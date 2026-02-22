@@ -119,6 +119,7 @@ Use --json for machine-readable output suitable for monitoring or CI.`,
 			// convergence is 2 iterations.
 			const maxFixIterations = 5
 			repairedNames := make(map[string]bool)
+			permissionDenied := false
 			var results []checkResult
 
 			serverName, err := ref.ParseServerName(params.ServerName)
@@ -146,8 +147,11 @@ Use --json for machine-readable output suitable for monitoring or CI.`,
 					}
 				}
 
-				fixCount := executeFixes(ctx, sess, results, params.DryRun)
-				if fixCount == 0 || params.DryRun {
+				outcome := executeFixes(ctx, sess, results, params.DryRun)
+				if outcome.PermissionDenied {
+					permissionDenied = true
+				}
+				if outcome.FixedCount == 0 || params.DryRun {
 					break
 				}
 
@@ -170,7 +174,7 @@ Use --json for machine-readable output suitable for monitoring or CI.`,
 				}
 			}
 
-			if done, err := params.EmitJSON(doctorJSON(results, params.DryRun)); done {
+			if done, err := params.EmitJSON(doctorJSON(results, params.DryRun, permissionDenied)); done {
 				if err != nil {
 					return err
 				}
@@ -181,7 +185,7 @@ Use --json for machine-readable output suitable for monitoring or CI.`,
 				}
 				return nil
 			}
-			return printChecklist(results, params.Fix, params.DryRun)
+			return printChecklist(results, params.Fix, params.DryRun, permissionDenied)
 		},
 	}
 }
@@ -892,30 +896,46 @@ func checkBasePipelines(ctx context.Context, session messaging.Session, pipeline
 	return checkPublishedStateEvents(ctx, session, pipelineRoomID, items)
 }
 
+// fixOutcome holds the results of a fix pass.
+type fixOutcome struct {
+	// FixedCount is the number of successfully applied fixes.
+	FixedCount int
+	// PermissionDenied is true if any fix failed with M_FORBIDDEN,
+	// indicating that the session lacks sufficient power level to
+	// make the required changes.
+	PermissionDenied bool
+}
+
 // executeFixes runs the fix action for each fixable failure, updating
-// results in place. Returns the number of successfully applied fixes.
-// In dry-run mode, no fixes are executed and 0 is returned.
-func executeFixes(ctx context.Context, session messaging.Session, results []checkResult, dryRun bool) int {
+// results in place. In dry-run mode, no fixes are executed.
+func executeFixes(ctx context.Context, session messaging.Session, results []checkResult, dryRun bool) fixOutcome {
 	if dryRun {
-		return 0
+		return fixOutcome{}
 	}
-	fixedCount := 0
+	var outcome fixOutcome
 	for i := range results {
 		if results[i].Status != statusFail || results[i].fix == nil {
 			continue
 		}
 		if err := results[i].fix(ctx, session); err != nil {
-			results[i].Message = fmt.Sprintf("%s (fix failed: %v)", results[i].Message, err)
+			if messaging.IsMatrixError(err, messaging.ErrCodeForbidden) {
+				outcome.PermissionDenied = true
+				results[i].Message = fmt.Sprintf("%s (insufficient permissions)", results[i].Message)
+			} else {
+				results[i].Message = fmt.Sprintf("%s (fix failed: %v)", results[i].Message, err)
+			}
 		} else {
 			results[i].Status = statusFixed
-			fixedCount++
+			outcome.FixedCount++
 		}
 	}
-	return fixedCount
+	return outcome
 }
 
 // printChecklist prints check results as a human-readable checklist.
-func printChecklist(results []checkResult, fixMode, dryRun bool) error {
+// When permissionDenied is true, an actionable hint about using admin
+// credentials is appended to the summary.
+func printChecklist(results []checkResult, fixMode, dryRun, permissionDenied bool) error {
 	anyFailed := false
 	fixableCount := 0
 	fixedCount := 0
@@ -948,6 +968,14 @@ func printChecklist(results []checkResult, fixMode, dryRun bool) error {
 		} else {
 			fmt.Fprintln(os.Stdout, "Some checks failed.")
 		}
+		if permissionDenied {
+			fmt.Fprintln(os.Stdout)
+			fmt.Fprintln(os.Stdout, "Some fixes failed due to insufficient permissions. Power level")
+			fmt.Fprintln(os.Stdout, "and state event changes require admin credentials. Re-run with")
+			fmt.Fprintln(os.Stdout, "the credential file from \"bureau matrix setup\":")
+			fmt.Fprintln(os.Stdout)
+			fmt.Fprintln(os.Stdout, "  bureau matrix doctor --fix --credential-file ./bureau-creds")
+		}
 		return &cli.ExitError{Code: 1}
 	}
 
@@ -962,13 +990,14 @@ func printChecklist(results []checkResult, fixMode, dryRun bool) error {
 
 // doctorJSONOutput is the JSON output structure for the doctor command.
 type doctorJSONOutput struct {
-	Checks []checkResult `json:"checks"            desc:"list of health check results"`
-	OK     bool          `json:"ok"                desc:"true if all checks passed"`
-	DryRun bool          `json:"dry_run,omitempty" desc:"true if fixes were simulated"`
+	Checks           []checkResult `json:"checks"                      desc:"list of health check results"`
+	OK               bool          `json:"ok"                          desc:"true if all checks passed"`
+	DryRun           bool          `json:"dry_run,omitempty"           desc:"true if fixes were simulated"`
+	PermissionDenied bool          `json:"permission_denied,omitempty" desc:"true if fixes failed due to insufficient permissions"`
 }
 
 // doctorJSON builds the JSON output struct for doctor results.
-func doctorJSON(results []checkResult, dryRun bool) doctorJSONOutput {
+func doctorJSON(results []checkResult, dryRun, permissionDenied bool) doctorJSONOutput {
 	anyFailed := false
 	for _, result := range results {
 		if result.Status == statusFail {
@@ -977,8 +1006,9 @@ func doctorJSON(results []checkResult, dryRun bool) doctorJSONOutput {
 		}
 	}
 	return doctorJSONOutput{
-		Checks: results,
-		OK:     !anyFailed,
-		DryRun: dryRun,
+		Checks:           results,
+		OK:               !anyFailed,
+		DryRun:           dryRun,
+		PermissionDenied: permissionDenied,
 	}
 }

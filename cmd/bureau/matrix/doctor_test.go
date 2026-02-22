@@ -1206,13 +1206,16 @@ func TestExecuteFixes(t *testing.T) {
 		fail("check3", "also broken"),
 	}
 
-	fixCount := executeFixes(t.Context(), nil, results, false)
+	outcome := executeFixes(t.Context(), nil, results, false)
 
 	if !called {
 		t.Error("fix function was not called")
 	}
-	if fixCount != 1 {
-		t.Errorf("expected fixCount=1, got %d", fixCount)
+	if outcome.FixedCount != 1 {
+		t.Errorf("expected FixedCount=1, got %d", outcome.FixedCount)
+	}
+	if outcome.PermissionDenied {
+		t.Error("expected PermissionDenied=false")
 	}
 	if results[0].Status != statusPass {
 		t.Errorf("check1 should still be PASS, got %s", results[0].Status)
@@ -1233,9 +1236,42 @@ func TestExecuteFixes_ReturnsZeroOnDryRun(t *testing.T) {
 		}),
 	}
 
-	fixCount := executeFixes(t.Context(), nil, results, true)
-	if fixCount != 0 {
-		t.Errorf("expected fixCount=0 in dry-run, got %d", fixCount)
+	outcome := executeFixes(t.Context(), nil, results, true)
+	if outcome.FixedCount != 0 {
+		t.Errorf("expected FixedCount=0 in dry-run, got %d", outcome.FixedCount)
+	}
+}
+
+func TestExecuteFixes_PermissionDenied(t *testing.T) {
+	results := []checkResult{
+		failWithFix("power levels", "admin has PL 0", "reset power levels", func(ctx context.Context, session messaging.Session) error {
+			return &messaging.MatrixError{
+				Code:       messaging.ErrCodeForbidden,
+				Message:    "You don't have permission to post that to the room",
+				StatusCode: 403,
+			}
+		}),
+		failWithFix("join rules", "wrong join rule", "set join rule", func(ctx context.Context, session messaging.Session) error {
+			return nil
+		}),
+	}
+
+	outcome := executeFixes(t.Context(), nil, results, false)
+
+	if !outcome.PermissionDenied {
+		t.Error("expected PermissionDenied=true")
+	}
+	if outcome.FixedCount != 1 {
+		t.Errorf("expected FixedCount=1 (join rules fixed), got %d", outcome.FixedCount)
+	}
+	if results[0].Status != statusFail {
+		t.Errorf("power levels should remain FAIL, got %s", results[0].Status)
+	}
+	if !strings.Contains(results[0].Message, "insufficient permissions") {
+		t.Errorf("expected 'insufficient permissions' in message, got: %s", results[0].Message)
+	}
+	if results[1].Status != statusFixed {
+		t.Errorf("join rules should be FIXED, got %s", results[1].Status)
 	}
 }
 

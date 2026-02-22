@@ -6,6 +6,7 @@ package command
 import (
 	"encoding/json"
 	"fmt"
+	"io"
 
 	"github.com/bureau-foundation/bureau/lib/ref"
 	"github.com/bureau-foundation/bureau/lib/schema"
@@ -83,6 +84,28 @@ func (r *Result) IsError() bool {
 // the pipeline completion result from the initial "accepted" ack.
 func (r *Result) IsPipelineResult() bool {
 	return r.ExitCode != nil
+}
+
+// Err returns an error if the command result indicates failure.
+// Returns nil for "success" and "accepted" statuses. Use this to
+// collapse the common error-check pattern:
+//
+//	if err := result.Err(); err != nil { return err }
+func (r *Result) Err() error {
+	if r.Status == "error" {
+		return fmt.Errorf("daemon error: %s", r.Error)
+	}
+	return nil
+}
+
+// WriteAcceptedHint writes the standard acceptance display for async
+// commands: executor principal name and "bureau observe" hint. Writes
+// nothing if Principal is empty (synchronous commands).
+func (r *Result) WriteAcceptedHint(writer io.Writer) {
+	if r.Principal != "" {
+		fmt.Fprintf(writer, "  executor:  %s\n", r.Principal)
+		fmt.Fprintf(writer, "\nObserve progress: bureau observe %s\n", r.Principal)
+	}
 }
 
 // UnmarshalResult unmarshals ResultData into the provided target.

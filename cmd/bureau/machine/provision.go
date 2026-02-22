@@ -110,6 +110,23 @@ accidental or intentional spoofing of active machines.`,
 			ctx, cancel := context.WithTimeout(context.Background(), 60*time.Second)
 			defer cancel()
 
+			// Connect for admin operations (room management, invites,
+			// power levels). Uses SessionConfig for consistency with
+			// decommission and revoke.
+			genericSession, err := params.SessionConfig.Connect(ctx)
+			if err != nil {
+				return cli.Internal("connect: %w", err)
+			}
+			defer genericSession.Close()
+
+			adminSession, ok := genericSession.(*messaging.DirectSession)
+			if !ok {
+				return cli.Internal("provision requires a direct session (credential file), not a proxy session")
+			}
+
+			// The credential file also contains the registration token,
+			// which SessionConfig.Connect() doesn't extract. Read it
+			// separately for account registration.
 			credentials, err := cli.ReadCredentialFile(params.SessionConfig.CredentialFile)
 			if err != nil {
 				return cli.Internal("read credential file: %w", err)
@@ -126,19 +143,12 @@ accidental or intentional spoofing of active machines.`,
 			}
 			defer registrationTokenBuffer.Close()
 
-			homeserverURL := credentials["MATRIX_HOMESERVER_URL"]
-			if homeserverURL == "" {
-				return cli.Validation("credential file missing MATRIX_HOMESERVER_URL")
-			}
-			adminUserIDString := credentials["MATRIX_ADMIN_USER"]
-			adminToken := credentials["MATRIX_ADMIN_TOKEN"]
-			if adminUserIDString == "" || adminToken == "" {
-				return cli.Validation("credential file missing MATRIX_ADMIN_USER or MATRIX_ADMIN_TOKEN")
-			}
-
-			adminUserID, err := ref.ParseUserID(adminUserIDString)
+			// Account registration (client.Register) is unauthenticated
+			// and needs a Client, not a Session. Create a separate
+			// Client for this single HTTP POST.
+			homeserverURL, err := params.SessionConfig.ResolveHomeserverURL()
 			if err != nil {
-				return cli.Internal("parse admin user ID: %w", err)
+				return err
 			}
 
 			client, err := messaging.NewClient(messaging.ClientConfig{
@@ -148,15 +158,9 @@ accidental or intentional spoofing of active machines.`,
 				return cli.Internal("create matrix client: %w", err)
 			}
 
-			adminSession, err := client.SessionFromToken(adminUserID, adminToken)
+			server, err := ref.ServerFromUserID(adminSession.UserID().String())
 			if err != nil {
-				return cli.Internal("create admin session: %w", err)
-			}
-			defer adminSession.Close()
-
-			server, err := ref.ServerFromUserID(adminUserIDString)
-			if err != nil {
-				return cli.Internal("cannot determine server name from admin user ID: %w", err)
+				return cli.Internal("cannot determine server name from session: %w", err)
 			}
 			fleet, err := ref.ParseFleet(args[0], server)
 			if err != nil {

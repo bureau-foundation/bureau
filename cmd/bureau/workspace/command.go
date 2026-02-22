@@ -463,8 +463,8 @@ func runStatus(alias string, serverName ref.ServerName, jsonOutput *cli.JSONOutp
 	if err != nil {
 		return err
 	}
-	if result.IsError() {
-		return cli.Internal("daemon error: %s", result.Error)
+	if err := result.Err(); err != nil {
+		return err
 	}
 
 	if done, err := jsonOutput.EmitJSON(json.RawMessage(result.ResultData)); done {
@@ -525,8 +525,8 @@ func runDu(alias string, serverName ref.ServerName, jsonOutput *cli.JSONOutput) 
 	if err != nil {
 		return err
 	}
-	if result.IsError() {
-		return cli.Internal("daemon error: %s", result.Error)
+	if err := result.Err(); err != nil {
+		return err
 	}
 
 	if done, err := jsonOutput.EmitJSON(json.RawMessage(result.ResultData)); done {
@@ -683,8 +683,8 @@ func runWorktreeAdd(alias, branch string, serverName ref.ServerName, jsonOutput 
 	if err != nil {
 		return err
 	}
-	if result.IsError() {
-		return cli.Internal("daemon error: %s", result.Error)
+	if err := result.Err(); err != nil {
+		return err
 	}
 
 	if done, err := jsonOutput.EmitJSON(worktreeAddResult{
@@ -703,10 +703,7 @@ func runWorktreeAdd(alias, branch string, serverName ref.ServerName, jsonOutput 
 	if branch != "" {
 		fmt.Fprintf(os.Stderr, "  branch:    %s\n", branch)
 	}
-	if result.Principal != "" {
-		fmt.Fprintf(os.Stderr, "  executor:  %s\n", result.Principal)
-		fmt.Fprintf(os.Stderr, "\nObserve progress: bureau observe %s\n", result.Principal)
-	}
+	result.WriteAcceptedHint(os.Stderr)
 	return nil
 }
 
@@ -808,8 +805,8 @@ func runWorktreeRemove(alias, mode string, serverName ref.ServerName, jsonOutput
 	if err != nil {
 		return err
 	}
-	if result.IsError() {
-		return cli.Internal("daemon error: %s", result.Error)
+	if err := result.Err(); err != nil {
+		return err
 	}
 
 	if done, err := jsonOutput.EmitJSON(worktreeRemoveResult{
@@ -825,10 +822,7 @@ func runWorktreeRemove(alias, mode string, serverName ref.ServerName, jsonOutput
 	fmt.Fprintf(os.Stderr, "Worktree remove accepted for %s (mode=%s)\n", alias, mode)
 	fmt.Fprintf(os.Stderr, "  workspace: %s\n", workspaceAlias)
 	fmt.Fprintf(os.Stderr, "  subpath:   %s\n", worktreeSubpath)
-	if result.Principal != "" {
-		fmt.Fprintf(os.Stderr, "  executor:  %s\n", result.Principal)
-		fmt.Fprintf(os.Stderr, "\nObserve progress: bureau observe %s\n", result.Principal)
-	}
+	result.WriteAcceptedHint(os.Stderr)
 	return nil
 }
 
@@ -880,8 +874,8 @@ func runFetch(alias string, serverName ref.ServerName, jsonOutput *cli.JSONOutpu
 	if err != nil {
 		return err
 	}
-	if result.IsError() {
-		return cli.Internal("daemon error: %s", result.Error)
+	if err := result.Err(); err != nil {
+		return err
 	}
 
 	if done, err := jsonOutput.EmitJSON(json.RawMessage(result.ResultData)); done {
@@ -934,8 +928,8 @@ func runWorktreeList(alias string, serverName ref.ServerName, jsonOutput *cli.JS
 	if err != nil {
 		return err
 	}
-	if result.IsError() {
-		return cli.Internal("daemon error: %s", result.Error)
+	if err := result.Err(); err != nil {
+		return err
 	}
 
 	if done, err := jsonOutput.EmitJSON(json.RawMessage(result.ResultData)); done {

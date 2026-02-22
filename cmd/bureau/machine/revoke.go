@@ -88,29 +88,20 @@ depending on the homeserver — this is by design for emergency revocation.`,
 			ctx, cancel := context.WithTimeout(context.Background(), 60*time.Second)
 			defer cancel()
 
-			credentials, err := cli.ReadCredentialFile(params.SessionConfig.CredentialFile)
+			genericSession, err := params.SessionConfig.Connect(ctx)
 			if err != nil {
-				return cli.Internal("read credential file: %w", err)
+				return cli.Internal("connect: %w", err)
+			}
+			defer genericSession.Close()
+
+			adminSession, ok := genericSession.(*messaging.DirectSession)
+			if !ok {
+				return cli.Internal("revoke requires a direct session (credential file), not a proxy session")
 			}
 
-			homeserverURL := credentials["MATRIX_HOMESERVER_URL"]
-			if homeserverURL == "" {
-				return cli.Validation("credential file missing MATRIX_HOMESERVER_URL")
-			}
-			adminUserIDString := credentials["MATRIX_ADMIN_USER"]
-			adminToken := credentials["MATRIX_ADMIN_TOKEN"]
-			if adminUserIDString == "" || adminToken == "" {
-				return cli.Validation("credential file missing MATRIX_ADMIN_USER or MATRIX_ADMIN_TOKEN")
-			}
-
-			adminUserID, err := ref.ParseUserID(adminUserIDString)
+			server, err := ref.ServerFromUserID(adminSession.UserID().String())
 			if err != nil {
-				return cli.Internal("parse admin user ID: %w", err)
-			}
-
-			server, err := ref.ServerFromUserID(adminUserIDString)
-			if err != nil {
-				return cli.Internal("cannot determine server name from admin user ID: %w", err)
+				return cli.Internal("cannot determine server name from session: %w", err)
 			}
 
 			fleet, err := ref.ParseFleet(args[0], server)
@@ -121,19 +112,6 @@ depending on the homeserver — this is by design for emergency revocation.`,
 			if err != nil {
 				return cli.Validation("invalid machine name: %v", err)
 			}
-
-			client, err := messaging.NewClient(messaging.ClientConfig{
-				HomeserverURL: homeserverURL,
-			})
-			if err != nil {
-				return cli.Internal("create matrix client: %w", err)
-			}
-
-			adminSession, err := client.SessionFromToken(adminUserID, adminToken)
-			if err != nil {
-				return cli.Internal("create admin session: %w", err)
-			}
-			defer adminSession.Close()
 
 			return Revoke(ctx, adminSession, RevokeParams{
 				Machine: machine,

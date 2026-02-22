@@ -79,6 +79,10 @@ type observeRequest struct {
 	// Used when Action is "query_authorization".
 	Target string `json:"target,omitempty"`
 
+	// ServiceRole is the service role to mint a token for (e.g.,
+	// "ticket", "artifact"). Used when Action is "mint_service_token".
+	ServiceRole string `json:"service_role,omitempty"`
+
 	// Observer is the Matrix user ID of the entity making this request.
 	// Required for all actions — the daemon verifies this via Token.
 	Observer string `json:"observer,omitempty"`
@@ -286,6 +290,8 @@ func (d *Daemon) handleObserveClient(clientConnection net.Conn) {
 		d.handleQueryAuthorization(clientConnection, request)
 	case "query_grants", "query_allowances":
 		d.handleQueryPrincipalPolicy(clientConnection, request)
+	case "mint_service_token":
+		d.handleMintServiceToken(clientConnection, request)
 	default:
 		d.sendObserveError(clientConnection,
 			fmt.Sprintf("unknown action %q", request.Action))

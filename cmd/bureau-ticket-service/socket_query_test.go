@@ -12,6 +12,114 @@ import (
 	"github.com/bureau-foundation/bureau/lib/ticketindex"
 )
 
+// --- List rooms tests ---
+
+func TestHandleListRoomsReturnsSummary(t *testing.T) {
+	client, cleanup := testServer(t, sampleRooms())
+	defer cleanup()
+
+	var result []roomInfo
+	err := client.Call(context.Background(), "list-rooms", map[string]any{}, &result)
+	if err != nil {
+		t.Fatalf("Call: %v", err)
+	}
+
+	if len(result) != 2 {
+		t.Fatalf("got %d rooms, want 2", len(result))
+	}
+
+	// Build a map for order-independent assertion.
+	byRoom := make(map[string]roomInfo)
+	for _, room := range result {
+		byRoom[room.RoomID] = room
+	}
+
+	roomA, exists := byRoom["!roomA:local"]
+	if !exists {
+		t.Fatal("missing roomA in response")
+	}
+	if roomA.Stats.Total != 3 {
+		t.Errorf("roomA total: got %d, want 3", roomA.Stats.Total)
+	}
+	// newTrackedRoom uses empty prefix → handler should default to "tkt".
+	if roomA.Prefix != "tkt" {
+		t.Errorf("roomA prefix: got %q, want 'tkt'", roomA.Prefix)
+	}
+
+	roomB, exists := byRoom["!roomB:local"]
+	if !exists {
+		t.Fatal("missing roomB in response")
+	}
+	if roomB.Stats.Total != 1 {
+		t.Errorf("roomB total: got %d, want 1", roomB.Stats.Total)
+	}
+}
+
+func TestHandleListRoomsIncludesAlias(t *testing.T) {
+	rooms := sampleRooms()
+	rooms[testRoomID("!roomA:local")].alias = "#general:bureau.local"
+
+	client, cleanup := testServer(t, rooms)
+	defer cleanup()
+
+	var result []roomInfo
+	err := client.Call(context.Background(), "list-rooms", map[string]any{}, &result)
+	if err != nil {
+		t.Fatalf("Call: %v", err)
+	}
+
+	byRoom := make(map[string]roomInfo)
+	for _, room := range result {
+		byRoom[room.RoomID] = room
+	}
+
+	roomA := byRoom["!roomA:local"]
+	if roomA.Alias != "#general:bureau.local" {
+		t.Errorf("alias: got %q, want '#general:bureau.local'", roomA.Alias)
+	}
+}
+
+func TestHandleListRoomsCustomPrefix(t *testing.T) {
+	rooms := sampleRooms()
+	rooms[testRoomID("!roomA:local")].config.Prefix = "iree"
+
+	client, cleanup := testServer(t, rooms)
+	defer cleanup()
+
+	var result []roomInfo
+	err := client.Call(context.Background(), "list-rooms", map[string]any{}, &result)
+	if err != nil {
+		t.Fatalf("Call: %v", err)
+	}
+
+	byRoom := make(map[string]roomInfo)
+	for _, room := range result {
+		byRoom[room.RoomID] = room
+	}
+
+	if byRoom["!roomA:local"].Prefix != "iree" {
+		t.Errorf("prefix: got %q, want 'iree'", byRoom["!roomA:local"].Prefix)
+	}
+}
+
+func TestHandleListRoomsEmptyReturnsEmptySlice(t *testing.T) {
+	client, cleanup := testServer(t, map[ref.RoomID]*roomState{})
+	defer cleanup()
+
+	var result []roomInfo
+	err := client.Call(context.Background(), "list-rooms", map[string]any{}, &result)
+	if err != nil {
+		t.Fatalf("Call: %v", err)
+	}
+
+	if result == nil {
+		t.Fatal("expected empty slice, got nil")
+	}
+	if len(result) != 0 {
+		t.Fatalf("got %d rooms, want 0", len(result))
+	}
+}
+
 // --- List tests ---
 
 func TestHandleListReturnsAllTickets(t *testing.T) {

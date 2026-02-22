@@ -344,6 +344,7 @@ func TestQueryActionsRequireGrant(t *testing.T) {
 		fields map[string]any
 	}{
 		// Query actions.
+		{"list-rooms", map[string]any{}},
 		{"list", map[string]any{"room": "!roomA:local"}},
 		{"ready", map[string]any{"room": "!roomA:local"}},
 		{"blocked", map[string]any{"room": "!roomA:local"}},

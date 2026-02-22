@@ -20,6 +20,7 @@ go_library(
         "query.go",
         "relay.go",
         "ringbuffer.go",
+        "service_token.go",
     ],
     importpath = "github.com/bureau-foundation/bureau/observe",
     visibility = ["//visibility:public"],

@@ -57,6 +57,7 @@ func (ts *TicketService) registerActions(server *service.SocketServer) {
 	server.HandleAuth("info", ts.withReadLock(ts.handleInfo))
 
 	// Query actions — read lock, all read-only.
+	server.HandleAuth("list-rooms", ts.withReadLock(ts.handleListRooms))
 	server.HandleAuth("list", ts.withReadLock(ts.handleList))
 	server.HandleAuth("ready", ts.withReadLock(ts.handleReady))
 	server.HandleAuth("blocked", ts.withReadLock(ts.handleBlocked))

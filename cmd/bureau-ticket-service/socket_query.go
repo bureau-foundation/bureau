@@ -739,3 +739,41 @@ func formatDuration(d time.Duration) string {
 		return fmt.Sprintf("%ds", seconds)
 	}
 }
+
+// --- List rooms ---
+
+// roomInfo describes a single tracked room for the list-rooms
+// response. Includes the room's canonical alias and ticket ID prefix
+// so the viewer can display human-friendly room names and construct
+// ticket references.
+type roomInfo struct {
+	RoomID string            `cbor:"room_id"`
+	Alias  string            `cbor:"alias,omitempty"`
+	Prefix string            `cbor:"prefix,omitempty"`
+	Stats  ticketindex.Stats `cbor:"stats"`
+}
+
+// handleListRooms returns summary information for every tracked room.
+// The viewer uses this for room selection when no --room flag is
+// provided.
+func (ts *TicketService) handleListRooms(ctx context.Context, token *servicetoken.Token, raw []byte) (any, error) {
+	if err := requireGrant(token, "ticket/list-rooms"); err != nil {
+		return nil, err
+	}
+
+	rooms := make([]roomInfo, 0, len(ts.rooms))
+	for roomID, state := range ts.rooms {
+		prefix := state.config.Prefix
+		if prefix == "" {
+			prefix = "tkt"
+		}
+		rooms = append(rooms, roomInfo{
+			RoomID: roomID.String(),
+			Alias:  state.alias,
+			Prefix: prefix,
+			Stats:  state.index.Stats(),
+		})
+	}
+
+	return rooms, nil
+}

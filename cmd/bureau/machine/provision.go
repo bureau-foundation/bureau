@@ -190,7 +190,7 @@ func runProvision(fleetLocalpart, machineName string, params *provisionParams) e
 			// memberships and cleared state events. Otherwise it could be
 			// an active machine or a partially decommissioned one.
 			fmt.Fprintf(os.Stderr, "  Account already exists — verifying decommission status...\n")
-			if err := verifyFullDecommission(ctx, client, adminUserID, adminToken, machine, machineUsername, machineUserID.String()); err != nil {
+			if err := verifyFullDecommission(ctx, client, adminUserID, adminToken, machine, machineUsername, machineUserID); err != nil {
 				return err
 			}
 			// Decommission verified. Reset the password to our one-time
@@ -349,7 +349,7 @@ func runProvision(fleetLocalpart, machineName string, params *provisionParams) e
 // This is the security gate for re-provisioning. Without it, provision
 // could be used to take over an active machine's identity by resetting
 // its password and re-bootstrapping.
-func verifyFullDecommission(ctx context.Context, client *messaging.Client, adminUserID ref.UserID, adminToken string, machine ref.Machine, machineUsername, machineUserID string) error {
+func verifyFullDecommission(ctx context.Context, client *messaging.Client, adminUserID ref.UserID, adminToken string, machine ref.Machine, machineUsername string, machineUserID ref.UserID) error {
 	adminSession, err := client.SessionFromToken(adminUserID, adminToken)
 	if err != nil {
 		return cli.Internal("create admin session for decommission check: %w", err)

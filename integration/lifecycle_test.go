@@ -578,10 +578,10 @@ func TestTwoMachineFleet(t *testing.T) {
 	// meaning the homeserver has persisted the events. A subsequent /sync
 	// sees them immediately.
 	eventsB := proxySyncRoomTimeline(t, clientB, sharedRoom.RoomID)
-	assertMessagePresent(t, eventsB, principalAAccount.UserID.String(), messageFromA)
+	assertMessagePresent(t, eventsB, principalAAccount.UserID, messageFromA)
 
 	eventsA := proxySyncRoomTimeline(t, clientA, sharedRoom.RoomID)
-	assertMessagePresent(t, eventsA, principalBAccount.UserID.String(), messageFromB)
+	assertMessagePresent(t, eventsA, principalBAccount.UserID, messageFromB)
 
 	t.Log("cross-machine message exchange verified")
 

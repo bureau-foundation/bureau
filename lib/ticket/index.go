@@ -38,7 +38,7 @@ type Filter struct {
 	Label string
 
 	// Assignee matches tickets assigned to this Matrix user ID.
-	Assignee string
+	Assignee ref.UserID
 
 	// Type matches tickets with this exact type.
 	Type string
@@ -979,8 +979,8 @@ func (idx *Index) updateIndexes(
 	for _, label := range content.Labels {
 		stringOp(idx.byLabel, label, ticketID)
 	}
-	if content.Assignee != "" {
-		stringOp(idx.byAssignee, content.Assignee, ticketID)
+	if !content.Assignee.IsZero() {
+		stringOp(idx.byAssignee, content.Assignee.String(), ticketID)
 	}
 	if content.Parent != "" {
 		stringOp(idx.children, content.Parent, ticketID)
@@ -1053,7 +1053,7 @@ func (idx *Index) matchesFilter(content *schema.TicketContent, filter *Filter) b
 	if filter.Label != "" && !slices.Contains(content.Labels, filter.Label) {
 		return false
 	}
-	if filter.Assignee != "" && content.Assignee != filter.Assignee {
+	if !filter.Assignee.IsZero() && content.Assignee != filter.Assignee {
 		return false
 	}
 	if filter.Type != "" && content.Type != filter.Type {

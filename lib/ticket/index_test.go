@@ -8,6 +8,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/bureau-foundation/bureau/lib/ref"
 	"github.com/bureau-foundation/bureau/lib/schema"
 )
 
@@ -22,7 +23,7 @@ func makeTicket(title string) schema.TicketContent {
 		Status:    "open",
 		Priority:  2,
 		Type:      "task",
-		CreatedBy: "@test:bureau.local",
+		CreatedBy: ref.MustParseUserID("@test:bureau.local"),
 		CreatedAt: "2026-02-12T10:00:00Z",
 		UpdatedAt: "2026-02-12T10:00:00Z",
 	}
@@ -144,7 +145,7 @@ func TestRemoveCleansSecondaryIndexes(t *testing.T) {
 	idx := NewIndex()
 	tc := makeTicket("Labeled ticket")
 	tc.Labels = []string{"security", "urgent"}
-	tc.Assignee = "@agent:bureau.local"
+	tc.Assignee = ref.MustParseUserID("@agent:bureau.local")
 	tc.Parent = "tkt-epic"
 	idx.Put("tkt-abc1", tc)
 
@@ -154,7 +155,7 @@ func TestRemoveCleansSecondaryIndexes(t *testing.T) {
 	if entries := idx.List(Filter{Label: "security"}); len(entries) != 0 {
 		t.Errorf("label index still has %d entries after Remove", len(entries))
 	}
-	if entries := idx.List(Filter{Assignee: "@agent:bureau.local"}); len(entries) != 0 {
+	if entries := idx.List(Filter{Assignee: ref.MustParseUserID("@agent:bureau.local")}); len(entries) != 0 {
 		t.Errorf("assignee index still has %d entries after Remove", len(entries))
 	}
 	if children := idx.Children("tkt-epic"); len(children) != 0 {
@@ -540,13 +541,13 @@ func TestListByAssignee(t *testing.T) {
 	idx := NewIndex()
 
 	assigned := makeTicket("Assigned")
-	assigned.Assignee = "@pm:bureau.local"
+	assigned.Assignee = ref.MustParseUserID("@pm:bureau.local")
 	idx.Put("tkt-assigned", assigned)
 
 	unassigned := makeTicket("Unassigned")
 	idx.Put("tkt-unassigned", unassigned)
 
-	entries := idx.List(Filter{Assignee: "@pm:bureau.local"})
+	entries := idx.List(Filter{Assignee: ref.MustParseUserID("@pm:bureau.local")})
 	if len(entries) != 1 || entries[0].ID != "tkt-assigned" {
 		t.Errorf("List(assignee=@pm:bureau.local) = %v, want [tkt-assigned]", entryIDs(entries))
 	}
@@ -659,7 +660,7 @@ func TestGrepMatchesNoteBody(t *testing.T) {
 
 	tc := makeTicket("Some ticket")
 	tc.Notes = []schema.TicketNote{
-		{ID: "n-1", Author: "@a:b.c", CreatedAt: "2026-02-12T10:00:00Z", Body: "Found a race condition in the handler"},
+		{ID: "n-1", Author: ref.MustParseUserID("@a:b.c"), CreatedAt: "2026-02-12T10:00:00Z", Body: "Found a race condition in the handler"},
 	}
 	idx.Put("tkt-a", tc)
 
@@ -1715,7 +1716,7 @@ func TestSecondaryIndexesUpdatedOnPut(t *testing.T) {
 	tc := makeTicket("Original")
 	tc.Status = "open"
 	tc.Labels = []string{"frontend"}
-	tc.Assignee = "@agent1:bureau.local"
+	tc.Assignee = ref.MustParseUserID("@agent1:bureau.local")
 	idx.Put("tkt-a", tc)
 
 	// Verify initial state.
@@ -1729,7 +1730,7 @@ func TestSecondaryIndexesUpdatedOnPut(t *testing.T) {
 	// Update: change status, labels, and assignee.
 	tc.Status = "in_progress"
 	tc.Labels = []string{"backend"}
-	tc.Assignee = "@agent2:bureau.local"
+	tc.Assignee = ref.MustParseUserID("@agent2:bureau.local")
 	idx.Put("tkt-a", tc)
 
 	// Old values should be gone.
@@ -1739,7 +1740,7 @@ func TestSecondaryIndexesUpdatedOnPut(t *testing.T) {
 	if entries := idx.List(Filter{Label: "frontend"}); len(entries) != 0 {
 		t.Errorf("List(label=frontend) after update = %d, want 0", len(entries))
 	}
-	if entries := idx.List(Filter{Assignee: "@agent1:bureau.local"}); len(entries) != 0 {
+	if entries := idx.List(Filter{Assignee: ref.MustParseUserID("@agent1:bureau.local")}); len(entries) != 0 {
 		t.Errorf("List(assignee=agent1) after update = %d, want 0", len(entries))
 	}
 
@@ -1750,7 +1751,7 @@ func TestSecondaryIndexesUpdatedOnPut(t *testing.T) {
 	if entries := idx.List(Filter{Label: "backend"}); len(entries) != 1 {
 		t.Errorf("List(label=backend) after update = %d, want 1", len(entries))
 	}
-	if entries := idx.List(Filter{Assignee: "@agent2:bureau.local"}); len(entries) != 1 {
+	if entries := idx.List(Filter{Assignee: ref.MustParseUserID("@agent2:bureau.local")}); len(entries) != 1 {
 		t.Errorf("List(assignee=agent2) after update = %d, want 1", len(entries))
 	}
 }
@@ -2327,7 +2328,7 @@ func TestEpicHealthWithInProgress(t *testing.T) {
 	childB := makeTicket("B")
 	childB.Parent = "tkt-epic"
 	childB.Status = "in_progress"
-	childB.Assignee = "@agent:bureau.local"
+	childB.Assignee = ref.MustParseUserID("@agent:bureau.local")
 	idx.Put("tkt-b", childB) // in_progress
 
 	childC := makeTicket("C")

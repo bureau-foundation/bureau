@@ -234,7 +234,7 @@ func buildInspectResult(ctx context.Context, session messaging.Session, roomID r
 		default:
 			entry := inspectStateEntry{
 				StateKey: stateKey,
-				Sender:   event.Sender,
+				Sender:   event.Sender.String(),
 				Content:  event.Content,
 			}
 
@@ -271,11 +271,11 @@ func buildInspectResult(ctx context.Context, session messaging.Session, roomID r
 	joinedCount := 0
 	for _, member := range members {
 		powerLevel := defaultPowerLevel
-		if pl, ok := userPowerLevels[member.UserID]; ok {
+		if pl, ok := userPowerLevels[member.UserID.String()]; ok {
 			powerLevel = pl
 		}
 		result.Members = append(result.Members, inspectMember{
-			UserID:      member.UserID,
+			UserID:      member.UserID.String(),
 			DisplayName: member.DisplayName,
 			Membership:  member.Membership,
 			PowerLevel:  powerLevel,

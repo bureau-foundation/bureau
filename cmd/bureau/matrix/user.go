@@ -487,7 +487,7 @@ func listRoomMembers(ctx context.Context, session messaging.Session, roomIDOrAli
 	var entries []userListEntry
 	for _, member := range members {
 		entries = append(entries, userListEntry{
-			UserID:      member.UserID,
+			UserID:      member.UserID.String(),
 			DisplayName: member.DisplayName,
 			Membership:  member.Membership,
 		})
@@ -513,7 +513,7 @@ func listAllMembers(ctx context.Context, session messaging.Session, jsonOutput *
 	}
 
 	// Collect unique members across all rooms.
-	uniqueMembers := make(map[string]messaging.RoomMember)
+	uniqueMembers := make(map[ref.UserID]messaging.RoomMember)
 	for _, roomID := range rooms {
 		members, err := session.GetRoomMembers(ctx, roomID)
 		if err != nil {
@@ -533,16 +533,13 @@ func listAllMembers(ctx context.Context, session messaging.Session, jsonOutput *
 	for _, member := range uniqueMembers {
 		displayName := member.DisplayName
 		if displayName == "" {
-			memberUserID, parseErr := ref.ParseUserID(member.UserID)
-			if parseErr == nil {
-				fetched, err := session.GetDisplayName(ctx, memberUserID)
-				if err == nil {
-					displayName = fetched
-				}
+			fetched, err := session.GetDisplayName(ctx, member.UserID)
+			if err == nil {
+				displayName = fetched
 			}
 		}
 		entries = append(entries, userListEntry{
-			UserID:      member.UserID,
+			UserID:      member.UserID.String(),
 			DisplayName: displayName,
 		})
 	}
@@ -557,16 +554,9 @@ func listAllMembers(ctx context.Context, session messaging.Session, jsonOutput *
 		if displayName == "" {
 			// The /members endpoint may not include display names. Fall
 			// back to the profile endpoint for users without one.
-			memberUserID, parseErr := ref.ParseUserID(member.UserID)
-			if parseErr == nil {
-				fetched, err := session.GetDisplayName(ctx, memberUserID)
-				if err != nil {
-					// Profile lookup failures are non-fatal for listing; the
-					// user might have left the server or restricted their profile.
-					displayName = ""
-				} else {
-					displayName = fetched
-				}
+			fetched, err := session.GetDisplayName(ctx, member.UserID)
+			if err == nil {
+				displayName = fetched
 			}
 		}
 		fmt.Fprintf(writer, "%s\t%s\n", member.UserID, displayName)

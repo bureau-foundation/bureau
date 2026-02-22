@@ -7,6 +7,7 @@ import (
 	"strings"
 	"testing"
 
+	"github.com/bureau-foundation/bureau/lib/ref"
 	"github.com/bureau-foundation/bureau/messaging"
 )
 
@@ -112,7 +113,7 @@ func TestAbbreviateContent_ZeroMaxLength(t *testing.T) {
 func TestFormatEventOneLine_Message(t *testing.T) {
 	event := messaging.Event{
 		Type:           "m.room.message",
-		Sender:         "@user:local",
+		Sender:         ref.MustParseUserID("@user:local"),
 		OriginServerTS: 1771200000000,
 		Content:        map[string]any{"msgtype": "m.text", "body": "hello world"},
 	}
@@ -132,7 +133,7 @@ func TestFormatEventOneLine_StateEvent(t *testing.T) {
 	stateKey := "machine/workstation"
 	event := messaging.Event{
 		Type:           "m.bureau.machine_key",
-		Sender:         "@machine/workstation:local",
+		Sender:         ref.MustParseUserID("@machine/workstation:local"),
 		OriginServerTS: 1771200000000,
 		StateKey:       &stateKey,
 		Content:        map[string]any{"public_key": "age1abc123"},
@@ -149,7 +150,7 @@ func TestFormatEventOneLine_StateEvent(t *testing.T) {
 func TestFormatEventOneLine_OtherEvent(t *testing.T) {
 	event := messaging.Event{
 		Type:           "m.custom.event",
-		Sender:         "@bot:local",
+		Sender:         ref.MustParseUserID("@bot:local"),
 		OriginServerTS: 1771200000000,
 		Content:        map[string]any{"action": "test"},
 	}

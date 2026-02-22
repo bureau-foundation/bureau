@@ -291,8 +291,8 @@ func (renderer DetailRenderer) renderTimestampLine(content schema.TicketContent)
 	metaStyle := lipgloss.NewStyle().Foreground(renderer.theme.FaintText)
 
 	var parts []string
-	if content.CreatedBy != "" {
-		parts = append(parts, content.CreatedBy)
+	if !content.CreatedBy.IsZero() {
+		parts = append(parts, content.CreatedBy.String())
 	}
 	if content.CreatedAt != "" {
 		parts = append(parts, shortenTimestamp(content.CreatedAt))
@@ -303,8 +303,8 @@ func (renderer DetailRenderer) renderTimestampLine(content schema.TicketContent)
 	if content.ClosedAt != "" {
 		parts = append(parts, "closed "+shortenTimestamp(content.ClosedAt))
 	}
-	if content.Assignee != "" {
-		parts = append(parts, content.Assignee)
+	if !content.Assignee.IsZero() {
+		parts = append(parts, content.Assignee.String())
 	}
 
 	line := strings.Join(parts, "  ")

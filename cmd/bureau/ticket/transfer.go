@@ -10,6 +10,7 @@ import (
 	"os"
 
 	"github.com/bureau-foundation/bureau/cmd/bureau/cli"
+	"github.com/bureau-foundation/bureau/lib/ref"
 	"github.com/bureau-foundation/bureau/lib/schema"
 )
 
@@ -219,7 +220,7 @@ invalid, none are imported.`,
 
 				if params.ResetStatus {
 					entry.Content.Status = "open"
-					entry.Content.Assignee = ""
+					entry.Content.Assignee = ref.UserID{}
 					entry.Content.ClosedAt = ""
 					entry.Content.CloseReason = ""
 				}

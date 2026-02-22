@@ -485,7 +485,7 @@ func (d *Daemon) handleQueryLayout(clientConnection net.Conn, request observeReq
 		if member.Membership != "join" {
 			continue
 		}
-		localpart, localpartErr := principal.LocalpartFromMatrixID(member.UserID)
+		localpart, localpartErr := principal.LocalpartFromMatrixID(member.UserID.String())
 		if localpartErr != nil {
 			// Skip members whose user IDs don't match the Bureau
 			// @localpart:server convention.

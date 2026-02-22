@@ -16,7 +16,7 @@ func TestGrantJSONRoundTrip(t *testing.T) {
 		Targets:   []string{"bureau/dev/**"},
 		ExpiresAt: "2026-03-01T00:00:00Z",
 		Ticket:    "tkt-a3f9",
-		GrantedBy: "@bureau/dev/pm:bureau.local",
+		GrantedBy: ref.MustParseUserID("@bureau/dev/pm:bureau.local"),
 		GrantedAt: "2026-02-12T10:00:00Z",
 		Source:    SourceMachineDefault,
 	}
@@ -43,8 +43,8 @@ func TestGrantJSONRoundTrip(t *testing.T) {
 	if decoded.Ticket != "tkt-a3f9" {
 		t.Errorf("Ticket = %q, want tkt-a3f9", decoded.Ticket)
 	}
-	if decoded.GrantedBy != "@bureau/dev/pm:bureau.local" {
-		t.Errorf("GrantedBy = %q, want @bureau/dev/pm:bureau.local", decoded.GrantedBy)
+	if decoded.GrantedBy != ref.MustParseUserID("@bureau/dev/pm:bureau.local") {
+		t.Errorf("GrantedBy = %v, want @bureau/dev/pm:bureau.local", decoded.GrantedBy)
 	}
 	if decoded.Source != SourceMachineDefault {
 		t.Errorf("Source = %q, want %q", decoded.Source, SourceMachineDefault)
@@ -67,10 +67,18 @@ func TestGrantJSONOmitsEmptyFields(t *testing.T) {
 		t.Fatalf("Unmarshal to map: %v", err)
 	}
 
-	for _, field := range []string{"targets", "expires_at", "ticket", "granted_by", "granted_at", "source"} {
+	for _, field := range []string{"targets", "expires_at", "ticket", "granted_at", "source"} {
 		if _, exists := raw[field]; exists {
 			t.Errorf("field %q should be omitted from JSON when empty", field)
 		}
+	}
+	// GrantedBy is ref.UserID which implements TextMarshaler — Go's
+	// encoding/json emits "" for the zero value even with omitempty.
+	// Verify it marshals to empty string rather than being absent.
+	if got, ok := raw["granted_by"]; !ok {
+		t.Error("field \"granted_by\" should be present as empty string for zero UserID")
+	} else if got != "" {
+		t.Errorf("field \"granted_by\" = %v, want empty string for zero UserID", got)
 	}
 
 	if _, exists := raw["actions"]; !exists {
@@ -256,7 +264,7 @@ func TestTemporalGrantContentJSONRoundTrip(t *testing.T) {
 			Targets:   []string{"service/db/postgres:bureau.local"},
 			ExpiresAt: "2026-02-11T18:30:00Z",
 			Ticket:    "tkt-c4d1",
-			GrantedBy: "@bureau/dev/workspace/tpm:bureau.local",
+			GrantedBy: ref.MustParseUserID("@bureau/dev/workspace/tpm:bureau.local"),
 			GrantedAt: "2026-02-11T16:30:00Z",
 		},
 		Principal: principalID,

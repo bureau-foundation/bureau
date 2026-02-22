@@ -373,14 +373,18 @@ func (s *DirectSession) GetRoomMembers(ctx context.Context, roomID ref.RoomID) (
 		return nil, fmt.Errorf("messaging: failed to parse room members response: %w", err)
 	}
 
-	members := make([]RoomMember, len(response.Chunk))
-	for index, event := range response.Chunk {
-		members[index] = RoomMember{
-			UserID:      event.StateKey,
+	members := make([]RoomMember, 0, len(response.Chunk))
+	for _, event := range response.Chunk {
+		userID, err := ref.ParseUserID(event.StateKey)
+		if err != nil {
+			return nil, fmt.Errorf("messaging: invalid user ID in room members state key %q: %w", event.StateKey, err)
+		}
+		members = append(members, RoomMember{
+			UserID:      userID,
 			DisplayName: event.Content.DisplayName,
 			Membership:  event.Content.Membership,
 			AvatarURL:   event.Content.AvatarURL,
-		}
+		})
 	}
 	return members, nil
 }

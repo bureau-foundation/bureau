@@ -11,6 +11,7 @@ import (
 	"time"
 
 	"github.com/bureau-foundation/bureau/lib/codec"
+	"github.com/bureau-foundation/bureau/lib/ref"
 	"github.com/bureau-foundation/bureau/lib/schema"
 	"github.com/bureau-foundation/bureau/lib/servicetoken"
 	"github.com/bureau-foundation/bureau/lib/ticket"
@@ -198,6 +199,19 @@ type upcomingGateEntry struct {
 	UntilFire string `json:"until_fire"`
 }
 
+// --- Query helpers ---
+
+// parseFilterAssignee parses a string assignee from a query request into
+// a ref.UserID for use in ticket.Filter. An empty string returns the
+// zero value (no filter). A non-empty string must be a valid Matrix
+// user ID.
+func parseFilterAssignee(raw string) (ref.UserID, error) {
+	if raw == "" {
+		return ref.UserID{}, nil
+	}
+	return ref.ParseUserID(raw)
+}
+
 // --- Query handlers ---
 
 // handleList returns tickets matching a filter within a room.
@@ -216,11 +230,16 @@ func (ts *TicketService) handleList(ctx context.Context, token *servicetoken.Tok
 		return nil, err
 	}
 
+	assignee, err := parseFilterAssignee(request.Assignee)
+	if err != nil {
+		return nil, fmt.Errorf("invalid assignee filter: %w", err)
+	}
+
 	entries := state.index.List(ticket.Filter{
 		Status:   request.Status,
 		Priority: request.Priority,
 		Label:    request.Label,
-		Assignee: request.Assignee,
+		Assignee: assignee,
 		Type:     request.Type,
 		Parent:   request.Parent,
 	})
@@ -398,11 +417,16 @@ func (ts *TicketService) handleGrep(ctx context.Context, token *servicetoken.Tok
 		return nil, errors.New("missing required field: pattern")
 	}
 
+	assignee, err := parseFilterAssignee(request.Assignee)
+	if err != nil {
+		return nil, fmt.Errorf("invalid assignee filter: %w", err)
+	}
+
 	filter := ticket.Filter{
 		Status:   request.Status,
 		Priority: request.Priority,
 		Label:    request.Label,
-		Assignee: request.Assignee,
+		Assignee: assignee,
 		Type:     request.Type,
 		Parent:   request.Parent,
 	}
@@ -460,11 +484,16 @@ func (ts *TicketService) handleSearch(ctx context.Context, token *servicetoken.T
 		return nil, errors.New("missing required field: query")
 	}
 
+	assignee, err := parseFilterAssignee(request.Assignee)
+	if err != nil {
+		return nil, fmt.Errorf("invalid assignee filter: %w", err)
+	}
+
 	filter := ticket.Filter{
 		Status:   request.Status,
 		Priority: request.Priority,
 		Label:    request.Label,
-		Assignee: request.Assignee,
+		Assignee: assignee,
 		Type:     request.Type,
 		Parent:   request.Parent,
 	}
@@ -661,7 +690,7 @@ func (ts *TicketService) handleUpcomingGates(ctx context.Context, token *service
 					TicketID:    pending.ID,
 					Title:       pending.Content.Title,
 					Status:      pending.Content.Status,
-					Assignee:    pending.Content.Assignee,
+					Assignee:    pending.Content.Assignee.String(),
 					Room:        roomID.String(),
 					UntilFire:   untilFireStr,
 				})

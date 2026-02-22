@@ -111,7 +111,7 @@ type Grant struct {
 	// GrantedBy is the Matrix user ID of the principal that created this
 	// grant. Set automatically by the daemon when processing grant
 	// requests. Omit for static grants (template-defined, room-level).
-	GrantedBy string `json:"granted_by,omitempty" cbor:"5,keyasint,omitempty"`
+	GrantedBy ref.UserID `json:"granted_by,omitempty" cbor:"5,keyasint,omitempty"`
 
 	// GrantedAt is an RFC 3339 timestamp of when this grant was created.
 	// Set automatically by the daemon. Omit for static grants.

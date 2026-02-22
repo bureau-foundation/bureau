@@ -92,7 +92,7 @@ func TestNativeAgentEndToEnd(t *testing.T) {
 	// 3. Agent executes bureau_matrix_send via MCP → tool sends message to
 	//    Matrix through the proxy-routed client (zero credentials in sandbox)
 	// 4. This assertion catches the message from step 3
-	responseWatch.WaitForMessage(t, "echo result: hello", agent.Account.UserID.String())
+	responseWatch.WaitForMessage(t, "echo result: hello", agent.Account.UserID)
 	t.Log("bureau_matrix_send tool posted message — proxy pipeline verified")
 
 	// Wait for the mock to confirm the second LLM call completed. This
@@ -187,7 +187,7 @@ func TestNativeAgentContextTruncation(t *testing.T) {
 		}
 
 		expectedResponse := fmt.Sprintf("response from turn %d", turn)
-		responseWatch.WaitForMessage(t, expectedResponse, agent.Account.UserID.String())
+		responseWatch.WaitForMessage(t, expectedResponse, agent.Account.UserID)
 		t.Logf("turn %d: bureau_matrix_send posted message", turn)
 	}
 

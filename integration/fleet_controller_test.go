@@ -112,7 +112,7 @@ type fleetPlanResponse struct {
 // for integration testing. The SocketPath is the CBOR API endpoint.
 type fleetController struct {
 	PrincipalName string
-	UserID        string
+	UserID        ref.UserID
 	SocketPath    string
 	StateDir      string
 }
@@ -171,7 +171,7 @@ func startFleetController(t *testing.T, admin *messaging.DirectSession, machine 
 	// this explicitly: invite + PL 50.
 	grantFleetControllerConfigAccess(t, admin, &fleetController{
 		PrincipalName: controllerName,
-		UserID:        account.UserID.String(),
+		UserID:        account.UserID,
 	}, machine)
 
 	// Start the fleet controller binary.
@@ -195,7 +195,7 @@ func startFleetController(t *testing.T, admin *messaging.DirectSession, machine 
 
 	return &fleetController{
 		PrincipalName: controllerName,
-		UserID:        account.UserID.String(),
+		UserID:        account.UserID,
 		SocketPath:    socketPath,
 		StateDir:      stateDir,
 	}
@@ -233,14 +233,8 @@ func grantFleetControllerConfigAccess(t *testing.T, admin *messaging.DirectSessi
 		t.Fatal("machine has no config room ID — was startMachine called?")
 	}
 
-	userIDString := fc.UserID
-	userID, err := ref.ParseUserID(userIDString)
-	if err != nil {
-		t.Fatalf("parse fleet controller user ID %q: %v", userIDString, err)
-	}
-
 	// Invite (idempotent — M_FORBIDDEN means already a member).
-	if err := admin.InviteUser(ctx, machine.ConfigRoomID, userID); err != nil {
+	if err := admin.InviteUser(ctx, machine.ConfigRoomID, fc.UserID); err != nil {
 		if !messaging.IsMatrixError(err, "M_FORBIDDEN") {
 			t.Fatalf("invite fleet controller to config room %s: %v", machine.ConfigRoomID, err)
 		}
@@ -263,7 +257,7 @@ func grantFleetControllerConfigAccess(t *testing.T, admin *messaging.DirectSessi
 		users = make(map[string]any)
 		powerLevels["users"] = users
 	}
-	users[userIDString] = 50
+	users[fc.UserID.String()] = 50
 
 	if _, err := admin.SendStateEvent(ctx, machine.ConfigRoomID,
 		schema.MatrixEventTypePowerLevels, "", powerLevels); err != nil {
@@ -420,7 +414,7 @@ func deployFleetOperator(t *testing.T, admin *messaging.DirectSession, fleet *te
 func publishFleetServiceBinding(t *testing.T, admin *messaging.DirectSession, machine *testMachine, fc *fleetController) {
 	t.Helper()
 
-	controllerEntity, err := ref.ParseEntityUserID(fc.UserID)
+	controllerEntity, err := ref.ParseEntityUserID(fc.UserID.String())
 	if err != nil {
 		t.Fatalf("parse fleet controller entity: %v", err)
 	}

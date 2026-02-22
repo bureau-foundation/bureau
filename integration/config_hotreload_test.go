@@ -111,7 +111,7 @@ func TestMatrixPolicyHotReload(t *testing.T) {
 	// synthesizes exactly 1 grant (matrix/join action), so we match on
 	// GrantCount == 1 to distinguish from Phase 3's 0-grant revert.
 	waitForNotification[schema.GrantsUpdatedMessage](
-		t, &watch, schema.MsgTypeGrantsUpdated, machine.UserID.String(),
+		t, &watch, schema.MsgTypeGrantsUpdated, machine.UserID,
 		func(m schema.GrantsUpdatedMessage) bool {
 			return m.GrantCount == 1
 		}, "grants updated with 1 grant")
@@ -146,7 +146,7 @@ func TestMatrixPolicyHotReload(t *testing.T) {
 	// Wait for the daemon's grants revert confirmation. Default-deny
 	// produces 0 grants.
 	waitForNotification[schema.GrantsUpdatedMessage](
-		t, &watch, schema.MsgTypeGrantsUpdated, machine.UserID.String(),
+		t, &watch, schema.MsgTypeGrantsUpdated, machine.UserID,
 		func(m schema.GrantsUpdatedMessage) bool {
 			return m.GrantCount == 0
 		}, "grants updated with 0 grants")
@@ -252,7 +252,7 @@ func TestServiceVisibilityHotReload(t *testing.T) {
 	// is posted after the push completes, guaranteeing the proxy has
 	// the updated directory.
 	waitForNotification[schema.ServiceDirectoryUpdatedMessage](
-		t, &watch, schema.MsgTypeServiceDirectoryUpdated, machine.UserID.String(),
+		t, &watch, schema.MsgTypeServiceDirectoryUpdated, machine.UserID,
 		func(m schema.ServiceDirectoryUpdatedMessage) bool {
 			return slices.Contains(m.Added, "service/vis-hr/test")
 		}, "service directory update adding service/vis-hr/test")
@@ -281,7 +281,7 @@ func TestServiceVisibilityHotReload(t *testing.T) {
 	// nextBatch has advanced past Phase 1's service directory message,
 	// so this wait only sees new events.
 	waitForNotification[schema.GrantsUpdatedMessage](
-		t, &watch, schema.MsgTypeGrantsUpdated, machine.UserID.String(),
+		t, &watch, schema.MsgTypeGrantsUpdated, machine.UserID,
 		func(m schema.GrantsUpdatedMessage) bool {
 			return m.Principal == "agent/vis-hr"
 		}, "grants updated for agent/vis-hr")
@@ -305,7 +305,7 @@ func TestServiceVisibilityHotReload(t *testing.T) {
 	// verify the service is visible again. Phase 2's grants message
 	// was already consumed above, so this matches Phase 3's message.
 	waitForNotification[schema.GrantsUpdatedMessage](
-		t, &watch, schema.MsgTypeGrantsUpdated, machine.UserID.String(),
+		t, &watch, schema.MsgTypeGrantsUpdated, machine.UserID,
 		func(m schema.GrantsUpdatedMessage) bool {
 			return m.Principal == "agent/vis-hr"
 		}, "grants updated for agent/vis-hr")

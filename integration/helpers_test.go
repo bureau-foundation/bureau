@@ -933,7 +933,7 @@ func (w *roomWatch) WaitForEvent(t *testing.T, predicate func(messaging.Event) b
 
 // WaitForMessage blocks until a message from senderID containing bodyContains
 // arrives in the watched room. Returns the full message body.
-func (w *roomWatch) WaitForMessage(t *testing.T, bodyContains, senderID string) string {
+func (w *roomWatch) WaitForMessage(t *testing.T, bodyContains string, senderID ref.UserID) string {
 	t.Helper()
 	event := w.WaitForEvent(t, func(event messaging.Event) bool {
 		if event.Type != schema.MatrixEventTypeMessage {
@@ -1036,12 +1036,12 @@ func (w *roomWatch) WaitForCommandResults(t *testing.T, requestID string, count 
 //
 // This is the typed replacement for WaitForMessage. Tests match on struct
 // fields instead of body substrings.
-func waitForNotification[T any](t *testing.T, w *roomWatch, msgtype string, senderID string, predicate func(T) bool, description string) T {
+func waitForNotification[T any](t *testing.T, w *roomWatch, msgtype string, senderID ref.UserID, predicate func(T) bool, description string) T {
 	t.Helper()
 	if msgtype == "" {
 		t.Fatal("msgtype is required")
 	}
-	if senderID == "" {
+	if senderID.IsZero() {
 		t.Fatal("senderID is required")
 	}
 	var result T
@@ -1228,7 +1228,7 @@ func proxySyncRoomTimeline(t *testing.T, client *http.Client, roomID ref.RoomID)
 
 // assertMessagePresent checks that an event list contains a message from the
 // expected sender with the expected body text.
-func assertMessagePresent(t *testing.T, events []messaging.Event, sender, expectedBody string) {
+func assertMessagePresent(t *testing.T, events []messaging.Event, sender ref.UserID, expectedBody string) {
 	t.Helper()
 	for _, event := range events {
 		if event.Type != schema.MatrixEventTypeMessage {

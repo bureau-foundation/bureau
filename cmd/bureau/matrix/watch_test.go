@@ -80,7 +80,7 @@ func TestRunWatchLoop_ReceivesEvents(t *testing.T) {
 									{
 										EventID:        "$ev1",
 										Type:           "m.room.message",
-										Sender:         "@user:local",
+										Sender:         ref.MustParseUserID("@user:local"),
 										OriginServerTS: 1771200000000,
 										Content:        map[string]any{"msgtype": "m.text", "body": "hello"},
 									},
@@ -152,14 +152,14 @@ func TestRunWatchLoop_TypeFiltering(t *testing.T) {
 									{
 										EventID:        "$ev1",
 										Type:           "m.room.message",
-										Sender:         "@user:local",
+										Sender:         ref.MustParseUserID("@user:local"),
 										OriginServerTS: 1771200000000,
 										Content:        map[string]any{"msgtype": "m.text", "body": "should be filtered out"},
 									},
 									{
 										EventID:        "$ev2",
 										Type:           "m.bureau.machine_status",
-										Sender:         "@machine:local",
+										Sender:         ref.MustParseUserID("@machine:local"),
 										OriginServerTS: 1771200001000,
 										Content:        map[string]any{"cpu_percent": 42.5},
 									},

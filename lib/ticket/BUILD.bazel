@@ -28,5 +28,8 @@ go_test(
         "search_test.go",
     ],
     embed = [":ticket"],
-    deps = ["//lib/schema"],
+    deps = [
+        "//lib/ref",
+        "//lib/schema",
+    ],
 )

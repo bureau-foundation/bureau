@@ -260,7 +260,7 @@ func ticketFixture(title, status string) schema.TicketContent {
 		Status:    status,
 		Priority:  2,
 		Type:      "task",
-		CreatedBy: "@bureau/fleet/prod/agent/tester:bureau.local",
+		CreatedBy: ref.MustParseUserID("@bureau/fleet/prod/agent/tester:bureau.local"),
 		CreatedAt: "2026-01-15T12:00:00Z",
 		UpdatedAt: "2026-01-15T12:00:00Z",
 	}
@@ -291,7 +291,7 @@ func sampleRooms() map[ref.RoomID]*roomState {
 			Priority:  1,
 			Type:      "feature",
 			Labels:    []string{"auth", "frontend"},
-			Assignee:  "@agent/coder:bureau.local",
+			Assignee:  ref.MustParseUserID("@agent/coder:bureau.local"),
 			CreatedAt: "2026-01-01T00:00:00Z",
 		},
 		"tkt-2": {
@@ -561,7 +561,7 @@ func TestHandleShow(t *testing.T) {
 	if result.Content.Body != "add OAuth support" {
 		t.Errorf("body: got %q, want 'add OAuth support'", result.Content.Body)
 	}
-	if result.Content.Assignee != "@agent/coder:bureau.local" {
+	if result.Content.Assignee != ref.MustParseUserID("@agent/coder:bureau.local") {
 		t.Errorf("assignee: got %q", result.Content.Assignee)
 	}
 }
@@ -1132,14 +1132,14 @@ func TestSchemaContentRoundTripViaCBOR(t *testing.T) {
 		Priority:  2,
 		Type:      "task",
 		Labels:    []string{"a", "b"},
-		Assignee:  "@agent/test:bureau.local",
+		Assignee:  ref.MustParseUserID("@agent/test:bureau.local"),
 		Parent:    "parent-1",
 		BlockedBy: []string{"dep-1"},
-		CreatedBy: "@creator:bureau.local",
+		CreatedBy: ref.MustParseUserID("@creator:bureau.local"),
 		CreatedAt: "2026-01-01T00:00:00Z",
 		UpdatedAt: "2026-01-02T00:00:00Z",
 		Notes: []schema.TicketNote{
-			{ID: "n-1", Author: "@author:bureau.local", Body: "note body", CreatedAt: "2026-01-01T00:00:00Z"},
+			{ID: "n-1", Author: ref.MustParseUserID("@author:bureau.local"), Body: "note body", CreatedAt: "2026-01-01T00:00:00Z"},
 		},
 	}
 
@@ -1235,7 +1235,7 @@ func mutationRooms() map[ref.RoomID]*roomState {
 			Status:    "open",
 			Priority:  2,
 			Type:      "task",
-			CreatedBy: "@agent/creator:bureau.local",
+			CreatedBy: ref.MustParseUserID("@agent/creator:bureau.local"),
 			CreatedAt: "2026-01-01T00:00:00Z",
 			UpdatedAt: "2026-01-01T00:00:00Z",
 		},
@@ -1245,7 +1245,7 @@ func mutationRooms() map[ref.RoomID]*roomState {
 			Status:      "closed",
 			Priority:    2,
 			Type:        "bug",
-			CreatedBy:   "@agent/creator:bureau.local",
+			CreatedBy:   ref.MustParseUserID("@agent/creator:bureau.local"),
 			CreatedAt:   "2026-01-01T00:00:00Z",
 			UpdatedAt:   "2026-01-02T00:00:00Z",
 			ClosedAt:    "2026-01-02T00:00:00Z",
@@ -1257,8 +1257,8 @@ func mutationRooms() map[ref.RoomID]*roomState {
 			Status:    "in_progress",
 			Priority:  1,
 			Type:      "feature",
-			Assignee:  "@agent/worker:bureau.local",
-			CreatedBy: "@agent/creator:bureau.local",
+			Assignee:  ref.MustParseUserID("@agent/worker:bureau.local"),
+			CreatedBy: ref.MustParseUserID("@agent/creator:bureau.local"),
 			CreatedAt: "2026-01-01T00:00:00Z",
 			UpdatedAt: "2026-01-02T00:00:00Z",
 		},
@@ -1284,7 +1284,7 @@ func mutationRooms() map[ref.RoomID]*roomState {
 					CreatedAt:   "2026-01-01T00:00:00Z",
 				},
 			},
-			CreatedBy: "@agent/creator:bureau.local",
+			CreatedBy: ref.MustParseUserID("@agent/creator:bureau.local"),
 			CreatedAt: "2026-01-01T00:00:00Z",
 			UpdatedAt: "2026-01-01T00:00:00Z",
 		},
@@ -1295,7 +1295,7 @@ func mutationRooms() map[ref.RoomID]*roomState {
 			Priority:  2,
 			Type:      "task",
 			BlockedBy: []string{"tkt-open"},
-			CreatedBy: "@agent/creator:bureau.local",
+			CreatedBy: ref.MustParseUserID("@agent/creator:bureau.local"),
 			CreatedAt: "2026-01-01T00:00:00Z",
 			UpdatedAt: "2026-01-01T00:00:00Z",
 		},
@@ -1345,7 +1345,7 @@ func TestHandleCreate(t *testing.T) {
 	if content.Status != "open" {
 		t.Errorf("status: got %q, want 'open'", content.Status)
 	}
-	if content.CreatedBy != "@bureau/fleet/prod/agent/tester:bureau.local" {
+	if content.CreatedBy != ref.MustParseUserID("@bureau/fleet/prod/agent/tester:bureau.local") {
 		t.Errorf("created_by: got %q, want '@bureau/fleet/prod/agent/tester:bureau.local'", content.CreatedBy)
 	}
 
@@ -1484,7 +1484,7 @@ func TestHandleUpdateClaimTicket(t *testing.T) {
 	if result.Content.Status != "in_progress" {
 		t.Errorf("status: got %q, want 'in_progress'", result.Content.Status)
 	}
-	if result.Content.Assignee != "@bureau/fleet/prod/agent/tester:bureau.local" {
+	if result.Content.Assignee != ref.MustParseUserID("@bureau/fleet/prod/agent/tester:bureau.local") {
 		t.Errorf("assignee: got %q", result.Content.Assignee)
 	}
 }
@@ -1522,7 +1522,7 @@ func TestHandleUpdateUnclaim(t *testing.T) {
 	if result.Content.Status != "open" {
 		t.Errorf("status: got %q, want 'open'", result.Content.Status)
 	}
-	if result.Content.Assignee != "" {
+	if !result.Content.Assignee.IsZero() {
 		t.Errorf("assignee should be auto-cleared, got %q", result.Content.Assignee)
 	}
 }
@@ -1584,7 +1584,7 @@ func TestHandleUpdateCloseViaUpdate(t *testing.T) {
 	if result.Content.ClosedAt == "" {
 		t.Error("closed_at should be auto-set")
 	}
-	if result.Content.Assignee != "" {
+	if !result.Content.Assignee.IsZero() {
 		t.Errorf("assignee should be empty, got %q", result.Content.Assignee)
 	}
 }
@@ -1642,7 +1642,7 @@ func TestHandleCloseInProgress(t *testing.T) {
 		t.Fatalf("Call: %v", err)
 	}
 
-	if result.Content.Assignee != "" {
+	if !result.Content.Assignee.IsZero() {
 		t.Errorf("assignee should be cleared, got %q", result.Content.Assignee)
 	}
 }
@@ -1676,7 +1676,7 @@ func recurringRooms() map[ref.RoomID]*roomState {
 			Status:    "open",
 			Priority:  2,
 			Type:      "task",
-			CreatedBy: "@agent/creator:bureau.local",
+			CreatedBy: ref.MustParseUserID("@agent/creator:bureau.local"),
 			CreatedAt: "2026-01-10T00:00:00Z",
 			UpdatedAt: "2026-01-10T00:00:00Z",
 			Gates: []schema.TicketGate{
@@ -1698,7 +1698,7 @@ func recurringRooms() map[ref.RoomID]*roomState {
 			Status:    "open",
 			Priority:  2,
 			Type:      "task",
-			CreatedBy: "@agent/creator:bureau.local",
+			CreatedBy: ref.MustParseUserID("@agent/creator:bureau.local"),
 			CreatedAt: "2026-01-10T00:00:00Z",
 			UpdatedAt: "2026-01-10T00:00:00Z",
 			Gates: []schema.TicketGate{
@@ -1720,7 +1720,7 @@ func recurringRooms() map[ref.RoomID]*roomState {
 			Status:    "open",
 			Priority:  2,
 			Type:      "task",
-			CreatedBy: "@agent/creator:bureau.local",
+			CreatedBy: ref.MustParseUserID("@agent/creator:bureau.local"),
 			CreatedAt: "2026-01-10T00:00:00Z",
 			UpdatedAt: "2026-01-10T00:00:00Z",
 			Gates: []schema.TicketGate{
@@ -1743,7 +1743,7 @@ func recurringRooms() map[ref.RoomID]*roomState {
 			Status:    "open",
 			Priority:  2,
 			Type:      "task",
-			CreatedBy: "@agent/creator:bureau.local",
+			CreatedBy: ref.MustParseUserID("@agent/creator:bureau.local"),
 			CreatedAt: "2026-01-10T00:00:00Z",
 			UpdatedAt: "2026-01-10T00:00:00Z",
 		},
@@ -1778,7 +1778,7 @@ func TestHandleCloseRecurringScheduleRearms(t *testing.T) {
 	if result.Content.CloseReason != "" {
 		t.Errorf("close_reason should be empty (re-armed), got %q", result.Content.CloseReason)
 	}
-	if result.Content.Assignee != "" {
+	if !result.Content.Assignee.IsZero() {
 		t.Errorf("assignee should be cleared, got %q", result.Content.Assignee)
 	}
 
@@ -2759,7 +2759,7 @@ func TestHandleUpcomingGates(t *testing.T) {
 				Status:    "open",
 				Priority:  2,
 				Type:      "chore",
-				CreatedBy: "@agent/creator:bureau.local",
+				CreatedBy: ref.MustParseUserID("@agent/creator:bureau.local"),
 				CreatedAt: "2026-01-01T00:00:00Z",
 				UpdatedAt: "2026-01-01T00:00:00Z",
 				Gates: []schema.TicketGate{
@@ -2778,7 +2778,7 @@ func TestHandleUpcomingGates(t *testing.T) {
 				Status:    "open",
 				Priority:  3,
 				Type:      "chore",
-				CreatedBy: "@agent/creator:bureau.local",
+				CreatedBy: ref.MustParseUserID("@agent/creator:bureau.local"),
 				CreatedAt: "2026-01-01T00:00:00Z",
 				UpdatedAt: "2026-01-01T00:00:00Z",
 				Gates: []schema.TicketGate{
@@ -2797,7 +2797,7 @@ func TestHandleUpcomingGates(t *testing.T) {
 				Status:    "open",
 				Priority:  2,
 				Type:      "task",
-				CreatedBy: "@agent/creator:bureau.local",
+				CreatedBy: ref.MustParseUserID("@agent/creator:bureau.local"),
 				CreatedAt: "2026-01-01T00:00:00Z",
 				UpdatedAt: "2026-01-01T00:00:00Z",
 				Gates: []schema.TicketGate{
@@ -2866,7 +2866,7 @@ func TestHandleUpcomingGatesRoomFilter(t *testing.T) {
 			"tkt-a": {
 				Version: 1, Title: "room1 task", Status: "open",
 				Priority: 2, Type: "chore",
-				CreatedBy: "@agent/creator:bureau.local",
+				CreatedBy: ref.MustParseUserID("@agent/creator:bureau.local"),
 				CreatedAt: "2026-01-01T00:00:00Z",
 				UpdatedAt: "2026-01-01T00:00:00Z",
 				Gates: []schema.TicketGate{
@@ -2878,7 +2878,7 @@ func TestHandleUpcomingGatesRoomFilter(t *testing.T) {
 			"tkt-b": {
 				Version: 1, Title: "room2 task", Status: "open",
 				Priority: 2, Type: "chore",
-				CreatedBy: "@agent/creator:bureau.local",
+				CreatedBy: ref.MustParseUserID("@agent/creator:bureau.local"),
 				CreatedAt: "2026-01-01T00:00:00Z",
 				UpdatedAt: "2026-01-01T00:00:00Z",
 				Gates: []schema.TicketGate{
@@ -3123,7 +3123,7 @@ func TestTimerLifecycleMaxOccurrences(t *testing.T) {
 				Status:    "open",
 				Priority:  2,
 				Type:      "chore",
-				CreatedBy: "@agent/creator:bureau.local",
+				CreatedBy: ref.MustParseUserID("@agent/creator:bureau.local"),
 				CreatedAt: "2026-01-01T00:00:00Z",
 				UpdatedAt: "2026-01-01T00:00:00Z",
 				Gates: []schema.TicketGate{

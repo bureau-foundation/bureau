@@ -27,6 +27,7 @@ go_library(
     importpath = "github.com/bureau-foundation/bureau/lib/ticketui",
     visibility = ["//visibility:public"],
     deps = [
+        "//lib/ref",
         "//lib/schema",
         "//lib/ticket",
         "@com_github_alecthomas_chroma_v2//quick",
@@ -61,6 +62,7 @@ go_test(
     ],
     embed = [":ticketui"],
     deps = [
+        "//lib/ref",
         "//lib/schema",
         "//lib/ticket",
         "@com_github_charmbracelet_bubbletea//:bubbletea",

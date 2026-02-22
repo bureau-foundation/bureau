@@ -13,6 +13,7 @@ import (
 
 	"github.com/bureau-foundation/bureau/lib/codec"
 	"github.com/bureau-foundation/bureau/lib/cron"
+	"github.com/bureau-foundation/bureau/lib/ref"
 	"github.com/bureau-foundation/bureau/lib/schema"
 	"github.com/bureau-foundation/bureau/lib/servicetoken"
 )
@@ -151,7 +152,7 @@ func (ts *TicketService) synthesizeDeferGate(until, forDuration string) (schema.
 //   - blocked -> in_progress (resume, caller must provide assignee)
 //   - blocked -> closed (cancelled while blocked)
 //   - closed -> open (reopen)
-func validateStatusTransition(currentStatus, proposedStatus, currentAssignee string) error {
+func validateStatusTransition(currentStatus, proposedStatus string, currentAssignee ref.UserID) error {
 	if currentStatus == proposedStatus {
 		if currentStatus == "in_progress" {
 			return fmt.Errorf("ticket is already in_progress (assigned to %s)", currentAssignee)
@@ -421,8 +422,6 @@ func (ts *TicketService) handleCreate(ctx context.Context, token *servicetoken.T
 	}
 
 	now := ts.clock.Now().UTC().Format(time.RFC3339)
-	createdBy := token.Subject.String()
-
 	content := schema.TicketContent{
 		Version:   schema.TicketContentVersion,
 		Title:     request.Title,
@@ -436,7 +435,7 @@ func (ts *TicketService) handleCreate(ctx context.Context, token *servicetoken.T
 		Gates:     request.Gates,
 		Origin:    request.Origin,
 		Deadline:  request.Deadline,
-		CreatedBy: createdBy,
+		CreatedBy: token.Subject,
 		CreatedAt: now,
 		UpdatedAt: now,
 	}
@@ -557,7 +556,15 @@ func (ts *TicketService) handleUpdate(ctx context.Context, token *servicetoken.T
 	}
 	proposedAssignee := content.Assignee
 	if request.Assignee != nil {
-		proposedAssignee = *request.Assignee
+		if *request.Assignee == "" {
+			proposedAssignee = ref.UserID{}
+		} else {
+			parsed, err := ref.ParseUserID(*request.Assignee)
+			if err != nil {
+				return nil, fmt.Errorf("invalid assignee: %w", err)
+			}
+			proposedAssignee = parsed
+		}
 	}
 
 	// Validate status transition if the client explicitly sent a status
@@ -588,7 +595,7 @@ func (ts *TicketService) handleUpdate(ctx context.Context, token *servicetoken.T
 		if proposedStatus != content.Status {
 			// Auto-clear assignee when leaving in_progress.
 			if content.Status == "in_progress" && proposedStatus != "in_progress" {
-				proposedAssignee = ""
+				proposedAssignee = ref.UserID{}
 			}
 
 			// Auto-manage lifecycle fields for closed transitions.
@@ -604,10 +611,10 @@ func (ts *TicketService) handleUpdate(ctx context.Context, token *servicetoken.T
 
 	// Enforce assignee/in_progress atomicity: in_progress requires
 	// an assignee, and an assignee requires in_progress.
-	if proposedStatus == "in_progress" && proposedAssignee == "" {
+	if proposedStatus == "in_progress" && proposedAssignee.IsZero() {
 		return nil, errors.New("assignee is required when status is in_progress")
 	}
-	if proposedAssignee != "" && proposedStatus != "in_progress" {
+	if !proposedAssignee.IsZero() && proposedStatus != "in_progress" {
 		return nil, fmt.Errorf("assignee can only be set when status is in_progress (status is %q)", proposedStatus)
 	}
 
@@ -647,7 +654,7 @@ func (ts *TicketService) handleUpdate(ctx context.Context, token *servicetoken.T
 		}
 		if rearmed {
 			content.Status = "open"
-			content.Assignee = ""
+			content.Assignee = ref.UserID{}
 			content.ClosedAt = ""
 			content.CloseReason = ""
 
@@ -760,7 +767,7 @@ func (ts *TicketService) handleClose(ctx context.Context, token *servicetoken.To
 		if rearmed {
 			// Ticket reopens with re-armed gates instead of closing.
 			content.Status = "open"
-			content.Assignee = ""
+			content.Assignee = ref.UserID{}
 			content.UpdatedAt = nowStr
 			// Do not set ClosedAt or CloseReason — the ticket is
 			// not actually closing.
@@ -790,7 +797,7 @@ func (ts *TicketService) handleClose(ctx context.Context, token *servicetoken.To
 	content.Status = "closed"
 	content.ClosedAt = nowStr
 	content.CloseReason = request.Reason
-	content.Assignee = ""
+	content.Assignee = ref.UserID{}
 	content.UpdatedAt = nowStr
 
 	if err := content.Validate(); err != nil {
@@ -889,7 +896,6 @@ func (ts *TicketService) handleBatchCreate(ctx context.Context, token *serviceto
 	}
 
 	now := ts.clock.Now().UTC().Format(time.RFC3339)
-	createdBy := token.Subject.String()
 
 	type pendingTicket struct {
 		id      string
@@ -924,7 +930,7 @@ func (ts *TicketService) handleBatchCreate(ctx context.Context, token *serviceto
 			BlockedBy: entry.BlockedBy,
 			Gates:     entry.Gates,
 			Origin:    entry.Origin,
-			CreatedBy: createdBy,
+			CreatedBy: token.Subject,
 			CreatedAt: now,
 			UpdatedAt: now,
 		}

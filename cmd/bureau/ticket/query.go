@@ -948,8 +948,8 @@ func writeShowDetail(result showResult) error {
 	fmt.Fprintf(writer, "Type:\t%s\n", content.Type)
 	fmt.Fprintf(writer, "Title:\t%s\n", content.Title)
 
-	if content.Assignee != "" {
-		fmt.Fprintf(writer, "Assignee:\t%s\n", content.Assignee)
+	if !content.Assignee.IsZero() {
+		fmt.Fprintf(writer, "Assignee:\t%s\n", content.Assignee.String())
 	}
 	if len(content.Labels) > 0 {
 		fmt.Fprintf(writer, "Labels:\t%s\n", strings.Join(content.Labels, ", "))
@@ -968,8 +968,8 @@ func writeShowDetail(result showResult) error {
 	}
 	fmt.Fprintf(writer, "Created:\t%s\n", content.CreatedAt)
 	fmt.Fprintf(writer, "Updated:\t%s\n", content.UpdatedAt)
-	if content.CreatedBy != "" {
-		fmt.Fprintf(writer, "Created by:\t%s\n", content.CreatedBy)
+	if !content.CreatedBy.IsZero() {
+		fmt.Fprintf(writer, "Created by:\t%s\n", content.CreatedBy.String())
 	}
 	if content.ClosedAt != "" {
 		fmt.Fprintf(writer, "Closed:\t%s\n", content.ClosedAt)

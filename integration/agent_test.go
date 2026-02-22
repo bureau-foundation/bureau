@@ -49,6 +49,6 @@ func TestMockAgentLifecycle(t *testing.T) {
 	// Wait for the completion summary. The mock agent emits a fixed set
 	// of events and exits, so agent-complete should follow quickly.
 	completeWatch := watchRoom(t, admin, machine.ConfigRoomID)
-	completeWatch.WaitForMessage(t, "agent-complete", agent.Account.UserID.String())
+	completeWatch.WaitForMessage(t, "agent-complete", agent.Account.UserID)
 	t.Log("mock agent sent completion summary — lifecycle verified")
 }

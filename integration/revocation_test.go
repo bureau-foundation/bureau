@@ -264,14 +264,14 @@ func TestMachineRevocation_CLIRevoke(t *testing.T) {
 	if revocation.Machine != machineName {
 		t.Errorf("revocation machine = %q, want %q", revocation.Machine, machineName)
 	}
-	if revocation.MachineUserID != machineUserID.String() {
+	if revocation.MachineUserID != machineUserID {
 		t.Errorf("revocation machine_user_id = %q, want %q", revocation.MachineUserID, machineUserID)
 	}
 	t.Logf("revocation account_deactivated = %v (depends on homeserver admin API support)", revocation.AccountDeactivated)
 	if revocation.Reason != revokeReason {
 		t.Errorf("revocation reason = %q, want %q", revocation.Reason, revokeReason)
 	}
-	if revocation.InitiatedBy == "" {
+	if revocation.InitiatedBy.IsZero() {
 		t.Error("revocation initiated_by should not be empty")
 	}
 	if revocation.InitiatedAt == "" {
@@ -351,7 +351,7 @@ func TestMachineRevocation_CLIRevoke(t *testing.T) {
 		t.Fatalf("get machine room members: %v", err)
 	}
 	for _, member := range members {
-		if member.UserID == machineUserID.String() && member.Membership == "join" {
+		if member.UserID == machineUserID && member.Membership == "join" {
 			t.Errorf("machine %s should have been kicked from machine room but is still joined", machineUserID)
 		}
 	}

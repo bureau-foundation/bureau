@@ -99,7 +99,7 @@ func TestSandboxExitOutputCapture(t *testing.T) {
 	// config room when the sandbox exits. The typed message includes
 	// exit code and captured terminal output as structured fields.
 	exitMsg := waitForNotification[schema.SandboxExitedMessage](
-		t, &exitWatch, schema.MsgTypeSandboxExited, machine.UserID.String(),
+		t, &exitWatch, schema.MsgTypeSandboxExited, machine.UserID,
 		nil, "sandbox exit notification")
 
 	// The exit code should be 42 (our explicit exit code).

@@ -9,6 +9,7 @@ import (
 
 	tea "github.com/charmbracelet/bubbletea"
 
+	"github.com/bureau-foundation/bureau/lib/ref"
 	"github.com/bureau-foundation/bureau/lib/schema"
 	"github.com/bureau-foundation/bureau/lib/ticket"
 )
@@ -25,8 +26,8 @@ func testSource() *IndexSource {
 		Priority:  0,
 		Type:      "bug",
 		Labels:    []string{"infra"},
-		Assignee:  "@iree/pm:bureau.local",
-		CreatedBy: "ben",
+		Assignee:  ref.MustParseUserID("@iree/pm:bureau.local"),
+		CreatedBy: ref.MustParseUserID("@ben:bureau.local"),
 		CreatedAt: "2026-02-01T00:00:00Z",
 		UpdatedAt: "2026-02-01T00:00:00Z",
 	})
@@ -37,7 +38,7 @@ func testSource() *IndexSource {
 		Priority:  1,
 		Type:      "task",
 		Labels:    []string{"transport"},
-		CreatedBy: "ben",
+		CreatedBy: ref.MustParseUserID("@ben:bureau.local"),
 		CreatedAt: "2026-02-02T00:00:00Z",
 		UpdatedAt: "2026-02-02T00:00:00Z",
 	})
@@ -47,7 +48,7 @@ func testSource() *IndexSource {
 		Status:    "closed",
 		Priority:  2,
 		Type:      "chore",
-		CreatedBy: "ben",
+		CreatedBy: ref.MustParseUserID("@ben:bureau.local"),
 		CreatedAt: "2026-02-03T00:00:00Z",
 		UpdatedAt: "2026-02-03T00:00:00Z",
 		ClosedAt:  "2026-02-04T00:00:00Z",
@@ -59,8 +60,8 @@ func testSource() *IndexSource {
 		Priority:  1,
 		Type:      "bug",
 		Labels:    []string{"observation"},
-		Assignee:  "@ben:bureau.local",
-		CreatedBy: "ben",
+		Assignee:  ref.MustParseUserID("@ben:bureau.local"),
+		CreatedBy: ref.MustParseUserID("@ben:bureau.local"),
 		CreatedAt: "2026-02-01T12:00:00Z",
 		UpdatedAt: "2026-02-02T00:00:00Z",
 	})
@@ -79,7 +80,7 @@ func testGroupedSource() *IndexSource {
 		Status:    "open",
 		Priority:  1,
 		Type:      "epic",
-		CreatedBy: "ben",
+		CreatedBy: ref.MustParseUserID("@ben:bureau.local"),
 		CreatedAt: "2026-01-01T00:00:00Z",
 		UpdatedAt: "2026-01-01T00:00:00Z",
 	})
@@ -91,7 +92,7 @@ func testGroupedSource() *IndexSource {
 		Priority:  0,
 		Type:      "task",
 		Parent:    "epic-1",
-		CreatedBy: "ben",
+		CreatedBy: ref.MustParseUserID("@ben:bureau.local"),
 		CreatedAt: "2026-01-02T00:00:00Z",
 		UpdatedAt: "2026-01-02T00:00:00Z",
 	})
@@ -102,7 +103,7 @@ func testGroupedSource() *IndexSource {
 		Priority:  1,
 		Type:      "task",
 		Parent:    "epic-1",
-		CreatedBy: "ben",
+		CreatedBy: ref.MustParseUserID("@ben:bureau.local"),
 		CreatedAt: "2026-01-03T00:00:00Z",
 		UpdatedAt: "2026-01-03T00:00:00Z",
 	})
@@ -113,7 +114,7 @@ func testGroupedSource() *IndexSource {
 		Priority:  2,
 		Type:      "task",
 		Parent:    "epic-1",
-		CreatedBy: "ben",
+		CreatedBy: ref.MustParseUserID("@ben:bureau.local"),
 		CreatedAt: "2026-01-04T00:00:00Z",
 		UpdatedAt: "2026-01-05T00:00:00Z",
 		ClosedAt:  "2026-01-05T00:00:00Z",
@@ -126,7 +127,7 @@ func testGroupedSource() *IndexSource {
 		Status:    "open",
 		Priority:  0,
 		Type:      "epic",
-		CreatedBy: "ben",
+		CreatedBy: ref.MustParseUserID("@ben:bureau.local"),
 		CreatedAt: "2026-01-10T00:00:00Z",
 		UpdatedAt: "2026-01-10T00:00:00Z",
 	})
@@ -137,7 +138,7 @@ func testGroupedSource() *IndexSource {
 		Priority:  0,
 		Type:      "task",
 		Parent:    "epic-2",
-		CreatedBy: "ben",
+		CreatedBy: ref.MustParseUserID("@ben:bureau.local"),
 		CreatedAt: "2026-01-11T00:00:00Z",
 		UpdatedAt: "2026-01-11T00:00:00Z",
 	})
@@ -149,7 +150,7 @@ func testGroupedSource() *IndexSource {
 		Status:    "open",
 		Priority:  3,
 		Type:      "chore",
-		CreatedBy: "ben",
+		CreatedBy: ref.MustParseUserID("@ben:bureau.local"),
 		CreatedAt: "2026-01-20T00:00:00Z",
 		UpdatedAt: "2026-01-20T00:00:00Z",
 	})
@@ -759,7 +760,7 @@ func testDependencyModelSource() *IndexSource {
 		Status:    "open",
 		Priority:  0,
 		Type:      "task",
-		CreatedBy: "test",
+		CreatedBy: ref.MustParseUserID("@test:bureau.local"),
 		CreatedAt: "2026-01-01T00:00:00Z",
 		UpdatedAt: "2026-01-01T00:00:00Z",
 	})
@@ -770,7 +771,7 @@ func testDependencyModelSource() *IndexSource {
 		Priority:  1,
 		Type:      "task",
 		BlockedBy: []string{"tkt-a"},
-		CreatedBy: "test",
+		CreatedBy: ref.MustParseUserID("@test:bureau.local"),
 		CreatedAt: "2026-01-02T00:00:00Z",
 		UpdatedAt: "2026-01-02T00:00:00Z",
 	})
@@ -780,7 +781,7 @@ func testDependencyModelSource() *IndexSource {
 		Status:    "closed",
 		Priority:  2,
 		Type:      "task",
-		CreatedBy: "test",
+		CreatedBy: ref.MustParseUserID("@test:bureau.local"),
 		CreatedAt: "2026-01-03T00:00:00Z",
 		UpdatedAt: "2026-01-03T00:00:00Z",
 		ClosedAt:  "2026-01-04T00:00:00Z",

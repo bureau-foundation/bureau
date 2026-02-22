@@ -293,10 +293,8 @@ func Run(ctx context.Context, driver Driver, config RunConfig) error {
 	messagePumpCtx, cancelMessagePump := context.WithCancel(ctx)
 	defer cancelMessagePump()
 
-	ownUserID := agentContext.Identity.UserID
-	machineUserID := machine.UserID()
 	pumpReady := make(chan struct{})
-	go runMessagePump(messagePumpCtx, session, agentContext.ConfigRoomID, ownUserID, machineUserID.String(), process.Stdin(), logger, pumpReady)
+	go runMessagePump(messagePumpCtx, session, agentContext.ConfigRoomID, identityUserID, machine.UserID(), process.Stdin(), logger, pumpReady)
 
 	// Wait for the pump to complete its initial /sync before announcing
 	// readiness. This guarantees "agent-ready" means the pump is listening.
@@ -427,7 +425,7 @@ func formatSummary(summary SessionSummary, processError error) string {
 // Messages from the agent itself and from the machine daemon are
 // skipped (the daemon posts operational messages like service directory
 // updates that are not intended for the agent).
-func runMessagePump(ctx context.Context, session messaging.Session, roomID ref.RoomID, ownUserID, machineUserID string, stdin io.Writer, logger *slog.Logger, ready chan<- struct{}) {
+func runMessagePump(ctx context.Context, session messaging.Session, roomID ref.RoomID, ownUserID, machineUserID ref.UserID, stdin io.Writer, logger *slog.Logger, ready chan<- struct{}) {
 	filter := buildMessageSyncFilter(roomID.String())
 
 	// Initial /sync with timeout=0 to capture the stream position. Events

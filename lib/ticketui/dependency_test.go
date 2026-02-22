@@ -10,6 +10,7 @@ import (
 
 	"github.com/charmbracelet/lipgloss"
 
+	"github.com/bureau-foundation/bureau/lib/ref"
 	"github.com/bureau-foundation/bureau/lib/schema"
 	"github.com/bureau-foundation/bureau/lib/ticket"
 )
@@ -30,7 +31,7 @@ func testDependencySource() *IndexSource {
 		Priority:  1,
 		Type:      "task",
 		BlockedBy: []string{"left-1", "left-2"},
-		CreatedBy: "test",
+		CreatedBy: ref.MustParseUserID("@test:bureau.local"),
 	})
 	index.Put("left-1", schema.TicketContent{
 		Version:  1,

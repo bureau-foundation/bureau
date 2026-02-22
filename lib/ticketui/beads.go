@@ -9,6 +9,7 @@ import (
 	"fmt"
 	"os"
 
+	"github.com/bureau-foundation/bureau/lib/ref"
 	"github.com/bureau-foundation/bureau/lib/schema"
 	"github.com/bureau-foundation/bureau/lib/ticket"
 )
@@ -110,7 +111,7 @@ func beadsToTicketContent(entry beadsEntry) schema.TicketContent {
 		Priority:    entry.Priority,
 		Type:        entry.IssueType,
 		Labels:      entry.Labels,
-		CreatedBy:   entry.CreatedBy,
+		CreatedBy:   beadsParseUserID(entry.CreatedBy),
 		CreatedAt:   entry.CreatedAt,
 		UpdatedAt:   entry.UpdatedAt,
 		ClosedAt:    entry.ClosedAt,
@@ -136,4 +137,13 @@ func beadsToTicketContent(entry beadsEntry) schema.TicketContent {
 	}
 
 	return content
+}
+
+// beadsParseUserID parses a beads created_by string as a Matrix user
+// ID. Beads entries come from a local issue tracker where the
+// created_by field may not be a valid Matrix user ID format. Returns
+// the zero value for non-Matrix identifiers.
+func beadsParseUserID(raw string) ref.UserID {
+	userID, _ := ref.ParseUserID(raw)
+	return userID
 }

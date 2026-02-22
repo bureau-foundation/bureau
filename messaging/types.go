@@ -102,7 +102,7 @@ func NewThreadReply(threadRootID, body string) MessageContent {
 type Event struct {
 	EventID        string         `json:"event_id"`
 	Type           ref.EventType  `json:"type"`
-	Sender         string         `json:"sender"`
+	Sender         ref.UserID     `json:"sender"`
 	OriginServerTS int64          `json:"origin_server_ts"`
 	Content        map[string]any `json:"content"`
 	RoomID         ref.RoomID     `json:"room_id,omitempty"`
@@ -228,10 +228,10 @@ type JoinedRoomsResponse struct {
 
 // RoomMember represents a member of a Matrix room.
 type RoomMember struct {
-	UserID      string `json:"user_id"`
-	DisplayName string `json:"display_name"`
-	Membership  string `json:"membership"`
-	AvatarURL   string `json:"avatar_url,omitempty"`
+	UserID      ref.UserID `json:"user_id"`
+	DisplayName string     `json:"display_name"`
+	Membership  string     `json:"membership"`
+	AvatarURL   string     `json:"avatar_url,omitempty"`
 }
 
 // RoomMembersResponse is returned by the /members endpoint.
@@ -243,7 +243,7 @@ type RoomMembersResponse struct {
 type RoomMemberEvent struct {
 	Type     string            `json:"type"`
 	StateKey string            `json:"state_key"`
-	Sender   string            `json:"sender"`
+	Sender   ref.UserID        `json:"sender"`
 	Content  RoomMemberContent `json:"content"`
 }
 

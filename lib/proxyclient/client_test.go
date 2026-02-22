@@ -424,8 +424,8 @@ func TestSync(t *testing.T) {
 	if event.Type != "m.room.message" {
 		t.Errorf("event type = %q, want m.room.message", event.Type)
 	}
-	if event.Sender != "@admin:test.local" {
-		t.Errorf("event sender = %q, want @admin:test.local", event.Sender)
+	if event.Sender != ref.MustParseUserID("@admin:test.local") {
+		t.Errorf("event sender = %v, want @admin:test.local", event.Sender)
 	}
 	body, _ := event.Content["body"].(string)
 	if body != "hello agent" {
@@ -545,8 +545,8 @@ func TestGetRoomMembers(t *testing.T) {
 	if len(members) != 1 {
 		t.Fatalf("got %d members, want 1", len(members))
 	}
-	if members[0].UserID != "@agent/test:test.local" {
-		t.Errorf("UserID = %q, want @agent/test:test.local", members[0].UserID)
+	if members[0].UserID != ref.MustParseUserID("@agent/test:test.local") {
+		t.Errorf("UserID = %v, want @agent/test:test.local", members[0].UserID)
 	}
 	if members[0].DisplayName != "Test Agent" {
 		t.Errorf("DisplayName = %q, want Test Agent", members[0].DisplayName)

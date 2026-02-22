@@ -8,6 +8,8 @@ import (
 	"reflect"
 	"strings"
 	"testing"
+
+	"github.com/bureau-foundation/bureau/lib/ref"
 )
 
 // validTicketContent returns a TicketContent with all required fields
@@ -19,7 +21,7 @@ func validTicketContent() TicketContent {
 		Status:    "open",
 		Priority:  2,
 		Type:      "bug",
-		CreatedBy: "@iree/amdgpu/pm:bureau.local",
+		CreatedBy: ref.MustParseUserID("@iree/amdgpu/pm:bureau.local"),
 		CreatedAt: "2026-02-12T10:00:00Z",
 		UpdatedAt: "2026-02-12T10:00:00Z",
 	}
@@ -34,7 +36,7 @@ func TestTicketContentRoundTrip(t *testing.T) {
 		Priority:  1,
 		Type:      "feature",
 		Labels:    []string{"amdgpu", "inference", "p1"},
-		Assignee:  "@iree/amdgpu/pm:bureau.local",
+		Assignee:  ref.MustParseUserID("@iree/amdgpu/pm:bureau.local"),
 		Parent:    "tkt-epic1",
 		BlockedBy: []string{"tkt-a3f9", "tkt-b2c4"},
 		Gates: []TicketGate{
@@ -60,7 +62,7 @@ func TestTicketContentRoundTrip(t *testing.T) {
 		Notes: []TicketNote{
 			{
 				ID:        "n-1",
-				Author:    "@bureau/admin:bureau.local",
+				Author:    ref.MustParseUserID("@bureau/admin:bureau.local"),
 				CreatedAt: "2026-02-12T10:30:00Z",
 				Body:      "Be careful about the memory alignment on MI300X.",
 			},
@@ -76,7 +78,7 @@ func TestTicketContentRoundTrip(t *testing.T) {
 				Label: "screenshot of rendering bug",
 			},
 		},
-		CreatedBy:   "@bureau/admin:bureau.local",
+		CreatedBy:   ref.MustParseUserID("@bureau/admin:bureau.local"),
 		CreatedAt:   "2026-02-12T09:00:00Z",
 		UpdatedAt:   "2026-02-12T11:00:00Z",
 		ClosedAt:    "",
@@ -107,7 +109,7 @@ func TestTicketContentRoundTrip(t *testing.T) {
 	assertField(t, raw, "status", "in_progress")
 	assertField(t, raw, "priority", float64(1))
 	assertField(t, raw, "type", "feature")
-	assertField(t, raw, "assignee", original.Assignee)
+	assertField(t, raw, "assignee", original.Assignee.String())
 	assertField(t, raw, "parent", "tkt-epic1")
 	assertField(t, raw, "created_by", "@bureau/admin:bureau.local")
 	assertField(t, raw, "created_at", "2026-02-12T09:00:00Z")
@@ -227,9 +229,17 @@ func TestTicketContentOmitsEmptyOptionals(t *testing.T) {
 	}
 
 	optionalFields := []string{
-		"body", "labels", "assignee", "parent", "blocked_by",
+		"body", "labels", "parent", "blocked_by",
 		"gates", "notes", "attachments", "closed_at", "close_reason",
 		"origin", "extra",
+	}
+	// Assignee is ref.UserID which implements TextMarshaler — Go's
+	// encoding/json emits "" for the zero value even with omitempty.
+	// Verify it marshals to empty string rather than being absent.
+	if got, ok := raw["assignee"]; !ok {
+		t.Error("assignee should be present as empty string for zero UserID")
+	} else if got != "" {
+		t.Errorf("assignee = %v, want empty string for zero UserID", got)
 	}
 	for _, field := range optionalFields {
 		if _, exists := raw[field]; exists {
@@ -454,7 +464,7 @@ func TestTicketContentValidate(t *testing.T) {
 		},
 		{
 			name:    "created_by_empty",
-			modify:  func(tc *TicketContent) { tc.CreatedBy = "" },
+			modify:  func(tc *TicketContent) { tc.CreatedBy = ref.UserID{} },
 			wantErr: "created_by is required",
 		},
 		{
@@ -477,7 +487,7 @@ func TestTicketContentValidate(t *testing.T) {
 		{
 			name: "invalid_note",
 			modify: func(tc *TicketContent) {
-				tc.Notes = []TicketNote{{ID: "n-1", Author: "", CreatedAt: "2026-02-12T10:00:00Z", Body: "test"}}
+				tc.Notes = []TicketNote{{ID: "n-1", Author: ref.UserID{}, CreatedAt: "2026-02-12T10:00:00Z", Body: "test"}}
 			},
 			wantErr: "notes[0]: note: author is required",
 		},
@@ -500,11 +510,11 @@ func TestTicketContentValidate(t *testing.T) {
 			modify: func(tc *TicketContent) {
 				tc.Body = "Full description"
 				tc.Labels = []string{"important"}
-				tc.Assignee = "@test:bureau.local"
+				tc.Assignee = ref.MustParseUserID("@test:bureau.local")
 				tc.Parent = "tkt-parent"
 				tc.BlockedBy = []string{"tkt-dep"}
 				tc.Gates = []TicketGate{{ID: "g1", Type: "human", Status: "pending"}}
-				tc.Notes = []TicketNote{{ID: "n-1", Author: "@a:b.c", CreatedAt: "2026-01-01T00:00:00Z", Body: "note"}}
+				tc.Notes = []TicketNote{{ID: "n-1", Author: ref.MustParseUserID("@a:b.c"), CreatedAt: "2026-01-01T00:00:00Z", Body: "note"}}
 				tc.Attachments = []TicketAttachment{{Ref: "art-abc123"}}
 				tc.Deadline = "2026-03-01T00:00:00Z"
 				tc.Origin = &TicketOrigin{Source: "github", ExternalRef: "GH-1234"}
@@ -995,7 +1005,7 @@ func TestTicketGateValidate(t *testing.T) {
 func TestTicketNoteRoundTrip(t *testing.T) {
 	original := TicketNote{
 		ID:        "n-1",
-		Author:    "@bureau/admin:bureau.local",
+		Author:    ref.MustParseUserID("@bureau/admin:bureau.local"),
 		CreatedAt: "2026-02-12T10:30:00Z",
 		Body:      "Security scanner found CVE-2026-1234 in this dependency.",
 	}
@@ -1031,27 +1041,27 @@ func TestTicketNoteValidate(t *testing.T) {
 	}{
 		{
 			name:    "valid",
-			note:    TicketNote{ID: "n-1", Author: "@a:b.c", CreatedAt: "2026-01-01T00:00:00Z", Body: "note"},
+			note:    TicketNote{ID: "n-1", Author: ref.MustParseUserID("@a:b.c"), CreatedAt: "2026-01-01T00:00:00Z", Body: "note"},
 			wantErr: "",
 		},
 		{
 			name:    "id_empty",
-			note:    TicketNote{ID: "", Author: "@a:b.c", CreatedAt: "2026-01-01T00:00:00Z", Body: "note"},
+			note:    TicketNote{ID: "", Author: ref.MustParseUserID("@a:b.c"), CreatedAt: "2026-01-01T00:00:00Z", Body: "note"},
 			wantErr: "id is required",
 		},
 		{
 			name:    "author_empty",
-			note:    TicketNote{ID: "n-1", Author: "", CreatedAt: "2026-01-01T00:00:00Z", Body: "note"},
+			note:    TicketNote{ID: "n-1", Author: ref.UserID{}, CreatedAt: "2026-01-01T00:00:00Z", Body: "note"},
 			wantErr: "author is required",
 		},
 		{
 			name:    "created_at_empty",
-			note:    TicketNote{ID: "n-1", Author: "@a:b.c", CreatedAt: "", Body: "note"},
+			note:    TicketNote{ID: "n-1", Author: ref.MustParseUserID("@a:b.c"), CreatedAt: "", Body: "note"},
 			wantErr: "created_at is required",
 		},
 		{
 			name:    "body_empty",
-			note:    TicketNote{ID: "n-1", Author: "@a:b.c", CreatedAt: "2026-01-01T00:00:00Z", Body: ""},
+			note:    TicketNote{ID: "n-1", Author: ref.MustParseUserID("@a:b.c"), CreatedAt: "2026-01-01T00:00:00Z", Body: ""},
 			wantErr: "body is required",
 		},
 	}

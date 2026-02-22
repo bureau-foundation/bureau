@@ -65,8 +65,8 @@ func (filter *FilterModel) MatchesEntry(entry ticket.Entry, source Source) bool 
 	}
 
 	// Match against assignee.
-	if entry.Content.Assignee != "" &&
-		strings.Contains(strings.ToLower(entry.Content.Assignee), query) {
+	if !entry.Content.Assignee.IsZero() &&
+		strings.Contains(strings.ToLower(entry.Content.Assignee.String()), query) {
 		return true
 	}
 
@@ -174,7 +174,7 @@ func searchableFields(entry ticket.Entry, source Source) []string {
 		entry.ID,
 		entry.Content.Title,
 		strings.Join(entry.Content.Labels, " "),
-		entry.Content.Assignee,
+		entry.Content.Assignee.String(),
 		entry.Content.Type,
 		entry.Content.Status,
 	}

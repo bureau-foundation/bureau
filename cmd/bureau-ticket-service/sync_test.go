@@ -461,7 +461,7 @@ func TestPendingEchoSkipsStaleEvent(t *testing.T) {
 	// /sync response that was in-flight when the mutation happened).
 	staleContent := toContentMap(t, schema.TicketContent{
 		Version: 1, Title: "original", Status: "in_progress",
-		Type: "task", Assignee: "someone",
+		Type: "task", Assignee: ref.MustParseUserID("@someone:bureau.local"),
 		CreatedAt: "2026-01-01T00:00:00Z", UpdatedAt: "2026-01-01T12:00:00Z",
 	})
 	staleEvent := messaging.Event{
@@ -596,7 +596,7 @@ func TestPendingEchoLatestWriteWins(t *testing.T) {
 	state.pendingEchoes["tkt-1"] = "$claim-event-id"
 	state.index.Put("tkt-1", schema.TicketContent{
 		Version: 1, Title: "original", Status: "in_progress",
-		Type: "task", Assignee: "alice",
+		Type: "task", Assignee: ref.MustParseUserID("@alice:bureau.local"),
 		CreatedAt: "2026-01-01T00:00:00Z", UpdatedAt: "2026-01-02T00:00:00Z",
 	})
 
@@ -612,7 +612,7 @@ func TestPendingEchoLatestWriteWins(t *testing.T) {
 	// (we expect the close echo now), so it should be skipped.
 	claimEchoContent := toContentMap(t, schema.TicketContent{
 		Version: 1, Title: "original", Status: "in_progress",
-		Type: "task", Assignee: "alice",
+		Type: "task", Assignee: ref.MustParseUserID("@alice:bureau.local"),
 		CreatedAt: "2026-01-01T00:00:00Z", UpdatedAt: "2026-01-02T00:00:00Z",
 	})
 	indexed := ts.indexTicketEvent(state, messaging.Event{
@@ -663,7 +663,7 @@ func TestPendingEchoNoEffectWithoutPending(t *testing.T) {
 	// No pending echo — events should be indexed normally.
 	newContent := toContentMap(t, schema.TicketContent{
 		Version: 1, Title: "updated", Status: "in_progress",
-		Type: "task", Assignee: "bob",
+		Type: "task", Assignee: ref.MustParseUserID("@bob:bureau.local"),
 		CreatedAt: "2026-01-01T00:00:00Z", UpdatedAt: "2026-01-02T00:00:00Z",
 	})
 

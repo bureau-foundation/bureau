@@ -88,13 +88,13 @@ func TestTwoAgentMessaging(t *testing.T) {
 			// No sleep needed: proxySendMessage returned 200 OK with event_id,
 			// meaning the homeserver has persisted the events.
 			aliceEvents := proxySyncRoomTimeline(t, aliceHTTP, chatRoomID)
-			assertMessagePresent(t, aliceEvents, alice.UserID.String(), "Hello from Alice")
-			assertMessagePresent(t, aliceEvents, bob.UserID.String(), "Hello from Bob")
+			assertMessagePresent(t, aliceEvents, alice.UserID, "Hello from Alice")
+			assertMessagePresent(t, aliceEvents, bob.UserID, "Hello from Bob")
 
 			// Bob reads the conversation.
 			bobEvents := proxySyncRoomTimeline(t, bobHTTP, chatRoomID)
-			assertMessagePresent(t, bobEvents, alice.UserID.String(), "Hello from Alice")
-			assertMessagePresent(t, bobEvents, bob.UserID.String(), "Hello from Bob")
+			assertMessagePresent(t, bobEvents, alice.UserID, "Hello from Alice")
+			assertMessagePresent(t, bobEvents, bob.UserID, "Hello from Bob")
 		})
 	})
 }

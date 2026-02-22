@@ -387,14 +387,18 @@ func (client *Client) GetRoomMembers(ctx context.Context, roomID ref.RoomID) ([]
 		return nil, fmt.Errorf("get room members for %s: %w", roomID, err)
 	}
 
-	members := make([]messaging.RoomMember, len(membersResponse.Chunk))
-	for index, event := range membersResponse.Chunk {
-		members[index] = messaging.RoomMember{
-			UserID:      event.StateKey,
+	members := make([]messaging.RoomMember, 0, len(membersResponse.Chunk))
+	for _, event := range membersResponse.Chunk {
+		userID, err := ref.ParseUserID(event.StateKey)
+		if err != nil {
+			return nil, fmt.Errorf("get room members: invalid user ID in state key %q: %w", event.StateKey, err)
+		}
+		members = append(members, messaging.RoomMember{
+			UserID:      userID,
 			DisplayName: event.Content.DisplayName,
 			Membership:  event.Content.Membership,
 			AvatarURL:   event.Content.AvatarURL,
-		}
+		})
 	}
 	return members, nil
 }

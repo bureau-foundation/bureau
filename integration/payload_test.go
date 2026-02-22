@@ -71,7 +71,7 @@ func TestPayloadDeliveryAndHotReload(t *testing.T) {
 	t.Logf("proxy socket appeared: %s", proxySocketPath)
 
 	// Wait for the agent's ready message containing the initial payload.
-	readyMessage := readyWatch.WaitForMessage(t, "quickstart-test-ready", agent.UserID.String())
+	readyMessage := readyWatch.WaitForMessage(t, "quickstart-test-ready", agent.UserID)
 	t.Logf("agent ready message: %s", readyMessage)
 
 	if !strings.Contains(readyMessage, `"version":1`) {
@@ -108,7 +108,7 @@ func TestPayloadDeliveryAndHotReload(t *testing.T) {
 	// message after the IPC response confirms the file has been rewritten.
 	// The admin session watches the config room (not the agent).
 	waitForNotification[schema.PayloadUpdatedMessage](
-		t, &reloadWatch, schema.MsgTypePayloadUpdated, machine.UserID.String(),
+		t, &reloadWatch, schema.MsgTypePayloadUpdated, machine.UserID,
 		func(m schema.PayloadUpdatedMessage) bool {
 			return m.Principal == "agent/payload-test"
 		}, "payload updated for agent/payload-test")
@@ -125,7 +125,7 @@ func TestPayloadDeliveryAndHotReload(t *testing.T) {
 	}
 
 	// Wait for the agent's acknowledgment with the updated payload.
-	ackMessage := ackWatch.WaitForMessage(t, "quickstart-test-ok", agent.UserID.String())
+	ackMessage := ackWatch.WaitForMessage(t, "quickstart-test-ok", agent.UserID)
 	t.Logf("agent ack message: %s", ackMessage)
 
 	if !strings.Contains(ackMessage, `"version":2`) {
@@ -203,7 +203,7 @@ func TestPayloadHotReloadFromEmpty(t *testing.T) {
 	// Wait for the agent's ready message. The launcher always creates
 	// the payload file (with {} for empty payloads), so the agent sees
 	// an empty JSON object rather than a missing file.
-	readyMessage := readyWatch.WaitForMessage(t, "quickstart-test-ready", agent.UserID.String())
+	readyMessage := readyWatch.WaitForMessage(t, "quickstart-test-ready", agent.UserID)
 	t.Logf("agent ready message: %s", readyMessage)
 
 	// The agent should report payload={} (the empty object the launcher
@@ -234,7 +234,7 @@ func TestPayloadHotReloadFromEmpty(t *testing.T) {
 	// detects the change from nil → populated and sends update-payload
 	// IPC to the launcher, which rewrites the bind-mounted file in-place.
 	waitForNotification[schema.PayloadUpdatedMessage](
-		t, &reloadWatch, schema.MsgTypePayloadUpdated, machine.UserID.String(),
+		t, &reloadWatch, schema.MsgTypePayloadUpdated, machine.UserID,
 		func(m schema.PayloadUpdatedMessage) bool {
 			return m.Principal == "agent/payload-empty"
 		}, "payload updated for agent/payload-empty")
@@ -252,7 +252,7 @@ func TestPayloadHotReloadFromEmpty(t *testing.T) {
 	// The agent re-reads payload.json before sending its ack. Because
 	// the bind mount was created at sandbox startup (even with no initial
 	// payload), the in-place write from handleUpdatePayload is visible.
-	ackMessage := ackWatch.WaitForMessage(t, "quickstart-test-ok", agent.UserID.String())
+	ackMessage := ackWatch.WaitForMessage(t, "quickstart-test-ok", agent.UserID)
 	t.Logf("agent ack message: %s", ackMessage)
 
 	if !strings.Contains(ackMessage, `"version":1`) {

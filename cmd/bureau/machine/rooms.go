@@ -87,7 +87,7 @@ func resolveGlobalRooms(ctx context.Context, session messaging.Session, namespac
 // checkMachineMembership checks whether a machine user has any active
 // memberships (join or invite) in the given rooms. Returns the list of
 // rooms where the machine still has an active membership.
-func checkMachineMembership(ctx context.Context, session messaging.Session, machineUserID string, rooms []resolvedRoom) []resolvedRoom {
+func checkMachineMembership(ctx context.Context, session messaging.Session, machineUserID ref.UserID, rooms []resolvedRoom) []resolvedRoom {
 	var activeRooms []resolvedRoom
 	for _, room := range rooms {
 		members, err := session.GetRoomMembers(ctx, room.roomID)

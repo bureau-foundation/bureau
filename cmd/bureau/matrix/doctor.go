@@ -747,17 +747,17 @@ func checkOperatorMembership(ctx context.Context, session messaging.Session, spa
 		return []checkResult{fail("operator membership", fmt.Sprintf("cannot read space members: %v", err))}
 	}
 
-	adminUserIDForOperators := session.UserID().String()
-	var operators []string
+	adminUserID := session.UserID()
+	var operators []ref.UserID
 	for _, member := range spaceMembers {
 		if member.Membership != "join" {
 			continue
 		}
-		if member.UserID == adminUserIDForOperators {
+		if member.UserID == adminUserID {
 			continue
 		}
 		// Machine accounts have localparts like "machine/worker-01".
-		localpart := strings.TrimSuffix(strings.TrimPrefix(member.UserID, "@"), ":"+serverName.String())
+		localpart := strings.TrimSuffix(strings.TrimPrefix(member.UserID.String(), "@"), ":"+serverName.String())
 		if strings.HasPrefix(localpart, "machine/") {
 			continue
 		}
@@ -782,7 +782,7 @@ func checkOperatorMembership(ctx context.Context, session messaging.Session, spa
 			continue
 		}
 
-		memberSet := make(map[string]bool)
+		memberSet := make(map[ref.UserID]bool)
 		for _, member := range members {
 			if member.Membership == "join" || member.Membership == "invite" {
 				memberSet[member.UserID] = true
@@ -801,11 +801,7 @@ func checkOperatorMembership(ctx context.Context, session messaging.Session, spa
 					fmt.Sprintf("operator %s not in %s", capturedUserID, room.name),
 					fmt.Sprintf("invite %s to %s", capturedUserID, room.name),
 					func(ctx context.Context, session messaging.Session) error {
-						parsedUserID, err := ref.ParseUserID(capturedUserID)
-						if err != nil {
-							return fmt.Errorf("parse operator user ID %q: %w", capturedUserID, err)
-						}
-						return session.InviteUser(ctx, capturedRoomID, parsedUserID)
+						return session.InviteUser(ctx, capturedRoomID, capturedUserID)
 					},
 				))
 			}

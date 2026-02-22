@@ -88,7 +88,7 @@ type TicketContent struct {
 	// Single assignee: Bureau agents are principals with unique
 	// identities, one agent works one ticket. Multiple people
 	// on something means sub-tickets (parent-child).
-	Assignee string `json:"assignee,omitempty"`
+	Assignee ref.UserID `json:"assignee,omitempty"`
 
 	// Parent is the ticket ID of the parent work item (e.g., an
 	// epic). Enables hierarchical breakdown: the ticket service
@@ -120,7 +120,7 @@ type TicketContent struct {
 	Attachments []TicketAttachment `json:"attachments,omitempty"`
 
 	// CreatedBy is the Matrix user ID of the ticket creator.
-	CreatedBy string `json:"created_by"`
+	CreatedBy ref.UserID `json:"created_by"`
 
 	// CreatedAt is an ISO 8601 timestamp.
 	CreatedAt string `json:"created_at"`
@@ -186,7 +186,7 @@ func (t *TicketContent) Validate() error {
 	default:
 		return fmt.Errorf("ticket content: unknown type %q", t.Type)
 	}
-	if t.CreatedBy == "" {
+	if t.CreatedBy.IsZero() {
 		return errors.New("ticket content: created_by is required")
 	}
 	if t.CreatedAt == "" {
@@ -520,7 +520,7 @@ type TicketNote struct {
 	ID string `json:"id"`
 
 	// Author is the Matrix user ID of the note creator.
-	Author string `json:"author"`
+	Author ref.UserID `json:"author"`
 
 	// CreatedAt is an ISO 8601 timestamp.
 	CreatedAt string `json:"created_at"`
@@ -536,7 +536,7 @@ func (n *TicketNote) Validate() error {
 	if n.ID == "" {
 		return errors.New("note: id is required")
 	}
-	if n.Author == "" {
+	if n.Author.IsZero() {
 		return errors.New("note: author is required")
 	}
 	if n.CreatedAt == "" {

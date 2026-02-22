@@ -866,7 +866,7 @@ func deployAgent(t *testing.T, admin *messaging.DirectSession, machine *testMach
 	waitForFile(t, proxySocketPath)
 
 	if !options.SkipWaitForReady {
-		readyWatch.WaitForMessage(t, "agent-ready", result.PrincipalUserID.String())
+		readyWatch.WaitForMessage(t, "agent-ready", result.PrincipalUserID)
 	}
 
 	return agentDeployment{

@@ -393,7 +393,7 @@ func TestCredentialRotation(t *testing.T) {
 	// credentials_rotated notification with status "completed" after
 	// destroying the old sandbox and creating the new one.
 	waitForNotification[schema.CredentialsRotatedMessage](
-		t, &watch, schema.MsgTypeCredentialsRotated, machine.UserID.String(),
+		t, &watch, schema.MsgTypeCredentialsRotated, machine.UserID,
 		func(m schema.CredentialsRotatedMessage) bool {
 			return m.Principal == agent.Localpart && m.Status == "completed"
 		}, "credentials rotation completed for "+agent.Localpart)

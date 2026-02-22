@@ -6,6 +6,7 @@ package ticketui
 import (
 	"testing"
 
+	"github.com/bureau-foundation/bureau/lib/ref"
 	"github.com/bureau-foundation/bureau/lib/schema"
 	"github.com/bureau-foundation/bureau/lib/ticket"
 )
@@ -67,7 +68,7 @@ func TestFilterMatchesAssignee(t *testing.T) {
 		ID: "tkt-001",
 		Content: schema.TicketContent{
 			Title:    "Fix connection pooling leak",
-			Assignee: "@iree/pm:bureau.local",
+			Assignee: ref.MustParseUserID("@iree/pm:bureau.local"),
 		},
 	}
 

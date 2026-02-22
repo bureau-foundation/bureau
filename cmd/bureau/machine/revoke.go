@@ -276,10 +276,10 @@ func runRevoke(fleetLocalpart, machineName string, params *revokeParams) error {
 	// invalidate cached tokens and revoke external API keys.
 	revocationContent := schema.CredentialRevocationContent{
 		Machine:            machineUsername,
-		MachineUserID:      machineUserID.String(),
+		MachineUserID:      machineUserID,
 		Principals:         principals,
 		CredentialKeys:     credentialKeys,
-		InitiatedBy:        adminUserID.String(),
+		InitiatedBy:        adminUserID,
 		InitiatedAt:        time.Now().UTC().Format(time.RFC3339),
 		Reason:             params.Reason,
 		AccountDeactivated: accountDeactivated,

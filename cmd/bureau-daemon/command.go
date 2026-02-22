@@ -73,7 +73,7 @@ func (d *Daemon) processCommandMessages(ctx context.Context, roomID ref.RoomID, 
 		// Skip messages sent by the daemon itself. This prevents
 		// self-processing loops if the daemon's own messages appear
 		// in the sync response (e.g., echoed command results).
-		if event.Sender == d.machine.UserID().String() {
+		if event.Sender == d.machine.UserID() {
 			continue
 		}
 
@@ -100,7 +100,7 @@ func (d *Daemon) processCommandMessages(ctx context.Context, roomID ref.RoomID, 
 
 // handleCommand is the per-command lifecycle: look up, validate,
 // authorize, execute, and post the result.
-func (d *Daemon) handleCommand(ctx context.Context, roomID ref.RoomID, eventID, sender string, command schema.CommandMessage) {
+func (d *Daemon) handleCommand(ctx context.Context, roomID ref.RoomID, eventID string, sender ref.UserID, command schema.CommandMessage) {
 	start := time.Now()
 
 	d.logger.Info("processing command",
@@ -185,7 +185,7 @@ func (d *Daemon) workspacePath(workspace string) string {
 // authorizeCommand reads the room's m.room.power_levels state event and
 // checks that the sender's power level meets the required threshold.
 // Returns an error if authorization fails or power levels cannot be read.
-func (d *Daemon) authorizeCommand(ctx context.Context, roomID ref.RoomID, sender string, requiredLevel int) error {
+func (d *Daemon) authorizeCommand(ctx context.Context, roomID ref.RoomID, sender ref.UserID, requiredLevel int) error {
 	raw, err := d.session.GetStateEvent(ctx, roomID, schema.MatrixEventTypePowerLevels, "")
 	if err != nil {
 		// If the room has no power levels event (unlikely but possible),
@@ -201,7 +201,7 @@ func (d *Daemon) authorizeCommand(ctx context.Context, roomID ref.RoomID, sender
 		return fmt.Errorf("parsing power levels for room %s: %w", roomID, err)
 	}
 
-	senderLevel := getUserPowerLevel(powerLevels, sender)
+	senderLevel := getUserPowerLevel(powerLevels, sender.String())
 	if int(senderLevel) < requiredLevel {
 		return fmt.Errorf("sender %s has power level %d, command requires %d",
 			sender, int(senderLevel), requiredLevel)

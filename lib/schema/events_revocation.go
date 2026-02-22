@@ -33,7 +33,7 @@ type CredentialRevocationContent struct {
 
 	// MachineUserID is the full Matrix user ID of the revoked machine
 	// (e.g., "@machine/workstation:bureau.local").
-	MachineUserID string `json:"machine_user_id"`
+	MachineUserID ref.UserID `json:"machine_user_id"`
 
 	// Principals lists the localparts of principals that had credentials
 	// on this machine at revocation time.
@@ -45,7 +45,7 @@ type CredentialRevocationContent struct {
 
 	// InitiatedBy is the Matrix user ID of the admin who initiated
 	// the revocation.
-	InitiatedBy string `json:"initiated_by"`
+	InitiatedBy ref.UserID `json:"initiated_by"`
 
 	// InitiatedAt is the RFC 3339 timestamp of when the revocation
 	// was initiated.

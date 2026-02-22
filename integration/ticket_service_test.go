@@ -89,7 +89,7 @@ func TestTicketServiceAgent(t *testing.T) {
 	// daemon's directory update message uses the fleet-scoped name.
 	fleetScopedServiceName := ticketServiceEntity.Localpart()
 	waitForNotification[schema.ServiceDirectoryUpdatedMessage](
-		t, &serviceWatch, schema.MsgTypeServiceDirectoryUpdated, machine.UserID.String(),
+		t, &serviceWatch, schema.MsgTypeServiceDirectoryUpdated, machine.UserID,
 		func(message schema.ServiceDirectoryUpdatedMessage) bool {
 			return slices.Contains(message.Added, fleetScopedServiceName)
 		}, "service directory update adding "+fleetScopedServiceName)
@@ -151,7 +151,7 @@ func TestTicketServiceAgent(t *testing.T) {
 	if ticketContent.Priority != 2 {
 		t.Errorf("priority = %d, want 2", ticketContent.Priority)
 	}
-	if ticketContent.CreatedBy == "" {
+	if ticketContent.CreatedBy.IsZero() {
 		t.Error("created_by is empty")
 	}
 
@@ -237,7 +237,7 @@ func TestTicketLifecycleAgent(t *testing.T) {
 
 	fleetScopedServiceName := ticketServiceEntity.Localpart()
 	waitForNotification[schema.ServiceDirectoryUpdatedMessage](
-		t, &serviceWatch, schema.MsgTypeServiceDirectoryUpdated, machine.UserID.String(),
+		t, &serviceWatch, schema.MsgTypeServiceDirectoryUpdated, machine.UserID,
 		func(message schema.ServiceDirectoryUpdatedMessage) bool {
 			return slices.Contains(message.Added, fleetScopedServiceName)
 		}, "service directory update adding "+fleetScopedServiceName)
@@ -333,7 +333,7 @@ func TestTicketLifecycleAgent(t *testing.T) {
 
 		proxySocket := machine.PrincipalSocketPath(t, account.Localpart)
 		waitForFile(t, proxySocket)
-		readyWatch.WaitForMessage(t, "agent-ready", account.UserID.String())
+		readyWatch.WaitForMessage(t, "agent-ready", account.UserID)
 
 		currentDeployedLocalpart = account.Localpart
 		currentAdminSocket = machine.PrincipalAdminSocketPath(t, account.Localpart)
@@ -426,7 +426,7 @@ func TestTicketLifecycleAgent(t *testing.T) {
 		t.Logf("created %s", ticketID)
 
 		// Claim (open → in_progress).
-		pmUserID := pmAccount.UserID.String()
+		pmUserID := pmAccount.UserID
 		sendStep(t, adminSocket, []mockToolStep{{
 			ToolName: "bureau_ticket_update",
 			ToolInput: func() map[string]any {
@@ -444,7 +444,7 @@ func TestTicketLifecycleAgent(t *testing.T) {
 			t.Errorf("after claim: status = %q, want in_progress", content.Status)
 		}
 		if content.Assignee != pmUserID {
-			t.Errorf("after claim: assignee = %q, want %q", content.Assignee, pmUserID)
+			t.Errorf("after claim: assignee = %s, want %s", content.Assignee, pmUserID)
 		}
 
 		// Close (in_progress → closed).
@@ -510,7 +510,7 @@ func TestTicketLifecycleAgent(t *testing.T) {
 		ticketID, _ := waitForTicket(t, &projectWatch, "Permission test ticket")
 		t.Logf("worker created %s", ticketID)
 
-		workerUserID := workerAccount.UserID.String()
+		workerUserID := workerAccount.UserID
 		sendStep(t, workerSocket, []mockToolStep{{
 			ToolName: "bureau_ticket_update",
 			ToolInput: func() map[string]any {
@@ -625,7 +625,7 @@ func TestTicketLifecycleAgent(t *testing.T) {
 
 		ticketID, _ := waitForTicket(t, &projectWatch, "Contention target")
 
-		workerUserID := workerAccount.UserID.String()
+		workerUserID := workerAccount.UserID
 		sendStep(t, workerSocket, []mockToolStep{{
 			ToolName: "bureau_ticket_update",
 			ToolInput: func() map[string]any {
@@ -640,13 +640,13 @@ func TestTicketLifecycleAgent(t *testing.T) {
 
 		content := readTicketState(t, admin, roomAlphaID, ticketID)
 		if content.Assignee != workerUserID {
-			t.Fatalf("after worker claim: assignee = %q, want %q", content.Assignee, workerUserID)
+			t.Fatalf("after worker claim: assignee = %s, want %s", content.Assignee, workerUserID)
 		}
 
 		// Switch to PM — claim should fail (contention).
 		pmSocket := deployAgent(t, pmAccount, pmGrants)
 
-		pmUserID := pmAccount.UserID.String()
+		pmUserID := pmAccount.UserID
 		sendStep(t, pmSocket, []mockToolStep{{
 			ToolName: "bureau_ticket_update",
 			ToolInput: func() map[string]any {
@@ -661,7 +661,7 @@ func TestTicketLifecycleAgent(t *testing.T) {
 
 		content = readTicketState(t, admin, roomAlphaID, ticketID)
 		if content.Assignee != workerUserID {
-			t.Errorf("after contention: assignee = %q, want %q (PM claim should be rejected)", content.Assignee, workerUserID)
+			t.Errorf("after contention: assignee = %s, want %s (PM claim should be rejected)", content.Assignee, workerUserID)
 		}
 
 		t.Log("contention correctly detected")

@@ -198,7 +198,7 @@ func TestProxyCrashRecovery(t *testing.T) {
 	// "recovered". This is the definitive signal that the full cycle
 	// (detection → cleanup → re-creation) completed.
 	waitForNotification[schema.ProxyCrashMessage](
-		t, &watch, schema.MsgTypeProxyCrash, machineUserID.String(),
+		t, &watch, schema.MsgTypeProxyCrash, machineUserID,
 		func(m schema.ProxyCrashMessage) bool {
 			return m.Principal == principalLocalpart && m.Status == "recovered"
 		}, "proxy crash recovery for "+principalLocalpart)

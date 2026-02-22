@@ -154,7 +154,7 @@ func TestStructuredAgentAPI(t *testing.T) {
 
 	var foundMessage bool
 	for _, event := range response.Chunk {
-		if event.Type != schema.MatrixEventTypeMessage || event.Sender != agent.Account.UserID.String() {
+		if event.Type != schema.MatrixEventTypeMessage || event.Sender != agent.Account.UserID {
 			continue
 		}
 		body, _ := event.Content["body"].(string)

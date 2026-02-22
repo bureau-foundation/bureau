@@ -329,14 +329,14 @@ func TestGetRoomState(t *testing.T) {
 			{
 				EventID:  "$s1",
 				Type:     "m.bureau.machine_key",
-				Sender:   "@machine/workstation:local",
+				Sender:   ref.MustParseUserID("@machine/workstation:local"),
 				StateKey: &stateKey1,
 				Content:  map[string]any{"algorithm": "age-x25519", "public_key": "age1test"},
 			},
 			{
 				EventID:  "$s2",
 				Type:     "m.room.power_levels",
-				Sender:   "@admin:local",
+				Sender:   ref.MustParseUserID("@admin:local"),
 				StateKey: &stateKey2,
 				Content:  map[string]any{"users_default": float64(0)},
 			},
@@ -381,8 +381,8 @@ func TestRoomMessages(t *testing.T) {
 			Start: "t1",
 			End:   "t2",
 			Chunk: []Event{
-				{EventID: "$msg1", Type: "m.room.message", Sender: "@alice:local"},
-				{EventID: "$msg2", Type: "m.room.message", Sender: "@bob:local"},
+				{EventID: "$msg1", Type: "m.room.message", Sender: ref.MustParseUserID("@alice:local")},
+				{EventID: "$msg2", Type: "m.room.message", Sender: ref.MustParseUserID("@bob:local")},
 			},
 		})
 	}))
@@ -414,7 +414,7 @@ func TestThreadMessages(t *testing.T) {
 
 		writeJSON(writer, ThreadMessagesResponse{
 			Chunk: []Event{
-				{EventID: "$reply1", Type: "m.room.message", Sender: "@bob:local"},
+				{EventID: "$reply1", Type: "m.room.message", Sender: ref.MustParseUserID("@bob:local")},
 			},
 			NextBatch: "next-page-token",
 		})
@@ -456,7 +456,7 @@ func TestSync(t *testing.T) {
 					mustRoomID("!room1:local"): {
 						Timeline: TimelineSection{
 							Events: []Event{
-								{EventID: "$evt1", Type: "m.room.message", Sender: "@alice:local"},
+								{EventID: "$evt1", Type: "m.room.message", Sender: ref.MustParseUserID("@alice:local")},
 							},
 						},
 					},
@@ -615,7 +615,7 @@ func TestGetRoomMembers(t *testing.T) {
 				{
 					Type:     "m.room.member",
 					StateKey: "@alice:local",
-					Sender:   "@alice:local",
+					Sender:   ref.MustParseUserID("@alice:local"),
 					Content: RoomMemberContent{
 						Membership:  "join",
 						DisplayName: "Alice",
@@ -624,7 +624,7 @@ func TestGetRoomMembers(t *testing.T) {
 				{
 					Type:     "m.room.member",
 					StateKey: "@bob:local",
-					Sender:   "@alice:local",
+					Sender:   ref.MustParseUserID("@alice:local"),
 					Content: RoomMemberContent{
 						Membership:  "invite",
 						DisplayName: "Bob",
@@ -641,7 +641,7 @@ func TestGetRoomMembers(t *testing.T) {
 	if len(members) != 2 {
 		t.Fatalf("expected 2 members, got %d", len(members))
 	}
-	if members[0].UserID != "@alice:local" {
+	if members[0].UserID != ref.MustParseUserID("@alice:local") {
 		t.Errorf("unexpected first member user ID: %s", members[0].UserID)
 	}
 	if members[0].DisplayName != "Alice" {
@@ -650,7 +650,7 @@ func TestGetRoomMembers(t *testing.T) {
 	if members[0].Membership != "join" {
 		t.Errorf("unexpected first member membership: %s", members[0].Membership)
 	}
-	if members[1].UserID != "@bob:local" {
+	if members[1].UserID != ref.MustParseUserID("@bob:local") {
 		t.Errorf("unexpected second member user ID: %s", members[1].UserID)
 	}
 	if members[1].Membership != "invite" {

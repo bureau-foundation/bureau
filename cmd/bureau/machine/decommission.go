@@ -223,7 +223,7 @@ func runDecommission(fleetLocalpart, machineName string, params *decommissionPar
 	allRooms := make([]resolvedRoom, 0, len(globalRooms)+len(fleetRooms))
 	allRooms = append(allRooms, globalRooms...)
 	allRooms = append(allRooms, fleetRooms...)
-	activeRooms := checkMachineMembership(ctx, adminSession, machineUserID.String(), allRooms)
+	activeRooms := checkMachineMembership(ctx, adminSession, machineUserID, allRooms)
 
 	// Also check the config room if it exists.
 	if !configRoomID.IsZero() {
@@ -232,7 +232,7 @@ func runDecommission(fleetLocalpart, machineName string, params *decommissionPar
 			alias:       configAlias,
 			roomID:      configRoomID,
 		}
-		configActive := checkMachineMembership(ctx, adminSession, machineUserID.String(), []resolvedRoom{configResolved})
+		configActive := checkMachineMembership(ctx, adminSession, machineUserID, []resolvedRoom{configResolved})
 		activeRooms = append(activeRooms, configActive...)
 	}
 

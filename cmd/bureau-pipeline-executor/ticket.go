@@ -7,6 +7,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"log/slog"
 	"sync/atomic"
 	"time"
 
@@ -116,7 +117,7 @@ func addTicketStepNote(ctx context.Context, client *service.ServiceClient, ticke
 // critical operation — the ticket must reflect the pipeline's terminal
 // outcome. Retries up to closeRetryCount times with exponential
 // backoff (500ms, 1s, 2s).
-func closeTicket(ctx context.Context, clk clock.Clock, client *service.ServiceClient, ticketID, roomID, reason string) error {
+func closeTicket(ctx context.Context, clk clock.Clock, client *service.ServiceClient, ticketID, roomID, reason string, logger *slog.Logger) error {
 	fields := map[string]any{
 		"ticket": ticketID,
 		"room":   roomID,
@@ -138,7 +139,7 @@ func closeTicket(ctx context.Context, clk clock.Clock, client *service.ServiceCl
 		if lastError == nil {
 			return nil
 		}
-		fmt.Printf("[pipeline] warning: close ticket attempt %d/%d failed: %v\n", attempt+1, closeRetryCount, lastError)
+		logger.Warn("close ticket attempt failed", "attempt", attempt+1, "max_attempts", closeRetryCount, "error", lastError)
 	}
 	return fmt.Errorf("close ticket failed after %d attempts: %w", closeRetryCount, lastError)
 }
@@ -180,7 +181,7 @@ func showTicketStatus(ctx context.Context, client *service.ServiceClient, ticket
 // cancellation triggered). Transient errors from the ticket service
 // are logged and retried — a brief socket unavailability does not
 // kill the pipeline.
-func watchForCancellation(stepContext context.Context, clk clock.Clock, client *service.ServiceClient, ticketID, roomID string, cancelSteps context.CancelFunc, cancelled *atomic.Bool, pollInterval time.Duration) {
+func watchForCancellation(stepContext context.Context, clk clock.Clock, client *service.ServiceClient, ticketID, roomID string, cancelSteps context.CancelFunc, cancelled *atomic.Bool, pollInterval time.Duration, logger *slog.Logger) {
 	ticker := clk.NewTicker(pollInterval)
 	defer ticker.Stop()
 
@@ -192,11 +193,11 @@ func watchForCancellation(stepContext context.Context, clk clock.Clock, client *
 			status, err := showTicketStatus(stepContext, client, ticketID, roomID)
 			if err != nil {
 				// Transient failure: log and retry next tick.
-				fmt.Printf("[pipeline] warning: cancellation watcher: %v\n", err)
+				logger.Warn("cancellation watcher poll failed", "error", err)
 				continue
 			}
 			if status == "closed" {
-				fmt.Println("[pipeline] ticket closed externally, cancelling execution")
+				logger.Info("ticket closed externally, cancelling execution")
 				cancelled.Store(true)
 				cancelSteps()
 				return

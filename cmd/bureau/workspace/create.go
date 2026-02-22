@@ -7,6 +7,7 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"log/slog"
 	"os"
 	"strconv"
 	"strings"
@@ -157,6 +158,8 @@ func runCreate(alias string, sessionConfig *cli.SessionConfig, machineName, temp
 		return fmt.Errorf("invalid --server-name: %w", err)
 	}
 
+	logger := cli.NewCommandLogger().With("command", "workspace/create", "alias", alias)
+
 	// Resolve "local" to the actual machine localpart from the launcher's
 	// session file.
 	if machineName == "local" {
@@ -165,7 +168,7 @@ func runCreate(alias string, sessionConfig *cli.SessionConfig, machineName, temp
 			return cli.NotFound("resolving local machine identity: %w", err)
 		}
 		machineName = resolved
-		fmt.Fprintf(os.Stderr, "Resolved --machine=local to %s\n", machineName)
+		logger.Info("resolved --machine=local", "machine", machineName)
 	}
 
 	// Parse the machine localpart into a typed ref.
@@ -195,7 +198,7 @@ func runCreate(alias string, sessionConfig *cli.SessionConfig, machineName, temp
 		Template:   templateRef,
 		Params:     paramMap,
 		AgentCount: agentCount,
-	})
+	}, logger)
 	if err != nil {
 		return err
 	}
@@ -233,7 +236,7 @@ func runCreate(alias string, sessionConfig *cli.SessionConfig, machineName, temp
 // deadline. This function does not create its own session, which allows
 // callers (integration tests, MCP tools, batched commands) to reuse an
 // existing session and avoid competing for /sync responses.
-func Create(ctx context.Context, session messaging.Session, params CreateParams) (*CreateResult, error) {
+func Create(ctx context.Context, session messaging.Session, params CreateParams, logger *slog.Logger) (*CreateResult, error) {
 	// Validate the workspace alias.
 	if err := principal.ValidateLocalpart(params.Alias); err != nil {
 		return nil, cli.Validation("invalid workspace alias: %w", err)
@@ -339,13 +342,13 @@ func Create(ctx context.Context, session messaging.Session, params CreateParams)
 	ticketService, found, queryErr := service.QueryFirst(ctx, session, machineRef.Fleet(),
 		service.And(service.OnMachine(machineRef), service.HasCapability("dependency-graph")))
 	if queryErr != nil {
-		fmt.Fprintf(os.Stderr, "  Warning: failed to query service directory: %v\n", queryErr)
+		logger.Warn("failed to query service directory", "error", queryErr)
 	} else if found {
 		if ensureErr := service.EnsureServiceInRoom(ctx, session, workspaceRoomID, ticketService.Principal.UserID()); ensureErr != nil {
-			fmt.Fprintf(os.Stderr, "  Warning: ticket service failed to join workspace room: %v\n", ensureErr)
+			logger.Warn("ticket service failed to join workspace room", "error", ensureErr)
 		}
 	} else {
-		fmt.Fprintf(os.Stderr, "  Warning: no ticket service found for machine %s — pipeline execution will fail until one is deployed\n", machineRef.Localpart())
+		logger.Warn("no ticket service found, pipeline execution will fail until one is deployed", "machine", machineRef.Localpart())
 	}
 
 	// Build principal assignments (setup + agents + teardown).
@@ -355,7 +358,7 @@ func Create(ctx context.Context, session messaging.Session, params CreateParams)
 	}
 
 	// Update the machine's MachineConfig with the new principals.
-	err = updateMachineConfig(ctx, session, machineRef, assignments)
+	err = updateMachineConfig(ctx, session, machineRef, assignments, logger)
 	if err != nil {
 		return nil, cli.Internal("updating machine config: %w", err)
 	}
@@ -582,7 +585,7 @@ func buildPrincipalAssignments(alias, agentTemplate string, agentCount int, serv
 // MachineConfig state event: reads the existing config (if any), appends
 // new principal assignments (skipping duplicates by localpart), and
 // publishes the updated config.
-func updateMachineConfig(ctx context.Context, session messaging.Session, machine ref.Machine, newAssignments []schema.PrincipalAssignment) error {
+func updateMachineConfig(ctx context.Context, session messaging.Session, machine ref.Machine, newAssignments []schema.PrincipalAssignment, logger *slog.Logger) error {
 	configRoomAlias := machine.RoomAlias()
 	configRoomID, err := session.ResolveAlias(ctx, configRoomAlias)
 	if err != nil {
@@ -610,7 +613,7 @@ func updateMachineConfig(ctx context.Context, session messaging.Session, machine
 	addedCount := 0
 	for _, assignment := range newAssignments {
 		if existingLocalparts[assignment.Principal.Localpart()] {
-			fmt.Fprintf(os.Stderr, "  (skipping %s — already assigned)\n", assignment.Principal.Localpart())
+			logger.Info("principal already assigned, skipping", "principal", assignment.Principal.Localpart())
 			continue
 		}
 		config.Principals = append(config.Principals, assignment)
@@ -618,7 +621,7 @@ func updateMachineConfig(ctx context.Context, session messaging.Session, machine
 	}
 
 	if addedCount == 0 {
-		fmt.Fprintf(os.Stderr, "  All principals already assigned, skipping MachineConfig update.\n")
+		logger.Info("all principals already assigned, skipping MachineConfig update")
 		return nil
 	}
 

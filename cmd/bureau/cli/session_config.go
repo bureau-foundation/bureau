@@ -114,9 +114,7 @@ func (c *SessionConfig) Connect(ctx context.Context) (messaging.Session, error) 
 		return nil, Validation("--user-id is required (or use --credential-file)")
 	}
 
-	logger := slog.New(slog.NewJSONHandler(os.Stderr, &slog.HandlerOptions{
-		Level: slog.LevelInfo,
-	}))
+	logger := NewClientLogger(slog.LevelInfo)
 
 	client, err := messaging.NewClient(messaging.ClientConfig{
 		HomeserverURL: homeserverURL,

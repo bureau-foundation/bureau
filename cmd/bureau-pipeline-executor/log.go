@@ -6,6 +6,7 @@ package main
 import (
 	"context"
 	"fmt"
+	"log/slog"
 	"time"
 
 	"github.com/bureau-foundation/bureau/lib/ref"
@@ -19,6 +20,7 @@ import (
 // lets the executor call logging methods unconditionally without checking
 // whether thread logging is configured.
 type threadLogger struct {
+	logger      *slog.Logger
 	session     messaging.Session
 	roomID      ref.RoomID
 	rootEventID ref.EventID
@@ -33,7 +35,7 @@ type threadLogger struct {
 // Returns an error if the thread cannot be created. The caller should
 // treat this as fatal when observation is configured — running a pipeline
 // with no record of what happened is worse than not running at all.
-func newThreadLogger(ctx context.Context, session messaging.Session, room string, pipelineName string, stepCount int) (*threadLogger, error) {
+func newThreadLogger(ctx context.Context, session messaging.Session, room string, pipelineName string, stepCount int, logger *slog.Logger) (*threadLogger, error) {
 	var roomID ref.RoomID
 	if len(room) > 0 && room[0] == '#' {
 		alias, err := ref.ParseRoomAlias(room)
@@ -60,6 +62,7 @@ func newThreadLogger(ctx context.Context, session messaging.Session, room string
 	}
 
 	return &threadLogger{
+		logger:      logger,
 		session:     session,
 		roomID:      roomID,
 		rootEventID: rootEventID,
@@ -136,7 +139,7 @@ func (l *threadLogger) sendThreadReply(ctx context.Context, body string) {
 	// check — if we can't create the thread at all, the pipeline doesn't
 	// start.
 	if _, err := l.session.SendMessage(ctx, l.roomID, messaging.NewThreadReply(l.rootEventID, body)); err != nil {
-		fmt.Printf("[pipeline] warning: failed to send thread reply: %v\n", err)
+		l.logger.Warn("failed to send thread reply", "error", err)
 	}
 }
 

@@ -6,6 +6,7 @@ package main
 import (
 	"encoding/json"
 	"fmt"
+	"log/slog"
 	"os"
 	"time"
 
@@ -25,6 +26,7 @@ import (
 // nil-safe no-ops). The launcher sets this variable when spawning
 // executor sandboxes to enable daemon integration.
 type resultLog struct {
+	logger  *slog.Logger
 	file    *os.File
 	encoder *json.Encoder
 }
@@ -32,12 +34,13 @@ type resultLog struct {
 // newResultLog creates a JSONL result log at the given path. The file
 // is created (truncating any existing content) immediately. Returns an
 // error if the file cannot be created.
-func newResultLog(path string) (*resultLog, error) {
+func newResultLog(path string, logger *slog.Logger) (*resultLog, error) {
 	file, err := os.Create(path)
 	if err != nil {
 		return nil, fmt.Errorf("creating result log %s: %w", path, err)
 	}
 	return &resultLog{
+		logger:  logger,
 		file:    file,
 		encoder: json.NewEncoder(file),
 	}, nil
@@ -128,13 +131,13 @@ func (r *resultLog) writeAborted(abortedStep, reason string, durationMS int64, l
 
 func (r *resultLog) write(entry any) {
 	if err := r.encoder.Encode(entry); err != nil {
-		fmt.Printf("[pipeline] warning: failed to write result log entry: %v\n", err)
+		r.logger.Warn("failed to write result log entry", "error", err)
 		return
 	}
 	// Sync after each line so that partial results survive a crash and
 	// are visible to readers (daemon tailing for progress) immediately.
 	if err := r.file.Sync(); err != nil {
-		fmt.Printf("[pipeline] warning: failed to sync result log: %v\n", err)
+		r.logger.Warn("failed to sync result log", "error", err)
 	}
 }
 

@@ -76,6 +76,8 @@ func runDestroy(localpart string, params serviceDestroyParams) error {
 		return fmt.Errorf("invalid --server-name: %w", err)
 	}
 
+	logger := cli.NewCommandLogger().With("command", "service/destroy", "localpart", localpart)
+
 	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
 	defer cancel()
 
@@ -105,7 +107,7 @@ func runDestroy(localpart string, params serviceDestroyParams) error {
 	}
 
 	if machine.IsZero() && machineCount > 0 {
-		fmt.Fprintf(os.Stderr, "resolved %s → %s (scanned %d machines)\n", localpart, location.Machine.Localpart(), machineCount)
+		logger.Info("resolved service location", "machine", location.Machine.Localpart(), "machines_scanned", machineCount)
 	}
 
 	destroyResult, err := principal.Destroy(ctx, session, location.ConfigRoomID, location.Machine, localpart)
@@ -120,7 +122,7 @@ func runDestroy(localpart string, params serviceDestroyParams) error {
 			schema.EventTypeCredentials, localpart, struct{}{})
 		if err != nil {
 			// Non-fatal — the assignment is already removed.
-			fmt.Fprintf(os.Stderr, "warning: failed to purge credentials: %v\n", err)
+			logger.Warn("failed to purge credentials", "error", err)
 		} else {
 			purged = true
 		}

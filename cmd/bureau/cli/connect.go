@@ -6,7 +6,6 @@ package cli
 import (
 	"context"
 	"log/slog"
-	"os"
 	"time"
 
 	"github.com/bureau-foundation/bureau/lib/ref"
@@ -27,9 +26,7 @@ func ConnectOperator() (context.Context, context.CancelFunc, messaging.Session, 
 
 	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
 
-	logger := slog.New(slog.NewJSONHandler(os.Stderr, &slog.HandlerOptions{
-		Level: slog.LevelWarn,
-	}))
+	logger := NewClientLogger(slog.LevelWarn)
 
 	client, err := messaging.NewClient(messaging.ClientConfig{
 		HomeserverURL: operatorSession.Homeserver,

@@ -33,3 +33,12 @@ func NewCommandLogger() *slog.Logger {
 	}
 	return slog.New(handler)
 }
+
+// NewClientLogger creates a structured logger for the Matrix client's
+// internal protocol logging. Always uses JSONHandler — protocol logs
+// are machine-parseable regardless of terminal. The caller specifies
+// the level: LevelWarn for short-lived operator sessions (suppress
+// HTTP chatter), LevelInfo for long-running credential-based sessions.
+func NewClientLogger(level slog.Level) *slog.Logger {
+	return slog.New(slog.NewJSONHandler(os.Stderr, &slog.HandlerOptions{Level: level}))
+}

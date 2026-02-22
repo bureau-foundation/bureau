@@ -6,7 +6,6 @@ package service
 import (
 	"context"
 	"fmt"
-	"os"
 	"time"
 
 	"github.com/bureau-foundation/bureau/cmd/bureau/cli"
@@ -95,13 +94,15 @@ func runShow(localpart string, params serviceShowParams) error {
 		}
 	}
 
+	logger := cli.NewCommandLogger().With("command", "service/show", "localpart", localpart)
+
 	location, machineCount, err := principal.Resolve(ctx, session, localpart, machine, fleet)
 	if err != nil {
 		return cli.NotFound("resolve service: %w", err)
 	}
 
 	if machine.IsZero() && machineCount > 0 {
-		fmt.Fprintf(os.Stderr, "resolved %s → %s (scanned %d machines)\n", localpart, location.Machine.Localpart(), machineCount)
+		logger.Info("resolved service location", "machine", location.Machine.Localpart(), "machines_scanned", machineCount)
 	}
 
 	result := serviceShowResult{

@@ -783,13 +783,14 @@ func createWorkspace(t *testing.T, session messaging.Session, machineRef ref.Mac
 	t.Helper()
 	ctx := t.Context()
 
+	logger := slog.New(slog.NewJSONHandler(os.Stderr, nil)).With("test", t.Name())
 	result, err := workspace.Create(ctx, session, workspace.CreateParams{
 		Alias:      alias,
 		Machine:    machineRef,
 		Template:   template,
 		Params:     params,
 		AgentCount: 1,
-	})
+	}, logger)
 	if err != nil {
 		t.Fatalf("create workspace %s: %v", alias, err)
 	}

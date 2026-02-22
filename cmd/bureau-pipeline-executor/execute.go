@@ -9,6 +9,7 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"log/slog"
 	"os"
 	"os/exec"
 	"strings"
@@ -45,7 +46,7 @@ type stepResult struct {
 //
 // The artifacts client may be nil — artifact-mode outputs will fail with
 // a clear error if the artifact service is not available.
-func executeStep(ctx context.Context, step pipeline.PipelineStep, index, total int, session messaging.Session, artifacts *artifactstore.Client, logger *threadLogger) stepResult {
+func executeStep(ctx context.Context, step pipeline.PipelineStep, index, total int, session messaging.Session, artifacts *artifactstore.Client, threadLog *threadLogger, logger *slog.Logger) stepResult {
 	startTime := time.Now()
 
 	// Parse timeout.
@@ -103,8 +104,8 @@ func executeStep(ctx context.Context, step pipeline.PipelineStep, index, total i
 		}
 		if exitCode != 0 {
 			duration := time.Since(startTime)
-			fmt.Printf("[pipeline] step %d/%d: %s... skipped (guard condition not met)\n", index+1, total, step.Name)
-			logger.logStep(ctx, index, total, step.Name, "skipped", duration)
+			logger.Info("step skipped", "step", index+1, "total", total, "name", step.Name, "reason", "guard condition not met")
+			threadLog.logStep(ctx, index, total, step.Name, "skipped", duration)
 			return stepResult{status: "skipped", duration: duration}
 		}
 	}
@@ -198,8 +199,8 @@ func executeStep(ctx context.Context, step pipeline.PipelineStep, index, total i
 	}
 
 	duration := time.Since(startTime)
-	fmt.Printf("[pipeline] step %d/%d: %s... ok (%s)\n", index+1, total, step.Name, formatDuration(duration))
-	logger.logStep(ctx, index, total, step.Name, "ok", duration)
+	logger.Info("step completed", "step", index+1, "total", total, "name", step.Name, "duration", formatDuration(duration))
+	threadLog.logStep(ctx, index, total, step.Name, "ok", duration)
 	return stepResult{status: "ok", duration: duration, outputs: outputs}
 }
 

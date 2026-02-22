@@ -6,6 +6,7 @@ package fleet
 import (
 	"context"
 	"fmt"
+	"log/slog"
 	"os"
 	"time"
 
@@ -111,7 +112,9 @@ func runCreate(fleetLocalpart string, params *createParams) error {
 		return cli.Validation("%v", err)
 	}
 
-	rooms, err := ensureFleetRooms(ctx, session, fleet)
+	logger := cli.NewCommandLogger().With("command", "fleet/create", "fleet", fleet.Localpart())
+
+	rooms, err := ensureFleetRooms(ctx, session, fleet, logger)
 	if err != nil {
 		return err
 	}
@@ -121,7 +124,7 @@ func runCreate(fleetLocalpart string, params *createParams) error {
 		if err != nil {
 			return cli.Validation("invalid invite user ID %q: %w", userIDString, err)
 		}
-		if err := inviteToFleetRooms(ctx, session, rooms, parsedUserID); err != nil {
+		if err := inviteToFleetRooms(ctx, session, rooms, parsedUserID, logger); err != nil {
 			return err
 		}
 	}
@@ -159,7 +162,7 @@ type fleetRooms struct {
 // if they don't exist and adds them as children of the namespace space. All
 // identity information comes from the fleet ref — no string decomposition
 // at the call site.
-func ensureFleetRooms(ctx context.Context, session messaging.Session, fleet ref.Fleet) (fleetRooms, error) {
+func ensureFleetRooms(ctx context.Context, session messaging.Session, fleet ref.Fleet, logger *slog.Logger) (fleetRooms, error) {
 	// Resolve the namespace space that will parent these rooms.
 	spaceAlias := fleet.Namespace().SpaceAlias()
 	spaceRoomID, err := session.ResolveAlias(ctx, spaceAlias)
@@ -184,7 +187,7 @@ func ensureFleetRooms(ctx context.Context, session messaging.Session, fleet ref.
 			Preset:                    "private_chat",
 			Visibility:                "private",
 			PowerLevelContentOverride: schema.FleetRoomPowerLevels(adminUserID),
-		})
+		}, logger)
 	if err != nil {
 		return fleetRooms{}, err
 	}
@@ -198,7 +201,7 @@ func ensureFleetRooms(ctx context.Context, session messaging.Session, fleet ref.
 			Preset:                    "private_chat",
 			Visibility:                "private",
 			PowerLevelContentOverride: schema.MachineRoomPowerLevels(adminUserID),
-		})
+		}, logger)
 	if err != nil {
 		return fleetRooms{}, err
 	}
@@ -212,7 +215,7 @@ func ensureFleetRooms(ctx context.Context, session messaging.Session, fleet ref.
 			Preset:                    "private_chat",
 			Visibility:                "private",
 			PowerLevelContentOverride: schema.ServiceRoomPowerLevels(adminUserID),
-		})
+		}, logger)
 	if err != nil {
 		return fleetRooms{}, err
 	}
@@ -226,7 +229,7 @@ func ensureFleetRooms(ctx context.Context, session messaging.Session, fleet ref.
 
 // inviteToFleetRooms invites a user to all three fleet rooms. Silently
 // skips rooms the user has already joined.
-func inviteToFleetRooms(ctx context.Context, session messaging.Session, rooms fleetRooms, userID ref.UserID) error {
+func inviteToFleetRooms(ctx context.Context, session messaging.Session, rooms fleetRooms, userID ref.UserID, logger *slog.Logger) error {
 	for _, roomID := range []ref.RoomID{rooms.ConfigRoomID, rooms.MachineRoomID, rooms.ServiceRoomID} {
 		if err := session.InviteUser(ctx, roomID, userID); err != nil {
 			if messaging.IsMatrixError(err, messaging.ErrCodeForbidden) {
@@ -235,7 +238,7 @@ func inviteToFleetRooms(ctx context.Context, session messaging.Session, rooms fl
 			return cli.Internal("inviting %s to room %s: %w", userID, roomID, err)
 		}
 	}
-	fmt.Fprintf(os.Stderr, "Invited %s to fleet rooms\n", userID)
+	logger.Info("invited user to fleet rooms", "user_id", userID.String())
 	return nil
 }
 
@@ -244,10 +247,10 @@ func inviteToFleetRooms(ctx context.Context, session messaging.Session, rooms fl
 // space. The alias parameter is the full "#localpart:server" form used for
 // the resolve check; the CreateRoomRequest.Alias field is the localpart
 // used by the Matrix create-room API.
-func idempotentCreateRoom(ctx context.Context, session messaging.Session, alias ref.RoomAlias, spaceRoomID ref.RoomID, server ref.ServerName, request messaging.CreateRoomRequest) (ref.RoomID, error) {
+func idempotentCreateRoom(ctx context.Context, session messaging.Session, alias ref.RoomAlias, spaceRoomID ref.RoomID, server ref.ServerName, request messaging.CreateRoomRequest, logger *slog.Logger) (ref.RoomID, error) {
 	roomID, err := session.ResolveAlias(ctx, alias)
 	if err == nil {
-		fmt.Fprintf(os.Stderr, "Room %s already exists (%s)\n", alias, roomID)
+		logger.Info("room already exists", "alias", alias.String(), "room_id", roomID.String())
 		return roomID, nil
 	}
 	if !messaging.IsMatrixError(err, messaging.ErrCodeNotFound) {
@@ -266,6 +269,6 @@ func idempotentCreateRoom(ctx context.Context, session messaging.Session, alias 
 		return ref.RoomID{}, cli.Internal("adding %s as child of namespace space: %w", alias, err)
 	}
 
-	fmt.Fprintf(os.Stderr, "Created room %s (%s)\n", alias, response.RoomID)
+	logger.Info("created room", "alias", alias.String(), "room_id", response.RoomID.String())
 	return response.RoomID, nil
 }

@@ -180,7 +180,8 @@ func runCreate(templateRef schema.TemplateRef, params serviceCreateParams) error
 		return cli.Internal("resolve fleet machine room %q: %w", machineRoomAlias, err)
 	}
 
-	fmt.Fprintf(os.Stderr, "Creating service %s on %s (template %s)...\n", params.Name, params.Machine, templateRef)
+	logger := cli.NewCommandLogger().With("command", "service/create", "name", params.Name, "template", templateRef.String())
+	logger.Info("creating service", "machine", params.Machine)
 
 	principalEntity, err := ref.NewEntityFromAccountLocalpart(fleet, params.Name)
 	if err != nil {

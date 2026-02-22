@@ -1892,25 +1892,6 @@ func TestApplyPipelineExecutorOverlay(t *testing.T) {
 			wantEnvironmentPath:  pipelineEnvPath,
 		},
 		{
-			name:                   "pipeline_inline with empty command",
-			pipelineExecutorBinary: executorBinary,
-			pipelineEnvironment:    pipelineEnvPath,
-			workspaceRoot:          workspaceRoot,
-			spec: &schema.SandboxSpec{
-				Payload: map[string]any{
-					"pipeline_inline": map[string]any{
-						"description": "inline pipeline",
-						"steps":       []map[string]any{{"name": "test"}},
-					},
-				},
-			},
-			wantApplied:          true,
-			wantCommand:          []string{executorBinary},
-			wantFilesystemLength: 2, // executor binary + workspace root (no original mounts)
-			wantBureauSandbox:    "1",
-			wantEnvironmentPath:  pipelineEnvPath,
-		},
-		{
 			name:                   "existing command not overwritten",
 			pipelineExecutorBinary: executorBinary,
 			pipelineEnvironment:    pipelineEnvPath,

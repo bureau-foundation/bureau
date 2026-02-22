@@ -218,31 +218,19 @@ func TestBuildPipelineExecutorSpec(t *testing.T) {
 	daemon.pipelineEnvironment = "/nix/store/xyz-runner-env"
 	daemon.workspaceRoot = "/var/bureau/workspace"
 
-	command := schema.CommandMessage{
-		Command:   "pipeline.execute",
-		RequestID: "req-42",
-		Parameters: map[string]any{
-			"pipeline": "bureau/pipeline:dev-workspace-init",
-			"project":  "my-project",
-		},
-	}
-
 	spec := daemon.buildPipelineExecutorSpec(
-		"bureau/pipeline:dev-workspace-init",
 		"/tmp/result-abc/result.jsonl",
-		"", "",
-		command,
+		"/run/artifact.sock", "/tmp/artifact.token",
+		"pip-a3f9", ref.MustParseRoomID("!pipeline-room:bureau.local"),
+		"/run/ticket.sock", "/tmp/ticket.token",
 	)
 
-	// Verify command.
-	if len(spec.Command) != 2 {
-		t.Fatalf("expected 2 command elements, got %d: %v", len(spec.Command), spec.Command)
+	// Verify command — just the executor binary, no CLI arguments.
+	if len(spec.Command) != 1 {
+		t.Fatalf("expected 1 command element, got %d: %v", len(spec.Command), spec.Command)
 	}
 	if spec.Command[0] != daemon.pipelineExecutorBinary {
 		t.Errorf("command[0] = %q, want %q", spec.Command[0], daemon.pipelineExecutorBinary)
-	}
-	if spec.Command[1] != "bureau/pipeline:dev-workspace-init" {
-		t.Errorf("command[1] = %q, want pipeline ref", spec.Command[1])
 	}
 
 	// Verify environment variables.
@@ -252,9 +240,14 @@ func TestBuildPipelineExecutorSpec(t *testing.T) {
 	if spec.EnvironmentVariables["BUREAU_RESULT_PATH"] != "/run/bureau/result.jsonl" {
 		t.Errorf("BUREAU_RESULT_PATH = %q", spec.EnvironmentVariables["BUREAU_RESULT_PATH"])
 	}
+	if spec.EnvironmentVariables["BUREAU_TICKET_ID"] != "pip-a3f9" {
+		t.Errorf("BUREAU_TICKET_ID = %q, want 'pip-a3f9'", spec.EnvironmentVariables["BUREAU_TICKET_ID"])
+	}
+	if spec.EnvironmentVariables["BUREAU_TICKET_ROOM"] != "!pipeline-room:bureau.local" {
+		t.Errorf("BUREAU_TICKET_ROOM = %q", spec.EnvironmentVariables["BUREAU_TICKET_ROOM"])
+	}
 
 	// Verify filesystem mounts by destination rather than by index.
-	// Order is not semantically meaningful and shifts when mounts are added.
 	findMount := func(dest string) *schema.TemplateMount {
 		for index := range spec.Filesystem {
 			if spec.Filesystem[index].Dest == dest {
@@ -264,8 +257,7 @@ func TestBuildPipelineExecutorSpec(t *testing.T) {
 		return nil
 	}
 
-	// Executor binary mount (bind-mounted at its host path so bwrap can
-	// find it regardless of where it lives on the host).
+	// Executor binary mount.
 	executorMount := findMount(daemon.pipelineExecutorBinary)
 	if executorMount == nil {
 		t.Error("executor binary mount not found")
@@ -291,17 +283,39 @@ func TestBuildPipelineExecutorSpec(t *testing.T) {
 		}
 	}
 
-	// Workspace root mount (canonical /workspace path used by pipeline JSONC).
+	// Workspace root mount.
 	workspaceMount := findMount("/workspace")
 	if workspaceMount == nil {
 		t.Error("workspace root mount not found")
 	} else {
 		if workspaceMount.Source != "/var/bureau/workspace" {
-			t.Errorf("workspace mount source = %q, want %q", workspaceMount.Source, "/var/bureau/workspace")
+			t.Errorf("workspace mount source = %q", workspaceMount.Source)
 		}
 		if workspaceMount.Mode != "rw" {
 			t.Errorf("workspace mount mode = %q, want 'rw'", workspaceMount.Mode)
 		}
+	}
+
+	// Artifact service mounts.
+	artifactSocketMount := findMount("/run/bureau/artifact.sock")
+	if artifactSocketMount == nil {
+		t.Error("artifact socket mount not found")
+	} else if artifactSocketMount.Source != "/run/artifact.sock" {
+		t.Errorf("artifact socket source = %q", artifactSocketMount.Source)
+	}
+
+	// Ticket service mounts.
+	ticketSocketMount := findMount("/run/bureau/service/ticket.sock")
+	if ticketSocketMount == nil {
+		t.Error("ticket socket mount not found")
+	} else if ticketSocketMount.Source != "/run/ticket.sock" {
+		t.Errorf("ticket socket source = %q", ticketSocketMount.Source)
+	}
+	ticketTokenMount := findMount("/run/bureau/service/token/ticket.token")
+	if ticketTokenMount == nil {
+		t.Error("ticket token mount not found")
+	} else if ticketTokenMount.Source != "/tmp/ticket.token" {
+		t.Errorf("ticket token source = %q", ticketTokenMount.Source)
 	}
 
 	// Verify namespaces.
@@ -321,14 +335,6 @@ func TestBuildPipelineExecutorSpec(t *testing.T) {
 	if spec.EnvironmentPath != daemon.pipelineEnvironment {
 		t.Errorf("EnvironmentPath = %q, want %q", spec.EnvironmentPath, daemon.pipelineEnvironment)
 	}
-
-	// Verify payload.
-	if spec.Payload == nil {
-		t.Fatal("expected payload from command parameters")
-	}
-	if spec.Payload["project"] != "my-project" {
-		t.Errorf("payload[project] = %v, want 'my-project'", spec.Payload["project"])
-	}
 }
 
 func TestBuildPipelineExecutorSpec_NoEnvironment(t *testing.T) {
@@ -339,38 +345,41 @@ func TestBuildPipelineExecutorSpec_NoEnvironment(t *testing.T) {
 	daemon.pipelineEnvironment = "" // No Nix environment.
 	daemon.workspaceRoot = "/var/bureau/workspace"
 
-	spec := daemon.buildPipelineExecutorSpec("test", "/tmp/result.jsonl",
-		"", "", schema.CommandMessage{})
+	spec := daemon.buildPipelineExecutorSpec("/tmp/result.jsonl",
+		"", "", "pip-1234", ref.MustParseRoomID("!room:test"), "/run/ticket.sock", "/tmp/ticket.token")
 
 	if spec.EnvironmentPath != "" {
 		t.Errorf("EnvironmentPath should be empty, got %q", spec.EnvironmentPath)
 	}
 }
 
-func TestBuildPipelineExecutorSpec_NoRef(t *testing.T) {
+func TestBuildPipelineExecutorSpec_NoArtifact(t *testing.T) {
 	t.Parallel()
 
 	daemon, _ := newTestDaemon(t)
 	daemon.pipelineExecutorBinary = "/usr/bin/executor"
 	daemon.workspaceRoot = "/var/bureau/workspace"
 
-	// When pipelineRef is empty, the executor resolves via payload.
-	spec := daemon.buildPipelineExecutorSpec("", "/tmp/result.jsonl",
-		"", "", schema.CommandMessage{
-			Parameters: map[string]any{
-				"pipeline_ref": "bureau/pipeline:inline-test",
-			},
-		})
+	// Empty artifact socket/token paths — no artifact service available.
+	spec := daemon.buildPipelineExecutorSpec("/tmp/result.jsonl",
+		"", "", "pip-1234", ref.MustParseRoomID("!room:test"), "/run/ticket.sock", "/tmp/ticket.token")
 
-	// Command should have only the binary, no pipeline ref argument.
-	if len(spec.Command) != 1 {
-		t.Fatalf("expected 1 command element (no ref arg), got %d: %v",
-			len(spec.Command), spec.Command)
+	// Verify no artifact mounts are present.
+	for _, mount := range spec.Filesystem {
+		if strings.Contains(mount.Dest, "artifact") {
+			t.Errorf("unexpected artifact mount: %+v", mount)
+		}
 	}
 
-	// Pipeline ref should be in the payload.
-	if spec.Payload["pipeline_ref"] != "bureau/pipeline:inline-test" {
-		t.Errorf("payload missing pipeline_ref")
+	// Verify ticket mounts ARE present (always required).
+	var hasTicketSocket bool
+	for _, mount := range spec.Filesystem {
+		if mount.Dest == "/run/bureau/service/ticket.sock" {
+			hasTicketSocket = true
+		}
+	}
+	if !hasTicketSocket {
+		t.Error("ticket socket mount not found")
 	}
 }
 
@@ -387,7 +396,7 @@ func TestHandlePipelineExecute_NoBinary(t *testing.T) {
 
 	// daemon has no pipelineExecutorBinary set.
 	event := buildPipelineCommandEvent(ref.MustParseEventID("$pipe1"), ref.MustParseUserID("@admin:bureau.local"),
-		"bureau/pipeline:test", "req-1")
+		"bureau/pipeline:test", "!tickets:bureau.local", "req-1")
 
 	ctx := context.Background()
 	harness.daemon.processCommandMessages(ctx, mustRoomID(roomID), []messaging.Event{event})
@@ -485,7 +494,7 @@ func TestHandlePipelineExecute_Accepted(t *testing.T) {
 	})
 
 	event := buildPipelineCommandEvent(ref.MustParseEventID("$pipe3"), ref.MustParseUserID("@admin:bureau.local"),
-		"bureau/pipeline:dev-init", "req-accepted")
+		"bureau/pipeline:dev-init", "!tickets:bureau.local", "req-accepted")
 
 	ctx := context.Background()
 	harness.daemon.processCommandMessages(ctx, mustRoomID(roomID), []messaging.Event{event})
@@ -535,7 +544,7 @@ func TestHandlePipelineExecute_AuthorizationRequired(t *testing.T) {
 	})
 
 	event := buildPipelineCommandEvent(ref.MustParseEventID("$pipe4"), ref.MustParseUserID("@operator:bureau.local"),
-		"bureau/pipeline:test", "req-denied")
+		"bureau/pipeline:test", "!tickets:bureau.local", "req-denied")
 
 	ctx := context.Background()
 	harness.daemon.processCommandMessages(ctx, mustRoomID(roomID), []messaging.Event{event})
@@ -555,7 +564,7 @@ func TestHandlePipelineExecute_AuthorizationRequired(t *testing.T) {
 	}
 }
 
-func TestHandlePipelineExecute_ViaPayloadRef(t *testing.T) {
+func TestHandlePipelineExecute_PipelineRefRejected(t *testing.T) {
 	t.Parallel()
 	harness := newCommandTestHarness(t)
 
@@ -566,12 +575,6 @@ func TestHandlePipelineExecute_ViaPayloadRef(t *testing.T) {
 	}
 	harness.daemon.pipelineExecutorBinary = binaryPath
 
-	// Use a pre-cancelled context so the async goroutine exits
-	// immediately without racing against the synchronous result.
-	cancelledCtx, cancel := context.WithCancel(context.Background())
-	cancel()
-	harness.daemon.shutdownCtx = cancelledCtx
-
 	const roomID = "!workspace:test"
 	harness.matrixState.setStateEvent(roomID, schema.MatrixEventTypePowerLevels, "", map[string]any{
 		"users": map[string]any{
@@ -579,7 +582,8 @@ func TestHandlePipelineExecute_ViaPayloadRef(t *testing.T) {
 		},
 	})
 
-	// No "pipeline" parameter, but pipeline_ref is present.
+	// Send "pipeline_ref" instead of "pipeline" — the old parameter
+	// name is no longer supported; "pipeline" is required.
 	event := messaging.Event{
 		EventID: ref.MustParseEventID("$pipe5"),
 		Type:    schema.MatrixEventTypeMessage,
@@ -602,24 +606,77 @@ func TestHandlePipelineExecute_ViaPayloadRef(t *testing.T) {
 		t.Fatalf("expected exactly 1 sent message, got %d", len(messages))
 	}
 
-	result, ok := messages[0].Content["result"].(map[string]any)
-	if !ok {
-		t.Fatalf("result is not a map: %T", messages[0].Content["result"])
+	message := messages[0]
+	if message.Content["status"] != "error" {
+		t.Errorf("status = %v, want 'error'", message.Content["status"])
 	}
-	if result["status"] != "accepted" {
-		t.Errorf("result.status = %v, want 'accepted'", result["status"])
+	errorText, _ := message.Content["error"].(string)
+	if !strings.Contains(errorText, "'pipeline' is required") {
+		t.Errorf("error should mention missing 'pipeline' parameter, got: %q", errorText)
+	}
+}
+
+func TestHandlePipelineExecute_MissingRoom(t *testing.T) {
+	t.Parallel()
+	harness := newCommandTestHarness(t)
+
+	binaryDir := t.TempDir()
+	binaryPath := filepath.Join(binaryDir, "executor")
+	if err := os.WriteFile(binaryPath, []byte("#!/bin/sh\n"), 0755); err != nil {
+		t.Fatal(err)
+	}
+	harness.daemon.pipelineExecutorBinary = binaryPath
+
+	const roomID = "!workspace:test"
+	harness.matrixState.setStateEvent(roomID, schema.MatrixEventTypePowerLevels, "", map[string]any{
+		"users": map[string]any{
+			"@admin:bureau.local": float64(100),
+		},
+	})
+
+	// Pipeline is provided but room is missing.
+	event := messaging.Event{
+		EventID: ref.MustParseEventID("$pipe6"),
+		Type:    schema.MatrixEventTypeMessage,
+		Sender:  ref.MustParseUserID("@admin:bureau.local"),
+		Content: map[string]any{
+			"msgtype": schema.MsgTypeCommand,
+			"body":    "pipeline.execute",
+			"command": "pipeline.execute",
+			"parameters": map[string]any{
+				"pipeline": "bureau/pipeline:test",
+			},
+		},
+	}
+
+	ctx := context.Background()
+	harness.daemon.processCommandMessages(ctx, mustRoomID(roomID), []messaging.Event{event})
+
+	messages := harness.getSentMessages()
+	if len(messages) != 1 {
+		t.Fatalf("expected exactly 1 sent message, got %d", len(messages))
+	}
+
+	message := messages[0]
+	if message.Content["status"] != "error" {
+		t.Errorf("status = %v, want 'error'", message.Content["status"])
+	}
+	errorText, _ := message.Content["error"].(string)
+	if !strings.Contains(errorText, "'room' is required") {
+		t.Errorf("error should mention missing 'room' parameter, got: %q", errorText)
 	}
 }
 
 // buildPipelineCommandEvent creates a messaging.Event for a
-// pipeline.execute command with a pipeline ref parameter.
-func buildPipelineCommandEvent(eventID ref.EventID, sender ref.UserID, pipelineRef, requestID string) messaging.Event {
+// pipeline.execute command with pipeline ref and room parameters.
+func buildPipelineCommandEvent(eventID ref.EventID, sender ref.UserID, pipelineRef, ticketRoom, requestID string) messaging.Event {
 	content := map[string]any{
 		"msgtype": schema.MsgTypeCommand,
 		"body":    "pipeline.execute " + pipelineRef,
 		"command": "pipeline.execute",
 		"parameters": map[string]any{
 			"pipeline": pipelineRef,
+			"room":     ticketRoom,
 		},
 	}
 	if requestID != "" {

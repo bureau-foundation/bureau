@@ -152,8 +152,42 @@ type SyncOptions struct {
 
 // SyncResponse is the top-level response from /sync.
 type SyncResponse struct {
-	NextBatch string       `json:"next_batch"`
-	Rooms     RoomsSection `json:"rooms"`
+	NextBatch string          `json:"next_batch"`
+	Presence  PresenceSection `json:"presence,omitempty"`
+	Rooms     RoomsSection    `json:"rooms"`
+}
+
+// PresenceSection contains presence events from the /sync response.
+// Each event reports one user's presence state change. Services that
+// don't need presence filter it out via their sync filter
+// ("presence": {"types": []}) and receive an empty section.
+type PresenceSection struct {
+	Events []PresenceEvent `json:"events"`
+}
+
+// PresenceEvent is a single m.presence event from the /sync response.
+type PresenceEvent struct {
+	Type    string               `json:"type"`
+	Sender  ref.UserID           `json:"sender"`
+	Content PresenceEventContent `json:"content"`
+}
+
+// PresenceEventContent carries the presence state for a single user.
+type PresenceEventContent struct {
+	// Presence is the user's current state: "online", "unavailable",
+	// or "offline".
+	Presence string `json:"presence"`
+
+	// LastActiveAgo is milliseconds since the user was last active.
+	// Zero when unknown or when the user is currently active.
+	LastActiveAgo int64 `json:"last_active_ago,omitempty"`
+
+	// CurrentlyActive is true when the user is actively using a
+	// client right now (not just connected but idle).
+	CurrentlyActive bool `json:"currently_active,omitempty"`
+
+	// StatusMsg is an optional user-set status message.
+	StatusMsg string `json:"status_msg,omitempty"`
 }
 
 // RoomsSection contains per-room sync data grouped by membership state.

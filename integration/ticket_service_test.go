@@ -669,6 +669,105 @@ func TestTicketLifecycleAgent(t *testing.T) {
 	})
 }
 
+// --- Shared helpers for ticket service deployment ---
+
+// ticketServiceDeployment holds the result of deploying a ticket service
+// on a test machine. Tests use Entity to configure rooms with service
+// bindings, and the daemon uses the socket for ticket operations.
+type ticketServiceDeployment struct {
+	Entity ref.Entity // fleet-scoped entity ref for room service bindings
+}
+
+// deployTicketService registers a ticket service principal, starts the
+// service binary, and waits for the daemon to discover it via the
+// service directory. The service persists for the lifetime of the test.
+//
+// The suffix distinguishes multiple ticket services within the same
+// fleet (each test needs a unique localpart to avoid registration
+// collisions across parallel tests sharing the same homeserver).
+func deployTicketService(t *testing.T, admin *messaging.DirectSession, fleet *testFleet, machine *testMachine, suffix string) ticketServiceDeployment {
+	t.Helper()
+
+	localpart := "service/ticket/" + suffix
+	account := registerFleetPrincipal(t, fleet, localpart, "ticket-svc-"+suffix)
+
+	stateDir := t.TempDir()
+	writeServiceSession(t, stateDir, account)
+
+	systemRoomID := resolveSystemRoom(t, admin)
+	inviteToRooms(t, admin, account.UserID, systemRoomID, fleet.ServiceRoomID)
+
+	entity, err := ref.NewEntityFromAccountLocalpart(fleet.Ref, localpart)
+	if err != nil {
+		t.Fatalf("construct ticket service entity ref: %v", err)
+	}
+
+	serviceWatch := watchRoom(t, admin, machine.ConfigRoomID)
+
+	socketPath := machine.PrincipalSocketPath(t, localpart)
+	if err := os.MkdirAll(filepath.Dir(socketPath), 0755); err != nil {
+		t.Fatalf("create ticket service socket parent directory: %v", err)
+	}
+
+	ticketBinary := resolvedBinary(t, "TICKET_SERVICE_BINARY")
+	startProcess(t, "ticket-"+suffix, ticketBinary,
+		"--homeserver", testHomeserverURL,
+		"--machine-name", machine.Name,
+		"--principal-name", localpart,
+		"--server-name", testServerName,
+		"--run-dir", machine.RunDir,
+		"--state-dir", stateDir,
+		"--fleet", fleet.Prefix,
+	)
+	waitForFile(t, socketPath)
+
+	fleetScopedName := entity.Localpart()
+	waitForNotification[schema.ServiceDirectoryUpdatedMessage](
+		t, &serviceWatch, schema.MsgTypeServiceDirectoryUpdated, machine.UserID,
+		func(message schema.ServiceDirectoryUpdatedMessage) bool {
+			return slices.Contains(message.Added, fleetScopedName)
+		}, "service directory update adding "+fleetScopedName)
+
+	return ticketServiceDeployment{Entity: entity}
+}
+
+// enableTicketsInRoom publishes ticket config and a room service binding
+// to an existing room, enabling pip- ticket creation in that room. The
+// ticket service must already be deployed and the admin must have
+// sufficient power level to publish state events.
+//
+// The prefix controls the ticket ID prefix (e.g., "pip" for pipeline
+// tickets, "tkt" for general tickets). The allowedTypes restricts which
+// ticket types can be created in this room (e.g., ["pipeline"]).
+func enableTicketsInRoom(t *testing.T, admin *messaging.DirectSession, roomID ref.RoomID, ticketService ticketServiceDeployment, prefix string, allowedTypes []string) {
+	t.Helper()
+
+	ctx := t.Context()
+
+	ticketConfig := ticket.TicketConfigContent{
+		Version:      ticket.TicketConfigVersion,
+		Prefix:       prefix,
+		AllowedTypes: allowedTypes,
+	}
+	if _, err := admin.SendStateEvent(ctx, roomID, schema.EventTypeTicketConfig, "", ticketConfig); err != nil {
+		t.Fatalf("publish ticket config in room %s: %v", roomID, err)
+	}
+
+	if _, err := admin.SendStateEvent(ctx, roomID, schema.EventTypeRoomService, "ticket",
+		schema.RoomServiceContent{
+			Principal: ticketService.Entity,
+		}); err != nil {
+		t.Fatalf("publish ticket room service binding in room %s: %v", roomID, err)
+	}
+
+	// Invite the ticket service to the room so it can sync state events.
+	if err := admin.InviteUser(ctx, roomID, ticketService.Entity.UserID()); err != nil {
+		if !messaging.IsMatrixError(err, "M_FORBIDDEN") {
+			t.Fatalf("invite ticket service to room %s: %v", roomID, err)
+		}
+	}
+}
+
 // --- Shared helpers for ticket tests ---
 
 // writeServiceSession writes a session.json file for a Bureau service

@@ -20,11 +20,14 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"strings"
 	"time"
 
 	"github.com/bureau-foundation/bureau/lib/ref"
 	"github.com/bureau-foundation/bureau/lib/schema"
 	"github.com/bureau-foundation/bureau/lib/schema/pipeline"
+	"github.com/bureau-foundation/bureau/lib/schema/ticket"
+	"github.com/bureau-foundation/bureau/lib/service"
 	"github.com/bureau-foundation/bureau/lib/servicetoken"
 )
 
@@ -53,17 +56,24 @@ func handlePipelineExecute(ctx context.Context, d *Daemon, roomID ref.RoomID, ev
 	}
 
 	// Extract the pipeline reference from command parameters. The
-	// pipeline can be specified as a pipeline ref (room:template), a
-	// file path, or inline in the payload. The executor handles all
-	// three — we just need to pass it through.
+	// executor resolves the pipeline definition from a ref string
+	// (namespace/pipeline:name) via the proxy's Matrix API.
 	pipelineRef, _ := command.Parameters["pipeline"].(string)
 	if pipelineRef == "" {
-		// When no explicit pipeline ref is provided, the executor
-		// falls back to payload-based resolution (pipeline_ref or
-		// pipeline_inline keys).
-		if command.Parameters["pipeline_ref"] == nil && command.Parameters["pipeline_inline"] == nil {
-			return nil, fmt.Errorf("parameter 'pipeline', 'pipeline_ref', or 'pipeline_inline' is required")
-		}
+		return nil, fmt.Errorf("parameter 'pipeline' is required")
+	}
+
+	// The room parameter specifies where the pip- ticket is created.
+	// This is the room where the execution record lives — visible to
+	// agents, triagers, and anyone with room access. The room must
+	// have ticket config with allowed_types including "pipeline".
+	ticketRoomIDString, _ := command.Parameters["room"].(string)
+	if ticketRoomIDString == "" {
+		return nil, fmt.Errorf("parameter 'room' is required (room ID where the pipeline ticket is created)")
+	}
+	ticketRoomID, err := ref.ParseRoomID(ticketRoomIDString)
+	if err != nil {
+		return nil, fmt.Errorf("parameter 'room' is not a valid room ID: %w", err)
 	}
 
 	// Generate an ephemeral principal localpart. The counter ensures
@@ -74,13 +84,14 @@ func handlePipelineExecute(ctx context.Context, d *Daemon, roomID ref.RoomID, ev
 		"room_id", roomID,
 		"localpart", localpart,
 		"pipeline", pipelineRef,
+		"ticket_room", ticketRoomID,
 		"request_id", command.RequestID,
 	)
 
 	// Start async execution. Uses the daemon's shutdown context (not
 	// the sync cycle's context) so the pipeline survives across sync
 	// iterations but cancels on daemon shutdown.
-	go d.executePipeline(d.shutdownCtx, roomID, eventID, command, localpart, pipelineRef)
+	go d.executePipeline(d.shutdownCtx, roomID, eventID, command, localpart, pipelineRef, ticketRoomID)
 
 	return map[string]any{
 		"status":    "accepted",
@@ -106,6 +117,7 @@ func (d *Daemon) executePipeline(
 	roomID ref.RoomID, commandEventID ref.EventID,
 	command schema.CommandMessage,
 	localpart, pipelineRef string,
+	ticketRoomID ref.RoomID,
 ) {
 	// Exit immediately if the daemon is already shutting down. The
 	// goroutine was started in handlePipelineExecute; by the time it
@@ -188,8 +200,72 @@ func (d *Daemon) executePipeline(
 		}
 	}
 
+	// Create a pip- ticket for this pipeline execution. The executor
+	// operates on tickets: claiming, posting progress, adding notes,
+	// and closing with the terminal outcome. The ticket service must
+	// be running and the target room must have ticket config with
+	// allowed_types including "pipeline".
+	ticketSocketPath := d.findLocalTicketSocket()
+	if ticketSocketPath == "" {
+		d.postPipelineError(ctx, roomID, commandEventID, command, start,
+			"no ticket service running on this machine (required for pipeline execution)")
+		return
+	}
+
+	// Extract variables from command parameters (string values only).
+	pipelineVariables := make(map[string]string)
+	for key, value := range command.Parameters {
+		if key == "pipeline" {
+			continue
+		}
+		if stringValue, ok := value.(string); ok {
+			pipelineVariables[key] = stringValue
+		}
+	}
+
+	ticketID, triggerContent, err := d.createPipelineTicket(
+		ctx, ticketSocketPath, pipelineEntity, ticketRoomID,
+		pipelineRef, pipelineVariables)
+	if err != nil {
+		d.postPipelineError(ctx, roomID, commandEventID, command, start,
+			fmt.Sprintf("creating pipeline ticket: %v", err))
+		return
+	}
+
+	d.logger.Info("created pipeline ticket",
+		"ticket_id", ticketID,
+		"room", ticketRoomID,
+		"pipeline", pipelineRef,
+	)
+
+	// Mint a sandbox-side ticket service token. The executor uses this
+	// for ongoing interactions: claim, progress, notes, close, show.
+	var ticketTokenPath string
+	ticketToken := &servicetoken.Token{
+		Subject:   pipelineEntity.UserID(),
+		Machine:   d.machine,
+		Audience:  "ticket",
+		Grants:    []servicetoken.Grant{{Actions: []string{"ticket/update", "ticket/close", "ticket/show"}}},
+		IssuedAt:  d.clock.Now().Unix(),
+		ExpiresAt: d.clock.Now().Add(1 * time.Hour).Unix(),
+	}
+	ticketTokenBytes, mintError := servicetoken.Mint(d.tokenSigningPrivateKey, ticketToken)
+	if mintError != nil {
+		d.postPipelineError(ctx, roomID, commandEventID, command, start,
+			fmt.Sprintf("minting ticket service token: %v", mintError))
+		return
+	}
+	ticketTokenPath = filepath.Join(resultDirectory, "ticket.token")
+	if writeError := os.WriteFile(ticketTokenPath, ticketTokenBytes, 0600); writeError != nil {
+		d.postPipelineError(ctx, roomID, commandEventID, command, start,
+			fmt.Sprintf("writing ticket token file: %v", writeError))
+		return
+	}
+
 	// Build the sandbox spec for the pipeline executor.
-	spec := d.buildPipelineExecutorSpec(pipelineRef, resultFilePath, artifactSocketPath, artifactTokenPath, command)
+	spec := d.buildPipelineExecutorSpec(
+		resultFilePath, artifactSocketPath, artifactTokenPath,
+		ticketID, ticketRoomID, ticketSocketPath, ticketTokenPath)
 
 	// Build credentials from the daemon's own Matrix session. The
 	// pipeline executor talks to Matrix through its proxy, which needs
@@ -205,6 +281,7 @@ func (d *Daemon) executePipeline(
 		Principal:         localpart,
 		DirectCredentials: credentials,
 		SandboxSpec:       spec,
+		TriggerContent:    triggerContent,
 	})
 	if err != nil {
 		d.postPipelineError(ctx, roomID, commandEventID, command, start,
@@ -295,25 +372,135 @@ func (d *Daemon) findLocalArtifactSocket() string {
 	return ""
 }
 
-func (d *Daemon) buildPipelineExecutorSpec(
+// findLocalTicketSocket returns the host-side socket path for the
+// local ticket service, or empty string if no ticket service is
+// running on this machine. Discovers the ticket service by its
+// "dependency-graph" capability in the service directory.
+func (d *Daemon) findLocalTicketSocket() string {
+	for _, svc := range d.services {
+		if svc.Machine != d.machine {
+			continue
+		}
+		for _, capability := range svc.Capabilities {
+			if capability == "dependency-graph" {
+				return svc.Principal.SocketPath(d.fleetRunDir)
+			}
+		}
+	}
+	return ""
+}
+
+// ticketCreateResponse is the response from the ticket service's
+// "create" action. Field names match the Go field names of the
+// server-side createResponse struct (CBOR uses Go field names when
+// no cbor tags are present).
+type ticketCreateResponse struct {
+	ID   string
+	Room string
+}
+
+// createPipelineTicket creates a pip- ticket for a pipeline execution
+// via the ticket service. Returns the ticket ID and JSON-serialized
+// TicketContent for use as trigger.json. The caller provides the
+// room ID where the ticket should be created — that room must have
+// ticket config with allowed_types including "pipeline".
+func (d *Daemon) createPipelineTicket(
+	ctx context.Context,
+	ticketSocketPath string,
+	principal ref.Entity,
+	roomID ref.RoomID,
 	pipelineRef string,
+	variables map[string]string,
+) (string, []byte, error) {
+	// Mint a short-lived token for the create call only. The
+	// sandbox gets a separate, longer-lived token for ongoing
+	// ticket operations (claim, progress, notes, close).
+	createToken := &servicetoken.Token{
+		Subject:   principal.UserID(),
+		Machine:   d.machine,
+		Audience:  "ticket",
+		Grants:    []servicetoken.Grant{{Actions: []string{"ticket/create"}}},
+		IssuedAt:  d.clock.Now().Unix(),
+		ExpiresAt: d.clock.Now().Add(1 * time.Minute).Unix(),
+	}
+	tokenBytes, err := servicetoken.Mint(d.tokenSigningPrivateKey, createToken)
+	if err != nil {
+		return "", nil, fmt.Errorf("minting ticket create token: %w", err)
+	}
+
+	client := service.NewServiceClientFromToken(ticketSocketPath, tokenBytes)
+
+	pipelineContent := &ticket.PipelineExecutionContent{
+		PipelineRef: pipelineRef,
+		Variables:   variables,
+	}
+
+	fields := map[string]any{
+		"room":     roomID.String(),
+		"type":     "pipeline",
+		"title":    fmt.Sprintf("Pipeline: %s", pipelineNameFromRef(pipelineRef)),
+		"priority": 2,
+		"pipeline": pipelineContent,
+	}
+
+	var response ticketCreateResponse
+	if err := client.Call(ctx, "create", fields, &response); err != nil {
+		return "", nil, err
+	}
+
+	// Build the TicketContent that the executor reads as trigger.json.
+	// This reconstructs the content the ticket service created — the
+	// create response only returns ID and Room, not the full content.
+	// The executor extracts Pipeline.PipelineRef and Pipeline.Variables;
+	// other fields are available as EVENT_-prefixed trigger variables.
+	now := d.clock.Now().UTC().Format(time.RFC3339)
+	triggerContent := ticket.TicketContent{
+		Version:   ticket.TicketContentVersion,
+		Title:     fmt.Sprintf("Pipeline: %s", pipelineNameFromRef(pipelineRef)),
+		Status:    "open",
+		Priority:  2,
+		Type:      "pipeline",
+		CreatedBy: principal.UserID(),
+		CreatedAt: now,
+		UpdatedAt: now,
+		Pipeline:  pipelineContent,
+	}
+
+	triggerBytes, err := json.Marshal(triggerContent)
+	if err != nil {
+		return "", nil, fmt.Errorf("marshaling trigger content: %w", err)
+	}
+
+	return response.ID, triggerBytes, nil
+}
+
+// pipelineNameFromRef extracts a human-readable name from a pipeline
+// ref string. For refs like "bureau/pipeline:workspace-setup-dev",
+// returns "workspace-setup-dev". For simple names like "init",
+// returns them unchanged.
+func pipelineNameFromRef(pipelineRef string) string {
+	if index := strings.LastIndex(pipelineRef, ":"); index >= 0 {
+		return pipelineRef[index+1:]
+	}
+	return pipelineRef
+}
+
+func (d *Daemon) buildPipelineExecutorSpec(
 	resultFilePath string,
 	artifactSocketPath string,
 	artifactTokenPath string,
-	command schema.CommandMessage,
+	ticketID string,
+	ticketRoom ref.RoomID,
+	ticketSocketPath string,
+	ticketTokenPath string,
 ) *schema.SandboxSpec {
-	// Build the command. When a pipeline ref is provided, pass it as
-	// the CLI argument. Otherwise, the executor resolves via payload.
-	executorCommand := []string{d.pipelineExecutorBinary}
-	if pipelineRef != "" {
-		executorCommand = append(executorCommand, pipelineRef)
-	}
-
 	spec := &schema.SandboxSpec{
-		Command: executorCommand,
+		Command: []string{d.pipelineExecutorBinary},
 		EnvironmentVariables: map[string]string{
 			"BUREAU_SANDBOX":     "1",
 			"BUREAU_RESULT_PATH": "/run/bureau/result.jsonl",
+			"BUREAU_TICKET_ID":   ticketID,
+			"BUREAU_TICKET_ROOM": ticketRoom.String(),
 			"TERM":               "xterm-256color",
 		},
 		Filesystem: []schema.TemplateMount{
@@ -360,10 +547,15 @@ func (d *Daemon) buildPipelineExecutorSpec(
 		spec.EnvironmentVariables["BUREAU_ARTIFACT_TOKEN"] = "/run/bureau/artifact.token"
 	}
 
-	// Build the payload from command parameters. The executor reads
-	// the payload for pipeline_ref, pipeline_inline, and variables.
-	if len(command.Parameters) > 0 {
-		spec.Payload = command.Parameters
+	// Ticket service: bind-mount the socket and token file. The
+	// executor uses these for ticket lifecycle operations: claiming,
+	// posting progress, adding step notes, and closing with the
+	// pipeline's terminal outcome.
+	if ticketSocketPath != "" && ticketTokenPath != "" {
+		spec.Filesystem = append(spec.Filesystem,
+			schema.TemplateMount{Source: ticketSocketPath, Dest: "/run/bureau/service/ticket.sock", Mode: "rw"},
+			schema.TemplateMount{Source: ticketTokenPath, Dest: "/run/bureau/service/token/ticket.token", Mode: "ro"},
+		)
 	}
 
 	return spec

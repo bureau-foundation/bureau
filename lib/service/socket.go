@@ -112,6 +112,11 @@ type SocketServer struct {
 	// shutdown. Serve waits for all active connections to complete
 	// before returning.
 	activeConnections sync.WaitGroup
+
+	// ready is closed after the socket is bound and accepting
+	// connections. Callers can block on Ready() to wait for the
+	// server to be reachable.
+	ready chan struct{}
 }
 
 // NewSocketServer creates a server that will listen on socketPath.
@@ -140,7 +145,14 @@ func NewSocketServer(socketPath string, logger *slog.Logger, authConfig *AuthCon
 		streamHandlers: make(map[string]AuthStreamFunc),
 		authConfig:     authConfig,
 		logger:         logger,
+		ready:          make(chan struct{}),
 	}
+}
+
+// Ready returns a channel that is closed once the server socket is
+// bound and accepting connections.
+func (s *SocketServer) Ready() <-chan struct{} {
+	return s.ready
 }
 
 // Handle registers an unauthenticated handler for the given action
@@ -217,6 +229,8 @@ func (s *SocketServer) Serve(ctx context.Context) error {
 		listener.Close()
 		os.Remove(s.socketPath)
 	}()
+
+	close(s.ready)
 
 	// Unblock Accept when the context is cancelled.
 	go func() {

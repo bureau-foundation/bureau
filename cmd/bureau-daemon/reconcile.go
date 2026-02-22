@@ -198,8 +198,18 @@ func (d *Daemon) reconcile(ctx context.Context) error {
 	}
 
 	// Check for hot-reloadable changes on already-running principals.
+	// Pipeline executor principals are ephemeral (run a pipeline, exit)
+	// and do not support hot-reload or structural restart. Their sandbox
+	// spec includes ticket context (BUREAU_TICKET_ID, BUREAU_TICKET_ROOM)
+	// that is set at creation time and not reproducible from template
+	// re-resolution alone. Comparing the re-resolved spec (without ticket
+	// context) against the running spec (with ticket context) would always
+	// detect a structural change, causing an infinite destroy-recreate loop.
 	for principal, assignment := range desired {
 		if !d.running[principal] {
+			continue
+		}
+		if d.pipelineExecutors[principal] {
 			continue
 		}
 		d.reconcileRunningPrincipal(ctx, principal, assignment)
@@ -269,6 +279,7 @@ func (d *Daemon) reconcile(ctx context.Context) error {
 		// launcher creates only a proxy process (no bwrap sandbox).
 		var sandboxSpec *schema.SandboxSpec
 		var resolvedTemplate *schema.TemplateContent
+		var pipelineTicketTokenDir string // set when pipeline executor overlay creates a ticket token
 		if assignment.Template != "" {
 			template, err := resolveTemplate(ctx, d.session, assignment.Template, d.machine.Server())
 			if err != nil {
@@ -291,6 +302,136 @@ func (d *Daemon) reconcile(ctx context.Context) error {
 					"template", assignment.Template,
 					"command", sandboxSpec.Command,
 				)
+
+				// The pipeline executor requires a pip- ticket. Create
+				// it now and inject ticket context into the sandbox spec
+				// so the executor can claim, progress, and close it.
+				ticketSocketPath := d.findLocalTicketSocket()
+				if ticketSocketPath == "" {
+					d.logger.Error("pipeline executor overlay applied but no ticket service running",
+						"principal", principal,
+					)
+					isFirstFailure := d.startFailures[principal] == nil
+					d.recordStartFailure(principal, failureCategoryServiceResolution,
+						"no ticket service running (required for pipeline execution)")
+					if isFirstFailure {
+						if _, sendErr := d.sendEventRetry(ctx, d.configRoomID, schema.MatrixEventTypeMessage,
+							schema.NewPrincipalStartFailedMessage(principal.AccountLocalpart(),
+								"no ticket service running (required for pipeline execution)")); sendErr != nil {
+							d.logger.Error("failed to post ticket service failure notification",
+								"principal", principal, "error", sendErr)
+						}
+					}
+					continue
+				}
+
+				pipelineRef, _ := sandboxSpec.Payload["pipeline_ref"].(string)
+
+				// Determine the room for the pip- ticket. For condition-
+				// triggered pipelines (workspace setup/teardown), use the
+				// workspace room. Otherwise use the config room.
+				ticketRoomID := conditionRoomIDs[principal]
+				if ticketRoomID.IsZero() {
+					ticketRoomID = d.configRoomID
+				}
+
+				// Extract variables from the payload (string values only,
+				// excluding the pipeline_ref key itself).
+				pipelineVariables := make(map[string]string)
+				for key, value := range sandboxSpec.Payload {
+					if key == "pipeline_ref" {
+						continue
+					}
+					if stringValue, ok := value.(string); ok {
+						pipelineVariables[key] = stringValue
+					}
+				}
+
+				ticketID, ticketTriggerContent, ticketErr := d.createPipelineTicket(
+					ctx, ticketSocketPath, principal,
+					ticketRoomID, pipelineRef, pipelineVariables)
+				if ticketErr != nil {
+					d.logger.Error("creating pipeline ticket for executor",
+						"principal", principal,
+						"pipeline_ref", pipelineRef,
+						"error", ticketErr,
+					)
+					isFirstFailure := d.startFailures[principal] == nil
+					d.recordStartFailure(principal, failureCategoryServiceResolution,
+						fmt.Sprintf("creating pipeline ticket: %v", ticketErr))
+					if isFirstFailure {
+						if _, sendErr := d.sendEventRetry(ctx, d.configRoomID, schema.MatrixEventTypeMessage,
+							schema.NewPrincipalStartFailedMessage(principal.AccountLocalpart(),
+								fmt.Sprintf("pipeline ticket creation failed: %v", ticketErr))); sendErr != nil {
+							d.logger.Error("failed to post pipeline ticket failure notification",
+								"principal", principal, "error", sendErr)
+						}
+					}
+					continue
+				}
+
+				d.logger.Info("created pipeline ticket for executor",
+					"principal", principal,
+					"ticket_id", ticketID,
+					"room", ticketRoomID,
+					"pipeline_ref", pipelineRef,
+				)
+
+				// Set ticket context env vars.
+				sandboxSpec.EnvironmentVariables["BUREAU_TICKET_ID"] = ticketID
+				sandboxSpec.EnvironmentVariables["BUREAU_TICKET_ROOM"] = ticketRoomID.String()
+
+				// Mount the ticket service socket.
+				sandboxSpec.Filesystem = append(sandboxSpec.Filesystem,
+					schema.TemplateMount{Source: ticketSocketPath, Dest: "/run/bureau/service/ticket.sock", Mode: "rw"},
+				)
+
+				// Mint a ticket token for the executor. This is separate
+				// from the standard mintServiceTokens flow because the
+				// pipeline executor's ticket access is a daemon concern,
+				// not template-declared authorization.
+				ticketToken := &servicetoken.Token{
+					Subject:   principal.UserID(),
+					Machine:   d.machine,
+					Audience:  "ticket",
+					Grants:    []servicetoken.Grant{{Actions: []string{"ticket/update", "ticket/close", "ticket/show"}}},
+					IssuedAt:  d.clock.Now().Unix(),
+					ExpiresAt: d.clock.Now().Add(1 * time.Hour).Unix(),
+				}
+				ticketTokenBytes, mintErr := servicetoken.Mint(d.tokenSigningPrivateKey, ticketToken)
+				if mintErr != nil {
+					d.logger.Error("minting ticket token for pipeline executor",
+						"principal", principal, "error", mintErr)
+					d.recordStartFailure(principal, failureCategoryTokenMinting,
+						fmt.Sprintf("minting ticket token: %v", mintErr))
+					continue
+				}
+
+				// Write the ticket token to the principal's token
+				// directory. This directory is bind-mounted by the launcher
+				// at /run/bureau/service/token/ via the TokenDirectory IPC
+				// field. Creating it early is idempotent with mintServiceTokens.
+				pipelineTicketTokenDir = filepath.Join(d.stateDir, "tokens", principal.AccountLocalpart())
+				if mkdirErr := os.MkdirAll(pipelineTicketTokenDir, 0700); mkdirErr != nil {
+					d.logger.Error("creating ticket token directory",
+						"principal", principal, "error", mkdirErr)
+					d.recordStartFailure(principal, failureCategoryTokenMinting,
+						fmt.Sprintf("creating ticket token directory: %v", mkdirErr))
+					continue
+				}
+				ticketTokenPath := filepath.Join(pipelineTicketTokenDir, "ticket.token")
+				if writeErr := os.WriteFile(ticketTokenPath, ticketTokenBytes, 0600); writeErr != nil {
+					d.logger.Error("writing ticket token",
+						"principal", principal, "error", writeErr)
+					d.recordStartFailure(principal, failureCategoryTokenMinting,
+						fmt.Sprintf("writing ticket token: %v", writeErr))
+					continue
+				}
+
+				// Replace the trigger content with the TicketContent JSON.
+				// The executor reads trigger.json as TicketContent to extract
+				// Pipeline.PipelineRef and Pipeline.Variables.
+				triggerContents[principal] = ticketTriggerContent
 			}
 
 			// Ensure the Nix environment's store path (and its full
@@ -448,6 +589,14 @@ func (d *Daemon) reconcile(ctx context.Context) error {
 			}
 			tokenDirectory = tokenDir
 			mintedTokens = minted
+		}
+
+		// If the pipeline executor overlay wrote a ticket token to the
+		// token directory but no other services required tokens (so
+		// mintServiceTokens didn't run), ensure tokenDirectory is set
+		// so the launcher mounts it at /run/bureau/service/token/.
+		if pipelineTicketTokenDir != "" && tokenDirectory == "" {
+			tokenDirectory = pipelineTicketTokenDir
 		}
 
 		// Resolve authorization grants before sandbox creation so the
@@ -933,12 +1082,10 @@ func (d *Daemon) applyPipelineExecutorOverlay(spec *schema.SandboxSpec) bool {
 		return false
 	}
 
-	// Check whether the payload references a pipeline. The executor
-	// resolves pipeline_ref (Tier 2) and pipeline_inline (Tier 3) from
-	// the payload file at /run/bureau/payload.json.
-	_, hasRef := spec.Payload["pipeline_ref"].(string)
-	_, hasInline := spec.Payload["pipeline_inline"]
-	if !hasRef && !hasInline {
+	// Check whether the payload references a pipeline definition.
+	// The pipeline_ref key is set by workspace templates to indicate
+	// that this principal runs a pipeline (setup/teardown).
+	if _, hasRef := spec.Payload["pipeline_ref"].(string); !hasRef {
 		return false
 	}
 

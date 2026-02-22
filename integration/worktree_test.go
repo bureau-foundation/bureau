@@ -623,6 +623,14 @@ func TestWorkspaceWorktreeLifecycle(t *testing.T) {
 
 	ctx := t.Context()
 
+	// --- Ticket service ---
+	// Pipeline executors (workspace setup/teardown and worktree
+	// add/remove) create pip- tickets. Deploy before workspace
+	// creation so the daemon discovers the service via the service
+	// directory. Ticket config is published to the workspace room
+	// after the CLI creates it.
+	deployTicketService(t, admin, fleet, machine, "ws-wt")
+
 	// Resolve the pipeline room for principal invitations. The machine
 	// itself was invited to all global rooms (template, pipeline, system,
 	// machine, service, fleet) during provisioning (startMachineLauncher).

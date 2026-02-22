@@ -179,6 +179,18 @@ const (
 	// Room: the pipeline's log room
 	EventTypePipelineResult ref.EventType = "m.bureau.pipeline_result"
 
+	// EventTypeServiceReady is a timeline event sent by a service after
+	// it joins a room and finishes processing the room's configuration.
+	// Consumers use this as a deterministic readiness signal — the
+	// service is guaranteed to accept requests for this room after
+	// this event is sent. Not a state event: message events are
+	// append-only, so a rogue service cannot overwrite another
+	// service's readiness signal. The sender field (set by the
+	// homeserver) authenticates the source.
+	//
+	// Room: any room the service has joined and is tracking
+	EventTypeServiceReady ref.EventType = "m.bureau.service_ready"
+
 	// EventTypeRoomService declares which service principal handles a
 	// given service role in a room. This is a general mechanism for
 	// room-scoped service binding — any service type (tickets, CI, code

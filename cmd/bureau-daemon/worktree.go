@@ -73,7 +73,7 @@ func handleWorkspaceWorktreeAdd(ctx context.Context, d *Daemon, roomID ref.RoomI
 			"PROJECT":           project,
 			"WORKTREE_PATH":     worktreePath,
 			"BRANCH":            branch,
-			"WORKSPACE_ROOM_ID": roomID,
+			"WORKSPACE_ROOM_ID": roomID.String(),
 			"MACHINE":           d.machine.Localpart(),
 		},
 	}
@@ -100,7 +100,7 @@ func handleWorkspaceWorktreeAdd(ctx context.Context, d *Daemon, roomID ref.RoomI
 		"localpart", localpart,
 	)
 
-	go d.executePipeline(d.shutdownCtx, roomID, eventID, pipelineCommand, localpart, pipelineRef)
+	go d.executePipeline(d.shutdownCtx, roomID, eventID, pipelineCommand, localpart, pipelineRef, roomID)
 
 	return map[string]any{
 		"status":    "accepted",
@@ -155,7 +155,7 @@ func handleWorkspaceWorktreeRemove(ctx context.Context, d *Daemon, roomID ref.Ro
 			"PROJECT":           project,
 			"WORKTREE_PATH":     worktreePath,
 			"MODE":              mode,
-			"WORKSPACE_ROOM_ID": roomID,
+			"WORKSPACE_ROOM_ID": roomID.String(),
 			"MACHINE":           d.machine.Localpart(),
 		},
 	}
@@ -181,7 +181,7 @@ func handleWorkspaceWorktreeRemove(ctx context.Context, d *Daemon, roomID ref.Ro
 		"localpart", localpart,
 	)
 
-	go d.executePipeline(d.shutdownCtx, roomID, eventID, pipelineCommand, localpart, pipelineRef)
+	go d.executePipeline(d.shutdownCtx, roomID, eventID, pipelineCommand, localpart, pipelineRef, roomID)
 
 	return map[string]any{
 		"status":    "accepted",

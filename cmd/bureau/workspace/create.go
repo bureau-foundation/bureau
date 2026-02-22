@@ -16,7 +16,9 @@ import (
 	"github.com/bureau-foundation/bureau/lib/principal"
 	"github.com/bureau-foundation/bureau/lib/ref"
 	"github.com/bureau-foundation/bureau/lib/schema"
+	"github.com/bureau-foundation/bureau/lib/schema/ticket"
 	"github.com/bureau-foundation/bureau/lib/schema/workspace"
+	"github.com/bureau-foundation/bureau/lib/service"
 	"github.com/bureau-foundation/bureau/messaging"
 )
 
@@ -232,6 +234,38 @@ func runCreate(alias string, session *cli.SessionConfig, machine, templateRef st
 	})
 	if err != nil {
 		return cli.Internal("publishing workspace state: %w", err)
+	}
+
+	// Enable pipeline ticket management in the workspace room. Workspace
+	// setup and teardown pipelines create pip- tickets to track execution
+	// progress. The ticket config must be in the room before the daemon
+	// creates pip- tickets, and before the ticket service joins — the
+	// ticket service only tracks rooms that have ticket config.
+	_, err = sess.SendStateEvent(ctx, workspaceRoomID, schema.EventTypeTicketConfig, "", ticket.TicketConfigContent{
+		Version:      ticket.TicketConfigVersion,
+		Prefix:       "pip",
+		AllowedTypes: []string{"pipeline"},
+	})
+	if err != nil {
+		return cli.Internal("publishing ticket config: %w", err)
+	}
+
+	// Ensure the ticket service is in the workspace room before
+	// publishing MachineConfig. The daemon creates pip- tickets during
+	// reconciliation — if the ticket service hasn't joined by then,
+	// ticket creation fails and enters backoff. EnsureServiceInRoom
+	// invites the service and blocks (via /sync long-poll) until it
+	// joins, eliminating the race.
+	ticketService, found, queryErr := service.QueryFirst(ctx, sess, machineRef.Fleet(),
+		service.And(service.OnMachine(machineRef), service.HasCapability("dependency-graph")))
+	if queryErr != nil {
+		fmt.Fprintf(os.Stderr, "  Warning: failed to query service directory: %v\n", queryErr)
+	} else if found {
+		if ensureErr := service.EnsureServiceInRoom(ctx, sess, workspaceRoomID, ticketService.Principal.UserID()); ensureErr != nil {
+			fmt.Fprintf(os.Stderr, "  Warning: ticket service failed to join workspace room: %v\n", ensureErr)
+		}
+	} else {
+		fmt.Fprintf(os.Stderr, "  Warning: no ticket service found for machine %s — pipeline execution will fail until one is deployed\n", machine)
 	}
 
 	// Build principal assignments (setup + agents + teardown).

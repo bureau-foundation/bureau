@@ -1442,7 +1442,12 @@ func TestPipelineExecutionContentValidate(t *testing.T) {
 		{
 			name:    "total_steps_zero",
 			content: PipelineExecutionContent{PipelineRef: "ci-pipeline", TotalSteps: 0},
-			wantErr: "total_steps must be >= 1",
+			wantErr: "",
+		},
+		{
+			name:    "total_steps_negative",
+			content: PipelineExecutionContent{PipelineRef: "ci-pipeline", TotalSteps: -1},
+			wantErr: "total_steps must be >= 0",
 		},
 		{
 			name:    "current_step_negative",

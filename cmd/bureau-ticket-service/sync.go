@@ -65,7 +65,7 @@ func buildSyncFilter() string {
 			},
 		},
 		"presence": map[string]any{
-			"types": emptyTypes,
+			"types": []string{"m.presence"},
 		},
 		"account_data": map[string]any{
 			"types": emptyTypes,
@@ -152,7 +152,18 @@ func (ts *TicketService) initialSync(ctx context.Context) (string, error) {
 		}
 		tickets := ts.processRoomState(ctx, roomID, events, nil)
 		totalTickets += tickets
+
+		// Announce readiness for newly-tracked rooms so that
+		// consumers waiting via EnsureServiceInRoom unblock.
+		if _, tracked := ts.rooms[roomID]; tracked {
+			service.AnnounceReady(ctx, ts.session, roomID, ts.serviceType, ts.capabilities, ts.logger)
+		}
 	}
+
+	// Populate initial presence state from the sync response. The
+	// initial sync may include presence events for users who share
+	// rooms with the service.
+	ts.processPresence(response.Presence.Events)
 
 	ts.logger.Info("ticket index built",
 		"ticketed_rooms", len(ts.rooms),
@@ -250,9 +261,27 @@ func (ts *TicketService) handleSync(ctx context.Context, response *messaging.Syn
 	ts.mu.Lock()
 	defer ts.mu.Unlock()
 
-	// Accept invites to new rooms.
+	// Accept invites to new rooms. Fetch full state for each
+	// accepted room and process it immediately — the sync filter
+	// restricts which state event types the homeserver returns in
+	// Rooms.Join, so newly-joined rooms may appear with no useful
+	// state on the next sync cycle.
 	if len(response.Rooms.Invite) > 0 {
 		acceptedRooms := service.AcceptInvites(ctx, ts.session, response.Rooms.Invite, ts.logger)
+		for _, roomID := range acceptedRooms {
+			events, err := ts.session.GetRoomState(ctx, roomID)
+			if err != nil {
+				ts.logger.Error("failed to fetch state for accepted room",
+					"room_id", roomID,
+					"error", err,
+				)
+				continue
+			}
+			ts.processRoomState(ctx, roomID, events, nil)
+			if _, tracked := ts.rooms[roomID]; tracked {
+				service.AnnounceReady(ctx, ts.session, roomID, ts.serviceType, ts.capabilities, ts.logger)
+			}
+		}
 		if len(acceptedRooms) > 0 {
 			ts.logger.Info("accepted room invites", "count", len(acceptedRooms))
 		}
@@ -275,6 +304,9 @@ func (ts *TicketService) handleSync(ctx context.Context, response *messaging.Syn
 		)
 		delete(ts.rooms, roomID)
 	}
+
+	// Update presence cache from any m.presence events in this batch.
+	ts.processPresence(response.Presence.Events)
 
 	// Process state changes in joined rooms.
 	for roomID, room := range response.Rooms.Join {
@@ -437,6 +469,10 @@ func (ts *TicketService) handleTicketConfigChange(ctx context.Context, roomID re
 			"prefix", config.Prefix,
 			"backfilled_tickets", backfilled,
 		)
+
+		// Announce readiness so consumers waiting via
+		// EnsureServiceInRoom unblock deterministically.
+		service.AnnounceReady(ctx, ts.session, roomID, ts.serviceType, ts.capabilities, ts.logger)
 	} else {
 		state.config = config
 	}
@@ -635,4 +671,19 @@ type roomSummary struct {
 	Tickets    int            `cbor:"tickets"`
 	ByStatus   map[string]int `cbor:"by_status"`
 	ByPriority map[int]int    `cbor:"by_priority"`
+}
+
+// processPresence updates the in-memory presence cache from m.presence
+// events received via /sync. Each event replaces the previous state for
+// that user. Caller must hold ts.mu (write lock).
+func (ts *TicketService) processPresence(events []messaging.PresenceEvent) {
+	for _, event := range events {
+		if event.Type != "m.presence" {
+			continue
+		}
+		if event.Sender.IsZero() {
+			continue
+		}
+		ts.presence[event.Sender] = event.Content
+	}
 }

@@ -669,8 +669,8 @@ func (p *PipelineExecutionContent) Validate() error {
 	if p.PipelineRef == "" {
 		return errors.New("pipeline_ref is required")
 	}
-	if p.TotalSteps < 1 {
-		return fmt.Errorf("total_steps must be >= 1, got %d", p.TotalSteps)
+	if p.TotalSteps < 0 {
+		return fmt.Errorf("total_steps must be >= 0, got %d", p.TotalSteps)
 	}
 	if p.CurrentStep < 0 {
 		return fmt.Errorf("current_step must be >= 0, got %d", p.CurrentStep)

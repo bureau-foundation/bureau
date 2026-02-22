@@ -8,7 +8,9 @@ go_library(
     srcs = [
         "bootstrap.go",
         "client.go",
+        "discovery.go",
         "doc.go",
+        "ready.go",
         "registration.go",
         "session.go",
         "signing_key.go",
@@ -33,6 +35,7 @@ go_test(
     name = "service_test",
     srcs = [
         "client_test.go",
+        "discovery_test.go",
         "session_test.go",
         "signing_key_test.go",
         "socket_test.go",
@@ -45,5 +48,6 @@ go_test(
         "//lib/schema",
         "//lib/servicetoken",
         "//lib/testutil",
+        "//messaging",
     ],
 )

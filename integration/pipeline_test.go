@@ -4,26 +4,33 @@
 package integration_test
 
 import (
+	"encoding/json"
 	"os"
 	"testing"
 
+	"github.com/bureau-foundation/bureau/lib/ref"
 	"github.com/bureau-foundation/bureau/lib/schema"
+	"github.com/bureau-foundation/bureau/lib/schema/pipeline"
+	"github.com/bureau-foundation/bureau/lib/schema/ticket"
+	"github.com/bureau-foundation/bureau/messaging"
 )
 
 // TestPipelineExecution exercises the full pipeline execution lifecycle
 // through real processes:
 //
+//   - Admin publishes a pipeline definition to the pipeline room
 //   - Admin sends a pipeline.execute command to the config room
 //   - Daemon picks it up via /sync, posts "accepted" acknowledgment
+//   - Daemon creates a pip- ticket in the project room via the ticket service
 //   - Daemon creates a bwrap sandbox running bureau-pipeline-executor
-//   - Executor runs pipeline steps (via /bin/sh -c from the Nix runner-env)
+//   - Executor claims the ticket, runs pipeline steps, posts notes, closes ticket
 //   - Executor writes JSONL result, exits
 //   - Daemon reads result, posts threaded pipeline result to Matrix
 //   - Test reads both results and verifies structure
 //
-// This proves the daemon→launcher IPC, bwrap sandbox creation, pipeline
-// executor binary, Nix environment bind mounting, result file flow, and
-// threaded Matrix reply posting all work together.
+// This proves the daemon→launcher IPC, bwrap sandbox creation, ticket
+// lifecycle, pipeline executor binary, Nix environment bind mounting,
+// result file flow, and threaded Matrix reply posting all work together.
 func TestPipelineExecution(t *testing.T) {
 	t.Parallel()
 
@@ -48,11 +55,38 @@ func TestPipelineExecution(t *testing.T) {
 
 	ctx := t.Context()
 
-	// Send a pipeline.execute command to the config room. The admin has
-	// PL 100 (set by the daemon during room creation), satisfying the
-	// PowerLevelAdmin requirement for pipeline.execute.
+	// --- Ticket service setup ---
+	ticketSvc := deployTicketService(t, admin, fleet, machine, "pipeline")
+
+	// Create a project room for pip- tickets.
+	projectRoomID := createTicketProjectRoom(t, admin, "pipeline-project",
+		ticketSvc.Entity, machine.UserID.String())
+
+	// --- Publish pipeline definition ---
+	pipelineRoomID, err := admin.ResolveAlias(ctx, testNamespace.PipelineRoomAlias())
+	if err != nil {
+		t.Fatalf("resolve pipeline room: %v", err)
+	}
+
+	if _, err := admin.SendStateEvent(ctx, pipelineRoomID, schema.EventTypePipeline, "test-greet",
+		pipeline.PipelineContent{
+			Description: "Integration test pipeline",
+			Steps: []pipeline.PipelineStep{
+				{Name: "greet", Run: "echo hello"},
+				{Name: "farewell", Run: "echo goodbye"},
+			},
+		}); err != nil {
+		t.Fatalf("publish pipeline definition: %v", err)
+	}
+
+	// --- Execute pipeline ---
 	requestID := "test-pipeline-" + t.Name()
 	resultWatch := watchRoom(t, admin, machine.ConfigRoomID)
+	// Create the project room watch before sending the command so it
+	// captures ticket state events that arrive during pipeline execution.
+	// The findPipelineTicket call below uses this watch to find the
+	// closed pip- ticket.
+	projectWatch := watchRoom(t, admin, projectRoomID)
 
 	commandEventID, err := admin.SendEvent(ctx, machine.ConfigRoomID, schema.MatrixEventTypeMessage,
 		schema.CommandMessage{
@@ -61,13 +95,8 @@ func TestPipelineExecution(t *testing.T) {
 			Command:   "pipeline.execute",
 			RequestID: requestID,
 			Parameters: map[string]any{
-				"pipeline_inline": map[string]any{
-					"description": "Integration test pipeline",
-					"steps": []map[string]any{
-						{"name": "greet", "run": "echo hello"},
-						{"name": "farewell", "run": "echo goodbye"},
-					},
-				},
+				"pipeline": "bureau/pipeline:test-greet",
+				"room":     projectRoomID.String(),
 			},
 		})
 	if err != nil {
@@ -93,7 +122,6 @@ func TestPipelineExecution(t *testing.T) {
 	if principalName == "" {
 		t.Error("accepted result has empty principal")
 	}
-	// Verify the result threads to the command event.
 	verifyThreadRelation(t, acceptedResult, commandEventID.String())
 
 	// --- Verify pipeline result ---
@@ -131,16 +159,24 @@ func TestPipelineExecution(t *testing.T) {
 		}
 	}
 
-	// Verify the pipeline result threads to the command event.
 	verifyThreadRelation(t, pipelineResult, commandEventID.String())
 
-	t.Log("pipeline execution lifecycle verified: command → accepted → sandbox → executor → result")
+	// --- Verify pip- ticket was created and closed ---
+	ticketID, ticketContent := findPipelineTicket(t, admin, projectRoomID, &projectWatch, "test-greet")
+	if ticketContent.Status != "closed" {
+		t.Errorf("ticket %s status = %q, want closed", ticketID, ticketContent.Status)
+	}
+	if ticketContent.Type != "pipeline" {
+		t.Errorf("ticket %s type = %q, want pipeline", ticketID, ticketContent.Type)
+	}
+
+	t.Log("pipeline execution lifecycle verified: command → accepted → ticket → sandbox → executor → result")
 }
 
 // TestPipelineExecutionFailure verifies that pipeline step failures are
 // correctly reported through the full stack. A pipeline with a failing step
 // should produce a result with status "error" and the correct step-level
-// failure information.
+// failure information. The pip- ticket should still be closed.
 func TestPipelineExecutionFailure(t *testing.T) {
 	t.Parallel()
 
@@ -165,6 +201,29 @@ func TestPipelineExecutionFailure(t *testing.T) {
 
 	ctx := t.Context()
 
+	// --- Ticket service + project room ---
+	ticketSvc := deployTicketService(t, admin, fleet, machine, "pipefail")
+	projectRoomID := createTicketProjectRoom(t, admin, "pipefail-project",
+		ticketSvc.Entity, machine.UserID.String())
+
+	// --- Publish failing pipeline definition ---
+	pipelineRoomID, err := admin.ResolveAlias(ctx, testNamespace.PipelineRoomAlias())
+	if err != nil {
+		t.Fatalf("resolve pipeline room: %v", err)
+	}
+
+	if _, err := admin.SendStateEvent(ctx, pipelineRoomID, schema.EventTypePipeline, "test-fail",
+		pipeline.PipelineContent{
+			Description: "Failing pipeline",
+			Steps: []pipeline.PipelineStep{
+				{Name: "setup", Run: "echo starting"},
+				{Name: "fail-step", Run: "exit 1"},
+			},
+		}); err != nil {
+		t.Fatalf("publish failing pipeline definition: %v", err)
+	}
+
+	// --- Execute pipeline ---
 	requestID := "test-pipeline-fail-" + t.Name()
 	resultWatch := watchRoom(t, admin, machine.ConfigRoomID)
 
@@ -175,13 +234,8 @@ func TestPipelineExecutionFailure(t *testing.T) {
 			Command:   "pipeline.execute",
 			RequestID: requestID,
 			Parameters: map[string]any{
-				"pipeline_inline": map[string]any{
-					"description": "Failing pipeline",
-					"steps": []map[string]any{
-						{"name": "setup", "run": "echo starting"},
-						{"name": "fail-step", "run": "exit 1"},
-					},
-				},
+				"pipeline": "bureau/pipeline:test-fail",
+				"room":     projectRoomID.String(),
 			},
 		})
 	if err != nil {
@@ -232,7 +286,6 @@ func TestPipelineExecutionFailure(t *testing.T) {
 		}
 	}
 
-	// The body should mention the failing step.
 	body, _ := pipelineResult["body"].(string)
 	if body == "" {
 		t.Error("pipeline result body is empty")
@@ -244,10 +297,10 @@ func TestPipelineExecutionFailure(t *testing.T) {
 }
 
 // TestPipelineParameterPropagation verifies that command parameters flow
-// through the entire chain: command message → daemon → SandboxSpec.Payload
-// → launcher (payload.json) → executor → pipeline variable resolution →
-// shell execution. A pipeline step uses a variable from the command
-// parameters; if the step succeeds, the variable was propagated correctly.
+// through the entire chain: command message → daemon → pip- ticket
+// variables → executor → pipeline variable resolution → shell execution.
+// A pipeline step uses a variable from the command parameters; if the step
+// succeeds, the variable was propagated correctly.
 func TestPipelineParameterPropagation(t *testing.T) {
 	t.Parallel()
 
@@ -272,34 +325,52 @@ func TestPipelineParameterPropagation(t *testing.T) {
 
 	ctx := t.Context()
 
+	// --- Ticket service + project room ---
+	ticketSvc := deployTicketService(t, admin, fleet, machine, "pipeparam")
+	projectRoomID := createTicketProjectRoom(t, admin, "pipeparam-project",
+		ticketSvc.Entity, machine.UserID.String())
+
+	// --- Publish pipeline definition with variable declaration ---
+	pipelineRoomID, err := admin.ResolveAlias(ctx, testNamespace.PipelineRoomAlias())
+	if err != nil {
+		t.Fatalf("resolve pipeline room: %v", err)
+	}
+
+	if _, err := admin.SendStateEvent(ctx, pipelineRoomID, schema.EventTypePipeline, "test-params",
+		pipeline.PipelineContent{
+			Description: "Parameter propagation test",
+			Variables: map[string]pipeline.PipelineVariable{
+				"PROJECT": {
+					Description: "project name",
+					Required:    true,
+				},
+			},
+			Steps: []pipeline.PipelineStep{
+				// test(1) returns 0 (success) if the string comparison
+				// is true. If PROJECT was not propagated or resolved,
+				// this fails.
+				{Name: "verify-project", Run: `test "${PROJECT}" = "iree"`},
+			},
+		}); err != nil {
+		t.Fatalf("publish parameter test pipeline definition: %v", err)
+	}
+
+	// --- Execute pipeline with variable ---
 	requestID := "test-pipeline-params-" + t.Name()
 	resultWatch := watchRoom(t, admin, machine.ConfigRoomID)
 
-	_, err := admin.SendEvent(ctx, machine.ConfigRoomID, schema.MatrixEventTypeMessage,
+	_, err = admin.SendEvent(ctx, machine.ConfigRoomID, schema.MatrixEventTypeMessage,
 		schema.CommandMessage{
 			MsgType:   schema.MsgTypeCommand,
 			Body:      "pipeline.execute: parameter propagation test",
 			Command:   "pipeline.execute",
 			RequestID: requestID,
 			Parameters: map[string]any{
-				"pipeline_inline": map[string]any{
-					"description": "Parameter propagation test",
-					"variables": map[string]any{
-						"PROJECT": map[string]any{
-							"description": "project name",
-							"required":    true,
-						},
-					},
-					"steps": []map[string]any{
-						// test(1) returns 0 (success) if the string
-						// comparison is true. If PROJECT was not
-						// propagated or resolved, this fails.
-						{"name": "verify-project", "run": "test \"${PROJECT}\" = \"iree\""},
-					},
-				},
-				// This top-level parameter becomes a payload variable.
-				// The executor reads it from payload.json, and
-				// ResolveVariables makes it available as ${PROJECT}.
+				"pipeline": "bureau/pipeline:test-params",
+				"room":     projectRoomID.String(),
+				// This top-level parameter becomes a ticket variable.
+				// The executor reads it from the TicketContent.Pipeline.Variables,
+				// and ResolveVariables makes it available as ${PROJECT}.
 				"PROJECT": "iree",
 			},
 		})
@@ -311,7 +382,7 @@ func TestPipelineParameterPropagation(t *testing.T) {
 	pipelineResult := findPipelineEvent(t, results)
 
 	// If the step succeeded (exit 0), the variable was propagated correctly
-	// through the entire daemon → launcher → executor → shell chain.
+	// through the entire daemon → ticket → executor → shell chain.
 	if status, _ := pipelineResult["status"].(string); status != "success" {
 		body, _ := pipelineResult["body"].(string)
 		exitCode, _ := pipelineResult["exit_code"].(float64)
@@ -340,7 +411,7 @@ func TestPipelineParameterPropagation(t *testing.T) {
 		}
 	}
 
-	t.Log("parameter propagation verified: command parameters flow through daemon → launcher → executor → shell")
+	t.Log("parameter propagation verified: command parameters flow through daemon → ticket → executor → shell")
 }
 
 // --- Pipeline test helpers ---
@@ -366,4 +437,47 @@ func verifyThreadRelation(t *testing.T, content map[string]any, expectedEventID 
 	if eventID != expectedEventID {
 		t.Errorf("m.relates_to.event_id = %q, want %q", eventID, expectedEventID)
 	}
+}
+
+// findPipelineTicket searches for a pip- ticket in the project room that
+// references the given pipeline name. Checks current state first, then
+// falls back to watching for new events. Returns the ticket ID and content.
+func findPipelineTicket(t *testing.T, admin *messaging.DirectSession, roomID ref.RoomID, watch *roomWatch, pipelineName string) (string, ticket.TicketContent) {
+	t.Helper()
+
+	// Search for existing tickets by scanning state events.
+	// The ticket state key is the ticket ID (e.g., "pip-a3f9").
+	// We need to find the one whose pipeline ref contains pipelineName.
+	event := watch.WaitForEvent(t, func(event messaging.Event) bool {
+		if event.Type != schema.EventTypeTicket {
+			return false
+		}
+		ticketType, _ := event.Content["type"].(string)
+		if ticketType != "pipeline" {
+			return false
+		}
+		title, _ := event.Content["title"].(string)
+		status, _ := event.Content["status"].(string)
+		// Match pipeline tickets by title and terminal status.
+		return title != "" && status == "closed" && event.StateKey != nil
+	}, "closed pipeline ticket for "+pipelineName)
+
+	ticketID := ""
+	if event.StateKey != nil {
+		ticketID = *event.StateKey
+	}
+	if ticketID == "" {
+		t.Fatal("pipeline ticket state event has no state key")
+	}
+
+	contentJSON, err := json.Marshal(event.Content)
+	if err != nil {
+		t.Fatalf("marshal ticket content: %v", err)
+	}
+	var content ticket.TicketContent
+	if err := json.Unmarshal(contentJSON, &content); err != nil {
+		t.Fatalf("unmarshal ticket content: %v", err)
+	}
+
+	return ticketID, content
 }

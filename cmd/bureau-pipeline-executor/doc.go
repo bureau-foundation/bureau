@@ -1,41 +1,56 @@
 // Copyright 2026 The Bureau Authors
 // SPDX-License-Identifier: Apache-2.0
 
-// Pipeline executor for Bureau sandboxes. Reads a pipeline definition
-// (from a file, a Matrix pipeline ref, or the sandbox payload), resolves
-// variables, sequences steps, and reports progress via the proxy's
-// structured /v1/matrix/* API.
+// Pipeline executor for Bureau sandboxes. Reads a pipeline execution
+// ticket, resolves the pipeline definition from the ticket's pipeline
+// ref via the proxy's structured /v1/matrix/* API, sequences steps,
+// and reports progress via both the ticket service and Matrix thread
+// logging.
 //
-// The executor's only interface to the outside world is the proxy Unix
-// socket at /run/bureau/proxy.sock. It uses the structured API for all
-// Matrix operations — whoami, alias resolution, state events, messages.
+// The executor operates on two interfaces:
 //
-// Pipeline resolution has two tiers:
+//   - Proxy socket (/run/bureau/proxy.sock) for Matrix operations:
+//     pipeline ref resolution (room alias → room ID → state event),
+//     thread logging, and pipeline result state event publishing.
 //
-//  1. CLI argument — file path (/path/to/pipeline.jsonc) or pipeline ref
-//     (bureau/pipeline:dev-workspace-init). For development and explicit
-//     invocation.
-//  2. Payload keys — /run/bureau/payload.json contains either pipeline_ref
-//     (string) or pipeline_inline (PipelineContent JSON object). For
-//     daemon-driven execution via PrincipalAssignment.
+//   - Ticket service socket (/run/bureau/service/ticket.sock) for
+//     ticket lifecycle: claiming the pip- ticket, posting step
+//     progress updates, adding step completion notes, and closing
+//     the ticket with the pipeline's terminal outcome.
 //
-// If neither tier resolves a pipeline, the executor exits with a clear
-// error. There is no embedded fallback — using a stale compiled-in
-// pipeline when the Matrix version was deleted or updated would silently
-// produce wrong behavior.
+// Ticket context is provided via environment variables set by the
+// daemon when launching the executor sandbox:
+//
+//   - BUREAU_TICKET_ID: the pip- ticket state key (e.g., "pip-a3f9")
+//   - BUREAU_TICKET_ROOM: the room ID where the ticket lives
+//
+// The trigger file (/run/bureau/trigger.json) contains the full
+// TicketContent JSON. The executor extracts the pipeline ref and
+// execution variables from the ticket's Pipeline field, and also
+// converts top-level TicketContent fields to EVENT_-prefixed
+// variables for use in pipeline variable expressions.
+//
+// Pipeline execution lifecycle:
+//
+//  1. Claim the ticket (open → in_progress). Exit cleanly on
+//     contention (another executor already claimed it).
+//  2. Resolve the pipeline definition via the proxy.
+//  3. Execute steps with progress updates and step completion notes.
+//  4. On completion: set conclusion, close ticket, publish result.
+//
+// External cancellation is supported: a background goroutine polls
+// the ticket status every 5 seconds. When the ticket is closed
+// externally, the running step is killed and the executor exits
+// with conclusion "cancelled".
 //
 // Step execution supports:
 //
 //   - run: shell commands via sh -c (PATH lookup) with inherited stdout/stderr
 //   - publish: state event publication via proxy putState
+//   - assert_state: precondition checks against Matrix state events
 //   - when: guard conditions that skip steps on non-zero exit
 //   - check: post-run health checks that fail steps on non-zero exit
 //   - optional: failed optional steps log a warning and continue
 //   - timeout: per-step deadlines (default 5 minutes)
-//
-// When the pipeline's log section is configured, the executor creates a
-// Matrix thread in the specified room and posts per-step progress updates.
-// Thread creation failure is fatal — observation is a core Bureau
-// requirement, and running with no record of what happened is worse than
-// not running at all.
+//   - grace_period: SIGTERM before SIGKILL for graceful shutdown
 package main

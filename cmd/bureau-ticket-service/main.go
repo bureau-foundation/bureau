@@ -41,11 +41,13 @@ func run() error {
 	ctx, stop := signal.NotifyContext(context.Background(), syscall.SIGINT, syscall.SIGTERM)
 	defer stop()
 
+	capabilities := []string{"dependency-graph", "gate-evaluation"}
+
 	boot, cleanup, err := service.Bootstrap(ctx, service.BootstrapConfig{
 		Flags:        flags,
 		Audience:     "ticket",
 		Description:  "Ticket tracking and coordination service",
-		Capabilities: []string{"dependency-graph", "gate-evaluation"},
+		Capabilities: capabilities,
 	})
 	if err != nil {
 		return err
@@ -66,6 +68,9 @@ func run() error {
 		aliasCache:    make(map[ref.RoomAlias]ref.RoomID),
 		subscribers:   make(map[ref.RoomID][]*subscriber),
 		timerNotify:   make(chan struct{}, 1),
+		serviceType:   "ticket",
+		presence:      make(map[ref.UserID]messaging.PresenceEventContent),
+		capabilities:  capabilities,
 		logger:        boot.Logger,
 	}
 
@@ -181,6 +186,18 @@ type TicketService struct {
 	// add/remove, write lock for notify since it may remove
 	// disconnected subscribers).
 	subscribers map[ref.RoomID][]*subscriber
+
+	// presence caches the latest m.presence event content for each
+	// user, populated from the /sync presence section. Used by
+	// list-members to enrich room membership with online status.
+	// Protected by mu.
+	presence map[ref.UserID]messaging.PresenceEventContent
+
+	// serviceType and capabilities identify this service in
+	// m.bureau.service_ready events sent when the service starts
+	// tracking a room.
+	serviceType  string
+	capabilities []string
 
 	logger *slog.Logger
 }

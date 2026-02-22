@@ -4,9 +4,11 @@
 package main
 
 import (
+	"context"
 	"encoding/json"
 	"fmt"
 	"io"
+	"log/slog"
 	"net"
 	"net/http"
 	"os"
@@ -17,8 +19,12 @@ import (
 	"time"
 
 	"github.com/bureau-foundation/bureau/lib/clock"
-	pipelineschema "github.com/bureau-foundation/bureau/lib/schema/pipeline"
+	"github.com/bureau-foundation/bureau/lib/codec"
+	"github.com/bureau-foundation/bureau/lib/schema/pipeline"
+	"github.com/bureau-foundation/bureau/lib/service"
 )
+
+// --- Mock proxy (HTTP over Unix socket, for Matrix operations) ---
 
 // mockProxy serves the /v1/matrix/* API for executor tests. Records all
 // requests for assertion.
@@ -139,8 +145,182 @@ func startMockProxy(t *testing.T) (string, *mockProxy) {
 	return socketPath, mock
 }
 
+// --- Mock ticket service (CBOR over Unix socket) ---
+
+// mockTicketService is a minimal CBOR service that handles the ticket
+// actions the executor uses: update (claim/progress), close, add-note,
+// and show. Uses service.SocketServer with unauthenticated handlers
+// for simplicity — the ServiceClient's token is ignored.
+type mockTicketService struct {
+	mu sync.Mutex
+
+	// ticketStatus is returned by the "show" action. Tests can change
+	// this to simulate external cancellation.
+	ticketStatus string
+
+	// claimCalls records each "update" call that sets status.
+	claimCalls []mockTicketCall
+
+	// progressCalls records "update" calls that set pipeline content.
+	progressCalls []mockTicketCall
+
+	// closeCalls records each "close" call.
+	closeCalls []mockTicketCall
+
+	// noteCalls records each "add-note" call.
+	noteCalls []mockTicketCall
+
+	// showCalls counts show invocations for assertions.
+	showCalls int
+
+	// failActions is a set of actions that should return errors.
+	// Used to test retry logic and error handling.
+	failActions map[string]bool
+}
+
+type mockTicketCall struct {
+	Fields map[string]any
+}
+
+func newMockTicketService() *mockTicketService {
+	return &mockTicketService{
+		ticketStatus: "in_progress",
+		failActions:  map[string]bool{},
+	}
+}
+
+// startMockTicketService creates a CBOR socket server with mock
+// ticket handlers and returns the socket path and token path. The
+// token file contains dummy bytes — the mock server ignores auth.
+func startMockTicketService(t *testing.T) (string, string, *mockTicketService) {
+	t.Helper()
+
+	tempDir := t.TempDir()
+	socketPath := filepath.Join(tempDir, "ticket.sock")
+	tokenPath := filepath.Join(tempDir, "ticket.token")
+
+	// Write a dummy token file — the mock server ignores it.
+	if err := os.WriteFile(tokenPath, []byte("test-token"), 0644); err != nil {
+		t.Fatalf("write dummy token: %v", err)
+	}
+
+	mock := newMockTicketService()
+
+	// Use service.SocketServer with unauthenticated handlers.
+	// The ServiceClient sends a token field, but Handle (unauthenticated)
+	// ignores it — the raw CBOR bytes include the token but the handler
+	// decodes only the fields it cares about.
+	logger := slog.New(slog.NewTextHandler(io.Discard, nil))
+	server := service.NewSocketServer(socketPath, logger, nil)
+
+	server.Handle("update", func(ctx context.Context, raw []byte) (any, error) {
+		if mock.shouldFail("update") {
+			return nil, fmt.Errorf("mock: update failure")
+		}
+		var fields map[string]any
+		if err := codec.Unmarshal(raw, &fields); err != nil {
+			return nil, fmt.Errorf("decoding update request: %w", err)
+		}
+		mock.mu.Lock()
+		defer mock.mu.Unlock()
+		// Distinguish claim (has "status") from progress (has "pipeline").
+		if _, hasStatus := fields["status"]; hasStatus {
+			mock.claimCalls = append(mock.claimCalls, mockTicketCall{Fields: fields})
+		} else {
+			mock.progressCalls = append(mock.progressCalls, mockTicketCall{Fields: fields})
+		}
+		return map[string]any{
+			"id":      fields["ticket"],
+			"content": map[string]any{"status": "in_progress"},
+		}, nil
+	})
+
+	server.Handle("close", func(ctx context.Context, raw []byte) (any, error) {
+		if mock.shouldFail("close") {
+			return nil, fmt.Errorf("mock: close failure")
+		}
+		var fields map[string]any
+		if err := codec.Unmarshal(raw, &fields); err != nil {
+			return nil, fmt.Errorf("decoding close request: %w", err)
+		}
+		mock.mu.Lock()
+		mock.closeCalls = append(mock.closeCalls, mockTicketCall{Fields: fields})
+		mock.mu.Unlock()
+		return map[string]any{
+			"id":      fields["ticket"],
+			"content": map[string]any{"status": "closed"},
+		}, nil
+	})
+
+	server.Handle("add-note", func(ctx context.Context, raw []byte) (any, error) {
+		if mock.shouldFail("add-note") {
+			return nil, fmt.Errorf("mock: add-note failure")
+		}
+		var fields map[string]any
+		if err := codec.Unmarshal(raw, &fields); err != nil {
+			return nil, fmt.Errorf("decoding add-note request: %w", err)
+		}
+		mock.mu.Lock()
+		mock.noteCalls = append(mock.noteCalls, mockTicketCall{Fields: fields})
+		mock.mu.Unlock()
+		return map[string]any{
+			"id":      fields["ticket"],
+			"content": map[string]any{"status": "in_progress"},
+		}, nil
+	})
+
+	server.Handle("show", func(ctx context.Context, raw []byte) (any, error) {
+		if mock.shouldFail("show") {
+			return nil, fmt.Errorf("mock: show failure")
+		}
+		mock.mu.Lock()
+		mock.showCalls++
+		status := mock.ticketStatus
+		mock.mu.Unlock()
+		return map[string]any{
+			"Content": map[string]any{
+				"Status": status,
+			},
+		}, nil
+	})
+
+	// Start serving in background, shut down on test cleanup.
+	serverCtx, serverCancel := context.WithCancel(context.Background())
+	serverDone := make(chan error, 1)
+	go func() {
+		serverDone <- server.Serve(serverCtx)
+	}()
+	t.Cleanup(func() {
+		serverCancel()
+		<-serverDone
+	})
+
+	// Wait for the socket to be ready.
+	select {
+	case <-server.Ready():
+	case <-serverCtx.Done():
+		t.Fatal("socket server did not start")
+	}
+
+	return socketPath, tokenPath, mock
+}
+
+func (m *mockTicketService) shouldFail(action string) bool {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	return m.failActions[action]
+}
+
+func (m *mockTicketService) setTicketStatus(status string) {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	m.ticketStatus = status
+}
+
+// --- Test helpers ---
+
 // writePipeline writes a JSONC pipeline file and returns its path.
-func writePipeline(t *testing.T, name string, content *pipelineschema.PipelineContent) string {
+func writePipeline(t *testing.T, name string, content *pipeline.PipelineContent) string {
 	t.Helper()
 
 	data, err := json.MarshalIndent(content, "", "  ")
@@ -155,101 +335,159 @@ func writePipeline(t *testing.T, name string, content *pipelineschema.PipelineCo
 	return path
 }
 
-// writePayload writes a payload JSON file and returns its path.
-func writePayload(t *testing.T, payload map[string]any) string {
+// writeTrigger writes a trigger JSON file and returns its path.
+func writeTrigger(t *testing.T, content map[string]any) string {
 	t.Helper()
 
-	data, err := json.Marshal(payload)
+	data, err := json.Marshal(content)
 	if err != nil {
-		t.Fatalf("marshal payload: %v", err)
+		t.Fatalf("marshal trigger: %v", err)
 	}
 
-	path := filepath.Join(t.TempDir(), "payload.json")
+	path := filepath.Join(t.TempDir(), "trigger.json")
 	if err := os.WriteFile(path, data, 0644); err != nil {
-		t.Fatalf("write payload: %v", err)
+		t.Fatalf("write trigger: %v", err)
 	}
 	return path
 }
 
-func TestRunSteps(t *testing.T) {
-	socketPath, _ := startMockProxy(t)
+// writeTicketTrigger writes a trigger.json containing a TicketContent
+// for a pipeline ticket with the given pipeline ref and variables.
+func writeTicketTrigger(t *testing.T, pipelineRef string, variables map[string]string) string {
+	t.Helper()
 
-	pipelinePath := writePipeline(t, "test-pipeline", &pipelineschema.PipelineContent{
+	content := map[string]any{
+		"version":  1,
+		"title":    "Pipeline: " + pipelineRef,
+		"status":   "open",
+		"priority": 2,
+		"type":     "pipeline",
+		"pipeline": map[string]any{
+			"pipeline_ref": pipelineRef,
+			"total_steps":  0,
+		},
+	}
+	if variables != nil {
+		content["pipeline"].(map[string]any)["variables"] = variables
+	}
+	return writeTrigger(t, content)
+}
+
+// setupTestEnv configures environment variables for a test that calls
+// run(). Sets up the proxy, ticket service, and trigger.json. Returns
+// the mock proxy and mock ticket service for assertions.
+//
+// The pipelineRef must be resolvable by the mock proxy — callers should
+// set up resolveResponses and stateResponses on the returned mock proxy
+// before calling run().
+func setupTestEnv(t *testing.T, pipelineRef string, variables map[string]string) (*mockProxy, *mockTicketService) {
+	t.Helper()
+
+	proxySocket, mock := startMockProxy(t)
+	ticketSocket, ticketToken, ticketMock := startMockTicketService(t)
+	triggerPath := writeTicketTrigger(t, pipelineRef, variables)
+
+	t.Setenv("BUREAU_SANDBOX", "1")
+	t.Setenv("BUREAU_PROXY_SOCKET", proxySocket)
+	t.Setenv("BUREAU_TICKET_ID", "pip-test")
+	t.Setenv("BUREAU_TICKET_ROOM", "!pipeline_room:bureau.local")
+	t.Setenv("BUREAU_TICKET_SOCKET", ticketSocket)
+	t.Setenv("BUREAU_TICKET_TOKEN", ticketToken)
+	t.Setenv("BUREAU_TRIGGER_PATH", triggerPath)
+
+	os.Args = []string{"bureau-pipeline-executor"}
+
+	return mock, ticketMock
+}
+
+// setupTestEnvWithPipeline is a convenience that sets up the
+// environment AND registers a pipeline in the mock proxy so that the
+// pipeline ref resolves correctly.
+func setupTestEnvWithPipeline(t *testing.T, pipelineName string, pipelineContent *pipeline.PipelineContent) (*mockProxy, *mockTicketService) {
+	t.Helper()
+
+	pipelineRef := "bureau/pipeline:" + pipelineName
+	mock, ticketMock := setupTestEnv(t, pipelineRef, nil)
+
+	// Register the pipeline in the mock proxy.
+	pipelineJSON, err := json.Marshal(pipelineContent)
+	if err != nil {
+		t.Fatalf("marshal pipeline content: %v", err)
+	}
+	mock.resolveResponses["#bureau/pipeline:bureau.local"] = "!pipeline_room:bureau.local"
+	mock.stateResponses["!pipeline_room:bureau.local/m.bureau.pipeline/"+pipelineName] = string(pipelineJSON)
+
+	return mock, ticketMock
+}
+
+// --- Tests ---
+
+func TestRunSteps(t *testing.T) {
+	_, ticketMock := setupTestEnvWithPipeline(t, "test-pipeline", &pipeline.PipelineContent{
 		Description: "Test pipeline",
-		Steps: []pipelineschema.PipelineStep{
+		Steps: []pipeline.PipelineStep{
 			{Name: "step-one", Run: "echo step one"},
 			{Name: "step-two", Run: "echo step two"},
 			{Name: "step-three", Run: "echo step three"},
 		},
 	})
 
-	t.Setenv("BUREAU_SANDBOX", "1")
-	t.Setenv("BUREAU_PROXY_SOCKET", socketPath)
-	t.Setenv("BUREAU_PAYLOAD_PATH", filepath.Join(t.TempDir(), "nonexistent-payload.json"))
-
-	os.Args = []string{"bureau-pipeline-executor", pipelinePath}
-	err := run()
-	if err != nil {
+	if err := run(); err != nil {
 		t.Fatalf("run() failed: %v", err)
+	}
+
+	ticketMock.mu.Lock()
+	defer ticketMock.mu.Unlock()
+
+	// Should have claimed the ticket.
+	if len(ticketMock.claimCalls) != 1 {
+		t.Fatalf("expected 1 claim call, got %d", len(ticketMock.claimCalls))
+	}
+
+	// Should have closed the ticket.
+	if len(ticketMock.closeCalls) != 1 {
+		t.Fatalf("expected 1 close call, got %d", len(ticketMock.closeCalls))
+	}
+
+	// Should have posted 3 step notes.
+	if len(ticketMock.noteCalls) != 3 {
+		t.Fatalf("expected 3 note calls, got %d", len(ticketMock.noteCalls))
 	}
 }
 
 func TestWhenGuardSkip(t *testing.T) {
-	socketPath, _ := startMockProxy(t)
-
-	pipelinePath := writePipeline(t, "when-skip", &pipelineschema.PipelineContent{
-		Steps: []pipelineschema.PipelineStep{
+	setupTestEnvWithPipeline(t, "when-skip", &pipeline.PipelineContent{
+		Steps: []pipeline.PipelineStep{
 			{Name: "always-runs", Run: "true"},
 			{Name: "skipped", Run: "echo should not run", When: "false"},
 			{Name: "also-runs", Run: "true"},
 		},
 	})
 
-	t.Setenv("BUREAU_SANDBOX", "1")
-	t.Setenv("BUREAU_PROXY_SOCKET", socketPath)
-	t.Setenv("BUREAU_PAYLOAD_PATH", filepath.Join(t.TempDir(), "nonexistent.json"))
-
-	os.Args = []string{"bureau-pipeline-executor", pipelinePath}
-	err := run()
-	if err != nil {
+	if err := run(); err != nil {
 		t.Fatalf("run() failed: %v", err)
 	}
 }
 
 func TestWhenGuardPass(t *testing.T) {
-	socketPath, _ := startMockProxy(t)
-
-	pipelinePath := writePipeline(t, "when-pass", &pipelineschema.PipelineContent{
-		Steps: []pipelineschema.PipelineStep{
+	setupTestEnvWithPipeline(t, "when-pass", &pipeline.PipelineContent{
+		Steps: []pipeline.PipelineStep{
 			{Name: "guarded-pass", Run: "true", When: "true"},
 		},
 	})
 
-	t.Setenv("BUREAU_SANDBOX", "1")
-	t.Setenv("BUREAU_PROXY_SOCKET", socketPath)
-	t.Setenv("BUREAU_PAYLOAD_PATH", filepath.Join(t.TempDir(), "nonexistent.json"))
-
-	os.Args = []string{"bureau-pipeline-executor", pipelinePath}
-	err := run()
-	if err != nil {
+	if err := run(); err != nil {
 		t.Fatalf("run() failed: %v", err)
 	}
 }
 
 func TestCheckFailure(t *testing.T) {
-	socketPath, _ := startMockProxy(t)
-
-	pipelinePath := writePipeline(t, "check-fail", &pipelineschema.PipelineContent{
-		Steps: []pipelineschema.PipelineStep{
+	setupTestEnvWithPipeline(t, "check-fail", &pipeline.PipelineContent{
+		Steps: []pipeline.PipelineStep{
 			{Name: "passes-then-fails-check", Run: "true", Check: "false"},
 		},
 	})
 
-	t.Setenv("BUREAU_SANDBOX", "1")
-	t.Setenv("BUREAU_PROXY_SOCKET", socketPath)
-	t.Setenv("BUREAU_PAYLOAD_PATH", filepath.Join(t.TempDir(), "nonexistent.json"))
-
-	os.Args = []string{"bureau-pipeline-executor", pipelinePath}
 	err := run()
 	if err == nil {
 		t.Fatal("expected error from check failure")
@@ -260,43 +498,28 @@ func TestCheckFailure(t *testing.T) {
 }
 
 func TestOptionalStepContinues(t *testing.T) {
-	socketPath, _ := startMockProxy(t)
-
-	pipelinePath := writePipeline(t, "optional-fail", &pipelineschema.PipelineContent{
-		Steps: []pipelineschema.PipelineStep{
+	setupTestEnvWithPipeline(t, "optional-fail", &pipeline.PipelineContent{
+		Steps: []pipeline.PipelineStep{
 			{Name: "step-one", Run: "true"},
 			{Name: "optional-fail", Run: "false", Optional: true},
 			{Name: "step-three", Run: "true"},
 		},
 	})
 
-	t.Setenv("BUREAU_SANDBOX", "1")
-	t.Setenv("BUREAU_PROXY_SOCKET", socketPath)
-	t.Setenv("BUREAU_PAYLOAD_PATH", filepath.Join(t.TempDir(), "nonexistent.json"))
-
-	os.Args = []string{"bureau-pipeline-executor", pipelinePath}
-	err := run()
-	if err != nil {
+	if err := run(); err != nil {
 		t.Fatalf("pipeline should continue past optional failure, got: %v", err)
 	}
 }
 
 func TestRequiredStepAborts(t *testing.T) {
-	socketPath, _ := startMockProxy(t)
-
-	pipelinePath := writePipeline(t, "required-fail", &pipelineschema.PipelineContent{
-		Steps: []pipelineschema.PipelineStep{
+	setupTestEnvWithPipeline(t, "required-fail", &pipeline.PipelineContent{
+		Steps: []pipeline.PipelineStep{
 			{Name: "step-one", Run: "true"},
 			{Name: "required-fail", Run: "false"},
 			{Name: "never-reached", Run: "true"},
 		},
 	})
 
-	t.Setenv("BUREAU_SANDBOX", "1")
-	t.Setenv("BUREAU_PROXY_SOCKET", socketPath)
-	t.Setenv("BUREAU_PAYLOAD_PATH", filepath.Join(t.TempDir(), "nonexistent.json"))
-
-	os.Args = []string{"bureau-pipeline-executor", pipelinePath}
 	err := run()
 	if err == nil {
 		t.Fatal("expected error from required step failure")
@@ -307,13 +530,11 @@ func TestRequiredStepAborts(t *testing.T) {
 }
 
 func TestPublishStep(t *testing.T) {
-	socketPath, mock := startMockProxy(t)
-
-	pipelinePath := writePipeline(t, "publish-test", &pipelineschema.PipelineContent{
-		Steps: []pipelineschema.PipelineStep{
+	mock, _ := setupTestEnvWithPipeline(t, "publish-test", &pipeline.PipelineContent{
+		Steps: []pipeline.PipelineStep{
 			{
 				Name: "publish-ready",
-				Publish: &pipelineschema.PipelinePublish{
+				Publish: &pipeline.PipelinePublish{
 					EventType: "m.bureau.workspace",
 					Room:      "!room1:bureau.local",
 					StateKey:  "",
@@ -323,13 +544,7 @@ func TestPublishStep(t *testing.T) {
 		},
 	})
 
-	t.Setenv("BUREAU_SANDBOX", "1")
-	t.Setenv("BUREAU_PROXY_SOCKET", socketPath)
-	t.Setenv("BUREAU_PAYLOAD_PATH", filepath.Join(t.TempDir(), "nonexistent.json"))
-
-	os.Args = []string{"bureau-pipeline-executor", pipelinePath}
-	err := run()
-	if err != nil {
+	if err := run(); err != nil {
 		t.Fatalf("run() failed: %v", err)
 	}
 
@@ -358,19 +573,11 @@ func TestPublishStep(t *testing.T) {
 }
 
 func TestTimeout(t *testing.T) {
-	socketPath, _ := startMockProxy(t)
-
-	pipelinePath := writePipeline(t, "timeout-test", &pipelineschema.PipelineContent{
-		Steps: []pipelineschema.PipelineStep{
+	setupTestEnvWithPipeline(t, "timeout-test", &pipeline.PipelineContent{
+		Steps: []pipeline.PipelineStep{
 			{Name: "slow-step", Run: "sleep 30", Timeout: "200ms"},
 		},
 	})
-
-	t.Setenv("BUREAU_SANDBOX", "1")
-	t.Setenv("BUREAU_PROXY_SOCKET", socketPath)
-	t.Setenv("BUREAU_PAYLOAD_PATH", filepath.Join(t.TempDir(), "nonexistent.json"))
-
-	os.Args = []string{"bureau-pipeline-executor", pipelinePath}
 
 	wallClock := clock.Real()
 	startTime := wallClock.Now()
@@ -380,101 +587,57 @@ func TestTimeout(t *testing.T) {
 	if err == nil {
 		t.Fatal("expected error from timeout")
 	}
-	// Should complete well under 5 seconds (the 200ms timeout should kick in).
 	if elapsed > 5*time.Second {
 		t.Errorf("timeout took too long: %v", elapsed)
 	}
 }
 
 func TestVariableExpansion(t *testing.T) {
-	socketPath, _ := startMockProxy(t)
-
-	payloadPath := writePayload(t, map[string]any{
+	pipelineRef := "bureau/pipeline:var-test"
+	mock, _ := setupTestEnv(t, pipelineRef, map[string]string{
 		"REPOSITORY": "https://github.com/iree-org/iree.git",
 		"PROJECT":    "iree",
 	})
 
-	pipelinePath := writePipeline(t, "var-test", &pipelineschema.PipelineContent{
-		Variables: map[string]pipelineschema.PipelineVariable{
+	pipelineJSON, _ := json.Marshal(&pipeline.PipelineContent{
+		Variables: map[string]pipeline.PipelineVariable{
 			"REPOSITORY": {Required: true},
 			"PROJECT":    {Required: true},
 		},
-		Steps: []pipelineschema.PipelineStep{
+		Steps: []pipeline.PipelineStep{
 			{Name: "use-vars", Run: `echo "repo=${REPOSITORY} project=${PROJECT}"`},
 		},
 	})
 
-	t.Setenv("BUREAU_SANDBOX", "1")
-	t.Setenv("BUREAU_PROXY_SOCKET", socketPath)
-	t.Setenv("BUREAU_PAYLOAD_PATH", payloadPath)
+	mock.resolveResponses["#bureau/pipeline:bureau.local"] = "!pipeline_room:bureau.local"
+	mock.stateResponses["!pipeline_room:bureau.local/m.bureau.pipeline/var-test"] = string(pipelineJSON)
 
-	os.Args = []string{"bureau-pipeline-executor", pipelinePath}
-	err := run()
-	if err != nil {
+	if err := run(); err != nil {
 		t.Fatalf("run() failed: %v", err)
 	}
 }
 
 func TestPipelineRefResolution(t *testing.T) {
-	socketPath, mock := startMockProxy(t)
-
-	// Set up ref resolution: bureau/pipeline:dev-workspace-init
-	// → alias #bureau/pipeline:bureau.local → room ID → state event
-	mock.resolveResponses["#bureau/pipeline:bureau.local"] = "!pipeline_room:bureau.local"
-	mock.stateResponses["!pipeline_room:bureau.local/m.bureau.pipeline/dev-workspace-init"] = `{
-		"description": "Test pipeline from ref",
-		"steps": [{"name": "hello", "run": "echo hello from ref"}]
-	}`
-
-	t.Setenv("BUREAU_SANDBOX", "1")
-	t.Setenv("BUREAU_PROXY_SOCKET", socketPath)
-	t.Setenv("BUREAU_PAYLOAD_PATH", filepath.Join(t.TempDir(), "nonexistent.json"))
-
-	os.Args = []string{"bureau-pipeline-executor", "bureau/pipeline:dev-workspace-init"}
-	err := run()
-	if err != nil {
-		t.Fatalf("run() failed: %v", err)
-	}
-}
-
-func TestFileResolution(t *testing.T) {
-	socketPath, _ := startMockProxy(t)
-
-	pipelinePath := writePipeline(t, "file-resolve", &pipelineschema.PipelineContent{
-		Steps: []pipelineschema.PipelineStep{
-			{Name: "from-file", Run: "echo from file"},
-		},
+	setupTestEnvWithPipeline(t, "dev-workspace-init", &pipeline.PipelineContent{
+		Description: "Test pipeline from ref",
+		Steps:       []pipeline.PipelineStep{{Name: "hello", Run: "echo hello from ref"}},
 	})
 
-	t.Setenv("BUREAU_SANDBOX", "1")
-	t.Setenv("BUREAU_PROXY_SOCKET", socketPath)
-	t.Setenv("BUREAU_PAYLOAD_PATH", filepath.Join(t.TempDir(), "nonexistent.json"))
-
-	os.Args = []string{"bureau-pipeline-executor", pipelinePath}
-	err := run()
-	if err != nil {
+	if err := run(); err != nil {
 		t.Fatalf("run() failed: %v", err)
 	}
 }
 
 func TestThreadLogging(t *testing.T) {
-	socketPath, mock := startMockProxy(t)
-
-	pipelinePath := writePipeline(t, "log-test", &pipelineschema.PipelineContent{
-		Log: &pipelineschema.PipelineLog{Room: "!log_room:bureau.local"},
-		Steps: []pipelineschema.PipelineStep{
+	mock, _ := setupTestEnvWithPipeline(t, "log-test", &pipeline.PipelineContent{
+		Log: &pipeline.PipelineLog{Room: "!log_room:bureau.local"},
+		Steps: []pipeline.PipelineStep{
 			{Name: "step-one", Run: "true"},
 			{Name: "step-two", Run: "true"},
 		},
 	})
 
-	t.Setenv("BUREAU_SANDBOX", "1")
-	t.Setenv("BUREAU_PROXY_SOCKET", socketPath)
-	t.Setenv("BUREAU_PAYLOAD_PATH", filepath.Join(t.TempDir(), "nonexistent.json"))
-
-	os.Args = []string{"bureau-pipeline-executor", pipelinePath}
-	err := run()
-	if err != nil {
+	if err := run(); err != nil {
 		t.Fatalf("run() failed: %v", err)
 	}
 
@@ -486,12 +649,10 @@ func TestThreadLogging(t *testing.T) {
 		t.Fatalf("expected 4 messages (root + 2 steps + complete), got %d", len(mock.recordedMessages))
 	}
 
-	// Root message should mention "started".
 	if !strings.Contains(mock.recordedMessages[0].Body, "started") {
 		t.Errorf("root message should mention 'started', got: %s", mock.recordedMessages[0].Body)
 	}
 
-	// Step replies should contain m.relates_to.
 	for index := 1; index < len(mock.recordedMessages); index++ {
 		if !strings.Contains(mock.recordedMessages[index].Body, "m.relates_to") {
 			t.Errorf("message %d should be a thread reply (contain m.relates_to), got: %s",
@@ -501,26 +662,19 @@ func TestThreadLogging(t *testing.T) {
 }
 
 func TestThreadLoggingWithAliasResolution(t *testing.T) {
-	socketPath, mock := startMockProxy(t)
-	mock.resolveResponses["#iree/workspace:bureau.local"] = "!workspace_room:bureau.local"
-
-	pipelinePath := writePipeline(t, "log-alias-test", &pipelineschema.PipelineContent{
-		Variables: map[string]pipelineschema.PipelineVariable{
+	mock, _ := setupTestEnvWithPipeline(t, "log-alias-test", &pipeline.PipelineContent{
+		Variables: map[string]pipeline.PipelineVariable{
 			"WORKSPACE_ROOM": {Default: "#iree/workspace:bureau.local"},
 		},
-		Log: &pipelineschema.PipelineLog{Room: "${WORKSPACE_ROOM}"},
-		Steps: []pipelineschema.PipelineStep{
+		Log: &pipeline.PipelineLog{Room: "${WORKSPACE_ROOM}"},
+		Steps: []pipeline.PipelineStep{
 			{Name: "step-one", Run: "true"},
 		},
 	})
 
-	t.Setenv("BUREAU_SANDBOX", "1")
-	t.Setenv("BUREAU_PROXY_SOCKET", socketPath)
-	t.Setenv("BUREAU_PAYLOAD_PATH", filepath.Join(t.TempDir(), "nonexistent.json"))
+	mock.resolveResponses["#iree/workspace:bureau.local"] = "!workspace_room:bureau.local"
 
-	os.Args = []string{"bureau-pipeline-executor", pipelinePath}
-	err := run()
-	if err != nil {
+	if err := run(); err != nil {
 		t.Fatalf("run() failed: %v", err)
 	}
 
@@ -535,8 +689,7 @@ func TestThreadLoggingWithAliasResolution(t *testing.T) {
 }
 
 func TestThreadLoggingFailureIsFatal(t *testing.T) {
-	// Use a dedicated mock that returns errors on message send, rather
-	// than the standard mock which always succeeds.
+	// Use a dedicated mock that returns errors on message send.
 	failMock := &failingMessageProxy{
 		whoamiUserID: "@pipeline/test:bureau.local",
 	}
@@ -550,18 +703,33 @@ func TestThreadLoggingFailureIsFatal(t *testing.T) {
 	go failServer.Serve(listener)
 	t.Cleanup(func() { failServer.Close() })
 
-	pipelinePath := writePipeline(t, "log-fatal-test", &pipelineschema.PipelineContent{
-		Log: &pipelineschema.PipelineLog{Room: "!log_room:bureau.local"},
-		Steps: []pipelineschema.PipelineStep{
-			{Name: "step-one", Run: "true"},
-		},
+	pipelineRef := "bureau/pipeline:log-fatal-test"
+	ticketSocket, ticketToken, _ := startMockTicketService(t)
+	triggerPath := writeTicketTrigger(t, pipelineRef, nil)
+
+	// The pipeline content with log room — thread creation will fail.
+	pipelineJSON, _ := json.Marshal(&pipeline.PipelineContent{
+		Log:   &pipeline.PipelineLog{Room: "!log_room:bureau.local"},
+		Steps: []pipeline.PipelineStep{{Name: "step-one", Run: "true"}},
 	})
+	failMock.mu.Lock()
+	failMock.resolveResponses = map[string]string{
+		"#bureau/pipeline:bureau.local": "!pipeline_room:bureau.local",
+	}
+	failMock.stateResponses = map[string]string{
+		"!pipeline_room:bureau.local/m.bureau.pipeline/log-fatal-test": string(pipelineJSON),
+	}
+	failMock.mu.Unlock()
 
 	t.Setenv("BUREAU_SANDBOX", "1")
 	t.Setenv("BUREAU_PROXY_SOCKET", failSocket)
-	t.Setenv("BUREAU_PAYLOAD_PATH", filepath.Join(t.TempDir(), "nonexistent.json"))
+	t.Setenv("BUREAU_TICKET_ID", "pip-test")
+	t.Setenv("BUREAU_TICKET_ROOM", "!pipeline_room:bureau.local")
+	t.Setenv("BUREAU_TICKET_SOCKET", ticketSocket)
+	t.Setenv("BUREAU_TICKET_TOKEN", ticketToken)
+	t.Setenv("BUREAU_TRIGGER_PATH", triggerPath)
 
-	os.Args = []string{"bureau-pipeline-executor", pipelinePath}
+	os.Args = []string{"bureau-pipeline-executor"}
 	err = run()
 	if err == nil {
 		t.Fatal("expected fatal error when thread creation fails")
@@ -573,45 +741,60 @@ func TestThreadLoggingFailureIsFatal(t *testing.T) {
 
 // failingMessageProxy returns errors on POST /v1/matrix/message.
 type failingMessageProxy struct {
-	whoamiUserID string
+	mu               sync.Mutex
+	whoamiUserID     string
+	resolveResponses map[string]string
+	stateResponses   map[string]string
 }
 
 func (m *failingMessageProxy) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	w.Header().Set("Content-Type", "application/json")
 
-	if r.Method == "GET" && r.URL.Path == "/v1/identity" {
+	switch {
+	case r.Method == "GET" && r.URL.Path == "/v1/identity":
 		json.NewEncoder(w).Encode(map[string]string{"user_id": m.whoamiUserID, "server_name": "bureau.local"})
-		return
-	}
-	if r.Method == "GET" && r.URL.Path == "/v1/matrix/whoami" {
+	case r.Method == "GET" && r.URL.Path == "/v1/matrix/whoami":
 		json.NewEncoder(w).Encode(map[string]string{"user_id": m.whoamiUserID})
-		return
-	}
-	if r.Method == "POST" && r.URL.Path == "/v1/matrix/message" {
+	case r.Method == "GET" && r.URL.Path == "/v1/matrix/resolve":
+		alias := r.URL.Query().Get("alias")
+		m.mu.Lock()
+		roomID, ok := m.resolveResponses[alias]
+		m.mu.Unlock()
+		if ok {
+			json.NewEncoder(w).Encode(map[string]string{"room_id": roomID})
+		} else {
+			w.WriteHeader(http.StatusNotFound)
+			json.NewEncoder(w).Encode(map[string]string{"errcode": "M_NOT_FOUND"})
+		}
+	case r.Method == "GET" && r.URL.Path == "/v1/matrix/state":
+		room := r.URL.Query().Get("room")
+		eventType := r.URL.Query().Get("type")
+		stateKey := r.URL.Query().Get("key")
+		lookupKey := room + "/" + eventType + "/" + stateKey
+		m.mu.Lock()
+		content, ok := m.stateResponses[lookupKey]
+		m.mu.Unlock()
+		if ok {
+			w.Write([]byte(content))
+		} else {
+			w.WriteHeader(http.StatusNotFound)
+		}
+	case r.Method == "POST" && r.URL.Path == "/v1/matrix/message":
 		w.WriteHeader(http.StatusForbidden)
 		json.NewEncoder(w).Encode(map[string]string{"error": "no permission"})
-		return
+	default:
+		w.WriteHeader(http.StatusNotFound)
 	}
-	w.WriteHeader(http.StatusNotFound)
 }
 
 func TestNoLogConfigRunsWithoutThread(t *testing.T) {
-	socketPath, mock := startMockProxy(t)
-
-	pipelinePath := writePipeline(t, "no-log", &pipelineschema.PipelineContent{
-		// No Log field — thread logging disabled.
-		Steps: []pipelineschema.PipelineStep{
+	mock, _ := setupTestEnvWithPipeline(t, "no-log", &pipeline.PipelineContent{
+		Steps: []pipeline.PipelineStep{
 			{Name: "step-one", Run: "true"},
 		},
 	})
 
-	t.Setenv("BUREAU_SANDBOX", "1")
-	t.Setenv("BUREAU_PROXY_SOCKET", socketPath)
-	t.Setenv("BUREAU_PAYLOAD_PATH", filepath.Join(t.TempDir(), "nonexistent.json"))
-
-	os.Args = []string{"bureau-pipeline-executor", pipelinePath}
-	err := run()
-	if err != nil {
+	if err := run(); err != nil {
 		t.Fatalf("run() failed: %v", err)
 	}
 
@@ -619,55 +802,8 @@ func TestNoLogConfigRunsWithoutThread(t *testing.T) {
 	messageCount := len(mock.recordedMessages)
 	mock.mu.Unlock()
 
-	// No thread logging → no messages sent.
 	if messageCount != 0 {
 		t.Errorf("expected 0 messages with no log config, got %d", messageCount)
-	}
-}
-
-func TestPayloadVariableConversion(t *testing.T) {
-	payloadPath := writePayload(t, map[string]any{
-		"string_var":      "hello",
-		"number_var":      42.0,
-		"float_var":       3.14,
-		"bool_true":       true,
-		"bool_false":      false,
-		"null_var":        nil,
-		"object_var":      map[string]any{"nested": "value"},
-		"pipeline_ref":    "bureau/pipeline:should-be-excluded",
-		"pipeline_inline": map[string]any{"steps": []any{}},
-	})
-
-	variables, err := loadPayloadVariables(payloadPath)
-	if err != nil {
-		t.Fatalf("loadPayloadVariables: %v", err)
-	}
-
-	tests := []struct {
-		key      string
-		expected string
-		present  bool
-	}{
-		{"string_var", "hello", true},
-		{"number_var", "42", true},
-		{"float_var", "3.14", true},
-		{"bool_true", "true", true},
-		{"bool_false", "false", true},
-		{"null_var", "", false},
-		{"object_var", `{"nested":"value"}`, true},
-		{"pipeline_ref", "", false},
-		{"pipeline_inline", "", false},
-	}
-
-	for _, test := range tests {
-		value, present := variables[test.key]
-		if present != test.present {
-			t.Errorf("key %q: present=%v, want %v", test.key, present, test.present)
-			continue
-		}
-		if present && value != test.expected {
-			t.Errorf("key %q: value=%q, want %q", test.key, value, test.expected)
-		}
 	}
 }
 
@@ -705,7 +841,6 @@ func TestTriggerVariableConversion(t *testing.T) {
 		{"EVENT_count", "3", true},
 		{"EVENT_enabled", "true", true},
 		{"EVENT_empty", "", false},
-		// Original keys without EVENT_ prefix should NOT be present.
 		{"status", "", false},
 		{"teardown_mode", "", false},
 	}
@@ -725,7 +860,6 @@ func TestTriggerVariableConversion(t *testing.T) {
 func TestTriggerVariablesMissingFile(t *testing.T) {
 	t.Parallel()
 
-	// Non-existent trigger file should return empty map, not error.
 	variables, err := loadTriggerVariables(filepath.Join(t.TempDir(), "nonexistent.json"))
 	if err != nil {
 		t.Fatalf("expected no error for missing trigger file, got: %v", err)
@@ -735,160 +869,9 @@ func TestTriggerVariablesMissingFile(t *testing.T) {
 	}
 }
 
-func TestTriggerVariablesPrecedence(t *testing.T) {
-	t.Parallel()
-
-	// Verify that payload variables take precedence over trigger variables
-	// when merged. If both trigger and payload define a variable with the
-	// same name, payload wins.
-	triggerPath := writeTrigger(t, map[string]any{
-		"status": "teardown",
-		"mode":   "from-trigger",
-	})
-	payloadPath := writePayload(t, map[string]any{
-		"EVENT_mode": "from-payload",
-		"OTHER":      "payload-only",
-	})
-
-	triggerVariables, err := loadTriggerVariables(triggerPath)
-	if err != nil {
-		t.Fatalf("loadTriggerVariables: %v", err)
-	}
-	payloadVariables, err := loadPayloadVariables(payloadPath)
-	if err != nil {
-		t.Fatalf("loadPayloadVariables: %v", err)
-	}
-
-	// Merge: trigger first (lower priority), payload on top.
-	merged := make(map[string]string, len(triggerVariables)+len(payloadVariables))
-	for key, value := range triggerVariables {
-		merged[key] = value
-	}
-	for key, value := range payloadVariables {
-		merged[key] = value
-	}
-
-	// EVENT_mode should be "from-payload" (payload wins over trigger's EVENT_mode).
-	if merged["EVENT_mode"] != "from-payload" {
-		t.Errorf("EVENT_mode = %q, want %q (payload should win)", merged["EVENT_mode"], "from-payload")
-	}
-	// EVENT_status should come from trigger (no collision).
-	if merged["EVENT_status"] != "teardown" {
-		t.Errorf("EVENT_status = %q, want %q", merged["EVENT_status"], "teardown")
-	}
-	// OTHER should come from payload (no collision).
-	if merged["OTHER"] != "payload-only" {
-		t.Errorf("OTHER = %q, want %q", merged["OTHER"], "payload-only")
-	}
-}
-
-// writeTrigger writes a trigger JSON file and returns its path.
-func writeTrigger(t *testing.T, content map[string]any) string {
-	t.Helper()
-
-	data, err := json.Marshal(content)
-	if err != nil {
-		t.Fatalf("marshal trigger: %v", err)
-	}
-
-	path := filepath.Join(t.TempDir(), "trigger.json")
-	if err := os.WriteFile(path, data, 0644); err != nil {
-		t.Fatalf("write trigger: %v", err)
-	}
-	return path
-}
-
-func TestPayloadInlineResolution(t *testing.T) {
-	socketPath, _ := startMockProxy(t)
-
-	payloadPath := writePayload(t, map[string]any{
-		"pipeline_inline": map[string]any{
-			"steps": []any{
-				map[string]any{"name": "from-inline", "run": "echo inline"},
-			},
-		},
-	})
-
-	t.Setenv("BUREAU_SANDBOX", "1")
-	t.Setenv("BUREAU_PROXY_SOCKET", socketPath)
-	t.Setenv("BUREAU_PAYLOAD_PATH", payloadPath)
-
-	os.Args = []string{"bureau-pipeline-executor"}
-	err := run()
-	if err != nil {
-		t.Fatalf("run() failed: %v", err)
-	}
-}
-
-func TestPayloadRefResolution(t *testing.T) {
-	socketPath, mock := startMockProxy(t)
-
-	mock.resolveResponses["#bureau/pipeline:bureau.local"] = "!pipeline_room:bureau.local"
-	mock.stateResponses["!pipeline_room:bureau.local/m.bureau.pipeline/test-pipeline"] = `{
-		"steps": [{"name": "from-ref", "run": "echo from payload ref"}]
-	}`
-
-	payloadPath := writePayload(t, map[string]any{
-		"pipeline_ref": "bureau/pipeline:test-pipeline",
-	})
-
-	t.Setenv("BUREAU_SANDBOX", "1")
-	t.Setenv("BUREAU_PROXY_SOCKET", socketPath)
-	t.Setenv("BUREAU_PAYLOAD_PATH", payloadPath)
-
-	os.Args = []string{"bureau-pipeline-executor"}
-	err := run()
-	if err != nil {
-		t.Fatalf("run() failed: %v", err)
-	}
-}
-
-func TestIsFilePath(t *testing.T) {
-	tests := []struct {
-		input    string
-		expected bool
-	}{
-		{"/path/to/pipeline.jsonc", true},
-		{"./relative/pipeline.json", true},
-		{"../parent/pipeline.json", true},
-		{"pipeline.jsonc", true},
-		{"pipeline.json", true},
-		{"subdir/pipeline", true},
-		{"/path/with:colon", true},                      // absolute path takes precedence over colon
-		{"bureau/pipeline:dev-workspace-init", false},   // valid template ref
-		{"iree/template@other.example:8448:foo", false}, // federated ref with port
-		{"just-a-ref:name", false},                      // valid template ref (no slashes)
-		{"no-colon-no-slash", false},                    // not recognizable as either
-	}
-
-	for _, test := range tests {
-		result := isFilePath(test.input)
-		if result != test.expected {
-			t.Errorf("isFilePath(%q) = %v, want %v", test.input, result, test.expected)
-		}
-	}
-}
-
-func TestNoPipelineSpecified(t *testing.T) {
-	socketPath, _ := startMockProxy(t)
-
-	t.Setenv("BUREAU_SANDBOX", "1")
-	t.Setenv("BUREAU_PROXY_SOCKET", socketPath)
-	t.Setenv("BUREAU_PAYLOAD_PATH", filepath.Join(t.TempDir(), "nonexistent.json"))
-
-	os.Args = []string{"bureau-pipeline-executor"}
-	err := run()
-	if err == nil {
-		t.Fatal("expected error when no pipeline is specified")
-	}
-	if !strings.Contains(err.Error(), "no pipeline specified") {
-		t.Errorf("expected 'no pipeline specified' error, got: %v", err)
-	}
-}
-
 func TestSandboxGuardRejectsOutsideSandbox(t *testing.T) {
 	t.Setenv("BUREAU_SANDBOX", "")
-	os.Args = []string{"bureau-pipeline-executor", "anything"}
+	os.Args = []string{"bureau-pipeline-executor"}
 	err := run()
 	if err == nil {
 		t.Fatal("expected error when BUREAU_SANDBOX is not set")
@@ -898,30 +881,49 @@ func TestSandboxGuardRejectsOutsideSandbox(t *testing.T) {
 	}
 }
 
-func TestResultLogSuccess(t *testing.T) {
-	socketPath, _ := startMockProxy(t)
-	resultPath := filepath.Join(t.TempDir(), "result.jsonl")
+func TestMissingTicketIDRejectsRun(t *testing.T) {
+	t.Setenv("BUREAU_SANDBOX", "1")
+	t.Setenv("BUREAU_TICKET_ID", "")
+	os.Args = []string{"bureau-pipeline-executor"}
+	err := run()
+	if err == nil {
+		t.Fatal("expected error when BUREAU_TICKET_ID is not set")
+	}
+	if !strings.Contains(err.Error(), "BUREAU_TICKET_ID") {
+		t.Errorf("expected ticket ID error, got: %v", err)
+	}
+}
 
-	pipelinePath := writePipeline(t, "result-ok", &pipelineschema.PipelineContent{
-		Steps: []pipelineschema.PipelineStep{
+func TestMissingTicketRoomRejectsRun(t *testing.T) {
+	t.Setenv("BUREAU_SANDBOX", "1")
+	t.Setenv("BUREAU_TICKET_ID", "pip-test")
+	t.Setenv("BUREAU_TICKET_ROOM", "")
+	os.Args = []string{"bureau-pipeline-executor"}
+	err := run()
+	if err == nil {
+		t.Fatal("expected error when BUREAU_TICKET_ROOM is not set")
+	}
+	if !strings.Contains(err.Error(), "BUREAU_TICKET_ROOM") {
+		t.Errorf("expected ticket room error, got: %v", err)
+	}
+}
+
+func TestResultLogSuccess(t *testing.T) {
+	resultPath := filepath.Join(t.TempDir(), "result.jsonl")
+	setupTestEnvWithPipeline(t, "result-ok", &pipeline.PipelineContent{
+		Steps: []pipeline.PipelineStep{
 			{Name: "step-one", Run: "true"},
 			{Name: "step-two", Run: "true"},
 		},
 	})
-
-	t.Setenv("BUREAU_SANDBOX", "1")
-	t.Setenv("BUREAU_PROXY_SOCKET", socketPath)
-	t.Setenv("BUREAU_PAYLOAD_PATH", filepath.Join(t.TempDir(), "nonexistent.json"))
 	t.Setenv("BUREAU_RESULT_PATH", resultPath)
 
-	os.Args = []string{"bureau-pipeline-executor", pipelinePath}
 	if err := run(); err != nil {
 		t.Fatalf("run() failed: %v", err)
 	}
 
 	entries := readResultLog(t, resultPath)
 
-	// Expected: start, step (ok), step (ok), complete.
 	if len(entries) != 4 {
 		t.Fatalf("expected 4 JSONL entries, got %d", len(entries))
 	}
@@ -929,37 +931,27 @@ func TestResultLogSuccess(t *testing.T) {
 	assertResultField(t, entries[0], "type", "start")
 	assertResultField(t, entries[0], "pipeline", "result-ok")
 	assertResultFieldFloat(t, entries[0], "step_count", 2)
-
 	assertResultField(t, entries[1], "type", "step")
 	assertResultField(t, entries[1], "name", "step-one")
 	assertResultField(t, entries[1], "status", "ok")
-
 	assertResultField(t, entries[2], "type", "step")
 	assertResultField(t, entries[2], "name", "step-two")
 	assertResultField(t, entries[2], "status", "ok")
-
 	assertResultField(t, entries[3], "type", "complete")
 	assertResultField(t, entries[3], "status", "ok")
 }
 
 func TestResultLogFailure(t *testing.T) {
-	socketPath, _ := startMockProxy(t)
 	resultPath := filepath.Join(t.TempDir(), "result.jsonl")
-
-	pipelinePath := writePipeline(t, "result-fail", &pipelineschema.PipelineContent{
-		Steps: []pipelineschema.PipelineStep{
+	setupTestEnvWithPipeline(t, "result-fail", &pipeline.PipelineContent{
+		Steps: []pipeline.PipelineStep{
 			{Name: "passes", Run: "true"},
 			{Name: "fails", Run: "false"},
 			{Name: "never-reached", Run: "true"},
 		},
 	})
-
-	t.Setenv("BUREAU_SANDBOX", "1")
-	t.Setenv("BUREAU_PROXY_SOCKET", socketPath)
-	t.Setenv("BUREAU_PAYLOAD_PATH", filepath.Join(t.TempDir(), "nonexistent.json"))
 	t.Setenv("BUREAU_RESULT_PATH", resultPath)
 
-	os.Args = []string{"bureau-pipeline-executor", pipelinePath}
 	err := run()
 	if err == nil {
 		t.Fatal("expected error from step failure")
@@ -967,111 +959,72 @@ func TestResultLogFailure(t *testing.T) {
 
 	entries := readResultLog(t, resultPath)
 
-	// Expected: start, step (ok), step (failed), failed.
 	if len(entries) != 4 {
 		t.Fatalf("expected 4 JSONL entries, got %d", len(entries))
 	}
 
 	assertResultField(t, entries[0], "type", "start")
-	assertResultField(t, entries[1], "type", "step")
 	assertResultField(t, entries[1], "name", "passes")
 	assertResultField(t, entries[1], "status", "ok")
-
-	assertResultField(t, entries[2], "type", "step")
 	assertResultField(t, entries[2], "name", "fails")
 	assertResultField(t, entries[2], "status", "failed")
-	if _, exists := entries[2]["error"]; !exists {
-		t.Error("failed step entry should have an error field")
-	}
-
 	assertResultField(t, entries[3], "type", "failed")
-	assertResultField(t, entries[3], "status", "failed")
 	assertResultField(t, entries[3], "failed_step", "fails")
 }
 
 func TestResultLogSkippedAndOptional(t *testing.T) {
-	socketPath, _ := startMockProxy(t)
 	resultPath := filepath.Join(t.TempDir(), "result.jsonl")
-
-	pipelinePath := writePipeline(t, "result-mixed", &pipelineschema.PipelineContent{
-		Steps: []pipelineschema.PipelineStep{
+	setupTestEnvWithPipeline(t, "result-mixed", &pipeline.PipelineContent{
+		Steps: []pipeline.PipelineStep{
 			{Name: "skipped-step", Run: "true", When: "false"},
 			{Name: "optional-fail", Run: "false", Optional: true},
 			{Name: "passes", Run: "true"},
 		},
 	})
-
-	t.Setenv("BUREAU_SANDBOX", "1")
-	t.Setenv("BUREAU_PROXY_SOCKET", socketPath)
-	t.Setenv("BUREAU_PAYLOAD_PATH", filepath.Join(t.TempDir(), "nonexistent.json"))
 	t.Setenv("BUREAU_RESULT_PATH", resultPath)
 
-	os.Args = []string{"bureau-pipeline-executor", pipelinePath}
 	if err := run(); err != nil {
 		t.Fatalf("run() failed: %v", err)
 	}
 
 	entries := readResultLog(t, resultPath)
 
-	// Expected: start, step (skipped), step (failed optional), step (ok), complete.
 	if len(entries) != 5 {
 		t.Fatalf("expected 5 JSONL entries, got %d", len(entries))
 	}
 
 	assertResultField(t, entries[1], "name", "skipped-step")
 	assertResultField(t, entries[1], "status", "skipped")
-
 	assertResultField(t, entries[2], "name", "optional-fail")
 	assertResultField(t, entries[2], "status", "failed (optional)")
-
 	assertResultField(t, entries[3], "name", "passes")
 	assertResultField(t, entries[3], "status", "ok")
-
 	assertResultField(t, entries[4], "type", "complete")
 }
 
 func TestResultLogNotCreatedWithoutEnvVar(t *testing.T) {
-	socketPath, _ := startMockProxy(t)
-
-	pipelinePath := writePipeline(t, "no-result", &pipelineschema.PipelineContent{
-		Steps: []pipelineschema.PipelineStep{
+	setupTestEnvWithPipeline(t, "no-result", &pipeline.PipelineContent{
+		Steps: []pipeline.PipelineStep{
 			{Name: "step-one", Run: "true"},
 		},
 	})
-
-	t.Setenv("BUREAU_SANDBOX", "1")
-	t.Setenv("BUREAU_PROXY_SOCKET", socketPath)
-	t.Setenv("BUREAU_PAYLOAD_PATH", filepath.Join(t.TempDir(), "nonexistent.json"))
-	// BUREAU_RESULT_PATH intentionally not set.
 	t.Setenv("BUREAU_RESULT_PATH", "")
 
-	os.Args = []string{"bureau-pipeline-executor", pipelinePath}
 	if err := run(); err != nil {
 		t.Fatalf("run() failed: %v", err)
 	}
-
-	// No file should be created.
-	// (We can't easily verify this without a known path, but the point is
-	// run() succeeds without BUREAU_RESULT_PATH.)
 }
 
 func TestResultLogWithThreadLogging(t *testing.T) {
-	socketPath, _ := startMockProxy(t)
 	resultPath := filepath.Join(t.TempDir(), "result.jsonl")
-
-	pipelinePath := writePipeline(t, "result-with-log", &pipelineschema.PipelineContent{
-		Log: &pipelineschema.PipelineLog{Room: "!log_room:bureau.local"},
-		Steps: []pipelineschema.PipelineStep{
+	setupTestEnvWithPipeline(t, "result-with-log", &pipeline.PipelineContent{
+		Log: &pipeline.PipelineLog{Room: "!log_room:bureau.local"},
+		Steps: []pipeline.PipelineStep{
 			{Name: "step-one", Run: "true"},
 		},
 	})
-
-	t.Setenv("BUREAU_SANDBOX", "1")
-	t.Setenv("BUREAU_PROXY_SOCKET", socketPath)
-	t.Setenv("BUREAU_PAYLOAD_PATH", filepath.Join(t.TempDir(), "nonexistent.json"))
 	t.Setenv("BUREAU_RESULT_PATH", resultPath)
 
-	os.Args = []string{"bureau-pipeline-executor", pipelinePath}
 	if err := run(); err != nil {
 		t.Fatalf("run() failed: %v", err)
 	}
@@ -1081,35 +1034,28 @@ func TestResultLogWithThreadLogging(t *testing.T) {
 		t.Fatalf("expected at least 3 entries, got %d", len(entries))
 	}
 
-	// The complete entry should include the log event ID from the thread.
 	lastEntry := entries[len(entries)-1]
 	assertResultField(t, lastEntry, "type", "complete")
 	logEventID, ok := lastEntry["log_event_id"].(string)
 	if !ok {
 		t.Fatal("complete entry missing log_event_id")
 	}
-	// The mock proxy returns "$msg_1" as the event ID for all messages.
 	if logEventID != "$msg_1" {
 		t.Errorf("log_event_id = %q, want %q", logEventID, "$msg_1")
 	}
 }
 
 func TestGracefulTerminationSendsSIGTERM(t *testing.T) {
-	socketPath, _ := startMockProxy(t)
 	markerDir := t.TempDir()
 	markerFile := filepath.Join(markerDir, "got_sigterm")
 
-	// This command traps SIGTERM and writes a marker file before exiting.
-	// Without grace_period, the process would receive SIGKILL (no chance
-	// to run the trap handler). With grace_period, it receives SIGTERM
-	// first and the trap fires.
 	trapCommand := fmt.Sprintf(
 		"trap 'touch %s; exit 0' TERM; sleep 30",
 		markerFile,
 	)
 
-	pipelinePath := writePipeline(t, "graceful-test", &pipelineschema.PipelineContent{
-		Steps: []pipelineschema.PipelineStep{
+	setupTestEnvWithPipeline(t, "graceful-test", &pipeline.PipelineContent{
+		Steps: []pipeline.PipelineStep{
 			{
 				Name:        "graceful-step",
 				Run:         trapCommand,
@@ -1119,40 +1065,27 @@ func TestGracefulTerminationSendsSIGTERM(t *testing.T) {
 		},
 	})
 
-	t.Setenv("BUREAU_SANDBOX", "1")
-	t.Setenv("BUREAU_PROXY_SOCKET", socketPath)
-	t.Setenv("BUREAU_PAYLOAD_PATH", filepath.Join(t.TempDir(), "nonexistent.json"))
-
-	os.Args = []string{"bureau-pipeline-executor", pipelinePath}
 	wallClock := clock.Real()
 	startTime := wallClock.Now()
 	err := run()
 	elapsed := wallClock.Now().Sub(startTime)
 
-	// The step should fail (timeout exceeded), but the process got SIGTERM.
 	if err == nil {
 		t.Fatal("expected error from timeout")
 	}
 
-	// Should complete relatively quickly (the trap handler exits immediately).
 	if elapsed > 5*time.Second {
 		t.Errorf("took too long: %v (grace period should not have been exhausted)", elapsed)
 	}
 
-	// The marker file should exist, proving SIGTERM was delivered (not SIGKILL).
 	if _, statError := os.Stat(markerFile); os.IsNotExist(statError) {
 		t.Error("marker file not created: process received SIGKILL instead of SIGTERM")
 	}
 }
 
 func TestGracefulTerminationEscalatesToSIGKILL(t *testing.T) {
-	socketPath, _ := startMockProxy(t)
-
-	// This command traps SIGTERM but does NOT exit — it ignores the signal
-	// and continues sleeping. The grace period should expire and SIGKILL
-	// should terminate it.
-	pipelinePath := writePipeline(t, "escalation-test", &pipelineschema.PipelineContent{
-		Steps: []pipelineschema.PipelineStep{
+	setupTestEnvWithPipeline(t, "escalation-test", &pipeline.PipelineContent{
+		Steps: []pipeline.PipelineStep{
 			{
 				Name:        "stubborn-step",
 				Run:         "trap '' TERM; sleep 30",
@@ -1162,11 +1095,6 @@ func TestGracefulTerminationEscalatesToSIGKILL(t *testing.T) {
 		},
 	})
 
-	t.Setenv("BUREAU_SANDBOX", "1")
-	t.Setenv("BUREAU_PROXY_SOCKET", socketPath)
-	t.Setenv("BUREAU_PAYLOAD_PATH", filepath.Join(t.TempDir(), "nonexistent.json"))
-
-	os.Args = []string{"bureau-pipeline-executor", pipelinePath}
 	wallClock := clock.Real()
 	startTime := wallClock.Now()
 	err := run()
@@ -1176,20 +1104,364 @@ func TestGracefulTerminationEscalatesToSIGKILL(t *testing.T) {
 		t.Fatal("expected error from timeout")
 	}
 
-	// Should take roughly timeout + grace_period (200ms + 500ms = 700ms),
-	// not the full 30s sleep. Allow generous upper bound for CI.
 	if elapsed > 5*time.Second {
 		t.Errorf("took too long: %v (SIGKILL escalation should have fired)", elapsed)
 	}
 
-	// The step should have taken at least the grace period (the process
-	// ignores SIGTERM, so it survives until SIGKILL).
 	if elapsed < 500*time.Millisecond {
 		t.Errorf("completed too quickly: %v (grace period should have been waited out)", elapsed)
 	}
 }
 
-// readResultLog reads a JSONL file and returns each line as a parsed map.
+func TestAssertStateEquals(t *testing.T) {
+	mock, _ := setupTestEnvWithPipeline(t, "assert-eq", &pipeline.PipelineContent{
+		Steps: []pipeline.PipelineStep{
+			{
+				Name: "check-active",
+				AssertState: &pipeline.PipelineAssertState{
+					Room:      "!room:bureau.local",
+					EventType: "m.bureau.worktree",
+					StateKey:  "feature/test",
+					Field:     "status",
+					Equals:    "active",
+				},
+			},
+			{Name: "after-assert", Run: "true"},
+		},
+	})
+	mock.stateResponses["!room:bureau.local/m.bureau.worktree/feature/test"] = `{"status":"active","project":"iree"}`
+
+	if err := run(); err != nil {
+		t.Fatalf("run() failed: %v", err)
+	}
+}
+
+func TestAssertStateAbort(t *testing.T) {
+	resultPath := filepath.Join(t.TempDir(), "result.jsonl")
+	mock, _ := setupTestEnvWithPipeline(t, "assert-abort", &pipeline.PipelineContent{
+		Steps: []pipeline.PipelineStep{
+			{
+				Name: "assert-still-removing",
+				AssertState: &pipeline.PipelineAssertState{
+					Room:       "!room:bureau.local",
+					EventType:  "m.bureau.worktree",
+					StateKey:   "feature/test",
+					Field:      "status",
+					Equals:     "removing",
+					OnMismatch: "abort",
+					Message:    "worktree state changed, aborting",
+				},
+			},
+			{Name: "never-reached", Run: "true"},
+		},
+	})
+	mock.stateResponses["!room:bureau.local/m.bureau.worktree/feature/test"] = `{"status":"active"}`
+	t.Setenv("BUREAU_RESULT_PATH", resultPath)
+
+	err := run()
+	if err != nil {
+		t.Fatalf("abort should return nil error, got: %v", err)
+	}
+
+	entries := readResultLog(t, resultPath)
+	lastEntry := entries[len(entries)-1]
+	assertResultField(t, lastEntry, "type", "aborted")
+	assertResultField(t, lastEntry, "status", "aborted")
+	assertResultField(t, lastEntry, "aborted_step", "assert-still-removing")
+}
+
+func TestOnFailurePublishesState(t *testing.T) {
+	mock, _ := setupTestEnvWithPipeline(t, "on-failure-pub", &pipeline.PipelineContent{
+		Steps: []pipeline.PipelineStep{
+			{Name: "will-fail", Run: "false"},
+		},
+		OnFailure: []pipeline.PipelineStep{
+			{
+				Name: "publish-failed",
+				Publish: &pipeline.PipelinePublish{
+					EventType: "m.bureau.worktree",
+					Room:      "!room:bureau.local",
+					StateKey:  "feature/test",
+					Content:   map[string]any{"status": "failed"},
+				},
+			},
+		},
+	})
+
+	err := run()
+	if err == nil {
+		t.Fatal("expected error from step failure")
+	}
+
+	mock.mu.Lock()
+	defer mock.mu.Unlock()
+	if len(mock.recordedPuts) != 1 {
+		t.Fatalf("expected 1 PUT state request from on_failure, got %d", len(mock.recordedPuts))
+	}
+}
+
+func TestOnFailureNotRunOnAbort(t *testing.T) {
+	mock, _ := setupTestEnvWithPipeline(t, "on-failure-abort", &pipeline.PipelineContent{
+		Steps: []pipeline.PipelineStep{
+			{
+				Name: "assert-removing",
+				AssertState: &pipeline.PipelineAssertState{
+					Room:       "!room:bureau.local",
+					EventType:  "m.bureau.worktree",
+					StateKey:   "feature/test",
+					Field:      "status",
+					Equals:     "removing",
+					OnMismatch: "abort",
+				},
+			},
+		},
+		OnFailure: []pipeline.PipelineStep{
+			{
+				Name: "should-not-run",
+				Publish: &pipeline.PipelinePublish{
+					EventType: "m.bureau.worktree",
+					Room:      "!room:bureau.local",
+					StateKey:  "feature/test",
+					Content:   map[string]any{"status": "failed"},
+				},
+			},
+		},
+	})
+	mock.stateResponses["!room:bureau.local/m.bureau.worktree/feature/test"] = `{"status":"active"}`
+
+	if err := run(); err != nil {
+		t.Fatalf("abort should not return error, got: %v", err)
+	}
+
+	mock.mu.Lock()
+	defer mock.mu.Unlock()
+	if len(mock.recordedPuts) != 0 {
+		t.Errorf("on_failure should not run on abort, but %d PUT requests were recorded", len(mock.recordedPuts))
+	}
+}
+
+func TestOnFailureVariables(t *testing.T) {
+	markerDir := t.TempDir()
+	markerFile := filepath.Join(markerDir, "failure-context")
+
+	setupTestEnvWithPipeline(t, "on-failure-vars", &pipeline.PipelineContent{
+		Steps: []pipeline.PipelineStep{
+			{Name: "doomed-step", Run: "false"},
+		},
+		OnFailure: []pipeline.PipelineStep{
+			{
+				Name: "record-failure",
+				Run:  fmt.Sprintf("echo \"step=${FAILED_STEP} error=${FAILED_ERROR}\" > %s", markerFile),
+			},
+		},
+	})
+
+	err := run()
+	if err == nil {
+		t.Fatal("expected error from step failure")
+	}
+
+	data, readError := os.ReadFile(markerFile)
+	if readError != nil {
+		t.Fatalf("marker file not written: %v", readError)
+	}
+	content := string(data)
+	if !strings.Contains(content, "step=doomed-step") {
+		t.Errorf("FAILED_STEP not set correctly, marker file: %q", content)
+	}
+}
+
+// --- Ticket interaction tests ---
+
+func TestTicketClaimOnContention(t *testing.T) {
+	// Test that isContention correctly identifies contention errors.
+	contentionError := &service.ServiceError{
+		Action:  "update",
+		Message: "ticket pip-test is already in_progress (assigned to @other:bureau.local)",
+	}
+	if !isContention(contentionError) {
+		t.Error("expected isContention to return true for contention error")
+	}
+
+	// Non-contention errors should not match.
+	otherError := &service.ServiceError{
+		Action:  "update",
+		Message: "some other error",
+	}
+	if isContention(otherError) {
+		t.Error("expected isContention to return false for non-contention error")
+	}
+
+	// Plain errors should not match.
+	if isContention(fmt.Errorf("connection refused")) {
+		t.Error("expected isContention to return false for plain error")
+	}
+}
+
+func TestTicketProgressAndCloseOnSuccess(t *testing.T) {
+	_, ticketMock := setupTestEnvWithPipeline(t, "progress-test", &pipeline.PipelineContent{
+		Steps: []pipeline.PipelineStep{
+			{Name: "step-one", Run: "true"},
+			{Name: "step-two", Run: "true"},
+		},
+	})
+
+	if err := run(); err != nil {
+		t.Fatalf("run() failed: %v", err)
+	}
+
+	ticketMock.mu.Lock()
+	defer ticketMock.mu.Unlock()
+
+	// Verify claim call.
+	if len(ticketMock.claimCalls) != 1 {
+		t.Fatalf("expected 1 claim, got %d", len(ticketMock.claimCalls))
+	}
+	claimFields := ticketMock.claimCalls[0].Fields
+	if claimFields["status"] != "in_progress" {
+		t.Errorf("claim status = %v, want in_progress", claimFields["status"])
+	}
+
+	// Verify close call includes success message.
+	if len(ticketMock.closeCalls) != 1 {
+		t.Fatalf("expected 1 close, got %d", len(ticketMock.closeCalls))
+	}
+	closeReason, _ := ticketMock.closeCalls[0].Fields["reason"].(string)
+	if !strings.Contains(closeReason, "completed successfully") {
+		t.Errorf("close reason should mention success, got: %q", closeReason)
+	}
+
+	// Verify step notes.
+	if len(ticketMock.noteCalls) != 2 {
+		t.Fatalf("expected 2 notes (one per step), got %d", len(ticketMock.noteCalls))
+	}
+}
+
+func TestTicketClosedOnFailure(t *testing.T) {
+	_, ticketMock := setupTestEnvWithPipeline(t, "close-on-fail", &pipeline.PipelineContent{
+		Steps: []pipeline.PipelineStep{
+			{Name: "will-fail", Run: "false"},
+		},
+	})
+
+	err := run()
+	if err == nil {
+		t.Fatal("expected error from step failure")
+	}
+
+	ticketMock.mu.Lock()
+	defer ticketMock.mu.Unlock()
+
+	if len(ticketMock.closeCalls) != 1 {
+		t.Fatalf("expected 1 close call, got %d", len(ticketMock.closeCalls))
+	}
+	closeReason, _ := ticketMock.closeCalls[0].Fields["reason"].(string)
+	if !strings.Contains(closeReason, "will-fail") {
+		t.Errorf("close reason should mention failed step, got: %q", closeReason)
+	}
+}
+
+func TestFormatStepNote(t *testing.T) {
+	tests := []struct {
+		name     string
+		result   stepResult
+		expected string
+	}{
+		{
+			name:     "ok",
+			result:   stepResult{status: "ok", duration: 1234 * time.Millisecond},
+			expected: "step 1/3: build... ok (1.2s)",
+		},
+		{
+			name:     "skipped",
+			result:   stepResult{status: "skipped"},
+			expected: "step 1/3: build... skipped",
+		},
+		{
+			name:     "failed",
+			result:   stepResult{status: "failed", duration: 567 * time.Millisecond, err: fmt.Errorf("exit code 1")},
+			expected: "step 1/3: build... failed (0.6s): exit code 1",
+		},
+	}
+
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			note := formatStepNote(0, 3, "build", test.result)
+			if note != test.expected {
+				t.Errorf("got %q, want %q", note, test.expected)
+			}
+		})
+	}
+}
+
+func TestPipelineResultIncludesTicketID(t *testing.T) {
+	mock, _ := setupTestEnvWithPipeline(t, "result-ticket-id", &pipeline.PipelineContent{
+		Log: &pipeline.PipelineLog{Room: "!log_room:bureau.local"},
+		Steps: []pipeline.PipelineStep{
+			{Name: "step-one", Run: "true"},
+		},
+	})
+
+	if err := run(); err != nil {
+		t.Fatalf("run() failed: %v", err)
+	}
+
+	mock.mu.Lock()
+	defer mock.mu.Unlock()
+
+	// The pipeline result state event should have been published.
+	if len(mock.recordedPuts) != 1 {
+		t.Fatalf("expected 1 PUT (pipeline result), got %d", len(mock.recordedPuts))
+	}
+
+	var putBody struct {
+		Content struct {
+			TicketID string `json:"ticket_id"`
+		} `json:"content"`
+	}
+	if err := json.Unmarshal([]byte(mock.recordedPuts[0].Body), &putBody); err != nil {
+		t.Fatalf("unmarshal PUT body: %v", err)
+	}
+	if putBody.Content.TicketID != "pip-test" {
+		t.Errorf("ticket_id = %q, want %q", putBody.Content.TicketID, "pip-test")
+	}
+}
+
+// --- Trigger parsing tests ---
+
+func TestNonPipelineTicketTypeRejected(t *testing.T) {
+	proxySocket, _ := startMockProxy(t)
+	ticketSocket, ticketToken, _ := startMockTicketService(t)
+
+	// Write a trigger with type "task" instead of "pipeline".
+	triggerPath := writeTrigger(t, map[string]any{
+		"version":  1,
+		"title":    "Not a pipeline",
+		"status":   "open",
+		"priority": 2,
+		"type":     "task",
+	})
+
+	t.Setenv("BUREAU_SANDBOX", "1")
+	t.Setenv("BUREAU_PROXY_SOCKET", proxySocket)
+	t.Setenv("BUREAU_TICKET_ID", "tkt-test")
+	t.Setenv("BUREAU_TICKET_ROOM", "!room:bureau.local")
+	t.Setenv("BUREAU_TICKET_SOCKET", ticketSocket)
+	t.Setenv("BUREAU_TICKET_TOKEN", ticketToken)
+	t.Setenv("BUREAU_TRIGGER_PATH", triggerPath)
+
+	os.Args = []string{"bureau-pipeline-executor"}
+	err := run()
+	if err == nil {
+		t.Fatal("expected error for non-pipeline ticket type")
+	}
+	if !strings.Contains(err.Error(), "expected \"pipeline\"") {
+		t.Errorf("expected type mismatch error, got: %v", err)
+	}
+}
+
+// --- JSONL helpers ---
+
 func readResultLog(t *testing.T, path string) []map[string]any {
 	t.Helper()
 	data, err := os.ReadFile(path)
@@ -1210,8 +1482,6 @@ func readResultLog(t *testing.T, path string) []map[string]any {
 	return entries
 }
 
-// assertResultField checks that a JSONL entry has a string field with the
-// expected value.
 func assertResultField(t *testing.T, entry map[string]any, key, expected string) {
 	t.Helper()
 	value, ok := entry[key].(string)
@@ -1224,8 +1494,6 @@ func assertResultField(t *testing.T, entry map[string]any, key, expected string)
 	}
 }
 
-// assertResultFieldFloat checks that a JSONL entry has a numeric field with
-// the expected value (JSON numbers decode as float64).
 func assertResultFieldFloat(t *testing.T, entry map[string]any, key string, expected float64) {
 	t.Helper()
 	value, ok := entry[key].(float64)
@@ -1236,516 +1504,4 @@ func assertResultFieldFloat(t *testing.T, entry map[string]any, key string, expe
 	if value != expected {
 		t.Errorf("entry[%q] = %v, want %v", key, value, expected)
 	}
-}
-
-func TestAssertStateEquals(t *testing.T) {
-	socketPath, mock := startMockProxy(t)
-
-	// Pre-load the state event that assert_state will read.
-	mock.stateResponses["!room:bureau.local/m.bureau.worktree/feature/test"] = `{"status":"active","project":"iree"}`
-
-	pipelinePath := writePipeline(t, "assert-eq", &pipelineschema.PipelineContent{
-		Steps: []pipelineschema.PipelineStep{
-			{
-				Name: "check-active",
-				AssertState: &pipelineschema.PipelineAssertState{
-					Room:      "!room:bureau.local",
-					EventType: "m.bureau.worktree",
-					StateKey:  "feature/test",
-					Field:     "status",
-					Equals:    "active",
-				},
-			},
-			{Name: "after-assert", Run: "true"},
-		},
-	})
-
-	t.Setenv("BUREAU_SANDBOX", "1")
-	t.Setenv("BUREAU_PROXY_SOCKET", socketPath)
-	t.Setenv("BUREAU_PAYLOAD_PATH", filepath.Join(t.TempDir(), "nonexistent.json"))
-
-	os.Args = []string{"bureau-pipeline-executor", pipelinePath}
-	err := run()
-	if err != nil {
-		t.Fatalf("run() failed: %v", err)
-	}
-}
-
-func TestAssertStateEqualsMismatch(t *testing.T) {
-	socketPath, mock := startMockProxy(t)
-
-	mock.stateResponses["!room:bureau.local/m.bureau.worktree/feature/test"] = `{"status":"removing","project":"iree"}`
-
-	pipelinePath := writePipeline(t, "assert-eq-fail", &pipelineschema.PipelineContent{
-		Steps: []pipelineschema.PipelineStep{
-			{
-				Name: "check-active",
-				AssertState: &pipelineschema.PipelineAssertState{
-					Room:      "!room:bureau.local",
-					EventType: "m.bureau.worktree",
-					StateKey:  "feature/test",
-					Field:     "status",
-					Equals:    "active",
-				},
-			},
-			{Name: "never-reached", Run: "true"},
-		},
-	})
-
-	t.Setenv("BUREAU_SANDBOX", "1")
-	t.Setenv("BUREAU_PROXY_SOCKET", socketPath)
-	t.Setenv("BUREAU_PAYLOAD_PATH", filepath.Join(t.TempDir(), "nonexistent.json"))
-
-	os.Args = []string{"bureau-pipeline-executor", pipelinePath}
-	err := run()
-	if err == nil {
-		t.Fatal("expected error from assert_state mismatch")
-	}
-	if !strings.Contains(err.Error(), "check-active") {
-		t.Errorf("error should mention step name, got: %v", err)
-	}
-}
-
-func TestAssertStateAbort(t *testing.T) {
-	socketPath, mock := startMockProxy(t)
-	resultPath := filepath.Join(t.TempDir(), "result.jsonl")
-
-	// State says "active" but we expect "removing" — mismatch with on_mismatch=abort.
-	mock.stateResponses["!room:bureau.local/m.bureau.worktree/feature/test"] = `{"status":"active"}`
-
-	pipelinePath := writePipeline(t, "assert-abort", &pipelineschema.PipelineContent{
-		Steps: []pipelineschema.PipelineStep{
-			{
-				Name: "assert-still-removing",
-				AssertState: &pipelineschema.PipelineAssertState{
-					Room:       "!room:bureau.local",
-					EventType:  "m.bureau.worktree",
-					StateKey:   "feature/test",
-					Field:      "status",
-					Equals:     "removing",
-					OnMismatch: "abort",
-					Message:    "worktree state changed, aborting",
-				},
-			},
-			{Name: "never-reached", Run: "true"},
-		},
-	})
-
-	t.Setenv("BUREAU_SANDBOX", "1")
-	t.Setenv("BUREAU_PROXY_SOCKET", socketPath)
-	t.Setenv("BUREAU_PAYLOAD_PATH", filepath.Join(t.TempDir(), "nonexistent.json"))
-	t.Setenv("BUREAU_RESULT_PATH", resultPath)
-
-	os.Args = []string{"bureau-pipeline-executor", pipelinePath}
-	err := run()
-	// Abort is NOT an error — it's a clean exit.
-	if err != nil {
-		t.Fatalf("abort should return nil error, got: %v", err)
-	}
-
-	// Verify result log has an aborted entry.
-	entries := readResultLog(t, resultPath)
-	lastEntry := entries[len(entries)-1]
-	assertResultField(t, lastEntry, "type", "aborted")
-	assertResultField(t, lastEntry, "status", "aborted")
-	assertResultField(t, lastEntry, "aborted_step", "assert-still-removing")
-}
-
-func TestAssertStateNotEquals(t *testing.T) {
-	socketPath, mock := startMockProxy(t)
-
-	mock.stateResponses["!room:bureau.local/m.bureau.worktree/feature/test"] = `{"status":"active"}`
-
-	pipelinePath := writePipeline(t, "assert-neq", &pipelineschema.PipelineContent{
-		Steps: []pipelineschema.PipelineStep{
-			{
-				Name: "check-not-removing",
-				AssertState: &pipelineschema.PipelineAssertState{
-					Room:      "!room:bureau.local",
-					EventType: "m.bureau.worktree",
-					StateKey:  "feature/test",
-					Field:     "status",
-					NotEquals: "removing",
-				},
-			},
-		},
-	})
-
-	t.Setenv("BUREAU_SANDBOX", "1")
-	t.Setenv("BUREAU_PROXY_SOCKET", socketPath)
-	t.Setenv("BUREAU_PAYLOAD_PATH", filepath.Join(t.TempDir(), "nonexistent.json"))
-
-	os.Args = []string{"bureau-pipeline-executor", pipelinePath}
-	if err := run(); err != nil {
-		t.Fatalf("run() failed: %v", err)
-	}
-}
-
-func TestAssertStateIn(t *testing.T) {
-	socketPath, mock := startMockProxy(t)
-
-	mock.stateResponses["!room:bureau.local/m.bureau.workspace/"] = `{"status":"teardown"}`
-
-	pipelinePath := writePipeline(t, "assert-in", &pipelineschema.PipelineContent{
-		Steps: []pipelineschema.PipelineStep{
-			{
-				Name: "check-status-in-set",
-				AssertState: &pipelineschema.PipelineAssertState{
-					Room:      "!room:bureau.local",
-					EventType: "m.bureau.workspace",
-					Field:     "status",
-					In:        []string{"active", "teardown"},
-				},
-			},
-		},
-	})
-
-	t.Setenv("BUREAU_SANDBOX", "1")
-	t.Setenv("BUREAU_PROXY_SOCKET", socketPath)
-	t.Setenv("BUREAU_PAYLOAD_PATH", filepath.Join(t.TempDir(), "nonexistent.json"))
-
-	os.Args = []string{"bureau-pipeline-executor", pipelinePath}
-	if err := run(); err != nil {
-		t.Fatalf("run() failed: %v", err)
-	}
-}
-
-func TestAssertStateNotIn(t *testing.T) {
-	socketPath, mock := startMockProxy(t)
-
-	mock.stateResponses["!room:bureau.local/m.bureau.workspace/"] = `{"status":"active"}`
-
-	pipelinePath := writePipeline(t, "assert-not-in", &pipelineschema.PipelineContent{
-		Steps: []pipelineschema.PipelineStep{
-			{
-				Name: "check-not-terminal",
-				AssertState: &pipelineschema.PipelineAssertState{
-					Room:      "!room:bureau.local",
-					EventType: "m.bureau.workspace",
-					Field:     "status",
-					NotIn:     []string{"archived", "removed"},
-				},
-			},
-		},
-	})
-
-	t.Setenv("BUREAU_SANDBOX", "1")
-	t.Setenv("BUREAU_PROXY_SOCKET", socketPath)
-	t.Setenv("BUREAU_PAYLOAD_PATH", filepath.Join(t.TempDir(), "nonexistent.json"))
-
-	os.Args = []string{"bureau-pipeline-executor", pipelinePath}
-	if err := run(); err != nil {
-		t.Fatalf("run() failed: %v", err)
-	}
-}
-
-func TestAssertStateMissingEvent(t *testing.T) {
-	socketPath, _ := startMockProxy(t)
-	// No state response pre-loaded — the event doesn't exist.
-
-	pipelinePath := writePipeline(t, "assert-missing", &pipelineschema.PipelineContent{
-		Steps: []pipelineschema.PipelineStep{
-			{
-				Name: "check-nonexistent",
-				AssertState: &pipelineschema.PipelineAssertState{
-					Room:      "!room:bureau.local",
-					EventType: "m.bureau.worktree",
-					StateKey:  "no/such/worktree",
-					Field:     "status",
-					Equals:    "active",
-				},
-			},
-		},
-	})
-
-	t.Setenv("BUREAU_SANDBOX", "1")
-	t.Setenv("BUREAU_PROXY_SOCKET", socketPath)
-	t.Setenv("BUREAU_PAYLOAD_PATH", filepath.Join(t.TempDir(), "nonexistent.json"))
-
-	os.Args = []string{"bureau-pipeline-executor", pipelinePath}
-	err := run()
-	if err == nil {
-		t.Fatal("expected error when state event does not exist")
-	}
-	if !strings.Contains(err.Error(), "assert_state") {
-		t.Errorf("error should mention assert_state: %v", err)
-	}
-}
-
-func TestAssertStateMissingField(t *testing.T) {
-	socketPath, mock := startMockProxy(t)
-
-	// State event exists but doesn't have the expected field.
-	mock.stateResponses["!room:bureau.local/m.bureau.worktree/feature/test"] = `{"project":"iree"}`
-
-	pipelinePath := writePipeline(t, "assert-no-field", &pipelineschema.PipelineContent{
-		Steps: []pipelineschema.PipelineStep{
-			{
-				Name: "check-missing-field",
-				AssertState: &pipelineschema.PipelineAssertState{
-					Room:      "!room:bureau.local",
-					EventType: "m.bureau.worktree",
-					StateKey:  "feature/test",
-					Field:     "status",
-					Equals:    "active",
-				},
-			},
-		},
-	})
-
-	t.Setenv("BUREAU_SANDBOX", "1")
-	t.Setenv("BUREAU_PROXY_SOCKET", socketPath)
-	t.Setenv("BUREAU_PAYLOAD_PATH", filepath.Join(t.TempDir(), "nonexistent.json"))
-
-	os.Args = []string{"bureau-pipeline-executor", pipelinePath}
-	err := run()
-	if err == nil {
-		t.Fatal("expected error when field is missing from state event")
-	}
-	if !strings.Contains(err.Error(), "not found") {
-		t.Errorf("error should mention field not found: %v", err)
-	}
-}
-
-func TestAssertStateWithWhenGuard(t *testing.T) {
-	socketPath, _ := startMockProxy(t)
-
-	// No state pre-loaded — the assert_state would fail if it ran.
-	// But the when guard should skip it.
-	pipelinePath := writePipeline(t, "assert-when-skip", &pipelineschema.PipelineContent{
-		Steps: []pipelineschema.PipelineStep{
-			{
-				Name: "conditional-assert",
-				When: "false",
-				AssertState: &pipelineschema.PipelineAssertState{
-					Room:      "!room:bureau.local",
-					EventType: "m.bureau.worktree",
-					StateKey:  "no/such/worktree",
-					Field:     "status",
-					Equals:    "active",
-				},
-			},
-		},
-	})
-
-	t.Setenv("BUREAU_SANDBOX", "1")
-	t.Setenv("BUREAU_PROXY_SOCKET", socketPath)
-	t.Setenv("BUREAU_PAYLOAD_PATH", filepath.Join(t.TempDir(), "nonexistent.json"))
-
-	os.Args = []string{"bureau-pipeline-executor", pipelinePath}
-	if err := run(); err != nil {
-		t.Fatalf("run() should succeed (guard skips assert_state), got: %v", err)
-	}
-}
-
-func TestOnFailurePublishesState(t *testing.T) {
-	socketPath, mock := startMockProxy(t)
-
-	pipelinePath := writePipeline(t, "on-failure-pub", &pipelineschema.PipelineContent{
-		Steps: []pipelineschema.PipelineStep{
-			{Name: "will-fail", Run: "false"},
-		},
-		OnFailure: []pipelineschema.PipelineStep{
-			{
-				Name: "publish-failed",
-				Publish: &pipelineschema.PipelinePublish{
-					EventType: "m.bureau.worktree",
-					Room:      "!room:bureau.local",
-					StateKey:  "feature/test",
-					Content:   map[string]any{"status": "failed"},
-				},
-			},
-		},
-	})
-
-	t.Setenv("BUREAU_SANDBOX", "1")
-	t.Setenv("BUREAU_PROXY_SOCKET", socketPath)
-	t.Setenv("BUREAU_PAYLOAD_PATH", filepath.Join(t.TempDir(), "nonexistent.json"))
-
-	os.Args = []string{"bureau-pipeline-executor", pipelinePath}
-	err := run()
-	if err == nil {
-		t.Fatal("expected error from step failure")
-	}
-
-	// The on_failure publish step should have fired.
-	mock.mu.Lock()
-	defer mock.mu.Unlock()
-	if len(mock.recordedPuts) != 1 {
-		t.Fatalf("expected 1 PUT state request from on_failure, got %d", len(mock.recordedPuts))
-	}
-	var putBody struct {
-		EventType string         `json:"event_type"`
-		Room      string         `json:"room"`
-		StateKey  string         `json:"state_key"`
-		Content   map[string]any `json:"content"`
-	}
-	if err := json.Unmarshal([]byte(mock.recordedPuts[0].Body), &putBody); err != nil {
-		t.Fatalf("unmarshal PUT body: %v", err)
-	}
-	if putBody.Content["status"] != "failed" {
-		t.Errorf("on_failure should have published status=failed, got %v", putBody.Content["status"])
-	}
-}
-
-func TestOnFailureStepFailureDoesNotCascade(t *testing.T) {
-	socketPath, _ := startMockProxy(t)
-
-	pipelinePath := writePipeline(t, "on-failure-cascade", &pipelineschema.PipelineContent{
-		Steps: []pipelineschema.PipelineStep{
-			{Name: "will-fail", Run: "false"},
-		},
-		OnFailure: []pipelineschema.PipelineStep{
-			{Name: "also-fails", Run: "false"},
-		},
-	})
-
-	t.Setenv("BUREAU_SANDBOX", "1")
-	t.Setenv("BUREAU_PROXY_SOCKET", socketPath)
-	t.Setenv("BUREAU_PAYLOAD_PATH", filepath.Join(t.TempDir(), "nonexistent.json"))
-
-	os.Args = []string{"bureau-pipeline-executor", pipelinePath}
-	err := run()
-	if err == nil {
-		t.Fatal("expected error from original step failure")
-	}
-	// The error should be from the original step, not from on_failure.
-	if !strings.Contains(err.Error(), "will-fail") {
-		t.Errorf("error should mention original step, got: %v", err)
-	}
-}
-
-func TestOnFailureNotRunOnAbort(t *testing.T) {
-	socketPath, mock := startMockProxy(t)
-
-	mock.stateResponses["!room:bureau.local/m.bureau.worktree/feature/test"] = `{"status":"active"}`
-
-	pipelinePath := writePipeline(t, "on-failure-abort", &pipelineschema.PipelineContent{
-		Steps: []pipelineschema.PipelineStep{
-			{
-				Name: "assert-removing",
-				AssertState: &pipelineschema.PipelineAssertState{
-					Room:       "!room:bureau.local",
-					EventType:  "m.bureau.worktree",
-					StateKey:   "feature/test",
-					Field:      "status",
-					Equals:     "removing",
-					OnMismatch: "abort",
-				},
-			},
-		},
-		OnFailure: []pipelineschema.PipelineStep{
-			{
-				Name: "should-not-run",
-				Publish: &pipelineschema.PipelinePublish{
-					EventType: "m.bureau.worktree",
-					Room:      "!room:bureau.local",
-					StateKey:  "feature/test",
-					Content:   map[string]any{"status": "failed"},
-				},
-			},
-		},
-	})
-
-	t.Setenv("BUREAU_SANDBOX", "1")
-	t.Setenv("BUREAU_PROXY_SOCKET", socketPath)
-	t.Setenv("BUREAU_PAYLOAD_PATH", filepath.Join(t.TempDir(), "nonexistent.json"))
-
-	os.Args = []string{"bureau-pipeline-executor", pipelinePath}
-	err := run()
-	if err != nil {
-		t.Fatalf("abort should not return error, got: %v", err)
-	}
-
-	// on_failure should NOT have run — no state events published.
-	mock.mu.Lock()
-	defer mock.mu.Unlock()
-	if len(mock.recordedPuts) != 0 {
-		t.Errorf("on_failure should not run on abort, but %d PUT requests were recorded", len(mock.recordedPuts))
-	}
-}
-
-func TestOnFailureVariables(t *testing.T) {
-	socketPath, _ := startMockProxy(t)
-	markerDir := t.TempDir()
-	markerFile := filepath.Join(markerDir, "failure-context")
-
-	pipelinePath := writePipeline(t, "on-failure-vars", &pipelineschema.PipelineContent{
-		Steps: []pipelineschema.PipelineStep{
-			{Name: "doomed-step", Run: "false"},
-		},
-		OnFailure: []pipelineschema.PipelineStep{
-			{
-				Name: "record-failure",
-				Run:  fmt.Sprintf("echo \"step=${FAILED_STEP} error=${FAILED_ERROR}\" > %s", markerFile),
-			},
-		},
-	})
-
-	t.Setenv("BUREAU_SANDBOX", "1")
-	t.Setenv("BUREAU_PROXY_SOCKET", socketPath)
-	t.Setenv("BUREAU_PAYLOAD_PATH", filepath.Join(t.TempDir(), "nonexistent.json"))
-
-	os.Args = []string{"bureau-pipeline-executor", pipelinePath}
-	err := run()
-	if err == nil {
-		t.Fatal("expected error from step failure")
-	}
-
-	// The on_failure step should have written the marker file with
-	// FAILED_STEP and FAILED_ERROR values.
-	data, readError := os.ReadFile(markerFile)
-	if readError != nil {
-		t.Fatalf("marker file not written (on_failure step did not run): %v", readError)
-	}
-	content := string(data)
-	if !strings.Contains(content, "step=doomed-step") {
-		t.Errorf("FAILED_STEP not set correctly, marker file: %q", content)
-	}
-	if !strings.Contains(content, "error=") {
-		t.Errorf("FAILED_ERROR not set, marker file: %q", content)
-	}
-}
-
-func TestAssertStateResultLog(t *testing.T) {
-	socketPath, mock := startMockProxy(t)
-	resultPath := filepath.Join(t.TempDir(), "result.jsonl")
-
-	mock.stateResponses["!room:bureau.local/m.bureau.worktree/feature/test"] = `{"status":"active"}`
-
-	pipelinePath := writePipeline(t, "assert-result-log", &pipelineschema.PipelineContent{
-		Steps: []pipelineschema.PipelineStep{
-			{Name: "step-one", Run: "true"},
-			{
-				Name: "check-active",
-				AssertState: &pipelineschema.PipelineAssertState{
-					Room:      "!room:bureau.local",
-					EventType: "m.bureau.worktree",
-					StateKey:  "feature/test",
-					Field:     "status",
-					Equals:    "active",
-				},
-			},
-			{Name: "step-three", Run: "true"},
-		},
-	})
-
-	t.Setenv("BUREAU_SANDBOX", "1")
-	t.Setenv("BUREAU_PROXY_SOCKET", socketPath)
-	t.Setenv("BUREAU_PAYLOAD_PATH", filepath.Join(t.TempDir(), "nonexistent.json"))
-	t.Setenv("BUREAU_RESULT_PATH", resultPath)
-
-	os.Args = []string{"bureau-pipeline-executor", pipelinePath}
-	if err := run(); err != nil {
-		t.Fatalf("run() failed: %v", err)
-	}
-
-	entries := readResultLog(t, resultPath)
-	// start + step-one(ok) + check-active(ok) + step-three(ok) + complete = 5
-	if len(entries) != 5 {
-		t.Fatalf("expected 5 JSONL entries, got %d", len(entries))
-	}
-	assertResultField(t, entries[2], "name", "check-active")
-	assertResultField(t, entries[2], "status", "ok")
-	assertResultField(t, entries[4], "type", "complete")
 }

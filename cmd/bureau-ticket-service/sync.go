@@ -216,14 +216,14 @@ func (ts *TicketService) processRoomState(ctx context.Context, roomID ref.RoomID
 	ticketCount := 0
 	for _, event := range stateEvents {
 		if event.Type == schema.EventTypeTicket && event.StateKey != nil {
-			if ts.indexTicketEvent(state, event) {
+			if ts.indexTicketEvent(roomID, state, event) {
 				ticketCount++
 			}
 		}
 	}
 	for _, event := range timelineEvents {
 		if event.Type == schema.EventTypeTicket && event.StateKey != nil {
-			if ts.indexTicketEvent(state, event) {
+			if ts.indexTicketEvent(roomID, state, event) {
 				ticketCount++
 			}
 		}
@@ -335,7 +335,7 @@ func (ts *TicketService) processRoomSync(ctx context.Context, roomID ref.RoomID,
 	var closedTicketIDs []string
 	for _, event := range stateEvents {
 		if event.Type == schema.EventTypeTicket && event.StateKey != nil {
-			ts.indexTicketEvent(state, event)
+			ts.indexTicketEvent(roomID, state, event)
 			if status, _ := event.Content["status"].(string); status == "closed" {
 				closedTicketIDs = append(closedTicketIDs, *event.StateKey)
 			}
@@ -460,7 +460,7 @@ func (ts *TicketService) backfillRoomTickets(ctx context.Context, roomID ref.Roo
 	count := 0
 	for _, event := range events {
 		if event.Type == schema.EventTypeTicket && event.StateKey != nil {
-			if ts.indexTicketEvent(state, event) {
+			if ts.indexTicketEvent(roomID, state, event) {
 				count++
 			}
 		}
@@ -523,7 +523,7 @@ func (ts *TicketService) parseTicketConfig(event messaging.Event) *ticket.Ticket
 // IS the expected echo. This prevents the sync loop from overwriting
 // optimistic local updates with stale events that were in-flight when
 // the local write happened.
-func (ts *TicketService) indexTicketEvent(state *roomState, event messaging.Event) bool {
+func (ts *TicketService) indexTicketEvent(roomID ref.RoomID, state *roomState, event messaging.Event) bool {
 	if event.StateKey == nil {
 		return false
 	}
@@ -547,6 +547,7 @@ func (ts *TicketService) indexTicketEvent(state *roomState, event messaging.Even
 	// Empty content means the ticket was redacted.
 	if len(event.Content) == 0 {
 		state.index.Remove(ticketID)
+		ts.notifySubscribers(roomID, "remove", ticketID, ticket.TicketContent{})
 		return false
 	}
 
@@ -569,6 +570,7 @@ func (ts *TicketService) indexTicketEvent(state *roomState, event messaging.Even
 	}
 
 	state.index.Put(ticketID, content)
+	ts.notifySubscribers(roomID, "put", ticketID, content)
 	return true
 }
 
@@ -589,6 +591,7 @@ func (ts *TicketService) putWithEcho(ctx context.Context, roomID ref.RoomID, sta
 	}
 	state.pendingEchoes[ticketID] = eventID
 	state.index.Put(ticketID, content)
+	ts.notifySubscribers(roomID, "put", ticketID, content)
 	return nil
 }
 

@@ -58,6 +58,7 @@ go_test(
         "//lib/schema/ticket",
         "//lib/service",
         "//lib/servicetoken",
+        "//lib/testutil",
         "//lib/ticketindex",
         "//messaging",
     ],

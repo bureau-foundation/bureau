@@ -36,10 +36,11 @@ func testRoomID(raw string) ref.RoomID {
 // make network calls (leave handling, tombstone detection, etc.).
 func newTestService() *TicketService {
 	return &TicketService{
-		clock:     clock.Real(),
-		startedAt: time.Date(2026, 1, 1, 12, 0, 0, 0, time.UTC),
-		rooms:     make(map[ref.RoomID]*roomState),
-		logger:    slog.New(slog.NewTextHandler(io.Discard, nil)),
+		clock:       clock.Real(),
+		startedAt:   time.Date(2026, 1, 1, 12, 0, 0, 0, time.UTC),
+		rooms:       make(map[ref.RoomID]*roomState),
+		subscribers: make(map[ref.RoomID][]*subscriber),
+		logger:      slog.New(slog.NewTextHandler(io.Discard, nil)),
 	}
 }
 
@@ -472,7 +473,7 @@ func TestPendingEchoSkipsStaleEvent(t *testing.T) {
 		Content:  staleContent,
 	}
 
-	indexed := ts.indexTicketEvent(state, staleEvent)
+	indexed := ts.indexTicketEvent(testRoomID("!room:local"), state, staleEvent)
 
 	if indexed {
 		t.Fatal("stale event should not have been indexed")
@@ -521,7 +522,7 @@ func TestPendingEchoClearsOnEchoArrival(t *testing.T) {
 		Content:  echoContent,
 	}
 
-	indexed := ts.indexTicketEvent(state, echoEvent)
+	indexed := ts.indexTicketEvent(testRoomID("!room:local"), state, echoEvent)
 
 	if !indexed {
 		t.Fatal("echo event should have been indexed")
@@ -553,7 +554,7 @@ func TestPendingEchoAllowsEventsAfterEcho(t *testing.T) {
 		Type: "task", CreatedAt: "2026-01-01T00:00:00Z",
 		UpdatedAt: "2026-01-02T00:00:00Z", ClosedAt: "2026-01-02T00:00:00Z",
 	})
-	ts.indexTicketEvent(state, messaging.Event{
+	ts.indexTicketEvent(testRoomID("!room:local"), state, messaging.Event{
 		EventID:  ref.MustParseEventID("$echo-event-id"),
 		Type:     schema.EventTypeTicket,
 		StateKey: stringPtr("tkt-1"),
@@ -574,7 +575,7 @@ func TestPendingEchoAllowsEventsAfterEcho(t *testing.T) {
 		Content:  reopenContent,
 	}
 
-	indexed := ts.indexTicketEvent(state, reopenEvent)
+	indexed := ts.indexTicketEvent(testRoomID("!room:local"), state, reopenEvent)
 
 	if !indexed {
 		t.Fatal("post-echo event should have been indexed")
@@ -616,7 +617,7 @@ func TestPendingEchoLatestWriteWins(t *testing.T) {
 		Type: "task", Assignee: ref.MustParseUserID("@alice:bureau.local"),
 		CreatedAt: "2026-01-01T00:00:00Z", UpdatedAt: "2026-01-02T00:00:00Z",
 	})
-	indexed := ts.indexTicketEvent(state, messaging.Event{
+	indexed := ts.indexTicketEvent(testRoomID("!room:local"), state, messaging.Event{
 		EventID:  ref.MustParseEventID("$claim-event-id"),
 		Type:     schema.EventTypeTicket,
 		StateKey: stringPtr("tkt-1"),
@@ -638,7 +639,7 @@ func TestPendingEchoLatestWriteWins(t *testing.T) {
 		Type: "task", CreatedAt: "2026-01-01T00:00:00Z",
 		UpdatedAt: "2026-01-02T01:00:00Z", ClosedAt: "2026-01-02T01:00:00Z",
 	})
-	indexed = ts.indexTicketEvent(state, messaging.Event{
+	indexed = ts.indexTicketEvent(testRoomID("!room:local"), state, messaging.Event{
 		EventID:  ref.MustParseEventID("$close-event-id"),
 		Type:     schema.EventTypeTicket,
 		StateKey: stringPtr("tkt-1"),
@@ -668,7 +669,7 @@ func TestPendingEchoNoEffectWithoutPending(t *testing.T) {
 		CreatedAt: "2026-01-01T00:00:00Z", UpdatedAt: "2026-01-02T00:00:00Z",
 	})
 
-	indexed := ts.indexTicketEvent(state, messaging.Event{
+	indexed := ts.indexTicketEvent(testRoomID("!room:local"), state, messaging.Event{
 		EventID:  ref.MustParseEventID("$normal-event-id"),
 		Type:     schema.EventTypeTicket,
 		StateKey: stringPtr("tkt-1"),
@@ -690,11 +691,12 @@ func TestPendingEchoNoEffectWithoutPending(t *testing.T) {
 func TestPutWithEchoRecordsEcho(t *testing.T) {
 	writer := &fakeWriterForEchoTest{}
 	ts := &TicketService{
-		writer:    writer,
-		clock:     clock.Real(),
-		startedAt: time.Date(2026, 1, 1, 12, 0, 0, 0, time.UTC),
-		rooms:     make(map[ref.RoomID]*roomState),
-		logger:    slog.New(slog.NewTextHandler(io.Discard, nil)),
+		writer:      writer,
+		clock:       clock.Real(),
+		startedAt:   time.Date(2026, 1, 1, 12, 0, 0, 0, time.UTC),
+		rooms:       make(map[ref.RoomID]*roomState),
+		subscribers: make(map[ref.RoomID][]*subscriber),
+		logger:      slog.New(slog.NewTextHandler(io.Discard, nil)),
 	}
 
 	state := newTrackedRoom(nil)

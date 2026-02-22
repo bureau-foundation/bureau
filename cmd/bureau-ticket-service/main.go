@@ -64,6 +64,7 @@ func run() error {
 		startedAt:     boot.Clock.Now(),
 		rooms:         make(map[ref.RoomID]*roomState),
 		aliasCache:    make(map[ref.RoomAlias]ref.RoomID),
+		subscribers:   make(map[ref.RoomID][]*subscriber),
 		timerNotify:   make(chan struct{}, 1),
 		logger:        boot.Logger,
 	}
@@ -172,6 +173,14 @@ type TicketService struct {
 	// at the heap minimum. Nil when the heap is empty or no timer
 	// is scheduled. Protected by mu.
 	timerFunc *clock.Timer
+
+	// subscribers maps room IDs to active subscribe-stream
+	// subscribers. Notification hooks in putWithEcho and
+	// indexTicketEvent dispatch events to these subscribers via
+	// notifySubscribers. Protected by mu (write lock for
+	// add/remove, write lock for notify since it may remove
+	// disconnected subscribers).
+	subscribers map[ref.RoomID][]*subscriber
 
 	logger *slog.Logger
 }

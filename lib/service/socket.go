@@ -37,6 +37,22 @@ type ActionFunc func(ctx context.Context, raw []byte) (any, error)
 // fields to identify the caller and make authorization decisions.
 type AuthActionFunc func(ctx context.Context, token *servicetoken.Token, raw []byte) (any, error)
 
+// AuthStreamFunc processes a long-lived authenticated stream. After
+// the initial CBOR handshake (request decoding and token verification),
+// the handler takes full ownership of the connection: it may read and
+// write freely and blocks until the stream should end.
+//
+// The raw parameter is the initial CBOR request (including action and
+// token fields). The token has been verified. The context cancels when
+// the server shuts down. The connection is closed by the server after
+// the handler returns — the handler must not close it.
+//
+// Unlike ActionFunc and AuthActionFunc, the server does not write a
+// response for stream handlers. The handler is responsible for all
+// writes to the connection (e.g., snapshot frames, live events,
+// heartbeats).
+type AuthStreamFunc func(ctx context.Context, token *servicetoken.Token, raw []byte, conn net.Conn)
+
 // AuthConfig holds the cryptographic material needed to verify
 // service tokens on incoming requests. All fields are required.
 type AuthConfig struct {
@@ -70,19 +86,27 @@ type Response struct {
 }
 
 // SocketServer serves a CBOR request-response protocol on a Unix
-// socket. Each connection handles exactly one request-response cycle:
+// socket. Most connections handle exactly one request-response cycle:
 // the client writes a CBOR value, the server processes it and writes
 // a CBOR response, then the connection closes.
 //
-// Actions are registered with Handle (unauthenticated) or HandleAuth
-// (authenticated, requires a valid service token) before calling
-// Serve. Unknown actions receive an error response.
+// Stream handlers (registered via HandleAuthStream) are an exception:
+// the handler takes ownership of the connection after the initial CBOR
+// handshake and may read/write freely for the connection's lifetime.
+// This supports protocols like subscribe where the server streams
+// events until the client disconnects.
+//
+// Actions are registered with Handle (unauthenticated), HandleAuth
+// (authenticated request-response), or HandleAuthStream (authenticated
+// long-lived stream) before calling Serve. Unknown actions receive an
+// error response.
 type SocketServer struct {
-	socketPath   string
-	handlers     map[string]ActionFunc
-	authHandlers map[string]AuthActionFunc
-	authConfig   *AuthConfig
-	logger       *slog.Logger
+	socketPath     string
+	handlers       map[string]ActionFunc
+	authHandlers   map[string]AuthActionFunc
+	streamHandlers map[string]AuthStreamFunc
+	authConfig     *AuthConfig
+	logger         *slog.Logger
 
 	// activeConnections tracks in-flight request handlers for graceful
 	// shutdown. Serve waits for all active connections to complete
@@ -110,11 +134,12 @@ func NewSocketServer(socketPath string, logger *slog.Logger, authConfig *AuthCon
 		}
 	}
 	return &SocketServer{
-		socketPath:   socketPath,
-		handlers:     make(map[string]ActionFunc),
-		authHandlers: make(map[string]AuthActionFunc),
-		authConfig:   authConfig,
-		logger:       logger,
+		socketPath:     socketPath,
+		handlers:       make(map[string]ActionFunc),
+		authHandlers:   make(map[string]AuthActionFunc),
+		streamHandlers: make(map[string]AuthStreamFunc),
+		authConfig:     authConfig,
+		logger:         logger,
 	}
 }
 
@@ -142,13 +167,32 @@ func (s *SocketServer) HandleAuth(action string, handler AuthActionFunc) {
 	s.authHandlers[action] = handler
 }
 
+// HandleAuthStream registers an authenticated stream handler for the
+// given action name. After verifying the service token, the server
+// passes the connection to the handler, which takes ownership and
+// blocks until the stream ends. The server clears read/write deadlines
+// before calling the handler (stream connections are long-lived).
+//
+// Panics if no AuthConfig was provided to NewSocketServer, or if the
+// action is already registered.
+func (s *SocketServer) HandleAuthStream(action string, handler AuthStreamFunc) {
+	if s.authConfig == nil {
+		panic("service.SocketServer: HandleAuthStream requires AuthConfig")
+	}
+	s.checkActionAvailable(action)
+	s.streamHandlers[action] = handler
+}
+
 // checkActionAvailable panics if the action name is already
-// registered in either handler map.
+// registered in any handler map.
 func (s *SocketServer) checkActionAvailable(action string) {
 	if _, exists := s.handlers[action]; exists {
 		panic(fmt.Sprintf("service.SocketServer: duplicate handler for action %q", action))
 	}
 	if _, exists := s.authHandlers[action]; exists {
+		panic(fmt.Sprintf("service.SocketServer: duplicate handler for action %q", action))
+	}
+	if _, exists := s.streamHandlers[action]; exists {
 		panic(fmt.Sprintf("service.SocketServer: duplicate handler for action %q", action))
 	}
 }
@@ -265,32 +309,59 @@ func (s *SocketServer) handleConnection(ctx context.Context, conn net.Conn) {
 		return
 	}
 
-	// Try authenticated handler.
-	authHandler, exists := s.authHandlers[header.Action]
-	if !exists {
-		s.writeError(conn, fmt.Sprintf("unknown action %q", header.Action))
+	// Try authenticated request-response handler.
+	if authHandler, exists := s.authHandlers[header.Action]; exists {
+		token, err := s.verifyRequestToken(raw, header.Action)
+		if err != nil {
+			s.writeError(conn, err.Error())
+			return
+		}
+
+		result, err := authHandler(ctx, token, []byte(raw))
+		if err != nil {
+			s.logger.Debug("action failed",
+				"action", header.Action,
+				"subject", token.Subject,
+				"error", err,
+			)
+			s.writeError(conn, err.Error())
+			return
+		}
+
+		s.writeSuccess(conn, result)
 		return
 	}
 
-	// Verify the service token before dispatching.
-	token, err := s.verifyRequestToken(raw, header.Action)
-	if err != nil {
-		s.writeError(conn, err.Error())
-		return
-	}
+	// Try authenticated stream handler. Stream handlers take
+	// ownership of the connection: the server clears deadlines
+	// and does not write a response. The handler blocks until
+	// the stream ends.
+	if streamHandler, exists := s.streamHandlers[header.Action]; exists {
+		token, err := s.verifyRequestToken(raw, header.Action)
+		if err != nil {
+			s.writeError(conn, err.Error())
+			return
+		}
 
-	result, err := authHandler(ctx, token, []byte(raw))
-	if err != nil {
-		s.logger.Debug("action failed",
+		// Clear deadlines — stream connections are long-lived.
+		conn.SetReadDeadline(time.Time{})
+		conn.SetWriteDeadline(time.Time{})
+
+		s.logger.Info("stream handler started",
 			"action", header.Action,
 			"subject", token.Subject,
-			"error", err,
 		)
-		s.writeError(conn, err.Error())
+
+		streamHandler(ctx, token, []byte(raw), conn)
+
+		s.logger.Info("stream handler ended",
+			"action", header.Action,
+			"subject", token.Subject,
+		)
 		return
 	}
 
-	s.writeSuccess(conn, result)
+	s.writeError(conn, fmt.Sprintf("unknown action %q", header.Action))
 }
 
 // VerifyRequestToken extracts the "token" field from a CBOR request,

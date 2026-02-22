@@ -912,6 +912,306 @@ func TestSocketServerAuthWrongAudience(t *testing.T) {
 	wg.Wait()
 }
 
+// --- Stream handler tests ---
+
+func TestSocketServerStreamHandler(t *testing.T) {
+	socketPath := testSocketPath(t)
+	authConfig, privateKey := testAuthConfig(t)
+	server := NewSocketServer(socketPath, testLogger(), authConfig)
+
+	// Stream handler writes three CBOR values then returns.
+	server.HandleAuthStream("subscribe", func(ctx context.Context, token *servicetoken.Token, raw []byte, conn net.Conn) {
+		encoder := codec.NewEncoder(conn)
+		for i := range 3 {
+			if err := encoder.Encode(map[string]any{
+				"sequence": i,
+				"subject":  token.Subject.String(),
+			}); err != nil {
+				return
+			}
+		}
+	})
+
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+
+	var wg sync.WaitGroup
+	wg.Add(1)
+	go func() {
+		defer wg.Done()
+		server.Serve(ctx)
+	}()
+
+	waitForSocket(t, socketPath)
+
+	// Connect and send the subscribe request.
+	tokenBytes := mintTestToken(t, privateKey, "agent/viewer")
+	conn, err := net.DialTimeout("unix", socketPath, 5*time.Second)
+	if err != nil {
+		t.Fatalf("connecting: %v", err)
+	}
+	defer conn.Close()
+
+	if err := codec.NewEncoder(conn).Encode(map[string]any{
+		"action": "subscribe",
+		"token":  tokenBytes,
+	}); err != nil {
+		t.Fatalf("writing request: %v", err)
+	}
+
+	// Read three CBOR values from the stream.
+	decoder := codec.NewDecoder(conn)
+	wantSubject := "@bureau/fleet/test/agent/viewer:test.local"
+	for i := range 3 {
+		var frame map[string]any
+		if err := decoder.Decode(&frame); err != nil {
+			t.Fatalf("reading frame %d: %v", i, err)
+		}
+		if frame["sequence"] != uint64(i) {
+			t.Errorf("frame %d: expected sequence=%d, got %v", i, i, frame["sequence"])
+		}
+		if frame["subject"] != wantSubject {
+			t.Errorf("frame %d: expected subject=%s, got %v", i, wantSubject, frame["subject"])
+		}
+	}
+
+	cancel()
+	wg.Wait()
+}
+
+func TestSocketServerStreamHandlerAuthFailure(t *testing.T) {
+	socketPath := testSocketPath(t)
+	authConfig, _ := testAuthConfig(t)
+	server := NewSocketServer(socketPath, testLogger(), authConfig)
+
+	server.HandleAuthStream("subscribe", func(ctx context.Context, token *servicetoken.Token, raw []byte, conn net.Conn) {
+		t.Error("stream handler should not be called without a valid token")
+	})
+
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+
+	var wg sync.WaitGroup
+	wg.Add(1)
+	go func() {
+		defer wg.Done()
+		server.Serve(ctx)
+	}()
+
+	waitForSocket(t, socketPath)
+
+	// Send request without a token — should get an error response.
+	response := sendRequest(t, socketPath, map[string]string{"action": "subscribe"})
+	if response.OK {
+		t.Errorf("expected ok=false, got true")
+	}
+	if !strings.Contains(response.Error, "missing token field") {
+		t.Errorf("expected 'missing token field' in error, got %q", response.Error)
+	}
+
+	cancel()
+	wg.Wait()
+}
+
+func TestSocketServerStreamHandlerGracefulShutdown(t *testing.T) {
+	socketPath := testSocketPath(t)
+	authConfig, privateKey := testAuthConfig(t)
+	server := NewSocketServer(socketPath, testLogger(), authConfig)
+
+	// Stream handler blocks until context cancels.
+	handlerStarted := make(chan struct{})
+	server.HandleAuthStream("subscribe", func(ctx context.Context, token *servicetoken.Token, raw []byte, conn net.Conn) {
+		close(handlerStarted)
+		<-ctx.Done()
+		// Write a final frame after shutdown signal.
+		codec.NewEncoder(conn).Encode(map[string]any{"type": "shutdown"})
+	})
+
+	ctx, cancel := context.WithCancel(context.Background())
+
+	serveDone := make(chan error, 1)
+	go func() {
+		serveDone <- server.Serve(ctx)
+	}()
+
+	waitForSocket(t, socketPath)
+
+	// Connect and start the stream.
+	tokenBytes := mintTestToken(t, privateKey, "agent/viewer")
+	conn, err := net.DialTimeout("unix", socketPath, 5*time.Second)
+	if err != nil {
+		t.Fatalf("connecting: %v", err)
+	}
+	defer conn.Close()
+
+	if err := codec.NewEncoder(conn).Encode(map[string]any{
+		"action": "subscribe",
+		"token":  tokenBytes,
+	}); err != nil {
+		t.Fatalf("writing request: %v", err)
+	}
+
+	// Wait for the handler to start, then cancel.
+	<-handlerStarted
+	cancel()
+
+	// The handler should write its shutdown frame.
+	var frame map[string]any
+	if err := codec.NewDecoder(conn).Decode(&frame); err != nil {
+		t.Fatalf("reading shutdown frame: %v", err)
+	}
+	if frame["type"] != "shutdown" {
+		t.Errorf("expected type=shutdown, got %v", frame["type"])
+	}
+
+	// Serve should return after the stream handler completes.
+	if err := testutil.RequireReceive(t, serveDone, 5*time.Second, "Serve did not return after cancellation"); err != nil {
+		t.Errorf("Serve returned error: %v", err)
+	}
+}
+
+func TestSocketServerHandleAuthStreamPanicsWithoutConfig(t *testing.T) {
+	server := NewSocketServer("/tmp/test.sock", testLogger(), nil)
+
+	defer func() {
+		r := recover()
+		if r == nil {
+			t.Error("expected panic when calling HandleAuthStream without AuthConfig")
+		}
+		message, ok := r.(string)
+		if !ok || !strings.Contains(message, "HandleAuthStream requires AuthConfig") {
+			t.Errorf("unexpected panic message: %v", r)
+		}
+	}()
+
+	server.HandleAuthStream("subscribe", func(ctx context.Context, token *servicetoken.Token, raw []byte, conn net.Conn) {})
+}
+
+func TestSocketServerDuplicateStreamAction(t *testing.T) {
+	authConfig, _ := testAuthConfig(t)
+
+	// Stream-stream duplicate.
+	t.Run("stream-stream", func(t *testing.T) {
+		server := NewSocketServer("/tmp/test.sock", testLogger(), authConfig)
+		server.HandleAuthStream("subscribe", func(ctx context.Context, token *servicetoken.Token, raw []byte, conn net.Conn) {})
+
+		defer func() {
+			if r := recover(); r == nil {
+				t.Error("expected panic on duplicate stream handler")
+			}
+		}()
+
+		server.HandleAuthStream("subscribe", func(ctx context.Context, token *servicetoken.Token, raw []byte, conn net.Conn) {})
+	})
+
+	// Stream-auth duplicate.
+	t.Run("stream-then-auth", func(t *testing.T) {
+		server := NewSocketServer("/tmp/test.sock", testLogger(), authConfig)
+		server.HandleAuthStream("subscribe", func(ctx context.Context, token *servicetoken.Token, raw []byte, conn net.Conn) {})
+
+		defer func() {
+			if r := recover(); r == nil {
+				t.Error("expected panic on stream-then-auth duplicate")
+			}
+		}()
+
+		server.HandleAuth("subscribe", func(ctx context.Context, token *servicetoken.Token, raw []byte) (any, error) {
+			return nil, nil
+		})
+	})
+
+	// Auth-stream duplicate.
+	t.Run("auth-then-stream", func(t *testing.T) {
+		server := NewSocketServer("/tmp/test.sock", testLogger(), authConfig)
+		server.HandleAuth("subscribe", func(ctx context.Context, token *servicetoken.Token, raw []byte) (any, error) {
+			return nil, nil
+		})
+
+		defer func() {
+			if r := recover(); r == nil {
+				t.Error("expected panic on auth-then-stream duplicate")
+			}
+		}()
+
+		server.HandleAuthStream("subscribe", func(ctx context.Context, token *servicetoken.Token, raw []byte, conn net.Conn) {})
+	})
+
+	// Unauth-stream duplicate.
+	t.Run("unauth-then-stream", func(t *testing.T) {
+		server := NewSocketServer("/tmp/test.sock", testLogger(), authConfig)
+		server.Handle("subscribe", func(ctx context.Context, raw []byte) (any, error) {
+			return nil, nil
+		})
+
+		defer func() {
+			if r := recover(); r == nil {
+				t.Error("expected panic on unauth-then-stream duplicate")
+			}
+		}()
+
+		server.HandleAuthStream("subscribe", func(ctx context.Context, token *servicetoken.Token, raw []byte, conn net.Conn) {})
+	})
+}
+
+func TestSocketServerStreamCoexistsWithRequestResponse(t *testing.T) {
+	socketPath := testSocketPath(t)
+	authConfig, privateKey := testAuthConfig(t)
+	server := NewSocketServer(socketPath, testLogger(), authConfig)
+
+	// Register both a request-response handler and a stream handler.
+	server.Handle("status", func(ctx context.Context, raw []byte) (any, error) {
+		return map[string]any{"healthy": true}, nil
+	})
+
+	server.HandleAuthStream("subscribe", func(ctx context.Context, token *servicetoken.Token, raw []byte, conn net.Conn) {
+		codec.NewEncoder(conn).Encode(map[string]any{"type": "hello"})
+	})
+
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+
+	var wg sync.WaitGroup
+	wg.Add(1)
+	go func() {
+		defer wg.Done()
+		server.Serve(ctx)
+	}()
+
+	waitForSocket(t, socketPath)
+
+	// Request-response still works.
+	statusResponse := sendRequest(t, socketPath, map[string]string{"action": "status"})
+	if !statusResponse.OK {
+		t.Fatalf("status: expected ok=true, got false (error: %s)", statusResponse.Error)
+	}
+
+	// Stream handler works.
+	tokenBytes := mintTestToken(t, privateKey, "agent/viewer")
+	conn, err := net.DialTimeout("unix", socketPath, 5*time.Second)
+	if err != nil {
+		t.Fatalf("connecting for subscribe: %v", err)
+	}
+	defer conn.Close()
+
+	if err := codec.NewEncoder(conn).Encode(map[string]any{
+		"action": "subscribe",
+		"token":  tokenBytes,
+	}); err != nil {
+		t.Fatalf("writing subscribe request: %v", err)
+	}
+
+	var frame map[string]any
+	if err := codec.NewDecoder(conn).Decode(&frame); err != nil {
+		t.Fatalf("reading subscribe frame: %v", err)
+	}
+	if frame["type"] != "hello" {
+		t.Errorf("expected type=hello, got %v", frame["type"])
+	}
+
+	cancel()
+	wg.Wait()
+}
+
 // waitForSocket polls until the socket file exists. Bounded by the
 // test context timeout (no wall-clock access).
 func waitForSocket(t *testing.T, path string) {

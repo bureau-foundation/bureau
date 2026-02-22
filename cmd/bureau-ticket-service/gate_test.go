@@ -2775,11 +2775,12 @@ func (f *fakeWriterForGates) SendStateEvent(_ context.Context, roomID ref.RoomID
 // with no writer (suitable for match-only tests that don't call satisfyGate).
 func newGateTestService() *TicketService {
 	return &TicketService{
-		clock:      clock.Fake(time.Date(2026, 1, 15, 12, 0, 0, 0, time.UTC)),
-		startedAt:  time.Date(2026, 1, 1, 12, 0, 0, 0, time.UTC),
-		rooms:      make(map[ref.RoomID]*roomState),
-		aliasCache: make(map[ref.RoomAlias]ref.RoomID),
-		logger:     slog.New(slog.NewTextHandler(io.Discard, nil)),
+		clock:       clock.Fake(time.Date(2026, 1, 15, 12, 0, 0, 0, time.UTC)),
+		startedAt:   time.Date(2026, 1, 1, 12, 0, 0, 0, time.UTC),
+		rooms:       make(map[ref.RoomID]*roomState),
+		subscribers: make(map[ref.RoomID][]*subscriber),
+		aliasCache:  make(map[ref.RoomAlias]ref.RoomID),
+		logger:      slog.New(slog.NewTextHandler(io.Discard, nil)),
 	}
 }
 
@@ -2787,12 +2788,13 @@ func newGateTestService() *TicketService {
 // evaluation tests that also verify Matrix writes.
 func newGateTestServiceWithWriter(writer matrixWriter) *TicketService {
 	return &TicketService{
-		writer:     writer,
-		clock:      clock.Fake(time.Date(2026, 1, 15, 12, 0, 0, 0, time.UTC)),
-		startedAt:  time.Date(2026, 1, 1, 12, 0, 0, 0, time.UTC),
-		rooms:      make(map[ref.RoomID]*roomState),
-		aliasCache: make(map[ref.RoomAlias]ref.RoomID),
-		logger:     slog.New(slog.NewTextHandler(io.Discard, nil)),
+		writer:      writer,
+		clock:       clock.Fake(time.Date(2026, 1, 15, 12, 0, 0, 0, time.UTC)),
+		startedAt:   time.Date(2026, 1, 1, 12, 0, 0, 0, time.UTC),
+		rooms:       make(map[ref.RoomID]*roomState),
+		subscribers: make(map[ref.RoomID][]*subscriber),
+		aliasCache:  make(map[ref.RoomAlias]ref.RoomID),
+		logger:      slog.New(slog.NewTextHandler(io.Discard, nil)),
 	}
 }
 

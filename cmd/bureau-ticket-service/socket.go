@@ -81,6 +81,11 @@ func (ts *TicketService) registerActions(server *service.SocketServer) {
 	server.HandleAuth("resolve-gate", ts.withWriteLock(ts.handleResolveGate))
 	server.HandleAuth("update-gate", ts.withWriteLock(ts.handleUpdateGate))
 	server.HandleAuth("defer", ts.withWriteLock(ts.handleDefer))
+
+	// Stream actions — long-lived authenticated connections. The
+	// handler takes ownership of the connection after the initial
+	// CBOR handshake and manages its own locking.
+	server.HandleAuthStream("subscribe", ts.handleSubscribe)
 }
 
 // statusResponse is the response to the "status" action. Contains

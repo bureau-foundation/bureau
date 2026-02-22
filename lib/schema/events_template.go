@@ -151,7 +151,7 @@ type StartCondition struct {
 	// exist (e.g., "#iree/amdgpu/inference:bureau.local"). The daemon
 	// resolves this to a room ID (cached) before fetching the event.
 	// When empty, the daemon checks the principal's own config room.
-	RoomAlias string `json:"room_alias,omitempty"`
+	RoomAlias ref.RoomAlias `json:"room_alias,omitempty"`
 
 	// ContentMatch specifies criteria that must all be satisfied in the
 	// event content for the condition to pass. When nil or empty, only

@@ -56,7 +56,7 @@ func TestReconcile_StartConditionMet(t *testing.T) {
 				StartCondition: &schema.StartCondition{
 					EventType:    schema.EventTypeWorkspace,
 					StateKey:     "",
-					RoomAlias:    "#iree/amdgpu/inference:test.local",
+					RoomAlias:    ref.MustParseRoomAlias("#iree/amdgpu/inference:test.local"),
 					ContentMatch: schema.ContentMatch{"status": schema.Eq("active")},
 				},
 			},
@@ -113,7 +113,7 @@ func TestReconcile_StartConditionNotMet(t *testing.T) {
 				StartCondition: &schema.StartCondition{
 					EventType:    schema.EventTypeWorkspace,
 					StateKey:     "",
-					RoomAlias:    "#iree/amdgpu/inference:test.local",
+					RoomAlias:    ref.MustParseRoomAlias("#iree/amdgpu/inference:test.local"),
 					ContentMatch: schema.ContentMatch{"status": schema.Eq("active")},
 				},
 			},
@@ -169,7 +169,7 @@ func TestReconcile_StartConditionDeferredThenLaunches(t *testing.T) {
 				StartCondition: &schema.StartCondition{
 					EventType:    schema.EventTypeWorkspace,
 					StateKey:     "",
-					RoomAlias:    "#iree/amdgpu/inference:test.local",
+					RoomAlias:    ref.MustParseRoomAlias("#iree/amdgpu/inference:test.local"),
 					ContentMatch: schema.ContentMatch{"status": schema.Eq("active")},
 				},
 			},
@@ -343,7 +343,7 @@ func TestReconcile_StartConditionUnresolvableAlias(t *testing.T) {
 				StartCondition: &schema.StartCondition{
 					EventType: schema.EventTypeWorkspace,
 					StateKey:  "",
-					RoomAlias: "#nonexistent/room:test.local",
+					RoomAlias: ref.MustParseRoomAlias("#nonexistent/room:test.local"),
 				},
 			},
 		},
@@ -408,7 +408,7 @@ func TestReconcile_StartConditionContentMismatch(t *testing.T) {
 				StartCondition: &schema.StartCondition{
 					EventType:    schema.EventTypeWorkspace,
 					StateKey:     "",
-					RoomAlias:    "#iree/amdgpu/inference:test.local",
+					RoomAlias:    ref.MustParseRoomAlias("#iree/amdgpu/inference:test.local"),
 					ContentMatch: schema.ContentMatch{"status": schema.Eq("active")},
 				},
 			},
@@ -491,7 +491,7 @@ func TestReconcile_ContentMatchArrayContains(t *testing.T) {
 				StartCondition: &schema.StartCondition{
 					EventType:    schema.EventTypeTicket,
 					StateKey:     "TICKET-1",
-					RoomAlias:    "#tickets:test.local",
+					RoomAlias:    ref.MustParseRoomAlias("#tickets:test.local"),
 					ContentMatch: schema.ContentMatch{"labels": schema.Eq("bug")},
 				},
 			},
@@ -551,7 +551,7 @@ func TestReconcile_ContentMatchArrayDoesNotContain(t *testing.T) {
 				StartCondition: &schema.StartCondition{
 					EventType:    schema.EventTypeTicket,
 					StateKey:     "TICKET-2",
-					RoomAlias:    "#tickets:test.local",
+					RoomAlias:    ref.MustParseRoomAlias("#tickets:test.local"),
 					ContentMatch: schema.ContentMatch{"labels": schema.Eq("security")},
 				},
 			},
@@ -611,7 +611,7 @@ func TestReconcile_ContentMatchArrayWithNonStringElements(t *testing.T) {
 				StartCondition: &schema.StartCondition{
 					EventType:    schema.EventTypeTicket,
 					StateKey:     "TICKET-3",
-					RoomAlias:    "#tickets:test.local",
+					RoomAlias:    ref.MustParseRoomAlias("#tickets:test.local"),
 					ContentMatch: schema.ContentMatch{"labels": schema.Eq("42")},
 				},
 			},
@@ -671,7 +671,7 @@ func TestReconcile_ContentMatchMixedStringAndArray(t *testing.T) {
 				StartCondition: &schema.StartCondition{
 					EventType:    schema.EventTypeTicket,
 					StateKey:     "TICKET-4",
-					RoomAlias:    "#tickets:test.local",
+					RoomAlias:    ref.MustParseRoomAlias("#tickets:test.local"),
 					ContentMatch: schema.ContentMatch{"status": schema.Eq("open"), "labels": schema.Eq("security")},
 				},
 			},
@@ -730,7 +730,7 @@ func TestReconcile_ContentMatchMixedStringAndArray_PartialFail(t *testing.T) {
 				StartCondition: &schema.StartCondition{
 					EventType:    schema.EventTypeTicket,
 					StateKey:     "TICKET-5",
-					RoomAlias:    "#tickets:test.local",
+					RoomAlias:    ref.MustParseRoomAlias("#tickets:test.local"),
 					ContentMatch: schema.ContentMatch{"status": schema.Eq("open"), "labels": schema.Eq("security")},
 				},
 			},
@@ -788,7 +788,7 @@ func TestReconcile_ContentMatchEmptyArray(t *testing.T) {
 				StartCondition: &schema.StartCondition{
 					EventType:    schema.EventTypeTicket,
 					StateKey:     "TICKET-6",
-					RoomAlias:    "#tickets:test.local",
+					RoomAlias:    ref.MustParseRoomAlias("#tickets:test.local"),
 					ContentMatch: schema.ContentMatch{"labels": schema.Eq("bug")},
 				},
 			},
@@ -852,7 +852,7 @@ func TestReconcile_RunningPrincipalStoppedWhenConditionFails(t *testing.T) {
 				StartCondition: &schema.StartCondition{
 					EventType:    schema.EventTypeWorkspace,
 					StateKey:     "",
-					RoomAlias:    "#iree/amdgpu/inference:test.local",
+					RoomAlias:    ref.MustParseRoomAlias("#iree/amdgpu/inference:test.local"),
 					ContentMatch: schema.ContentMatch{"status": schema.Eq("active")},
 				},
 			},
@@ -941,7 +941,7 @@ func TestReconcile_ConditionFalseDoesNotStopUnconditionedPrincipal(t *testing.T)
 				StartCondition: &schema.StartCondition{
 					EventType:    schema.EventTypeWorkspace,
 					StateKey:     "",
-					RoomAlias:    "#iree/amdgpu/inference:test.local",
+					RoomAlias:    ref.MustParseRoomAlias("#iree/amdgpu/inference:test.local"),
 					ContentMatch: schema.ContentMatch{"status": schema.Eq("active")},
 				},
 			},
@@ -1046,7 +1046,7 @@ func TestReconcile_TriggerContentPassedToLauncher(t *testing.T) {
 				StartCondition: &schema.StartCondition{
 					EventType:    schema.EventTypeWorkspace,
 					StateKey:     "",
-					RoomAlias:    "#iree/amdgpu/inference:test.local",
+					RoomAlias:    ref.MustParseRoomAlias("#iree/amdgpu/inference:test.local"),
 					ContentMatch: schema.ContentMatch{"status": schema.Eq("teardown")},
 				},
 			},
@@ -1279,7 +1279,7 @@ func TestReconcile_ArrayContainmentTriggerContent(t *testing.T) {
 				StartCondition: &schema.StartCondition{
 					EventType:    schema.EventTypeTicket,
 					StateKey:     "TICKET-100",
-					RoomAlias:    "#tickets:test.local",
+					RoomAlias:    ref.MustParseRoomAlias("#tickets:test.local"),
 					ContentMatch: schema.ContentMatch{"labels": schema.Eq("urgent")},
 				},
 			},
@@ -1428,7 +1428,7 @@ func TestReconcile_ArrayContainmentDeferredThenLaunches(t *testing.T) {
 				StartCondition: &schema.StartCondition{
 					EventType:    schema.EventTypeTicket,
 					StateKey:     "TICKET-200",
-					RoomAlias:    "#tickets:test.local",
+					RoomAlias:    ref.MustParseRoomAlias("#tickets:test.local"),
 					ContentMatch: schema.ContentMatch{"labels": schema.Eq("reviewed")},
 				},
 			},
@@ -1515,7 +1515,7 @@ func TestReconcile_ArrayContainmentRunningPrincipalStopped(t *testing.T) {
 				StartCondition: &schema.StartCondition{
 					EventType:    schema.EventTypeTicket,
 					StateKey:     "TICKET-300",
-					RoomAlias:    "#tickets:test.local",
+					RoomAlias:    ref.MustParseRoomAlias("#tickets:test.local"),
 					ContentMatch: schema.ContentMatch{"tags": schema.Eq("active")},
 				},
 			},
@@ -1602,7 +1602,7 @@ func TestReconcile_ArrayContainmentMultiplePrincipals(t *testing.T) {
 				StartCondition: &schema.StartCondition{
 					EventType:    schema.EventTypeTicket,
 					StateKey:     "TICKET-400",
-					RoomAlias:    "#tickets:test.local",
+					RoomAlias:    ref.MustParseRoomAlias("#tickets:test.local"),
 					ContentMatch: schema.ContentMatch{"labels": schema.Eq("bug")},
 				},
 			},
@@ -1613,7 +1613,7 @@ func TestReconcile_ArrayContainmentMultiplePrincipals(t *testing.T) {
 				StartCondition: &schema.StartCondition{
 					EventType:    schema.EventTypeTicket,
 					StateKey:     "TICKET-400",
-					RoomAlias:    "#tickets:test.local",
+					RoomAlias:    ref.MustParseRoomAlias("#tickets:test.local"),
 					ContentMatch: schema.ContentMatch{"labels": schema.Eq("frontend")},
 				},
 			},
@@ -1624,7 +1624,7 @@ func TestReconcile_ArrayContainmentMultiplePrincipals(t *testing.T) {
 				StartCondition: &schema.StartCondition{
 					EventType:    schema.EventTypeTicket,
 					StateKey:     "TICKET-400",
-					RoomAlias:    "#tickets:test.local",
+					RoomAlias:    ref.MustParseRoomAlias("#tickets:test.local"),
 					ContentMatch: schema.ContentMatch{"labels": schema.Eq("backend")},
 				},
 			},
@@ -1720,7 +1720,7 @@ func TestReconcile_ArrayContainmentFieldTypeChangesToArray(t *testing.T) {
 				StartCondition: &schema.StartCondition{
 					EventType:    schema.EventTypeTicket,
 					StateKey:     "TICKET-500",
-					RoomAlias:    "#tickets:test.local",
+					RoomAlias:    ref.MustParseRoomAlias("#tickets:test.local"),
 					ContentMatch: schema.ContentMatch{"category": schema.Eq("infrastructure")},
 				},
 			},

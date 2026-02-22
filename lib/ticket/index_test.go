@@ -1203,7 +1203,7 @@ func TestWatchedGatesSkipsCrossRoomGates(t *testing.T) {
 	tc := makeTicket("Cross-room gated")
 	tc.Gates = []schema.TicketGate{
 		{ID: "cross", Type: "state_event", Status: "pending",
-			EventType: "m.bureau.workspace", RoomAlias: "#other:local"},
+			EventType: "m.bureau.workspace", RoomAlias: ref.MustParseRoomAlias("#other:local")},
 	}
 	idx.Put("tkt-a", tc)
 

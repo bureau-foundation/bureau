@@ -176,7 +176,7 @@ func matchTicketGate(gate *schema.TicketGate, event messaging.Event) bool {
 // same-room state_event gate. Gates with RoomAlias set are cross-room
 // and evaluated separately by evaluateCrossRoomGates.
 func matchStateEventGate(gate *schema.TicketGate, event messaging.Event) bool {
-	if gate.RoomAlias != "" {
+	if !gate.RoomAlias.IsZero() {
 		return false
 	}
 	return matchStateEventCondition(gate, event)
@@ -253,7 +253,7 @@ func (ts *TicketService) evaluateCrossRoomGates(ctx context.Context, joinedRooms
 		for _, entry := range candidates {
 			for gateIndex := range entry.Content.Gates {
 				gate := &entry.Content.Gates[gateIndex]
-				if gate.Status != "pending" || gate.Type != "state_event" || gate.RoomAlias == "" {
+				if gate.Status != "pending" || gate.Type != "state_event" || gate.RoomAlias.IsZero() {
 					continue
 				}
 
@@ -347,14 +347,9 @@ func collectStateEvents(room messaging.JoinedRoom) []messaging.Event {
 // the result. Cache entries persist for the lifetime of the service.
 // Aliases that fail to resolve are not cached (the room may not exist
 // yet, and a future attempt should retry).
-func (ts *TicketService) resolveAliasWithCache(ctx context.Context, aliasString string) (ref.RoomID, error) {
-	if roomID, cached := ts.aliasCache[aliasString]; cached {
+func (ts *TicketService) resolveAliasWithCache(ctx context.Context, alias ref.RoomAlias) (ref.RoomID, error) {
+	if roomID, cached := ts.aliasCache[alias]; cached {
 		return roomID, nil
-	}
-
-	alias, err := ref.ParseRoomAlias(aliasString)
-	if err != nil {
-		return ref.RoomID{}, fmt.Errorf("invalid room alias %q: %w", aliasString, err)
 	}
 
 	resolved, err := ts.resolver.ResolveAlias(ctx, alias)
@@ -362,7 +357,7 @@ func (ts *TicketService) resolveAliasWithCache(ctx context.Context, aliasString 
 		return ref.RoomID{}, err
 	}
 
-	ts.aliasCache[aliasString] = resolved
+	ts.aliasCache[alias] = resolved
 	return resolved, nil
 }
 

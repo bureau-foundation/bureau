@@ -515,7 +515,7 @@ func watchKeysForGate(gate *schema.TicketGate) []gateWatchKey {
 	case "state_event":
 		// Cross-room gates (RoomAlias set) are evaluated separately
 		// by evaluateCrossRoomGates, not the per-event watch path.
-		if gate.RoomAlias != "" {
+		if !gate.RoomAlias.IsZero() {
 			return nil
 		}
 		if gate.EventType == "" {

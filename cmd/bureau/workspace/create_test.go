@@ -204,8 +204,8 @@ func TestBuildPrincipalAssignments_SetupCondition(t *testing.T) {
 	if condition.StateKey != "" {
 		t.Errorf("condition StateKey = %q, want empty", condition.StateKey)
 	}
-	if condition.RoomAlias != "#iree/amdgpu/inference:bureau.local" {
-		t.Errorf("condition RoomAlias = %q, want %q", condition.RoomAlias, "#iree/amdgpu/inference:bureau.local")
+	if condition.RoomAlias != ref.MustParseRoomAlias("#iree/amdgpu/inference:bureau.local") {
+		t.Errorf("condition RoomAlias = %s, want %s", condition.RoomAlias, "#iree/amdgpu/inference:bureau.local")
 	}
 	if condition.ContentMatch["status"].StringValue() != "pending" {
 		t.Errorf("condition ContentMatch[\"status\"] = %q, want %q", condition.ContentMatch["status"].StringValue(), "pending")
@@ -244,8 +244,8 @@ func TestBuildPrincipalAssignments_TeardownCondition(t *testing.T) {
 	if condition.StateKey != "" {
 		t.Errorf("condition StateKey = %q, want empty", condition.StateKey)
 	}
-	if condition.RoomAlias != "#iree/amdgpu/inference:bureau.local" {
-		t.Errorf("condition RoomAlias = %q, want %q", condition.RoomAlias, "#iree/amdgpu/inference:bureau.local")
+	if condition.RoomAlias != ref.MustParseRoomAlias("#iree/amdgpu/inference:bureau.local") {
+		t.Errorf("condition RoomAlias = %s, want %s", condition.RoomAlias, "#iree/amdgpu/inference:bureau.local")
 	}
 	if condition.ContentMatch["status"].StringValue() != "teardown" {
 		t.Errorf("condition ContentMatch[\"status\"] = %q, want %q", condition.ContentMatch["status"].StringValue(), "teardown")

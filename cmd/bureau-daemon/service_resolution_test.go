@@ -265,7 +265,7 @@ func TestReconcile_ServiceMountsWorkspaceRoom(t *testing.T) {
 				StartCondition: &schema.StartCondition{
 					EventType:    schema.EventTypeWorkspace,
 					StateKey:     "",
-					RoomAlias:    "#iree/amdgpu/inference:test.local",
+					RoomAlias:    ref.MustParseRoomAlias("#iree/amdgpu/inference:test.local"),
 					ContentMatch: schema.ContentMatch{"status": schema.Eq("active")},
 				},
 			},

@@ -316,7 +316,7 @@ type TicketGate struct {
 
 	// RoomAlias is the room to watch (type "state_event"). When
 	// empty, watches the ticket's own room.
-	RoomAlias string `json:"room_alias,omitempty"`
+	RoomAlias ref.RoomAlias `json:"room_alias,omitempty"`
 
 	// ContentMatch specifies criteria that must be satisfied in the
 	// watched event's content (type "state_event"). Same semantics

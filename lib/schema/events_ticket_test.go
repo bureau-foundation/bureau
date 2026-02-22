@@ -643,7 +643,7 @@ func TestTicketGateRoundTrip(t *testing.T) {
 				Status:    "pending",
 				EventType: "m.bureau.workspace",
 				StateKey:  "",
-				RoomAlias: "#iree/amdgpu/inference:bureau.local",
+				RoomAlias: ref.MustParseRoomAlias("#iree/amdgpu/inference:bureau.local"),
 				ContentMatch: ContentMatch{
 					"status": Eq("active"),
 				},
@@ -775,7 +775,7 @@ func TestTicketGateOmitsEmptyOptionals(t *testing.T) {
 
 	optionalFields := []string{
 		"description", "pipeline_ref", "conclusion", "event_type",
-		"state_key", "room_alias", "content_match", "ticket_id",
+		"state_key", "content_match", "ticket_id",
 		"duration", "target", "base", "schedule", "interval",
 		"last_fired_at", "fire_count", "max_occurrences",
 		"created_at", "satisfied_at", "satisfied_by",
@@ -784,6 +784,11 @@ func TestTicketGateOmitsEmptyOptionals(t *testing.T) {
 		if _, exists := raw[field]; exists {
 			t.Errorf("%s should be omitted when empty, but is present", field)
 		}
+	}
+	// ref.RoomAlias implements TextMarshaler, so omitempty serializes
+	// the zero value as "" rather than omitting the field entirely.
+	if value, exists := raw["room_alias"]; exists && value != "" {
+		t.Errorf("room_alias should be empty string for zero value, got %v", value)
 	}
 }
 

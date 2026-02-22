@@ -544,7 +544,7 @@ func TestStartConditionOnPrincipalAssignment(t *testing.T) {
 		StartCondition: &StartCondition{
 			EventType:    "m.bureau.workspace",
 			StateKey:     "",
-			RoomAlias:    "#iree/amdgpu/inference:bureau.local",
+			RoomAlias:    ref.MustParseRoomAlias("#iree/amdgpu/inference:bureau.local"),
 			ContentMatch: ContentMatch{"status": Eq("active")},
 		},
 	}
@@ -587,8 +587,8 @@ func TestStartConditionOnPrincipalAssignment(t *testing.T) {
 	if decoded.StartCondition.StateKey != "" {
 		t.Errorf("StartCondition.StateKey: got %q, want empty", decoded.StartCondition.StateKey)
 	}
-	if decoded.StartCondition.RoomAlias != "#iree/amdgpu/inference:bureau.local" {
-		t.Errorf("StartCondition.RoomAlias: got %q, want %q",
+	if decoded.StartCondition.RoomAlias != ref.MustParseRoomAlias("#iree/amdgpu/inference:bureau.local") {
+		t.Errorf("StartCondition.RoomAlias: got %s, want %s",
 			decoded.StartCondition.RoomAlias, "#iree/amdgpu/inference:bureau.local")
 	}
 	statusMatch, ok := decoded.StartCondition.ContentMatch["status"]
@@ -641,8 +641,10 @@ func TestStartConditionOmitsEmptyRoomAlias(t *testing.T) {
 	}
 	assertField(t, raw, "event_type", "m.bureau.workspace")
 	assertField(t, raw, "state_key", "")
-	if _, exists := raw["room_alias"]; exists {
-		t.Error("room_alias should be omitted when empty")
+	// ref.RoomAlias implements TextMarshaler, so omitempty serializes
+	// the zero value as "" rather than omitting the field entirely.
+	if value, exists := raw["room_alias"]; exists && value != "" {
+		t.Errorf("room_alias should be empty string for zero value, got %v", value)
 	}
 	if _, exists := raw["content_match"]; exists {
 		t.Error("content_match should be omitted when nil")
@@ -653,7 +655,7 @@ func TestStartConditionContentMatchRoundTrip(t *testing.T) {
 	condition := StartCondition{
 		EventType:    "m.bureau.workspace",
 		StateKey:     "",
-		RoomAlias:    "#iree/amdgpu/inference:bureau.local",
+		RoomAlias:    ref.MustParseRoomAlias("#iree/amdgpu/inference:bureau.local"),
 		ContentMatch: ContentMatch{"status": Eq("active")},
 	}
 

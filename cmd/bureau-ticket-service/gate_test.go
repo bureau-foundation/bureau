@@ -360,7 +360,7 @@ func TestMatchStateEventGateSkipsCrossRoom(t *testing.T) {
 		Type:      "state_event",
 		Status:    "pending",
 		EventType: "m.bureau.workspace",
-		RoomAlias: "#other/room:bureau.local",
+		RoomAlias: ref.MustParseRoomAlias("#other/room:bureau.local"),
 	}
 
 	event := messaging.Event{
@@ -502,7 +502,7 @@ func TestFireExpiredTimersSatisfiesExpired(t *testing.T) {
 		writer:     writer,
 		clock:      fakeClock,
 		rooms:      make(map[ref.RoomID]*roomState),
-		aliasCache: make(map[string]ref.RoomID),
+		aliasCache: make(map[ref.RoomAlias]ref.RoomID),
 		logger:     slog.New(slog.NewTextHandler(io.Discard, nil)),
 	}
 
@@ -557,7 +557,7 @@ func TestFireExpiredTimersSkipsUnexpired(t *testing.T) {
 		writer:     writer,
 		clock:      fakeClock,
 		rooms:      make(map[ref.RoomID]*roomState),
-		aliasCache: make(map[string]ref.RoomID),
+		aliasCache: make(map[ref.RoomAlias]ref.RoomID),
 		logger:     slog.New(slog.NewTextHandler(io.Discard, nil)),
 	}
 
@@ -607,7 +607,7 @@ func TestFireExpiredTimersSkipsEmptyTarget(t *testing.T) {
 		writer:     writer,
 		clock:      fakeClock,
 		rooms:      make(map[ref.RoomID]*roomState),
-		aliasCache: make(map[string]ref.RoomID),
+		aliasCache: make(map[ref.RoomAlias]ref.RoomID),
 		logger:     slog.New(slog.NewTextHandler(io.Discard, nil)),
 	}
 
@@ -668,7 +668,7 @@ func TestFireExpiredTimersLazyDeletion(t *testing.T) {
 		writer:     writer,
 		clock:      fakeClock,
 		rooms:      make(map[ref.RoomID]*roomState),
-		aliasCache: make(map[string]ref.RoomID),
+		aliasCache: make(map[ref.RoomAlias]ref.RoomID),
 		logger:     slog.New(slog.NewTextHandler(io.Discard, nil)),
 	}
 
@@ -722,7 +722,7 @@ func TestTimerHeapOrdering(t *testing.T) {
 	ts := &TicketService{
 		clock:      clock.Fake(time.Date(2026, 1, 1, 0, 0, 0, 0, time.UTC)),
 		rooms:      make(map[ref.RoomID]*roomState),
-		aliasCache: make(map[string]ref.RoomID),
+		aliasCache: make(map[ref.RoomAlias]ref.RoomID),
 		logger:     slog.New(slog.NewTextHandler(io.Discard, nil)),
 	}
 
@@ -756,7 +756,7 @@ func TestTimerLoopEndToEnd(t *testing.T) {
 		writer:      writer,
 		clock:       fakeClock,
 		rooms:       make(map[ref.RoomID]*roomState),
-		aliasCache:  make(map[string]ref.RoomID),
+		aliasCache:  make(map[ref.RoomAlias]ref.RoomID),
 		timerNotify: make(chan struct{}, 1),
 		logger:      slog.New(slog.NewTextHandler(io.Discard, nil)),
 	}
@@ -826,7 +826,7 @@ func TestTimerLoopRescheduleOnNewEntry(t *testing.T) {
 		writer:      writer,
 		clock:       fakeClock,
 		rooms:       make(map[ref.RoomID]*roomState),
-		aliasCache:  make(map[string]ref.RoomID),
+		aliasCache:  make(map[ref.RoomAlias]ref.RoomID),
 		timerNotify: make(chan struct{}, 1),
 		logger:      slog.New(slog.NewTextHandler(io.Discard, nil)),
 	}
@@ -928,7 +928,7 @@ func TestSatisfyGateWritesToMatrixAndUpdatesIndex(t *testing.T) {
 		writer:     writer,
 		clock:      fakeClock,
 		rooms:      make(map[ref.RoomID]*roomState),
-		aliasCache: make(map[string]ref.RoomID),
+		aliasCache: make(map[ref.RoomAlias]ref.RoomID),
 		logger:     slog.New(slog.NewTextHandler(io.Discard, nil)),
 	}
 
@@ -1529,7 +1529,7 @@ func TestCrossRoomGateSatisfiedByWatchedRoomEvent(t *testing.T) {
 		clock:      clock.Fake(time.Date(2026, 1, 15, 12, 0, 0, 0, time.UTC)),
 		startedAt:  time.Date(2026, 1, 1, 12, 0, 0, 0, time.UTC),
 		rooms:      make(map[ref.RoomID]*roomState),
-		aliasCache: make(map[string]ref.RoomID),
+		aliasCache: make(map[ref.RoomAlias]ref.RoomID),
 		logger:     slog.New(slog.NewTextHandler(io.Discard, nil)),
 	}
 
@@ -1550,7 +1550,7 @@ func TestCrossRoomGateSatisfiedByWatchedRoomEvent(t *testing.T) {
 					Status:    "pending",
 					EventType: schema.EventTypePipelineResult,
 					StateKey:  "build-check",
-					RoomAlias: "#ci/results:bureau.local",
+					RoomAlias: ref.MustParseRoomAlias("#ci/results:bureau.local"),
 				},
 			},
 		},
@@ -1606,7 +1606,7 @@ func TestCrossRoomGateNoEventsFromWatchedRoom(t *testing.T) {
 		clock:      clock.Fake(time.Date(2026, 1, 15, 12, 0, 0, 0, time.UTC)),
 		startedAt:  time.Date(2026, 1, 1, 12, 0, 0, 0, time.UTC),
 		rooms:      make(map[ref.RoomID]*roomState),
-		aliasCache: make(map[string]ref.RoomID),
+		aliasCache: make(map[ref.RoomAlias]ref.RoomID),
 		logger:     slog.New(slog.NewTextHandler(io.Discard, nil)),
 	}
 
@@ -1625,7 +1625,7 @@ func TestCrossRoomGateNoEventsFromWatchedRoom(t *testing.T) {
 					Type:      "state_event",
 					Status:    "pending",
 					EventType: schema.EventTypePipelineResult,
-					RoomAlias: "#ci/results:bureau.local",
+					RoomAlias: ref.MustParseRoomAlias("#ci/results:bureau.local"),
 				},
 			},
 		},
@@ -1669,7 +1669,7 @@ func TestCrossRoomGateUnresolvableAlias(t *testing.T) {
 		clock:      clock.Fake(time.Date(2026, 1, 15, 12, 0, 0, 0, time.UTC)),
 		startedAt:  time.Date(2026, 1, 1, 12, 0, 0, 0, time.UTC),
 		rooms:      make(map[ref.RoomID]*roomState),
-		aliasCache: make(map[string]ref.RoomID),
+		aliasCache: make(map[ref.RoomAlias]ref.RoomID),
 		logger:     slog.New(slog.NewTextHandler(io.Discard, nil)),
 	}
 
@@ -1688,7 +1688,7 @@ func TestCrossRoomGateUnresolvableAlias(t *testing.T) {
 					Type:      "state_event",
 					Status:    "pending",
 					EventType: schema.EventTypePipelineResult,
-					RoomAlias: "#nonexistent:bureau.local",
+					RoomAlias: ref.MustParseRoomAlias("#nonexistent:bureau.local"),
 				},
 			},
 		},
@@ -1715,12 +1715,12 @@ func TestCrossRoomGateAliasCaching(t *testing.T) {
 		clock:      clock.Fake(time.Date(2026, 1, 15, 12, 0, 0, 0, time.UTC)),
 		startedAt:  time.Date(2026, 1, 1, 12, 0, 0, 0, time.UTC),
 		rooms:      make(map[ref.RoomID]*roomState),
-		aliasCache: make(map[string]ref.RoomID),
+		aliasCache: make(map[ref.RoomAlias]ref.RoomID),
 		logger:     slog.New(slog.NewTextHandler(io.Discard, nil)),
 	}
 
 	// First resolution should call the resolver.
-	roomID, err := ts.resolveAliasWithCache(context.Background(), "#ci/results:bureau.local")
+	roomID, err := ts.resolveAliasWithCache(context.Background(), ref.MustParseRoomAlias("#ci/results:bureau.local"))
 	if err != nil {
 		t.Fatalf("first resolve failed: %v", err)
 	}
@@ -1732,7 +1732,7 @@ func TestCrossRoomGateAliasCaching(t *testing.T) {
 	}
 
 	// Second resolution should use the cache.
-	roomID, err = ts.resolveAliasWithCache(context.Background(), "#ci/results:bureau.local")
+	roomID, err = ts.resolveAliasWithCache(context.Background(), ref.MustParseRoomAlias("#ci/results:bureau.local"))
 	if err != nil {
 		t.Fatalf("cached resolve failed: %v", err)
 	}
@@ -1755,7 +1755,7 @@ func TestCrossRoomGateSkipsSameRoomGates(t *testing.T) {
 		clock:      clock.Fake(time.Date(2026, 1, 15, 12, 0, 0, 0, time.UTC)),
 		startedAt:  time.Date(2026, 1, 1, 12, 0, 0, 0, time.UTC),
 		rooms:      make(map[ref.RoomID]*roomState),
-		aliasCache: make(map[string]ref.RoomID),
+		aliasCache: make(map[ref.RoomAlias]ref.RoomID),
 		logger:     slog.New(slog.NewTextHandler(io.Discard, nil)),
 	}
 
@@ -1823,7 +1823,7 @@ func TestCrossRoomGateSkipsNonStateEventTypes(t *testing.T) {
 		clock:      clock.Fake(time.Date(2026, 1, 15, 12, 0, 0, 0, time.UTC)),
 		startedAt:  time.Date(2026, 1, 1, 12, 0, 0, 0, time.UTC),
 		rooms:      make(map[ref.RoomID]*roomState),
-		aliasCache: make(map[string]ref.RoomID),
+		aliasCache: make(map[ref.RoomAlias]ref.RoomID),
 		logger:     slog.New(slog.NewTextHandler(io.Discard, nil)),
 	}
 
@@ -1886,7 +1886,7 @@ func TestCrossRoomGateContentMatch(t *testing.T) {
 		clock:      clock.Fake(time.Date(2026, 1, 15, 12, 0, 0, 0, time.UTC)),
 		startedAt:  time.Date(2026, 1, 1, 12, 0, 0, 0, time.UTC),
 		rooms:      make(map[ref.RoomID]*roomState),
-		aliasCache: make(map[string]ref.RoomID),
+		aliasCache: make(map[ref.RoomAlias]ref.RoomID),
 		logger:     slog.New(slog.NewTextHandler(io.Discard, nil)),
 	}
 
@@ -1905,7 +1905,7 @@ func TestCrossRoomGateContentMatch(t *testing.T) {
 					Type:      "state_event",
 					Status:    "pending",
 					EventType: "m.bureau.deploy",
-					RoomAlias: "#deploy/staging:bureau.local",
+					RoomAlias: ref.MustParseRoomAlias("#deploy/staging:bureau.local"),
 					ContentMatch: schema.ContentMatch{
 						"status": schema.Eq("live"),
 					},
@@ -1977,7 +1977,7 @@ func TestCrossRoomGateTimelineEvents(t *testing.T) {
 		clock:      clock.Fake(time.Date(2026, 1, 15, 12, 0, 0, 0, time.UTC)),
 		startedAt:  time.Date(2026, 1, 1, 12, 0, 0, 0, time.UTC),
 		rooms:      make(map[ref.RoomID]*roomState),
-		aliasCache: make(map[string]ref.RoomID),
+		aliasCache: make(map[ref.RoomAlias]ref.RoomID),
 		logger:     slog.New(slog.NewTextHandler(io.Discard, nil)),
 	}
 
@@ -1997,7 +1997,7 @@ func TestCrossRoomGateTimelineEvents(t *testing.T) {
 					Status:    "pending",
 					EventType: schema.EventTypePipelineResult,
 					StateKey:  "lint",
-					RoomAlias: "#ci/results:bureau.local",
+					RoomAlias: ref.MustParseRoomAlias("#ci/results:bureau.local"),
 				},
 			},
 		},
@@ -2040,7 +2040,7 @@ func TestCrossRoomGateNilResolverIsNoOp(t *testing.T) {
 		clock:      clock.Fake(time.Date(2026, 1, 15, 12, 0, 0, 0, time.UTC)),
 		startedAt:  time.Date(2026, 1, 1, 12, 0, 0, 0, time.UTC),
 		rooms:      make(map[ref.RoomID]*roomState),
-		aliasCache: make(map[string]ref.RoomID),
+		aliasCache: make(map[ref.RoomAlias]ref.RoomID),
 		logger:     slog.New(slog.NewTextHandler(io.Discard, nil)),
 	}
 
@@ -2059,7 +2059,7 @@ func TestCrossRoomGateNilResolverIsNoOp(t *testing.T) {
 					Type:      "state_event",
 					Status:    "pending",
 					EventType: schema.EventTypePipelineResult,
-					RoomAlias: "#ci/results:bureau.local",
+					RoomAlias: ref.MustParseRoomAlias("#ci/results:bureau.local"),
 				},
 			},
 		},
@@ -2136,7 +2136,7 @@ func TestHandleSyncCrossRoomGateEvaluation(t *testing.T) {
 		clock:      clock.Fake(time.Date(2026, 1, 15, 12, 0, 0, 0, time.UTC)),
 		startedAt:  time.Date(2026, 1, 1, 12, 0, 0, 0, time.UTC),
 		rooms:      make(map[ref.RoomID]*roomState),
-		aliasCache: make(map[string]ref.RoomID),
+		aliasCache: make(map[ref.RoomAlias]ref.RoomID),
 		logger:     slog.New(slog.NewTextHandler(io.Discard, nil)),
 	}
 
@@ -2156,7 +2156,7 @@ func TestHandleSyncCrossRoomGateEvaluation(t *testing.T) {
 					Status:    "pending",
 					EventType: schema.EventTypePipelineResult,
 					StateKey:  "build-check",
-					RoomAlias: "#ci/results:bureau.local",
+					RoomAlias: ref.MustParseRoomAlias("#ci/results:bureau.local"),
 				},
 			},
 		},
@@ -2471,7 +2471,7 @@ func TestResolveUnblockedTimerTargetsComputesTarget(t *testing.T) {
 		writer:     writer,
 		clock:      fakeClock,
 		rooms:      make(map[ref.RoomID]*roomState),
-		aliasCache: make(map[string]ref.RoomID),
+		aliasCache: make(map[ref.RoomAlias]ref.RoomID),
 		logger:     slog.New(slog.NewTextHandler(io.Discard, nil)),
 	}
 
@@ -2531,7 +2531,7 @@ func TestResolveUnblockedTimerTargetsSkipsPartiallyBlocked(t *testing.T) {
 		writer:     writer,
 		clock:      fakeClock,
 		rooms:      make(map[ref.RoomID]*roomState),
-		aliasCache: make(map[string]ref.RoomID),
+		aliasCache: make(map[ref.RoomAlias]ref.RoomID),
 		logger:     slog.New(slog.NewTextHandler(io.Discard, nil)),
 	}
 
@@ -2593,7 +2593,7 @@ func TestResolveUnblockedTimerTargetsSkipsCreatedBase(t *testing.T) {
 		writer:     writer,
 		clock:      fakeClock,
 		rooms:      make(map[ref.RoomID]*roomState),
-		aliasCache: make(map[string]ref.RoomID),
+		aliasCache: make(map[ref.RoomAlias]ref.RoomID),
 		logger:     slog.New(slog.NewTextHandler(io.Discard, nil)),
 	}
 
@@ -2648,7 +2648,7 @@ func TestResolveUnblockedTimerTargetsMultipleBlockersSameBatch(t *testing.T) {
 		writer:     writer,
 		clock:      fakeClock,
 		rooms:      make(map[ref.RoomID]*roomState),
-		aliasCache: make(map[string]ref.RoomID),
+		aliasCache: make(map[ref.RoomAlias]ref.RoomID),
 		logger:     slog.New(slog.NewTextHandler(io.Discard, nil)),
 	}
 
@@ -2777,7 +2777,7 @@ func newGateTestService() *TicketService {
 		clock:      clock.Fake(time.Date(2026, 1, 15, 12, 0, 0, 0, time.UTC)),
 		startedAt:  time.Date(2026, 1, 1, 12, 0, 0, 0, time.UTC),
 		rooms:      make(map[ref.RoomID]*roomState),
-		aliasCache: make(map[string]ref.RoomID),
+		aliasCache: make(map[ref.RoomAlias]ref.RoomID),
 		logger:     slog.New(slog.NewTextHandler(io.Discard, nil)),
 	}
 }
@@ -2790,7 +2790,7 @@ func newGateTestServiceWithWriter(writer matrixWriter) *TicketService {
 		clock:      clock.Fake(time.Date(2026, 1, 15, 12, 0, 0, 0, time.UTC)),
 		startedAt:  time.Date(2026, 1, 1, 12, 0, 0, 0, time.UTC),
 		rooms:      make(map[ref.RoomID]*roomState),
-		aliasCache: make(map[string]ref.RoomID),
+		aliasCache: make(map[ref.RoomAlias]ref.RoomID),
 		logger:     slog.New(slog.NewTextHandler(io.Discard, nil)),
 	}
 }

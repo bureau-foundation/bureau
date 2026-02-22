@@ -366,7 +366,10 @@ func ensureWorkspaceRoom(ctx context.Context, session messaging.Session, alias s
 // agent principals stop (their condition becomes false) and the teardown
 // principal starts (its condition becomes true).
 func buildPrincipalAssignments(alias, agentTemplate string, agentCount int, serverName ref.ServerName, machineRef ref.Machine, workspaceRoomID ref.RoomID, params map[string]string) ([]schema.PrincipalAssignment, error) {
-	workspaceRoomAlias := schema.FullRoomAlias(alias, serverName)
+	workspaceRoomAlias, err := ref.ParseRoomAlias(schema.FullRoomAlias(alias, serverName))
+	if err != nil {
+		return nil, fmt.Errorf("constructing workspace room alias: %w", err)
+	}
 	fleet := machineRef.Fleet()
 
 	// Derive workspace path components from the alias. The first segment

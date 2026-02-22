@@ -41,6 +41,7 @@ lib/           Supporting packages:
     fleet/       Fleet service, machine, HA lease, alert event types
     observation/ Layout, window, pane event types
     pipeline/    Pipeline definition, step, result event types
+    telemetry/   Telemetry data types (spans, metrics, logs, batch wire format)
     ticket/      Ticket content, gate, note, attachment event types
     workspace/   Workspace state, worktree, project config event types
   sealed/        age encryption/decryption for credential bundles

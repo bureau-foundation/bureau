@@ -13,6 +13,7 @@ import (
 
 	"github.com/bureau-foundation/bureau/lib/codec"
 	"github.com/bureau-foundation/bureau/lib/schema/ticket"
+	"github.com/bureau-foundation/bureau/lib/service"
 	"github.com/bureau-foundation/bureau/lib/ticketindex"
 )
 
@@ -225,4 +226,91 @@ func (source *ServiceSource) clearIndex() {
 	source.mutex.Lock()
 	source.index = ticketindex.NewIndex()
 	source.mutex.Unlock()
+}
+
+// --- Mutator implementation ---
+//
+// Each mutation creates a fresh one-shot ServiceClient using the
+// current token. The token is read from the atomic value at call time
+// so refreshed tokens are picked up automatically. Results arrive
+// through the subscribe stream, not through the mutation response.
+
+// mutationClient creates a ServiceClient for a one-shot mutation call
+// using the current token.
+func (source *ServiceSource) mutationClient() *service.ServiceClient {
+	tokenBytes, _ := source.token.Load().([]byte)
+	return service.NewServiceClientFromToken(source.socketPath, tokenBytes)
+}
+
+// UpdateStatus transitions a ticket to a new status. When transitioning
+// to "in_progress", assignee must be the operator's Matrix user ID.
+// When transitioning to "closed", delegates to Close (without reason).
+// When transitioning from "closed", delegates to Reopen.
+func (source *ServiceSource) UpdateStatus(ctx context.Context, ticketID, status, assignee string) error {
+	// Closing and reopening use dedicated actions with separate grants.
+	if status == "closed" {
+		return source.CloseTicket(ctx, ticketID, "")
+	}
+
+	// Check if the ticket is currently closed — if so, this is a reopen.
+	currentContent, exists := source.Get(ticketID)
+	if exists && currentContent.Status == "closed" {
+		return source.ReopenTicket(ctx, ticketID)
+	}
+
+	fields := map[string]any{
+		"ticket": ticketID,
+		"status": status,
+	}
+	if assignee != "" {
+		fields["assignee"] = assignee
+	}
+	return source.mutationClient().Call(ctx, "update", fields, nil)
+}
+
+// UpdatePriority changes a ticket's priority.
+func (source *ServiceSource) UpdatePriority(ctx context.Context, ticketID string, priority int) error {
+	fields := map[string]any{
+		"ticket":   ticketID,
+		"priority": priority,
+	}
+	return source.mutationClient().Call(ctx, "update", fields, nil)
+}
+
+// UpdateTitle changes a ticket's title.
+func (source *ServiceSource) UpdateTitle(ctx context.Context, ticketID, title string) error {
+	fields := map[string]any{
+		"ticket": ticketID,
+		"title":  title,
+	}
+	return source.mutationClient().Call(ctx, "update", fields, nil)
+}
+
+// CloseTicket transitions a ticket to "closed" with an optional reason.
+func (source *ServiceSource) CloseTicket(ctx context.Context, ticketID, reason string) error {
+	fields := map[string]any{
+		"ticket": ticketID,
+	}
+	if reason != "" {
+		fields["reason"] = reason
+	}
+	return source.mutationClient().Call(ctx, "close", fields, nil)
+}
+
+// ReopenTicket transitions a closed ticket back to "open".
+func (source *ServiceSource) ReopenTicket(ctx context.Context, ticketID string) error {
+	fields := map[string]any{
+		"ticket": ticketID,
+	}
+	return source.mutationClient().Call(ctx, "reopen", fields, nil)
+}
+
+// AddNote appends a note to a ticket. The note's author and timestamp
+// are set by the ticket service from the token subject.
+func (source *ServiceSource) AddNote(ctx context.Context, ticketID, body string) error {
+	fields := map[string]any{
+		"ticket": ticketID,
+		"body":   body,
+	}
+	return source.mutationClient().Call(ctx, "add-note", fields, nil)
 }

@@ -30,6 +30,7 @@ go_library(
         "//lib/ticketindex",
         "//lib/ticketui",
         "//messaging",
+        "//observe",
         "@com_github_charmbracelet_bubbletea//:bubbletea",
         "@com_github_spf13_pflag//:pflag",
     ],

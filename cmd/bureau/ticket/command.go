@@ -61,7 +61,7 @@ the ticket across all rooms.`,
 			gateCommand(),
 			depCommand(),
 
-			// Interactive viewer (pre-existing).
+			// Interactive viewer.
 			ViewerCommand(),
 		},
 		Examples: []cli.Example{

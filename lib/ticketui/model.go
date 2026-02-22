@@ -4,10 +4,12 @@
 package ticketui
 
 import (
+	"context"
 	"encoding/base64"
 	"fmt"
 	"os"
 	"slices"
+	"strconv"
 	"strings"
 	"time"
 
@@ -44,6 +46,18 @@ const (
 	// FocusDetailSearch means keystrokes go to the detail pane
 	// search input (activated by / when the detail pane has focus).
 	FocusDetailSearch
+	// FocusDropdown means a dropdown overlay (status or priority)
+	// is active. All keyboard input routes to the dropdown until
+	// the user selects an option or dismisses it.
+	FocusDropdown
+	// FocusTitleEdit means the title in the detail header is being
+	// edited inline. Character input modifies the title buffer,
+	// enter submits, escape cancels.
+	FocusTitleEdit
+	// FocusNoteModal means the note input modal is active. All
+	// keyboard input routes to the textarea inside the modal.
+	// Ctrl+D submits, Escape cancels.
+	FocusNoteModal
 )
 
 // Split ratio bounds and step size.
@@ -75,6 +89,17 @@ type heatTickMsg struct{}
 // clipboardFadeMsg is sent after a short delay to clear the clipboard
 // feedback notice from the status bar.
 type clipboardFadeMsg struct{}
+
+// mutationResultMsg is sent when an asynchronous mutation call completes.
+// On success, err is nil and the subscribe stream delivers the update.
+// On error, err is displayed in the status bar.
+type mutationResultMsg struct {
+	err error
+}
+
+// mutationErrorFadeMsg is sent after a delay to clear the mutation
+// error notice from the status bar.
+type mutationErrorFadeMsg struct{}
 
 // clipboardFadeDelay is how long the "Copied" notice stays visible.
 const clipboardFadeDelay = 2 * time.Second
@@ -220,6 +245,15 @@ type Model struct {
 	// so the "Copied" indicator disappears.
 	clipboardNotice string
 
+	// Mutation state. Active when the source implements Mutator.
+	activeDropdown  *DropdownOverlay // Non-nil when a dropdown overlay is visible.
+	operatorUserID  string           // Matrix user ID for auto-assignment on in_progress transitions.
+	mutationError   string           // Briefly displayed in the status bar after a failed mutation.
+	titleEditBuffer []rune           // Rune buffer for inline title editing; nil when not editing.
+	titleEditCursor int              // Cursor position within titleEditBuffer.
+	titleEditID     string           // Ticket ID being title-edited.
+	noteModal       *NoteModal       // Non-nil when the note input modal is visible.
+
 	// Live update animation.
 	heatTracker  *HeatTracker // Tracks recently-changed tickets for glow animation.
 	eventChannel <-chan Event // Source event subscription; nil if no live updates.
@@ -265,6 +299,14 @@ func NewModel(source Source) Model {
 	return model
 }
 
+// SetOperatorID sets the Matrix user ID of the current operator. Used
+// for auto-assignment when transitioning tickets to in_progress via
+// the status dropdown. Call this after NewModel and before running the
+// bubbletea program. Only meaningful when the source implements Mutator.
+func (model *Model) SetOperatorID(userID string) {
+	model.operatorUserID = userID
+}
+
 // Init implements tea.Model. Starts listening for source events if the
 // event channel is available (set up in NewModel).
 func (model Model) Init() tea.Cmd {
@@ -302,6 +344,18 @@ func (model Model) Update(message tea.Msg) (tea.Model, tea.Cmd) {
 		// When detail search is active, route all input to the search.
 		if model.focusRegion == FocusDetailSearch {
 			return model.handleDetailSearchKeys(message)
+		}
+		// When a dropdown overlay is active, route all input to it.
+		if model.focusRegion == FocusDropdown {
+			return model.handleDropdownKeys(message)
+		}
+		// When title is being edited inline, route all input to the editor.
+		if model.focusRegion == FocusTitleEdit {
+			return model.handleTitleEditKeys(message)
+		}
+		// When the note modal is active, route all input to it.
+		if model.focusRegion == FocusNoteModal {
+			return model.handleNoteModalKeys(message)
 		}
 
 		switch {
@@ -385,6 +439,20 @@ func (model Model) Update(message tea.Msg) (tea.Model, tea.Cmd) {
 	case clipboardFadeMsg:
 		model.clipboardNotice = ""
 
+	case dropdownSelectMsg:
+		return model.handleDropdownSelect(message)
+
+	case mutationResultMsg:
+		if message.err != nil {
+			model.mutationError = message.err.Error()
+			return model, tea.Tick(clipboardFadeDelay, func(time.Time) tea.Msg {
+				return mutationErrorFadeMsg{}
+			})
+		}
+
+	case mutationErrorFadeMsg:
+		model.mutationError = ""
+
 	case tea.WindowSizeMsg:
 		model.width = message.Width
 		model.height = message.Height
@@ -439,9 +507,20 @@ func (model *Model) handleMouse(message tea.MouseMsg) tea.Cmd {
 		return nil
 	}
 
-	// Any non-motion interaction dismisses the tooltip.
+	// Any non-motion interaction dismisses the tooltip, dropdown,
+	// and title edit.
 	if model.tooltip != nil {
 		model.tooltip = nil
+	}
+	if model.activeDropdown != nil {
+		model.dismissDropdown()
+	}
+	if model.focusRegion == FocusTitleEdit {
+		model.cancelTitleEdit()
+	}
+	if model.noteModal != nil {
+		model.noteModal = nil
+		model.focusRegion = FocusDetail
 	}
 
 	// Handle active drags — motion updates position, release ends drag.
@@ -537,12 +616,26 @@ func (model *Model) handleMouse(message tea.MouseMsg) tea.Cmd {
 			model.handleListClick(message.Y - contentStart)
 		} else if inDetailPane {
 			model.focusRegion = FocusDetail
-			// Check for clickable dependency/child/parent entries
-			// in the detail body area.
-			bodyRelativeY := message.Y - contentStart - detailHeaderLines
 			// X relative to the detail content area: subtract
 			// list pane, divider, and left padding.
 			contentRelativeX := message.X - model.listWidth() - 1 - 1
+
+			// Check for header click targets (status, priority, title)
+			// in the fixed header area above the scrollable body.
+			headerRelativeY := message.Y - contentStart
+			if headerRelativeY >= 0 && headerRelativeY < detailHeaderLines {
+				field := model.detailPane.HeaderTarget(headerRelativeY, contentRelativeX)
+				if field != "" {
+					if cmd := model.handleHeaderClick(field, message.X, message.Y); cmd != nil {
+						return cmd
+					}
+					return nil
+				}
+			}
+
+			// Check for clickable dependency/child/parent entries
+			// in the detail body area.
+			bodyRelativeY := message.Y - contentStart - detailHeaderLines
 			if bodyRelativeY >= 0 && bodyRelativeY < model.detailPane.viewport.Height {
 				ticketID := model.detailPane.ClickTarget(bodyRelativeY, contentRelativeX)
 				if ticketID != "" {
@@ -1425,11 +1518,15 @@ func (model *Model) handleDetailKeys(message tea.KeyMsg) {
 		model.detailPane.viewport.GotoBottom()
 
 	// Search match navigation: only active when there's a search query.
+	// When no search is active, 'n' opens the note modal (if the source
+	// supports mutations).
 	case key.Matches(message, model.keys.SearchNext):
 		if model.detailPane.search.Input != "" {
 			model.detailPane.search.NextMatch()
 			model.detailPane.applySearchHighlighting()
 			model.detailPane.ScrollToCurrentMatch()
+		} else {
+			model.openNoteModal()
 		}
 	case key.Matches(message, model.keys.SearchPrevious):
 		if model.detailPane.search.Input != "" {
@@ -1437,6 +1534,366 @@ func (model *Model) handleDetailKeys(message tea.KeyMsg) {
 			model.detailPane.applySearchHighlighting()
 			model.detailPane.ScrollToCurrentMatch()
 		}
+	}
+}
+
+// handleDropdownKeys processes keyboard input when a dropdown overlay
+// is active (FocusDropdown). Up/down navigate options, enter selects,
+// escape dismisses. All other keys are consumed to prevent them from
+// reaching the underlying panes.
+func (model Model) handleDropdownKeys(message tea.KeyMsg) (tea.Model, tea.Cmd) {
+	if model.activeDropdown == nil {
+		model.focusRegion = FocusDetail
+		return model, nil
+	}
+
+	switch {
+	case key.Matches(message, model.keys.Quit):
+		if message.Type == tea.KeyCtrlC {
+			return model, tea.Quit
+		}
+		// 'q' dismisses the dropdown rather than quitting.
+		model.dismissDropdown()
+
+	case key.Matches(message, model.keys.FilterClear):
+		// Escape dismisses the dropdown.
+		model.dismissDropdown()
+
+	case key.Matches(message, model.keys.Up):
+		model.activeDropdown.MoveUp()
+
+	case key.Matches(message, model.keys.Down):
+		model.activeDropdown.MoveDown()
+
+	case message.Type == tea.KeyEnter:
+		selected := model.activeDropdown.Selected()
+		msg := dropdownSelectMsg{
+			field:    model.activeDropdown.Field,
+			ticketID: model.activeDropdown.TicketID,
+			value:    selected.Value,
+		}
+		model.dismissDropdown()
+		return model.handleDropdownSelect(msg)
+	}
+
+	return model, nil
+}
+
+// dismissDropdown closes the active dropdown overlay and returns
+// keyboard focus to the detail pane.
+func (model *Model) dismissDropdown() {
+	model.activeDropdown = nil
+	model.focusRegion = FocusDetail
+}
+
+// handleHeaderClick processes a click on a header field (status,
+// priority, or title). Opens the appropriate mutation UI if the source
+// supports mutations. Returns a tea.Cmd if one is needed, or nil.
+func (model *Model) handleHeaderClick(field string, screenX, screenY int) tea.Cmd {
+	mutator, ok := model.source.(Mutator)
+	if !ok {
+		return nil
+	}
+	_ = mutator // Used by the select handler, not directly here.
+
+	if model.selectedID == "" {
+		return nil
+	}
+
+	content, exists := model.source.Get(model.selectedID)
+	if !exists {
+		return nil
+	}
+
+	switch field {
+	case "status":
+		options := StatusTransitions(content.Status)
+		if len(options) == 0 {
+			return nil
+		}
+		model.activeDropdown = &DropdownOverlay{
+			Options:  options,
+			Cursor:   0,
+			AnchorX:  screenX,
+			AnchorY:  screenY + 1, // Below the clicked field.
+			Field:    "status",
+			TicketID: model.selectedID,
+		}
+		model.focusRegion = FocusDropdown
+
+	case "priority":
+		model.activeDropdown = &DropdownOverlay{
+			Options:  PriorityOptions(),
+			Cursor:   content.Priority, // Pre-select current priority.
+			AnchorX:  screenX,
+			AnchorY:  screenY + 1,
+			Field:    "priority",
+			TicketID: model.selectedID,
+		}
+		model.focusRegion = FocusDropdown
+
+	case "title":
+		titleRunes := []rune(content.Title)
+		model.titleEditBuffer = titleRunes
+		model.titleEditCursor = len(titleRunes)
+		model.titleEditID = model.selectedID
+		model.focusRegion = FocusTitleEdit
+		model.updateTitleEditHeader()
+	}
+
+	return nil
+}
+
+// handleDropdownSelect dispatches the mutation for a dropdown selection.
+// The mutation runs in a background goroutine; results arrive as a
+// mutationResultMsg. On success, the subscribe stream updates the
+// local index automatically.
+func (model Model) handleDropdownSelect(message dropdownSelectMsg) (tea.Model, tea.Cmd) {
+	mutator, ok := model.source.(Mutator)
+	if !ok {
+		return model, nil
+	}
+
+	switch message.field {
+	case "status":
+		assignee := ""
+		if message.value == "in_progress" {
+			assignee = model.operatorUserID
+		}
+		return model, func() tea.Msg {
+			err := mutator.UpdateStatus(context.Background(), message.ticketID, message.value, assignee)
+			return mutationResultMsg{err: err}
+		}
+
+	case "priority":
+		priority, err := strconv.Atoi(message.value)
+		if err != nil {
+			return model, func() tea.Msg {
+				return mutationResultMsg{err: fmt.Errorf("invalid priority value: %s", message.value)}
+			}
+		}
+		return model, func() tea.Msg {
+			err := mutator.UpdatePriority(context.Background(), message.ticketID, priority)
+			return mutationResultMsg{err: err}
+		}
+	}
+
+	return model, nil
+}
+
+// handleTitleEditKeys processes keyboard input during inline title
+// editing. Regular characters are inserted at the cursor. Backspace
+// deletes behind the cursor. Left/right move the cursor. Home/end
+// jump to the start/end. Enter submits the new title. Escape cancels
+// and restores the original title.
+func (model Model) handleTitleEditKeys(message tea.KeyMsg) (tea.Model, tea.Cmd) {
+	switch {
+	case key.Matches(message, model.keys.Quit):
+		if message.Type == tea.KeyCtrlC {
+			return model, tea.Quit
+		}
+		// 'q' cancels the title edit rather than quitting.
+		model.cancelTitleEdit()
+
+	case key.Matches(message, model.keys.FilterClear):
+		// Escape cancels the edit.
+		model.cancelTitleEdit()
+
+	case message.Type == tea.KeyEnter:
+		return model.submitTitleEdit()
+
+	case message.Type == tea.KeyBackspace:
+		if model.titleEditCursor > 0 {
+			model.titleEditBuffer = append(
+				model.titleEditBuffer[:model.titleEditCursor-1],
+				model.titleEditBuffer[model.titleEditCursor:]...)
+			model.titleEditCursor--
+			model.updateTitleEditHeader()
+		}
+
+	case message.Type == tea.KeyDelete:
+		if model.titleEditCursor < len(model.titleEditBuffer) {
+			model.titleEditBuffer = append(
+				model.titleEditBuffer[:model.titleEditCursor],
+				model.titleEditBuffer[model.titleEditCursor+1:]...)
+			model.updateTitleEditHeader()
+		}
+
+	case message.Type == tea.KeyLeft:
+		if model.titleEditCursor > 0 {
+			model.titleEditCursor--
+			model.updateTitleEditHeader()
+		}
+
+	case message.Type == tea.KeyRight:
+		if model.titleEditCursor < len(model.titleEditBuffer) {
+			model.titleEditCursor++
+			model.updateTitleEditHeader()
+		}
+
+	case message.Type == tea.KeyHome || message.Type == tea.KeyCtrlA:
+		model.titleEditCursor = 0
+		model.updateTitleEditHeader()
+
+	case message.Type == tea.KeyEnd || message.Type == tea.KeyCtrlE:
+		model.titleEditCursor = len(model.titleEditBuffer)
+		model.updateTitleEditHeader()
+
+	case message.Type == tea.KeyRunes || message.Type == tea.KeySpace:
+		for _, character := range message.Runes {
+			// Insert at cursor position.
+			model.titleEditBuffer = append(model.titleEditBuffer, 0)
+			copy(model.titleEditBuffer[model.titleEditCursor+1:], model.titleEditBuffer[model.titleEditCursor:])
+			model.titleEditBuffer[model.titleEditCursor] = character
+			model.titleEditCursor++
+		}
+		model.updateTitleEditHeader()
+	}
+
+	return model, nil
+}
+
+// cancelTitleEdit restores the original title and exits edit mode.
+func (model *Model) cancelTitleEdit() {
+	model.titleEditBuffer = nil
+	model.titleEditID = ""
+	model.focusRegion = FocusDetail
+	// Re-render the detail pane to restore the original title display.
+	model.syncDetailPane()
+}
+
+// submitTitleEdit sends the title mutation and exits edit mode.
+func (model Model) submitTitleEdit() (tea.Model, tea.Cmd) {
+	newTitle := strings.TrimSpace(string(model.titleEditBuffer))
+	ticketID := model.titleEditID
+
+	model.titleEditBuffer = nil
+	model.titleEditID = ""
+	model.focusRegion = FocusDetail
+
+	if newTitle == "" {
+		// Empty title: cancel the edit silently.
+		model.syncDetailPane()
+		return model, nil
+	}
+
+	// Check if title actually changed.
+	content, exists := model.source.Get(ticketID)
+	if exists && content.Title == newTitle {
+		model.syncDetailPane()
+		return model, nil
+	}
+
+	mutator, ok := model.source.(Mutator)
+	if !ok {
+		model.syncDetailPane()
+		return model, nil
+	}
+
+	model.syncDetailPane()
+	return model, func() tea.Msg {
+		err := mutator.UpdateTitle(context.Background(), ticketID, newTitle)
+		return mutationResultMsg{err: err}
+	}
+}
+
+// updateTitleEditHeader re-renders the detail header with the current
+// title edit buffer and a visible cursor so the user sees their edits
+// in real time.
+func (model *Model) updateTitleEditHeader() {
+	if !model.detailPane.hasEntry {
+		return
+	}
+
+	// Build the title with a block cursor at the edit position.
+	// Characters before the cursor are rendered normally; the cursor
+	// character uses reverse video; characters after are normal.
+	cursorStyle := lipgloss.NewStyle().Reverse(true)
+	var titleWithCursor string
+	if model.titleEditCursor >= len(model.titleEditBuffer) {
+		// Cursor at the end: show a trailing block cursor.
+		titleWithCursor = string(model.titleEditBuffer) + cursorStyle.Render(" ")
+	} else {
+		before := string(model.titleEditBuffer[:model.titleEditCursor])
+		atCursor := string(model.titleEditBuffer[model.titleEditCursor : model.titleEditCursor+1])
+		after := string(model.titleEditBuffer[model.titleEditCursor+1:])
+		titleWithCursor = before + cursorStyle.Render(atCursor) + after
+	}
+
+	// Create a modified entry with the cursor-enhanced title.
+	editedEntry := model.detailPane.entry
+	editedEntry.Content.Title = titleWithCursor
+
+	renderer := NewDetailRenderer(model.theme, model.detailPane.contentWidth())
+	var score *ticketindex.TicketScore
+	if model.activeTab == TabReady {
+		ticketScore := model.source.Score(editedEntry.ID, model.detailPane.renderTime)
+		score = &ticketScore
+	}
+	headerResult := renderer.RenderHeader(editedEntry, score)
+	model.detailPane.header = headerResult.Rendered
+	model.detailPane.headerClickTargets = headerResult.Targets
+}
+
+// openNoteModal opens the note input modal for the currently selected
+// ticket. Does nothing if no ticket is selected or if the source
+// does not support mutations.
+func (model *Model) openNoteModal() {
+	if model.selectedID == "" {
+		return
+	}
+	if _, ok := model.source.(Mutator); !ok {
+		return
+	}
+
+	modal := NewNoteModal(model.selectedID, model.theme)
+	model.noteModal = &modal
+	model.focusRegion = FocusNoteModal
+}
+
+// handleNoteModalKeys processes keyboard input when the note modal is
+// active. Ctrl+D submits the note, Escape cancels. All other input
+// goes to the textarea.
+func (model Model) handleNoteModalKeys(message tea.KeyMsg) (tea.Model, tea.Cmd) {
+	if model.noteModal == nil {
+		model.focusRegion = FocusDetail
+		return model, nil
+	}
+
+	switch {
+	case message.Type == tea.KeyCtrlC:
+		return model, tea.Quit
+
+	case message.Type == tea.KeyEsc:
+		model.noteModal = nil
+		model.focusRegion = FocusDetail
+		return model, nil
+
+	case message.Type == tea.KeyCtrlD:
+		// Submit the note.
+		body := strings.TrimSpace(model.noteModal.Value())
+		ticketID := model.noteModal.TicketID
+		model.noteModal = nil
+		model.focusRegion = FocusDetail
+
+		if body == "" {
+			return model, nil
+		}
+
+		mutator, ok := model.source.(Mutator)
+		if !ok {
+			return model, nil
+		}
+
+		return model, func() tea.Msg {
+			err := mutator.AddNote(context.Background(), ticketID, body)
+			return mutationResultMsg{err: err}
+		}
+
+	default:
+		// Forward to textarea.
+		model.noteModal.Update(message)
+		return model, nil
 	}
 }
 
@@ -1599,6 +2056,19 @@ func (model Model) View() string {
 			model.tooltip.anchorX, model.tooltip.anchorY)
 	}
 
+	// Overlay dropdown if active.
+	if model.activeDropdown != nil {
+		dropdownLines := model.activeDropdown.Render(model.theme)
+		output = overlayTooltip(output, dropdownLines,
+			model.activeDropdown.AnchorX, model.activeDropdown.AnchorY)
+	}
+
+	// Overlay note modal if active.
+	if model.noteModal != nil {
+		modalLines, anchorX, anchorY := model.noteModal.Render(model.width, model.height)
+		output = overlayTooltip(output, modalLines, anchorX, anchorY)
+	}
+
 	return output
 }
 
@@ -1742,14 +2212,21 @@ func (model *Model) ensureCursorVisible() {
 
 // renderEmpty renders the empty state when no tickets match.
 func (model Model) renderEmpty() string {
-	message := lipgloss.NewStyle().
-		Foreground(model.theme.FaintText).
-		Render("No tickets found.")
+	text := "No tickets found."
+	if stater, ok := model.source.(LoadingStater); ok {
+		state := stater.LoadingState()
+		if state != "caught_up" {
+			text = loadingStateLabel(state)
+		}
+	}
+
+	messageStyle := lipgloss.NewStyle().
+		Foreground(model.theme.FaintText)
 
 	return lipgloss.Place(
 		model.width, model.height,
 		lipgloss.Center, lipgloss.Center,
-		message,
+		messageStyle.Render(text),
 	)
 }
 
@@ -1895,6 +2372,12 @@ func (model Model) renderHelp() string {
 		focusIndicator = "FILTER"
 	case FocusDetailSearch:
 		focusIndicator = "SEARCH"
+	case FocusDropdown:
+		focusIndicator = "SELECT"
+	case FocusTitleEdit:
+		focusIndicator = "EDIT"
+	case FocusNoteModal:
+		focusIndicator = "NOTE"
 	}
 
 	help := fmt.Sprintf(" [%s] q quit  ↑↓ navigate  ←→ collapse/expand  BS back  Tab focus  ]/[ resize  1/2/3 tabs  / filter",
@@ -1940,12 +2423,33 @@ func (model Model) renderHelp() string {
 		help += fmt.Sprintf("  %d/%d", selectablePosition, totalItems)
 	}
 
+	// Show loading state for service-backed sources. The source
+	// optionally implements LoadingStater to report stream progress.
+	if stater, ok := model.source.(LoadingStater); ok {
+		state := stater.LoadingState()
+		if state != "caught_up" {
+			loadingStyle := lipgloss.NewStyle().
+				Foreground(model.theme.StatusColor("in_progress")).
+				Bold(true)
+			label := loadingStateLabel(state)
+			help += "  " + loadingStyle.Render(label)
+		}
+	}
+
 	// Show clipboard feedback when a right-click copy just happened.
 	if model.clipboardNotice != "" {
 		clipStyle := lipgloss.NewStyle().
 			Foreground(model.theme.StatusColor("closed")).
 			Bold(true)
 		help += "  " + clipStyle.Render("Copied: "+model.clipboardNotice)
+	}
+
+	// Show mutation error when a mutation call failed.
+	if model.mutationError != "" {
+		errorStyle := lipgloss.NewStyle().
+			Foreground(model.theme.StatusColor("blocked")).
+			Bold(true)
+		help += "  " + errorStyle.Render("Error: "+model.mutationError)
 	}
 
 	return style.Render(help)

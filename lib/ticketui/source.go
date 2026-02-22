@@ -4,6 +4,7 @@
 package ticketui
 
 import (
+	"context"
 	"sync"
 	"time"
 
@@ -69,6 +70,76 @@ type Source interface {
 	// underlying data changes. Returns nil if live updates are not
 	// supported (e.g., one-shot file load without --watch).
 	Subscribe() <-chan Event
+}
+
+// Mutator is an optional interface that Source implementations can
+// provide to support ticket mutations. The TUI checks for this via
+// type assertion on the source; when present, interactive mutation
+// controls (status dropdown, priority selector, title edit, note add)
+// are enabled. When absent (e.g., file-backed IndexSource), mutation
+// UI elements are hidden.
+//
+// ServiceSource implements this interface; IndexSource does not.
+//
+// All methods are one-shot calls that send a mutation to the ticket
+// service. Results arrive asynchronously through the subscribe stream
+// and update the local index. Callers should not update the local state
+// directly — the subscribe stream is the single source of truth.
+type Mutator interface {
+	// UpdateStatus transitions the ticket to a new status. The
+	// assignee parameter is required when status is "in_progress"
+	// (pass the operator's user ID) and must be empty otherwise.
+	// Transitions to "closed" delegate to Close; transitions from
+	// "closed" delegate to Reopen.
+	UpdateStatus(ctx context.Context, ticketID, status, assignee string) error
+
+	// UpdatePriority changes the ticket's priority (0-4).
+	UpdatePriority(ctx context.Context, ticketID string, priority int) error
+
+	// UpdateTitle changes the ticket's title.
+	UpdateTitle(ctx context.Context, ticketID, title string) error
+
+	// CloseTicket transitions the ticket to "closed" with an optional
+	// reason. Pass empty string for no reason.
+	CloseTicket(ctx context.Context, ticketID, reason string) error
+
+	// ReopenTicket transitions a closed ticket back to "open".
+	ReopenTicket(ctx context.Context, ticketID string) error
+
+	// AddNote appends a note to the ticket. The author and
+	// timestamp are set by the ticket service.
+	AddNote(ctx context.Context, ticketID, body string) error
+}
+
+// LoadingStater is an optional interface that Source implementations can
+// provide to report their loading progress. The TUI checks for this via
+// type assertion and displays appropriate loading indicators when the
+// source is still receiving its initial snapshot.
+//
+// ServiceSource implements this interface; IndexSource does not (it is
+// always fully loaded at construction time).
+type LoadingStater interface {
+	// LoadingState returns the current stream phase:
+	//   "connecting"    — not yet connected to the service
+	//   "loading"       — connected, receiving initial snapshot
+	//   "open_complete" — open tickets loaded, Ready/Blocked tabs usable
+	//   "caught_up"     — full snapshot received, live events flowing
+	LoadingState() string
+}
+
+// loadingStateLabel returns a human-readable label for a loading state
+// string, suitable for display in the TUI status bar or empty view.
+func loadingStateLabel(state string) string {
+	switch state {
+	case "connecting":
+		return "Connecting..."
+	case "loading":
+		return "Loading tickets..."
+	case "open_complete":
+		return "Loading history..."
+	default:
+		return "Loading..."
+	}
 }
 
 // IndexSource wraps a [ticketindex.Index] with a mutex for concurrent access

@@ -42,6 +42,23 @@ type BodyClickTarget struct {
 	EndX     int // Exclusive end column of the clickable region.
 }
 
+// HeaderClickTarget maps a region in the fixed header to a clickable
+// field. Used by the model to handle mouse clicks on status, priority,
+// and title for inline mutation.
+type HeaderClickTarget struct {
+	Line   int    // 0-based line in the header (0-4).
+	StartX int    // Inclusive start column of the clickable region.
+	EndX   int    // Exclusive end column of the clickable region.
+	Field  string // "status", "priority", or "title".
+}
+
+// HeaderRenderResult carries the rendered header string alongside
+// click targets for interactive fields.
+type HeaderRenderResult struct {
+	Rendered string
+	Targets  []HeaderClickTarget
+}
+
 // DetailRenderer builds the content for the detail pane. Produces a
 // fixed header (rendered outside the viewport) and scrollable body
 // (set into the viewport).
@@ -58,12 +75,13 @@ func NewDetailRenderer(theme Theme, width int) DetailRenderer {
 // RenderHeader produces the fixed header lines for a ticket. Always
 // exactly [detailHeaderLines] lines tall regardless of content. When
 // a score is provided, signal indicators (↑N, →P0, Nd) are
-// right-aligned on Line 1.
-func (renderer DetailRenderer) RenderHeader(entry ticketindex.Entry, score *ticketindex.TicketScore) string {
+// right-aligned on Line 1. Returns a HeaderRenderResult with the
+// rendered string and click targets for status, priority, and title.
+func (renderer DetailRenderer) RenderHeader(entry ticketindex.Entry, score *ticketindex.TicketScore) HeaderRenderResult {
 	content := entry.Content
 
 	// Line 1: STATUS  P1  type  id  [labels]  ...signals
-	line1 := renderer.renderMetaLine(entry.ID, content, score)
+	line1, statusEnd, priorityStart, priorityEnd := renderer.renderMetaLine(entry.ID, content, score)
 
 	// Line 2: timestamps + assignee, condensed onto one line.
 	line2 := renderer.renderTimestampLine(content)
@@ -77,7 +95,47 @@ func (renderer DetailRenderer) RenderHeader(entry ticketindex.Entry, score *tick
 		Width(renderer.width)
 	separator := separatorStyle.Render(strings.Repeat("─", renderer.width))
 
-	return strings.Join([]string{line1, line2, titleLine1, titleLine2, separator}, "\n")
+	rendered := strings.Join([]string{line1, line2, titleLine1, titleLine2, separator}, "\n")
+
+	// Build header click targets for interactive fields.
+	var targets []HeaderClickTarget
+
+	// Status: line 0, columns 0..statusEnd.
+	targets = append(targets, HeaderClickTarget{
+		Line:   0,
+		StartX: 0,
+		EndX:   statusEnd,
+		Field:  "status",
+	})
+
+	// Priority: line 0, columns priorityStart..priorityEnd.
+	targets = append(targets, HeaderClickTarget{
+		Line:   0,
+		StartX: priorityStart,
+		EndX:   priorityEnd,
+		Field:  "priority",
+	})
+
+	// Title: lines 2-3, full width.
+	if content.Title != "" {
+		targets = append(targets, HeaderClickTarget{
+			Line:   2,
+			StartX: 0,
+			EndX:   renderer.width,
+			Field:  "title",
+		})
+		targets = append(targets, HeaderClickTarget{
+			Line:   3,
+			StartX: 0,
+			EndX:   renderer.width,
+			Field:  "title",
+		})
+	}
+
+	return HeaderRenderResult{
+		Rendered: rendered,
+		Targets:  targets,
+	}
 }
 
 // RenderBody produces the scrollable body content for a ticket and a
@@ -196,7 +254,13 @@ func (renderer DetailRenderer) RenderBody(source Source, entry ticketindex.Entry
 // renderMetaLine builds the first header line: status, priority, type,
 // ID, labels, and right-aligned signal indicators. The score parameter
 // is optional; when nil no indicators are shown.
-func (renderer DetailRenderer) renderMetaLine(ticketID string, content ticket.TicketContent, score *ticketindex.TicketScore) string {
+//
+// Returns the rendered line plus the column positions of the status and
+// priority text for click target computation:
+//   - statusEnd: exclusive end column of the status text
+//   - priorityStart: inclusive start column of the priority text
+//   - priorityEnd: exclusive end column of the priority text
+func (renderer DetailRenderer) renderMetaLine(ticketID string, content ticket.TicketContent, score *ticketindex.TicketScore) (line string, statusEnd, priorityStart, priorityEnd int) {
 	statusStyle := lipgloss.NewStyle().
 		Foreground(renderer.theme.StatusColor(content.Status)).
 		Bold(true)
@@ -211,8 +275,16 @@ func (renderer DetailRenderer) renderMetaLine(ticketID string, content ticket.Ti
 	idStyle := lipgloss.NewStyle().
 		Foreground(renderer.theme.FaintText)
 
-	leftPortion := statusStyle.Render(strings.ToUpper(content.Status)) + "  " +
-		priorityStyle.Render(fmt.Sprintf("P%d", content.Priority)) + "  " +
+	// Track visible character positions for click targets.
+	statusText := strings.ToUpper(content.Status)
+	statusEnd = len(statusText) // Status text is ASCII, so len == visible width.
+
+	priorityText := fmt.Sprintf("P%d", content.Priority)
+	priorityStart = statusEnd + 2 // "  " gap after status.
+	priorityEnd = priorityStart + len(priorityText)
+
+	leftPortion := statusStyle.Render(statusText) + "  " +
+		priorityStyle.Render(priorityText) + "  " +
 		typeStyle.Render(content.Type) + "  " +
 		idStyle.Render(ticketID)
 
@@ -233,7 +305,8 @@ func (renderer DetailRenderer) renderMetaLine(ticketID string, content ticket.Ti
 		}
 	}
 
-	return lipgloss.NewStyle().Width(renderer.width).MaxWidth(renderer.width).Render(leftPortion)
+	line = lipgloss.NewStyle().Width(renderer.width).MaxWidth(renderer.width).Render(leftPortion)
+	return line, statusEnd, priorityStart, priorityEnd
 }
 
 // renderSignalIndicators builds compact right-aligned signal
@@ -645,6 +718,12 @@ type DetailPane struct {
 	// mouse clicks on dependency, child, and parent entries.
 	clickTargets []BodyClickTarget
 
+	// headerClickTargets maps regions in the fixed header to
+	// interactive fields (status, priority, title). Set by
+	// SetContent and rerender; used by the model to handle
+	// mutation triggers via mouse clicks on header elements.
+	headerClickTargets []HeaderClickTarget
+
 	// Search state for in-body text search.
 	search SearchModel
 
@@ -718,7 +797,9 @@ func (pane *DetailPane) SetContent(source Source, entry ticketindex.Entry, now t
 	contentWidth := pane.contentWidth()
 	renderer := NewDetailRenderer(pane.theme, contentWidth)
 	score := pane.computeScore(source, entry, now)
-	pane.header = renderer.RenderHeader(entry, score)
+	headerResult := renderer.RenderHeader(entry, score)
+	pane.header = headerResult.Rendered
+	pane.headerClickTargets = headerResult.Targets
 	body, clickTargets := renderer.RenderBody(source, entry, now)
 
 	// Wrap body to contentWidth so no line exceeds the viewport width.
@@ -750,6 +831,7 @@ func (pane *DetailPane) Clear() {
 	pane.entry = ticketindex.Entry{}
 	pane.header = ""
 	pane.clickTargets = nil
+	pane.headerClickTargets = nil
 	pane.rawBody = ""
 	pane.search.Clear()
 	pane.viewport.SetContent("")
@@ -763,7 +845,9 @@ func (pane *DetailPane) rerender() {
 	contentWidth := pane.contentWidth()
 	renderer := NewDetailRenderer(pane.theme, contentWidth)
 	score := pane.computeScore(pane.source, pane.entry, pane.renderTime)
-	pane.header = renderer.RenderHeader(pane.entry, score)
+	headerResult := renderer.RenderHeader(pane.entry, score)
+	pane.header = headerResult.Rendered
+	pane.headerClickTargets = headerResult.Targets
 	body, clickTargets := renderer.RenderBody(pane.source, pane.entry, pane.renderTime)
 
 	// Same width constraint as SetContent: ensure no line exceeds the
@@ -888,6 +972,20 @@ func (pane DetailPane) ClickTarget(viewportY, relativeX int) string {
 	for _, target := range pane.clickTargets {
 		if target.Line == bodyLine && relativeX >= target.StartX && relativeX < target.EndX {
 			return target.TicketID
+		}
+	}
+	return ""
+}
+
+// HeaderTarget returns the field name at the given header-relative
+// position, or empty string if the position is not a clickable
+// header region. headerLine is 0-based within the header (0-4).
+// relativeX is the X position within the content area (after left
+// padding).
+func (pane DetailPane) HeaderTarget(headerLine, relativeX int) string {
+	for _, target := range pane.headerClickTargets {
+		if target.Line == headerLine && relativeX >= target.StartX && relativeX < target.EndX {
+			return target.Field
 		}
 	}
 	return ""

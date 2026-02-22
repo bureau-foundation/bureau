@@ -105,7 +105,7 @@ func Send(ctx context.Context, params SendParams) (*Future, error) {
 		Parameters: params.Parameters,
 	}
 
-	_, err = params.Session.SendEvent(ctx, params.RoomID, schema.MatrixEventTypeMessage, command)
+	eventID, err := params.Session.SendEvent(ctx, params.RoomID, schema.MatrixEventTypeMessage, command)
 	if err != nil {
 		return nil, fmt.Errorf("sending %s command: %w", params.Command, err)
 	}
@@ -113,6 +113,7 @@ func Send(ctx context.Context, params SendParams) (*Future, error) {
 	return &Future{
 		watcher:   watcher,
 		requestID: requestID,
+		eventID:   eventID,
 	}, nil
 }
 

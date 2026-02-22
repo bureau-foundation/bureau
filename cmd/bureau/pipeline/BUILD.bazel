@@ -18,6 +18,7 @@ go_library(
     visibility = ["//visibility:public"],
     deps = [
         "//cmd/bureau/cli",
+        "//lib/command",
         "//lib/pipelinedef",
         "//lib/ref",
         "//lib/schema",

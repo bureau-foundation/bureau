@@ -9,6 +9,7 @@ import (
 	"strings"
 
 	"github.com/bureau-foundation/bureau/cmd/bureau/cli"
+	"github.com/bureau-foundation/bureau/lib/command"
 	"github.com/bureau-foundation/bureau/lib/ref"
 	"github.com/bureau-foundation/bureau/lib/schema"
 )
@@ -117,13 +118,6 @@ variables, accessible in pipeline steps via ${NAME} substitution.`,
 				parameters[key] = value
 			}
 
-			// Generate a request ID for correlating the command with its
-			// threaded result replies.
-			requestID, err := cli.GenerateRequestID()
-			if err != nil {
-				return cli.Internal("generating request ID: %w", err)
-			}
-
 			// Connect to Matrix.
 			ctx, cancel, session, err := cli.ConnectOperator()
 			if err != nil {
@@ -139,28 +133,27 @@ variables, accessible in pipeline steps via ${NAME} substitution.`,
 				return cli.NotFound("resolving config room %s: %w (is the machine registered?)", configRoomAlias, err)
 			}
 
-			// Build the command message.
-			command := schema.CommandMessage{
-				MsgType:    schema.MsgTypeCommand,
-				Body:       fmt.Sprintf("pipeline.execute %s on %s", pipelineRefString, params.Machine),
+			// Fire-and-forget: send the command and immediately discard
+			// the future. The daemon acknowledges asynchronously and
+			// posts step-by-step results as threaded replies.
+			future, err := command.Send(ctx, command.SendParams{
+				Session:    session,
+				RoomID:     configRoomID,
 				Command:    "pipeline.execute",
-				RequestID:  requestID,
 				Parameters: parameters,
-			}
-
-			// Send as an m.room.message event.
-			eventID, err := session.SendEvent(ctx, configRoomID, "m.room.message", command)
+			})
 			if err != nil {
-				return cli.Internal("sending pipeline.execute command: %w", err)
+				return err
 			}
+			defer future.Discard()
 
 			if done, err := params.EmitJSON(executeResult{
 				Machine:      params.Machine,
 				PipelineRef:  pipelineRefString,
 				ConfigRoom:   configRoomAlias,
 				ConfigRoomID: configRoomID,
-				EventID:      eventID,
-				RequestID:    requestID,
+				EventID:      future.EventID(),
+				RequestID:    future.RequestID(),
 			}); done {
 				return err
 			}
@@ -168,8 +161,8 @@ variables, accessible in pipeline steps via ${NAME} substitution.`,
 			fmt.Fprintf(os.Stdout, "pipeline.execute sent to %s\n", params.Machine)
 			fmt.Fprintf(os.Stdout, "  pipeline:    %s\n", pipelineRefString)
 			fmt.Fprintf(os.Stdout, "  config room: %s (%s)\n", configRoomAlias, configRoomID)
-			fmt.Fprintf(os.Stdout, "  event:       %s\n", eventID)
-			fmt.Fprintf(os.Stdout, "  request_id:  %s\n", requestID)
+			fmt.Fprintf(os.Stdout, "  event:       %s\n", future.EventID())
+			fmt.Fprintf(os.Stdout, "  request_id:  %s\n", future.RequestID())
 			return nil
 		},
 	}

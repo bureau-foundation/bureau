@@ -7,6 +7,7 @@ import (
 	"context"
 	"fmt"
 
+	"github.com/bureau-foundation/bureau/lib/ref"
 	"github.com/bureau-foundation/bureau/lib/schema"
 	"github.com/bureau-foundation/bureau/messaging"
 )
@@ -20,6 +21,7 @@ import (
 type Future struct {
 	watcher   *messaging.RoomWatcher
 	requestID string
+	eventID   ref.EventID
 }
 
 // Wait blocks until a single command result matching this future's
@@ -72,6 +74,13 @@ func (f *Future) Discard() {
 // with its results.
 func (f *Future) RequestID() string {
 	return f.requestID
+}
+
+// EventID returns the Matrix event ID of the sent command message.
+// Callers use this to locate the command's thread in a room (results
+// are threaded replies to this event).
+func (f *Future) EventID() ref.EventID {
+	return f.eventID
 }
 
 // isCommandResult returns true if the event is a command_result

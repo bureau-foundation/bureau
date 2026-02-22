@@ -130,6 +130,9 @@ func (s *pipelineTestState) handler() http.Handler {
 			strings.Contains(path, "/send/"):
 			s.handleSendEvent(writer, request, path)
 
+		case strings.HasPrefix(path, "/_matrix/client/v3/sync"):
+			s.handleSync(writer)
+
 		default:
 			http.Error(writer, fmt.Sprintf(`{"errcode":"M_UNRECOGNIZED","error":"unknown: %s %s"}`, request.Method, path), http.StatusNotFound)
 		}
@@ -292,6 +295,11 @@ func (s *pipelineTestState) handleSendEvent(writer http.ResponseWriter, request 
 
 	writer.Header().Set("Content-Type", "application/json")
 	fmt.Fprintf(writer, `{"event_id":"$test-event-id"}`)
+}
+
+func (s *pipelineTestState) handleSync(writer http.ResponseWriter) {
+	writer.Header().Set("Content-Type", "application/json")
+	fmt.Fprint(writer, `{"next_batch":"mock_batch_token","rooms":{"join":{}}}`)
 }
 
 // newPipelineTestSession creates a mock Matrix session connected to the

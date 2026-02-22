@@ -402,10 +402,23 @@ type PipelineResultContent struct {
 	// this field.
 	PipelineRef string `json:"pipeline_ref"`
 
-	// Conclusion is the terminal outcome: "success", "failure", or
-	// "aborted". TicketGate.Conclusion matches against this field.
-	// An empty Conclusion in a gate means "any completed result".
+	// Conclusion is the terminal outcome: "success", "failure",
+	// "aborted", or "cancelled". TicketGate.Conclusion matches against
+	// this field. An empty Conclusion in a gate means "any completed
+	// result".
+	//
+	// "aborted" means the pipeline was stopped cleanly by an
+	// assert_state step with on_mismatch "abort" — the pipeline
+	// decided to stop itself. "cancelled" means external
+	// cancellation: the ticket was closed before or during execution
+	// and the executor was told to stop.
 	Conclusion string `json:"conclusion"`
+
+	// TicketID is the ticket that initiated this execution (e.g.,
+	// "pip-a3f9"). Links the machine-readable result event back to
+	// the ticket lifecycle. Empty for legacy executions that predate
+	// the pipeline/ticket unification.
+	TicketID string `json:"ticket_id,omitempty"`
 
 	// StartedAt is an ISO 8601 timestamp of when execution began.
 	StartedAt string `json:"started_at"`
@@ -488,7 +501,7 @@ func (p *PipelineResultContent) Validate() error {
 		return errors.New("pipeline result: pipeline_ref is required")
 	}
 	switch p.Conclusion {
-	case "success", "failure", "aborted":
+	case "success", "failure", "aborted", "cancelled":
 		// Valid.
 	case "":
 		return errors.New("pipeline result: conclusion is required")

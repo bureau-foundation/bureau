@@ -590,7 +590,7 @@ func TestPipelineResultContentOmitsEmptyOptionals(t *testing.T) {
 	}
 
 	// Optional fields with zero values should be omitted.
-	for _, field := range []string{"step_results", "failed_step", "error_message", "log_event_id", "extra"} {
+	for _, field := range []string{"step_results", "failed_step", "error_message", "ticket_id", "log_event_id", "extra"} {
 		if _, exists := raw[field]; exists {
 			t.Errorf("expected field %q to be omitted, but it is present", field)
 		}
@@ -735,9 +735,14 @@ func TestPipelineResultContentValidate(t *testing.T) {
 			wantErr: "conclusion is required",
 		},
 		{
-			name:    "conclusion_unknown",
+			name:    "conclusion_cancelled",
 			modify:  func(p *PipelineResultContent) { p.Conclusion = "cancelled" },
-			wantErr: `unknown conclusion "cancelled"`,
+			wantErr: "",
+		},
+		{
+			name:    "conclusion_unknown",
+			modify:  func(p *PipelineResultContent) { p.Conclusion = "timeout" },
+			wantErr: `unknown conclusion "timeout"`,
 		},
 		{
 			name:    "conclusion_success",
@@ -1086,6 +1091,45 @@ func TestParseStepOutputs(t *testing.T) {
 			t.Errorf("error should mention the output name, got: %v", err)
 		}
 	})
+}
+
+func TestPipelineResultContentTicketID(t *testing.T) {
+	// TicketID is present when set.
+	content := validPipelineResultContent()
+	content.TicketID = "pip-a3f9"
+
+	data, err := json.Marshal(content)
+	if err != nil {
+		t.Fatalf("Marshal: %v", err)
+	}
+
+	var raw map[string]any
+	if err := json.Unmarshal(data, &raw); err != nil {
+		t.Fatalf("Unmarshal to map: %v", err)
+	}
+	assertField(t, raw, "ticket_id", "pip-a3f9")
+
+	var decoded PipelineResultContent
+	if err := json.Unmarshal(data, &decoded); err != nil {
+		t.Fatalf("Unmarshal: %v", err)
+	}
+	if decoded.TicketID != "pip-a3f9" {
+		t.Errorf("TicketID = %q, want %q", decoded.TicketID, "pip-a3f9")
+	}
+
+	// TicketID is omitted when empty.
+	content.TicketID = ""
+	data, err = json.Marshal(content)
+	if err != nil {
+		t.Fatalf("Marshal: %v", err)
+	}
+	var emptyRaw map[string]any
+	if err := json.Unmarshal(data, &emptyRaw); err != nil {
+		t.Fatalf("Unmarshal to map: %v", err)
+	}
+	if _, exists := emptyRaw["ticket_id"]; exists {
+		t.Error("ticket_id should be omitted when empty")
+	}
 }
 
 func TestPipelineOnFailure(t *testing.T) {

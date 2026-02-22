@@ -245,7 +245,7 @@ func TestTicketContentOmitsEmptyOptionals(t *testing.T) {
 	optionalFields := []string{
 		"body", "labels", "parent", "blocked_by",
 		"gates", "notes", "attachments", "closed_at", "close_reason",
-		"origin", "extra",
+		"origin", "pipeline", "extra",
 	}
 	// Assignee is ref.UserID which implements TextMarshaler — Go's
 	// encoding/json emits "" for the zero value even with omitempty.
@@ -475,6 +475,44 @@ func TestTicketContentValidate(t *testing.T) {
 			name:    "type_question",
 			modify:  func(tc *TicketContent) { tc.Type = "question" },
 			wantErr: "",
+		},
+		{
+			name: "type_pipeline",
+			modify: func(tc *TicketContent) {
+				tc.Type = "pipeline"
+				tc.Pipeline = &PipelineExecutionContent{
+					PipelineRef: "dev-workspace-init",
+					TotalSteps:  3,
+				}
+			},
+			wantErr: "",
+		},
+		{
+			name:    "type_pipeline_missing_content",
+			modify:  func(tc *TicketContent) { tc.Type = "pipeline" },
+			wantErr: "pipeline content is required when type is \"pipeline\"",
+		},
+		{
+			name: "type_pipeline_invalid_content",
+			modify: func(tc *TicketContent) {
+				tc.Type = "pipeline"
+				tc.Pipeline = &PipelineExecutionContent{
+					PipelineRef: "",
+					TotalSteps:  3,
+				}
+			},
+			wantErr: "pipeline: pipeline_ref is required",
+		},
+		{
+			name: "non_pipeline_type_with_pipeline_content",
+			modify: func(tc *TicketContent) {
+				tc.Type = "task"
+				tc.Pipeline = &PipelineExecutionContent{
+					PipelineRef: "dev-workspace-init",
+					TotalSteps:  3,
+				}
+			},
+			wantErr: "pipeline content must be nil when type is \"task\"",
 		},
 		{
 			name:    "created_by_empty",
@@ -1284,6 +1322,284 @@ func TestTicketOriginValidate(t *testing.T) {
 	}
 }
 
+func TestPipelineExecutionContentRoundTrip(t *testing.T) {
+	original := PipelineExecutionContent{
+		PipelineRef:     "dev-workspace-init",
+		Variables:       map[string]string{"REPOSITORY": "https://github.com/example/repo.git", "BRANCH": "main"},
+		CurrentStep:     2,
+		TotalSteps:      5,
+		CurrentStepName: "install-deps",
+	}
+
+	data, err := json.Marshal(original)
+	if err != nil {
+		t.Fatalf("Marshal: %v", err)
+	}
+
+	var raw map[string]any
+	if err := json.Unmarshal(data, &raw); err != nil {
+		t.Fatalf("Unmarshal to map: %v", err)
+	}
+	assertField(t, raw, "pipeline_ref", "dev-workspace-init")
+	assertField(t, raw, "current_step", float64(2))
+	assertField(t, raw, "total_steps", float64(5))
+	assertField(t, raw, "current_step_name", "install-deps")
+
+	variables, ok := raw["variables"].(map[string]any)
+	if !ok {
+		t.Fatalf("variables is not an object: %T", raw["variables"])
+	}
+	assertField(t, variables, "REPOSITORY", "https://github.com/example/repo.git")
+	assertField(t, variables, "BRANCH", "main")
+
+	var decoded PipelineExecutionContent
+	if err := json.Unmarshal(data, &decoded); err != nil {
+		t.Fatalf("Unmarshal: %v", err)
+	}
+	if decoded.PipelineRef != original.PipelineRef {
+		t.Errorf("PipelineRef = %q, want %q", decoded.PipelineRef, original.PipelineRef)
+	}
+	if decoded.CurrentStep != original.CurrentStep {
+		t.Errorf("CurrentStep = %d, want %d", decoded.CurrentStep, original.CurrentStep)
+	}
+	if decoded.TotalSteps != original.TotalSteps {
+		t.Errorf("TotalSteps = %d, want %d", decoded.TotalSteps, original.TotalSteps)
+	}
+	if decoded.CurrentStepName != original.CurrentStepName {
+		t.Errorf("CurrentStepName = %q, want %q", decoded.CurrentStepName, original.CurrentStepName)
+	}
+	if len(decoded.Variables) != 2 {
+		t.Fatalf("Variables count = %d, want 2", len(decoded.Variables))
+	}
+}
+
+func TestPipelineExecutionContentOmitsEmptyOptionals(t *testing.T) {
+	content := PipelineExecutionContent{
+		PipelineRef: "simple-pipeline",
+		TotalSteps:  1,
+	}
+
+	data, err := json.Marshal(content)
+	if err != nil {
+		t.Fatalf("Marshal: %v", err)
+	}
+
+	var raw map[string]any
+	if err := json.Unmarshal(data, &raw); err != nil {
+		t.Fatalf("Unmarshal to map: %v", err)
+	}
+
+	for _, field := range []string{"variables", "current_step", "current_step_name", "conclusion"} {
+		if _, exists := raw[field]; exists {
+			t.Errorf("%s should be omitted when empty/zero, but is present", field)
+		}
+	}
+
+	// Required fields must be present.
+	for _, field := range []string{"pipeline_ref", "total_steps"} {
+		if _, exists := raw[field]; !exists {
+			t.Errorf("required field %s is missing from JSON", field)
+		}
+	}
+}
+
+func TestPipelineExecutionContentValidate(t *testing.T) {
+	tests := []struct {
+		name    string
+		content PipelineExecutionContent
+		wantErr string
+	}{
+		{
+			name:    "valid_minimal",
+			content: PipelineExecutionContent{PipelineRef: "ci-pipeline", TotalSteps: 3},
+			wantErr: "",
+		},
+		{
+			name: "valid_in_progress",
+			content: PipelineExecutionContent{
+				PipelineRef:     "ci-pipeline",
+				TotalSteps:      5,
+				CurrentStep:     3,
+				CurrentStepName: "run-tests",
+			},
+			wantErr: "",
+		},
+		{
+			name: "valid_completed",
+			content: PipelineExecutionContent{
+				PipelineRef: "ci-pipeline",
+				TotalSteps:  3,
+				CurrentStep: 3,
+				Conclusion:  "success",
+			},
+			wantErr: "",
+		},
+		{
+			name:    "pipeline_ref_empty",
+			content: PipelineExecutionContent{PipelineRef: "", TotalSteps: 3},
+			wantErr: "pipeline_ref is required",
+		},
+		{
+			name:    "total_steps_zero",
+			content: PipelineExecutionContent{PipelineRef: "ci-pipeline", TotalSteps: 0},
+			wantErr: "total_steps must be >= 1",
+		},
+		{
+			name:    "current_step_negative",
+			content: PipelineExecutionContent{PipelineRef: "ci-pipeline", TotalSteps: 3, CurrentStep: -1},
+			wantErr: "current_step must be >= 0",
+		},
+		{
+			name:    "current_step_exceeds_total",
+			content: PipelineExecutionContent{PipelineRef: "ci-pipeline", TotalSteps: 3, CurrentStep: 4},
+			wantErr: "current_step (4) exceeds total_steps (3)",
+		},
+		{
+			name: "conclusion_success",
+			content: PipelineExecutionContent{
+				PipelineRef: "ci-pipeline", TotalSteps: 3, Conclusion: "success",
+			},
+			wantErr: "",
+		},
+		{
+			name: "conclusion_failure",
+			content: PipelineExecutionContent{
+				PipelineRef: "ci-pipeline", TotalSteps: 3, Conclusion: "failure",
+			},
+			wantErr: "",
+		},
+		{
+			name: "conclusion_aborted",
+			content: PipelineExecutionContent{
+				PipelineRef: "ci-pipeline", TotalSteps: 3, Conclusion: "aborted",
+			},
+			wantErr: "",
+		},
+		{
+			name: "conclusion_cancelled",
+			content: PipelineExecutionContent{
+				PipelineRef: "ci-pipeline", TotalSteps: 3, Conclusion: "cancelled",
+			},
+			wantErr: "",
+		},
+		{
+			name: "conclusion_invalid",
+			content: PipelineExecutionContent{
+				PipelineRef: "ci-pipeline", TotalSteps: 3, Conclusion: "timeout",
+			},
+			wantErr: `unknown conclusion "timeout"`,
+		},
+	}
+
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			err := test.content.Validate()
+			if test.wantErr == "" {
+				if err != nil {
+					t.Errorf("Validate() = %v, want nil", err)
+				}
+			} else {
+				if err == nil {
+					t.Fatalf("Validate() = nil, want error containing %q", test.wantErr)
+				}
+				if !strings.Contains(err.Error(), test.wantErr) {
+					t.Errorf("Validate() = %q, want error containing %q", err, test.wantErr)
+				}
+			}
+		})
+	}
+}
+
+func TestPipelineTicketRoundTrip(t *testing.T) {
+	// A complete pipeline ticket with type-specific content.
+	original := validTicketContent()
+	original.Type = "pipeline"
+	original.Pipeline = &PipelineExecutionContent{
+		PipelineRef:     "dev-workspace-init",
+		Variables:       map[string]string{"REPOSITORY": "https://github.com/example/repo.git"},
+		CurrentStep:     2,
+		TotalSteps:      5,
+		CurrentStepName: "install-deps",
+	}
+
+	data, err := json.Marshal(original)
+	if err != nil {
+		t.Fatalf("Marshal: %v", err)
+	}
+
+	var raw map[string]any
+	if err := json.Unmarshal(data, &raw); err != nil {
+		t.Fatalf("Unmarshal to map: %v", err)
+	}
+
+	assertField(t, raw, "type", "pipeline")
+	pipeline, ok := raw["pipeline"].(map[string]any)
+	if !ok {
+		t.Fatalf("pipeline is not an object: %T", raw["pipeline"])
+	}
+	assertField(t, pipeline, "pipeline_ref", "dev-workspace-init")
+	assertField(t, pipeline, "total_steps", float64(5))
+
+	var decoded TicketContent
+	if err := json.Unmarshal(data, &decoded); err != nil {
+		t.Fatalf("Unmarshal: %v", err)
+	}
+	if decoded.Pipeline == nil {
+		t.Fatal("Pipeline should not be nil after round-trip")
+	}
+	if decoded.Pipeline.PipelineRef != "dev-workspace-init" {
+		t.Errorf("Pipeline.PipelineRef = %q, want %q",
+			decoded.Pipeline.PipelineRef, "dev-workspace-init")
+	}
+	if decoded.Pipeline.CurrentStep != 2 {
+		t.Errorf("Pipeline.CurrentStep = %d, want 2", decoded.Pipeline.CurrentStep)
+	}
+
+	if err := decoded.Validate(); err != nil {
+		t.Errorf("Validate() = %v, want nil", err)
+	}
+}
+
+func TestPrefixForType(t *testing.T) {
+	tests := []struct {
+		ticketType string
+		want       string
+	}{
+		{"pipeline", "pip"},
+		{"task", ""},
+		{"bug", ""},
+		{"feature", ""},
+		{"epic", ""},
+		{"chore", ""},
+		{"docs", ""},
+		{"question", ""},
+		{"unknown", ""},
+	}
+	for _, test := range tests {
+		t.Run(test.ticketType, func(t *testing.T) {
+			if got := PrefixForType(test.ticketType); got != test.want {
+				t.Errorf("PrefixForType(%q) = %q, want %q", test.ticketType, got, test.want)
+			}
+		})
+	}
+}
+
+func TestIsValidType(t *testing.T) {
+	validTypes := []string{"task", "bug", "feature", "epic", "chore", "docs", "question", "pipeline"}
+	for _, typeName := range validTypes {
+		if !IsValidType(typeName) {
+			t.Errorf("IsValidType(%q) = false, want true", typeName)
+		}
+	}
+
+	invalidTypes := []string{"", "improvement", "story", "incident"}
+	for _, typeName := range invalidTypes {
+		if IsValidType(typeName) {
+			t.Errorf("IsValidType(%q) = true, want false", typeName)
+		}
+	}
+}
+
 func TestTicketConfigContentRoundTrip(t *testing.T) {
 	original := TicketConfigContent{
 		Version:       1,
@@ -1323,6 +1639,40 @@ func TestTicketConfigContentRoundTrip(t *testing.T) {
 	}
 }
 
+func TestTicketConfigContentAllowedTypesRoundTrip(t *testing.T) {
+	original := TicketConfigContent{
+		Version:      1,
+		Prefix:       "pip",
+		AllowedTypes: []string{"pipeline"},
+	}
+
+	data, err := json.Marshal(original)
+	if err != nil {
+		t.Fatalf("Marshal: %v", err)
+	}
+
+	var raw map[string]any
+	if err := json.Unmarshal(data, &raw); err != nil {
+		t.Fatalf("Unmarshal to map: %v", err)
+	}
+
+	allowedTypes, ok := raw["allowed_types"].([]any)
+	if !ok {
+		t.Fatalf("allowed_types is not an array: %T", raw["allowed_types"])
+	}
+	if len(allowedTypes) != 1 || allowedTypes[0] != "pipeline" {
+		t.Errorf("allowed_types = %v, want [pipeline]", allowedTypes)
+	}
+
+	var decoded TicketConfigContent
+	if err := json.Unmarshal(data, &decoded); err != nil {
+		t.Fatalf("Unmarshal: %v", err)
+	}
+	if len(decoded.AllowedTypes) != 1 || decoded.AllowedTypes[0] != "pipeline" {
+		t.Errorf("AllowedTypes = %v, want [pipeline]", decoded.AllowedTypes)
+	}
+}
+
 func TestTicketConfigContentOmitsEmptyOptionals(t *testing.T) {
 	config := TicketConfigContent{Version: 1}
 
@@ -1336,7 +1686,7 @@ func TestTicketConfigContentOmitsEmptyOptionals(t *testing.T) {
 		t.Fatalf("Unmarshal to map: %v", err)
 	}
 
-	for _, field := range []string{"prefix", "default_labels", "extra"} {
+	for _, field := range []string{"prefix", "allowed_types", "default_labels", "extra"} {
 		if _, exists := raw[field]; exists {
 			t.Errorf("%s should be omitted when empty, but is present", field)
 		}
@@ -1363,6 +1713,21 @@ func TestTicketConfigContentValidate(t *testing.T) {
 			name:    "valid_with_labels",
 			config:  TicketConfigContent{Version: 1, DefaultLabels: []string{"amdgpu"}},
 			wantErr: "",
+		},
+		{
+			name:    "valid_with_allowed_types",
+			config:  TicketConfigContent{Version: 1, AllowedTypes: []string{"pipeline"}},
+			wantErr: "",
+		},
+		{
+			name:    "valid_with_multiple_allowed_types",
+			config:  TicketConfigContent{Version: 1, AllowedTypes: []string{"task", "bug", "pipeline"}},
+			wantErr: "",
+		},
+		{
+			name:    "invalid_allowed_type",
+			config:  TicketConfigContent{Version: 1, AllowedTypes: []string{"task", "story"}},
+			wantErr: `allowed_types[1]: unknown type "story"`,
 		},
 		{
 			name:    "version_zero",

@@ -23,7 +23,7 @@ type listParams struct {
 	Priority int    `json:"priority" flag:"priority,p"  desc:"filter by priority (0-4, -1 for all)" default:"-1"`
 	Label    string `json:"label"    flag:"label,l"    desc:"filter by label"`
 	Assignee string `json:"assignee" flag:"assignee"   desc:"filter by assignee (Matrix user ID)"`
-	Type     string `json:"type"     flag:"type,t"     desc:"filter by type (task, bug, feature, epic, chore, docs, question)"`
+	Type     string `json:"type"     flag:"type,t"     desc:"filter by type (task, bug, feature, epic, chore, docs, question, pipeline)"`
 	Parent   string `json:"parent"   flag:"parent"     desc:"filter by parent ticket ID"`
 }
 
@@ -321,7 +321,7 @@ type grepParams struct {
 	Priority int    `json:"priority" flag:"priority,p"   desc:"filter by priority (0-4, -1 for all)" default:"-1"`
 	Label    string `json:"label"    flag:"label,l"     desc:"filter by label"`
 	Assignee string `json:"assignee" flag:"assignee"    desc:"filter by assignee (Matrix user ID)"`
-	Type     string `json:"type"     flag:"type,t"      desc:"filter by type (task, bug, feature, epic, chore, docs, question)"`
+	Type     string `json:"type"     flag:"type,t"      desc:"filter by type (task, bug, feature, epic, chore, docs, question, pipeline)"`
 }
 
 func grepCommand() *cli.Command {
@@ -429,7 +429,7 @@ type searchParams struct {
 	Priority int    `json:"priority" flag:"priority,p"   desc:"filter by priority (0-4, -1 for all)" default:"-1"`
 	Label    string `json:"label"    flag:"label,l"     desc:"filter by label"`
 	Assignee string `json:"assignee" flag:"assignee"    desc:"filter by assignee (Matrix user ID)"`
-	Type     string `json:"type"     flag:"type,t"      desc:"filter by type (task, bug, feature, epic, chore, docs, question)"`
+	Type     string `json:"type"     flag:"type,t"      desc:"filter by type (task, bug, feature, epic, chore, docs, question, pipeline)"`
 	Limit    int    `json:"limit"    flag:"limit,n"     desc:"maximum number of results" default:"50"`
 }
 
@@ -612,7 +612,7 @@ for a room.`,
 
 			if len(stats.ByType) > 0 {
 				fmt.Println("By Type:")
-				for _, typeName := range []string{"task", "bug", "feature", "epic", "chore", "docs", "question"} {
+				for _, typeName := range []string{"task", "bug", "feature", "epic", "chore", "docs", "question", "pipeline"} {
 					if count, ok := stats.ByType[typeName]; ok {
 						fmt.Printf("  %-14s %d\n", typeName, count)
 					}

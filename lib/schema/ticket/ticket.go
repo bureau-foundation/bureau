@@ -78,7 +78,9 @@ type TicketContent struct {
 	Priority int `json:"priority"`
 
 	// Type categorizes the work: "task", "bug", "feature",
-	// "epic", "chore", "docs", "question".
+	// "epic", "chore", "docs", "question", or "pipeline".
+	// Pipeline tickets represent pipeline executions and carry
+	// type-specific content in the Pipeline field.
 	Type string `json:"type"`
 
 	// Labels are free-form tags for filtering and grouping.
@@ -145,6 +147,11 @@ type TicketContent struct {
 	// from an external system (GitHub, beads JSONL, etc.).
 	Origin *TicketOrigin `json:"origin,omitempty"`
 
+	// Pipeline carries type-specific content for pipeline
+	// execution tickets (Type == "pipeline"). Must be set when
+	// Type is "pipeline" and must be nil for all other types.
+	Pipeline *PipelineExecutionContent `json:"pipeline,omitempty"`
+
 	// Extra is a documented extension namespace for experimental or
 	// preview fields before promotion to top-level schema fields in
 	// a version bump. Keys are field names; values are arbitrary
@@ -180,12 +187,22 @@ func (t *TicketContent) Validate() error {
 		return fmt.Errorf("ticket content: priority must be 0-4, got %d", t.Priority)
 	}
 	switch t.Type {
-	case "task", "bug", "feature", "epic", "chore", "docs", "question":
+	case "task", "bug", "feature", "epic", "chore", "docs", "question", "pipeline":
 		// Valid.
 	case "":
 		return errors.New("ticket content: type is required")
 	default:
 		return fmt.Errorf("ticket content: unknown type %q", t.Type)
+	}
+	if t.Type == "pipeline" {
+		if t.Pipeline == nil {
+			return errors.New("ticket content: pipeline content is required when type is \"pipeline\"")
+		}
+		if err := t.Pipeline.Validate(); err != nil {
+			return fmt.Errorf("ticket content: pipeline: %w", err)
+		}
+	} else if t.Pipeline != nil {
+		return fmt.Errorf("ticket content: pipeline content must be nil when type is %q", t.Type)
 	}
 	if t.CreatedBy.IsZero() {
 		return errors.New("ticket content: created_by is required")
@@ -605,6 +622,102 @@ func (o *TicketOrigin) Validate() error {
 	return nil
 }
 
+// PipelineExecutionContent carries the type-specific content for a
+// pipeline execution ticket (TicketContent.Type == "pipeline"). This
+// is the tagged-pointer discriminated union: pipeline tickets carry
+// structured execution state that generic tickets do not need.
+//
+// The executor updates these fields as the pipeline runs. Observers
+// (ticket UI, subscription endpoints) can read current_step and
+// conclusion without parsing pipeline result events.
+type PipelineExecutionContent struct {
+	// PipelineRef identifies the pipeline definition being executed
+	// (e.g., "dev-workspace-init"). Matches the state key of the
+	// m.bureau.pipeline event that defines the step sequence.
+	PipelineRef string `json:"pipeline_ref"`
+
+	// Variables are the resolved variable values for this execution.
+	// Keyed by variable name (e.g., "REPOSITORY", "BRANCH"). These
+	// are the actual values used, not the declarations from the
+	// pipeline definition.
+	Variables map[string]string `json:"variables,omitempty"`
+
+	// CurrentStep is the 1-based index of the step currently
+	// executing. Zero before execution starts. Updated by the
+	// executor as it progresses through steps.
+	CurrentStep int `json:"current_step,omitempty"`
+
+	// TotalSteps is the total number of steps in the pipeline
+	// definition. Set when the executor claims the ticket.
+	TotalSteps int `json:"total_steps"`
+
+	// CurrentStepName is the human-readable name of the step
+	// currently executing (e.g., "clone-repository"). Empty before
+	// execution starts or after completion. Updated alongside
+	// CurrentStep.
+	CurrentStepName string `json:"current_step_name,omitempty"`
+
+	// Conclusion is the terminal outcome after execution completes:
+	// "success", "failure", "aborted", or "cancelled". Empty while
+	// the pipeline is still running. Mirrors the conclusion in the
+	// companion m.bureau.pipeline_result event.
+	Conclusion string `json:"conclusion,omitempty"`
+}
+
+// Validate checks that all required fields are present and well-formed.
+func (p *PipelineExecutionContent) Validate() error {
+	if p.PipelineRef == "" {
+		return errors.New("pipeline_ref is required")
+	}
+	if p.TotalSteps < 1 {
+		return fmt.Errorf("total_steps must be >= 1, got %d", p.TotalSteps)
+	}
+	if p.CurrentStep < 0 {
+		return fmt.Errorf("current_step must be >= 0, got %d", p.CurrentStep)
+	}
+	if p.CurrentStep > p.TotalSteps {
+		return fmt.Errorf("current_step (%d) exceeds total_steps (%d)", p.CurrentStep, p.TotalSteps)
+	}
+	switch p.Conclusion {
+	case "", "success", "failure", "aborted", "cancelled":
+		// Valid. Empty means still running.
+	default:
+		return fmt.Errorf("unknown conclusion %q", p.Conclusion)
+	}
+	return nil
+}
+
+// validTicketTypes is the set of recognized ticket types. Used for
+// validation in both TicketContent and TicketConfigContent.AllowedTypes.
+var validTicketTypes = map[string]bool{
+	"task":     true,
+	"bug":      true,
+	"feature":  true,
+	"epic":     true,
+	"chore":    true,
+	"docs":     true,
+	"question": true,
+	"pipeline": true,
+}
+
+// IsValidType reports whether the given string is a recognized ticket type.
+func IsValidType(ticketType string) bool {
+	return validTicketTypes[ticketType]
+}
+
+// PrefixForType returns the ticket ID prefix for a given ticket type.
+// Pipeline tickets use "pip", all other types use the room's configured
+// prefix (defaulting to "tkt"). Returns the type-specific prefix if one
+// exists, or empty string to indicate the room default should be used.
+func PrefixForType(ticketType string) string {
+	switch ticketType {
+	case "pipeline":
+		return "pip"
+	default:
+		return ""
+	}
+}
+
 // TicketConfigContent enables and configures ticket management for a
 // room. Rooms without this event do not accept ticket operations from
 // the ticket service. Published by the admin via "bureau ticket enable".
@@ -622,6 +735,14 @@ type TicketConfigContent struct {
 	// prefix + "-" + short hash.
 	Prefix string `json:"prefix,omitempty"`
 
+	// AllowedTypes restricts which ticket types can be created in
+	// this room. When empty, all types are allowed. When set, only
+	// the listed types are accepted by the ticket service. This
+	// enables dedicated rooms for specific ticket types: a pipeline
+	// execution room might set AllowedTypes to ["pipeline"] to
+	// prevent manual task tickets from being filed there.
+	AllowedTypes []string `json:"allowed_types,omitempty"`
+
 	// DefaultLabels are applied to new tickets that don't
 	// explicitly specify labels.
 	DefaultLabels []string `json:"default_labels,omitempty"`
@@ -631,10 +752,16 @@ type TicketConfigContent struct {
 	Extra map[string]json.RawMessage `json:"extra,omitempty"`
 }
 
-// Validate checks that the config has a valid version.
+// Validate checks that the config has a valid version and that
+// AllowedTypes (if set) contains only recognized ticket types.
 func (c *TicketConfigContent) Validate() error {
 	if c.Version < 1 {
 		return fmt.Errorf("ticket config: version must be >= 1, got %d", c.Version)
+	}
+	for i, typeName := range c.AllowedTypes {
+		if !IsValidType(typeName) {
+			return fmt.Errorf("ticket config: allowed_types[%d]: unknown type %q", i, typeName)
+		}
 	}
 	return nil
 }

@@ -44,6 +44,8 @@ func typeIcon(ticketType string) string {
 		return "📝"
 	case "question":
 		return "❓"
+	case "pipeline":
+		return "🚀"
 	default:
 		return "  " // 2 spaces to match emoji width
 	}

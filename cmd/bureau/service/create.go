@@ -23,12 +23,12 @@ import (
 // This command requires the credential file (not just a session) because
 // it needs the registration token for Matrix account creation.
 type serviceCreateParams struct {
-	CredentialFile string `json:"-"            flag:"credential-file" desc:"path to Bureau credential file from 'bureau matrix setup' (required)"`
-	Machine        string `json:"machine"      flag:"machine"         desc:"target machine localpart (required)"`
-	Name           string `json:"name"         flag:"name"            desc:"service principal localpart (required)"`
-	Fleet          string `json:"fleet"        flag:"fleet"           desc:"fleet prefix (e.g., bureau/fleet/prod) (required)"`
-	ServerName     string `json:"server_name"  flag:"server-name"     desc:"Matrix server name" default:"bureau.local"`
-	AutoStart      bool   `json:"auto_start"   flag:"auto-start"      desc:"start sandbox automatically" default:"true"`
+	cli.SessionConfig
+	Machine    string `json:"machine"      flag:"machine"         desc:"target machine localpart (required)"`
+	Name       string `json:"name"         flag:"name"            desc:"service principal localpart (required)"`
+	Fleet      string `json:"fleet"        flag:"fleet"           desc:"fleet prefix (e.g., bureau/fleet/prod) (required)"`
+	ServerName string `json:"server_name"  flag:"server-name"     desc:"Matrix server name" default:"bureau.local"`
+	AutoStart  bool   `json:"auto_start"   flag:"auto-start"      desc:"start sandbox automatically" default:"true"`
 
 	cli.JSONOutput
 }
@@ -90,7 +90,7 @@ token for creating the service's account.`,
 			if len(args) > 1 {
 				return cli.Validation("unexpected argument: %s", args[1])
 			}
-			if params.CredentialFile == "" {
+			if params.SessionConfig.CredentialFile == "" {
 				return cli.Validation("--credential-file is required")
 			}
 			if params.Machine == "" {
@@ -117,8 +117,19 @@ func runCreate(templateRef schema.TemplateRef, params serviceCreateParams) error
 	ctx, cancel := context.WithTimeout(context.Background(), 60*time.Second)
 	defer cancel()
 
-	// Read the credential file for admin access and the registration token.
-	credentials, err := cli.ReadCredentialFile(params.CredentialFile)
+	// Connect for admin operations (room management, invites, config
+	// publishing). Uses SessionConfig for consistency with machine and
+	// agent commands.
+	adminSession, err := params.SessionConfig.Connect(ctx)
+	if err != nil {
+		return cli.Internal("connect: %w", err)
+	}
+	defer adminSession.Close()
+
+	// The credential file also contains the registration token,
+	// which SessionConfig.Connect() doesn't extract. Read it
+	// separately for account registration.
+	credentials, err := cli.ReadCredentialFile(params.SessionConfig.CredentialFile)
 	if err != nil {
 		return cli.Internal("read credential file: %w", err)
 	}
@@ -127,14 +138,19 @@ func runCreate(templateRef schema.TemplateRef, params serviceCreateParams) error
 	if registrationToken == "" {
 		return cli.Validation("credential file missing MATRIX_REGISTRATION_TOKEN")
 	}
-	homeserverURL := credentials["MATRIX_HOMESERVER_URL"]
-	if homeserverURL == "" {
-		return cli.Validation("credential file missing MATRIX_HOMESERVER_URL")
+
+	registrationTokenBuffer, err := secret.NewFromString(registrationToken)
+	if err != nil {
+		return cli.Internal("protecting registration token: %w", err)
 	}
-	adminUserID := credentials["MATRIX_ADMIN_USER"]
-	adminToken := credentials["MATRIX_ADMIN_TOKEN"]
-	if adminUserID == "" || adminToken == "" {
-		return cli.Validation("credential file missing MATRIX_ADMIN_USER or MATRIX_ADMIN_TOKEN")
+	defer registrationTokenBuffer.Close()
+
+	// Account registration (client.Register) is unauthenticated
+	// and needs a Client, not a Session. Create a separate Client
+	// for this single HTTP POST.
+	homeserverURL, err := params.SessionConfig.ResolveHomeserverURL()
+	if err != nil {
+		return err
 	}
 
 	client, err := messaging.NewClient(messaging.ClientConfig{
@@ -143,23 +159,6 @@ func runCreate(templateRef schema.TemplateRef, params serviceCreateParams) error
 	if err != nil {
 		return cli.Internal("create matrix client: %w", err)
 	}
-
-	registrationTokenBuffer, err := secret.NewFromString(registrationToken)
-	if err != nil {
-		return cli.Internal("protecting registration token: %w", err)
-	}
-	defer registrationTokenBuffer.Close()
-
-	parsedAdminUserID, err := ref.ParseUserID(adminUserID)
-	if err != nil {
-		return cli.Internal("parse admin user ID: %w", err)
-	}
-
-	adminSession, err := client.SessionFromToken(parsedAdminUserID, adminToken)
-	if err != nil {
-		return cli.Internal("create admin session: %w", err)
-	}
-	defer adminSession.Close()
 
 	serverName, err := ref.ParseServerName(params.ServerName)
 	if err != nil {

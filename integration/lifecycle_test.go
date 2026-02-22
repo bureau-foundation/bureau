@@ -12,7 +12,6 @@ import (
 	"testing"
 
 	"github.com/bureau-foundation/bureau/lib/bootstrap"
-	"github.com/bureau-foundation/bureau/lib/credential"
 	"github.com/bureau-foundation/bureau/lib/principal"
 	"github.com/bureau-foundation/bureau/lib/ref"
 	"github.com/bureau-foundation/bureau/lib/schema"
@@ -312,130 +311,20 @@ func TestTwoMachineFleet(t *testing.T) {
 	defer admin.Close()
 
 	twoMachineFleet := createTestFleet(t, admin)
-	machineARef, err := ref.NewMachine(twoMachineFleet.Ref, "fleet-a")
-	if err != nil {
-		t.Fatalf("create machine ref: %v", err)
-	}
-	machineBRef, err := ref.NewMachine(twoMachineFleet.Ref, "fleet-b")
-	if err != nil {
-		t.Fatalf("create machine ref: %v", err)
-	}
-	machineAName := machineARef.Localpart()
-	machineBName := machineBRef.Localpart()
+	machineA := newTestMachine(t, twoMachineFleet, "fleet-a")
+	machineB := newTestMachine(t, twoMachineFleet, "fleet-b")
 	machineRoomID := twoMachineFleet.MachineRoomID
 
-	// --- Provision both machines ---
-	stateDirA := t.TempDir()
-	stateDirB := t.TempDir()
-	bootstrapPathA := filepath.Join(stateDirA, "bootstrap.json")
-	bootstrapPathB := filepath.Join(stateDirB, "bootstrap.json")
-
-	twoMachineClient := adminClient(t)
-	provisionMachine(t, twoMachineClient, admin, machineARef, bootstrapPathA)
-	provisionMachine(t, twoMachineClient, admin, machineBRef, bootstrapPathB)
-	t.Log("both machines provisioned")
-
-	// --- First boot both machines ---
-	runDirA := tempSocketDir(t)
-	runDirB := tempSocketDir(t)
-
-	type machineSetup struct {
-		name          string
-		machineRef    ref.Machine
-		stateDir      string
-		runDir        string
-		bootstrapPath string
-		workspaceRoot string
-		cacheRoot     string
+	// --- Provision, first-boot, and start both machines ---
+	options := machineOptions{
+		Fleet:          twoMachineFleet,
+		LauncherBinary: launcherBinary,
+		DaemonBinary:   daemonBinary,
+		ProxyBinary:    proxyBinary,
 	}
-
-	setupMachine := func(name string, machineRef ref.Machine, stateDir, runDir, bootstrapPath string) machineSetup {
-		return machineSetup{
-			name:          name,
-			machineRef:    machineRef,
-			stateDir:      stateDir,
-			runDir:        runDir,
-			bootstrapPath: bootstrapPath,
-			workspaceRoot: filepath.Join(stateDir, "workspace"),
-			cacheRoot:     filepath.Join(stateDir, "cache"),
-		}
-	}
-
-	machineA := setupMachine(machineAName, machineARef, stateDirA, runDirA, bootstrapPathA)
-	machineB := setupMachine(machineBName, machineBRef, stateDirB, runDirB, bootstrapPathB)
-
-	// First-boot both in sequence (each is fast — just login + rotate + publish).
-	for _, machine := range []machineSetup{machineA, machineB} {
-		firstBootCmd := exec.Command(launcherBinary,
-			"--bootstrap-file", machine.bootstrapPath,
-			"--first-boot-only",
-			"--machine-name", machine.name,
-			"--server-name", testServerName,
-			"--fleet", twoMachineFleet.Prefix,
-			"--run-dir", machine.runDir,
-			"--state-dir", machine.stateDir,
-			"--workspace-root", machine.workspaceRoot,
-			"--cache-root", machine.cacheRoot,
-		)
-		firstBootCmd.Stdout = os.Stderr
-		firstBootCmd.Stderr = os.Stderr
-		if err := firstBootCmd.Run(); err != nil {
-			t.Fatalf("first boot %s failed: %v", machine.name, err)
-		}
-	}
-	t.Log("both machines completed first boot")
-
-	// Verify both machine keys are published. First boot already completed,
-	// so these events exist in room state — read them directly.
-	if _, err := admin.GetStateEvent(ctx, machineRoomID,
-		schema.EventTypeMachineKey, machineAName); err != nil {
-		t.Fatalf("get machine A key: %v", err)
-	}
-	if _, err := admin.GetStateEvent(ctx, machineRoomID,
-		schema.EventTypeMachineKey, machineBName); err != nil {
-		t.Fatalf("get machine B key: %v", err)
-	}
-
-	// --- Start both launcher+daemon pairs ---
-	startMachineProcesses := func(t *testing.T, machine machineSetup) {
-		t.Helper()
-		startProcess(t, machine.name+"-launcher", launcherBinary,
-			"--homeserver", testHomeserverURL,
-			"--machine-name", machine.name,
-			"--server-name", testServerName,
-			"--fleet", twoMachineFleet.Prefix,
-			"--run-dir", machine.runDir,
-			"--state-dir", machine.stateDir,
-			"--workspace-root", machine.workspaceRoot,
-			"--cache-root", machine.cacheRoot,
-			"--proxy-binary", proxyBinary,
-		)
-		waitForFile(t, principal.LauncherSocketPath(machine.runDir))
-
-		startProcess(t, machine.name+"-daemon", daemonBinary,
-			"--homeserver", testHomeserverURL,
-			"--machine-name", machine.name,
-			"--server-name", testServerName,
-			"--run-dir", machine.runDir,
-			"--state-dir", machine.stateDir,
-			"--admin-user", "bureau-admin",
-			"--status-interval", "2s",
-			"--fleet", twoMachineFleet.Prefix,
-		)
-	}
-
-	// Set up a watch before starting daemons to detect their first heartbeats.
-	statusWatch := watchRoom(t, admin, twoMachineFleet.MachineRoomID)
-
-	startMachineProcesses(t, machineA)
-	startMachineProcesses(t, machineB)
-
-	// Wait for both daemons to publish MachineStatus heartbeats.
-	statusWatch.WaitForStateEvent(t,
-		schema.EventTypeMachineStatus, machineAName)
-	statusWatch.WaitForStateEvent(t,
-		schema.EventTypeMachineStatus, machineBName)
-	t.Log("both daemons running and publishing status")
+	startMachine(t, admin, machineA, options)
+	startMachine(t, admin, machineB, options)
+	t.Log("both machines provisioned, booted, and publishing status")
 
 	// --- Verify mutual visibility ---
 	// Both machines should see each other's keys in #bureau/machine.
@@ -462,75 +351,27 @@ func TestTwoMachineFleet(t *testing.T) {
 		t.Errorf("expected at least 2 machine keys in #bureau/machine, got %d", keyCount)
 	}
 
-	// --- Register principals and provision credentials ---
+	// --- Register principals, provision credentials, and wait for proxies ---
 	principalAAccount := registerFleetPrincipal(t, twoMachineFleet, principalALocalpart, "pass-fleet-a")
 	principalBAccount := registerFleetPrincipal(t, twoMachineFleet, principalBLocalpart, "pass-fleet-b")
 
-	type principalSetup struct {
-		account      principalAccount
-		machineSetup machineSetup
-	}
-
-	principals := []principalSetup{
-		{principalAAccount, machineA},
-		{principalBAccount, machineB},
-	}
-
-	// Resolve config rooms (created by daemons) and push credentials + config.
-	for _, p := range principals {
-		configAlias := p.machineSetup.machineRef.RoomAlias()
-		configRoomID, err := admin.ResolveAlias(ctx, configAlias)
-		if err != nil {
-			t.Fatalf("config room %s not created: %v", configAlias, err)
-		}
-		if _, err := admin.JoinRoom(ctx, configRoomID); err != nil {
-			t.Fatalf("admin join config room %s: %v", configAlias, err)
-		}
-
-		principalEntity, entityErr := ref.NewEntityFromAccountLocalpart(p.machineSetup.machineRef.Fleet(), p.account.Localpart)
-		if entityErr != nil {
-			t.Fatalf("build principal entity for %s: %v", p.account.Localpart, entityErr)
-		}
-
-		_, err = credential.Provision(ctx, admin, credential.ProvisionParams{
-			Machine:       p.machineSetup.machineRef,
-			Principal:     principalEntity,
-			MachineRoomID: twoMachineFleet.MachineRoomID,
-			Credentials: map[string]string{
-				"MATRIX_TOKEN":          p.account.Token,
-				"MATRIX_USER_ID":        p.account.UserID.String(),
-				"MATRIX_HOMESERVER_URL": testHomeserverURL,
-			},
-		})
-		if err != nil {
-			t.Fatalf("provision credentials for %s: %v", p.account.Localpart, err)
-		}
-
-		_, err = admin.SendStateEvent(ctx, configRoomID, schema.EventTypeMachineConfig,
-			p.machineSetup.name, schema.MachineConfig{
-				Principals: []schema.PrincipalAssignment{
-					{
-						Principal: principalEntity,
-						AutoStart: true,
-						MatrixPolicy: &schema.MatrixPolicy{
-							AllowJoin: true,
-						},
-					},
-				},
-			})
-		if err != nil {
-			t.Fatalf("push machine config for %s: %v", p.machineSetup.name, err)
-		}
-	}
-
-	// --- Wait for both proxy sockets ---
-	proxySocketA := principalSocketPath(t, machineA.machineRef, machineA.runDir, principalAAccount.Localpart)
-	proxySocketB := principalSocketPath(t, machineB.machineRef, machineB.runDir, principalBAccount.Localpart)
-	waitForFile(t, proxySocketA)
-	waitForFile(t, proxySocketB)
+	socketsA := deployPrincipals(t, admin, machineA, deploymentConfig{
+		Principals: []principalSpec{{
+			Account:      principalAAccount,
+			MatrixPolicy: &schema.MatrixPolicy{AllowJoin: true},
+		}},
+	})
+	socketsB := deployPrincipals(t, admin, machineB, deploymentConfig{
+		Principals: []principalSpec{{
+			Account:      principalBAccount,
+			MatrixPolicy: &schema.MatrixPolicy{AllowJoin: true},
+		}},
+	})
 	t.Log("both proxies spawned")
 
 	// Verify proxy identities.
+	proxySocketA := socketsA[principalALocalpart]
+	proxySocketB := socketsB[principalBLocalpart]
 	clientA := proxyHTTPClient(proxySocketA)
 	clientB := proxyHTTPClient(proxySocketB)
 	whoamiA := proxyWhoami(t, clientA)
@@ -579,11 +420,11 @@ func TestTwoMachineFleet(t *testing.T) {
 	t.Log("cross-machine message exchange verified")
 
 	// --- Decommission both machines ---
-	decommissionMachine(t, admin, machineARef)
-	decommissionMachine(t, admin, machineBRef)
+	decommissionMachine(t, admin, machineA.Ref)
+	decommissionMachine(t, admin, machineB.Ref)
 
 	// Verify both machine keys are cleared.
-	for _, name := range []string{machineAName, machineBName} {
+	for _, name := range []string{machineA.Name, machineB.Name} {
 		keyJSON, err := admin.GetStateEvent(ctx, machineRoomID,
 			schema.EventTypeMachineKey, name)
 		if err != nil {

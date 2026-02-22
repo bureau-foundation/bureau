@@ -54,6 +54,8 @@ func (f *fakeShipper) Ship(_ context.Context, data []byte) error {
 	return err
 }
 
+func (f *fakeShipper) Close() {}
+
 func (f *fakeShipper) callCount() int {
 	f.mu.Lock()
 	defer f.mu.Unlock()

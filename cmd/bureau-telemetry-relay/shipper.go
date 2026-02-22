@@ -5,46 +5,157 @@ package main
 
 import (
 	"context"
+	"fmt"
 	"log/slog"
+	"net"
+	"os"
 	"sync/atomic"
 	"time"
 
 	"github.com/bureau-foundation/bureau/lib/clock"
 	"github.com/bureau-foundation/bureau/lib/codec"
-	"github.com/bureau-foundation/bureau/lib/service"
 )
 
-// BatchShipper sends a CBOR-encoded telemetry batch to the telemetry
+// BatchShipper sends CBOR-encoded telemetry batches to the telemetry
 // service. The relay uses this interface so that tests can substitute
 // a fake implementation without needing a real service socket.
 type BatchShipper interface {
 	Ship(ctx context.Context, data []byte) error
+
+	// Close shuts down the shipper, closing any persistent connection.
+	// Called after the shipper goroutine exits during graceful shutdown.
+	Close()
 }
 
-// socketShipper ships CBOR-encoded telemetry batches to the telemetry
-// service by calling its "ingest" action via a ServiceClient.
-type socketShipper struct {
-	client *service.ServiceClient
+// ingestAck is the acknowledgment frame sent by the telemetry service
+// after each batch on the streaming connection. Also used for the
+// initial handshake readiness signal.
+type ingestAck struct {
+	OK    bool   `cbor:"ok"`
+	Error string `cbor:"error,omitempty"`
 }
 
-// newSocketShipper creates a BatchShipper that sends batches to the
-// telemetry service at the given socket path, authenticating with the
-// service token at tokenPath.
-func newSocketShipper(socketPath, tokenPath string) (BatchShipper, error) {
-	client, err := service.NewServiceClient(socketPath, tokenPath)
+// streamShipper ships CBOR-encoded telemetry batches to the telemetry
+// service over a persistent streaming connection. The connection is
+// established on the first Ship call and reused for subsequent calls.
+// If the connection breaks, the next Ship call establishes a new one.
+type streamShipper struct {
+	socketPath string
+	tokenBytes []byte
+
+	conn    net.Conn
+	encoder *codec.Encoder
+	decoder *codec.Decoder
+}
+
+// streamDialTimeout is the maximum time to wait for a connection to
+// the telemetry service socket.
+const streamDialTimeout = 5 * time.Second
+
+// newStreamShipper creates a BatchShipper that maintains a persistent
+// streaming connection to the telemetry service. The service token is
+// read from tokenPath once at creation time.
+func newStreamShipper(socketPath, tokenPath string) (BatchShipper, error) {
+	tokenBytes, err := os.ReadFile(tokenPath)
 	if err != nil {
-		return nil, err
+		return nil, fmt.Errorf("reading service token from %s: %w", tokenPath, err)
 	}
-	return &socketShipper{client: client}, nil
+	if len(tokenBytes) == 0 {
+		return nil, fmt.Errorf("service token file %s is empty", tokenPath)
+	}
+	return &streamShipper{
+		socketPath: socketPath,
+		tokenBytes: tokenBytes,
+	}, nil
 }
 
-// Ship sends a pre-encoded CBOR batch to the telemetry service's
-// "ingest" action. The batch is sent as a codec.RawMessage so the
-// service receives the pre-encoded bytes without double-encoding.
-func (s *socketShipper) Ship(ctx context.Context, data []byte) error {
-	return s.client.Call(ctx, "ingest", map[string]any{
-		"batch": codec.RawMessage(data),
-	}, nil)
+// Ship sends a pre-encoded CBOR batch over the streaming connection.
+// If no connection exists, one is established first (including the
+// handshake and readiness ack). On any error, the connection is closed
+// so the next Ship call reconnects with a fresh handshake.
+func (s *streamShipper) Ship(ctx context.Context, data []byte) error {
+	if s.conn == nil {
+		if err := s.connect(ctx); err != nil {
+			return err
+		}
+	}
+
+	// Send the pre-encoded batch as a raw CBOR value. The service
+	// decodes this as a telemetry.TelemetryBatch.
+	if err := s.encoder.Encode(codec.RawMessage(data)); err != nil {
+		s.closeConnection()
+		return fmt.Errorf("writing batch: %w", err)
+	}
+
+	// Read the per-batch acknowledgment.
+	var ack ingestAck
+	if err := s.decoder.Decode(&ack); err != nil {
+		s.closeConnection()
+		return fmt.Errorf("reading ack: %w", err)
+	}
+	if !ack.OK {
+		s.closeConnection()
+		return fmt.Errorf("batch rejected: %s", ack.Error)
+	}
+
+	return nil
+}
+
+// Close shuts down the persistent connection if one is open.
+func (s *streamShipper) Close() {
+	s.closeConnection()
+}
+
+// connect establishes a streaming connection to the telemetry service.
+// It sends the handshake (action + token) and waits for the service's
+// readiness ack before returning.
+func (s *streamShipper) connect(ctx context.Context) error {
+	dialer := net.Dialer{Timeout: streamDialTimeout}
+	conn, err := dialer.DialContext(ctx, "unix", s.socketPath)
+	if err != nil {
+		return fmt.Errorf("connecting to %s: %w", s.socketPath, err)
+	}
+
+	s.conn = conn
+	s.encoder = codec.NewEncoder(conn)
+	s.decoder = codec.NewDecoder(conn)
+
+	// Send the handshake: action + token. The socket server verifies
+	// the token and routes to the "ingest" stream handler.
+	handshake := map[string]any{
+		"action": "ingest",
+		"token":  s.tokenBytes,
+	}
+	if err := s.encoder.Encode(handshake); err != nil {
+		s.closeConnection()
+		return fmt.Errorf("writing handshake: %w", err)
+	}
+
+	// Wait for the readiness signal. If auth fails, the socket server
+	// writes {ok: false, error: "..."} directly. If auth succeeds,
+	// the ingest handler writes {ok: true}.
+	var ack ingestAck
+	if err := s.decoder.Decode(&ack); err != nil {
+		s.closeConnection()
+		return fmt.Errorf("reading handshake response: %w", err)
+	}
+	if !ack.OK {
+		s.closeConnection()
+		return fmt.Errorf("handshake rejected: %s", ack.Error)
+	}
+
+	return nil
+}
+
+// closeConnection tears down the streaming connection and clears all
+// connection state. The next Ship call will establish a new connection.
+func (s *streamShipper) closeConnection() {
+	if s.conn != nil {
+		s.conn.Close()
+		s.conn = nil
+		s.encoder = nil
+		s.decoder = nil
+	}
 }
 
 // Backoff constants for the shipper retry loop. Starts at

@@ -71,9 +71,10 @@ func run() error {
 	}
 	defer cleanup()
 
-	// Create the outgoing shipper that sends batches to the
-	// telemetry service via its "ingest" socket action.
-	shipper, err := newSocketShipper(*telemetryServiceSocket, *telemetryTokenPath)
+	// Create the outgoing shipper that maintains a persistent
+	// streaming connection to the telemetry service's "ingest"
+	// action.
+	shipper, err := newStreamShipper(*telemetryServiceSocket, *telemetryTokenPath)
 	if err != nil {
 		return fmt.Errorf("creating shipper: %w", err)
 	}
@@ -100,8 +101,14 @@ func run() error {
 	// Start the periodic flush loop.
 	go relay.runFlushLoop(ctx, *flushInterval)
 
-	// Start the shipper goroutine.
-	go runShipper(ctx, relay.buffer, relay.shipper, relay.clock, &relay.shipped, relay.logger)
+	// Start the shipper goroutine. The done channel signals when the
+	// shipper has finished its drain pass so we can close the
+	// streaming connection cleanly.
+	shipperDone := make(chan struct{})
+	go func() {
+		runShipper(ctx, relay.buffer, relay.shipper, relay.clock, &relay.shipped, relay.logger)
+		close(shipperDone)
+	}()
 
 	boot.Logger.Info("telemetry relay running",
 		"principal", boot.PrincipalName,
@@ -125,6 +132,11 @@ func run() error {
 	// buffer. The shipper's drain pass (triggered by ctx
 	// cancellation) will attempt to ship these.
 	relay.flushToBuffer()
+
+	// Wait for the shipper to finish its drain pass, then close
+	// the streaming connection.
+	<-shipperDone
+	relay.shipper.Close()
 
 	return nil
 }

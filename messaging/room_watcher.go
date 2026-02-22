@@ -5,11 +5,68 @@ package messaging
 
 import (
 	"context"
+	"encoding/json"
 	"fmt"
 	"log/slog"
 
 	"github.com/bureau-foundation/bureau/lib/ref"
 )
+
+// SyncFilter configures what events a RoomWatcher receives from /sync.
+// The watched room is always included automatically — callers never
+// need to specify the room ID in the filter.
+//
+// A nil *SyncFilter means "all events from the watched room" (state,
+// timeline, and ephemeral). This is the common case for room watchers
+// in tests and production code that need to observe all activity.
+type SyncFilter struct {
+	// TimelineTypes restricts timeline events to these Matrix event types
+	// (e.g., "m.room.message"). An empty slice means all timeline types.
+	TimelineTypes []string `json:"timeline_types,omitempty"`
+
+	// TimelineLimit caps the number of timeline events per /sync response.
+	// Zero means no explicit limit (server default).
+	TimelineLimit int `json:"timeline_limit,omitempty"`
+
+	// ExcludeState suppresses state events from the /sync response.
+	// When true, only timeline events matching TimelineTypes are returned.
+	ExcludeState bool `json:"exclude_state,omitempty"`
+}
+
+// buildInlineFilter constructs the inline JSON filter string for /sync.
+// The filter always scopes to the given room. Additional restrictions
+// from the SyncFilter (event types, limits, state suppression) are
+// merged in.
+func buildInlineFilter(roomID ref.RoomID, filter *SyncFilter) string {
+	roomFilter := map[string]any{
+		"rooms": []string{roomID.String()},
+	}
+
+	if filter != nil {
+		if len(filter.TimelineTypes) > 0 {
+			timeline := map[string]any{"types": filter.TimelineTypes}
+			if filter.TimelineLimit > 0 {
+				timeline["limit"] = filter.TimelineLimit
+			}
+			roomFilter["timeline"] = timeline
+		} else if filter.TimelineLimit > 0 {
+			roomFilter["timeline"] = map[string]any{"limit": filter.TimelineLimit}
+		}
+
+		if filter.ExcludeState {
+			roomFilter["state"] = map[string]any{"types": []string{}}
+		}
+	}
+
+	top := map[string]any{
+		"room":         roomFilter,
+		"presence":     map[string]any{"types": []string{}},
+		"account_data": map[string]any{"types": []string{}},
+	}
+
+	data, _ := json.Marshal(top)
+	return string(data)
+}
 
 // RoomWatcher captures a position in the Matrix /sync stream for a
 // specific room. Create one with WatchRoom BEFORE triggering the action
@@ -38,15 +95,20 @@ type RoomWatcher struct {
 //
 // This performs an immediate /sync (timeout=0) to obtain the current
 // next_batch token without blocking. The token anchors all subsequent
-// long-poll calls. Pass an empty filter to receive all event types.
-func WatchRoom(ctx context.Context, session Session, roomID ref.RoomID, filter string) (*RoomWatcher, error) {
+// long-poll calls.
+//
+// The /sync filter is always scoped to the watched room. Pass nil for
+// the filter to receive all event types (state + timeline). Pass a
+// SyncFilter to restrict event types or suppress state events.
+func WatchRoom(ctx context.Context, session Session, roomID ref.RoomID, filter *SyncFilter) (*RoomWatcher, error) {
 	if roomID.IsZero() {
 		return nil, fmt.Errorf("messaging: WatchRoom requires a non-zero room ID")
 	}
+	inlineFilter := buildInlineFilter(roomID, filter)
 	response, err := session.Sync(ctx, SyncOptions{
 		SetTimeout: true,
 		Timeout:    0,
-		Filter:     filter,
+		Filter:     inlineFilter,
 	})
 	if err != nil {
 		return nil, fmt.Errorf("messaging: initial sync for room watch: %w", err)
@@ -54,7 +116,7 @@ func WatchRoom(ctx context.Context, session Session, roomID ref.RoomID, filter s
 	return &RoomWatcher{
 		session:   session,
 		roomID:    roomID,
-		filter:    filter,
+		filter:    inlineFilter,
 		nextBatch: response.NextBatch,
 	}, nil
 }
@@ -143,6 +205,16 @@ func (w *RoomWatcher) WaitForEvent(ctx context.Context, predicate func(Event) bo
 		w.nextBatch = response.NextBatch
 
 		if joined, ok := response.Rooms.Join[w.roomID]; ok {
+			stateCount := len(joined.State.Events)
+			timelineCount := len(joined.Timeline.Events)
+			if stateCount > 0 || timelineCount > 0 {
+				slog.Debug("room watcher received events",
+					"room_id", w.roomID,
+					"state_events", stateCount,
+					"timeline_events", timelineCount,
+					"pending_before", len(w.pending),
+				)
+			}
 			w.pending = append(w.pending, joined.State.Events...)
 			w.pending = append(w.pending, joined.Timeline.Events...)
 		}

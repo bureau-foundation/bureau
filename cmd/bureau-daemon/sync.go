@@ -223,7 +223,8 @@ func (d *Daemon) processSyncResponse(ctx context.Context, response *messaging.Sy
 	// by "bureau workspace create" and must join to read workspace state
 	// events needed for StartCondition evaluation on deferred principals.
 	for roomID := range response.Rooms.Invite {
-		d.logger.Info("accepting room invite", "room_id", roomID)
+		d.logger.Info("accepting room invite", "room_id", roomID,
+			"machine", d.machine.Localpart())
 		if _, err := d.session.JoinRoom(ctx, roomID); err != nil {
 			d.logger.Error("failed to accept room invite", "room_id", roomID, "error", err)
 			continue
@@ -265,10 +266,24 @@ func (d *Daemon) processSyncResponse(ctx context.Context, response *messaging.Sy
 			// The system room carries token signing keys and operational
 			// messages. State changes here don't require reconciliation.
 			continue
+		case d.templateRoomID:
+			// The template room is namespace-scoped (shared across all
+			// machines). The daemon reads templates on-demand during
+			// reconciliation. Member events from other machines joining
+			// the template room must not trigger reconciliation.
+			continue
+		case d.pipelineRoomID:
+			// The pipeline room is namespace-scoped (shared across all
+			// machines). Pipeline definitions are read by the executor,
+			// not the daemon's reconcile loop.
+			continue
 		default:
 			// Non-core rooms (workspace rooms joined via invite) with
 			// state changes trigger reconcile so deferred principals
 			// can re-evaluate StartConditions.
+			d.logger.Info("non-core room state change triggering reconcile",
+				"room_id", roomID,
+				"machine", d.machine.Localpart())
 			needsReconcile = true
 		}
 	}

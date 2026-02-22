@@ -249,7 +249,7 @@ func (d *Daemon) reconcile(ctx context.Context) error {
 		// the root cause may have been resolved.
 		if failure := d.startFailures[principal]; failure != nil {
 			if d.clock.Now().Before(failure.nextRetryAt) {
-				d.logger.Debug("principal in start backoff, skipping",
+				d.logger.Info("principal in start backoff, skipping",
 					"principal", principal,
 					"category", failure.category,
 					"attempts", failure.attempts,
@@ -257,6 +257,11 @@ func (d *Daemon) reconcile(ctx context.Context) error {
 				)
 				continue
 			}
+			d.logger.Info("start failure backoff expired, retrying",
+				"principal", principal,
+				"category", failure.category,
+				"attempts", failure.attempts,
+			)
 		}
 
 		d.logger.Info("starting principal", "principal", principal)
@@ -1310,6 +1315,10 @@ func (d *Daemon) resolveServiceSocket(ctx context.Context, role string, rooms []
 		content, err := d.session.GetStateEvent(ctx, roomID, schema.EventTypeRoomService, role)
 		if err != nil {
 			if messaging.IsMatrixError(err, messaging.ErrCodeNotFound) {
+				d.logger.Debug("no service binding in room",
+					"role", role,
+					"room_id", roomID,
+				)
 				continue // Not bound in this room, try next.
 			}
 			return "", fmt.Errorf("fetching service binding in room %s: %w", roomID, err)
@@ -1349,7 +1358,11 @@ func (d *Daemon) resolveServiceSocket(ctx context.Context, role string, rooms []
 		return socketPath, nil
 	}
 
-	return "", fmt.Errorf("no binding found for service role %q in any accessible room", role)
+	roomIDs := make([]string, len(rooms))
+	for i, r := range rooms {
+		roomIDs[i] = r.String()
+	}
+	return "", fmt.Errorf("no binding found for service role %q in rooms %v", role, roomIDs)
 }
 
 // tokenTTL is the default TTL for service tokens. Set to 5 minutes to

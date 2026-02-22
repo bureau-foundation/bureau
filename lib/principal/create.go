@@ -63,6 +63,14 @@ type CreateParams struct {
 	// is constructed by the caller — callers must explicitly set false.
 	AutoStart bool
 
+	// StartCondition gates this principal's launch on the existence of a
+	// specific state event. When set, the daemon only starts the sandbox
+	// if the referenced event exists and matches the content criteria.
+	// Use this for one-shot principals that should not restart after
+	// completing their work (the principal changes the gated state as
+	// its last action, making the condition false on next evaluation).
+	StartCondition *schema.StartCondition
+
 	// ExtraCredentials are additional key-value pairs included in the
 	// encrypted credential bundle alongside the Matrix token and user ID.
 	// Use this for LLM API keys or other service credentials the principal
@@ -262,6 +270,7 @@ func assignPrincipal(ctx context.Context, session messaging.Session, configRoomI
 		Principal:                 params.Principal,
 		Template:                  params.TemplateRef.String(),
 		AutoStart:                 params.AutoStart,
+		StartCondition:            params.StartCondition,
 		Labels:                    params.Labels,
 		Authorization:             params.Authorization,
 		ExtraEnvironmentVariables: params.ExtraEnvironmentVariables,

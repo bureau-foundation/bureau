@@ -7,7 +7,6 @@ import (
 	"context"
 	"crypto/rand"
 	"encoding/hex"
-	"encoding/json"
 	"fmt"
 
 	"github.com/bureau-foundation/bureau/lib/ref"
@@ -39,36 +38,22 @@ type SendParams struct {
 	// workspace.worktree.add includes "path" and optionally "branch".
 	Parameters map[string]any
 
-	// Filter is an optional /sync filter to reduce bandwidth. When
-	// empty, Send uses a default filter that restricts to
-	// m.room.message timeline events (sufficient for command results).
-	// Set explicitly to override, e.g., when the watcher also needs
-	// state events.
-	Filter string
+	// Filter is an optional /sync filter to control what events the
+	// result watcher receives. When nil, Send uses a default filter
+	// that restricts to m.room.message timeline events (sufficient
+	// for command results). Set explicitly to override, e.g., when
+	// the watcher also needs state events.
+	Filter *messaging.SyncFilter
 }
 
 // commandSyncFilter restricts /sync to m.room.message timeline events.
 // State events, ephemeral events, presence, and account data are
 // excluded since command results are always m.room.message events with
 // msgtype m.bureau.command_result.
-var commandSyncFilter = buildCommandSyncFilter()
-
-func buildCommandSyncFilter() string {
-	filter := map[string]any{
-		"room": map[string]any{
-			"timeline": map[string]any{
-				"types": []string{"m.room.message"},
-				"limit": 50,
-			},
-			"state":        map[string]any{"types": []string{}},
-			"ephemeral":    map[string]any{"types": []string{}},
-			"account_data": map[string]any{"types": []string{}},
-		},
-		"presence":     map[string]any{"types": []string{}},
-		"account_data": map[string]any{"types": []string{}},
-	}
-	data, _ := json.Marshal(filter)
-	return string(data)
+var commandSyncFilter = &messaging.SyncFilter{
+	TimelineTypes: []string{"m.room.message"},
+	TimelineLimit: 50,
+	ExcludeState:  true,
 }
 
 // Send captures the current /sync position, sends the command message,
@@ -79,7 +64,7 @@ func buildCommandSyncFilter() string {
 // The caller MUST call [Future.Discard] when done.
 func Send(ctx context.Context, params SendParams) (*Future, error) {
 	filter := params.Filter
-	if filter == "" {
+	if filter == nil {
 		filter = commandSyncFilter
 	}
 

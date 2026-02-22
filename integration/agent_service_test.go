@@ -113,26 +113,60 @@ func TestAgentServiceSessionTracking(t *testing.T) {
 
 	// --- Deploy mock agent with agent service ---
 
+	// The mock agent exits after one session. Without a StartCondition,
+	// the daemon would restart it on every exit (correct production
+	// behavior for long-running agents). Gate on total_session_count == 0
+	// so the daemon only starts the agent when no session has been
+	// recorded. EndSession writes total_session_count = 1, which makes
+	// the condition false — the daemon evaluates the condition on the
+	// next reconcile (triggered by watchSandboxExit) and does not restart.
+	//
+	// Pre-seed the agent_metrics state event with total_session_count = 0
+	// so the condition is satisfied on the first reconcile (StartCondition
+	// returns false for non-existent events).
+	const agentLocalpart = "agent/session-track-e2e"
+	agentEntity, err := ref.NewEntityFromAccountLocalpart(fleet.Ref, agentLocalpart)
+	if err != nil {
+		t.Fatalf("construct agent entity ref: %v", err)
+	}
+	metricsStateKey := agentEntity.UserID().Localpart()
+	if _, err := admin.SendStateEvent(ctx, machine.ConfigRoomID,
+		agentschema.EventTypeAgentMetrics, metricsStateKey,
+		agentschema.AgentMetricsContent{Version: agentschema.AgentMetricsVersion}); err != nil {
+		t.Fatalf("pre-seed agent metrics: %v", err)
+	}
+
+	// Create the watch BEFORE deploying the agent so we don't miss the
+	// metrics event. The watch checkpoint is after the pre-seeded metrics
+	// event (total_session_count=0), so only the EndSession-written
+	// metrics event (total_session_count=1) will match.
+	metricsWatch := watchRoom(t, admin, machine.ConfigRoomID)
+
 	agent := deployAgent(t, admin, machine, agentOptions{
 		Binary:           testutil.DataBinary(t, "MOCK_AGENT_BINARY"),
-		Localpart:        "agent/session-track-e2e",
+		Localpart:        agentLocalpart,
 		RequiredServices: []string{"agent"},
+		StartCondition: &schema.StartCondition{
+			EventType:    agentschema.EventTypeAgentMetrics,
+			StateKey:     metricsStateKey,
+			ContentMatch: schema.ContentMatch{"total_session_count": schema.Eq(float64(0))},
+		},
 	})
 
-	// Wait for the mock agent to complete. The mock driver emits a
-	// fixed sequence of events and exits naturally, triggering Run()'s
-	// cleanup: EndSession (writes state events to config room via
-	// agent service) then "agent-complete" summary posting.
-	completeWatch := watchRoom(t, admin, machine.ConfigRoomID)
-	completeWatch.WaitForMessage(t, "agent-complete", agent.Account.UserID)
-	t.Log("agent posted completion summary")
-
-	// --- Verify agent service state events ---
+	// Wait for the agent service to write metrics. EndSession writes
+	// the agent_session state event first, then the agent_metrics state
+	// event. Once we see agent_metrics, both events are guaranteed to
+	// be readable.
 	//
-	// Run() calls EndSession before posting "agent-complete", so by
-	// the time we see the summary message, the agent service has
-	// already written session and metrics state events to the config
-	// room. Reading them is synchronous (no waiting needed).
+	// We wait on the state event rather than on "agent-complete" because
+	// the daemon's reconcile loop correctly evaluates the StartCondition
+	// after EndSession writes total_session_count=1 — the condition
+	// becomes false, and the daemon stops the principal before the agent
+	// can post "agent-complete". This is correct production behavior:
+	// StartConditions are liveness conditions (used for workspace
+	// lifecycle orchestration), not just launch gates.
+	metricsWatch.WaitForStateEvent(t, agentschema.EventTypeAgentMetrics, metricsStateKey)
+	t.Log("agent service wrote metrics state event")
 
 	// Verify session state: no active session, latest session recorded.
 	sessionRaw, err := admin.GetStateEvent(ctx, machine.ConfigRoomID,

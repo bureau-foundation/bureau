@@ -15,7 +15,7 @@ import (
 	"github.com/bureau-foundation/bureau/lib/schema"
 	fleetschema "github.com/bureau-foundation/bureau/lib/schema/fleet"
 	"github.com/bureau-foundation/bureau/lib/service"
-	"github.com/bureau-foundation/bureau/lib/templatedef"
+	"github.com/bureau-foundation/bureau/lib/servicetoken"
 	"github.com/bureau-foundation/bureau/messaging"
 )
 
@@ -334,97 +334,29 @@ func waitForFleetService(t *testing.T, fleetWatch *roomWatch, fc *fleetControlle
 	)
 }
 
-// publishFleetOperatorTemplate publishes a test agent template with
-// RequiredServices: ["fleet"]. Principals deployed with this template
-// get a daemon-minted fleet service token, which the test uses to
-// authenticate fleet controller API calls. Returns the template
-// reference string.
-func publishFleetOperatorTemplate(t *testing.T, admin *messaging.DirectSession, machine *testMachine) string {
+// mintFleetToken creates a fleet service token signed by the machine's
+// Ed25519 key pair. The token is valid for 5 minutes and carries the
+// given grants scoped to the "fleet" audience.
+//
+// This replaces the old deployFleetOperator pattern, which deployed a
+// sandbox purely to read a daemon-minted token. That pattern was broken:
+// the test agent exited immediately, the daemon revoked the token, and
+// the test used a revoked token.
+func mintFleetToken(t *testing.T, fleet *testFleet, machine *testMachine, grants []string) []byte {
 	t.Helper()
 
-	testAgentBinary := resolvedBinary(t, "TEST_AGENT_BINARY")
-	grantTemplateAccess(t, admin, machine)
-
-	ref, err := schema.ParseTemplateRef("bureau/template:fleet-operator")
+	// Use a synthetic entity as the token subject. No sandbox or Matrix
+	// account is needed — the fleet controller validates the token
+	// signature and grants, not the subject's existence.
+	entity, err := ref.NewEntityFromAccountLocalpart(fleet.Ref, "agent/fleet-test-operator")
 	if err != nil {
-		t.Fatalf("parse fleet operator template ref: %v", err)
+		t.Fatalf("construct entity for fleet token: %v", err)
 	}
-
-	_, err = templatedef.Push(t.Context(), admin, ref, schema.TemplateContent{
-		Description:      "Fleet operator with fleet service token",
-		Command:          []string{testAgentBinary},
-		RequiredServices: []string{"fleet"},
-		Namespaces:       &schema.TemplateNamespaces{PID: true},
-		Security: &schema.TemplateSecurity{
-			NewSession:    true,
-			DieWithParent: true,
-			NoNewPrivs:    true,
-		},
-		Filesystem: []schema.TemplateMount{
-			{Source: testAgentBinary, Dest: testAgentBinary, Mode: "ro"},
-			{Dest: "/tmp", Type: "tmpfs"},
-		},
-		CreateDirs: []string{"/tmp", "/var/tmp", "/run/bureau"},
-		EnvironmentVariables: map[string]string{
-			"HOME":                "/workspace",
-			"TERM":                "xterm-256color",
-			"BUREAU_PROXY_SOCKET": "${PROXY_SOCKET}",
-			"BUREAU_MACHINE_NAME": "${MACHINE_NAME}",
-			"BUREAU_SERVER_NAME":  "${SERVER_NAME}",
-		},
-	}, testServer)
-	if err != nil {
-		t.Fatalf("push fleet operator template: %v", err)
+	tokenGrants := make([]servicetoken.Grant, len(grants))
+	for i, pattern := range grants {
+		tokenGrants[i] = servicetoken.Grant{Actions: []string{pattern}}
 	}
-
-	return ref.String()
-}
-
-// deployFleetOperator registers a principal, pushes credentials, deploys
-// it with the given fleet grants, waits for the proxy socket (proving
-// the daemon minted service tokens), and returns the daemon-minted fleet
-// token. The principal uses the fleet operator template which has
-// RequiredServices: ["fleet"], so the daemon mints a fleet token with
-// the filtered grants.
-func deployFleetOperator(t *testing.T, admin *messaging.DirectSession, fleet *testFleet, machine *testMachine, localpart, templateRef string, grants []string) []byte {
-	t.Helper()
-
-	account := registerFleetPrincipal(t, fleet, localpart, localpart+"-password")
-	pushCredentials(t, admin, machine, account)
-	joinConfigRoom(t, admin, machine.ConfigRoomID, account)
-
-	pushMachineConfig(t, admin, machine, deploymentConfig{
-		Principals: []principalSpec{{
-			Account:  account,
-			Template: templateRef,
-			Authorization: &schema.AuthorizationPolicy{
-				Grants: []schema.Grant{{Actions: grants}},
-			},
-		}},
-	})
-
-	waitForFile(t, machine.PrincipalSocketPath(t, localpart))
-	return readDaemonMintedToken(t, machine, localpart, "fleet")
-}
-
-// publishFleetServiceBinding publishes an m.bureau.room_service state
-// event for the "fleet" role in the machine's config room. The daemon
-// reads this binding on demand when resolving RequiredServices during
-// sandbox creation — the binding must exist before any principal with
-// RequiredServices: ["fleet"] is deployed.
-func publishFleetServiceBinding(t *testing.T, admin *messaging.DirectSession, machine *testMachine, fc *fleetController) {
-	t.Helper()
-
-	controllerEntity, err := ref.ParseEntityUserID(fc.UserID.String())
-	if err != nil {
-		t.Fatalf("parse fleet controller entity: %v", err)
-	}
-	_, err = admin.SendStateEvent(t.Context(), machine.ConfigRoomID,
-		schema.EventTypeRoomService, "fleet",
-		schema.RoomServiceContent{Principal: controllerEntity})
-	if err != nil {
-		t.Fatalf("publish fleet service binding in config room: %v", err)
-	}
+	return mintTestServiceToken(t, machine, entity, "fleet", tokenGrants)
 }
 
 // --- Fleet controller integration tests ---
@@ -459,24 +391,10 @@ func TestFleetControllerLifecycle(t *testing.T) {
 		Fleet:          fleet,
 	})
 
-	operatorTemplateRef := publishFleetOperatorTemplate(t, admin, machine)
-
-	// Start the fleet controller. It performs initial /sync before
-	// opening the socket, so by the time we can call APIs the fleet
-	// model should already contain the machine. Must start before
-	// deploying the operator because the operator's template has
-	// RequiredServices: ["fleet"] — the daemon needs the fleet
-	// controller's socket and binding to resolve that dependency.
 	controllerName := "service/fleet/lifecycle"
 	fc := startFleetController(t, admin, machine, controllerName, fleet)
-	publishFleetServiceBinding(t, admin, machine, fc)
 
-	// Deploy a fleet operator to obtain a daemon-minted fleet token.
-	// The daemon resolves the fleet service binding (published above),
-	// mounts the fleet controller socket, and mints a fleet token
-	// with the operator's grants.
-	operatorToken := deployFleetOperator(t, admin, fleet, machine,
-		"agent/fleet-lifecycle-operator", operatorTemplateRef, []string{"fleet/**"})
+	operatorToken := mintFleetToken(t, fleet, machine, []string{"fleet/**"})
 
 	ctx := t.Context()
 
@@ -760,7 +678,6 @@ func TestFleetPlaceAndUnplace(t *testing.T) {
 	// Publish a test template so the daemon can create sandboxes when
 	// the fleet controller places a service.
 	templateRef := publishTestAgentTemplate(t, admin, machine, "fleet-place-agent")
-	operatorTemplateRef := publishFleetOperatorTemplate(t, admin, machine)
 
 	// Register a Matrix account for the service principal. The fleet
 	// controller will reference this localpart when it creates a
@@ -780,36 +697,20 @@ func TestFleetPlaceAndUnplace(t *testing.T) {
 	joinConfigRoom(t, admin, machine.ConfigRoomID, serviceAccount)
 
 	// Push an empty MachineConfig so the fleet controller can discover
-	// the config room. The fleet controller discovers config room IDs
-	// from MachineConfig state events.
+	// the config room.
 	pushMachineConfig(t, admin, machine, deploymentConfig{})
 
 	// Create a fleet room watch BEFORE starting the fleet controller.
-	// The fleet controller posts config room discovered notifications
-	// to the fleet room after it joins and processes each config room.
 	configDiscoverWatch := watchRoom(t, admin, fleet.FleetRoomID)
 
-	// Start the fleet controller. The daemon detects the fleet controller
-	// joining the fleet room via /sync, invites it to the config room,
-	// and grants it PL 50. The fleet controller then accepts the config
-	// room invite and processes the MachineConfig event.
 	controllerName := "service/fleet/place-test"
 	fc := startFleetController(t, admin, machine, controllerName, fleet)
-	publishFleetServiceBinding(t, admin, machine, fc)
 
-	// Deploy a fleet operator to obtain a daemon-minted fleet token.
-	// The operator template has RequiredServices: ["fleet"], so the
-	// daemon resolves the fleet service binding, mounts the fleet
-	// controller socket, and mints a fleet token.
-	operatorToken := deployFleetOperator(t, admin, fleet, machine,
-		"agent/fleet-place-operator", operatorTemplateRef, []string{"fleet/**"})
-
+	operatorToken := mintFleetToken(t, fleet, machine, []string{"fleet/**"})
 	authClient := fleetClient(t, fc, operatorToken)
 	ctx := t.Context()
 
-	// Wait for the fleet controller to discover the config room. The
-	// fleet controller emits a structured notification to the fleet
-	// room after processing the MachineConfig state event.
+	// Wait for the fleet controller to discover the config room.
 	waitForFleetConfigRoom(t, &configDiscoverWatch, fc, machine.Name)
 
 	// Create a fleet room watch before publishing the service so we
@@ -968,7 +869,6 @@ func TestFleetReconciliation(t *testing.T) {
 	// Publish a test template and grant both machines access.
 	templateRef := publishTestAgentTemplate(t, admin, machineA, "fleet-recon-agent")
 	grantTemplateAccess(t, admin, machineB)
-	operatorTemplateRef := publishFleetOperatorTemplate(t, admin, machineA)
 
 	// Register the service principal and push credentials to both
 	// machines so either can create a sandbox after reconciliation.
@@ -982,26 +882,13 @@ func TestFleetReconciliation(t *testing.T) {
 	pushMachineConfig(t, admin, machineA, deploymentConfig{})
 	pushMachineConfig(t, admin, machineB, deploymentConfig{})
 
-	// Watch the fleet room BEFORE starting the fleet controller. The
-	// fleet controller posts config room and service discovery
-	// notifications to the fleet room. A single watch serves all
-	// discovery waits because WaitForEvent preserves non-matching
-	// events in its pending buffer.
 	discoverWatch := watchRoom(t, admin, fleet.FleetRoomID)
 
 	controllerName := "service/fleet/reconcile-test"
 	fc := startFleetController(t, admin, machineA, controllerName, fleet)
-
-	// Grant the fleet controller access to machineB's config room.
-	// startFleetController only grants access for the machine it receives
-	// (machineA); additional machines need explicit grants.
 	grantFleetControllerConfigAccess(t, admin, fc, machineB)
 
-	// Publish the fleet service binding and deploy a fleet operator on
-	// machineA to obtain a daemon-minted fleet token.
-	publishFleetServiceBinding(t, admin, machineA, fc)
-	operatorToken := deployFleetOperator(t, admin, fleet, machineA,
-		"agent/fleet-recon-operator", operatorTemplateRef, []string{"fleet/**"})
+	operatorToken := mintFleetToken(t, fleet, machineA, []string{"fleet/**"})
 
 	// Wait for the fleet controller to discover both config rooms.
 	waitForFleetConfigRoom(t, &discoverWatch, fc, machineA.Name)
@@ -1120,69 +1007,15 @@ func TestFleetAuthorizationDenied(t *testing.T) {
 		Fleet:          fleet,
 	})
 
-	operatorTemplateRef := publishFleetOperatorTemplate(t, admin, machine)
-
-	// Start the fleet controller first. The operator template has
-	// RequiredServices: ["fleet"], so the daemon needs the fleet
-	// controller's socket and binding before it can create sandboxes.
 	controllerName := "service/fleet/auth-test"
 	fc := startFleetController(t, admin, machine, controllerName, fleet)
-	publishFleetServiceBinding(t, admin, machine, fc)
 
-	// Deploy 3 principals with different grant scopes. Each uses the
-	// fleet operator template (RequiredServices: ["fleet"]) so the
-	// daemon mints a fleet token for each. The daemon's
-	// filterGrantsForService determines which grants end up in each
-	// token:
-	//   - narrowExact: "fleet/info" → token has one exact fleet grant
-	//   - narrowWildcard: "fleet/list-*" → token has one wildcard fleet grant
-	//   - noFleetGrants: "command/**" → no fleet-relevant grants, so the
-	//     token is valid but has zero grants (default-deny)
-	narrowExact := registerFleetPrincipal(t, fleet, "agent/fleet-auth-exact", "fleet-auth-exact-password")
-	narrowWildcard := registerFleetPrincipal(t, fleet, "agent/fleet-auth-wild", "fleet-auth-wild-password")
-	noFleetGrants := registerFleetPrincipal(t, fleet, "agent/fleet-auth-denied", "fleet-auth-denied-password")
-
-	pushCredentials(t, admin, machine, narrowExact)
-	pushCredentials(t, admin, machine, narrowWildcard)
-	pushCredentials(t, admin, machine, noFleetGrants)
-
-	joinConfigRoom(t, admin, machine.ConfigRoomID, narrowExact)
-	joinConfigRoom(t, admin, machine.ConfigRoomID, narrowWildcard)
-	joinConfigRoom(t, admin, machine.ConfigRoomID, noFleetGrants)
-
-	pushMachineConfig(t, admin, machine, deploymentConfig{
-		Principals: []principalSpec{
-			{
-				Account:  narrowExact,
-				Template: operatorTemplateRef,
-				Authorization: &schema.AuthorizationPolicy{
-					Grants: []schema.Grant{{Actions: []string{"fleet/info"}}},
-				},
-			},
-			{
-				Account:  narrowWildcard,
-				Template: operatorTemplateRef,
-				Authorization: &schema.AuthorizationPolicy{
-					Grants: []schema.Grant{{Actions: []string{"fleet/list-*"}}},
-				},
-			},
-			{
-				Account:  noFleetGrants,
-				Template: operatorTemplateRef,
-				Authorization: &schema.AuthorizationPolicy{
-					Grants: []schema.Grant{{Actions: []string{"command/**"}}},
-				},
-			},
-		},
-	})
-
-	waitForFile(t, machine.PrincipalSocketPath(t, "agent/fleet-auth-exact"))
-	waitForFile(t, machine.PrincipalSocketPath(t, "agent/fleet-auth-wild"))
-	waitForFile(t, machine.PrincipalSocketPath(t, "agent/fleet-auth-denied"))
-
-	narrowExactToken := readDaemonMintedToken(t, machine, "agent/fleet-auth-exact", "fleet")
-	narrowWildcardToken := readDaemonMintedToken(t, machine, "agent/fleet-auth-wild", "fleet")
-	noFleetGrantsToken := readDaemonMintedToken(t, machine, "agent/fleet-auth-denied", "fleet")
+	// Mint tokens with different grant scopes directly. No sandbox
+	// deployment needed — the fleet controller validates the token
+	// signature and grants, not the principal's sandbox state.
+	narrowExactToken := mintFleetToken(t, fleet, machine, []string{"fleet/info"})
+	narrowWildcardToken := mintFleetToken(t, fleet, machine, []string{"fleet/list-*"})
+	noFleetGrantsToken := mintFleetToken(t, fleet, machine, nil)
 
 	ctx := t.Context()
 

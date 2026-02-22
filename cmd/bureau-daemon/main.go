@@ -111,7 +111,7 @@ func run() error {
 
 	logger := slog.New(slog.NewJSONHandler(os.Stderr, &slog.HandlerOptions{
 		Level: slog.LevelInfo,
-	}))
+	})).With("machine", machine.Localpart())
 	slog.SetDefault(logger)
 
 	if maxLocalpart := principal.MaxLocalpartAvailable(runDir); maxLocalpart < principal.MaxLocalpartLength {
@@ -249,12 +249,34 @@ func run() error {
 			"room_id", serviceRoomID, "alias", serviceAlias, "error", err)
 	}
 
+	// Resolve the namespace-scoped template and pipeline rooms. The daemon
+	// is invited to these during machine provisioning and auto-accepts. It
+	// needs membership to read templates on-demand, but state changes in
+	// these rooms must NOT trigger reconciliation — they are shared across
+	// all machines in the namespace, and member events from other machines
+	// joining would cause spurious reconcile cycles.
+	namespace := fleet.Namespace()
+	templateAlias := namespace.TemplateRoomAlias()
+	templateRoomID, err := session.ResolveAlias(ctx, templateAlias)
+	if err != nil {
+		logger.Warn("failed to resolve template room (will still work via on-demand resolution)",
+			"alias", templateAlias, "error", err)
+	}
+	pipelineAlias := namespace.PipelineRoomAlias()
+	pipelineRoomID, err := session.ResolveAlias(ctx, pipelineAlias)
+	if err != nil {
+		logger.Warn("failed to resolve pipeline room",
+			"alias", pipelineAlias, "error", err)
+	}
+
 	logger.Info("fleet rooms ready",
 		"fleet", fleet.Localpart(),
 		"fleet_room", fleetRoomID,
 		"system_room", systemRoomID,
 		"machine_room", machineRoomID,
 		"service_room", serviceRoomID,
+		"template_room", templateRoomID,
+		"pipeline_room", pipelineRoomID,
 	)
 
 	// Check the watchdog from a previous exec() attempt. This detects
@@ -288,6 +310,8 @@ func run() error {
 		machineRoomID:          machineRoomID,
 		serviceRoomID:          serviceRoomID,
 		fleetRoomID:            fleetRoomID,
+		templateRoomID:         templateRoomID,
+		pipelineRoomID:         pipelineRoomID,
 		runDir:                 runDir,
 		fleetRunDir:            fleet.RunDir(runDir),
 		launcherSocket:         principal.LauncherSocketPath(runDir),
@@ -494,6 +518,8 @@ type Daemon struct {
 	machineRoomID  ref.RoomID
 	serviceRoomID  ref.RoomID
 	fleetRoomID    ref.RoomID // fleet room for HA leases, service definitions, and alerts
+	templateRoomID ref.RoomID // namespace template room (read-only, no reconcile)
+	pipelineRoomID ref.RoomID // namespace pipeline room (read-only, no reconcile)
 	runDir         string     // base runtime directory (e.g., /run/bureau)
 	fleetRunDir    string     // fleet-scoped runtime directory (e.g., /run/bureau/fleet/prod)
 	launcherSocket string
@@ -918,13 +944,22 @@ func (d *Daemon) recordStartFailure(principal ref.Entity, category startFailureC
 		}
 	}
 
+	nextRetryAt := now.Add(backoff)
 	d.startFailures[principal] = &startFailure{
 		category:    category,
 		message:     message,
 		failedAt:    now,
 		attempts:    attempts,
-		nextRetryAt: now.Add(backoff),
+		nextRetryAt: nextRetryAt,
 	}
+	d.logger.Info("start failure recorded",
+		"principal", principal,
+		"category", category,
+		"attempts", attempts,
+		"backoff", backoff.String(),
+		"next_retry_at", nextRetryAt.Format(time.RFC3339Nano),
+		"message", message,
+	)
 }
 
 // clearStartFailures removes all start failure entries, allowing immediate
@@ -934,6 +969,9 @@ func (d *Daemon) recordStartFailure(principal ref.Entity, category startFailureC
 //
 // Caller must hold reconcileMu.
 func (d *Daemon) clearStartFailures() {
+	if count := len(d.startFailures); count > 0 {
+		d.logger.Info("clearing all start failures", "count", count)
+	}
 	clear(d.startFailures)
 }
 

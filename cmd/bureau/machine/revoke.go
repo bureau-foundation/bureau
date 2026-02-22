@@ -53,9 +53,10 @@ executes three layers of defense:
   account. The daemon detects the auth failure, destroys all sandboxes,
   and exits. No cooperation from the compromised machine is needed.
 
-  Layer 2 — State cleanup (seconds): Clears credential state events,
-  machine key, and machine status. Kicks the machine from all rooms.
-  Publishes a credential revocation event for fleet-wide notification.
+  Layer 2 — Access revocation and state cleanup (seconds): Kicks the
+  machine from all rooms (homeserver rejects further writes). Then clears
+  credential state events, machine key, and machine status. Publishes a
+  credential revocation event for fleet-wide notification.
 
   Layer 3 — Token expiry (≤5 minutes): Outstanding service tokens expire
   via natural TTL. The daemon's emergency shutdown also pushes revocations
@@ -124,7 +125,7 @@ depending on the homeserver — this is by design for emergency revocation.`,
 // Revoke performs emergency credential revocation for a compromised machine.
 // It executes three layers of defense:
 //   - Layer 1: Deactivates the machine's Matrix account (daemon self-destructs)
-//   - Layer 2: Clears credential state events, kicks from all rooms
+//   - Layer 2: Kicks from all rooms, then clears credential state events
 //   - Layer 3: Outstanding service tokens expire via natural TTL
 //
 // The caller provides a DirectSession (required for account deactivation,
@@ -190,50 +191,24 @@ func Revoke(ctx context.Context, adminSession *messaging.DirectSession, params R
 		return cli.NotFound("fleet rooms could not be resolved — cannot clear machine state: %w", err)
 	}
 
-	// Clear machine_key and machine_status.
-	_, err = adminSession.SendStateEvent(ctx, machineRoomID, schema.EventTypeMachineKey, machineUsername, map[string]any{})
-	if err != nil {
-		fmt.Fprintf(os.Stderr, "  Warning: could not clear machine_key: %v\n", err)
-	} else {
-		fmt.Fprintf(os.Stderr, "  Cleared machine_key\n")
-	}
-
-	_, err = adminSession.SendStateEvent(ctx, machineRoomID, schema.EventTypeMachineStatus, machineUsername, map[string]any{})
-	if err != nil {
-		fmt.Fprintf(os.Stderr, "  Warning: could not clear machine_status: %v\n", err)
-	} else {
-		fmt.Fprintf(os.Stderr, "  Cleared machine_status\n")
-	}
-
-	// Resolve the config room and collect affected principals.
-	var principals []string
-	var credentialKeys []string
+	// Kick the machine from ALL rooms first. This is the access
+	// revocation: after the kick, the homeserver rejects all writes
+	// from the machine. State event cleanup (below) is safe because
+	// the machine can no longer interfere.
+	//
+	// Resolve the config room early so we can kick from it and then
+	// clean up its state events.
 	configAlias := machine.RoomAlias()
 	configRoomID, err := adminSession.ResolveAlias(ctx, configAlias)
-	if err != nil {
-		if messaging.IsMatrixError(err, messaging.ErrCodeNotFound) {
-			fmt.Fprintf(os.Stderr, "  Config room %s does not exist (skipping)\n", configAlias)
-		} else {
-			return cli.NotFound("resolve config room %q: %w", configAlias, err)
-		}
-	} else {
-		// Clear machine_config.
-		_, err = adminSession.SendStateEvent(ctx, configRoomID, schema.EventTypeMachineConfig, machineUsername, map[string]any{})
-		if err != nil {
-			fmt.Fprintf(os.Stderr, "  Warning: could not clear machine_config: %v\n", err)
-		} else {
-			fmt.Fprintf(os.Stderr, "  Cleared machine_config\n")
-		}
+	configRoomExists := err == nil
+	if err != nil && !messaging.IsMatrixError(err, messaging.ErrCodeNotFound) {
+		return cli.NotFound("resolve config room %q: %w", configAlias, err)
+	}
+	if !configRoomExists {
+		fmt.Fprintf(os.Stderr, "  Config room %s does not exist (skipping)\n", configAlias)
+	}
 
-		// Clear all credentials and collect the affected principal names.
-		cleared, err := clearConfigRoomCredentials(ctx, adminSession, configRoomID)
-		if err != nil {
-			fmt.Fprintf(os.Stderr, "  Warning: %v\n", err)
-		} else {
-			principals = cleared
-			credentialKeys = cleared
-		}
-
+	if configRoomExists {
 		err = adminSession.KickUser(ctx, configRoomID, machineUserID, "machine credentials revoked")
 		if err != nil {
 			fmt.Fprintf(os.Stderr, "  Warning: could not kick from config room: %v\n", err)
@@ -251,7 +226,6 @@ func Revoke(ctx context.Context, adminSession *messaging.DirectSession, params R
 		}
 	}
 
-	// Kick from all fleet-scoped rooms.
 	fleetRooms := []struct {
 		roomID ref.RoomID
 		name   string
@@ -266,6 +240,42 @@ func Revoke(ctx context.Context, adminSession *messaging.DirectSession, params R
 			fmt.Fprintf(os.Stderr, "  Warning: could not kick from %s: %v\n", room.name, err)
 		} else {
 			fmt.Fprintf(os.Stderr, "  Kicked from %s\n", room.name)
+		}
+	}
+
+	// Clear state events. The machine is already kicked from all
+	// rooms, so it cannot overwrite these cleared values.
+	_, err = adminSession.SendStateEvent(ctx, machineRoomID, schema.EventTypeMachineKey, machineUsername, map[string]any{})
+	if err != nil {
+		fmt.Fprintf(os.Stderr, "  Warning: could not clear machine_key: %v\n", err)
+	} else {
+		fmt.Fprintf(os.Stderr, "  Cleared machine_key\n")
+	}
+
+	_, err = adminSession.SendStateEvent(ctx, machineRoomID, schema.EventTypeMachineStatus, machineUsername, map[string]any{})
+	if err != nil {
+		fmt.Fprintf(os.Stderr, "  Warning: could not clear machine_status: %v\n", err)
+	} else {
+		fmt.Fprintf(os.Stderr, "  Cleared machine_status\n")
+	}
+
+	var principals []string
+	var credentialKeys []string
+
+	if configRoomExists {
+		_, err = adminSession.SendStateEvent(ctx, configRoomID, schema.EventTypeMachineConfig, machineUsername, map[string]any{})
+		if err != nil {
+			fmt.Fprintf(os.Stderr, "  Warning: could not clear machine_config: %v\n", err)
+		} else {
+			fmt.Fprintf(os.Stderr, "  Cleared machine_config\n")
+		}
+
+		cleared, err := clearConfigRoomCredentials(ctx, adminSession, configRoomID)
+		if err != nil {
+			fmt.Fprintf(os.Stderr, "  Warning: %v\n", err)
+		} else {
+			principals = cleared
+			credentialKeys = cleared
 		}
 	}
 

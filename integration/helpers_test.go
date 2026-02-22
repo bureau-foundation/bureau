@@ -983,7 +983,7 @@ type roomWatch struct {
 // returned roomWatch only sees events arriving after this call returns.
 func watchRoom(t *testing.T, session *messaging.DirectSession, roomID ref.RoomID) roomWatch {
 	t.Helper()
-	watcher, err := messaging.WatchRoom(t.Context(), session, roomID, "")
+	watcher, err := messaging.WatchRoom(t.Context(), session, roomID, nil)
 	if err != nil {
 		t.Fatalf("watchRoom %s: %v", roomID, err)
 	}
@@ -1122,23 +1122,33 @@ func waitForNotification[T any](t *testing.T, w *roomWatch, msgtype string, send
 	var result T
 	w.WaitForEvent(t, func(event messaging.Event) bool {
 		if event.Type != schema.MatrixEventTypeMessage {
+			t.Logf("waitForNotification[%s]: skip event type=%q sender=%s (want m.room.message)", description, event.Type, event.Sender)
 			return false
 		}
 		if event.Sender != senderID {
+			eventMsgtype, _ := event.Content["msgtype"].(string)
+			t.Logf("waitForNotification[%s]: skip sender=%s msgtype=%s (want sender=%s)", description, event.Sender, eventMsgtype, senderID)
 			return false
 		}
 		eventMsgtype, _ := event.Content["msgtype"].(string)
 		if eventMsgtype != msgtype {
+			t.Logf("waitForNotification[%s]: skip msgtype=%q from sender=%s (want msgtype=%s)", description, eventMsgtype, event.Sender, msgtype)
 			return false
 		}
 		contentJSON, err := json.Marshal(event.Content)
 		if err != nil {
+			t.Logf("waitForNotification[%s]: skip marshal error: %v", description, err)
 			return false
 		}
 		if err := json.Unmarshal(contentJSON, &result); err != nil {
+			t.Logf("waitForNotification[%s]: skip unmarshal error: %v", description, err)
 			return false
 		}
-		return predicate == nil || predicate(result)
+		if predicate != nil && !predicate(result) {
+			t.Logf("waitForNotification[%s]: skip predicate rejected content=%s", description, string(contentJSON))
+			return false
+		}
+		return true
 	}, description)
 	return result
 }

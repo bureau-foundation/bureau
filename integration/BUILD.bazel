@@ -96,6 +96,7 @@ go_test(
         "//lib/schema/workspace",
         "//lib/secret",
         "//lib/service",
+        "//lib/servicetoken",
         "//lib/templatedef",
         "//lib/testutil",
         "//messaging",

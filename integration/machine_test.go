@@ -5,6 +5,8 @@ package integration_test
 
 import (
 	"context"
+	"crypto/rand"
+	"encoding/hex"
 	"encoding/json"
 	"os"
 	"os/exec"
@@ -17,6 +19,7 @@ import (
 	"github.com/bureau-foundation/bureau/lib/ref"
 	"github.com/bureau-foundation/bureau/lib/schema"
 	"github.com/bureau-foundation/bureau/lib/secret"
+	"github.com/bureau-foundation/bureau/lib/servicetoken"
 	"github.com/bureau-foundation/bureau/lib/templatedef"
 	"github.com/bureau-foundation/bureau/messaging"
 )
@@ -709,6 +712,11 @@ type agentOptions struct {
 	// Payload is the per-instance payload merged over template defaults.
 	Payload map[string]any
 
+	// StartCondition gates this principal's launch on the existence of a
+	// specific state event. When set, the daemon only starts the sandbox
+	// if the referenced event exists and matches the content criteria.
+	StartCondition *schema.StartCondition
+
 	// SkipWaitForReady skips waiting for "agent-ready" after deployment.
 	// Set to true for agents expected to exit/fail before posting ready.
 	SkipWaitForReady bool
@@ -850,11 +858,12 @@ func deployAgent(t *testing.T, admin *messaging.DirectSession, machine *testMach
 			_, err := templatedef.Fetch(ctx, admin, ref, serverName)
 			return err
 		},
-		HomeserverURL: testHomeserverURL,
-		AutoStart:     true,
-		MachineRoomID: machine.MachineRoomID,
-		Payload:       options.Payload,
-		Authorization: options.Authorization,
+		HomeserverURL:  testHomeserverURL,
+		AutoStart:      true,
+		StartCondition: options.StartCondition,
+		MachineRoomID:  machine.MachineRoomID,
+		Payload:        options.Payload,
+		Authorization:  options.Authorization,
 	})
 	if err != nil {
 		t.Fatalf("create agent %q: %v", options.Localpart, err)
@@ -963,28 +972,45 @@ func joinConfigRoom(t *testing.T, admin *messaging.DirectSession, configRoomID r
 	agentSession.Close()
 }
 
-// readDaemonMintedToken reads a daemon-minted service token from the
-// machine's state directory. The daemon writes tokens to
-// <stateDir>/tokens/<localpart>/<role>.token during sandbox provisioning.
-// Call this after the proxy socket appears (which proves the daemon
-// completed sandbox creation including token minting).
-func readDaemonMintedToken(t *testing.T, machine *testMachine, localpart, serviceRole string) []byte {
+// mintTestServiceToken creates a service token signed by the machine's
+// Ed25519 key pair. This produces a token that the target service will
+// accept (signature validates, audience matches, not blacklisted),
+// independent of the daemon's sandbox lifecycle.
+//
+// Use this instead of reading tokens from the daemon's state directory:
+// daemon-minted tokens are revoked when the sandbox exits, so any test
+// that outlives the sandbox (which is most of them — the test agent
+// exits almost immediately) would use a revoked token.
+func mintTestServiceToken(t *testing.T, machine *testMachine, principal ref.Entity, serviceRole string, grants []servicetoken.Grant) []byte {
 	t.Helper()
 
-	if localpart == "" {
-		t.Fatal("localpart is required")
-	}
-	if serviceRole == "" {
-		t.Fatal("serviceRole is required")
+	_, privateKey, err := servicetoken.LoadKeypair(machine.StateDir)
+	if err != nil {
+		t.Fatalf("load machine signing keypair from %s: %v", machine.StateDir, err)
 	}
 
-	tokenPath := filepath.Join(machine.StateDir, "tokens", localpart, serviceRole+".token")
-	token, err := os.ReadFile(tokenPath)
+	tokenID := make([]byte, 16)
+	if _, err := rand.Read(tokenID); err != nil {
+		t.Fatalf("generate token ID: %v", err)
+	}
+
+	// Use fixed timestamps far in the future so the token is always
+	// valid during test execution. Wall clock is not needed here —
+	// the token just needs IssuedAt < now < ExpiresAt at verification
+	// time. 2025-01-01 to 2099-01-01 satisfies that for any test run.
+	token := &servicetoken.Token{
+		Subject:   principal.UserID(),
+		Machine:   machine.Ref,
+		Audience:  serviceRole,
+		Grants:    grants,
+		ID:        hex.EncodeToString(tokenID),
+		IssuedAt:  1735689600, // 2025-01-01T00:00:00Z
+		ExpiresAt: 4070908800, // 2099-01-01T00:00:00Z
+	}
+
+	tokenBytes, err := servicetoken.Mint(privateKey, token)
 	if err != nil {
-		t.Fatalf("read daemon-minted %s token for %s at %s: %v", serviceRole, localpart, tokenPath, err)
+		t.Fatalf("mint %s token for %s: %v", serviceRole, principal, err)
 	}
-	if len(token) == 0 {
-		t.Fatalf("daemon-minted %s token for %s is empty", serviceRole, localpart)
-	}
-	return token
+	return tokenBytes
 }

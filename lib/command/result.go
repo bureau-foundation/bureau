@@ -19,15 +19,16 @@ import (
 // and preserves the raw [messaging.Event] for callers that need event
 // metadata (event ID, sender, timestamp).
 type Result struct {
-	// Status is the command outcome: "success", "error", or "accepted".
-	// Accepted means the daemon acknowledged an async command and
-	// spawned a pipeline executor; the final result arrives later.
+	// Status is the command outcome: "success" or "error". The daemon
+	// always posts "success" for commands that completed without error,
+	// even for async commands that return "accepted" in their result
+	// payload.
 	Status string
 
 	// ResultData is the command-specific result payload as raw JSON.
 	// For synchronous commands, this contains the full result. For
-	// accepted acks, it contains the principal name. Callers unmarshal
-	// into their own types.
+	// accepted acks, it contains ticket_id and room. Callers unmarshal
+	// into their own types via [UnmarshalResult].
 	ResultData json.RawMessage
 
 	// Error is the error message when Status is "error".
@@ -40,8 +41,19 @@ type Result struct {
 	// command's request_id field.
 	RequestID string
 
+	// TicketID is the ticket ID from accepted results (e.g., "pip-a3f9").
+	// Present when the daemon creates a ticket for an async operation
+	// (pipeline execution, worktree add/remove). Extracted from the
+	// "ticket_id" field in ResultData.
+	TicketID ref.TicketID
+
+	// TicketRoom is the room ID where the ticket was created. Present
+	// alongside TicketID. Extracted from the "room" field in ResultData.
+	TicketRoom ref.RoomID
+
 	// Principal is the executor principal name for async commands.
-	// Present in "accepted" results for pipeline-backed operations.
+	// Present in older-style "accepted" results that include a
+	// principal field. Newer ticket-driven results use TicketID instead.
 	Principal string
 
 	// ExitCode is the pipeline exit code. Non-nil only for pipeline
@@ -63,10 +75,12 @@ type Result struct {
 }
 
 // IsAccepted returns true when the daemon acknowledged an async command
-// and spawned a pipeline executor. The final result arrives later as a
-// separate event.
+// by creating a ticket. The command result status is "success" (the
+// command handler completed), but the result payload contains
+// status:"accepted" and a ticket_id. The pipeline executor drives all
+// subsequent progress through the ticket.
 func (r *Result) IsAccepted() bool {
-	return r.Status == "accepted"
+	return !r.TicketID.IsZero()
 }
 
 // IsSuccess returns true when the command completed successfully.
@@ -99,9 +113,20 @@ func (r *Result) Err() error {
 }
 
 // WriteAcceptedHint writes the standard acceptance display for async
-// commands: executor principal name and "bureau observe" hint. Writes
-// nothing if Principal is empty (synchronous commands).
+// commands. For ticket-driven commands, prints the ticket ID, room,
+// and a "bureau pipeline wait" hint. Falls back to the principal-based
+// "bureau observe" hint for older-style accepted results.
+// Writes nothing for synchronous commands (no ticket, no principal).
 func (r *Result) WriteAcceptedHint(writer io.Writer) {
+	if !r.TicketID.IsZero() {
+		fmt.Fprintf(writer, "  ticket:  %s\n", r.TicketID)
+		if !r.TicketRoom.IsZero() {
+			fmt.Fprintf(writer, "  room:    %s\n", r.TicketRoom)
+		}
+		fmt.Fprintf(writer, "\nWatch progress: bureau pipeline wait %s --room %s\n",
+			r.TicketID, r.TicketRoom)
+		return
+	}
 	if r.Principal != "" {
 		fmt.Fprintf(writer, "  executor:  %s\n", r.Principal)
 		fmt.Fprintf(writer, "\nObserve progress: bureau observe %s\n", r.Principal)
@@ -118,7 +143,9 @@ func (r *Result) UnmarshalResult(target any) error {
 }
 
 // parseResult extracts a Result from a raw messaging.Event whose
-// content is a command_result message.
+// content is a command_result message. For accepted results (status
+// "success" with a ticket_id in the result payload), extracts the
+// TicketID and TicketRoom fields from the result data.
 func parseResult(event messaging.Event) (*Result, error) {
 	contentJSON, err := json.Marshal(event.Content)
 	if err != nil {
@@ -130,7 +157,7 @@ func parseResult(event messaging.Event) (*Result, error) {
 		return nil, fmt.Errorf("parsing command result: %w", err)
 	}
 
-	return &Result{
+	result := &Result{
 		Status:     raw.Status,
 		ResultData: raw.Result,
 		Error:      raw.Error,
@@ -142,5 +169,29 @@ func parseResult(event messaging.Event) (*Result, error) {
 		Outputs:    raw.Outputs,
 		LogEventID: raw.LogEventID,
 		Event:      event,
-	}, nil
+	}
+
+	// Extract ticket fields from the result payload. Async command
+	// handlers (pipeline.execute, worktree.add, worktree.remove) return
+	// {status:"accepted", ticket_id:"pip-xxx", room:"!room:server"} as
+	// the result data. Parse these into typed fields so callers don't
+	// need to unmarshal ResultData themselves for the common case.
+	if raw.Status == "success" && len(raw.Result) > 0 {
+		var accepted struct {
+			TicketID string `json:"ticket_id"`
+			Room     string `json:"room"`
+		}
+		if json.Unmarshal(raw.Result, &accepted) == nil && accepted.TicketID != "" {
+			if ticketID, err := ref.ParseTicketID(accepted.TicketID); err == nil {
+				result.TicketID = ticketID
+			}
+			if accepted.Room != "" {
+				if roomID, err := ref.ParseRoomID(accepted.Room); err == nil {
+					result.TicketRoom = roomID
+				}
+			}
+		}
+	}
+
+	return result, nil
 }

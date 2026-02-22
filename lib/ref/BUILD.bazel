@@ -19,6 +19,7 @@ go_library(
         "room_alias.go",
         "server_name.go",
         "service.go",
+        "ticket_id.go",
         "user.go",
         "validate.go",
     ],
@@ -32,6 +33,7 @@ go_test(
         "event_id_test.go",
         "ref_test.go",
         "room_test.go",
+        "ticket_id_test.go",
     ],
     embed = [":ref"],
 )

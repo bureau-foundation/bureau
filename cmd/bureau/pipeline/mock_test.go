@@ -24,7 +24,8 @@ import (
 
 // pipelineTestState provides a mock Matrix server for pipeline CLI tests.
 // It supports alias resolution, room state listing, individual state event
-// fetches, state event writes, and room message sends.
+// fetches, state event writes, room message sends, and /sync responses
+// that deliver command results.
 type pipelineTestState struct {
 	mu sync.Mutex
 
@@ -43,6 +44,20 @@ type pipelineTestState struct {
 
 	// sentEvents captures SendEvent calls (m.room.message) for verification.
 	sentEvents []sentEvent
+
+	// pendingSyncEvents accumulates events to deliver in the next /sync
+	// response (keyed by room ID). handleSendEvent populates this when
+	// autoCommandResult is set; handleSync drains it.
+	pendingSyncEvents map[string][]map[string]any
+
+	// autoCommandResult, when non-nil, is called after a command message
+	// is sent to generate a command_result that will be delivered via the
+	// next /sync. It receives the request ID and room ID and returns the
+	// result payload (the "result" field of the command_result content).
+	autoCommandResult func(requestID, roomID string) map[string]any
+
+	// syncBatchCounter generates unique batch tokens.
+	syncBatchCounter int
 }
 
 type sentStateEvent struct {
@@ -60,9 +75,10 @@ type sentEvent struct {
 
 func newPipelineTestState() *pipelineTestState {
 	return &pipelineTestState{
-		roomAliases: make(map[string]string),
-		roomEvents:  make(map[string][]messaging.Event),
-		stateEvents: make(map[string]json.RawMessage),
+		roomAliases:       make(map[string]string),
+		roomEvents:        make(map[string][]messaging.Event),
+		stateEvents:       make(map[string]json.RawMessage),
+		pendingSyncEvents: make(map[string][]map[string]any),
 	}
 }
 
@@ -131,7 +147,7 @@ func (s *pipelineTestState) handler() http.Handler {
 			s.handleSendEvent(writer, request, path)
 
 		case strings.HasPrefix(path, "/_matrix/client/v3/sync"):
-			s.handleSync(writer)
+			s.handleSync(writer, request)
 
 		default:
 			http.Error(writer, fmt.Sprintf(`{"errcode":"M_UNRECOGNIZED","error":"unknown: %s %s"}`, request.Method, path), http.StatusNotFound)
@@ -293,13 +309,63 @@ func (s *pipelineTestState) handleSendEvent(writer http.ResponseWriter, request 
 		Body:   body,
 	})
 
+	// If autoCommandResult is set and this is a command message, queue
+	// a matching command_result for delivery via the next /sync.
+	if s.autoCommandResult != nil {
+		var command schema.CommandMessage
+		if json.Unmarshal(body, &command) == nil && command.MsgType == schema.MsgTypeCommand {
+			resultPayload := s.autoCommandResult(command.RequestID, roomID)
+			resultJSON, _ := json.Marshal(resultPayload)
+			commandResult := map[string]any{
+				"msgtype":    schema.MsgTypeCommandResult,
+				"body":       "command result",
+				"status":     "success",
+				"request_id": command.RequestID,
+				"result":     json.RawMessage(resultJSON),
+			}
+			s.pendingSyncEvents[roomID] = append(s.pendingSyncEvents[roomID], commandResult)
+		}
+	}
+
 	writer.Header().Set("Content-Type", "application/json")
 	fmt.Fprintf(writer, `{"event_id":"$test-event-id"}`)
 }
 
-func (s *pipelineTestState) handleSync(writer http.ResponseWriter) {
+func (s *pipelineTestState) handleSync(writer http.ResponseWriter, request *http.Request) {
+	s.syncBatchCounter++
+	batchToken := fmt.Sprintf("mock_batch_%d", s.syncBatchCounter)
+
+	since := request.URL.Query().Get("since")
+	if since == "" || len(s.pendingSyncEvents) == 0 {
+		// Initial sync or no pending events — return empty rooms.
+		writer.Header().Set("Content-Type", "application/json")
+		fmt.Fprintf(writer, `{"next_batch":%q,"rooms":{"join":{}}}`, batchToken)
+		return
+	}
+
+	// Build /sync response with pending events in each room's timeline.
+	joinedRooms := make(map[string]any)
+	for roomID, events := range s.pendingSyncEvents {
+		timelineEvents := make([]map[string]any, len(events))
+		for i, event := range events {
+			timelineEvents[i] = map[string]any{
+				"type":    "m.room.message",
+				"content": event,
+			}
+		}
+		joinedRooms[roomID] = map[string]any{
+			"timeline": map[string]any{"events": timelineEvents},
+			"state":    map[string]any{"events": []any{}},
+		}
+	}
+	s.pendingSyncEvents = make(map[string][]map[string]any)
+
+	response := map[string]any{
+		"next_batch": batchToken,
+		"rooms":      map[string]any{"join": joinedRooms},
+	}
 	writer.Header().Set("Content-Type", "application/json")
-	fmt.Fprint(writer, `{"next_batch":"mock_batch_token","rooms":{"join":{}}}`)
+	json.NewEncoder(writer).Encode(response)
 }
 
 // newPipelineTestSession creates a mock Matrix session connected to the

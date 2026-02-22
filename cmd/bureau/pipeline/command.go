@@ -36,7 +36,11 @@ All commands that access Matrix require an operator session. Run
 			showCommand(),
 			validateCommand(),
 			pushCommand(),
-			executeCommand(),
+			runCommand(),
+			waitCommand(),
+			statusCommand(),
+			cancelCommand(),
+			listRunsCommand(),
 		},
 		Examples: []cli.Example{
 			{
@@ -56,8 +60,12 @@ All commands that access Matrix require an operator session. Run
 				Command:     "bureau pipeline push bureau/pipeline:my-pipeline my-pipeline.jsonc",
 			},
 			{
-				Description: "Execute a pipeline on a machine",
-				Command:     "bureau pipeline execute bureau/pipeline:dev-workspace-init --machine machine/workstation --param PROJECT=iree",
+				Description: "Run a pipeline on a machine",
+				Command:     "bureau pipeline run bureau/pipeline:dev-workspace-init --machine bureau/fleet/prod/machine/workstation --room '!project:bureau.local' --param PROJECT=iree",
+			},
+			{
+				Description: "Wait for a running pipeline to complete",
+				Command:     "bureau pipeline wait pip-a3f9 --room '!project:bureau.local'",
 			},
 		},
 	}

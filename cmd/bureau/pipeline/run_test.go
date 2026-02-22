@@ -11,18 +11,25 @@ import (
 	"github.com/bureau-foundation/bureau/lib/schema"
 )
 
-func TestExecutePipeline(t *testing.T) {
-
+func TestRunPipeline(t *testing.T) {
 	state := newPipelineTestState()
-	// Register the config room that the execute command resolves.
 	state.mu.Lock()
 	state.roomAliases["#bureau/fleet/prod/machine/workstation:test.local"] = "!config-ws:test"
+	// Auto-generate an accepted command_result for every command.
+	state.autoCommandResult = func(requestID, roomID string) map[string]any {
+		return map[string]any{
+			"status":    "accepted",
+			"ticket_id": "pip-test1234",
+			"room":      "!project:test",
+		}
+	}
 	state.mu.Unlock()
 	startTestServer(t, state)
 
-	cmd := executeCommand()
+	cmd := runCommand()
 	if err := cmd.FlagSet().Parse([]string{
 		"--machine", "bureau/fleet/prod/machine/workstation",
+		"--room", "!project:test",
 		"--param", "PROJECT=iree",
 		"--param", "BRANCH=main",
 		"--server-name", "test.local",
@@ -30,7 +37,7 @@ func TestExecutePipeline(t *testing.T) {
 		t.Fatalf("flag parse: %v", err)
 	}
 	if err := cmd.Run([]string{"bureau/pipeline:dev-workspace-init"}); err != nil {
-		t.Fatalf("execute: %v", err)
+		t.Fatalf("run: %v", err)
 	}
 
 	// Verify the command message was sent to the config room.
@@ -65,6 +72,9 @@ func TestExecutePipeline(t *testing.T) {
 	if pipeline, ok := command.Parameters["pipeline"].(string); !ok || pipeline != "bureau/pipeline:dev-workspace-init" {
 		t.Errorf("Parameters[pipeline] = %v, want %q", command.Parameters["pipeline"], "bureau/pipeline:dev-workspace-init")
 	}
+	if room, ok := command.Parameters["room"].(string); !ok || room != "!project:test" {
+		t.Errorf("Parameters[room] = %v, want %q", command.Parameters["room"], "!project:test")
+	}
 	if project, ok := command.Parameters["PROJECT"].(string); !ok || project != "iree" {
 		t.Errorf("Parameters[PROJECT] = %v, want %q", command.Parameters["PROJECT"], "iree")
 	}
@@ -73,10 +83,15 @@ func TestExecutePipeline(t *testing.T) {
 	}
 }
 
-func TestExecuteMissingMachine(t *testing.T) {
+func TestRunMissingMachine(t *testing.T) {
 	t.Parallel()
 
-	cmd := executeCommand()
+	cmd := runCommand()
+	if err := cmd.FlagSet().Parse([]string{
+		"--room", "!project:test",
+	}); err != nil {
+		t.Fatalf("flag parse: %v", err)
+	}
 	err := cmd.Run([]string{"bureau/pipeline:test"})
 	if err == nil {
 		t.Fatal("expected error for missing --machine")
@@ -86,11 +101,32 @@ func TestExecuteMissingMachine(t *testing.T) {
 	}
 }
 
-func TestExecuteBadPipelineRef(t *testing.T) {
+func TestRunMissingRoom(t *testing.T) {
 	t.Parallel()
 
-	cmd := executeCommand()
-	if err := cmd.FlagSet().Parse([]string{"--machine", "machine/workstation"}); err != nil {
+	cmd := runCommand()
+	if err := cmd.FlagSet().Parse([]string{
+		"--machine", "bureau/fleet/prod/machine/workstation",
+	}); err != nil {
+		t.Fatalf("flag parse: %v", err)
+	}
+	err := cmd.Run([]string{"bureau/pipeline:test"})
+	if err == nil {
+		t.Fatal("expected error for missing --room")
+	}
+	if !strings.Contains(err.Error(), "--room is required") {
+		t.Errorf("error %q should mention --room", err.Error())
+	}
+}
+
+func TestRunBadPipelineRef(t *testing.T) {
+	t.Parallel()
+
+	cmd := runCommand()
+	if err := cmd.FlagSet().Parse([]string{
+		"--machine", "machine/workstation",
+		"--room", "!project:test",
+	}); err != nil {
 		t.Fatalf("flag parse: %v", err)
 	}
 	err := cmd.Run([]string{"no-colon-here"})
@@ -102,17 +138,17 @@ func TestExecuteBadPipelineRef(t *testing.T) {
 	}
 }
 
-func TestExecuteBadParamFormat(t *testing.T) {
-
+func TestRunBadParamFormat(t *testing.T) {
 	state := newPipelineTestState()
 	state.mu.Lock()
 	state.roomAliases["#bureau/fleet/prod/machine/workstation:test.local"] = "!config-ws:test"
 	state.mu.Unlock()
 	startTestServer(t, state)
 
-	cmd := executeCommand()
+	cmd := runCommand()
 	if err := cmd.FlagSet().Parse([]string{
 		"--machine", "bureau/fleet/prod/machine/workstation",
+		"--room", "!project:test",
 		"--param", "no-equals-sign",
 		"--server-name", "test.local",
 	}); err != nil {
@@ -127,17 +163,17 @@ func TestExecuteBadParamFormat(t *testing.T) {
 	}
 }
 
-func TestExecuteEmptyParamKey(t *testing.T) {
-
+func TestRunEmptyParamKey(t *testing.T) {
 	state := newPipelineTestState()
 	state.mu.Lock()
 	state.roomAliases["#bureau/fleet/prod/machine/workstation:test.local"] = "!config-ws:test"
 	state.mu.Unlock()
 	startTestServer(t, state)
 
-	cmd := executeCommand()
+	cmd := runCommand()
 	if err := cmd.FlagSet().Parse([]string{
 		"--machine", "bureau/fleet/prod/machine/workstation",
+		"--room", "!project:test",
 		"--param", "=value-without-key",
 		"--server-name", "test.local",
 	}); err != nil {
@@ -152,11 +188,14 @@ func TestExecuteEmptyParamKey(t *testing.T) {
 	}
 }
 
-func TestExecuteInvalidMachineName(t *testing.T) {
+func TestRunInvalidMachineName(t *testing.T) {
 	t.Parallel()
 
-	cmd := executeCommand()
-	if err := cmd.FlagSet().Parse([]string{"--machine", "../escape/attempt"}); err != nil {
+	cmd := runCommand()
+	if err := cmd.FlagSet().Parse([]string{
+		"--machine", "../escape/attempt",
+		"--room", "!project:test",
+	}); err != nil {
 		t.Fatalf("flag parse: %v", err)
 	}
 	err := cmd.Run([]string{"bureau/pipeline:test"})
@@ -168,15 +207,34 @@ func TestExecuteInvalidMachineName(t *testing.T) {
 	}
 }
 
-func TestExecuteConfigRoomNotFound(t *testing.T) {
+func TestRunInvalidRoomID(t *testing.T) {
+	t.Parallel()
 
+	cmd := runCommand()
+	if err := cmd.FlagSet().Parse([]string{
+		"--machine", "bureau/fleet/prod/machine/workstation",
+		"--room", "not-a-room-id",
+	}); err != nil {
+		t.Fatalf("flag parse: %v", err)
+	}
+	err := cmd.Run([]string{"bureau/pipeline:test"})
+	if err == nil {
+		t.Fatal("expected error for invalid room ID")
+	}
+	if !strings.Contains(err.Error(), "invalid --room") {
+		t.Errorf("error %q should mention invalid --room", err.Error())
+	}
+}
+
+func TestRunConfigRoomNotFound(t *testing.T) {
 	state := newPipelineTestState()
 	// No rooms registered — config room resolution will fail.
 	startTestServer(t, state)
 
-	cmd := executeCommand()
+	cmd := runCommand()
 	if err := cmd.FlagSet().Parse([]string{
 		"--machine", "bureau/fleet/prod/machine/workstation",
+		"--room", "!project:test",
 		"--server-name", "test.local",
 	}); err != nil {
 		t.Fatalf("flag parse: %v", err)
@@ -190,10 +248,16 @@ func TestExecuteConfigRoomNotFound(t *testing.T) {
 	}
 }
 
-func TestExecuteNoArgs(t *testing.T) {
+func TestRunNoArgs(t *testing.T) {
 	t.Parallel()
 
-	cmd := executeCommand()
+	cmd := runCommand()
+	if err := cmd.FlagSet().Parse([]string{
+		"--machine", "bureau/fleet/prod/machine/workstation",
+		"--room", "!project:test",
+	}); err != nil {
+		t.Fatalf("flag parse: %v", err)
+	}
 	err := cmd.Run([]string{})
 	if err == nil {
 		t.Fatal("expected error for no args")

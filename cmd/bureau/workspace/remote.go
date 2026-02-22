@@ -6,9 +6,7 @@ package workspace
 import (
 	"context"
 	"encoding/json"
-	"fmt"
 	"strings"
-	"time"
 
 	"github.com/bureau-foundation/bureau/cmd/bureau/cli"
 	"github.com/bureau-foundation/bureau/lib/principal"
@@ -17,16 +15,6 @@ import (
 	"github.com/bureau-foundation/bureau/lib/schema/workspace"
 	"github.com/bureau-foundation/bureau/messaging"
 )
-
-// commandResult is the parsed content of an m.bureau.command_result
-// message, received as a threaded reply to a command event.
-type commandResult struct {
-	Status     string         `json:"status"`
-	Result     map[string]any `json:"result"`
-	Error      string         `json:"error"`
-	DurationMS int64          `json:"duration_ms"`
-	RequestID  string         `json:"request_id"`
-}
 
 // resolveWorkspaceRoom validates the alias and resolves it to a Matrix
 // room ID. The alias is the Bureau localpart (e.g., "iree/amdgpu/inference")
@@ -87,123 +75,6 @@ func findParentWorkspace(ctx context.Context, session messaging.Session, alias s
 		}
 
 		return roomID, state, candidate, nil
-	}
-}
-
-// sendWorkspaceCommand sends an m.bureau.command message to a workspace
-// room and returns the event ID and request ID. The command is sent as
-// an m.room.message event with msgtype m.bureau.command, which the
-// daemon processes via /sync.
-func sendWorkspaceCommand(
-	ctx context.Context,
-	session messaging.Session,
-	roomID ref.RoomID,
-	commandName string,
-	workspace string,
-	parameters map[string]any,
-) (ref.EventID, string, error) {
-	requestID, err := cli.GenerateRequestID()
-	if err != nil {
-		return ref.EventID{}, "", cli.Internal("generating request ID: %w", err)
-	}
-
-	command := schema.CommandMessage{
-		MsgType:    schema.MsgTypeCommand,
-		Body:       fmt.Sprintf("%s %s", commandName, workspace),
-		Command:    commandName,
-		Workspace:  workspace,
-		RequestID:  requestID,
-		Parameters: parameters,
-	}
-
-	eventID, err := session.SendEvent(ctx, roomID, "m.room.message", command)
-	if err != nil {
-		return ref.EventID{}, "", cli.Internal("sending %s command: %w", commandName, err)
-	}
-
-	return eventID, requestID, nil
-}
-
-// waitForCommandResult polls the thread of a command event until a
-// m.bureau.command_result reply appears with a matching request ID, or
-// the context expires.
-//
-// The poll interval starts at 250ms and grows to 2s. This balances
-// responsiveness for fast commands (status, du) with efficiency for
-// slow ones (fetch, pipeline execution).
-func waitForCommandResult(
-	ctx context.Context,
-	session messaging.Session,
-	roomID ref.RoomID,
-	commandEventID ref.EventID,
-	requestID string,
-) (*commandResult, error) {
-	pollInterval := 250 * time.Millisecond
-	maxInterval := 2 * time.Second
-
-	for {
-		select {
-		case <-ctx.Done():
-			return nil, cli.Transient("timed out waiting for command result (request_id=%s): %w", requestID, ctx.Err())
-		default:
-		}
-
-		response, err := session.ThreadMessages(ctx, roomID, commandEventID, messaging.ThreadMessagesOptions{
-			Limit: 10,
-		})
-		if err != nil {
-			// Transient errors during polling are expected (homeserver
-			// hiccups, brief network issues). Log-and-retry would be
-			// appropriate in a daemon, but for a CLI command a context
-			// timeout handles this naturally.
-			select {
-			case <-ctx.Done():
-				return nil, cli.Transient("timed out waiting for command result: %w", ctx.Err())
-			case <-time.After(pollInterval):
-				continue
-			}
-		}
-
-		for _, event := range response.Chunk {
-			msgtype, _ := event.Content["msgtype"].(string)
-			if msgtype != schema.MsgTypeCommandResult {
-				continue
-			}
-
-			// Match on request_id if present. This prevents picking up
-			// stale results from previous invocations of the same command
-			// in the same thread.
-			eventRequestID, _ := event.Content["request_id"].(string)
-			if requestID != "" && eventRequestID != requestID {
-				continue
-			}
-
-			// Parse the result.
-			contentJSON, err := json.Marshal(event.Content)
-			if err != nil {
-				return nil, cli.Internal("marshaling result content: %w", err)
-			}
-
-			var result commandResult
-			if err := json.Unmarshal(contentJSON, &result); err != nil {
-				return nil, cli.Internal("parsing command result: %w", err)
-			}
-
-			return &result, nil
-		}
-
-		// Back off gradually.
-		select {
-		case <-ctx.Done():
-			return nil, cli.Transient("timed out waiting for command result: %w", ctx.Err())
-		case <-time.After(pollInterval):
-		}
-		if pollInterval < maxInterval {
-			pollInterval = pollInterval * 3 / 2
-			if pollInterval > maxInterval {
-				pollInterval = maxInterval
-			}
-		}
 	}
 }
 

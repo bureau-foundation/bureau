@@ -12,6 +12,7 @@ import (
 	"time"
 
 	"github.com/bureau-foundation/bureau/cmd/bureau/cli"
+	"github.com/bureau-foundation/bureau/lib/command"
 	"github.com/bureau-foundation/bureau/lib/principal"
 	"github.com/bureau-foundation/bureau/lib/ref"
 	"github.com/bureau-foundation/bureau/lib/schema"
@@ -453,34 +454,37 @@ func runStatus(alias string, serverName ref.ServerName, jsonOutput *cli.JSONOutp
 		return err
 	}
 
-	eventID, requestID, err := sendWorkspaceCommand(ctx, session, roomID, "workspace.status", alias, nil)
+	result, err := command.Execute(ctx, command.SendParams{
+		Session:   session,
+		RoomID:    roomID,
+		Command:   "workspace.status",
+		Workspace: alias,
+	})
 	if err != nil {
 		return err
 	}
-
-	result, err := waitForCommandResult(ctx, session, roomID, eventID, requestID)
-	if err != nil {
-		return err
-	}
-
-	if result.Status == "error" {
+	if result.IsError() {
 		return cli.Internal("daemon error: %s", result.Error)
 	}
 
-	if done, err := jsonOutput.EmitJSON(result.Result); done {
+	if done, err := jsonOutput.EmitJSON(json.RawMessage(result.ResultData)); done {
 		return err
 	}
 
-	// Display the result.
-	workspace, _ := result.Result["workspace"].(string)
-	exists, _ := result.Result["exists"].(bool)
-	fmt.Printf("Workspace: %s\n", workspace)
+	var statusResult map[string]any
+	if err := result.UnmarshalResult(&statusResult); err != nil {
+		return cli.Internal("parsing status result: %v", err)
+	}
+
+	workspaceName, _ := statusResult["workspace"].(string)
+	exists, _ := statusResult["exists"].(bool)
+	fmt.Printf("Workspace: %s\n", workspaceName)
 	fmt.Printf("  exists: %v\n", exists)
 	if exists {
-		if hasBare, ok := result.Result["has_bare_repo"].(bool); ok && hasBare {
+		if hasBare, ok := statusResult["has_bare_repo"].(bool); ok && hasBare {
 			fmt.Printf("  has_bare_repo: true\n")
 		}
-		if isDir, ok := result.Result["is_dir"].(bool); ok {
+		if isDir, ok := statusResult["is_dir"].(bool); ok {
 			fmt.Printf("  is_dir: %v\n", isDir)
 		}
 	}
@@ -512,29 +516,33 @@ func runDu(alias string, serverName ref.ServerName, jsonOutput *cli.JSONOutput) 
 		return err
 	}
 
-	eventID, requestID, err := sendWorkspaceCommand(ctx, session, roomID, "workspace.du", alias, nil)
+	result, err := command.Execute(ctx, command.SendParams{
+		Session:   session,
+		RoomID:    roomID,
+		Command:   "workspace.du",
+		Workspace: alias,
+	})
 	if err != nil {
 		return err
 	}
-
-	result, err := waitForCommandResult(ctx, session, roomID, eventID, requestID)
-	if err != nil {
-		return err
-	}
-
-	if result.Status == "error" {
+	if result.IsError() {
 		return cli.Internal("daemon error: %s", result.Error)
 	}
 
-	if done, err := jsonOutput.EmitJSON(result.Result); done {
+	if done, err := jsonOutput.EmitJSON(json.RawMessage(result.ResultData)); done {
 		return err
 	}
 
+	var duResult map[string]any
+	if err := result.UnmarshalResult(&duResult); err != nil {
+		return cli.Internal("parsing du result: %v", err)
+	}
+
 	writer := tabwriter.NewWriter(os.Stdout, 0, 0, 2, ' ', 0)
-	workspace, _ := result.Result["workspace"].(string)
-	size, _ := result.Result["size"].(string)
+	workspaceName, _ := duResult["workspace"].(string)
+	size, _ := duResult["size"].(string)
 	fmt.Fprintf(writer, "WORKSPACE\tSIZE\n")
-	fmt.Fprintf(writer, "%s\t%s\n", workspace, size)
+	fmt.Fprintf(writer, "%s\t%s\n", workspaceName, size)
 	writer.Flush()
 	return nil
 }
@@ -635,11 +643,7 @@ func runWorktreeAdd(alias, branch string, serverName ref.ServerName, jsonOutput 
 
 	// Worktree operations route through the parent workspace room.
 	// Worktrees don't get their own rooms — they're filesystem
-	// artifacts, not organizational boundaries. If per-worktree rooms
-	// become useful (e.g., for agent communication scoped to a
-	// worktree), that's a separate information architecture decision.
-	//
-	// Walk up to find the parent workspace.
+	// artifacts, not organizational boundaries.
 	workspaceRoomID, workspaceState, workspaceAlias, err := findParentWorkspace(ctx, session, alias, serverName)
 	if err != nil {
 		return err
@@ -649,10 +653,6 @@ func runWorktreeAdd(alias, branch string, serverName ref.ServerName, jsonOutput 
 		return cli.Conflict("workspace %s is in status %q (must be \"active\" to add worktrees)", workspaceAlias, workspaceState.Status)
 	}
 
-	// Derive the worktree subpath: the part of the alias after the
-	// workspace alias prefix. findParentWorkspace always returns a
-	// strict prefix (it strips at least one segment), but verify
-	// the invariant explicitly rather than panicking on a bad slice.
 	worktreeSubpath, err := extractSubpath(alias, workspaceAlias)
 	if err != nil {
 		return err
@@ -665,29 +665,34 @@ func runWorktreeAdd(alias, branch string, serverName ref.ServerName, jsonOutput 
 		parameters["branch"] = branch
 	}
 
-	eventID, requestID, err := sendWorkspaceCommand(ctx, session, workspaceRoomID, "workspace.worktree.add", workspaceAlias, parameters)
+	// Wait for the "accepted" ack from the daemon. The pipeline
+	// runs asynchronously — the CLI returns after acceptance.
+	future, err := command.Send(ctx, command.SendParams{
+		Session:    session,
+		RoomID:     workspaceRoomID,
+		Command:    "workspace.worktree.add",
+		Workspace:  workspaceAlias,
+		Parameters: parameters,
+	})
 	if err != nil {
 		return err
 	}
+	defer future.Discard()
 
-	// Wait for the "accepted" ack from the daemon.
-	result, err := waitForCommandResult(ctx, session, workspaceRoomID, eventID, requestID)
+	result, err := future.Wait(ctx)
 	if err != nil {
 		return err
 	}
-
-	if result.Status == "error" {
+	if result.IsError() {
 		return cli.Internal("daemon error: %s", result.Error)
 	}
-
-	principalName, _ := result.Result["principal"].(string)
 
 	if done, err := jsonOutput.EmitJSON(worktreeAddResult{
 		Alias:         alias,
 		Workspace:     workspaceAlias,
 		Subpath:       worktreeSubpath,
 		Branch:        branch,
-		PrincipalName: principalName,
+		PrincipalName: result.Principal,
 	}); done {
 		return err
 	}
@@ -698,9 +703,9 @@ func runWorktreeAdd(alias, branch string, serverName ref.ServerName, jsonOutput 
 	if branch != "" {
 		fmt.Fprintf(os.Stderr, "  branch:    %s\n", branch)
 	}
-	if principalName != "" {
-		fmt.Fprintf(os.Stderr, "  executor:  %s\n", principalName)
-		fmt.Fprintf(os.Stderr, "\nObserve progress: bureau observe %s\n", principalName)
+	if result.Principal != "" {
+		fmt.Fprintf(os.Stderr, "  executor:  %s\n", result.Principal)
+		fmt.Fprintf(os.Stderr, "\nObserve progress: bureau observe %s\n", result.Principal)
 	}
 	return nil
 }
@@ -770,7 +775,6 @@ func runWorktreeRemove(alias, mode string, serverName ref.ServerName, jsonOutput
 	defer cancel()
 	defer session.Close()
 
-	// Walk up to find the parent workspace.
 	workspaceRoomID, workspaceState, workspaceAlias, err := findParentWorkspace(ctx, session, alias, serverName)
 	if err != nil {
 		return err
@@ -785,33 +789,35 @@ func runWorktreeRemove(alias, mode string, serverName ref.ServerName, jsonOutput
 		return err
 	}
 
-	parameters := map[string]any{
-		"path": worktreeSubpath,
-		"mode": mode,
-	}
-
-	eventID, requestID, err := sendWorkspaceCommand(ctx, session, workspaceRoomID, "workspace.worktree.remove", workspaceAlias, parameters)
+	future, err := command.Send(ctx, command.SendParams{
+		Session:   session,
+		RoomID:    workspaceRoomID,
+		Command:   "workspace.worktree.remove",
+		Workspace: workspaceAlias,
+		Parameters: map[string]any{
+			"path": worktreeSubpath,
+			"mode": mode,
+		},
+	})
 	if err != nil {
 		return err
 	}
+	defer future.Discard()
 
-	result, err := waitForCommandResult(ctx, session, workspaceRoomID, eventID, requestID)
+	result, err := future.Wait(ctx)
 	if err != nil {
 		return err
 	}
-
-	if result.Status == "error" {
+	if result.IsError() {
 		return cli.Internal("daemon error: %s", result.Error)
 	}
-
-	principalName, _ := result.Result["principal"].(string)
 
 	if done, err := jsonOutput.EmitJSON(worktreeRemoveResult{
 		Alias:         alias,
 		Workspace:     workspaceAlias,
 		Subpath:       worktreeSubpath,
 		Mode:          mode,
-		PrincipalName: principalName,
+		PrincipalName: result.Principal,
 	}); done {
 		return err
 	}
@@ -819,9 +825,9 @@ func runWorktreeRemove(alias, mode string, serverName ref.ServerName, jsonOutput
 	fmt.Fprintf(os.Stderr, "Worktree remove accepted for %s (mode=%s)\n", alias, mode)
 	fmt.Fprintf(os.Stderr, "  workspace: %s\n", workspaceAlias)
 	fmt.Fprintf(os.Stderr, "  subpath:   %s\n", worktreeSubpath)
-	if principalName != "" {
-		fmt.Fprintf(os.Stderr, "  executor:  %s\n", principalName)
-		fmt.Fprintf(os.Stderr, "\nObserve progress: bureau observe %s\n", principalName)
+	if result.Principal != "" {
+		fmt.Fprintf(os.Stderr, "  executor:  %s\n", result.Principal)
+		fmt.Fprintf(os.Stderr, "\nObserve progress: bureau observe %s\n", result.Principal)
 	}
 	return nil
 }
@@ -855,33 +861,39 @@ func runFetch(alias string, serverName ref.ServerName, jsonOutput *cli.JSONOutpu
 		return err
 	}
 
-	eventID, requestID, err := sendWorkspaceCommand(ctx, session, roomID, "workspace.fetch", alias, nil)
-	if err != nil {
-		return err
-	}
-
-	// Poll with a 5-minute timeout — fetch can be slow for large repos.
-	// The ConnectOperator context has a 30s deadline which is too short
-	// for the polling phase, so create a new context here.
-	pollCtx, pollCancel := context.WithTimeout(context.Background(), 5*time.Minute)
-	defer pollCancel()
-
 	fmt.Fprintf(os.Stderr, "Fetching %s (this may take a while for large repos)...\n", alias)
 
-	result, err := waitForCommandResult(pollCtx, session, roomID, eventID, requestID)
+	// Fetch can take minutes for large repos. ConnectOperator gives
+	// a 30s context which is too short for waiting on the result, so
+	// create a longer context for the command execution. The /sync
+	// long-poll uses 30s server-side holds internally, so even a
+	// 5-minute wait makes at most ~10 HTTP round-trips.
+	fetchCtx, fetchCancel := context.WithTimeout(context.Background(), 5*time.Minute)
+	defer fetchCancel()
+
+	result, err := command.Execute(fetchCtx, command.SendParams{
+		Session:   session,
+		RoomID:    roomID,
+		Command:   "workspace.fetch",
+		Workspace: alias,
+	})
 	if err != nil {
 		return err
 	}
-
-	if result.Status == "error" {
+	if result.IsError() {
 		return cli.Internal("daemon error: %s", result.Error)
 	}
 
-	if done, err := jsonOutput.EmitJSON(result.Result); done {
+	if done, err := jsonOutput.EmitJSON(json.RawMessage(result.ResultData)); done {
 		return err
 	}
 
-	output, _ := result.Result["output"].(string)
+	var fetchResult map[string]any
+	if err := result.UnmarshalResult(&fetchResult); err != nil {
+		return cli.Internal("parsing fetch result: %v", err)
+	}
+
+	output, _ := fetchResult["output"].(string)
 	if output != "" {
 		fmt.Println(output)
 	}
@@ -913,25 +925,29 @@ func runWorktreeList(alias string, serverName ref.ServerName, jsonOutput *cli.JS
 		return err
 	}
 
-	eventID, requestID, err := sendWorkspaceCommand(ctx, session, roomID, "workspace.worktree.list", alias, nil)
+	result, err := command.Execute(ctx, command.SendParams{
+		Session:   session,
+		RoomID:    roomID,
+		Command:   "workspace.worktree.list",
+		Workspace: alias,
+	})
 	if err != nil {
 		return err
 	}
-
-	result, err := waitForCommandResult(ctx, session, roomID, eventID, requestID)
-	if err != nil {
-		return err
-	}
-
-	if result.Status == "error" {
+	if result.IsError() {
 		return cli.Internal("daemon error: %s", result.Error)
 	}
 
-	if done, err := jsonOutput.EmitJSON(result.Result); done {
+	if done, err := jsonOutput.EmitJSON(json.RawMessage(result.ResultData)); done {
 		return err
 	}
 
-	worktrees, _ := result.Result["worktrees"].([]any)
+	var listResult map[string]any
+	if err := result.UnmarshalResult(&listResult); err != nil {
+		return cli.Internal("parsing worktree list result: %v", err)
+	}
+
+	worktrees, _ := listResult["worktrees"].([]any)
 	if len(worktrees) == 0 {
 		fmt.Println("No worktrees found.")
 		return nil

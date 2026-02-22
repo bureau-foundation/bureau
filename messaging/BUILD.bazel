@@ -10,6 +10,7 @@ go_library(
         "direct_session.go",
         "doc.go",
         "errors.go",
+        "room_watcher.go",
         "session.go",
         "types.go",
     ],

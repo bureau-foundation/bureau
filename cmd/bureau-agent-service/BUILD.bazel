@@ -17,7 +17,7 @@ go_library(
         "//lib/clock",
         "//lib/codec",
         "//lib/ref",
-        "//lib/schema",
+        "//lib/schema/agent",
         "//lib/service",
         "//lib/servicetoken",
         "//lib/version",

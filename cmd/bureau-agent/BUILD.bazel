@@ -15,7 +15,7 @@ go_library(
     deps = [
         "//cmd/bureau/commands",
         "//cmd/bureau/mcp",
-        "//lib/agent",
+        "//lib/agentdriver",
         "//lib/llm",
         "//lib/llm/context",
         "//lib/proxyclient",
@@ -40,7 +40,7 @@ go_test(
     deps = [
         "//cmd/bureau/cli",
         "//cmd/bureau/mcp",
-        "//lib/agent",
+        "//lib/agentdriver",
         "//lib/llm",
         "//lib/llm/context",
         "//lib/schema",

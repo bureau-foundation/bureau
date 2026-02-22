@@ -1,0 +1,20 @@
+# Copyright 2026 The Bureau Authors
+# SPDX-License-Identifier: Apache-2.0
+
+load("@rules_go//go:def.bzl", "go_library", "go_test")
+
+go_library(
+    name = "workspace",
+    srcs = [
+        "doc.go",
+        "workspace.go",
+    ],
+    importpath = "github.com/bureau-foundation/bureau/lib/schema/workspace",
+    visibility = ["//visibility:public"],
+)
+
+go_test(
+    name = "workspace_test",
+    srcs = ["workspace_test.go"],
+    embed = [":workspace"],
+)

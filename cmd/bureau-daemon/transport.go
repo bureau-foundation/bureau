@@ -18,7 +18,7 @@ import (
 	"strings"
 	"time"
 
-	"github.com/bureau-foundation/bureau/lib/artifact"
+	"github.com/bureau-foundation/bureau/lib/artifactstore"
 	"github.com/bureau-foundation/bureau/lib/codec"
 	"github.com/bureau-foundation/bureau/lib/netutil"
 	"github.com/bureau-foundation/bureau/lib/principal"
@@ -607,7 +607,7 @@ func (d *Daemon) serviceHasCapability(localpart, capability string) bool {
 // verify the request.
 func (d *Daemon) bridgeWithTokenInjection(transportConn, serviceConn net.Conn) error {
 	// Read the first length-prefixed CBOR message from the remote client.
-	raw, err := artifact.ReadRawMessage(transportConn)
+	raw, err := artifactstore.ReadRawMessage(transportConn)
 	if err != nil {
 		serviceConn.Close()
 		return fmt.Errorf("reading first message from transport: %w", err)
@@ -653,7 +653,7 @@ func (d *Daemon) bridgeWithTokenInjection(transportConn, serviceConn net.Conn) e
 	}
 
 	// Write the modified message to the local service socket.
-	if err := artifact.WriteRawMessage(serviceConn, modifiedBytes); err != nil {
+	if err := artifactstore.WriteRawMessage(serviceConn, modifiedBytes); err != nil {
 		serviceConn.Close()
 		return fmt.Errorf("writing modified message to service: %w", err)
 	}

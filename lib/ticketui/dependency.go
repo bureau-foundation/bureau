@@ -10,7 +10,7 @@ import (
 
 	"github.com/charmbracelet/lipgloss"
 
-	"github.com/bureau-foundation/bureau/lib/schema"
+	ticketschema "github.com/bureau-foundation/bureau/lib/schema/ticket"
 )
 
 // depNode holds the data for one node in the dependency graph. Each
@@ -18,7 +18,7 @@ import (
 // the center ticket, or the center ticket itself.
 type depNode struct {
 	ticketID         string
-	content          schema.TicketContent
+	content          ticketschema.TicketContent
 	exists           bool // False when the ticket is not in the index.
 	borrowedPriority int  // Most urgent transitive dependent; -1 if none.
 }

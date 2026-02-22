@@ -24,6 +24,7 @@ import (
 
 	"github.com/bureau-foundation/bureau/lib/ref"
 	"github.com/bureau-foundation/bureau/lib/schema"
+	"github.com/bureau-foundation/bureau/lib/schema/pipeline"
 	"github.com/bureau-foundation/bureau/lib/servicetoken"
 )
 
@@ -465,12 +466,12 @@ func (d *Daemon) postPipelineResult(
 	}
 
 	// Build step summaries from the result entries.
-	var steps []schema.PipelineStepResult
+	var steps []pipeline.PipelineStepResult
 	for _, entry := range entries {
 		if entry.Type != "step" {
 			continue
 		}
-		steps = append(steps, schema.PipelineStepResult{
+		steps = append(steps, pipeline.PipelineStepResult{
 			Name:       entry.Name,
 			Status:     entry.Status,
 			DurationMS: entry.DurationMS,

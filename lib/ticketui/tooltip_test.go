@@ -9,11 +9,11 @@ import (
 
 	"github.com/charmbracelet/x/ansi"
 
-	"github.com/bureau-foundation/bureau/lib/schema"
+	ticketschema "github.com/bureau-foundation/bureau/lib/schema/ticket"
 )
 
 func TestRenderTooltip_BasicContent(testing *testing.T) {
-	content := schema.TicketContent{
+	content := ticketschema.TicketContent{
 		Title:    "Fix connection pooling leak",
 		Status:   "open",
 		Priority: 1,
@@ -61,7 +61,7 @@ func TestRenderTooltip_BasicContent(testing *testing.T) {
 }
 
 func TestRenderTooltip_NoDescription(testing *testing.T) {
-	content := schema.TicketContent{
+	content := ticketschema.TicketContent{
 		Title:    "Short task",
 		Status:   "closed",
 		Priority: 3,
@@ -76,7 +76,7 @@ func TestRenderTooltip_NoDescription(testing *testing.T) {
 }
 
 func TestRenderTooltip_NoTitle(testing *testing.T) {
-	content := schema.TicketContent{
+	content := ticketschema.TicketContent{
 		Status:   "open",
 		Priority: 0,
 	}
@@ -90,7 +90,7 @@ func TestRenderTooltip_NoTitle(testing *testing.T) {
 }
 
 func TestRenderTooltip_LongTitleTruncated(testing *testing.T) {
-	content := schema.TicketContent{
+	content := ticketschema.TicketContent{
 		Title:    "This is a very long title that definitely exceeds the maximum tooltip width and should be truncated with an ellipsis character",
 		Status:   "open",
 		Priority: 2,
@@ -106,7 +106,7 @@ func TestRenderTooltip_LongTitleTruncated(testing *testing.T) {
 }
 
 func TestRenderTooltip_MultilineDescription(testing *testing.T) {
-	content := schema.TicketContent{
+	content := ticketschema.TicketContent{
 		Title:    "Task",
 		Status:   "open",
 		Priority: 2,
@@ -131,7 +131,7 @@ func TestRenderTooltip_MultilineDescription(testing *testing.T) {
 }
 
 func TestRenderTooltip_DescriptionSkipsBlankLines(testing *testing.T) {
-	content := schema.TicketContent{
+	content := ticketschema.TicketContent{
 		Title:    "Task",
 		Status:   "open",
 		Priority: 2,
@@ -153,7 +153,7 @@ func TestRenderTooltip_DescriptionSkipsBlankLines(testing *testing.T) {
 }
 
 func TestRenderTooltip_ConsistentWidth(testing *testing.T) {
-	content := schema.TicketContent{
+	content := ticketschema.TicketContent{
 		Title:    "Short",
 		Status:   "in_progress",
 		Priority: 0,

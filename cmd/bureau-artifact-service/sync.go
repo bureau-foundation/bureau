@@ -9,6 +9,7 @@ import (
 
 	"github.com/bureau-foundation/bureau/lib/ref"
 	"github.com/bureau-foundation/bureau/lib/schema"
+	artifactschema "github.com/bureau-foundation/bureau/lib/schema/artifact"
 	"github.com/bureau-foundation/bureau/lib/service"
 	"github.com/bureau-foundation/bureau/messaging"
 )
@@ -52,7 +53,7 @@ const syncFilter = `{
 // artifactRoomState holds per-room artifact scope configuration.
 // Only rooms with a valid m.bureau.artifact_scope event are tracked.
 type artifactRoomState struct {
-	scope *schema.ArtifactScope
+	scope *artifactschema.ArtifactScope
 }
 
 // initialSync performs the first /sync and discovers rooms with
@@ -108,7 +109,7 @@ func (as *ArtifactService) initialSync(ctx context.Context) (string, error) {
 func (as *ArtifactService) processRoomState(roomID ref.RoomID, stateEvents, timelineEvents []messaging.Event) {
 	// Look for artifact_scope in both state and timeline sections.
 	// Timeline events with a state_key are state changes.
-	var scope *schema.ArtifactScope
+	var scope *artifactschema.ArtifactScope
 	for _, event := range stateEvents {
 		if event.Type == schema.EventTypeArtifactScope && event.StateKey != nil {
 			scope = as.parseArtifactScope(event)
@@ -196,7 +197,7 @@ func (as *ArtifactService) handleArtifactScopeChange(roomID ref.RoomID, event me
 
 // parseArtifactScope parses an artifact_scope event's content.
 // Returns nil if the content is empty or unparseable.
-func (as *ArtifactService) parseArtifactScope(event messaging.Event) *schema.ArtifactScope {
+func (as *ArtifactService) parseArtifactScope(event messaging.Event) *artifactschema.ArtifactScope {
 	if len(event.Content) == 0 {
 		return nil
 	}
@@ -209,7 +210,7 @@ func (as *ArtifactService) parseArtifactScope(event messaging.Event) *schema.Art
 		return nil
 	}
 
-	var scope schema.ArtifactScope
+	var scope artifactschema.ArtifactScope
 	if err := json.Unmarshal(contentJSON, &scope); err != nil {
 		as.logger.Warn("failed to parse artifact_scope",
 			"error", err,

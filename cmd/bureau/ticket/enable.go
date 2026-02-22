@@ -13,6 +13,7 @@ import (
 	"github.com/bureau-foundation/bureau/cmd/bureau/cli"
 	"github.com/bureau-foundation/bureau/lib/ref"
 	"github.com/bureau-foundation/bureau/lib/schema"
+	ticketschema "github.com/bureau-foundation/bureau/lib/schema/ticket"
 	"github.com/bureau-foundation/bureau/lib/secret"
 	"github.com/bureau-foundation/bureau/messaging"
 )
@@ -368,8 +369,8 @@ func publishPrincipalAssignment(ctx context.Context, session messaging.Session, 
 //     m.bureau.ticket_config and m.bureau.room_service at PL 100)
 func configureRoom(ctx context.Context, session messaging.Session, roomID ref.RoomID, serviceEntity ref.Entity, prefix string) error {
 	// Publish ticket config (singleton, state_key="").
-	ticketConfig := schema.TicketConfigContent{
-		Version: schema.TicketConfigVersion,
+	ticketConfig := ticketschema.TicketConfigContent{
+		Version: ticketschema.TicketConfigVersion,
 		Prefix:  prefix,
 	}
 	_, err := session.SendStateEvent(ctx, roomID, schema.EventTypeTicketConfig, "", ticketConfig)

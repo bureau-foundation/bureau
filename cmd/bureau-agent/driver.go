@@ -17,7 +17,7 @@ import (
 
 	"github.com/bureau-foundation/bureau/cmd/bureau/commands"
 	"github.com/bureau-foundation/bureau/cmd/bureau/mcp"
-	"github.com/bureau-foundation/bureau/lib/agent"
+	"github.com/bureau-foundation/bureau/lib/agentdriver"
 	"github.com/bureau-foundation/bureau/lib/llm"
 	llmcontext "github.com/bureau-foundation/bureau/lib/llm/context"
 	"github.com/bureau-foundation/bureau/lib/proxyclient"
@@ -25,10 +25,10 @@ import (
 	"github.com/bureau-foundation/bureau/lib/toolserver"
 )
 
-// nativeDriver implements agent.Driver for the Bureau-native agent.
+// nativeDriver implements agentdriver.Driver for the Bureau-native agent.
 // Instead of spawning an external process, it runs the LLM agent loop
 // in a goroutine. The agent loop communicates with the lifecycle
-// manager (lib/agent.Run) through the same pipes that external agent
+// manager (lib/agentdriver.Run) through the same pipes that external agent
 // drivers use: stdin for message injection, stdout for structured events.
 type nativeDriver struct {
 	proxySocketPath string
@@ -39,7 +39,7 @@ type nativeDriver struct {
 // Start initializes the LLM provider and MCP tool server, then spawns
 // the agent loop goroutine. Returns a process handle and a reader for
 // structured event output.
-func (driver *nativeDriver) Start(ctx context.Context, config agent.DriverConfig) (agent.Process, io.ReadCloser, error) {
+func (driver *nativeDriver) Start(ctx context.Context, config agentdriver.DriverConfig) (agentdriver.Process, io.ReadCloser, error) {
 	// Create a proxy client for LLM API calls and grant fetching.
 	proxy := proxyclient.New(driver.proxySocketPath, driver.serverName)
 
@@ -106,7 +106,7 @@ func (driver *nativeDriver) Start(ctx context.Context, config agent.DriverConfig
 		return nil, nil, fmt.Errorf("unknown LLM provider %q (supported: anthropic, openai)", providerName)
 	}
 
-	// Read system prompt from the temp file written by agent.Run.
+	// Read system prompt from the temp file written by agentdriver.Run.
 	var systemPrompt string
 	if config.SystemPromptFile != "" {
 		data, readErr := os.ReadFile(config.SystemPromptFile)
@@ -193,8 +193,8 @@ func (driver *nativeDriver) Start(ctx context.Context, config agent.DriverConfig
 }
 
 // ParseOutput reads structured JSON events from the agent loop's stdout
-// and converts them to agent.Event values for the session log.
-func (driver *nativeDriver) ParseOutput(ctx context.Context, stdout io.Reader, events chan<- agent.Event) error {
+// and converts them to agentdriver.Event values for the session log.
+func (driver *nativeDriver) ParseOutput(ctx context.Context, stdout io.Reader, events chan<- agentdriver.Event) error {
 	scanner := bufio.NewScanner(stdout)
 	scanner.Buffer(make([]byte, 0, 64*1024), 1024*1024)
 
@@ -212,10 +212,10 @@ func (driver *nativeDriver) ParseOutput(ctx context.Context, stdout io.Reader, e
 
 		event, err := parseLoopEvent(line)
 		if err != nil {
-			events <- agent.Event{
+			events <- agentdriver.Event{
 				Timestamp: time.Now(),
-				Type:      agent.EventTypeOutput,
-				Output:    &agent.OutputEvent{Raw: json.RawMessage(append([]byte(nil), line...))},
+				Type:      agentdriver.EventTypeOutput,
+				Output:    &agentdriver.OutputEvent{Raw: json.RawMessage(append([]byte(nil), line...))},
 			}
 			continue
 		}
@@ -227,7 +227,7 @@ func (driver *nativeDriver) ParseOutput(ctx context.Context, stdout io.Reader, e
 }
 
 // Interrupt requests the agent loop to stop by cancelling its context.
-func (driver *nativeDriver) Interrupt(process agent.Process) error {
+func (driver *nativeDriver) Interrupt(process agentdriver.Process) error {
 	if nativeProc, ok := process.(*nativeProcess); ok {
 		nativeProc.cancelFn()
 		return nil
@@ -235,7 +235,7 @@ func (driver *nativeDriver) Interrupt(process agent.Process) error {
 	return fmt.Errorf("unexpected process type: %T", process)
 }
 
-// nativeProcess implements agent.Process for the in-process agent loop.
+// nativeProcess implements agentdriver.Process for the in-process agent loop.
 type nativeProcess struct {
 	done      chan struct{}
 	stdin     *io.PipeWriter
@@ -291,7 +291,7 @@ func estimateOverheadTokens(systemPrompt string, tools toolserver.Server) int {
 }
 
 // loopEvent is the JSON format written by the agent loop to stdout.
-// ParseOutput reads these lines and converts them to agent.Event.
+// ParseOutput reads these lines and converts them to agentdriver.Event.
 type loopEvent struct {
 	Type string `json:"type"`
 
@@ -323,28 +323,28 @@ type loopEvent struct {
 }
 
 // parseLoopEvent converts a JSON line from the agent loop into an
-// agent.Event for session logging.
-func parseLoopEvent(line []byte) (agent.Event, error) {
+// agentdriver.Event for session logging.
+func parseLoopEvent(line []byte) (agentdriver.Event, error) {
 	var event loopEvent
 	if err := json.Unmarshal(line, &event); err != nil {
-		return agent.Event{}, fmt.Errorf("parsing loop event: %w", err)
+		return agentdriver.Event{}, fmt.Errorf("parsing loop event: %w", err)
 	}
 
 	now := time.Now()
 
 	switch event.Type {
 	case "response":
-		return agent.Event{
+		return agentdriver.Event{
 			Timestamp: now,
-			Type:      agent.EventTypeResponse,
-			Response:  &agent.ResponseEvent{Content: event.Content},
+			Type:      agentdriver.EventTypeResponse,
+			Response:  &agentdriver.ResponseEvent{Content: event.Content},
 		}, nil
 
 	case "tool_call":
-		return agent.Event{
+		return agentdriver.Event{
 			Timestamp: now,
-			Type:      agent.EventTypeToolCall,
-			ToolCall: &agent.ToolCallEvent{
+			Type:      agentdriver.EventTypeToolCall,
+			ToolCall: &agentdriver.ToolCallEvent{
 				ID:    event.ID,
 				Name:  event.Name,
 				Input: event.Input,
@@ -352,10 +352,10 @@ func parseLoopEvent(line []byte) (agent.Event, error) {
 		}, nil
 
 	case "tool_result":
-		return agent.Event{
+		return agentdriver.Event{
 			Timestamp: now,
-			Type:      agent.EventTypeToolResult,
-			ToolResult: &agent.ToolResultEvent{
+			Type:      agentdriver.EventTypeToolResult,
+			ToolResult: &agentdriver.ToolResultEvent{
 				ID:      event.ID,
 				IsError: event.IsError,
 				Output:  event.Output,
@@ -363,20 +363,20 @@ func parseLoopEvent(line []byte) (agent.Event, error) {
 		}, nil
 
 	case "prompt":
-		return agent.Event{
+		return agentdriver.Event{
 			Timestamp: now,
-			Type:      agent.EventTypePrompt,
-			Prompt: &agent.PromptEvent{
+			Type:      agentdriver.EventTypePrompt,
+			Prompt: &agentdriver.PromptEvent{
 				Content: event.Content,
 				Source:  event.Source,
 			},
 		}, nil
 
 	case "metric":
-		return agent.Event{
+		return agentdriver.Event{
 			Timestamp: now,
-			Type:      agent.EventTypeMetric,
-			Metric: &agent.MetricEvent{
+			Type:      agentdriver.EventTypeMetric,
+			Metric: &agentdriver.MetricEvent{
 				InputTokens:     event.InputTokens,
 				OutputTokens:    event.OutputTokens,
 				CacheReadTokens: event.CacheReadTokens,
@@ -385,27 +385,27 @@ func parseLoopEvent(line []byte) (agent.Event, error) {
 		}, nil
 
 	case "error":
-		return agent.Event{
+		return agentdriver.Event{
 			Timestamp: now,
-			Type:      agent.EventTypeError,
-			Error:     &agent.ErrorEvent{Message: event.Message},
+			Type:      agentdriver.EventTypeError,
+			Error:     &agentdriver.ErrorEvent{Message: event.Message},
 		}, nil
 
 	case "system":
-		return agent.Event{
+		return agentdriver.Event{
 			Timestamp: now,
-			Type:      agent.EventTypeSystem,
-			System: &agent.SystemEvent{
+			Type:      agentdriver.EventTypeSystem,
+			System: &agentdriver.SystemEvent{
 				Subtype: event.Subtype,
 				Message: event.Message,
 			},
 		}, nil
 
 	default:
-		return agent.Event{
+		return agentdriver.Event{
 			Timestamp: now,
-			Type:      agent.EventTypeOutput,
-			Output:    &agent.OutputEvent{Raw: json.RawMessage(append([]byte(nil), line...))},
+			Type:      agentdriver.EventTypeOutput,
+			Output:    &agentdriver.OutputEvent{Raw: json.RawMessage(append([]byte(nil), line...))},
 		}, nil
 	}
 }

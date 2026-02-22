@@ -9,6 +9,7 @@ import (
 	"testing"
 
 	"github.com/bureau-foundation/bureau/lib/ref"
+	"github.com/bureau-foundation/bureau/lib/schema/pipeline"
 )
 
 func TestMsgTypeConstants(t *testing.T) {
@@ -226,7 +227,7 @@ func TestCommandResultMessagePipelineRoundTrip(t *testing.T) {
 		Status:     "success",
 		ExitCode:   &exitCode,
 		DurationMS: 12345,
-		Steps: []PipelineStepResult{
+		Steps: []pipeline.PipelineStepResult{
 			{Name: "build", Status: "success", DurationMS: 5000},
 			{Name: "test", Status: "success", DurationMS: 7345},
 		},

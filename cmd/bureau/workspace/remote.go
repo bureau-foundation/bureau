@@ -14,6 +14,7 @@ import (
 	"github.com/bureau-foundation/bureau/lib/principal"
 	"github.com/bureau-foundation/bureau/lib/ref"
 	"github.com/bureau-foundation/bureau/lib/schema"
+	"github.com/bureau-foundation/bureau/lib/schema/workspace"
 	"github.com/bureau-foundation/bureau/messaging"
 )
 
@@ -54,7 +55,7 @@ func resolveWorkspaceRoom(ctx context.Context, session messaging.Session, alias 
 // Returns the parent workspace's room ID, its parsed workspace state,
 // and the alias localpart that matched. Returns an error if no parent
 // workspace is found.
-func findParentWorkspace(ctx context.Context, session messaging.Session, alias string, serverName ref.ServerName) (ref.RoomID, *schema.WorkspaceState, string, error) {
+func findParentWorkspace(ctx context.Context, session messaging.Session, alias string, serverName ref.ServerName) (ref.RoomID, *workspace.WorkspaceState, string, error) {
 	// Walk up the alias path, dropping the last segment each time.
 	remaining := alias
 	for {
@@ -225,13 +226,13 @@ func extractSubpath(alias, workspaceAlias string) (string, error) {
 // readWorkspaceState reads and parses the m.bureau.workspace state
 // event from a room. Returns an error if the event doesn't exist or
 // can't be parsed.
-func readWorkspaceState(ctx context.Context, session messaging.Session, roomID ref.RoomID) (*schema.WorkspaceState, error) {
+func readWorkspaceState(ctx context.Context, session messaging.Session, roomID ref.RoomID) (*workspace.WorkspaceState, error) {
 	raw, err := session.GetStateEvent(ctx, roomID, schema.EventTypeWorkspace, "")
 	if err != nil {
 		return nil, cli.Internal("reading workspace state: %w", err)
 	}
 
-	var state schema.WorkspaceState
+	var state workspace.WorkspaceState
 	if err := json.Unmarshal(raw, &state); err != nil {
 		return nil, cli.Internal("parsing workspace state: %w", err)
 	}

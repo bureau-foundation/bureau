@@ -14,7 +14,7 @@ import (
 	"github.com/bureau-foundation/bureau/cmd/bureau/cli"
 	"github.com/bureau-foundation/bureau/lib/principal"
 	"github.com/bureau-foundation/bureau/lib/ref"
-	"github.com/bureau-foundation/bureau/lib/schema"
+	agentschema "github.com/bureau-foundation/bureau/lib/schema/agent"
 	"github.com/bureau-foundation/bureau/messaging"
 )
 
@@ -190,23 +190,23 @@ func runList(params agentListParams) error {
 // readAgentServiceState reads the agent session and metrics state events
 // for a given location. Returns nil for either if not found or on error
 // (best-effort enrichment).
-func readAgentServiceState(ctx context.Context, session messaging.Session, location principal.Location) (*schema.AgentSessionContent, *schema.AgentMetricsContent) {
+func readAgentServiceState(ctx context.Context, session messaging.Session, location principal.Location) (*agentschema.AgentSessionContent, *agentschema.AgentMetricsContent) {
 	localpart := location.Assignment.Principal.Localpart()
 	roomID := location.ConfigRoomID
 
-	var sessionContent *schema.AgentSessionContent
-	sessionRaw, err := session.GetStateEvent(ctx, roomID, schema.EventTypeAgentSession, localpart)
+	var sessionContent *agentschema.AgentSessionContent
+	sessionRaw, err := session.GetStateEvent(ctx, roomID, agentschema.EventTypeAgentSession, localpart)
 	if err == nil {
-		var content schema.AgentSessionContent
+		var content agentschema.AgentSessionContent
 		if json.Unmarshal(sessionRaw, &content) == nil {
 			sessionContent = &content
 		}
 	}
 
-	var metricsContent *schema.AgentMetricsContent
-	metricsRaw, err := session.GetStateEvent(ctx, roomID, schema.EventTypeAgentMetrics, localpart)
+	var metricsContent *agentschema.AgentMetricsContent
+	metricsRaw, err := session.GetStateEvent(ctx, roomID, agentschema.EventTypeAgentMetrics, localpart)
 	if err == nil {
-		var content schema.AgentMetricsContent
+		var content agentschema.AgentMetricsContent
 		if json.Unmarshal(metricsRaw, &content) == nil {
 			metricsContent = &content
 		}

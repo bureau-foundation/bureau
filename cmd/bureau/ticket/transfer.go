@@ -11,7 +11,7 @@ import (
 
 	"github.com/bureau-foundation/bureau/cmd/bureau/cli"
 	"github.com/bureau-foundation/bureau/lib/ref"
-	"github.com/bureau-foundation/bureau/lib/schema"
+	ticketschema "github.com/bureau-foundation/bureau/lib/schema/ticket"
 )
 
 // --- export ---
@@ -191,8 +191,8 @@ invalid, none are imported.`,
 			}
 
 			type importEntry struct {
-				ID      string               `json:"id"`
-				Content schema.TicketContent `json:"content"`
+				ID      string                     `json:"id"`
+				Content ticketschema.TicketContent `json:"content"`
 			}
 
 			var entries []importEntry

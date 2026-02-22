@@ -15,8 +15,8 @@ import (
 	"syscall"
 	"time"
 
-	"github.com/bureau-foundation/bureau/lib/artifact"
-	artifactfuse "github.com/bureau-foundation/bureau/lib/artifact/fuse"
+	"github.com/bureau-foundation/bureau/lib/artifactstore"
+	artifactfuse "github.com/bureau-foundation/bureau/lib/artifactstore/fuse"
 	"github.com/bureau-foundation/bureau/lib/clock"
 	"github.com/bureau-foundation/bureau/lib/ref"
 	"github.com/bureau-foundation/bureau/lib/secret"
@@ -72,16 +72,16 @@ func run() error {
 	// key is available immediately. The key is held in guarded
 	// memory (mmap-backed, mlock'd, excluded from core dumps,
 	// zeroed on close).
-	var encryptionKeys *artifact.EncryptionKeySet
+	var encryptionKeys *artifactstore.EncryptionKeySet
 	if encryptionKeyStdin {
-		keyBuffer, err := secret.NewFromReader(os.Stdin, artifact.KeySize)
+		keyBuffer, err := secret.NewFromReader(os.Stdin, artifactstore.KeySize)
 		if err != nil {
 			return fmt.Errorf("reading encryption key from stdin: %w", err)
 		}
 		os.Stdin.Close()
 
 		var keySetErr error
-		encryptionKeys, keySetErr = artifact.NewEncryptionKeySet(keyBuffer)
+		encryptionKeys, keySetErr = artifactstore.NewEncryptionKeySet(keyBuffer)
 		if keySetErr != nil {
 			keyBuffer.Close()
 			return fmt.Errorf("initializing encryption key set: %w", keySetErr)
@@ -106,19 +106,19 @@ func run() error {
 	defer cleanup()
 
 	// Initialize the artifact store.
-	store, err := artifact.NewStore(storeDir)
+	store, err := artifactstore.NewStore(storeDir)
 	if err != nil {
 		return fmt.Errorf("creating artifact store: %w", err)
 	}
 
 	// Initialize per-artifact metadata persistence.
-	metadataStore, err := artifact.NewMetadataStore(filepath.Join(storeDir, "metadata"))
+	metadataStore, err := artifactstore.NewMetadataStore(filepath.Join(storeDir, "metadata"))
 	if err != nil {
 		return fmt.Errorf("creating metadata store: %w", err)
 	}
 
 	// Build the ref-to-hash index from existing metadata files.
-	refIndex := artifact.NewRefIndex()
+	refIndex := artifactstore.NewRefIndex()
 	refMap, err := metadataStore.ScanRefs()
 	if err != nil {
 		return fmt.Errorf("scanning metadata for ref index: %w", err)
@@ -127,14 +127,14 @@ func run() error {
 	logger.Info("ref index built", "artifacts", refIndex.Len())
 
 	// Initialize persistent tag storage.
-	tagStore, err := artifact.NewTagStore(filepath.Join(storeDir, "tags"))
+	tagStore, err := artifactstore.NewTagStore(filepath.Join(storeDir, "tags"))
 	if err != nil {
 		return fmt.Errorf("creating tag store: %w", err)
 	}
 	logger.Info("tag store loaded", "tags", tagStore.Len())
 
 	// Build the in-memory artifact index for filtered queries.
-	artifactIndex := artifact.NewArtifactIndex()
+	artifactIndex := artifactstore.NewArtifactIndex()
 	allMetadata, err := metadataStore.ScanAll()
 	if err != nil {
 		return fmt.Errorf("scanning metadata for artifact index: %w", err)
@@ -143,13 +143,13 @@ func run() error {
 	logger.Info("artifact index built", "artifacts", artifactIndex.Len())
 
 	// Optionally initialize the ring cache for container-level caching.
-	var cache *artifact.Cache
+	var cache *artifactstore.Cache
 	if cacheDir != "" {
 		if cacheSize <= 0 {
 			return fmt.Errorf("--cache-size is required when --cache-dir is set")
 		}
 		var cacheErr error
-		cache, cacheErr = artifact.NewCache(artifact.CacheConfig{
+		cache, cacheErr = artifactstore.NewCache(artifactstore.CacheConfig{
 			Path:       cacheDir,
 			DeviceSize: cacheSize,
 		})
@@ -255,14 +255,14 @@ func run() error {
 
 // ArtifactService is the core service state.
 type ArtifactService struct {
-	store          *artifact.Store
-	metadataStore  *artifact.MetadataStore
-	refIndex       *artifact.RefIndex
-	tagStore       *artifact.TagStore
-	artifactIndex  *artifact.ArtifactIndex
-	cache          *artifact.Cache            // nil if no cache directory configured
-	authConfig     *service.AuthConfig        // nil in tests that don't exercise auth
-	encryptionKeys *artifact.EncryptionKeySet // nil if no encryption key provided (local-only mode)
+	store          *artifactstore.Store
+	metadataStore  *artifactstore.MetadataStore
+	refIndex       *artifactstore.RefIndex
+	tagStore       *artifactstore.TagStore
+	artifactIndex  *artifactstore.ArtifactIndex
+	cache          *artifactstore.Cache            // nil if no cache directory configured
+	authConfig     *service.AuthConfig             // nil in tests that don't exercise auth
+	encryptionKeys *artifactstore.EncryptionKeySet // nil if no encryption key provided (local-only mode)
 	session        *messaging.DirectSession
 	clock          clock.Clock
 

@@ -9,7 +9,7 @@ import (
 	"os"
 
 	"github.com/bureau-foundation/bureau/cmd/bureau/cli"
-	"github.com/bureau-foundation/bureau/lib/schema"
+	ticketschema "github.com/bureau-foundation/bureau/lib/schema/ticket"
 )
 
 // --- create ---
@@ -432,15 +432,15 @@ type batchParams struct {
 // batchTicket is a single ticket definition in a batch file. The
 // structure mirrors the service's batchCreateEntry CBOR request.
 type batchTicket struct {
-	Ref       string              `json:"ref"`
-	Title     string              `json:"title"`
-	Body      string              `json:"body,omitempty"`
-	Type      string              `json:"type"`
-	Priority  int                 `json:"priority"`
-	Labels    []string            `json:"labels,omitempty"`
-	Parent    string              `json:"parent,omitempty"`
-	BlockedBy []string            `json:"blocked_by,omitempty"`
-	Gates     []schema.TicketGate `json:"gates,omitempty"`
+	Ref       string                    `json:"ref"`
+	Title     string                    `json:"title"`
+	Body      string                    `json:"body,omitempty"`
+	Type      string                    `json:"type"`
+	Priority  int                       `json:"priority"`
+	Labels    []string                  `json:"labels,omitempty"`
+	Parent    string                    `json:"parent,omitempty"`
+	BlockedBy []string                  `json:"blocked_by,omitempty"`
+	Gates     []ticketschema.TicketGate `json:"gates,omitempty"`
 }
 
 func batchCommand() *cli.Command {

@@ -20,8 +20,8 @@ import (
 	"path/filepath"
 	"strings"
 
-	"github.com/bureau-foundation/bureau/lib/pipeline"
-	"github.com/bureau-foundation/bureau/lib/schema"
+	"github.com/bureau-foundation/bureau/lib/pipelinedef"
+	"github.com/bureau-foundation/bureau/lib/schema/pipeline"
 )
 
 //go:embed pipeline/*.jsonc
@@ -36,7 +36,7 @@ type Pipeline struct {
 	Name string
 
 	// Content is the parsed pipeline definition.
-	Content schema.PipelineContent
+	Content pipeline.PipelineContent
 
 	// SourceHash is the SHA-256 hex digest of the raw JSONC source
 	// file. Used by "bureau matrix doctor" to detect whether a
@@ -71,12 +71,12 @@ func Pipelines() ([]Pipeline, error) {
 			return nil, fmt.Errorf("reading embedded pipeline %s: %w", path, err)
 		}
 
-		content, err := pipeline.Parse(data)
+		content, err := pipelinedef.Parse(data)
 		if err != nil {
 			return nil, fmt.Errorf("parsing embedded pipeline %s: %w", path, err)
 		}
 
-		issues := pipeline.Validate(content)
+		issues := pipelinedef.Validate(content)
 		if len(issues) > 0 {
 			return nil, fmt.Errorf("validating embedded pipeline %s: %s", path, strings.Join(issues, "; "))
 		}
@@ -84,7 +84,7 @@ func Pipelines() ([]Pipeline, error) {
 		hash := sha256.Sum256(data)
 
 		pipelines = append(pipelines, Pipeline{
-			Name:       pipeline.NameFromPath(entry.Name()),
+			Name:       pipelinedef.NameFromPath(entry.Name()),
 			Content:    *content,
 			SourceHash: hex.EncodeToString(hash[:]),
 		})

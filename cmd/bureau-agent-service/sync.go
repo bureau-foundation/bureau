@@ -8,7 +8,7 @@ import (
 	"encoding/json"
 
 	"github.com/bureau-foundation/bureau/lib/ref"
-	"github.com/bureau-foundation/bureau/lib/schema"
+	"github.com/bureau-foundation/bureau/lib/schema/agent"
 	"github.com/bureau-foundation/bureau/lib/service"
 	"github.com/bureau-foundation/bureau/messaging"
 )
@@ -21,9 +21,9 @@ var syncFilter = buildSyncFilter()
 
 func buildSyncFilter() string {
 	stateEventTypes := []ref.EventType{
-		schema.EventTypeAgentSession,
-		schema.EventTypeAgentContext,
-		schema.EventTypeAgentMetrics,
+		agent.EventTypeAgentSession,
+		agent.EventTypeAgentContext,
+		agent.EventTypeAgentMetrics,
 	}
 
 	// Timeline includes the same state event types — state events
@@ -137,17 +137,17 @@ func (agentService *AgentService) handleSync(ctx context.Context, response *mess
 func (agentService *AgentService) processStateEvents(events []messaging.Event) {
 	for _, event := range events {
 		switch event.Type {
-		case schema.EventTypeAgentSession:
+		case agent.EventTypeAgentSession:
 			agentService.logger.Debug("observed agent session event",
 				"state_key", event.StateKey,
 				"sender", event.Sender,
 			)
-		case schema.EventTypeAgentContext:
+		case agent.EventTypeAgentContext:
 			agentService.logger.Debug("observed agent context event",
 				"state_key", event.StateKey,
 				"sender", event.Sender,
 			)
-		case schema.EventTypeAgentMetrics:
+		case agent.EventTypeAgentMetrics:
 			agentService.logger.Debug("observed agent metrics event",
 				"state_key", event.StateKey,
 				"sender", event.Sender,

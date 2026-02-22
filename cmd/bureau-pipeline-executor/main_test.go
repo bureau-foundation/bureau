@@ -17,7 +17,7 @@ import (
 	"time"
 
 	"github.com/bureau-foundation/bureau/lib/clock"
-	"github.com/bureau-foundation/bureau/lib/schema"
+	pipelineschema "github.com/bureau-foundation/bureau/lib/schema/pipeline"
 )
 
 // mockProxy serves the /v1/matrix/* API for executor tests. Records all
@@ -140,7 +140,7 @@ func startMockProxy(t *testing.T) (string, *mockProxy) {
 }
 
 // writePipeline writes a JSONC pipeline file and returns its path.
-func writePipeline(t *testing.T, name string, content *schema.PipelineContent) string {
+func writePipeline(t *testing.T, name string, content *pipelineschema.PipelineContent) string {
 	t.Helper()
 
 	data, err := json.MarshalIndent(content, "", "  ")
@@ -174,9 +174,9 @@ func writePayload(t *testing.T, payload map[string]any) string {
 func TestRunSteps(t *testing.T) {
 	socketPath, _ := startMockProxy(t)
 
-	pipelinePath := writePipeline(t, "test-pipeline", &schema.PipelineContent{
+	pipelinePath := writePipeline(t, "test-pipeline", &pipelineschema.PipelineContent{
 		Description: "Test pipeline",
-		Steps: []schema.PipelineStep{
+		Steps: []pipelineschema.PipelineStep{
 			{Name: "step-one", Run: "echo step one"},
 			{Name: "step-two", Run: "echo step two"},
 			{Name: "step-three", Run: "echo step three"},
@@ -197,8 +197,8 @@ func TestRunSteps(t *testing.T) {
 func TestWhenGuardSkip(t *testing.T) {
 	socketPath, _ := startMockProxy(t)
 
-	pipelinePath := writePipeline(t, "when-skip", &schema.PipelineContent{
-		Steps: []schema.PipelineStep{
+	pipelinePath := writePipeline(t, "when-skip", &pipelineschema.PipelineContent{
+		Steps: []pipelineschema.PipelineStep{
 			{Name: "always-runs", Run: "true"},
 			{Name: "skipped", Run: "echo should not run", When: "false"},
 			{Name: "also-runs", Run: "true"},
@@ -219,8 +219,8 @@ func TestWhenGuardSkip(t *testing.T) {
 func TestWhenGuardPass(t *testing.T) {
 	socketPath, _ := startMockProxy(t)
 
-	pipelinePath := writePipeline(t, "when-pass", &schema.PipelineContent{
-		Steps: []schema.PipelineStep{
+	pipelinePath := writePipeline(t, "when-pass", &pipelineschema.PipelineContent{
+		Steps: []pipelineschema.PipelineStep{
 			{Name: "guarded-pass", Run: "true", When: "true"},
 		},
 	})
@@ -239,8 +239,8 @@ func TestWhenGuardPass(t *testing.T) {
 func TestCheckFailure(t *testing.T) {
 	socketPath, _ := startMockProxy(t)
 
-	pipelinePath := writePipeline(t, "check-fail", &schema.PipelineContent{
-		Steps: []schema.PipelineStep{
+	pipelinePath := writePipeline(t, "check-fail", &pipelineschema.PipelineContent{
+		Steps: []pipelineschema.PipelineStep{
 			{Name: "passes-then-fails-check", Run: "true", Check: "false"},
 		},
 	})
@@ -262,8 +262,8 @@ func TestCheckFailure(t *testing.T) {
 func TestOptionalStepContinues(t *testing.T) {
 	socketPath, _ := startMockProxy(t)
 
-	pipelinePath := writePipeline(t, "optional-fail", &schema.PipelineContent{
-		Steps: []schema.PipelineStep{
+	pipelinePath := writePipeline(t, "optional-fail", &pipelineschema.PipelineContent{
+		Steps: []pipelineschema.PipelineStep{
 			{Name: "step-one", Run: "true"},
 			{Name: "optional-fail", Run: "false", Optional: true},
 			{Name: "step-three", Run: "true"},
@@ -284,8 +284,8 @@ func TestOptionalStepContinues(t *testing.T) {
 func TestRequiredStepAborts(t *testing.T) {
 	socketPath, _ := startMockProxy(t)
 
-	pipelinePath := writePipeline(t, "required-fail", &schema.PipelineContent{
-		Steps: []schema.PipelineStep{
+	pipelinePath := writePipeline(t, "required-fail", &pipelineschema.PipelineContent{
+		Steps: []pipelineschema.PipelineStep{
 			{Name: "step-one", Run: "true"},
 			{Name: "required-fail", Run: "false"},
 			{Name: "never-reached", Run: "true"},
@@ -309,11 +309,11 @@ func TestRequiredStepAborts(t *testing.T) {
 func TestPublishStep(t *testing.T) {
 	socketPath, mock := startMockProxy(t)
 
-	pipelinePath := writePipeline(t, "publish-test", &schema.PipelineContent{
-		Steps: []schema.PipelineStep{
+	pipelinePath := writePipeline(t, "publish-test", &pipelineschema.PipelineContent{
+		Steps: []pipelineschema.PipelineStep{
 			{
 				Name: "publish-ready",
-				Publish: &schema.PipelinePublish{
+				Publish: &pipelineschema.PipelinePublish{
 					EventType: "m.bureau.workspace",
 					Room:      "!room1:bureau.local",
 					StateKey:  "",
@@ -360,8 +360,8 @@ func TestPublishStep(t *testing.T) {
 func TestTimeout(t *testing.T) {
 	socketPath, _ := startMockProxy(t)
 
-	pipelinePath := writePipeline(t, "timeout-test", &schema.PipelineContent{
-		Steps: []schema.PipelineStep{
+	pipelinePath := writePipeline(t, "timeout-test", &pipelineschema.PipelineContent{
+		Steps: []pipelineschema.PipelineStep{
 			{Name: "slow-step", Run: "sleep 30", Timeout: "200ms"},
 		},
 	})
@@ -394,12 +394,12 @@ func TestVariableExpansion(t *testing.T) {
 		"PROJECT":    "iree",
 	})
 
-	pipelinePath := writePipeline(t, "var-test", &schema.PipelineContent{
-		Variables: map[string]schema.PipelineVariable{
+	pipelinePath := writePipeline(t, "var-test", &pipelineschema.PipelineContent{
+		Variables: map[string]pipelineschema.PipelineVariable{
 			"REPOSITORY": {Required: true},
 			"PROJECT":    {Required: true},
 		},
-		Steps: []schema.PipelineStep{
+		Steps: []pipelineschema.PipelineStep{
 			{Name: "use-vars", Run: `echo "repo=${REPOSITORY} project=${PROJECT}"`},
 		},
 	})
@@ -440,8 +440,8 @@ func TestPipelineRefResolution(t *testing.T) {
 func TestFileResolution(t *testing.T) {
 	socketPath, _ := startMockProxy(t)
 
-	pipelinePath := writePipeline(t, "file-resolve", &schema.PipelineContent{
-		Steps: []schema.PipelineStep{
+	pipelinePath := writePipeline(t, "file-resolve", &pipelineschema.PipelineContent{
+		Steps: []pipelineschema.PipelineStep{
 			{Name: "from-file", Run: "echo from file"},
 		},
 	})
@@ -460,9 +460,9 @@ func TestFileResolution(t *testing.T) {
 func TestThreadLogging(t *testing.T) {
 	socketPath, mock := startMockProxy(t)
 
-	pipelinePath := writePipeline(t, "log-test", &schema.PipelineContent{
-		Log: &schema.PipelineLog{Room: "!log_room:bureau.local"},
-		Steps: []schema.PipelineStep{
+	pipelinePath := writePipeline(t, "log-test", &pipelineschema.PipelineContent{
+		Log: &pipelineschema.PipelineLog{Room: "!log_room:bureau.local"},
+		Steps: []pipelineschema.PipelineStep{
 			{Name: "step-one", Run: "true"},
 			{Name: "step-two", Run: "true"},
 		},
@@ -504,12 +504,12 @@ func TestThreadLoggingWithAliasResolution(t *testing.T) {
 	socketPath, mock := startMockProxy(t)
 	mock.resolveResponses["#iree/workspace:bureau.local"] = "!workspace_room:bureau.local"
 
-	pipelinePath := writePipeline(t, "log-alias-test", &schema.PipelineContent{
-		Variables: map[string]schema.PipelineVariable{
+	pipelinePath := writePipeline(t, "log-alias-test", &pipelineschema.PipelineContent{
+		Variables: map[string]pipelineschema.PipelineVariable{
 			"WORKSPACE_ROOM": {Default: "#iree/workspace:bureau.local"},
 		},
-		Log: &schema.PipelineLog{Room: "${WORKSPACE_ROOM}"},
-		Steps: []schema.PipelineStep{
+		Log: &pipelineschema.PipelineLog{Room: "${WORKSPACE_ROOM}"},
+		Steps: []pipelineschema.PipelineStep{
 			{Name: "step-one", Run: "true"},
 		},
 	})
@@ -550,9 +550,9 @@ func TestThreadLoggingFailureIsFatal(t *testing.T) {
 	go failServer.Serve(listener)
 	t.Cleanup(func() { failServer.Close() })
 
-	pipelinePath := writePipeline(t, "log-fatal-test", &schema.PipelineContent{
-		Log: &schema.PipelineLog{Room: "!log_room:bureau.local"},
-		Steps: []schema.PipelineStep{
+	pipelinePath := writePipeline(t, "log-fatal-test", &pipelineschema.PipelineContent{
+		Log: &pipelineschema.PipelineLog{Room: "!log_room:bureau.local"},
+		Steps: []pipelineschema.PipelineStep{
 			{Name: "step-one", Run: "true"},
 		},
 	})
@@ -598,9 +598,9 @@ func (m *failingMessageProxy) ServeHTTP(w http.ResponseWriter, r *http.Request) 
 func TestNoLogConfigRunsWithoutThread(t *testing.T) {
 	socketPath, mock := startMockProxy(t)
 
-	pipelinePath := writePipeline(t, "no-log", &schema.PipelineContent{
+	pipelinePath := writePipeline(t, "no-log", &pipelineschema.PipelineContent{
 		// No Log field — thread logging disabled.
-		Steps: []schema.PipelineStep{
+		Steps: []pipelineschema.PipelineStep{
 			{Name: "step-one", Run: "true"},
 		},
 	})
@@ -902,8 +902,8 @@ func TestResultLogSuccess(t *testing.T) {
 	socketPath, _ := startMockProxy(t)
 	resultPath := filepath.Join(t.TempDir(), "result.jsonl")
 
-	pipelinePath := writePipeline(t, "result-ok", &schema.PipelineContent{
-		Steps: []schema.PipelineStep{
+	pipelinePath := writePipeline(t, "result-ok", &pipelineschema.PipelineContent{
+		Steps: []pipelineschema.PipelineStep{
 			{Name: "step-one", Run: "true"},
 			{Name: "step-two", Run: "true"},
 		},
@@ -946,8 +946,8 @@ func TestResultLogFailure(t *testing.T) {
 	socketPath, _ := startMockProxy(t)
 	resultPath := filepath.Join(t.TempDir(), "result.jsonl")
 
-	pipelinePath := writePipeline(t, "result-fail", &schema.PipelineContent{
-		Steps: []schema.PipelineStep{
+	pipelinePath := writePipeline(t, "result-fail", &pipelineschema.PipelineContent{
+		Steps: []pipelineschema.PipelineStep{
 			{Name: "passes", Run: "true"},
 			{Name: "fails", Run: "false"},
 			{Name: "never-reached", Run: "true"},
@@ -993,8 +993,8 @@ func TestResultLogSkippedAndOptional(t *testing.T) {
 	socketPath, _ := startMockProxy(t)
 	resultPath := filepath.Join(t.TempDir(), "result.jsonl")
 
-	pipelinePath := writePipeline(t, "result-mixed", &schema.PipelineContent{
-		Steps: []schema.PipelineStep{
+	pipelinePath := writePipeline(t, "result-mixed", &pipelineschema.PipelineContent{
+		Steps: []pipelineschema.PipelineStep{
 			{Name: "skipped-step", Run: "true", When: "false"},
 			{Name: "optional-fail", Run: "false", Optional: true},
 			{Name: "passes", Run: "true"},
@@ -1033,8 +1033,8 @@ func TestResultLogSkippedAndOptional(t *testing.T) {
 func TestResultLogNotCreatedWithoutEnvVar(t *testing.T) {
 	socketPath, _ := startMockProxy(t)
 
-	pipelinePath := writePipeline(t, "no-result", &schema.PipelineContent{
-		Steps: []schema.PipelineStep{
+	pipelinePath := writePipeline(t, "no-result", &pipelineschema.PipelineContent{
+		Steps: []pipelineschema.PipelineStep{
 			{Name: "step-one", Run: "true"},
 		},
 	})
@@ -1059,9 +1059,9 @@ func TestResultLogWithThreadLogging(t *testing.T) {
 	socketPath, _ := startMockProxy(t)
 	resultPath := filepath.Join(t.TempDir(), "result.jsonl")
 
-	pipelinePath := writePipeline(t, "result-with-log", &schema.PipelineContent{
-		Log: &schema.PipelineLog{Room: "!log_room:bureau.local"},
-		Steps: []schema.PipelineStep{
+	pipelinePath := writePipeline(t, "result-with-log", &pipelineschema.PipelineContent{
+		Log: &pipelineschema.PipelineLog{Room: "!log_room:bureau.local"},
+		Steps: []pipelineschema.PipelineStep{
 			{Name: "step-one", Run: "true"},
 		},
 	})
@@ -1108,8 +1108,8 @@ func TestGracefulTerminationSendsSIGTERM(t *testing.T) {
 		markerFile,
 	)
 
-	pipelinePath := writePipeline(t, "graceful-test", &schema.PipelineContent{
-		Steps: []schema.PipelineStep{
+	pipelinePath := writePipeline(t, "graceful-test", &pipelineschema.PipelineContent{
+		Steps: []pipelineschema.PipelineStep{
 			{
 				Name:        "graceful-step",
 				Run:         trapCommand,
@@ -1151,8 +1151,8 @@ func TestGracefulTerminationEscalatesToSIGKILL(t *testing.T) {
 	// This command traps SIGTERM but does NOT exit — it ignores the signal
 	// and continues sleeping. The grace period should expire and SIGKILL
 	// should terminate it.
-	pipelinePath := writePipeline(t, "escalation-test", &schema.PipelineContent{
-		Steps: []schema.PipelineStep{
+	pipelinePath := writePipeline(t, "escalation-test", &pipelineschema.PipelineContent{
+		Steps: []pipelineschema.PipelineStep{
 			{
 				Name:        "stubborn-step",
 				Run:         "trap '' TERM; sleep 30",
@@ -1244,11 +1244,11 @@ func TestAssertStateEquals(t *testing.T) {
 	// Pre-load the state event that assert_state will read.
 	mock.stateResponses["!room:bureau.local/m.bureau.worktree/feature/test"] = `{"status":"active","project":"iree"}`
 
-	pipelinePath := writePipeline(t, "assert-eq", &schema.PipelineContent{
-		Steps: []schema.PipelineStep{
+	pipelinePath := writePipeline(t, "assert-eq", &pipelineschema.PipelineContent{
+		Steps: []pipelineschema.PipelineStep{
 			{
 				Name: "check-active",
-				AssertState: &schema.PipelineAssertState{
+				AssertState: &pipelineschema.PipelineAssertState{
 					Room:      "!room:bureau.local",
 					EventType: "m.bureau.worktree",
 					StateKey:  "feature/test",
@@ -1276,11 +1276,11 @@ func TestAssertStateEqualsMismatch(t *testing.T) {
 
 	mock.stateResponses["!room:bureau.local/m.bureau.worktree/feature/test"] = `{"status":"removing","project":"iree"}`
 
-	pipelinePath := writePipeline(t, "assert-eq-fail", &schema.PipelineContent{
-		Steps: []schema.PipelineStep{
+	pipelinePath := writePipeline(t, "assert-eq-fail", &pipelineschema.PipelineContent{
+		Steps: []pipelineschema.PipelineStep{
 			{
 				Name: "check-active",
-				AssertState: &schema.PipelineAssertState{
+				AssertState: &pipelineschema.PipelineAssertState{
 					Room:      "!room:bureau.local",
 					EventType: "m.bureau.worktree",
 					StateKey:  "feature/test",
@@ -1313,11 +1313,11 @@ func TestAssertStateAbort(t *testing.T) {
 	// State says "active" but we expect "removing" — mismatch with on_mismatch=abort.
 	mock.stateResponses["!room:bureau.local/m.bureau.worktree/feature/test"] = `{"status":"active"}`
 
-	pipelinePath := writePipeline(t, "assert-abort", &schema.PipelineContent{
-		Steps: []schema.PipelineStep{
+	pipelinePath := writePipeline(t, "assert-abort", &pipelineschema.PipelineContent{
+		Steps: []pipelineschema.PipelineStep{
 			{
 				Name: "assert-still-removing",
-				AssertState: &schema.PipelineAssertState{
+				AssertState: &pipelineschema.PipelineAssertState{
 					Room:       "!room:bureau.local",
 					EventType:  "m.bureau.worktree",
 					StateKey:   "feature/test",
@@ -1356,11 +1356,11 @@ func TestAssertStateNotEquals(t *testing.T) {
 
 	mock.stateResponses["!room:bureau.local/m.bureau.worktree/feature/test"] = `{"status":"active"}`
 
-	pipelinePath := writePipeline(t, "assert-neq", &schema.PipelineContent{
-		Steps: []schema.PipelineStep{
+	pipelinePath := writePipeline(t, "assert-neq", &pipelineschema.PipelineContent{
+		Steps: []pipelineschema.PipelineStep{
 			{
 				Name: "check-not-removing",
-				AssertState: &schema.PipelineAssertState{
+				AssertState: &pipelineschema.PipelineAssertState{
 					Room:      "!room:bureau.local",
 					EventType: "m.bureau.worktree",
 					StateKey:  "feature/test",
@@ -1386,11 +1386,11 @@ func TestAssertStateIn(t *testing.T) {
 
 	mock.stateResponses["!room:bureau.local/m.bureau.workspace/"] = `{"status":"teardown"}`
 
-	pipelinePath := writePipeline(t, "assert-in", &schema.PipelineContent{
-		Steps: []schema.PipelineStep{
+	pipelinePath := writePipeline(t, "assert-in", &pipelineschema.PipelineContent{
+		Steps: []pipelineschema.PipelineStep{
 			{
 				Name: "check-status-in-set",
-				AssertState: &schema.PipelineAssertState{
+				AssertState: &pipelineschema.PipelineAssertState{
 					Room:      "!room:bureau.local",
 					EventType: "m.bureau.workspace",
 					Field:     "status",
@@ -1415,11 +1415,11 @@ func TestAssertStateNotIn(t *testing.T) {
 
 	mock.stateResponses["!room:bureau.local/m.bureau.workspace/"] = `{"status":"active"}`
 
-	pipelinePath := writePipeline(t, "assert-not-in", &schema.PipelineContent{
-		Steps: []schema.PipelineStep{
+	pipelinePath := writePipeline(t, "assert-not-in", &pipelineschema.PipelineContent{
+		Steps: []pipelineschema.PipelineStep{
 			{
 				Name: "check-not-terminal",
-				AssertState: &schema.PipelineAssertState{
+				AssertState: &pipelineschema.PipelineAssertState{
 					Room:      "!room:bureau.local",
 					EventType: "m.bureau.workspace",
 					Field:     "status",
@@ -1443,11 +1443,11 @@ func TestAssertStateMissingEvent(t *testing.T) {
 	socketPath, _ := startMockProxy(t)
 	// No state response pre-loaded — the event doesn't exist.
 
-	pipelinePath := writePipeline(t, "assert-missing", &schema.PipelineContent{
-		Steps: []schema.PipelineStep{
+	pipelinePath := writePipeline(t, "assert-missing", &pipelineschema.PipelineContent{
+		Steps: []pipelineschema.PipelineStep{
 			{
 				Name: "check-nonexistent",
-				AssertState: &schema.PipelineAssertState{
+				AssertState: &pipelineschema.PipelineAssertState{
 					Room:      "!room:bureau.local",
 					EventType: "m.bureau.worktree",
 					StateKey:  "no/such/worktree",
@@ -1478,11 +1478,11 @@ func TestAssertStateMissingField(t *testing.T) {
 	// State event exists but doesn't have the expected field.
 	mock.stateResponses["!room:bureau.local/m.bureau.worktree/feature/test"] = `{"project":"iree"}`
 
-	pipelinePath := writePipeline(t, "assert-no-field", &schema.PipelineContent{
-		Steps: []schema.PipelineStep{
+	pipelinePath := writePipeline(t, "assert-no-field", &pipelineschema.PipelineContent{
+		Steps: []pipelineschema.PipelineStep{
 			{
 				Name: "check-missing-field",
-				AssertState: &schema.PipelineAssertState{
+				AssertState: &pipelineschema.PipelineAssertState{
 					Room:      "!room:bureau.local",
 					EventType: "m.bureau.worktree",
 					StateKey:  "feature/test",
@@ -1512,12 +1512,12 @@ func TestAssertStateWithWhenGuard(t *testing.T) {
 
 	// No state pre-loaded — the assert_state would fail if it ran.
 	// But the when guard should skip it.
-	pipelinePath := writePipeline(t, "assert-when-skip", &schema.PipelineContent{
-		Steps: []schema.PipelineStep{
+	pipelinePath := writePipeline(t, "assert-when-skip", &pipelineschema.PipelineContent{
+		Steps: []pipelineschema.PipelineStep{
 			{
 				Name: "conditional-assert",
 				When: "false",
-				AssertState: &schema.PipelineAssertState{
+				AssertState: &pipelineschema.PipelineAssertState{
 					Room:      "!room:bureau.local",
 					EventType: "m.bureau.worktree",
 					StateKey:  "no/such/worktree",
@@ -1541,14 +1541,14 @@ func TestAssertStateWithWhenGuard(t *testing.T) {
 func TestOnFailurePublishesState(t *testing.T) {
 	socketPath, mock := startMockProxy(t)
 
-	pipelinePath := writePipeline(t, "on-failure-pub", &schema.PipelineContent{
-		Steps: []schema.PipelineStep{
+	pipelinePath := writePipeline(t, "on-failure-pub", &pipelineschema.PipelineContent{
+		Steps: []pipelineschema.PipelineStep{
 			{Name: "will-fail", Run: "false"},
 		},
-		OnFailure: []schema.PipelineStep{
+		OnFailure: []pipelineschema.PipelineStep{
 			{
 				Name: "publish-failed",
-				Publish: &schema.PipelinePublish{
+				Publish: &pipelineschema.PipelinePublish{
 					EventType: "m.bureau.worktree",
 					Room:      "!room:bureau.local",
 					StateKey:  "feature/test",
@@ -1591,11 +1591,11 @@ func TestOnFailurePublishesState(t *testing.T) {
 func TestOnFailureStepFailureDoesNotCascade(t *testing.T) {
 	socketPath, _ := startMockProxy(t)
 
-	pipelinePath := writePipeline(t, "on-failure-cascade", &schema.PipelineContent{
-		Steps: []schema.PipelineStep{
+	pipelinePath := writePipeline(t, "on-failure-cascade", &pipelineschema.PipelineContent{
+		Steps: []pipelineschema.PipelineStep{
 			{Name: "will-fail", Run: "false"},
 		},
-		OnFailure: []schema.PipelineStep{
+		OnFailure: []pipelineschema.PipelineStep{
 			{Name: "also-fails", Run: "false"},
 		},
 	})
@@ -1620,11 +1620,11 @@ func TestOnFailureNotRunOnAbort(t *testing.T) {
 
 	mock.stateResponses["!room:bureau.local/m.bureau.worktree/feature/test"] = `{"status":"active"}`
 
-	pipelinePath := writePipeline(t, "on-failure-abort", &schema.PipelineContent{
-		Steps: []schema.PipelineStep{
+	pipelinePath := writePipeline(t, "on-failure-abort", &pipelineschema.PipelineContent{
+		Steps: []pipelineschema.PipelineStep{
 			{
 				Name: "assert-removing",
-				AssertState: &schema.PipelineAssertState{
+				AssertState: &pipelineschema.PipelineAssertState{
 					Room:       "!room:bureau.local",
 					EventType:  "m.bureau.worktree",
 					StateKey:   "feature/test",
@@ -1634,10 +1634,10 @@ func TestOnFailureNotRunOnAbort(t *testing.T) {
 				},
 			},
 		},
-		OnFailure: []schema.PipelineStep{
+		OnFailure: []pipelineschema.PipelineStep{
 			{
 				Name: "should-not-run",
-				Publish: &schema.PipelinePublish{
+				Publish: &pipelineschema.PipelinePublish{
 					EventType: "m.bureau.worktree",
 					Room:      "!room:bureau.local",
 					StateKey:  "feature/test",
@@ -1670,11 +1670,11 @@ func TestOnFailureVariables(t *testing.T) {
 	markerDir := t.TempDir()
 	markerFile := filepath.Join(markerDir, "failure-context")
 
-	pipelinePath := writePipeline(t, "on-failure-vars", &schema.PipelineContent{
-		Steps: []schema.PipelineStep{
+	pipelinePath := writePipeline(t, "on-failure-vars", &pipelineschema.PipelineContent{
+		Steps: []pipelineschema.PipelineStep{
 			{Name: "doomed-step", Run: "false"},
 		},
-		OnFailure: []schema.PipelineStep{
+		OnFailure: []pipelineschema.PipelineStep{
 			{
 				Name: "record-failure",
 				Run:  fmt.Sprintf("echo \"step=${FAILED_STEP} error=${FAILED_ERROR}\" > %s", markerFile),
@@ -1713,12 +1713,12 @@ func TestAssertStateResultLog(t *testing.T) {
 
 	mock.stateResponses["!room:bureau.local/m.bureau.worktree/feature/test"] = `{"status":"active"}`
 
-	pipelinePath := writePipeline(t, "assert-result-log", &schema.PipelineContent{
-		Steps: []schema.PipelineStep{
+	pipelinePath := writePipeline(t, "assert-result-log", &pipelineschema.PipelineContent{
+		Steps: []pipelineschema.PipelineStep{
 			{Name: "step-one", Run: "true"},
 			{
 				Name: "check-active",
-				AssertState: &schema.PipelineAssertState{
+				AssertState: &pipelineschema.PipelineAssertState{
 					Room:      "!room:bureau.local",
 					EventType: "m.bureau.worktree",
 					StateKey:  "feature/test",

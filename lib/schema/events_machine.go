@@ -113,6 +113,33 @@ type GPUStatus struct {
 	MemoryClockMHz int `json:"memory_clock_mhz"`
 }
 
+// PrincipalResourceUsage reports resource consumption for one sandbox.
+// Populated from cgroup v2 statistics by the daemon and included in the
+// enriched MachineStatus heartbeat.
+type PrincipalResourceUsage struct {
+	// CPUPercent is the sandbox CPU utilization (0-100, may exceed 100
+	// on multi-core for per-core reporting). Derived from cpu.stat
+	// usage_usec delta.
+	CPUPercent int `json:"cpu_percent"`
+
+	// MemoryMB is the current memory usage in megabytes. From cgroup
+	// memory.current.
+	MemoryMB int `json:"memory_mb"`
+
+	// GPUPercent is the sandbox GPU utilization (0-100). Best-effort
+	// from per-process NVML stats. Zero when GPU monitoring is
+	// unavailable.
+	GPUPercent int `json:"gpu_percent,omitempty"`
+
+	// GPUMemoryMB is the sandbox GPU memory usage in megabytes.
+	// Best-effort from per-process NVML stats.
+	GPUMemoryMB int `json:"gpu_memory_mb,omitempty"`
+
+	// Status is the sandbox lifecycle state: "running", "idle", or
+	// "starting". Derived from cgroup state and sandbox lifecycle.
+	Status string `json:"status"`
+}
+
 // MachineInfo is the content of an EventTypeMachineInfo state event.
 // Published once at daemon startup to #bureau/machine. Contains static
 // system inventory that does not change between heartbeats: CPU topology,

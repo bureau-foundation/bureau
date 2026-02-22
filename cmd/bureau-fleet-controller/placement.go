@@ -9,7 +9,7 @@ import (
 	"strings"
 	"time"
 
-	"github.com/bureau-foundation/bureau/lib/schema"
+	"github.com/bureau-foundation/bureau/lib/schema/fleet"
 )
 
 // ineligible is the sentinel score returned when a machine cannot host a
@@ -31,7 +31,7 @@ type placementCandidate struct {
 //
 // The function is pure: it reads fc.machines and fc.services but performs
 // no I/O and has no side effects.
-func (fc *FleetController) scoreMachine(machineLocalpart string, service *schema.FleetServiceContent) int {
+func (fc *FleetController) scoreMachine(machineLocalpart string, service *fleet.FleetServiceContent) int {
 	machine, exists := fc.machines[machineLocalpart]
 	if !exists {
 		return ineligible
@@ -243,7 +243,7 @@ func (fc *FleetController) scoreMachine(machineLocalpart string, service *schema
 // scorePlacement returns a scored list of all eligible machines for a
 // service, sorted by score descending. Ties are broken by machine
 // localpart (lexicographic, ascending) for determinism.
-func (fc *FleetController) scorePlacement(service *schema.FleetServiceContent) []placementCandidate {
+func (fc *FleetController) scorePlacement(service *fleet.FleetServiceContent) []placementCandidate {
 	var candidates []placementCandidate
 
 	for machineLocalpart := range fc.machines {
@@ -270,7 +270,7 @@ func (fc *FleetController) scorePlacement(service *schema.FleetServiceContent) [
 // inTimeWindow checks whether the given time falls within a TimeWindow,
 // considering day-of-week and hour ranges. Handles midnight wrapping:
 // a window with StartHour=22 and EndHour=6 means 10 PM to 6 AM.
-func inTimeWindow(now time.Time, window schema.TimeWindow) bool {
+func inTimeWindow(now time.Time, window fleet.TimeWindow) bool {
 	// Day-of-week check. If Days is non-empty, the current day must
 	// match at least one entry.
 	if len(window.Days) > 0 {

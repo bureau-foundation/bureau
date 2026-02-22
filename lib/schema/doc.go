@@ -17,7 +17,7 @@
 //   - [EventTypeWebRTCOffer], [EventTypeWebRTCAnswer] -- signaling
 //   - [EventTypeLayout] -- tmux session structure for observation
 //   - [EventTypeTicket], [EventTypeTicketConfig] -- work item tracking
-//   - [EventTypeArtifactScope] -- artifact service integration config
+//   - [EventTypeArtifactScope] -- artifact service integration config (content types in schema/artifact)
 //   - [EventTypeAgentSession], [EventTypeAgentContext],
 //     [EventTypeAgentMetrics] -- agent service state
 //

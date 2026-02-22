@@ -8,7 +8,7 @@ go_library(
     srcs = ["main.go"],
     importpath = "github.com/bureau-foundation/bureau/cmd/bureau-agent-mock",
     visibility = ["//visibility:private"],
-    deps = ["//lib/agent"],
+    deps = ["//lib/agentdriver"],
 )
 
 go_binary(

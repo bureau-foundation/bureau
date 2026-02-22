@@ -7,14 +7,14 @@ import (
 	"sync"
 	"time"
 
-	"github.com/bureau-foundation/bureau/lib/schema"
-	"github.com/bureau-foundation/bureau/lib/ticket"
+	"github.com/bureau-foundation/bureau/lib/schema/ticket"
+	"github.com/bureau-foundation/bureau/lib/ticketindex"
 )
 
 // Snapshot is a point-in-time view of tickets with aggregate statistics.
 type Snapshot struct {
-	Entries []ticket.Entry
-	Stats   ticket.Stats
+	Entries []ticketindex.Entry
+	Stats   ticketindex.Stats
 }
 
 // Event describes a single change to the ticket index, delivered via
@@ -22,7 +22,7 @@ type Snapshot struct {
 type Event struct {
 	TicketID string
 	Kind     string // "put" or "remove"
-	Content  schema.TicketContent
+	Content  ticket.TicketContent
 }
 
 // Source abstracts ticket data access for the TUI. Implementations
@@ -41,10 +41,10 @@ type Source interface {
 	All() Snapshot
 
 	// Get returns a single ticket by ID.
-	Get(ticketID string) (schema.TicketContent, bool)
+	Get(ticketID string) (ticket.TicketContent, bool)
 
 	// Children returns direct children of a parent ticket.
-	Children(parentID string) []ticket.Entry
+	Children(parentID string) []ticketindex.Entry
 
 	// ChildProgress returns (total, closed) counts for a parent's
 	// children.
@@ -59,11 +59,11 @@ type Source interface {
 	// Score computes ranking dimensions for a ticket. The now
 	// parameter drives staleness computation; callers pass the
 	// current time rather than embedding a clock in the source.
-	Score(ticketID string, now time.Time) ticket.TicketScore
+	Score(ticketID string, now time.Time) ticketindex.TicketScore
 
 	// EpicHealth returns health metrics for an epic's children:
 	// parallelism width, active fraction, and critical path depth.
-	EpicHealth(epicID string) ticket.EpicHealthStats
+	EpicHealth(epicID string) ticketindex.EpicHealthStats
 
 	// Subscribe returns a channel that receives Events when the
 	// underlying data changes. Returns nil if live updates are not
@@ -71,17 +71,17 @@ type Source interface {
 	Subscribe() <-chan Event
 }
 
-// IndexSource wraps a [ticket.Index] with a mutex for concurrent access
+// IndexSource wraps a [ticketindex.Index] with a mutex for concurrent access
 // and event dispatch. This is the local implementation used when loading
 // from beads JSONL or when the ticket service runs in-process.
 type IndexSource struct {
 	mutex       sync.RWMutex
-	index       *ticket.Index
+	index       *ticketindex.Index
 	subscribers []chan Event
 }
 
 // NewIndexSource creates an IndexSource wrapping the given index.
-func NewIndexSource(index *ticket.Index) *IndexSource {
+func NewIndexSource(index *ticketindex.Index) *IndexSource {
 	return &IndexSource{
 		index: index,
 	}
@@ -113,20 +113,20 @@ func (source *IndexSource) All() Snapshot {
 	source.mutex.RLock()
 	defer source.mutex.RUnlock()
 	return Snapshot{
-		Entries: source.index.List(ticket.Filter{}),
+		Entries: source.index.List(ticketindex.Filter{}),
 		Stats:   source.index.Stats(),
 	}
 }
 
 // Get returns a single ticket by ID.
-func (source *IndexSource) Get(ticketID string) (schema.TicketContent, bool) {
+func (source *IndexSource) Get(ticketID string) (ticket.TicketContent, bool) {
 	source.mutex.RLock()
 	defer source.mutex.RUnlock()
 	return source.index.Get(ticketID)
 }
 
 // Children returns direct children of a parent ticket.
-func (source *IndexSource) Children(parentID string) []ticket.Entry {
+func (source *IndexSource) Children(parentID string) []ticketindex.Entry {
 	source.mutex.RLock()
 	defer source.mutex.RUnlock()
 	return source.index.Children(parentID)
@@ -154,14 +154,14 @@ func (source *IndexSource) Blocks(ticketID string) []string {
 }
 
 // Score computes ranking dimensions for a ticket using default weights.
-func (source *IndexSource) Score(ticketID string, now time.Time) ticket.TicketScore {
+func (source *IndexSource) Score(ticketID string, now time.Time) ticketindex.TicketScore {
 	source.mutex.RLock()
 	defer source.mutex.RUnlock()
-	return source.index.Score(ticketID, now, ticket.DefaultRankWeights())
+	return source.index.Score(ticketID, now, ticketindex.DefaultRankWeights())
 }
 
 // EpicHealth returns health metrics for an epic's children.
-func (source *IndexSource) EpicHealth(epicID string) ticket.EpicHealthStats {
+func (source *IndexSource) EpicHealth(epicID string) ticketindex.EpicHealthStats {
 	source.mutex.RLock()
 	defer source.mutex.RUnlock()
 	return source.index.EpicHealth(epicID)
@@ -179,7 +179,7 @@ func (source *IndexSource) Subscribe() <-chan Event {
 
 // Put adds or updates a ticket and dispatches an event to all
 // subscribers. Safe for concurrent use.
-func (source *IndexSource) Put(ticketID string, content schema.TicketContent) {
+func (source *IndexSource) Put(ticketID string, content ticket.TicketContent) {
 	source.mutex.Lock()
 	source.index.Put(ticketID, content)
 	// Snapshot subscriber list under lock; dispatch after release.

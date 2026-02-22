@@ -12,7 +12,7 @@ import (
 	"github.com/bureau-foundation/bureau/cmd/bureau/cli"
 	"github.com/bureau-foundation/bureau/lib/ref"
 	"github.com/bureau-foundation/bureau/lib/schema"
-	libtmpl "github.com/bureau-foundation/bureau/lib/template"
+	libtmpl "github.com/bureau-foundation/bureau/lib/templatedef"
 )
 
 // templatePushParams holds the parameters for the template push command.

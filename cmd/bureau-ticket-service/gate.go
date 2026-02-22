@@ -12,7 +12,8 @@ import (
 	"github.com/bureau-foundation/bureau/lib/cron"
 	"github.com/bureau-foundation/bureau/lib/ref"
 	"github.com/bureau-foundation/bureau/lib/schema"
-	"github.com/bureau-foundation/bureau/lib/ticket"
+	"github.com/bureau-foundation/bureau/lib/schema/ticket"
+	"github.com/bureau-foundation/bureau/lib/ticketindex"
 	"github.com/bureau-foundation/bureau/messaging"
 )
 
@@ -119,7 +120,7 @@ func (ts *TicketService) evaluateGatesForEvent(ctx context.Context, roomID ref.R
 // matchGateEvent checks whether a state event satisfies a gate's
 // condition. Dispatches to type-specific matchers. The gate must be
 // pending and not a human or timer type (caller checks this).
-func matchGateEvent(gate *schema.TicketGate, event messaging.Event) bool {
+func matchGateEvent(gate *ticket.TicketGate, event messaging.Event) bool {
 	switch gate.Type {
 	case "pipeline":
 		return matchPipelineGate(gate, event)
@@ -135,7 +136,7 @@ func matchGateEvent(gate *schema.TicketGate, event messaging.Event) bool {
 // matchPipelineGate checks whether a pipeline result event satisfies
 // a pipeline gate. Matches on event type, PipelineRef, and optionally
 // Conclusion.
-func matchPipelineGate(gate *schema.TicketGate, event messaging.Event) bool {
+func matchPipelineGate(gate *ticket.TicketGate, event messaging.Event) bool {
 	if event.Type != schema.EventTypePipelineResult {
 		return false
 	}
@@ -160,7 +161,7 @@ func matchPipelineGate(gate *schema.TicketGate, event messaging.Event) bool {
 // matchTicketGate checks whether a ticket state event satisfies a
 // ticket gate. A ticket gate is satisfied when the referenced ticket
 // reaches status "closed".
-func matchTicketGate(gate *schema.TicketGate, event messaging.Event) bool {
+func matchTicketGate(gate *ticket.TicketGate, event messaging.Event) bool {
 	if event.Type != schema.EventTypeTicket {
 		return false
 	}
@@ -175,7 +176,7 @@ func matchTicketGate(gate *schema.TicketGate, event messaging.Event) bool {
 // matchStateEventGate checks whether a state event satisfies a
 // same-room state_event gate. Gates with RoomAlias set are cross-room
 // and evaluated separately by evaluateCrossRoomGates.
-func matchStateEventGate(gate *schema.TicketGate, event messaging.Event) bool {
+func matchStateEventGate(gate *ticket.TicketGate, event messaging.Event) bool {
 	if !gate.RoomAlias.IsZero() {
 		return false
 	}
@@ -189,7 +190,7 @@ func matchStateEventGate(gate *schema.TicketGate, event messaging.Event) bool {
 // (via evaluateCrossRoomGates). It does not check room identity —
 // the caller is responsible for ensuring the event comes from the
 // correct room.
-func matchStateEventCondition(gate *schema.TicketGate, event messaging.Event) bool {
+func matchStateEventCondition(gate *ticket.TicketGate, event messaging.Event) bool {
 	if event.Type != gate.EventType {
 		return false
 	}
@@ -369,7 +370,7 @@ func (ts *TicketService) satisfyGate(
 	roomID ref.RoomID,
 	state *roomState,
 	ticketID string,
-	content schema.TicketContent,
+	content ticket.TicketContent,
 	gateIndex int,
 	satisfiedBy string,
 ) error {
@@ -391,7 +392,7 @@ func (ts *TicketService) satisfyGate(
 // Returns false with no error if Target is empty — this means the
 // timer has not started yet (e.g., base="unblocked" with open
 // blockers).
-func timerExpired(gate *schema.TicketGate, now time.Time) (bool, error) {
+func timerExpired(gate *ticket.TicketGate, now time.Time) (bool, error) {
 	if gate.Target == "" {
 		return false, nil
 	}
@@ -408,7 +409,7 @@ func timerExpired(gate *schema.TicketGate, now time.Time) (bool, error) {
 // from its Duration and the given base time. No-op if the gate already
 // has a Target, has no Duration, or is not a timer gate. Mutates the
 // gate in place.
-func computeTimerTarget(gate *schema.TicketGate, baseTime time.Time) error {
+func computeTimerTarget(gate *ticket.TicketGate, baseTime time.Time) error {
 	if gate.Type != "timer" || gate.Target != "" || gate.Duration == "" {
 		return nil
 	}
@@ -429,7 +430,7 @@ func computeTimerTarget(gate *schema.TicketGate, baseTime time.Time) error {
 //
 // Called from handleCreate and handleBatchCreate after gate CreatedAt
 // enrichment.
-func enrichTimerTargets(content *schema.TicketContent, index *ticket.Index) {
+func enrichTimerTargets(content *ticket.TicketContent, index *ticketindex.Index) {
 	for i := range content.Gates {
 		gate := &content.Gates[i]
 		if gate.Type != "timer" || gate.Target != "" || gate.Duration == "" {
@@ -572,7 +573,7 @@ func (h *timerHeap) Pop() any {
 // from the given ticket content to the timer heap, and reschedules
 // the timer if the new entries affect the earliest deadline.
 // Must be called with ts.mu held.
-func (ts *TicketService) pushTimerGates(roomID ref.RoomID, ticketID string, content *schema.TicketContent) {
+func (ts *TicketService) pushTimerGates(roomID ref.RoomID, ticketID string, content *ticket.TicketContent) {
 	pushed := false
 	for i := range content.Gates {
 		gate := &content.Gates[i]
@@ -602,7 +603,7 @@ func (ts *TicketService) pushTimerGates(roomID ref.RoomID, ticketID string, cont
 // note instead of satisfying a gate. Stale entries from a previous
 // deadline are handled by lazy deletion in fireExpiredTimersLocked.
 // Must be called with ts.mu held.
-func (ts *TicketService) pushDeadlineEntry(roomID ref.RoomID, ticketID string, content *schema.TicketContent) {
+func (ts *TicketService) pushDeadlineEntry(roomID ref.RoomID, ticketID string, content *ticket.TicketContent) {
 	if content.Deadline == "" || content.Status == "closed" {
 		return
 	}
@@ -648,7 +649,7 @@ func (ts *TicketService) rebuildTimerHeap() {
 		}
 
 		// Add deadline monitoring entries for non-closed tickets.
-		for _, entry := range state.index.List(ticket.Filter{}) {
+		for _, entry := range state.index.List(ticketindex.Filter{}) {
 			if entry.Content.Deadline == "" || entry.Content.Status == "closed" {
 				continue
 			}
@@ -799,7 +800,7 @@ func (ts *TicketService) fireExpiredTimersLocked(ctx context.Context) {
 // verifies the ticket still has a matching deadline, adds a
 // "Deadline passed" note, and writes the updated ticket to Matrix.
 // Must be called with ts.mu held.
-func (ts *TicketService) fireDeadlineLocked(ctx context.Context, entry timerHeapEntry, state *roomState, content schema.TicketContent) {
+func (ts *TicketService) fireDeadlineLocked(ctx context.Context, entry timerHeapEntry, state *roomState, content ticket.TicketContent) {
 	// Lazy deletion: verify the ticket still has the same deadline.
 	if content.Deadline == "" {
 		return
@@ -814,7 +815,7 @@ func (ts *TicketService) fireDeadlineLocked(ctx context.Context, entry timerHeap
 	noteID := fmt.Sprintf("n-%d", len(content.Notes)+1)
 	now := ts.clock.Now().UTC().Format(time.RFC3339)
 
-	content.Notes = append(content.Notes, schema.TicketNote{
+	content.Notes = append(content.Notes, ticket.TicketNote{
 		ID:        noteID,
 		Author:    ts.service.UserID(),
 		CreatedAt: now,
@@ -875,7 +876,7 @@ func (ts *TicketService) startTimerLoop(ctx context.Context) {
 // eligible if it is a timer with Schedule or Interval set, it has
 // been satisfied (or will be during close), and has not exhausted
 // its MaxOccurrences limit.
-func hasRecurringGates(content *schema.TicketContent) bool {
+func hasRecurringGates(content *ticket.TicketContent) bool {
 	for i := range content.Gates {
 		if content.Gates[i].IsRecurring() {
 			return true
@@ -896,7 +897,7 @@ func hasRecurringGates(content *schema.TicketContent) bool {
 // Returns true if at least one gate was re-armed (meaning the ticket
 // should reopen instead of closing). Returns false if all recurring
 // gates are exhausted and the ticket should close normally.
-func rearmRecurringGates(content *schema.TicketContent, now time.Time) (bool, error) {
+func rearmRecurringGates(content *ticket.TicketContent, now time.Time) (bool, error) {
 	rearmed := false
 	nowStr := now.UTC().Format(time.RFC3339)
 
@@ -956,7 +957,7 @@ func rearmRecurringGates(content *schema.TicketContent, now time.Time) (bool, er
 // ticket content. Used when EndRecurrence is true on a close
 // request — the caller wants to permanently close the ticket without
 // it re-arming.
-func stripRecurringGates(content *schema.TicketContent) {
+func stripRecurringGates(content *ticket.TicketContent) {
 	kept := content.Gates[:0]
 	for i := range content.Gates {
 		if !content.Gates[i].IsRecurring() {

@@ -25,6 +25,7 @@ go_library(
     visibility = ["//visibility:public"],
     deps = [
         "//lib/schema",
+        "//lib/schema/observation",
         "//lib/tmux",
         "@org_golang_x_sys//unix",
     ],
@@ -52,6 +53,7 @@ go_test(
     embed = [":observe"],
     deps = [
         "//lib/schema",
+        "//lib/schema/observation",
         "//lib/testutil",
         "//lib/tmux",
     ],

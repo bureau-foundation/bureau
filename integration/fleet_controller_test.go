@@ -13,8 +13,9 @@ import (
 
 	"github.com/bureau-foundation/bureau/lib/ref"
 	"github.com/bureau-foundation/bureau/lib/schema"
+	fleetschema "github.com/bureau-foundation/bureau/lib/schema/fleet"
 	"github.com/bureau-foundation/bureau/lib/service"
-	"github.com/bureau-foundation/bureau/lib/template"
+	"github.com/bureau-foundation/bureau/lib/templatedef"
 	"github.com/bureau-foundation/bureau/messaging"
 )
 
@@ -79,9 +80,9 @@ type fleetServiceInstance struct {
 }
 
 type fleetShowServiceResponse struct {
-	Localpart  string                      `json:"localpart"`
-	Definition *schema.FleetServiceContent `json:"definition"`
-	Instances  []fleetServiceInstance      `json:"instances"`
+	Localpart  string                           `json:"localpart"`
+	Definition *fleetschema.FleetServiceContent `json:"definition"`
+	Instances  []fleetServiceInstance           `json:"instances"`
 }
 
 type fleetPlaceResponse struct {
@@ -212,7 +213,7 @@ func fleetClient(t *testing.T, fc *fleetController, token []byte) *service.Servi
 
 // publishFleetService publishes a FleetServiceContent state event to
 // the fleet room. The state key is the service localpart.
-func publishFleetService(t *testing.T, admin *messaging.DirectSession, fleetRoomID ref.RoomID, serviceLocalpart string, definition schema.FleetServiceContent) {
+func publishFleetService(t *testing.T, admin *messaging.DirectSession, fleetRoomID ref.RoomID, serviceLocalpart string, definition fleetschema.FleetServiceContent) {
 	t.Helper()
 
 	_, err := admin.SendStateEvent(t.Context(), fleetRoomID, schema.EventTypeFleetService, serviceLocalpart, definition)
@@ -304,9 +305,9 @@ func assertFleetMachine(t *testing.T, client *service.ServiceClient, machineLoca
 func waitForFleetConfigRoom(t *testing.T, fleetWatch *roomWatch, fc *fleetController, machineLocalpart string) {
 	t.Helper()
 
-	waitForNotification[schema.FleetConfigRoomDiscoveredMessage](
-		t, fleetWatch, schema.MsgTypeFleetConfigRoomDiscovered, fc.UserID,
-		func(m schema.FleetConfigRoomDiscoveredMessage) bool {
+	waitForNotification[fleetschema.FleetConfigRoomDiscoveredMessage](
+		t, fleetWatch, fleetschema.MsgTypeFleetConfigRoomDiscovered, fc.UserID,
+		func(m fleetschema.FleetConfigRoomDiscoveredMessage) bool {
 			return m.Machine == machineLocalpart
 		},
 		"fleet controller discovers config room for "+machineLocalpart,
@@ -324,9 +325,9 @@ func waitForFleetConfigRoom(t *testing.T, fleetWatch *roomWatch, fc *fleetContro
 func waitForFleetService(t *testing.T, fleetWatch *roomWatch, fc *fleetController, serviceLocalpart string) {
 	t.Helper()
 
-	waitForNotification[schema.FleetServiceDiscoveredMessage](
-		t, fleetWatch, schema.MsgTypeFleetServiceDiscovered, fc.UserID,
-		func(m schema.FleetServiceDiscoveredMessage) bool {
+	waitForNotification[fleetschema.FleetServiceDiscoveredMessage](
+		t, fleetWatch, fleetschema.MsgTypeFleetServiceDiscovered, fc.UserID,
+		func(m fleetschema.FleetServiceDiscoveredMessage) bool {
 			return m.Service == serviceLocalpart
 		},
 		"fleet controller discovers service "+serviceLocalpart,
@@ -349,7 +350,7 @@ func publishFleetOperatorTemplate(t *testing.T, admin *messaging.DirectSession, 
 		t.Fatalf("parse fleet operator template ref: %v", err)
 	}
 
-	_, err = template.Push(t.Context(), admin, ref, schema.TemplateContent{
+	_, err = templatedef.Push(t.Context(), admin, ref, schema.TemplateContent{
 		Description:      "Fleet operator with fleet service token",
 		Command:          []string{testAgentBinary},
 		RequiredServices: []string{"fleet"},
@@ -575,9 +576,9 @@ func TestFleetControllerLifecycle(t *testing.T) {
 		// event-wait for the service discovered notification.
 		fleetWatch := watchRoom(t, admin, fleet.FleetRoomID)
 
-		publishFleetService(t, admin, fleet.FleetRoomID, serviceLocalpart, schema.FleetServiceContent{
+		publishFleetService(t, admin, fleet.FleetRoomID, serviceLocalpart, fleetschema.FleetServiceContent{
 			Template: "bureau/template:whisper-stt",
-			Replicas: schema.ReplicaSpec{Min: 0},
+			Replicas: fleetschema.ReplicaSpec{Min: 0},
 			Failover: "migrate",
 			Priority: 10,
 		})
@@ -819,9 +820,9 @@ func TestFleetPlaceAndUnplace(t *testing.T) {
 	// loop does not auto-place it. This test exercises explicit place
 	// and unplace calls; auto-placement is tested separately in
 	// TestFleetAutoPlacement.
-	publishFleetService(t, admin, fleet.FleetRoomID, serviceLocalpart, schema.FleetServiceContent{
+	publishFleetService(t, admin, fleet.FleetRoomID, serviceLocalpart, fleetschema.FleetServiceContent{
 		Template: templateRef,
-		Replicas: schema.ReplicaSpec{Min: 0},
+		Replicas: fleetschema.ReplicaSpec{Min: 0},
 		Failover: "migrate",
 		Priority: 10,
 	})
@@ -1009,10 +1010,10 @@ func TestFleetReconciliation(t *testing.T) {
 	// Publish the fleet service with Min=2. The fleet controller
 	// discovers the service via /sync, runs reconcile, detects a
 	// deficit of 2, scores both machines, and calls place() for each.
-	publishFleetService(t, admin, fleet.FleetRoomID, serviceLocalpart, schema.FleetServiceContent{
+	publishFleetService(t, admin, fleet.FleetRoomID, serviceLocalpart, fleetschema.FleetServiceContent{
 		Template: templateRef,
-		Replicas: schema.ReplicaSpec{Min: 2},
-		Placement: schema.PlacementConstraints{
+		Replicas: fleetschema.ReplicaSpec{Min: 2},
+		Placement: fleetschema.PlacementConstraints{
 			AllowedMachines: []string{machineA.Name, machineB.Name},
 		},
 		Failover: "migrate",

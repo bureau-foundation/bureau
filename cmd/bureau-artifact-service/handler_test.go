@@ -18,7 +18,7 @@ import (
 	"testing"
 	"time"
 
-	"github.com/bureau-foundation/bureau/lib/artifact"
+	"github.com/bureau-foundation/bureau/lib/artifactstore"
 	"github.com/bureau-foundation/bureau/lib/clock"
 	"github.com/bureau-foundation/bureau/lib/ref"
 	"github.com/bureau-foundation/bureau/lib/service"
@@ -39,17 +39,17 @@ func testService(t *testing.T) *ArtifactService {
 	t.Helper()
 
 	storeDir := t.TempDir()
-	store, err := artifact.NewStore(storeDir)
+	store, err := artifactstore.NewStore(storeDir)
 	if err != nil {
 		t.Fatal(err)
 	}
 
-	metadataStore, err := artifact.NewMetadataStore(t.TempDir())
+	metadataStore, err := artifactstore.NewMetadataStore(t.TempDir())
 	if err != nil {
 		t.Fatal(err)
 	}
 
-	tagStore, err := artifact.NewTagStore(t.TempDir())
+	tagStore, err := artifactstore.NewTagStore(t.TempDir())
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -57,9 +57,9 @@ func testService(t *testing.T) *ArtifactService {
 	return &ArtifactService{
 		store:         store,
 		metadataStore: metadataStore,
-		refIndex:      artifact.NewRefIndex(),
+		refIndex:      artifactstore.NewRefIndex(),
 		tagStore:      tagStore,
-		artifactIndex: artifact.NewArtifactIndex(),
+		artifactIndex: artifactstore.NewArtifactIndex(),
 		clock:         clock.Fake(testClockEpoch),
 		startedAt:     testClockEpoch,
 		rooms:         make(map[ref.RoomID]*artifactRoomState),
@@ -104,7 +104,7 @@ func TestStoreSmallArtifact(t *testing.T) {
 	conn, wait := startHandler(t, as)
 
 	// Send a store header with embedded data.
-	header := &artifact.StoreHeader{
+	header := &artifactstore.StoreHeader{
 		Action:      "store",
 		ContentType: "text/plain",
 		Size:        int64(len(content)),
@@ -112,14 +112,14 @@ func TestStoreSmallArtifact(t *testing.T) {
 		Description: "test artifact",
 		Labels:      []string{"test"},
 	}
-	if err := artifact.WriteMessage(conn, header); err != nil {
+	if err := artifactstore.WriteMessage(conn, header); err != nil {
 		t.Fatal(err)
 	}
 
 	// Read the store response. This unblocks the handler's write
 	// on the synchronous net.Pipe.
-	var response artifact.StoreResponse
-	if err := artifact.ReadMessage(conn, &response); err != nil {
+	var response artifactstore.StoreResponse
+	if err := artifactstore.ReadMessage(conn, &response); err != nil {
 		t.Fatal(err)
 	}
 
@@ -154,12 +154,12 @@ func TestStoreLargeArtifactSized(t *testing.T) {
 	conn, wait := startHandler(t, as)
 
 	// Send store header without embedded data (large artifact).
-	header := &artifact.StoreHeader{
+	header := &artifactstore.StoreHeader{
 		Action:      "store",
 		ContentType: "application/octet-stream",
 		Size:        int64(len(content)),
 	}
-	if err := artifact.WriteMessage(conn, header); err != nil {
+	if err := artifactstore.WriteMessage(conn, header); err != nil {
 		t.Fatal(err)
 	}
 
@@ -169,8 +169,8 @@ func TestStoreLargeArtifactSized(t *testing.T) {
 	}
 
 	// Read the store response.
-	var response artifact.StoreResponse
-	if err := artifact.ReadMessage(conn, &response); err != nil {
+	var response artifactstore.StoreResponse
+	if err := artifactstore.ReadMessage(conn, &response); err != nil {
 		t.Fatal(err)
 	}
 
@@ -193,17 +193,17 @@ func TestStoreLargeArtifactChunked(t *testing.T) {
 	conn, wait := startHandler(t, as)
 
 	// Send store header with SizeUnknown (chunked transfer).
-	header := &artifact.StoreHeader{
+	header := &artifactstore.StoreHeader{
 		Action:      "store",
 		ContentType: "application/octet-stream",
-		Size:        artifact.SizeUnknown,
+		Size:        artifactstore.SizeUnknown,
 	}
-	if err := artifact.WriteMessage(conn, header); err != nil {
+	if err := artifactstore.WriteMessage(conn, header); err != nil {
 		t.Fatal(err)
 	}
 
 	// Stream content using FrameWriter.
-	frameWriter := artifact.NewFrameWriter(conn)
+	frameWriter := artifactstore.NewFrameWriter(conn)
 	if _, err := frameWriter.Write(content); err != nil {
 		t.Fatal(err)
 	}
@@ -212,8 +212,8 @@ func TestStoreLargeArtifactChunked(t *testing.T) {
 	}
 
 	// Read the store response.
-	var response artifact.StoreResponse
-	if err := artifact.ReadMessage(conn, &response); err != nil {
+	var response artifactstore.StoreResponse
+	if err := artifactstore.ReadMessage(conn, &response); err != nil {
 		t.Fatal(err)
 	}
 
@@ -235,17 +235,17 @@ func TestFetchSmallArtifact(t *testing.T) {
 
 	conn, wait := startHandler(t, as)
 
-	request := &artifact.FetchRequest{
+	request := &artifactstore.FetchRequest{
 		Action: "fetch",
 		Ref:    ref,
 	}
-	if err := artifact.WriteMessage(conn, request); err != nil {
+	if err := artifactstore.WriteMessage(conn, request); err != nil {
 		t.Fatal(err)
 	}
 
 	// Read the fetch response.
-	var response artifact.FetchResponse
-	if err := artifact.ReadMessage(conn, &response); err != nil {
+	var response artifactstore.FetchResponse
+	if err := artifactstore.ReadMessage(conn, &response); err != nil {
 		t.Fatal(err)
 	}
 
@@ -275,17 +275,17 @@ func TestFetchLargeArtifact(t *testing.T) {
 
 	conn, wait := startHandler(t, as)
 
-	request := &artifact.FetchRequest{
+	request := &artifactstore.FetchRequest{
 		Action: "fetch",
 		Ref:    ref,
 	}
-	if err := artifact.WriteMessage(conn, request); err != nil {
+	if err := artifactstore.WriteMessage(conn, request); err != nil {
 		t.Fatal(err)
 	}
 
 	// Read the fetch response header.
-	var response artifact.FetchResponse
-	if err := artifact.ReadMessage(conn, &response); err != nil {
+	var response artifactstore.FetchResponse
+	if err := artifactstore.ReadMessage(conn, &response); err != nil {
 		t.Fatal(err)
 	}
 
@@ -321,16 +321,16 @@ func TestFetchByFullHash(t *testing.T) {
 	conn, wait := startHandler(t, as)
 
 	// Fetch using the full 64-char hex hash.
-	request := &artifact.FetchRequest{
+	request := &artifactstore.FetchRequest{
 		Action: "fetch",
-		Ref:    artifact.FormatHash(hash),
+		Ref:    artifactstore.FormatHash(hash),
 	}
-	if err := artifact.WriteMessage(conn, request); err != nil {
+	if err := artifactstore.WriteMessage(conn, request); err != nil {
 		t.Fatal(err)
 	}
 
-	var response artifact.FetchResponse
-	if err := artifact.ReadMessage(conn, &response); err != nil {
+	var response artifactstore.FetchResponse
+	if err := artifactstore.ReadMessage(conn, &response); err != nil {
 		t.Fatal(err)
 	}
 
@@ -346,16 +346,16 @@ func TestFetchNotFound(t *testing.T) {
 
 	conn, wait := startHandler(t, as)
 
-	request := &artifact.FetchRequest{
+	request := &artifactstore.FetchRequest{
 		Action: "fetch",
 		Ref:    "art-000000000000",
 	}
-	if err := artifact.WriteMessage(conn, request); err != nil {
+	if err := artifactstore.WriteMessage(conn, request); err != nil {
 		t.Fatal(err)
 	}
 
-	var errResp artifact.ErrorResponse
-	if err := artifact.ReadMessage(conn, &errResp); err != nil {
+	var errResp artifactstore.ErrorResponse
+	if err := artifactstore.ReadMessage(conn, &errResp); err != nil {
 		t.Fatal(err)
 	}
 
@@ -379,12 +379,12 @@ func TestExistsFound(t *testing.T) {
 
 	conn, wait := startHandler(t, as)
 
-	if err := artifact.WriteMessage(conn, refRequest{Action: "exists", Ref: ref}); err != nil {
+	if err := artifactstore.WriteMessage(conn, refRequest{Action: "exists", Ref: ref}); err != nil {
 		t.Fatal(err)
 	}
 
-	var response artifact.ExistsResponse
-	if err := artifact.ReadMessage(conn, &response); err != nil {
+	var response artifactstore.ExistsResponse
+	if err := artifactstore.ReadMessage(conn, &response); err != nil {
 		t.Fatal(err)
 	}
 
@@ -406,12 +406,12 @@ func TestExistsNotFound(t *testing.T) {
 
 	conn, wait := startHandler(t, as)
 
-	if err := artifact.WriteMessage(conn, refRequest{Action: "exists", Ref: "art-000000000000"}); err != nil {
+	if err := artifactstore.WriteMessage(conn, refRequest{Action: "exists", Ref: "art-000000000000"}); err != nil {
 		t.Fatal(err)
 	}
 
-	var response artifact.ExistsResponse
-	if err := artifact.ReadMessage(conn, &response); err != nil {
+	var response artifactstore.ExistsResponse
+	if err := artifactstore.ReadMessage(conn, &response); err != nil {
 		t.Fatal(err)
 	}
 
@@ -432,12 +432,12 @@ func TestShow(t *testing.T) {
 
 	conn, wait := startHandler(t, as)
 
-	if err := artifact.WriteMessage(conn, refRequest{Action: "show", Ref: ref}); err != nil {
+	if err := artifactstore.WriteMessage(conn, refRequest{Action: "show", Ref: ref}); err != nil {
 		t.Fatal(err)
 	}
 
-	var meta artifact.ArtifactMetadata
-	if err := artifact.ReadMessage(conn, &meta); err != nil {
+	var meta artifactstore.ArtifactMetadata
+	if err := artifactstore.ReadMessage(conn, &meta); err != nil {
 		t.Fatal(err)
 	}
 
@@ -471,14 +471,14 @@ func TestStatus(t *testing.T) {
 
 	conn, wait := startHandler(t, as)
 
-	if err := artifact.WriteMessage(conn, struct {
+	if err := artifactstore.WriteMessage(conn, struct {
 		Action string `json:"action"`
 	}{Action: "status"}); err != nil {
 		t.Fatal(err)
 	}
 
-	var response artifact.StatusResponse
-	if err := artifact.ReadMessage(conn, &response); err != nil {
+	var response artifactstore.StatusResponse
+	if err := artifactstore.ReadMessage(conn, &response); err != nil {
 		t.Fatal(err)
 	}
 
@@ -499,14 +499,14 @@ func TestUnknownAction(t *testing.T) {
 
 	conn, wait := startHandler(t, as)
 
-	if err := artifact.WriteMessage(conn, struct {
+	if err := artifactstore.WriteMessage(conn, struct {
 		Action string `json:"action"`
 	}{Action: "bogus"}); err != nil {
 		t.Fatal(err)
 	}
 
-	var errResp artifact.ErrorResponse
-	if err := artifact.ReadMessage(conn, &errResp); err != nil {
+	var errResp artifactstore.ErrorResponse
+	if err := artifactstore.ReadMessage(conn, &errResp); err != nil {
 		t.Fatal(err)
 	}
 
@@ -523,14 +523,14 @@ func TestMissingAction(t *testing.T) {
 	conn, wait := startHandler(t, as)
 
 	// Send a CBOR message without an action field.
-	if err := artifact.WriteMessage(conn, struct {
+	if err := artifactstore.WriteMessage(conn, struct {
 		Value int `json:"value"`
 	}{Value: 42}); err != nil {
 		t.Fatal(err)
 	}
 
-	var errResp artifact.ErrorResponse
-	if err := artifact.ReadMessage(conn, &errResp); err != nil {
+	var errResp artifactstore.ErrorResponse
+	if err := artifactstore.ReadMessage(conn, &errResp); err != nil {
 		t.Fatal(err)
 	}
 
@@ -547,16 +547,16 @@ func TestInvalidRef(t *testing.T) {
 	conn, wait := startHandler(t, as)
 
 	// Send a fetch with an invalid ref format.
-	request := &artifact.FetchRequest{
+	request := &artifactstore.FetchRequest{
 		Action: "fetch",
 		Ref:    "not-a-valid-ref",
 	}
-	if err := artifact.WriteMessage(conn, request); err != nil {
+	if err := artifactstore.WriteMessage(conn, request); err != nil {
 		t.Fatal(err)
 	}
 
-	var errResp artifact.ErrorResponse
-	if err := artifact.ReadMessage(conn, &errResp); err != nil {
+	var errResp artifactstore.ErrorResponse
+	if err := artifactstore.ReadMessage(conn, &errResp); err != nil {
 		t.Fatal(err)
 	}
 
@@ -578,18 +578,18 @@ func TestTagAndFetchByName(t *testing.T) {
 	// Create a tag pointing to the artifact.
 	conn, wait := startHandler(t, as)
 
-	tagRequest := &artifact.TagRequest{
+	tagRequest := &artifactstore.TagRequest{
 		Action:     "tag",
 		Name:       "model/latest",
 		Ref:        ref,
 		Optimistic: true,
 	}
-	if err := artifact.WriteMessage(conn, tagRequest); err != nil {
+	if err := artifactstore.WriteMessage(conn, tagRequest); err != nil {
 		t.Fatal(err)
 	}
 
-	var tagResp artifact.TagResponse
-	if err := artifact.ReadMessage(conn, &tagResp); err != nil {
+	var tagResp artifactstore.TagResponse
+	if err := artifactstore.ReadMessage(conn, &tagResp); err != nil {
 		t.Fatal(err)
 	}
 	wait()
@@ -604,16 +604,16 @@ func TestTagAndFetchByName(t *testing.T) {
 	// Fetch by tag name.
 	conn2, wait2 := startHandler(t, as)
 
-	fetchRequest := &artifact.FetchRequest{
+	fetchRequest := &artifactstore.FetchRequest{
 		Action: "fetch",
 		Ref:    "model/latest",
 	}
-	if err := artifact.WriteMessage(conn2, fetchRequest); err != nil {
+	if err := artifactstore.WriteMessage(conn2, fetchRequest); err != nil {
 		t.Fatal(err)
 	}
 
-	var fetchResp artifact.FetchResponse
-	if err := artifact.ReadMessage(conn2, &fetchResp); err != nil {
+	var fetchResp artifactstore.FetchResponse
+	if err := artifactstore.ReadMessage(conn2, &fetchResp); err != nil {
 		t.Fatal(err)
 	}
 	wait2()
@@ -629,19 +629,19 @@ func TestStoreWithTag(t *testing.T) {
 	content := []byte("store with tag")
 	conn, wait := startHandler(t, as)
 
-	header := &artifact.StoreHeader{
+	header := &artifactstore.StoreHeader{
 		Action:      "store",
 		ContentType: "text/plain",
 		Size:        int64(len(content)),
 		Data:        content,
 		Tag:         "auto/tagged",
 	}
-	if err := artifact.WriteMessage(conn, header); err != nil {
+	if err := artifactstore.WriteMessage(conn, header); err != nil {
 		t.Fatal(err)
 	}
 
-	var response artifact.StoreResponse
-	if err := artifact.ReadMessage(conn, &response); err != nil {
+	var response artifactstore.StoreResponse
+	if err := artifactstore.ReadMessage(conn, &response); err != nil {
 		t.Fatal(err)
 	}
 	wait()
@@ -653,8 +653,8 @@ func TestStoreWithTag(t *testing.T) {
 	}
 
 	// Verify tag points to the stored artifact.
-	if artifact.FormatRef(tag.Target) != response.Ref {
-		t.Errorf("tag target ref = %s, want %s", artifact.FormatRef(tag.Target), response.Ref)
+	if artifactstore.FormatRef(tag.Target) != response.Ref {
+		t.Errorf("tag target ref = %s, want %s", artifactstore.FormatRef(tag.Target), response.Ref)
 	}
 }
 
@@ -668,7 +668,7 @@ func TestTagCompareAndSwap(t *testing.T) {
 
 	// Create initial tag.
 	conn1, wait1 := startHandler(t, as)
-	if err := artifact.WriteMessage(conn1, &artifact.TagRequest{
+	if err := artifactstore.WriteMessage(conn1, &artifactstore.TagRequest{
 		Action:     "tag",
 		Name:       "cas/test",
 		Ref:        ref1,
@@ -676,8 +676,8 @@ func TestTagCompareAndSwap(t *testing.T) {
 	}); err != nil {
 		t.Fatal(err)
 	}
-	var resp1 artifact.TagResponse
-	if err := artifact.ReadMessage(conn1, &resp1); err != nil {
+	var resp1 artifactstore.TagResponse
+	if err := artifactstore.ReadMessage(conn1, &resp1); err != nil {
 		t.Fatal(err)
 	}
 	wait1()
@@ -685,7 +685,7 @@ func TestTagCompareAndSwap(t *testing.T) {
 	// CAS with wrong previous should fail.
 	conn2, wait2 := startHandler(t, as)
 	wrongPrevious := strings.Repeat("00", 32)
-	if err := artifact.WriteMessage(conn2, &artifact.TagRequest{
+	if err := artifactstore.WriteMessage(conn2, &artifactstore.TagRequest{
 		Action:           "tag",
 		Name:             "cas/test",
 		Ref:              ref2,
@@ -693,8 +693,8 @@ func TestTagCompareAndSwap(t *testing.T) {
 	}); err != nil {
 		t.Fatal(err)
 	}
-	var errResp artifact.ErrorResponse
-	if err := artifact.ReadMessage(conn2, &errResp); err != nil {
+	var errResp artifactstore.ErrorResponse
+	if err := artifactstore.ReadMessage(conn2, &errResp); err != nil {
 		t.Fatal(err)
 	}
 	wait2()
@@ -708,7 +708,7 @@ func TestTagCompareAndSwap(t *testing.T) {
 
 	// CAS with correct previous should succeed.
 	conn3, wait3 := startHandler(t, as)
-	if err := artifact.WriteMessage(conn3, &artifact.TagRequest{
+	if err := artifactstore.WriteMessage(conn3, &artifactstore.TagRequest{
 		Action:           "tag",
 		Name:             "cas/test",
 		Ref:              ref2,
@@ -716,8 +716,8 @@ func TestTagCompareAndSwap(t *testing.T) {
 	}); err != nil {
 		t.Fatal(err)
 	}
-	var resp3 artifact.TagResponse
-	if err := artifact.ReadMessage(conn3, &resp3); err != nil {
+	var resp3 artifactstore.TagResponse
+	if err := artifactstore.ReadMessage(conn3, &resp3); err != nil {
 		t.Fatal(err)
 	}
 	wait3()
@@ -739,15 +739,15 @@ func TestResolve(t *testing.T) {
 
 	// Resolve by tag name.
 	conn, wait := startHandler(t, as)
-	if err := artifact.WriteMessage(conn, &artifact.ResolveRequest{
+	if err := artifactstore.WriteMessage(conn, &artifactstore.ResolveRequest{
 		Action: "resolve",
 		Ref:    "named/thing",
 	}); err != nil {
 		t.Fatal(err)
 	}
 
-	var resp artifact.ResolveResponse
-	if err := artifact.ReadMessage(conn, &resp); err != nil {
+	var resp artifactstore.ResolveResponse
+	if err := artifactstore.ReadMessage(conn, &resp); err != nil {
 		t.Fatal(err)
 	}
 	wait()
@@ -776,15 +776,15 @@ func TestListTags(t *testing.T) {
 
 	// List with prefix.
 	conn, wait := startHandler(t, as)
-	if err := artifact.WriteMessage(conn, &artifact.TagsRequest{
+	if err := artifactstore.WriteMessage(conn, &artifactstore.TagsRequest{
 		Action: "tags",
 		Prefix: "prefix/",
 	}); err != nil {
 		t.Fatal(err)
 	}
 
-	var resp artifact.TagsResponse
-	if err := artifact.ReadMessage(conn, &resp); err != nil {
+	var resp artifactstore.TagsResponse
+	if err := artifactstore.ReadMessage(conn, &resp); err != nil {
 		t.Fatal(err)
 	}
 	wait()
@@ -804,15 +804,15 @@ func TestDeleteTag(t *testing.T) {
 
 	// Delete the tag.
 	conn, wait := startHandler(t, as)
-	if err := artifact.WriteMessage(conn, &artifact.DeleteTagRequest{
+	if err := artifactstore.WriteMessage(conn, &artifactstore.DeleteTagRequest{
 		Action: "delete-tag",
 		Name:   "to-delete",
 	}); err != nil {
 		t.Fatal(err)
 	}
 
-	var resp artifact.DeleteTagResponse
-	if err := artifact.ReadMessage(conn, &resp); err != nil {
+	var resp artifactstore.DeleteTagResponse
+	if err := artifactstore.ReadMessage(conn, &resp); err != nil {
 		t.Fatal(err)
 	}
 	wait()
@@ -828,15 +828,15 @@ func TestDeleteTag(t *testing.T) {
 
 	// Verify resolve by tag name fails.
 	conn2, wait2 := startHandler(t, as)
-	if err := artifact.WriteMessage(conn2, &artifact.FetchRequest{
+	if err := artifactstore.WriteMessage(conn2, &artifactstore.FetchRequest{
 		Action: "fetch",
 		Ref:    "to-delete",
 	}); err != nil {
 		t.Fatal(err)
 	}
 
-	var errResp artifact.ErrorResponse
-	if err := artifact.ReadMessage(conn2, &errResp); err != nil {
+	var errResp artifactstore.ErrorResponse
+	if err := artifactstore.ReadMessage(conn2, &errResp); err != nil {
 		t.Fatal(err)
 	}
 	wait2()
@@ -857,14 +857,14 @@ func TestListAllArtifacts(t *testing.T) {
 
 	conn, wait := startHandler(t, as)
 
-	if err := artifact.WriteMessage(conn, &artifact.ListRequest{
+	if err := artifactstore.WriteMessage(conn, &artifactstore.ListRequest{
 		Action: "list",
 	}); err != nil {
 		t.Fatal(err)
 	}
 
-	var resp artifact.ListResponse
-	if err := artifact.ReadMessage(conn, &resp); err != nil {
+	var resp artifactstore.ListResponse
+	if err := artifactstore.ReadMessage(conn, &resp); err != nil {
 		t.Fatal(err)
 	}
 	wait()
@@ -886,15 +886,15 @@ func TestListByContentType(t *testing.T) {
 
 	conn, wait := startHandler(t, as)
 
-	if err := artifact.WriteMessage(conn, &artifact.ListRequest{
+	if err := artifactstore.WriteMessage(conn, &artifactstore.ListRequest{
 		Action:      "list",
 		ContentType: "text/plain",
 	}); err != nil {
 		t.Fatal(err)
 	}
 
-	var resp artifact.ListResponse
-	if err := artifact.ReadMessage(conn, &resp); err != nil {
+	var resp artifactstore.ListResponse
+	if err := artifactstore.ReadMessage(conn, &resp); err != nil {
 		t.Fatal(err)
 	}
 	wait()
@@ -918,15 +918,15 @@ func TestListByLabel(t *testing.T) {
 
 	conn, wait := startHandler(t, as)
 
-	if err := artifact.WriteMessage(conn, &artifact.ListRequest{
+	if err := artifactstore.WriteMessage(conn, &artifactstore.ListRequest{
 		Action: "list",
 		Label:  "docs",
 	}); err != nil {
 		t.Fatal(err)
 	}
 
-	var resp artifact.ListResponse
-	if err := artifact.ReadMessage(conn, &resp); err != nil {
+	var resp artifactstore.ListResponse
+	if err := artifactstore.ReadMessage(conn, &resp); err != nil {
 		t.Fatal(err)
 	}
 	wait()
@@ -947,15 +947,15 @@ func TestListPagination(t *testing.T) {
 
 	// Page 1: limit 2.
 	conn1, wait1 := startHandler(t, as)
-	if err := artifact.WriteMessage(conn1, &artifact.ListRequest{
+	if err := artifactstore.WriteMessage(conn1, &artifactstore.ListRequest{
 		Action: "list",
 		Limit:  2,
 	}); err != nil {
 		t.Fatal(err)
 	}
 
-	var resp1 artifact.ListResponse
-	if err := artifact.ReadMessage(conn1, &resp1); err != nil {
+	var resp1 artifactstore.ListResponse
+	if err := artifactstore.ReadMessage(conn1, &resp1); err != nil {
 		t.Fatal(err)
 	}
 	wait1()
@@ -969,7 +969,7 @@ func TestListPagination(t *testing.T) {
 
 	// Page 2: offset 2, limit 2.
 	conn2, wait2 := startHandler(t, as)
-	if err := artifact.WriteMessage(conn2, &artifact.ListRequest{
+	if err := artifactstore.WriteMessage(conn2, &artifactstore.ListRequest{
 		Action: "list",
 		Limit:  2,
 		Offset: 2,
@@ -977,8 +977,8 @@ func TestListPagination(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	var resp2 artifact.ListResponse
-	if err := artifact.ReadMessage(conn2, &resp2); err != nil {
+	var resp2 artifactstore.ListResponse
+	if err := artifactstore.ReadMessage(conn2, &resp2); err != nil {
 		t.Fatal(err)
 	}
 	wait2()
@@ -993,14 +993,14 @@ func TestListEmpty(t *testing.T) {
 
 	conn, wait := startHandler(t, as)
 
-	if err := artifact.WriteMessage(conn, &artifact.ListRequest{
+	if err := artifactstore.WriteMessage(conn, &artifactstore.ListRequest{
 		Action: "list",
 	}); err != nil {
 		t.Fatal(err)
 	}
 
-	var resp artifact.ListResponse
-	if err := artifact.ReadMessage(conn, &resp); err != nil {
+	var resp artifactstore.ListResponse
+	if err := artifactstore.ReadMessage(conn, &resp); err != nil {
 		t.Fatal(err)
 	}
 	wait()
@@ -1020,14 +1020,14 @@ func TestListSummaryFields(t *testing.T) {
 
 	conn, wait := startHandler(t, as)
 
-	if err := artifact.WriteMessage(conn, &artifact.ListRequest{
+	if err := artifactstore.WriteMessage(conn, &artifactstore.ListRequest{
 		Action: "list",
 	}); err != nil {
 		t.Fatal(err)
 	}
 
-	var resp artifact.ListResponse
-	if err := artifact.ReadMessage(conn, &resp); err != nil {
+	var resp artifactstore.ListResponse
+	if err := artifactstore.ReadMessage(conn, &resp); err != nil {
 		t.Fatal(err)
 	}
 	wait()
@@ -1067,34 +1067,34 @@ func TestStoreUpdatesArtifactIndex(t *testing.T) {
 	content := []byte("indexed via store handler")
 	conn, wait := startHandler(t, as)
 
-	header := &artifact.StoreHeader{
+	header := &artifactstore.StoreHeader{
 		Action:      "store",
 		ContentType: "text/plain",
 		Size:        int64(len(content)),
 		Data:        content,
 		Labels:      []string{"indexed"},
 	}
-	if err := artifact.WriteMessage(conn, header); err != nil {
+	if err := artifactstore.WriteMessage(conn, header); err != nil {
 		t.Fatal(err)
 	}
 
-	var storeResp artifact.StoreResponse
-	if err := artifact.ReadMessage(conn, &storeResp); err != nil {
+	var storeResp artifactstore.StoreResponse
+	if err := artifactstore.ReadMessage(conn, &storeResp); err != nil {
 		t.Fatal(err)
 	}
 	wait()
 
 	// Verify the artifact index was updated by listing.
 	conn2, wait2 := startHandler(t, as)
-	if err := artifact.WriteMessage(conn2, &artifact.ListRequest{
+	if err := artifactstore.WriteMessage(conn2, &artifactstore.ListRequest{
 		Action: "list",
 		Label:  "indexed",
 	}); err != nil {
 		t.Fatal(err)
 	}
 
-	var listResp artifact.ListResponse
-	if err := artifact.ReadMessage(conn2, &listResp); err != nil {
+	var listResp artifactstore.ListResponse
+	if err := artifactstore.ReadMessage(conn2, &listResp); err != nil {
 		t.Fatal(err)
 	}
 	wait2()
@@ -1112,25 +1112,25 @@ func TestStoreDefaultsToPrivateVisibility(t *testing.T) {
 	content := []byte("should be private by default")
 	conn, wait := startHandler(t, as)
 
-	header := &artifact.StoreHeader{
+	header := &artifactstore.StoreHeader{
 		Action:      "store",
 		ContentType: "text/plain",
 		Size:        int64(len(content)),
 		Data:        content,
 		// Visibility not set — should default to "private".
 	}
-	if err := artifact.WriteMessage(conn, header); err != nil {
+	if err := artifactstore.WriteMessage(conn, header); err != nil {
 		t.Fatal(err)
 	}
 
-	var response artifact.StoreResponse
-	if err := artifact.ReadMessage(conn, &response); err != nil {
+	var response artifactstore.StoreResponse
+	if err := artifactstore.ReadMessage(conn, &response); err != nil {
 		t.Fatal(err)
 	}
 	wait()
 
 	// Verify metadata has private visibility.
-	hash, err := artifact.ParseHash(response.Hash)
+	hash, err := artifactstore.ParseHash(response.Hash)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -1138,8 +1138,8 @@ func TestStoreDefaultsToPrivateVisibility(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if meta.Visibility != artifact.VisibilityPrivate {
-		t.Errorf("visibility = %q, want %q", meta.Visibility, artifact.VisibilityPrivate)
+	if meta.Visibility != artifactstore.VisibilityPrivate {
+		t.Errorf("visibility = %q, want %q", meta.Visibility, artifactstore.VisibilityPrivate)
 	}
 }
 
@@ -1149,24 +1149,24 @@ func TestStoreAcceptsPublicVisibility(t *testing.T) {
 	content := []byte("public dataset content")
 	conn, wait := startHandler(t, as)
 
-	header := &artifact.StoreHeader{
+	header := &artifactstore.StoreHeader{
 		Action:      "store",
 		ContentType: "text/plain",
 		Size:        int64(len(content)),
 		Data:        content,
 		Visibility:  "public",
 	}
-	if err := artifact.WriteMessage(conn, header); err != nil {
+	if err := artifactstore.WriteMessage(conn, header); err != nil {
 		t.Fatal(err)
 	}
 
-	var response artifact.StoreResponse
-	if err := artifact.ReadMessage(conn, &response); err != nil {
+	var response artifactstore.StoreResponse
+	if err := artifactstore.ReadMessage(conn, &response); err != nil {
 		t.Fatal(err)
 	}
 	wait()
 
-	hash, err := artifact.ParseHash(response.Hash)
+	hash, err := artifactstore.ParseHash(response.Hash)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -1174,8 +1174,8 @@ func TestStoreAcceptsPublicVisibility(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if meta.Visibility != artifact.VisibilityPublic {
-		t.Errorf("visibility = %q, want %q", meta.Visibility, artifact.VisibilityPublic)
+	if meta.Visibility != artifactstore.VisibilityPublic {
+		t.Errorf("visibility = %q, want %q", meta.Visibility, artifactstore.VisibilityPublic)
 	}
 }
 
@@ -1185,19 +1185,19 @@ func TestStoreRejectsInvalidVisibility(t *testing.T) {
 	content := []byte("bad visibility")
 	conn, wait := startHandler(t, as)
 
-	header := &artifact.StoreHeader{
+	header := &artifactstore.StoreHeader{
 		Action:      "store",
 		ContentType: "text/plain",
 		Size:        int64(len(content)),
 		Data:        content,
 		Visibility:  "banana",
 	}
-	if err := artifact.WriteMessage(conn, header); err != nil {
+	if err := artifactstore.WriteMessage(conn, header); err != nil {
 		t.Fatal(err)
 	}
 
-	var errResp artifact.ErrorResponse
-	if err := artifact.ReadMessage(conn, &errResp); err != nil {
+	var errResp artifactstore.ErrorResponse
+	if err := artifactstore.ReadMessage(conn, &errResp); err != nil {
 		t.Fatal(err)
 	}
 	wait()
@@ -1217,40 +1217,40 @@ func TestFetchResponseIncludesVisibility(t *testing.T) {
 	content := []byte("fetch visibility test")
 	conn, wait := startHandler(t, as)
 
-	header := &artifact.StoreHeader{
+	header := &artifactstore.StoreHeader{
 		Action:      "store",
 		ContentType: "text/plain",
 		Size:        int64(len(content)),
 		Data:        content,
 		Visibility:  "public",
 	}
-	if err := artifact.WriteMessage(conn, header); err != nil {
+	if err := artifactstore.WriteMessage(conn, header); err != nil {
 		t.Fatal(err)
 	}
 
-	var storeResp artifact.StoreResponse
-	if err := artifact.ReadMessage(conn, &storeResp); err != nil {
+	var storeResp artifactstore.StoreResponse
+	if err := artifactstore.ReadMessage(conn, &storeResp); err != nil {
 		t.Fatal(err)
 	}
 	wait()
 
 	// Fetch the artifact and check visibility in the response.
 	conn2, wait2 := startHandler(t, as)
-	if err := artifact.WriteMessage(conn2, &artifact.FetchRequest{
+	if err := artifactstore.WriteMessage(conn2, &artifactstore.FetchRequest{
 		Action: "fetch",
 		Ref:    storeResp.Ref,
 	}); err != nil {
 		t.Fatal(err)
 	}
 
-	var fetchResp artifact.FetchResponse
-	if err := artifact.ReadMessage(conn2, &fetchResp); err != nil {
+	var fetchResp artifactstore.FetchResponse
+	if err := artifactstore.ReadMessage(conn2, &fetchResp); err != nil {
 		t.Fatal(err)
 	}
 	wait2()
 
-	if fetchResp.Visibility != artifact.VisibilityPublic {
-		t.Errorf("fetch response visibility = %q, want %q", fetchResp.Visibility, artifact.VisibilityPublic)
+	if fetchResp.Visibility != artifactstore.VisibilityPublic {
+		t.Errorf("fetch response visibility = %q, want %q", fetchResp.Visibility, artifactstore.VisibilityPublic)
 	}
 }
 
@@ -1261,40 +1261,40 @@ func TestPinPreservesVisibility(t *testing.T) {
 	content := []byte("pin visibility test")
 	conn, wait := startHandler(t, as)
 
-	header := &artifact.StoreHeader{
+	header := &artifactstore.StoreHeader{
 		Action:      "store",
 		ContentType: "text/plain",
 		Size:        int64(len(content)),
 		Data:        content,
 		Visibility:  "public",
 	}
-	if err := artifact.WriteMessage(conn, header); err != nil {
+	if err := artifactstore.WriteMessage(conn, header); err != nil {
 		t.Fatal(err)
 	}
 
-	var storeResp artifact.StoreResponse
-	if err := artifact.ReadMessage(conn, &storeResp); err != nil {
+	var storeResp artifactstore.StoreResponse
+	if err := artifactstore.ReadMessage(conn, &storeResp); err != nil {
 		t.Fatal(err)
 	}
 	wait()
 
 	// Pin the artifact — this updates metadata (cache_policy).
 	conn2, wait2 := startHandler(t, as)
-	if err := artifact.WriteMessage(conn2, &artifact.PinRequest{
+	if err := artifactstore.WriteMessage(conn2, &artifactstore.PinRequest{
 		Action: "pin",
 		Ref:    storeResp.Ref,
 	}); err != nil {
 		t.Fatal(err)
 	}
 
-	var pinResp artifact.PinResponse
-	if err := artifact.ReadMessage(conn2, &pinResp); err != nil {
+	var pinResp artifactstore.PinResponse
+	if err := artifactstore.ReadMessage(conn2, &pinResp); err != nil {
 		t.Fatal(err)
 	}
 	wait2()
 
 	// Verify visibility was not clobbered by the pin's metadata rewrite.
-	hash, err := artifact.ParseHash(storeResp.Hash)
+	hash, err := artifactstore.ParseHash(storeResp.Hash)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -1302,8 +1302,8 @@ func TestPinPreservesVisibility(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if meta.Visibility != artifact.VisibilityPublic {
-		t.Errorf("after pin, visibility = %q, want %q", meta.Visibility, artifact.VisibilityPublic)
+	if meta.Visibility != artifactstore.VisibilityPublic {
+		t.Errorf("after pin, visibility = %q, want %q", meta.Visibility, artifactstore.VisibilityPublic)
 	}
 	if meta.CachePolicy != "pin" {
 		t.Errorf("after pin, cache_policy = %q, want %q", meta.CachePolicy, "pin")
@@ -1317,18 +1317,18 @@ func TestListIncludesVisibility(t *testing.T) {
 	for _, visibility := range []string{"public", ""} {
 		content := []byte("list-vis-" + visibility)
 		conn, wait := startHandler(t, as)
-		header := &artifact.StoreHeader{
+		header := &artifactstore.StoreHeader{
 			Action:      "store",
 			ContentType: "text/plain",
 			Size:        int64(len(content)),
 			Data:        content,
 			Visibility:  visibility,
 		}
-		if err := artifact.WriteMessage(conn, header); err != nil {
+		if err := artifactstore.WriteMessage(conn, header); err != nil {
 			t.Fatal(err)
 		}
-		var resp artifact.StoreResponse
-		if err := artifact.ReadMessage(conn, &resp); err != nil {
+		var resp artifactstore.StoreResponse
+		if err := artifactstore.ReadMessage(conn, &resp); err != nil {
 			t.Fatal(err)
 		}
 		wait()
@@ -1336,14 +1336,14 @@ func TestListIncludesVisibility(t *testing.T) {
 
 	// List all artifacts and check visibility is populated.
 	conn, wait := startHandler(t, as)
-	if err := artifact.WriteMessage(conn, &artifact.ListRequest{
+	if err := artifactstore.WriteMessage(conn, &artifactstore.ListRequest{
 		Action: "list",
 	}); err != nil {
 		t.Fatal(err)
 	}
 
-	var listResp artifact.ListResponse
-	if err := artifact.ReadMessage(conn, &listResp); err != nil {
+	var listResp artifactstore.ListResponse
+	if err := artifactstore.ReadMessage(conn, &listResp); err != nil {
 		t.Fatal(err)
 	}
 	wait()
@@ -1377,15 +1377,15 @@ func TestPinArtifact(t *testing.T) {
 
 	conn, wait := startHandler(t, as)
 
-	if err := artifact.WriteMessage(conn, &artifact.PinRequest{
+	if err := artifactstore.WriteMessage(conn, &artifactstore.PinRequest{
 		Action: "pin",
 		Ref:    ref,
 	}); err != nil {
 		t.Fatal(err)
 	}
 
-	var resp artifact.PinResponse
-	if err := artifact.ReadMessage(conn, &resp); err != nil {
+	var resp artifactstore.PinResponse
+	if err := artifactstore.ReadMessage(conn, &resp); err != nil {
 		t.Fatal(err)
 	}
 	wait()
@@ -1432,15 +1432,15 @@ func TestUnpinArtifact(t *testing.T) {
 
 	conn, wait := startHandler(t, as)
 
-	if err := artifact.WriteMessage(conn, &artifact.UnpinRequest{
+	if err := artifactstore.WriteMessage(conn, &artifactstore.UnpinRequest{
 		Action: "unpin",
 		Ref:    ref,
 	}); err != nil {
 		t.Fatal(err)
 	}
 
-	var resp artifact.UnpinResponse
-	if err := artifact.ReadMessage(conn, &resp); err != nil {
+	var resp artifactstore.UnpinResponse
+	if err := artifactstore.ReadMessage(conn, &resp); err != nil {
 		t.Fatal(err)
 	}
 	wait()
@@ -1467,15 +1467,15 @@ func TestUnpinNotPinned(t *testing.T) {
 
 	conn, wait := startHandler(t, as)
 
-	if err := artifact.WriteMessage(conn, &artifact.UnpinRequest{
+	if err := artifactstore.WriteMessage(conn, &artifactstore.UnpinRequest{
 		Action: "unpin",
 		Ref:    ref,
 	}); err != nil {
 		t.Fatal(err)
 	}
 
-	var errResp artifact.ErrorResponse
-	if err := artifact.ReadMessage(conn, &errResp); err != nil {
+	var errResp artifactstore.ErrorResponse
+	if err := artifactstore.ReadMessage(conn, &errResp); err != nil {
 		t.Fatal(err)
 	}
 	wait()
@@ -1505,14 +1505,14 @@ func TestGCRemoveExpiredArtifact(t *testing.T) {
 
 	conn, wait := startHandler(t, as)
 
-	if err := artifact.WriteMessage(conn, &artifact.GCRequest{
+	if err := artifactstore.WriteMessage(conn, &artifactstore.GCRequest{
 		Action: "gc",
 	}); err != nil {
 		t.Fatal(err)
 	}
 
-	var resp artifact.GCResponse
-	if err := artifact.ReadMessage(conn, &resp); err != nil {
+	var resp artifactstore.GCResponse
+	if err := artifactstore.ReadMessage(conn, &resp); err != nil {
 		t.Fatal(err)
 	}
 	wait()
@@ -1542,14 +1542,14 @@ func TestGCPreservesPinnedArtifact(t *testing.T) {
 
 	conn, wait := startHandler(t, as)
 
-	if err := artifact.WriteMessage(conn, &artifact.GCRequest{
+	if err := artifactstore.WriteMessage(conn, &artifactstore.GCRequest{
 		Action: "gc",
 	}); err != nil {
 		t.Fatal(err)
 	}
 
-	var resp artifact.GCResponse
-	if err := artifact.ReadMessage(conn, &resp); err != nil {
+	var resp artifactstore.GCResponse
+	if err := artifactstore.ReadMessage(conn, &resp); err != nil {
 		t.Fatal(err)
 	}
 	wait()
@@ -1570,14 +1570,14 @@ func TestGCPreservesTaggedArtifact(t *testing.T) {
 
 	conn, wait := startHandler(t, as)
 
-	if err := artifact.WriteMessage(conn, &artifact.GCRequest{
+	if err := artifactstore.WriteMessage(conn, &artifactstore.GCRequest{
 		Action: "gc",
 	}); err != nil {
 		t.Fatal(err)
 	}
 
-	var resp artifact.GCResponse
-	if err := artifact.ReadMessage(conn, &resp); err != nil {
+	var resp artifactstore.GCResponse
+	if err := artifactstore.ReadMessage(conn, &resp); err != nil {
 		t.Fatal(err)
 	}
 	wait()
@@ -1595,14 +1595,14 @@ func TestGCPreservesNoTTL(t *testing.T) {
 
 	conn, wait := startHandler(t, as)
 
-	if err := artifact.WriteMessage(conn, &artifact.GCRequest{
+	if err := artifactstore.WriteMessage(conn, &artifactstore.GCRequest{
 		Action: "gc",
 	}); err != nil {
 		t.Fatal(err)
 	}
 
-	var resp artifact.GCResponse
-	if err := artifact.ReadMessage(conn, &resp); err != nil {
+	var resp artifactstore.GCResponse
+	if err := artifactstore.ReadMessage(conn, &resp); err != nil {
 		t.Fatal(err)
 	}
 	wait()
@@ -1620,15 +1620,15 @@ func TestGCDryRun(t *testing.T) {
 
 	conn, wait := startHandler(t, as)
 
-	if err := artifact.WriteMessage(conn, &artifact.GCRequest{
+	if err := artifactstore.WriteMessage(conn, &artifactstore.GCRequest{
 		Action: "gc",
 		DryRun: true,
 	}); err != nil {
 		t.Fatal(err)
 	}
 
-	var resp artifact.GCResponse
-	if err := artifact.ReadMessage(conn, &resp); err != nil {
+	var resp artifactstore.GCResponse
+	if err := artifactstore.ReadMessage(conn, &resp); err != nil {
 		t.Fatal(err)
 	}
 	wait()
@@ -1656,14 +1656,14 @@ func TestCacheStatus(t *testing.T) {
 
 	conn, wait := startHandler(t, as)
 
-	if err := artifact.WriteMessage(conn, struct {
+	if err := artifactstore.WriteMessage(conn, struct {
 		Action string `json:"action"`
 	}{Action: "cache-status"}); err != nil {
 		t.Fatal(err)
 	}
 
-	var resp artifact.CacheStatusResponse
-	if err := artifact.ReadMessage(conn, &resp); err != nil {
+	var resp artifactstore.CacheStatusResponse
+	if err := artifactstore.ReadMessage(conn, &resp); err != nil {
 		t.Fatal(err)
 	}
 	wait()
@@ -1694,17 +1694,17 @@ func testServiceWithAuth(t *testing.T) (*ArtifactService, ed25519.PrivateKey) {
 	}
 
 	storeDir := t.TempDir()
-	store, err := artifact.NewStore(storeDir)
+	store, err := artifactstore.NewStore(storeDir)
 	if err != nil {
 		t.Fatal(err)
 	}
 
-	metadataStore, err := artifact.NewMetadataStore(t.TempDir())
+	metadataStore, err := artifactstore.NewMetadataStore(t.TempDir())
 	if err != nil {
 		t.Fatal(err)
 	}
 
-	tagStore, err := artifact.NewTagStore(t.TempDir())
+	tagStore, err := artifactstore.NewTagStore(t.TempDir())
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -1720,9 +1720,9 @@ func testServiceWithAuth(t *testing.T) (*ArtifactService, ed25519.PrivateKey) {
 	as := &ArtifactService{
 		store:         store,
 		metadataStore: metadataStore,
-		refIndex:      artifact.NewRefIndex(),
+		refIndex:      artifactstore.NewRefIndex(),
 		tagStore:      tagStore,
-		artifactIndex: artifact.NewArtifactIndex(),
+		artifactIndex: artifactstore.NewArtifactIndex(),
 		authConfig:    authConfig,
 		clock:         testClock,
 		startedAt:     testClockEpoch,
@@ -1799,15 +1799,15 @@ func TestAuthMissingToken(t *testing.T) {
 	conn, wait := startHandler(t, as)
 
 	// Send a request with no token field.
-	if err := artifact.WriteMessage(conn, struct {
+	if err := artifactstore.WriteMessage(conn, struct {
 		Action string `json:"action"`
 		Ref    string `json:"ref"`
 	}{Action: "show", Ref: "art-000000000000"}); err != nil {
 		t.Fatal(err)
 	}
 
-	var errResp artifact.ErrorResponse
-	if err := artifact.ReadMessage(conn, &errResp); err != nil {
+	var errResp artifactstore.ErrorResponse
+	if err := artifactstore.ReadMessage(conn, &errResp); err != nil {
 		t.Fatal(err)
 	}
 	wait()
@@ -1834,7 +1834,7 @@ func TestAuthWrongGrant(t *testing.T) {
 
 	conn, wait := startHandler(t, as)
 
-	header := &artifact.StoreHeader{
+	header := &artifactstore.StoreHeader{
 		Action:      "store",
 		ContentType: "text/plain",
 		Size:        int64(len("new content")),
@@ -1848,12 +1848,12 @@ func TestAuthWrongGrant(t *testing.T) {
 		"data":         header.Data,
 		"token":        tokenBytes,
 	}
-	if err := artifact.WriteMessage(conn, requestMap); err != nil {
+	if err := artifactstore.WriteMessage(conn, requestMap); err != nil {
 		t.Fatal(err)
 	}
 
-	var errResp artifact.ErrorResponse
-	if err := artifact.ReadMessage(conn, &errResp); err != nil {
+	var errResp artifactstore.ErrorResponse
+	if err := artifactstore.ReadMessage(conn, &errResp); err != nil {
 		t.Fatal(err)
 	}
 	wait()
@@ -1885,13 +1885,13 @@ func TestAuthValidToken(t *testing.T) {
 		"ref":    "art-000000000000",
 		"token":  tokenBytes,
 	}
-	if err := artifact.WriteMessage(conn, requestMap); err != nil {
+	if err := artifactstore.WriteMessage(conn, requestMap); err != nil {
 		t.Fatal(err)
 	}
 
 	// Should get a valid response (not an auth error).
-	var response artifact.ExistsResponse
-	if err := artifact.ReadMessage(conn, &response); err != nil {
+	var response artifactstore.ExistsResponse
+	if err := artifactstore.ReadMessage(conn, &response); err != nil {
 		t.Fatal(err)
 	}
 	wait()
@@ -1915,12 +1915,12 @@ func TestAuthExpiredToken(t *testing.T) {
 		"ref":    "art-000000000000",
 		"token":  tokenBytes,
 	}
-	if err := artifact.WriteMessage(conn, requestMap); err != nil {
+	if err := artifactstore.WriteMessage(conn, requestMap); err != nil {
 		t.Fatal(err)
 	}
 
-	var errResp artifact.ErrorResponse
-	if err := artifact.ReadMessage(conn, &errResp); err != nil {
+	var errResp artifactstore.ErrorResponse
+	if err := artifactstore.ReadMessage(conn, &errResp); err != nil {
 		t.Fatal(err)
 	}
 	wait()
@@ -1942,14 +1942,14 @@ func TestAuthStatusWithoutToken(t *testing.T) {
 	conn, wait := startHandler(t, as)
 
 	// Status should work without any token even when auth is configured.
-	if err := artifact.WriteMessage(conn, struct {
+	if err := artifactstore.WriteMessage(conn, struct {
 		Action string `json:"action"`
 	}{Action: "status"}); err != nil {
 		t.Fatal(err)
 	}
 
-	var response artifact.StatusResponse
-	if err := artifact.ReadMessage(conn, &response); err != nil {
+	var response artifactstore.StatusResponse
+	if err := artifactstore.ReadMessage(conn, &response); err != nil {
 		t.Fatal(err)
 	}
 	wait()
@@ -1993,14 +1993,14 @@ func TestAuthAllActionsRequireToken(t *testing.T) {
 		t.Run(action.action, func(t *testing.T) {
 			conn, wait := startHandler(t, as)
 
-			if err := artifact.WriteMessage(conn, struct {
+			if err := artifactstore.WriteMessage(conn, struct {
 				Action string `json:"action"`
 			}{Action: action.action}); err != nil {
 				t.Fatal(err)
 			}
 
-			var errResp artifact.ErrorResponse
-			if err := artifact.ReadMessage(conn, &errResp); err != nil {
+			var errResp artifactstore.ErrorResponse
+			if err := artifactstore.ReadMessage(conn, &errResp); err != nil {
 				t.Fatal(err)
 			}
 			wait()
@@ -2034,12 +2034,12 @@ func TestAuthWildcardGrant(t *testing.T) {
 		"ref":    ref,
 		"token":  tokenBytes,
 	}
-	if err := artifact.WriteMessage(conn, requestMap); err != nil {
+	if err := artifactstore.WriteMessage(conn, requestMap); err != nil {
 		t.Fatal(err)
 	}
 
-	var response artifact.ExistsResponse
-	if err := artifact.ReadMessage(conn, &response); err != nil {
+	var response artifactstore.ExistsResponse
+	if err := artifactstore.ReadMessage(conn, &response); err != nil {
 		t.Fatal(err)
 	}
 	wait()
@@ -2067,12 +2067,12 @@ func TestAuthRevokedToken(t *testing.T) {
 		"ref":    "art-000000000000",
 		"token":  tokenBytes,
 	}
-	if err := artifact.WriteMessage(conn, requestMap); err != nil {
+	if err := artifactstore.WriteMessage(conn, requestMap); err != nil {
 		t.Fatal(err)
 	}
 
-	var errResp artifact.ErrorResponse
-	if err := artifact.ReadMessage(conn, &errResp); err != nil {
+	var errResp artifactstore.ErrorResponse
+	if err := artifactstore.ReadMessage(conn, &errResp); err != nil {
 		t.Fatal(err)
 	}
 	wait()
@@ -2150,16 +2150,16 @@ func TestFetchFallthroughToUpstream(t *testing.T) {
 	// and return the content.
 	conn, wait := startHandler(t, local)
 
-	request := &artifact.FetchRequest{
+	request := &artifactstore.FetchRequest{
 		Action: "fetch",
 		Ref:    upstreamRef,
 	}
-	if err := artifact.WriteMessage(conn, request); err != nil {
+	if err := artifactstore.WriteMessage(conn, request); err != nil {
 		t.Fatal(err)
 	}
 
-	var response artifact.FetchResponse
-	if err := artifact.ReadMessage(conn, &response); err != nil {
+	var response artifactstore.FetchResponse
+	if err := artifactstore.ReadMessage(conn, &response); err != nil {
 		t.Fatal(err)
 	}
 	wait()
@@ -2176,12 +2176,12 @@ func TestFetchFallthroughToUpstream(t *testing.T) {
 	local.upstreamSocket = "" // remove upstream
 	conn2, wait2 := startHandler(t, local)
 
-	if err := artifact.WriteMessage(conn2, request); err != nil {
+	if err := artifactstore.WriteMessage(conn2, request); err != nil {
 		t.Fatal(err)
 	}
 
-	var response2 artifact.FetchResponse
-	if err := artifact.ReadMessage(conn2, &response2); err != nil {
+	var response2 artifactstore.FetchResponse
+	if err := artifactstore.ReadMessage(conn2, &response2); err != nil {
 		t.Fatal(err)
 	}
 	wait2()
@@ -2202,23 +2202,23 @@ func TestFetchFallthroughByFullHash(t *testing.T) {
 
 	// Get the full hash.
 	hash := getStoredHash(t, upstream, content)
-	fullHash := artifact.FormatHash(hash)
+	fullHash := artifactstore.FormatHash(hash)
 
 	local := testService(t)
 	local.upstreamSocket = upstreamSocketPath
 
 	conn, wait := startHandler(t, local)
 
-	request := &artifact.FetchRequest{
+	request := &artifactstore.FetchRequest{
 		Action: "fetch",
 		Ref:    fullHash,
 	}
-	if err := artifact.WriteMessage(conn, request); err != nil {
+	if err := artifactstore.WriteMessage(conn, request); err != nil {
 		t.Fatal(err)
 	}
 
-	var response artifact.FetchResponse
-	if err := artifact.ReadMessage(conn, &response); err != nil {
+	var response artifactstore.FetchResponse
+	if err := artifactstore.ReadMessage(conn, &response); err != nil {
 		t.Fatal(err)
 	}
 	wait()
@@ -2246,16 +2246,16 @@ func TestFetchFallthroughTagsNeverForwarded(t *testing.T) {
 
 	// Fetch by tag name — should NOT fall through to upstream because
 	// tags are local to each service instance.
-	request := &artifact.FetchRequest{
+	request := &artifactstore.FetchRequest{
 		Action: "fetch",
 		Ref:    "upstream/tag",
 	}
-	if err := artifact.WriteMessage(conn, request); err != nil {
+	if err := artifactstore.WriteMessage(conn, request); err != nil {
 		t.Fatal(err)
 	}
 
-	var errResp artifact.ErrorResponse
-	if err := artifact.ReadMessage(conn, &errResp); err != nil {
+	var errResp artifactstore.ErrorResponse
+	if err := artifactstore.ReadMessage(conn, &errResp); err != nil {
 		t.Fatal(err)
 	}
 	wait()
@@ -2279,12 +2279,12 @@ func TestExistsFallthroughToUpstream(t *testing.T) {
 
 	conn, wait := startHandler(t, local)
 
-	if err := artifact.WriteMessage(conn, refRequest{Action: "exists", Ref: upstreamRef}); err != nil {
+	if err := artifactstore.WriteMessage(conn, refRequest{Action: "exists", Ref: upstreamRef}); err != nil {
 		t.Fatal(err)
 	}
 
-	var response artifact.ExistsResponse
-	if err := artifact.ReadMessage(conn, &response); err != nil {
+	var response artifactstore.ExistsResponse
+	if err := artifactstore.ReadMessage(conn, &response); err != nil {
 		t.Fatal(err)
 	}
 	wait()
@@ -2306,12 +2306,12 @@ func TestExistsFallthroughMiss(t *testing.T) {
 	conn, wait := startHandler(t, local)
 
 	// Check a ref that doesn't exist anywhere.
-	if err := artifact.WriteMessage(conn, refRequest{Action: "exists", Ref: "art-000000000000"}); err != nil {
+	if err := artifactstore.WriteMessage(conn, refRequest{Action: "exists", Ref: "art-000000000000"}); err != nil {
 		t.Fatal(err)
 	}
 
-	var response artifact.ExistsResponse
-	if err := artifact.ReadMessage(conn, &response); err != nil {
+	var response artifactstore.ExistsResponse
+	if err := artifactstore.ReadMessage(conn, &response); err != nil {
 		t.Fatal(err)
 	}
 	wait()
@@ -2339,14 +2339,14 @@ func storeTestArtifactWithMeta(t *testing.T, as *ArtifactService, content []byte
 		t.Fatalf("storing test artifact: %v", err)
 	}
 
-	meta := &artifact.ArtifactMetadata{
+	meta := &artifactstore.ArtifactMetadata{
 		FileHash:       result.FileHash,
 		Ref:            result.Ref,
 		ContentType:    contentType,
 		Filename:       filename,
 		Description:    description,
 		Labels:         labels,
-		Visibility:     artifact.VisibilityPrivate,
+		Visibility:     artifactstore.VisibilityPrivate,
 		Size:           result.Size,
 		ChunkCount:     result.ChunkCount,
 		ContainerCount: result.ContainerCount,
@@ -2364,14 +2364,14 @@ func storeTestArtifactWithMeta(t *testing.T, as *ArtifactService, content []byte
 
 // storeTestArtifactWithTTL stores an artifact with the given TTL and
 // storedAt timestamp. Returns the file hash.
-func storeTestArtifactWithTTL(t *testing.T, as *ArtifactService, content []byte, contentType, ttl string, storedAt time.Time) artifact.Hash {
+func storeTestArtifactWithTTL(t *testing.T, as *ArtifactService, content []byte, contentType, ttl string, storedAt time.Time) artifactstore.Hash {
 	t.Helper()
 	return storeTestArtifactWithTTLAndPolicy(t, as, content, contentType, ttl, storedAt, "")
 }
 
 // storeTestArtifactWithTTLAndPolicy stores an artifact with TTL,
 // storedAt, and cache policy. Returns the file hash.
-func storeTestArtifactWithTTLAndPolicy(t *testing.T, as *ArtifactService, content []byte, contentType, ttl string, storedAt time.Time, cachePolicy string) artifact.Hash {
+func storeTestArtifactWithTTLAndPolicy(t *testing.T, as *ArtifactService, content []byte, contentType, ttl string, storedAt time.Time, cachePolicy string) artifactstore.Hash {
 	t.Helper()
 
 	result, err := as.store.WriteContent(content, contentType)
@@ -2379,11 +2379,11 @@ func storeTestArtifactWithTTLAndPolicy(t *testing.T, as *ArtifactService, conten
 		t.Fatalf("storing test artifact: %v", err)
 	}
 
-	meta := &artifact.ArtifactMetadata{
+	meta := &artifactstore.ArtifactMetadata{
 		FileHash:       result.FileHash,
 		Ref:            result.Ref,
 		ContentType:    contentType,
-		Visibility:     artifact.VisibilityPrivate,
+		Visibility:     artifactstore.VisibilityPrivate,
 		Size:           result.Size,
 		ChunkCount:     result.ChunkCount,
 		ContainerCount: result.ContainerCount,
@@ -2403,10 +2403,10 @@ func storeTestArtifactWithTTLAndPolicy(t *testing.T, as *ArtifactService, conten
 
 // getStoredHash computes the file hash for content, matching the
 // hashing that Store.WriteContent uses.
-func getStoredHash(t *testing.T, as *ArtifactService, content []byte) artifact.Hash {
+func getStoredHash(t *testing.T, as *ArtifactService, content []byte) artifactstore.Hash {
 	t.Helper()
-	chunkHash := artifact.HashChunk(content)
-	return artifact.HashFile(chunkHash)
+	chunkHash := artifactstore.HashChunk(content)
+	return artifactstore.HashFile(chunkHash)
 }
 
 // --- Push target tests ---
@@ -2448,12 +2448,12 @@ func TestSetPushTargets(t *testing.T) {
 		"action":        "set-push-targets",
 		"signed_config": signedConfig,
 	}
-	if err := artifact.WriteMessage(conn, envelope); err != nil {
+	if err := artifactstore.WriteMessage(conn, envelope); err != nil {
 		t.Fatal(err)
 	}
 
 	var response map[string]bool
-	if err := artifact.ReadMessage(conn, &response); err != nil {
+	if err := artifactstore.ReadMessage(conn, &response); err != nil {
 		t.Fatal(err)
 	}
 	wait()
@@ -2504,7 +2504,7 @@ func TestStorePushToTarget(t *testing.T) {
 	content := []byte("pushable artifact content")
 	conn, wait := startHandler(t, local)
 
-	header := &artifact.StoreHeader{
+	header := &artifactstore.StoreHeader{
 		Action:      "store",
 		ContentType: "text/plain",
 		Size:        int64(len(content)),
@@ -2512,12 +2512,12 @@ func TestStorePushToTarget(t *testing.T) {
 		Description: "pushed artifact",
 		PushTargets: []string{"machine/gpu-server-1"},
 	}
-	if err := artifact.WriteMessage(conn, header); err != nil {
+	if err := artifactstore.WriteMessage(conn, header); err != nil {
 		t.Fatal(err)
 	}
 
-	var response artifact.StoreResponse
-	if err := artifact.ReadMessage(conn, &response); err != nil {
+	var response artifactstore.StoreResponse
+	if err := artifactstore.ReadMessage(conn, &response); err != nil {
 		t.Fatal(err)
 	}
 	wait()
@@ -2571,19 +2571,19 @@ func TestStorePushToMultipleTargets(t *testing.T) {
 	content := []byte("multi-push artifact")
 	conn, wait := startHandler(t, local)
 
-	header := &artifact.StoreHeader{
+	header := &artifactstore.StoreHeader{
 		Action:      "store",
 		ContentType: "text/plain",
 		Size:        int64(len(content)),
 		Data:        content,
 		PushTargets: []string{"machine/gpu-1", "machine/gpu-2"},
 	}
-	if err := artifact.WriteMessage(conn, header); err != nil {
+	if err := artifactstore.WriteMessage(conn, header); err != nil {
 		t.Fatal(err)
 	}
 
-	var response artifact.StoreResponse
-	if err := artifact.ReadMessage(conn, &response); err != nil {
+	var response artifactstore.StoreResponse
+	if err := artifactstore.ReadMessage(conn, &response); err != nil {
 		t.Fatal(err)
 	}
 	wait()
@@ -2616,19 +2616,19 @@ func TestStorePushTargetUnreachable(t *testing.T) {
 	content := []byte("push to unreachable target")
 	conn, wait := startHandler(t, local)
 
-	header := &artifact.StoreHeader{
+	header := &artifactstore.StoreHeader{
 		Action:      "store",
 		ContentType: "text/plain",
 		Size:        int64(len(content)),
 		Data:        content,
 		PushTargets: []string{"machine/reachable"},
 	}
-	if err := artifact.WriteMessage(conn, header); err != nil {
+	if err := artifactstore.WriteMessage(conn, header); err != nil {
 		t.Fatal(err)
 	}
 
-	var response artifact.StoreResponse
-	if err := artifact.ReadMessage(conn, &response); err != nil {
+	var response artifactstore.StoreResponse
+	if err := artifactstore.ReadMessage(conn, &response); err != nil {
 		t.Fatal(err)
 	}
 	wait()
@@ -2657,19 +2657,19 @@ func TestStorePushTargetUnknown(t *testing.T) {
 	content := []byte("push to unknown target")
 	conn, wait := startHandler(t, local)
 
-	header := &artifact.StoreHeader{
+	header := &artifactstore.StoreHeader{
 		Action:      "store",
 		ContentType: "text/plain",
 		Size:        int64(len(content)),
 		Data:        content,
 		PushTargets: []string{"machine/unknown"},
 	}
-	if err := artifact.WriteMessage(conn, header); err != nil {
+	if err := artifactstore.WriteMessage(conn, header); err != nil {
 		t.Fatal(err)
 	}
 
-	var response artifact.StoreResponse
-	if err := artifact.ReadMessage(conn, &response); err != nil {
+	var response artifactstore.StoreResponse
+	if err := artifactstore.ReadMessage(conn, &response); err != nil {
 		t.Fatal(err)
 	}
 	wait()
@@ -2705,19 +2705,19 @@ func TestStoreReplicatePolicy(t *testing.T) {
 	content := []byte("replicated artifact content")
 	conn, wait := startHandler(t, local)
 
-	header := &artifact.StoreHeader{
+	header := &artifactstore.StoreHeader{
 		Action:      "store",
 		ContentType: "text/plain",
 		Size:        int64(len(content)),
 		Data:        content,
 		CachePolicy: "replicate",
 	}
-	if err := artifact.WriteMessage(conn, header); err != nil {
+	if err := artifactstore.WriteMessage(conn, header); err != nil {
 		t.Fatal(err)
 	}
 
-	var response artifact.StoreResponse
-	if err := artifact.ReadMessage(conn, &response); err != nil {
+	var response artifactstore.StoreResponse
+	if err := artifactstore.ReadMessage(conn, &response); err != nil {
 		t.Fatal(err)
 	}
 	wait()
@@ -2751,19 +2751,19 @@ func TestStoreReplicateNoUpstream(t *testing.T) {
 	content := []byte("replicate without upstream")
 	conn, wait := startHandler(t, local)
 
-	header := &artifact.StoreHeader{
+	header := &artifactstore.StoreHeader{
 		Action:      "store",
 		ContentType: "text/plain",
 		Size:        int64(len(content)),
 		Data:        content,
 		CachePolicy: "replicate",
 	}
-	if err := artifact.WriteMessage(conn, header); err != nil {
+	if err := artifactstore.WriteMessage(conn, header); err != nil {
 		t.Fatal(err)
 	}
 
-	var response artifact.StoreResponse
-	if err := artifact.ReadMessage(conn, &response); err != nil {
+	var response artifactstore.StoreResponse
+	if err := artifactstore.ReadMessage(conn, &response); err != nil {
 		t.Fatal(err)
 	}
 	wait()
@@ -2797,13 +2797,13 @@ func TestStorePushLargeArtifact(t *testing.T) {
 
 	conn, wait := startHandler(t, local)
 
-	header := &artifact.StoreHeader{
+	header := &artifactstore.StoreHeader{
 		Action:      "store",
 		ContentType: "application/octet-stream",
 		Size:        int64(len(content)),
 		PushTargets: []string{"machine/gpu-server-1"},
 	}
-	if err := artifact.WriteMessage(conn, header); err != nil {
+	if err := artifactstore.WriteMessage(conn, header); err != nil {
 		t.Fatal(err)
 	}
 
@@ -2812,8 +2812,8 @@ func TestStorePushLargeArtifact(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	var response artifact.StoreResponse
-	if err := artifact.ReadMessage(conn, &response); err != nil {
+	var response artifactstore.StoreResponse
+	if err := artifactstore.ReadMessage(conn, &response); err != nil {
 		t.Fatal(err)
 	}
 	wait()
@@ -2840,16 +2840,16 @@ func TestStorePushLargeArtifact(t *testing.T) {
 
 	// Fetch from the target via its handler to verify content matches.
 	targetConn, targetWait := startHandler(t, target)
-	fetchRequest := &artifact.FetchRequest{
+	fetchRequest := &artifactstore.FetchRequest{
 		Action: "fetch",
 		Ref:    response.Ref,
 	}
-	if err := artifact.WriteMessage(targetConn, fetchRequest); err != nil {
+	if err := artifactstore.WriteMessage(targetConn, fetchRequest); err != nil {
 		t.Fatal(err)
 	}
 
-	var fetchResponse artifact.FetchResponse
-	if err := artifact.ReadMessage(targetConn, &fetchResponse); err != nil {
+	var fetchResponse artifactstore.FetchResponse
+	if err := artifactstore.ReadMessage(targetConn, &fetchResponse); err != nil {
 		t.Fatal(err)
 	}
 
@@ -2880,18 +2880,18 @@ func TestStoreNoPushTargets(t *testing.T) {
 	content := []byte("no push targets")
 	conn, wait := startHandler(t, local)
 
-	header := &artifact.StoreHeader{
+	header := &artifactstore.StoreHeader{
 		Action:      "store",
 		ContentType: "text/plain",
 		Size:        int64(len(content)),
 		Data:        content,
 	}
-	if err := artifact.WriteMessage(conn, header); err != nil {
+	if err := artifactstore.WriteMessage(conn, header); err != nil {
 		t.Fatal(err)
 	}
 
-	var response artifact.StoreResponse
-	if err := artifact.ReadMessage(conn, &response); err != nil {
+	var response artifactstore.StoreResponse
+	if err := artifactstore.ReadMessage(conn, &response); err != nil {
 		t.Fatal(err)
 	}
 	wait()

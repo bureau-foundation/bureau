@@ -12,11 +12,12 @@ import (
 	"strings"
 	"time"
 
-	"github.com/bureau-foundation/bureau/lib/artifact"
-	"github.com/bureau-foundation/bureau/lib/pipeline"
+	"github.com/bureau-foundation/bureau/lib/artifactstore"
+	"github.com/bureau-foundation/bureau/lib/pipelinedef"
 	"github.com/bureau-foundation/bureau/lib/proxyclient"
 	"github.com/bureau-foundation/bureau/lib/ref"
 	"github.com/bureau-foundation/bureau/lib/schema"
+	"github.com/bureau-foundation/bureau/lib/schema/pipeline"
 	"github.com/bureau-foundation/bureau/lib/version"
 	"github.com/bureau-foundation/bureau/messaging"
 )
@@ -96,7 +97,7 @@ func run() error {
 	}
 
 	// Validate.
-	issues := pipeline.Validate(content)
+	issues := pipelinedef.Validate(content)
 	if len(issues) > 0 {
 		return fmt.Errorf("pipeline %q has validation errors:\n  %s", name, strings.Join(issues, "\n  "))
 	}
@@ -131,7 +132,7 @@ func run() error {
 		mergedVariables[key] = value
 	}
 
-	variables, err := pipeline.ResolveVariables(content.Variables, mergedVariables, os.Getenv)
+	variables, err := pipelinedef.ResolveVariables(content.Variables, mergedVariables, os.Getenv)
 	if err != nil {
 		return err
 	}
@@ -139,7 +140,7 @@ func run() error {
 	// Set up thread logging if configured.
 	var logger *threadLogger
 	if content.Log != nil {
-		logRoom, err := pipeline.Expand(content.Log.Room, variables)
+		logRoom, err := pipelinedef.Expand(content.Log.Room, variables)
 		if err != nil {
 			return fmt.Errorf("expanding log.room: %w", err)
 		}
@@ -166,13 +167,13 @@ func run() error {
 	// The daemon bind-mounts the artifact socket and token into the sandbox
 	// when an artifact service is running. Pipelines that use artifact-mode
 	// outputs fail at step capture time with a clear error if this is nil.
-	var artifacts *artifact.Client
+	var artifacts *artifactstore.Client
 	if artifactSocket := os.Getenv("BUREAU_ARTIFACT_SOCKET"); artifactSocket != "" {
 		artifactToken := os.Getenv("BUREAU_ARTIFACT_TOKEN")
 		if artifactToken == "" {
 			return fmt.Errorf("BUREAU_ARTIFACT_SOCKET is set but BUREAU_ARTIFACT_TOKEN is not")
 		}
-		artifacts, err = artifact.NewClient(artifactSocket, artifactToken)
+		artifacts, err = artifactstore.NewClient(artifactSocket, artifactToken)
 		if err != nil {
 			return fmt.Errorf("creating artifact client: %w", err)
 		}
@@ -184,10 +185,10 @@ func run() error {
 	results.writeStart(name, len(content.Steps))
 
 	// Accumulate step outcomes for the pipeline result state event.
-	var stepResults []schema.PipelineStepResult
+	var stepResults []pipeline.PipelineStepResult
 
 	for index, step := range content.Steps {
-		expandedStep, err := pipeline.ExpandStep(step, variables)
+		expandedStep, err := pipelinedef.ExpandStep(step, variables)
 		if err != nil {
 			totalDuration := time.Since(pipelineStart)
 			results.writeFailed(step.Name, err.Error(),
@@ -212,7 +213,7 @@ func run() error {
 				result.duration.Milliseconds(), result.err.Error(), nil)
 			results.writeAborted(expandedStep.Name, result.err.Error(),
 				time.Since(pipelineStart).Milliseconds(), logger.logEventID())
-			stepResults = append(stepResults, schema.PipelineStepResult{
+			stepResults = append(stepResults, pipeline.PipelineStepResult{
 				Name:       expandedStep.Name,
 				Status:     "aborted",
 				DurationMS: result.duration.Milliseconds(),
@@ -232,7 +233,7 @@ func run() error {
 					"failed (optional)", result.duration)
 				results.writeStep(index, expandedStep.Name, "failed (optional)",
 					result.duration.Milliseconds(), result.err.Error(), nil)
-				stepResults = append(stepResults, schema.PipelineStepResult{
+				stepResults = append(stepResults, pipeline.PipelineStepResult{
 					Name:       expandedStep.Name,
 					Status:     "failed (optional)",
 					DurationMS: result.duration.Milliseconds(),
@@ -244,7 +245,7 @@ func run() error {
 				logger.logFailed(ctx, name, expandedStep.Name, result.err)
 				results.writeStep(index, expandedStep.Name, "failed",
 					result.duration.Milliseconds(), result.err.Error(), nil)
-				stepResults = append(stepResults, schema.PipelineStepResult{
+				stepResults = append(stepResults, pipeline.PipelineStepResult{
 					Name:       expandedStep.Name,
 					Status:     "failed",
 					DurationMS: result.duration.Milliseconds(),
@@ -269,7 +270,7 @@ func run() error {
 		default:
 			results.writeStep(index, expandedStep.Name, result.status,
 				result.duration.Milliseconds(), "", result.outputs)
-			stepResults = append(stepResults, schema.PipelineStepResult{
+			stepResults = append(stepResults, pipeline.PipelineStepResult{
 				Name:       expandedStep.Name,
 				Status:     result.status,
 				DurationMS: result.duration.Milliseconds(),
@@ -296,7 +297,7 @@ func run() error {
 	if len(content.Outputs) > 0 {
 		pipelineOutputs = make(map[string]string, len(content.Outputs))
 		for outputName, declaration := range content.Outputs {
-			value, err := pipeline.Expand(declaration.Value, variables)
+			value, err := pipelinedef.Expand(declaration.Value, variables)
 			if err != nil {
 				totalDuration := time.Since(pipelineStart)
 				results.writeFailed("", fmt.Sprintf("resolving pipeline output %q: %v", outputName, err),
@@ -337,7 +338,7 @@ func publishPipelineResult(
 	conclusion string,
 	startedAt time.Time,
 	totalDuration time.Duration,
-	stepResults []schema.PipelineStepResult,
+	stepResults []pipeline.PipelineStepResult,
 	outputs map[string]string,
 	failedStep string,
 	errorMessage string,
@@ -347,8 +348,8 @@ func publishPipelineResult(
 		return
 	}
 
-	result := schema.PipelineResultContent{
-		Version:      schema.PipelineResultContentVersion,
+	result := pipeline.PipelineResultContent{
+		Version:      pipeline.PipelineResultContentVersion,
 		PipelineRef:  pipelineName,
 		Conclusion:   conclusion,
 		StartedAt:    startedAt.UTC().Format(time.RFC3339),
@@ -382,12 +383,12 @@ func publishPipelineResult(
 // nothing went wrong, the work was simply no longer needed.
 func runOnFailureSteps(
 	ctx context.Context,
-	steps []schema.PipelineStep,
+	steps []pipeline.PipelineStep,
 	variables map[string]string,
 	failedStepName string,
 	failedError error,
 	session messaging.Session,
-	artifacts *artifact.Client,
+	artifacts *artifactstore.Client,
 	logger *threadLogger,
 	results *resultLog,
 ) {
@@ -406,7 +407,7 @@ func runOnFailureSteps(
 	fmt.Printf("[pipeline] running %d on_failure steps\n", len(steps))
 
 	for index, step := range steps {
-		expandedStep, err := pipeline.ExpandStep(step, failureVariables)
+		expandedStep, err := pipelinedef.ExpandStep(step, failureVariables)
 		if err != nil {
 			fmt.Printf("[pipeline] on_failure[%d] %q: expansion failed: %v\n", index, step.Name, err)
 			continue
@@ -438,15 +439,15 @@ func runOnFailureSteps(
 //
 // Returns the pipeline name and parsed content. Returns an error if no
 // source provides a pipeline definition.
-func resolvePipeline(ctx context.Context, argument string, payloadPath string, proxy *proxyclient.Client) (string, *schema.PipelineContent, error) {
+func resolvePipeline(ctx context.Context, argument string, payloadPath string, proxy *proxyclient.Client) (string, *pipeline.PipelineContent, error) {
 	// Tier 1: CLI argument.
 	if argument != "" {
 		if isFilePath(argument) {
-			content, err := pipeline.ReadFile(argument)
+			content, err := pipelinedef.ReadFile(argument)
 			if err != nil {
 				return "", nil, err
 			}
-			return pipeline.NameFromPath(argument), content, nil
+			return pipelinedef.NameFromPath(argument), content, nil
 		}
 		// Pipeline ref.
 		return resolvePipelineRef(ctx, argument, proxy)
@@ -477,7 +478,7 @@ func resolvePipeline(ctx context.Context, argument string, payloadPath string, p
 		if err != nil {
 			return "", nil, fmt.Errorf("marshaling pipeline_inline: %w", err)
 		}
-		content, err := pipeline.Parse(inlineJSON)
+		content, err := pipelinedef.Parse(inlineJSON)
 		if err != nil {
 			return "", nil, fmt.Errorf("parsing pipeline_inline: %w", err)
 		}
@@ -489,7 +490,7 @@ func resolvePipeline(ctx context.Context, argument string, payloadPath string, p
 
 // resolvePipelineRef parses a pipeline ref string, constructs the room
 // alias, resolves it via the proxy, and reads the pipeline state event.
-func resolvePipelineRef(ctx context.Context, ref string, proxy *proxyclient.Client) (string, *schema.PipelineContent, error) {
+func resolvePipelineRef(ctx context.Context, ref string, proxy *proxyclient.Client) (string, *pipeline.PipelineContent, error) {
 	templateRef, err := schema.ParseTemplateRef(ref)
 	if err != nil {
 		return "", nil, fmt.Errorf("parsing pipeline ref %q: %w", ref, err)
@@ -506,7 +507,7 @@ func resolvePipelineRef(ctx context.Context, ref string, proxy *proxyclient.Clie
 		return "", nil, fmt.Errorf("reading pipeline %q from room %s: %w", templateRef.Template, roomID, err)
 	}
 
-	content, err := pipeline.Parse(stateContent)
+	content, err := pipelinedef.Parse(stateContent)
 	if err != nil {
 		return "", nil, fmt.Errorf("parsing pipeline %q: %w", templateRef.Template, err)
 	}

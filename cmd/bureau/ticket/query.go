@@ -10,7 +10,7 @@ import (
 	"text/tabwriter"
 
 	"github.com/bureau-foundation/bureau/cmd/bureau/cli"
-	"github.com/bureau-foundation/bureau/lib/ticket"
+	"github.com/bureau-foundation/bureau/lib/ticketindex"
 )
 
 // --- list ---
@@ -563,7 +563,7 @@ func statsCommand() *cli.Command {
 for a room.`,
 		Usage:          "bureau ticket stats --room ROOM [flags]",
 		Params:         func() any { return &params },
-		Output:         func() any { return &ticket.Stats{} },
+		Output:         func() any { return &ticketindex.Stats{} },
 		Annotations:    cli.ReadOnly(),
 		RequiredGrants: []string{"command/ticket/stats"},
 		Run: func(args []string) error {
@@ -579,7 +579,7 @@ for a room.`,
 			ctx, cancel := callContext()
 			defer cancel()
 
-			var stats ticket.Stats
+			var stats ticketindex.Stats
 			if err := client.Call(ctx, "stats", map[string]any{"room": params.Room}, &stats); err != nil {
 				return err
 			}

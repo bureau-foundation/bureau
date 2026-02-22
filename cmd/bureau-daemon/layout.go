@@ -28,6 +28,7 @@ import (
 
 	"github.com/bureau-foundation/bureau/lib/ref"
 	"github.com/bureau-foundation/bureau/lib/schema"
+	"github.com/bureau-foundation/bureau/lib/schema/observation"
 	"github.com/bureau-foundation/bureau/messaging"
 	"github.com/bureau-foundation/bureau/observe"
 )
@@ -236,7 +237,7 @@ func (d *Daemon) readLayoutEvent(ctx context.Context, principal ref.Entity) (*ob
 		return nil, err
 	}
 
-	var content schema.LayoutContent
+	var content observation.LayoutContent
 	if err := json.Unmarshal(raw, &content); err != nil {
 		return nil, fmt.Errorf("parsing layout event for %q: %w", stateKey, err)
 	}

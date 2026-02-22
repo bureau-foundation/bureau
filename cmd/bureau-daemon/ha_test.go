@@ -15,6 +15,7 @@ import (
 	"github.com/bureau-foundation/bureau/lib/clock"
 	"github.com/bureau-foundation/bureau/lib/ref"
 	"github.com/bureau-foundation/bureau/lib/schema"
+	"github.com/bureau-foundation/bureau/lib/schema/fleet"
 	"github.com/bureau-foundation/bureau/lib/testutil"
 	"github.com/bureau-foundation/bureau/messaging"
 )
@@ -147,21 +148,21 @@ func TestHAEligibilityCheck(t *testing.T) {
 
 	tests := []struct {
 		name       string
-		definition *schema.FleetServiceContent
+		definition *fleet.FleetServiceContent
 		labels     map[string]string
 		want       bool
 	}{
 		{
 			name: "no constraints",
-			definition: &schema.FleetServiceContent{
-				Placement: schema.PlacementConstraints{},
+			definition: &fleet.FleetServiceContent{
+				Placement: fleet.PlacementConstraints{},
 			},
 			want: true,
 		},
 		{
 			name: "allowed machine matches glob",
-			definition: &schema.FleetServiceContent{
-				Placement: schema.PlacementConstraints{
+			definition: &fleet.FleetServiceContent{
+				Placement: fleet.PlacementConstraints{
 					AllowedMachines: []string{"bureau/fleet/*/machine/*"},
 				},
 			},
@@ -169,8 +170,8 @@ func TestHAEligibilityCheck(t *testing.T) {
 		},
 		{
 			name: "allowed machine exact match",
-			definition: &schema.FleetServiceContent{
-				Placement: schema.PlacementConstraints{
+			definition: &fleet.FleetServiceContent{
+				Placement: fleet.PlacementConstraints{
 					AllowedMachines: []string{"bureau/fleet/test/machine/test"},
 				},
 			},
@@ -178,8 +179,8 @@ func TestHAEligibilityCheck(t *testing.T) {
 		},
 		{
 			name: "allowed machine no match",
-			definition: &schema.FleetServiceContent{
-				Placement: schema.PlacementConstraints{
+			definition: &fleet.FleetServiceContent{
+				Placement: fleet.PlacementConstraints{
 					AllowedMachines: []string{"bureau/fleet/*/machine/gpu-*"},
 				},
 			},
@@ -187,8 +188,8 @@ func TestHAEligibilityCheck(t *testing.T) {
 		},
 		{
 			name: "required label present",
-			definition: &schema.FleetServiceContent{
-				Placement: schema.PlacementConstraints{
+			definition: &fleet.FleetServiceContent{
+				Placement: fleet.PlacementConstraints{
 					Requires: []string{"gpu=rtx4090"},
 				},
 			},
@@ -197,8 +198,8 @@ func TestHAEligibilityCheck(t *testing.T) {
 		},
 		{
 			name: "required label missing",
-			definition: &schema.FleetServiceContent{
-				Placement: schema.PlacementConstraints{
+			definition: &fleet.FleetServiceContent{
+				Placement: fleet.PlacementConstraints{
 					Requires: []string{"gpu=rtx4090"},
 				},
 			},
@@ -207,8 +208,8 @@ func TestHAEligibilityCheck(t *testing.T) {
 		},
 		{
 			name: "required label wrong value",
-			definition: &schema.FleetServiceContent{
-				Placement: schema.PlacementConstraints{
+			definition: &fleet.FleetServiceContent{
+				Placement: fleet.PlacementConstraints{
 					Requires: []string{"gpu=rtx4090"},
 				},
 			},
@@ -217,8 +218,8 @@ func TestHAEligibilityCheck(t *testing.T) {
 		},
 		{
 			name: "presence-only label check",
-			definition: &schema.FleetServiceContent{
-				Placement: schema.PlacementConstraints{
+			definition: &fleet.FleetServiceContent{
+				Placement: fleet.PlacementConstraints{
 					Requires: []string{"persistent"},
 				},
 			},
@@ -227,8 +228,8 @@ func TestHAEligibilityCheck(t *testing.T) {
 		},
 		{
 			name: "presence-only label check missing",
-			definition: &schema.FleetServiceContent{
-				Placement: schema.PlacementConstraints{
+			definition: &fleet.FleetServiceContent{
+				Placement: fleet.PlacementConstraints{
 					Requires: []string{"persistent"},
 				},
 			},
@@ -276,17 +277,17 @@ func TestHAAcquisitionSingleDaemon(t *testing.T) {
 	// Set up an expired lease from another machine.
 	matrixState.setStateEvent(daemon.fleetRoomID.String(),
 		schema.EventTypeHALease, serviceLocalpart,
-		schema.HALeaseContent{
+		fleet.HALeaseContent{
 			Holder:     "machine/dead",
 			Service:    serviceLocalpart,
 			AcquiredAt: "2026-01-01T10:00:00Z",
 			ExpiresAt:  "2026-01-01T10:03:00Z",
 		})
 
-	definition := &schema.FleetServiceContent{
+	definition := &fleet.FleetServiceContent{
 		Template:  "bureau/template:fleet-controller",
 		HAClass:   "critical",
-		Placement: schema.PlacementConstraints{},
+		Placement: fleet.PlacementConstraints{},
 		MatrixPolicy: &schema.MatrixPolicy{
 			AllowJoin: true,
 		},
@@ -331,7 +332,7 @@ func TestHAAcquisitionSingleDaemon(t *testing.T) {
 	if err != nil {
 		t.Fatalf("GetStateEvent: %v", err)
 	}
-	var lease schema.HALeaseContent
+	var lease fleet.HALeaseContent
 	if err := json.Unmarshal(raw, &lease); err != nil {
 		t.Fatalf("Unmarshal: %v", err)
 	}
@@ -411,7 +412,7 @@ func TestHAAcquisitionPreferredBias(t *testing.T) {
 	// Expired lease.
 	matrixState.setStateEvent(daemon.fleetRoomID.String(),
 		schema.EventTypeHALease, serviceLocalpart,
-		schema.HALeaseContent{
+		fleet.HALeaseContent{
 			Holder:     "machine/dead",
 			Service:    serviceLocalpart,
 			AcquiredAt: "2026-01-01T10:00:00Z",
@@ -419,10 +420,10 @@ func TestHAAcquisitionPreferredBias(t *testing.T) {
 		})
 
 	// This machine is preferred.
-	definition := &schema.FleetServiceContent{
+	definition := &fleet.FleetServiceContent{
 		Template: "bureau/template:fleet-controller",
 		HAClass:  "critical",
-		Placement: schema.PlacementConstraints{
+		Placement: fleet.PlacementConstraints{
 			PreferredMachines: []string{daemon.machine.Localpart()},
 		},
 	}
@@ -462,7 +463,7 @@ func TestHAAcquisitionPreferredBias(t *testing.T) {
 	if err != nil {
 		t.Fatalf("GetStateEvent: %v", err)
 	}
-	var lease schema.HALeaseContent
+	var lease fleet.HALeaseContent
 	if err := json.Unmarshal(raw, &lease); err != nil {
 		t.Fatalf("Unmarshal: %v", err)
 	}
@@ -556,7 +557,7 @@ func TestHALeaseRenewal(t *testing.T) {
 
 	// Write initial lease.
 	now := daemon.clock.Now()
-	initialLease := schema.HALeaseContent{
+	initialLease := fleet.HALeaseContent{
 		Holder:     daemon.machine.Localpart(),
 		Service:    serviceLocalpart,
 		AcquiredAt: now.UTC().Format(time.RFC3339),
@@ -597,7 +598,7 @@ func TestHALeaseRenewal(t *testing.T) {
 	if err != nil {
 		t.Fatalf("GetStateEvent: %v", err)
 	}
-	var renewed schema.HALeaseContent
+	var renewed fleet.HALeaseContent
 	if err := json.Unmarshal(raw, &renewed); err != nil {
 		t.Fatalf("Unmarshal: %v", err)
 	}
@@ -659,7 +660,7 @@ func TestHALeaseRelease(t *testing.T) {
 	if err != nil {
 		t.Fatalf("GetStateEvent: %v", err)
 	}
-	var released schema.HALeaseContent
+	var released fleet.HALeaseContent
 	if err := json.Unmarshal(raw, &released); err != nil {
 		t.Fatalf("Unmarshal: %v", err)
 	}
@@ -691,7 +692,7 @@ func TestHAIsLeaseHealthy(t *testing.T) {
 
 	tests := []struct {
 		name  string
-		lease *schema.HALeaseContent
+		lease *fleet.HALeaseContent
 		want  bool
 	}{
 		{
@@ -701,12 +702,12 @@ func TestHAIsLeaseHealthy(t *testing.T) {
 		},
 		{
 			name:  "empty holder",
-			lease: &schema.HALeaseContent{Holder: ""},
+			lease: &fleet.HALeaseContent{Holder: ""},
 			want:  false,
 		},
 		{
 			name: "expired lease",
-			lease: &schema.HALeaseContent{
+			lease: &fleet.HALeaseContent{
 				Holder:    "machine/other",
 				ExpiresAt: now.Add(-1 * time.Hour).UTC().Format(time.RFC3339),
 			},
@@ -714,7 +715,7 @@ func TestHAIsLeaseHealthy(t *testing.T) {
 		},
 		{
 			name: "valid lease",
-			lease: &schema.HALeaseContent{
+			lease: &fleet.HALeaseContent{
 				Holder:    "machine/other",
 				ExpiresAt: now.Add(1 * time.Hour).UTC().Format(time.RFC3339),
 			},
@@ -722,7 +723,7 @@ func TestHAIsLeaseHealthy(t *testing.T) {
 		},
 		{
 			name: "unparseable expiry",
-			lease: &schema.HALeaseContent{
+			lease: &fleet.HALeaseContent{
 				Holder:    "machine/other",
 				ExpiresAt: "not-a-date",
 			},

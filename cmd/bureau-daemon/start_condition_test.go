@@ -16,6 +16,7 @@ import (
 	"github.com/bureau-foundation/bureau/lib/principal"
 	"github.com/bureau-foundation/bureau/lib/ref"
 	"github.com/bureau-foundation/bureau/lib/schema"
+	"github.com/bureau-foundation/bureau/lib/schema/workspace"
 	"github.com/bureau-foundation/bureau/lib/testutil"
 	"github.com/bureau-foundation/bureau/messaging"
 )
@@ -39,7 +40,7 @@ func TestReconcile_StartConditionMet(t *testing.T) {
 
 	// Set up the workspace room with an active workspace event (condition is met).
 	matrixState.setRoomAlias(ref.MustParseRoomAlias("#iree/amdgpu/inference:test.local"), workspaceRoomID)
-	matrixState.setStateEvent(workspaceRoomID, schema.EventTypeWorkspace, "", schema.WorkspaceState{
+	matrixState.setStateEvent(workspaceRoomID, schema.EventTypeWorkspace, "", workspace.WorkspaceState{
 		Status:    "active",
 		Project:   "iree",
 		Machine:   machineName,
@@ -194,7 +195,7 @@ func TestReconcile_StartConditionDeferredThenLaunches(t *testing.T) {
 	tracker.mu.Unlock()
 
 	// Simulate the setup principal publishing workspace active status.
-	matrixState.setStateEvent(workspaceRoomID, schema.EventTypeWorkspace, "", schema.WorkspaceState{
+	matrixState.setStateEvent(workspaceRoomID, schema.EventTypeWorkspace, "", workspace.WorkspaceState{
 		Status:    "active",
 		Project:   "iree",
 		Machine:   machineName,
@@ -392,7 +393,7 @@ func TestReconcile_StartConditionContentMismatch(t *testing.T) {
 
 	// Workspace event exists but with "pending" status (not "active").
 	matrixState.setRoomAlias(ref.MustParseRoomAlias("#iree/amdgpu/inference:test.local"), workspaceRoomID)
-	matrixState.setStateEvent(workspaceRoomID, schema.EventTypeWorkspace, "", schema.WorkspaceState{
+	matrixState.setStateEvent(workspaceRoomID, schema.EventTypeWorkspace, "", workspace.WorkspaceState{
 		Status:    "pending",
 		Project:   "iree",
 		Machine:   machineName,
@@ -433,7 +434,7 @@ func TestReconcile_StartConditionContentMismatch(t *testing.T) {
 	tracker.mu.Unlock()
 
 	// Update the workspace event to "active".
-	matrixState.setStateEvent(workspaceRoomID, schema.EventTypeWorkspace, "", schema.WorkspaceState{
+	matrixState.setStateEvent(workspaceRoomID, schema.EventTypeWorkspace, "", workspace.WorkspaceState{
 		Status:    "active",
 		Project:   "iree",
 		Machine:   machineName,
@@ -836,7 +837,7 @@ func TestReconcile_RunningPrincipalStoppedWhenConditionFails(t *testing.T) {
 
 	// Workspace is initially active — condition is met.
 	matrixState.setRoomAlias(ref.MustParseRoomAlias("#iree/amdgpu/inference:test.local"), workspaceRoomID)
-	matrixState.setStateEvent(workspaceRoomID, schema.EventTypeWorkspace, "", schema.WorkspaceState{
+	matrixState.setStateEvent(workspaceRoomID, schema.EventTypeWorkspace, "", workspace.WorkspaceState{
 		Status:    "active",
 		Project:   "iree",
 		Machine:   machineName,
@@ -880,7 +881,7 @@ func TestReconcile_RunningPrincipalStoppedWhenConditionFails(t *testing.T) {
 	tracker.mu.Unlock()
 
 	// Simulate workspace transitioning to teardown.
-	matrixState.setStateEvent(workspaceRoomID, schema.EventTypeWorkspace, "", schema.WorkspaceState{
+	matrixState.setStateEvent(workspaceRoomID, schema.EventTypeWorkspace, "", workspace.WorkspaceState{
 		Status:    "teardown",
 		Project:   "iree",
 		Machine:   machineName,
@@ -924,7 +925,7 @@ func TestReconcile_ConditionFalseDoesNotStopUnconditionedPrincipal(t *testing.T)
 
 	// Workspace is initially active.
 	matrixState.setRoomAlias(ref.MustParseRoomAlias("#iree/amdgpu/inference:test.local"), workspaceRoomID)
-	matrixState.setStateEvent(workspaceRoomID, schema.EventTypeWorkspace, "", schema.WorkspaceState{
+	matrixState.setStateEvent(workspaceRoomID, schema.EventTypeWorkspace, "", workspace.WorkspaceState{
 		Status:    "active",
 		Project:   "iree",
 		Machine:   machineName,
@@ -978,7 +979,7 @@ func TestReconcile_ConditionFalseDoesNotStopUnconditionedPrincipal(t *testing.T)
 	tracker.mu.Unlock()
 
 	// Workspace transitions to teardown — conditioned principal loses its condition.
-	matrixState.setStateEvent(workspaceRoomID, schema.EventTypeWorkspace, "", schema.WorkspaceState{
+	matrixState.setStateEvent(workspaceRoomID, schema.EventTypeWorkspace, "", workspace.WorkspaceState{
 		Status:    "teardown",
 		Project:   "iree",
 		Machine:   machineName,
@@ -1028,7 +1029,7 @@ func TestReconcile_TriggerContentPassedToLauncher(t *testing.T) {
 	// Set up a workspace event with status "teardown" and a teardown_mode field.
 	// This is the event whose content should flow through as trigger content.
 	matrixState.setRoomAlias(ref.MustParseRoomAlias("#iree/amdgpu/inference:test.local"), workspaceRoomID)
-	matrixState.setStateEvent(workspaceRoomID, schema.EventTypeWorkspace, "", schema.WorkspaceState{
+	matrixState.setStateEvent(workspaceRoomID, schema.EventTypeWorkspace, "", workspace.WorkspaceState{
 		Status:       "teardown",
 		TeardownMode: "archive",
 		Project:      "iree",

@@ -10,6 +10,7 @@ import (
 
 	"github.com/bureau-foundation/bureau/cmd/bureau/cli"
 	"github.com/bureau-foundation/bureau/lib/schema"
+	fleetschema "github.com/bureau-foundation/bureau/lib/schema/fleet"
 )
 
 // --- list-services ---
@@ -132,16 +133,16 @@ type showServiceInstance struct {
 
 // showServiceResponse mirrors the fleet controller's show-service response.
 type showServiceResponse struct {
-	Localpart  string                      `cbor:"localpart"`
-	Definition *schema.FleetServiceContent `cbor:"definition"`
-	Instances  []showServiceInstance       `cbor:"instances"`
+	Localpart  string                           `cbor:"localpart"`
+	Definition *fleetschema.FleetServiceContent `cbor:"definition"`
+	Instances  []showServiceInstance            `cbor:"instances"`
 }
 
 // showServiceResult is the JSON output of show-service.
 type showServiceResult struct {
-	Localpart  string                      `json:"localpart"  desc:"service localpart"`
-	Definition *schema.FleetServiceContent `json:"definition" desc:"fleet service definition"`
-	Instances  []serviceInstanceResult     `json:"instances"  desc:"current placement instances"`
+	Localpart  string                           `json:"localpart"  desc:"service localpart"`
+	Definition *fleetschema.FleetServiceContent `json:"definition" desc:"fleet service definition"`
+	Instances  []serviceInstanceResult          `json:"instances"  desc:"current placement instances"`
 }
 
 // serviceInstanceResult is a single instance in the show-service output.

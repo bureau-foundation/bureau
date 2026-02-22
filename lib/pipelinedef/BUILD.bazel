@@ -1,0 +1,31 @@
+# Copyright 2026 The Bureau Authors
+# SPDX-License-Identifier: Apache-2.0
+
+load("@rules_go//go:def.bzl", "go_library", "go_test")
+
+go_library(
+    name = "pipelinedef",
+    srcs = [
+        "parse.go",
+        "validate.go",
+        "variables.go",
+    ],
+    importpath = "github.com/bureau-foundation/bureau/lib/pipelinedef",
+    visibility = ["//visibility:public"],
+    deps = [
+        "//lib/ref",
+        "//lib/schema/pipeline",
+        "@com_github_tidwall_jsonc//:jsonc",
+    ],
+)
+
+go_test(
+    name = "pipelinedef_test",
+    srcs = [
+        "parse_test.go",
+        "validate_test.go",
+        "variables_test.go",
+    ],
+    embed = [":pipelinedef"],
+    deps = ["//lib/schema/pipeline"],
+)

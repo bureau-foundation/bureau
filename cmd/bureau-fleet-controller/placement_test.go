@@ -9,6 +9,7 @@ import (
 
 	"github.com/bureau-foundation/bureau/lib/clock"
 	"github.com/bureau-foundation/bureau/lib/schema"
+	"github.com/bureau-foundation/bureau/lib/schema/fleet"
 )
 
 // newPlacementTestController creates a FleetController with a fake clock
@@ -63,17 +64,17 @@ func standardMachine() *machineState {
 
 // standardService creates a FleetServiceContent with typical GPU service
 // values. Useful as a baseline that tests can modify.
-func standardService() *schema.FleetServiceContent {
-	return &schema.FleetServiceContent{
+func standardService() *fleet.FleetServiceContent {
+	return &fleet.FleetServiceContent{
 		Template: "bureau/template:whisper-stt",
-		Replicas: schema.ReplicaSpec{Min: 1},
-		Resources: schema.ResourceRequirements{
+		Replicas: fleet.ReplicaSpec{Min: 1},
+		Resources: fleet.ResourceRequirements{
 			MemoryMB:      4096,
 			CPUMillicores: 2000,
 			GPU:           true,
 			GPUMemoryMB:   8192,
 		},
-		Placement: schema.PlacementConstraints{
+		Placement: fleet.PlacementConstraints{
 			Requires: []string{"gpu"},
 		},
 		Failover: "migrate",
@@ -441,73 +442,73 @@ func TestInTimeWindow(t *testing.T) {
 	tests := []struct {
 		name   string
 		now    time.Time
-		window schema.TimeWindow
+		window fleet.TimeWindow
 		want   bool
 	}{
 		{
 			name:   "within normal range",
 			now:    time.Date(2026, 1, 15, 14, 0, 0, 0, time.UTC), // 2 PM
-			window: schema.TimeWindow{StartHour: 9, EndHour: 17},
+			window: fleet.TimeWindow{StartHour: 9, EndHour: 17},
 			want:   true,
 		},
 		{
 			name:   "before normal range",
 			now:    time.Date(2026, 1, 15, 7, 0, 0, 0, time.UTC), // 7 AM
-			window: schema.TimeWindow{StartHour: 9, EndHour: 17},
+			window: fleet.TimeWindow{StartHour: 9, EndHour: 17},
 			want:   false,
 		},
 		{
 			name:   "at start of range",
 			now:    time.Date(2026, 1, 15, 9, 0, 0, 0, time.UTC), // 9 AM
-			window: schema.TimeWindow{StartHour: 9, EndHour: 17},
+			window: fleet.TimeWindow{StartHour: 9, EndHour: 17},
 			want:   true,
 		},
 		{
 			name:   "at end of range (exclusive)",
 			now:    time.Date(2026, 1, 15, 17, 0, 0, 0, time.UTC), // 5 PM
-			window: schema.TimeWindow{StartHour: 9, EndHour: 17},
+			window: fleet.TimeWindow{StartHour: 9, EndHour: 17},
 			want:   false,
 		},
 		{
 			name:   "midnight wrapping - in late evening",
 			now:    time.Date(2026, 1, 15, 23, 0, 0, 0, time.UTC), // 11 PM
-			window: schema.TimeWindow{StartHour: 22, EndHour: 6},
+			window: fleet.TimeWindow{StartHour: 22, EndHour: 6},
 			want:   true,
 		},
 		{
 			name:   "midnight wrapping - in early morning",
 			now:    time.Date(2026, 1, 15, 3, 0, 0, 0, time.UTC), // 3 AM
-			window: schema.TimeWindow{StartHour: 22, EndHour: 6},
+			window: fleet.TimeWindow{StartHour: 22, EndHour: 6},
 			want:   true,
 		},
 		{
 			name:   "midnight wrapping - outside afternoon",
 			now:    time.Date(2026, 1, 15, 15, 0, 0, 0, time.UTC), // 3 PM
-			window: schema.TimeWindow{StartHour: 22, EndHour: 6},
+			window: fleet.TimeWindow{StartHour: 22, EndHour: 6},
 			want:   false,
 		},
 		{
 			name:   "same start and end means all day",
 			now:    time.Date(2026, 1, 15, 15, 0, 0, 0, time.UTC),
-			window: schema.TimeWindow{StartHour: 8, EndHour: 8},
+			window: fleet.TimeWindow{StartHour: 8, EndHour: 8},
 			want:   true,
 		},
 		{
 			name:   "day-of-week match",
 			now:    time.Date(2026, 1, 14, 14, 0, 0, 0, time.UTC), // Wednesday
-			window: schema.TimeWindow{Days: []string{"wed"}, StartHour: 9, EndHour: 17},
+			window: fleet.TimeWindow{Days: []string{"wed"}, StartHour: 9, EndHour: 17},
 			want:   true,
 		},
 		{
 			name:   "day-of-week mismatch",
 			now:    time.Date(2026, 1, 14, 14, 0, 0, 0, time.UTC), // Wednesday
-			window: schema.TimeWindow{Days: []string{"mon", "fri"}, StartHour: 9, EndHour: 17},
+			window: fleet.TimeWindow{Days: []string{"mon", "fri"}, StartHour: 9, EndHour: 17},
 			want:   false,
 		},
 		{
 			name:   "empty days means all days",
 			now:    time.Date(2026, 1, 14, 14, 0, 0, 0, time.UTC), // Wednesday
-			window: schema.TimeWindow{StartHour: 9, EndHour: 17},
+			window: fleet.TimeWindow{StartHour: 9, EndHour: 17},
 			want:   true,
 		},
 	}
@@ -530,10 +531,10 @@ func TestScoreMachineBatchTimeOfDay(t *testing.T) {
 	outsideWindowTime := time.Date(2026, 1, 15, 14, 0, 0, 0, time.UTC)
 
 	service := standardService()
-	service.Scheduling = &schema.SchedulingSpec{
+	service.Scheduling = &fleet.SchedulingSpec{
 		Class:       "batch",
 		Preemptible: true,
-		PreferredWindows: []schema.TimeWindow{
+		PreferredWindows: []fleet.TimeWindow{
 			{StartHour: 22, EndHour: 6},
 		},
 	}
@@ -628,15 +629,15 @@ func TestScoreMachineNoGPUServiceNoGPURequirement(t *testing.T) {
 	fc.machines["machine/cpuonly"] = machine
 
 	// Service that doesn't require GPU.
-	service := &schema.FleetServiceContent{
+	service := &fleet.FleetServiceContent{
 		Template: "bureau/template:worker",
-		Replicas: schema.ReplicaSpec{Min: 1},
-		Resources: schema.ResourceRequirements{
+		Replicas: fleet.ReplicaSpec{Min: 1},
+		Resources: fleet.ResourceRequirements{
 			MemoryMB:      2048,
 			CPUMillicores: 1000,
 			GPU:           false,
 		},
-		Placement: schema.PlacementConstraints{},
+		Placement: fleet.PlacementConstraints{},
 		Failover:  "migrate",
 		Priority:  50,
 	}

@@ -10,7 +10,7 @@ go_library(
     visibility = ["//visibility:public"],
     deps = [
         "//cmd/bureau/cli",
-        "//lib/artifact",
+        "//lib/artifactstore",
         "@com_github_spf13_pflag//:pflag",
     ],
 )

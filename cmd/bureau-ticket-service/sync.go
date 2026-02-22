@@ -9,8 +9,9 @@ import (
 
 	"github.com/bureau-foundation/bureau/lib/ref"
 	"github.com/bureau-foundation/bureau/lib/schema"
+	"github.com/bureau-foundation/bureau/lib/schema/ticket"
 	"github.com/bureau-foundation/bureau/lib/service"
-	"github.com/bureau-foundation/bureau/lib/ticket"
+	"github.com/bureau-foundation/bureau/lib/ticketindex"
 	"github.com/bureau-foundation/bureau/messaging"
 )
 
@@ -86,10 +87,10 @@ type roomState struct {
 	// management and shouldn't be tracked (but this struct only
 	// exists for rooms that do have ticket management, so it should
 	// always be non-nil).
-	config *schema.TicketConfigContent
+	config *ticket.TicketConfigContent
 
 	// index is the in-memory ticket index for this room.
-	index *ticket.Index
+	index *ticketindex.Index
 
 	// pendingEchoes tracks event IDs of ticket writes made by
 	// mutation handlers (or gate satisfaction) that have not yet
@@ -172,7 +173,7 @@ func (ts *TicketService) processRoomState(ctx context.Context, roomID ref.RoomID
 	// determine if this room has ticket management enabled. Check
 	// both state and timeline events (timeline events with a
 	// state_key are state changes).
-	var config *schema.TicketConfigContent
+	var config *ticket.TicketConfigContent
 	var tombstoned bool
 	for _, event := range stateEvents {
 		if event.Type == schema.MatrixEventTypeTombstone {
@@ -202,7 +203,7 @@ func (ts *TicketService) processRoomState(ctx context.Context, roomID ref.RoomID
 	if !exists {
 		state = &roomState{
 			config:        config,
-			index:         ticket.NewIndex(),
+			index:         ticketindex.NewIndex(),
 			pendingEchoes: make(map[string]ref.EventID),
 			alias:         ts.resolveRoomAlias(ctx, roomID),
 		}
@@ -414,7 +415,7 @@ func (ts *TicketService) handleTicketConfigChange(ctx context.Context, roomID re
 	if !exists {
 		state = &roomState{
 			config:        config,
-			index:         ticket.NewIndex(),
+			index:         ticketindex.NewIndex(),
 			pendingEchoes: make(map[string]ref.EventID),
 			alias:         ts.resolveRoomAlias(ctx, roomID),
 		}
@@ -490,7 +491,7 @@ func (ts *TicketService) resolveRoomAlias(ctx context.Context, roomID ref.RoomID
 // parseTicketConfig parses a ticket_config event's content. Returns
 // nil if the content is empty or unparseable (room does not have
 // ticket management).
-func (ts *TicketService) parseTicketConfig(event messaging.Event) *schema.TicketConfigContent {
+func (ts *TicketService) parseTicketConfig(event messaging.Event) *ticket.TicketConfigContent {
 	if len(event.Content) == 0 {
 		return nil
 	}
@@ -503,7 +504,7 @@ func (ts *TicketService) parseTicketConfig(event messaging.Event) *schema.Ticket
 		return nil
 	}
 
-	var config schema.TicketConfigContent
+	var config ticket.TicketConfigContent
 	if err := json.Unmarshal(contentJSON, &config); err != nil {
 		ts.logger.Warn("failed to parse ticket_config",
 			"error", err,
@@ -558,7 +559,7 @@ func (ts *TicketService) indexTicketEvent(state *roomState, event messaging.Even
 		return false
 	}
 
-	var content schema.TicketContent
+	var content ticket.TicketContent
 	if err := json.Unmarshal(contentJSON, &content); err != nil {
 		ts.logger.Warn("failed to parse ticket content",
 			"ticket_id", ticketID,
@@ -581,7 +582,7 @@ func (ts *TicketService) indexTicketEvent(state *roomState, event messaging.Even
 // local index must use this method instead of calling SendStateEvent
 // and index.Put directly. This includes socket handlers, gate
 // satisfaction, and any future write path.
-func (ts *TicketService) putWithEcho(ctx context.Context, roomID ref.RoomID, state *roomState, ticketID string, content schema.TicketContent) error {
+func (ts *TicketService) putWithEcho(ctx context.Context, roomID ref.RoomID, state *roomState, ticketID string, content ticket.TicketContent) error {
 	eventID, err := ts.writer.SendStateEvent(ctx, roomID, schema.EventTypeTicket, ticketID, content)
 	if err != nil {
 		return err
@@ -602,7 +603,7 @@ func (ts *TicketService) totalTickets() int {
 
 // roomIndex returns the ticket index for a room. Returns nil if the
 // room doesn't have ticket management or isn't tracked by this service.
-func (ts *TicketService) roomIndex(roomID ref.RoomID) *ticket.Index {
+func (ts *TicketService) roomIndex(roomID ref.RoomID) *ticketindex.Index {
 	state, exists := ts.rooms[roomID]
 	if !exists {
 		return nil

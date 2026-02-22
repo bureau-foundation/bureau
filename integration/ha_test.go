@@ -10,6 +10,7 @@ import (
 	"time"
 
 	"github.com/bureau-foundation/bureau/lib/schema"
+	fleetschema "github.com/bureau-foundation/bureau/lib/schema/fleet"
 	"github.com/bureau-foundation/bureau/messaging"
 )
 
@@ -48,11 +49,11 @@ func TestHALeaseAcquisition(t *testing.T) {
 	fleetWatch := watchRoom(t, admin, fleet.FleetRoomID)
 	configWatch := watchRoom(t, admin, machine.ConfigRoomID)
 
-	publishFleetService(t, admin, fleet.FleetRoomID, serviceLocalpart, schema.FleetServiceContent{
+	publishFleetService(t, admin, fleet.FleetRoomID, serviceLocalpart, fleetschema.FleetServiceContent{
 		Template: templateRef,
 		HAClass:  "critical",
-		Replicas: schema.ReplicaSpec{Min: 1},
-		Placement: schema.PlacementConstraints{
+		Replicas: fleetschema.ReplicaSpec{Min: 1},
+		Placement: fleetschema.PlacementConstraints{
 			PreferredMachines: []string{machine.Name},
 			AllowedMachines:   []string{machine.Name},
 		},
@@ -62,7 +63,7 @@ func TestHALeaseAcquisition(t *testing.T) {
 	// Wait for the daemon to acquire the HA lease.
 	leaseJSON := fleetWatch.WaitForStateEvent(t,
 		schema.EventTypeHALease, serviceLocalpart)
-	var lease schema.HALeaseContent
+	var lease fleetschema.HALeaseContent
 	if err := json.Unmarshal(leaseJSON, &lease); err != nil {
 		t.Fatalf("unmarshal HA lease: %v", err)
 	}
@@ -184,11 +185,11 @@ func TestHALeaseFailover(t *testing.T) {
 	// --- Phase 1: Initial acquisition ---
 	fleetWatch := watchRoom(t, admin, fleet.FleetRoomID)
 
-	publishFleetService(t, admin, fleet.FleetRoomID, serviceLocalpart, schema.FleetServiceContent{
+	publishFleetService(t, admin, fleet.FleetRoomID, serviceLocalpart, fleetschema.FleetServiceContent{
 		Template: templateRef,
 		HAClass:  "critical",
-		Replicas: schema.ReplicaSpec{Min: 1},
-		Placement: schema.PlacementConstraints{
+		Replicas: fleetschema.ReplicaSpec{Min: 1},
+		Placement: fleetschema.PlacementConstraints{
 			PreferredMachines: []string{machineA.Name, machineB.Name},
 			AllowedMachines:   []string{machineA.Name, machineB.Name},
 		},

@@ -10,8 +10,8 @@ import (
 	"os"
 
 	"github.com/bureau-foundation/bureau/lib/ref"
-	"github.com/bureau-foundation/bureau/lib/schema"
-	"github.com/bureau-foundation/bureau/lib/ticket"
+	"github.com/bureau-foundation/bureau/lib/schema/ticket"
+	"github.com/bureau-foundation/bureau/lib/ticketindex"
 )
 
 // beadsEntry is the JSON structure of a single line in a beads JSONL
@@ -65,7 +65,7 @@ func LoadBeadsFile(path string) (*IndexSource, error) {
 	}
 	defer file.Close()
 
-	index := ticket.NewIndex()
+	index := ticketindex.NewIndex()
 	scanner := bufio.NewScanner(file)
 
 	// Beads entries can be large (long descriptions, many deps).
@@ -102,8 +102,8 @@ func LoadBeadsFile(path string) (*IndexSource, error) {
 }
 
 // beadsToTicketContent converts a beads JSONL entry to a TicketContent.
-func beadsToTicketContent(entry beadsEntry) schema.TicketContent {
-	content := schema.TicketContent{
+func beadsToTicketContent(entry beadsEntry) ticket.TicketContent {
+	content := ticket.TicketContent{
 		Version:     1,
 		Title:       entry.Title,
 		Body:        entry.Description,

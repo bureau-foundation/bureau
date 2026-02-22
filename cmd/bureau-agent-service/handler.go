@@ -10,7 +10,7 @@ import (
 	"strings"
 
 	"github.com/bureau-foundation/bureau/lib/codec"
-	"github.com/bureau-foundation/bureau/lib/schema"
+	"github.com/bureau-foundation/bureau/lib/schema/agent"
 	"github.com/bureau-foundation/bureau/lib/service"
 	"github.com/bureau-foundation/bureau/lib/servicetoken"
 )
@@ -123,7 +123,7 @@ func resolvePrincipalForRead(token *servicetoken.Token, raw []byte) (string, err
 type getSessionResponse struct {
 	// Session is the current session state from Matrix. Nil if no
 	// agent session state event exists for this principal.
-	Session *schema.AgentSessionContent `cbor:"session,omitempty"`
+	Session *agent.AgentSessionContent `cbor:"session,omitempty"`
 }
 
 func (agentService *AgentService) handleGetSession(ctx context.Context, token *servicetoken.Token, raw []byte) (any, error) {
@@ -165,7 +165,7 @@ func (agentService *AgentService) handleStartSession(ctx context.Context, token 
 	}
 
 	if current == nil {
-		current = &schema.AgentSessionContent{Version: schema.AgentSessionVersion}
+		current = &agent.AgentSessionContent{Version: agent.AgentSessionVersion}
 	}
 
 	if err := current.CanModify(); err != nil {
@@ -181,7 +181,7 @@ func (agentService *AgentService) handleStartSession(ctx context.Context, token 
 
 	if _, err := agentService.session.SendStateEvent(
 		ctx, agentService.configRoomID,
-		schema.EventTypeAgentSession, principalLocal, current,
+		agent.EventTypeAgentSession, principalLocal, current,
 	); err != nil {
 		return nil, fmt.Errorf("writing session state: %w", err)
 	}
@@ -260,7 +260,7 @@ func (agentService *AgentService) handleEndSession(ctx context.Context, token *s
 
 	if _, err := agentService.session.SendStateEvent(
 		ctx, agentService.configRoomID,
-		schema.EventTypeAgentSession, principalLocal, sessionContent,
+		agent.EventTypeAgentSession, principalLocal, sessionContent,
 	); err != nil {
 		return nil, fmt.Errorf("writing session state: %w", err)
 	}
@@ -272,7 +272,7 @@ func (agentService *AgentService) handleEndSession(ctx context.Context, token *s
 	}
 
 	if metricsContent == nil {
-		metricsContent = &schema.AgentMetricsContent{Version: schema.AgentMetricsVersion}
+		metricsContent = &agent.AgentMetricsContent{Version: agent.AgentMetricsVersion}
 	}
 
 	if err := metricsContent.CanModify(); err != nil {
@@ -301,7 +301,7 @@ func (agentService *AgentService) handleEndSession(ctx context.Context, token *s
 
 		if _, err := agentService.session.SendStateEvent(
 			ctx, agentService.configRoomID,
-			schema.EventTypeAgentMetrics, principalLocal, metricsContent,
+			agent.EventTypeAgentMetrics, principalLocal, metricsContent,
 		); err != nil {
 			return nil, fmt.Errorf("writing metrics state: %w", err)
 		}
@@ -321,7 +321,7 @@ func (agentService *AgentService) handleEndSession(ctx context.Context, token *s
 
 // getMetricsResponse is the wire format for the "get-metrics" response.
 type getMetricsResponse struct {
-	Metrics *schema.AgentMetricsContent `cbor:"metrics,omitempty"`
+	Metrics *agent.AgentMetricsContent `cbor:"metrics,omitempty"`
 }
 
 func (agentService *AgentService) handleGetMetrics(ctx context.Context, token *servicetoken.Token, raw []byte) (any, error) {
@@ -382,7 +382,7 @@ func (agentService *AgentService) handleSetContext(ctx context.Context, token *s
 	}
 
 	if current == nil {
-		current = &schema.AgentContextContent{Version: schema.AgentContextVersion}
+		current = &agent.AgentContextContent{Version: agent.AgentContextVersion}
 	}
 
 	if err := current.CanModify(); err != nil {
@@ -390,10 +390,10 @@ func (agentService *AgentService) handleSetContext(ctx context.Context, token *s
 	}
 
 	if current.Entries == nil {
-		current.Entries = make(map[string]schema.ContextEntry)
+		current.Entries = make(map[string]agent.ContextEntry)
 	}
 
-	current.Entries[request.Key] = schema.ContextEntry{
+	current.Entries[request.Key] = agent.ContextEntry{
 		ArtifactRef:  request.ArtifactRef,
 		Size:         request.Size,
 		ContentType:  request.ContentType,
@@ -405,7 +405,7 @@ func (agentService *AgentService) handleSetContext(ctx context.Context, token *s
 
 	if _, err := agentService.session.SendStateEvent(
 		ctx, agentService.configRoomID,
-		schema.EventTypeAgentContext, principalLocal, current,
+		agent.EventTypeAgentContext, principalLocal, current,
 	); err != nil {
 		return nil, fmt.Errorf("writing context state: %w", err)
 	}
@@ -428,7 +428,7 @@ type getContextRequest struct {
 
 // getContextResponse is the wire format for the "get-context" response.
 type getContextResponse struct {
-	Entry *schema.ContextEntry `cbor:"entry,omitempty"`
+	Entry *agent.ContextEntry `cbor:"entry,omitempty"`
 }
 
 func (agentService *AgentService) handleGetContext(ctx context.Context, token *servicetoken.Token, raw []byte) (any, error) {
@@ -512,7 +512,7 @@ func (agentService *AgentService) handleDeleteContext(ctx context.Context, token
 
 	if _, err := agentService.session.SendStateEvent(
 		ctx, agentService.configRoomID,
-		schema.EventTypeAgentContext, principalLocal, current,
+		agent.EventTypeAgentContext, principalLocal, current,
 	); err != nil {
 		return nil, fmt.Errorf("writing context state: %w", err)
 	}
@@ -534,7 +534,7 @@ type listContextRequest struct {
 
 // listContextResponse is the wire format for the "list-context" response.
 type listContextResponse struct {
-	Entries map[string]schema.ContextEntry `cbor:"entries,omitempty"`
+	Entries map[string]agent.ContextEntry `cbor:"entries,omitempty"`
 }
 
 func (agentService *AgentService) handleListContext(ctx context.Context, token *servicetoken.Token, raw []byte) (any, error) {
@@ -567,7 +567,7 @@ func (agentService *AgentService) handleListContext(ctx context.Context, token *
 	}
 
 	// Filter entries by key prefix.
-	filtered := make(map[string]schema.ContextEntry)
+	filtered := make(map[string]agent.ContextEntry)
 	for key, entry := range content.Entries {
 		if strings.HasPrefix(key, request.Prefix) {
 			filtered[key] = entry
@@ -585,10 +585,10 @@ func (agentService *AgentService) handleListContext(ctx context.Context, token *
 
 // readSessionState reads the m.bureau.agent_session state event for a
 // principal from the config room. Returns nil if no event exists.
-func (agentService *AgentService) readSessionState(ctx context.Context, principalLocal string) (*schema.AgentSessionContent, error) {
+func (agentService *AgentService) readSessionState(ctx context.Context, principalLocal string) (*agent.AgentSessionContent, error) {
 	raw, err := agentService.session.GetStateEvent(
 		ctx, agentService.configRoomID,
-		schema.EventTypeAgentSession, principalLocal,
+		agent.EventTypeAgentSession, principalLocal,
 	)
 	if err != nil {
 		// Matrix returns 404 for missing state events. Treat this as
@@ -596,7 +596,7 @@ func (agentService *AgentService) readSessionState(ctx context.Context, principa
 		return nil, nil
 	}
 
-	var content schema.AgentSessionContent
+	var content agent.AgentSessionContent
 	if unmarshalError := json.Unmarshal(raw, &content); unmarshalError != nil {
 		return nil, fmt.Errorf("unmarshaling agent session content: %w", unmarshalError)
 	}
@@ -606,16 +606,16 @@ func (agentService *AgentService) readSessionState(ctx context.Context, principa
 
 // readContextState reads the m.bureau.agent_context state event for a
 // principal from the config room. Returns nil if no event exists.
-func (agentService *AgentService) readContextState(ctx context.Context, principalLocal string) (*schema.AgentContextContent, error) {
+func (agentService *AgentService) readContextState(ctx context.Context, principalLocal string) (*agent.AgentContextContent, error) {
 	raw, err := agentService.session.GetStateEvent(
 		ctx, agentService.configRoomID,
-		schema.EventTypeAgentContext, principalLocal,
+		agent.EventTypeAgentContext, principalLocal,
 	)
 	if err != nil {
 		return nil, nil
 	}
 
-	var content schema.AgentContextContent
+	var content agent.AgentContextContent
 	if unmarshalError := json.Unmarshal(raw, &content); unmarshalError != nil {
 		return nil, fmt.Errorf("unmarshaling agent context content: %w", unmarshalError)
 	}
@@ -625,16 +625,16 @@ func (agentService *AgentService) readContextState(ctx context.Context, principa
 
 // readMetricsState reads the m.bureau.agent_metrics state event for a
 // principal from the config room. Returns nil if no event exists.
-func (agentService *AgentService) readMetricsState(ctx context.Context, principalLocal string) (*schema.AgentMetricsContent, error) {
+func (agentService *AgentService) readMetricsState(ctx context.Context, principalLocal string) (*agent.AgentMetricsContent, error) {
 	raw, err := agentService.session.GetStateEvent(
 		ctx, agentService.configRoomID,
-		schema.EventTypeAgentMetrics, principalLocal,
+		agent.EventTypeAgentMetrics, principalLocal,
 	)
 	if err != nil {
 		return nil, nil
 	}
 
-	var content schema.AgentMetricsContent
+	var content agent.AgentMetricsContent
 	if unmarshalError := json.Unmarshal(raw, &content); unmarshalError != nil {
 		return nil, fmt.Errorf("unmarshaling agent metrics content: %w", unmarshalError)
 	}

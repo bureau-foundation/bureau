@@ -8,7 +8,7 @@ import (
 	"os"
 
 	"github.com/bureau-foundation/bureau/cmd/bureau/cli"
-	libpipeline "github.com/bureau-foundation/bureau/lib/pipeline"
+	"github.com/bureau-foundation/bureau/lib/pipelinedef"
 	"github.com/bureau-foundation/bureau/lib/ref"
 	"github.com/bureau-foundation/bureau/lib/schema"
 )
@@ -93,12 +93,12 @@ without actually publishing.`,
 			}
 
 			// Read and validate the local file.
-			content, err := libpipeline.ReadFile(filePath)
+			content, err := pipelinedef.ReadFile(filePath)
 			if err != nil {
 				return err
 			}
 
-			issues := libpipeline.Validate(content)
+			issues := pipelinedef.Validate(content)
 			if len(issues) > 0 {
 				for _, issue := range issues {
 					fmt.Fprintf(os.Stderr, "  - %s\n", issue)

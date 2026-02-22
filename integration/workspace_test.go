@@ -11,7 +11,9 @@ import (
 
 	"github.com/bureau-foundation/bureau/lib/ref"
 	"github.com/bureau-foundation/bureau/lib/schema"
-	"github.com/bureau-foundation/bureau/lib/template"
+	"github.com/bureau-foundation/bureau/lib/schema/pipeline"
+	"github.com/bureau-foundation/bureau/lib/schema/workspace"
+	"github.com/bureau-foundation/bureau/lib/templatedef"
 	"github.com/bureau-foundation/bureau/messaging"
 )
 
@@ -77,7 +79,7 @@ func TestWorkspaceStartConditionLifecycle(t *testing.T) {
 	// condition) starts immediately; agent (gated on "active") and
 	// teardown (gated on "teardown") are both deferred.
 	_, err = admin.SendStateEvent(ctx, workspaceRoomID,
-		schema.EventTypeWorkspace, "", schema.WorkspaceState{
+		schema.EventTypeWorkspace, "", workspace.WorkspaceState{
 			Status:    "pending",
 			Project:   "wst",
 			Machine:   machine.Name,
@@ -171,7 +173,7 @@ func TestWorkspaceStartConditionLifecycle(t *testing.T) {
 	// --- Phase 2: Transition to "active" → agent starts ---
 	t.Log("phase 2: publishing 'active' status, expecting agent to start")
 	_, err = admin.SendStateEvent(ctx, workspaceRoomID,
-		schema.EventTypeWorkspace, "", schema.WorkspaceState{
+		schema.EventTypeWorkspace, "", workspace.WorkspaceState{
 			Status:    "active",
 			Project:   "wst",
 			Machine:   machine.Name,
@@ -196,7 +198,7 @@ func TestWorkspaceStartConditionLifecycle(t *testing.T) {
 	// --- Phase 3: Transition to "teardown" → agent stops, teardown starts ---
 	t.Log("phase 3: publishing 'teardown' status, expecting agent to stop and teardown to start")
 	_, err = admin.SendStateEvent(ctx, workspaceRoomID,
-		schema.EventTypeWorkspace, "", schema.WorkspaceState{
+		schema.EventTypeWorkspace, "", workspace.WorkspaceState{
 			Status:       "teardown",
 			TeardownMode: "archive",
 			Project:      "wst",
@@ -276,13 +278,13 @@ func TestWorkspaceCLILifecycle(t *testing.T) {
 	// --- Publish agent template ---
 	// The agent principal needs a sandbox command that stays alive. The
 	// runner environment provides coreutils (including sleep). Uses the
-	// production template.Push path to exercise room resolution and
+	// production templatedef.Push path to exercise room resolution and
 	// state event publication identically to "bureau template push".
 	agentTemplateRef, err := schema.ParseTemplateRef("bureau/template:test-ws-agent")
 	if err != nil {
 		t.Fatalf("parse agent template ref: %v", err)
 	}
-	_, err = template.Push(ctx, admin, agentTemplateRef, schema.TemplateContent{
+	_, err = templatedef.Push(ctx, admin, agentTemplateRef, schema.TemplateContent{
 		Description: "Long-running agent for workspace CLI integration tests",
 		Command:     []string{"sleep", "infinity"},
 		Environment: runnerEnv,
@@ -387,7 +389,7 @@ func TestWorkspaceCLILifecycle(t *testing.T) {
 	if err != nil {
 		t.Fatalf("read workspace state after setup: %v", err)
 	}
-	var activeState schema.WorkspaceState
+	var activeState workspace.WorkspaceState
 	if err := json.Unmarshal(workspaceStateRaw, &activeState); err != nil {
 		t.Fatalf("unmarshal workspace state: %v", err)
 	}
@@ -493,7 +495,7 @@ func waitForWorkspaceStatus(t *testing.T, session *messaging.DirectSession, room
 	// alias and calls this function).
 	content, err := session.GetStateEvent(t.Context(), roomID, schema.EventTypeWorkspace, "")
 	if err == nil {
-		var state schema.WorkspaceState
+		var state workspace.WorkspaceState
 		if json.Unmarshal(content, &state) == nil && state.Status == expectedStatus {
 			return
 		}
@@ -514,7 +516,7 @@ func waitForWorkspaceStatus(t *testing.T, session *messaging.DirectSession, room
 		if marshalError != nil {
 			return false
 		}
-		var state schema.WorkspaceState
+		var state workspace.WorkspaceState
 		if json.Unmarshal(contentJSON, &state) != nil {
 			return false
 		}
@@ -534,7 +536,7 @@ func waitForWorktreeStatus(t *testing.T, session *messaging.DirectSession, roomI
 	// Check whether the status already matches.
 	content, err := session.GetStateEvent(t.Context(), roomID, schema.EventTypeWorktree, worktreePath)
 	if err == nil {
-		var state schema.WorktreeState
+		var state workspace.WorktreeState
 		if json.Unmarshal(content, &state) == nil && state.Status == expectedStatus {
 			return
 		}
@@ -552,7 +554,7 @@ func waitForWorktreeStatus(t *testing.T, session *messaging.DirectSession, roomI
 		if marshalError != nil {
 			return false
 		}
-		var state schema.WorktreeState
+		var state workspace.WorktreeState
 		if json.Unmarshal(contentJSON, &state) != nil {
 			return false
 		}
@@ -589,7 +591,7 @@ func verifyPipelineResult(t *testing.T, session *messaging.DirectSession, roomID
 func checkPipelineResultContent(t *testing.T, content json.RawMessage, pipelineName, expectedConclusion string) {
 	t.Helper()
 
-	var result schema.PipelineResultContent
+	var result pipeline.PipelineResultContent
 	if err := json.Unmarshal(content, &result); err != nil {
 		t.Fatalf("unmarshal pipeline_result for %q: %v", pipelineName, err)
 	}

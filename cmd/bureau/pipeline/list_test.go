@@ -7,23 +7,23 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/bureau-foundation/bureau/lib/schema"
+	pipelineschema "github.com/bureau-foundation/bureau/lib/schema/pipeline"
 )
 
 func TestListPipelines(t *testing.T) {
 
 	state := newPipelineTestState()
-	state.addPipelineRoom("#bureau/pipeline:test.local", "!pipeline:test", map[string]schema.PipelineContent{
+	state.addPipelineRoom("#bureau/pipeline:test.local", "!pipeline:test", map[string]pipelineschema.PipelineContent{
 		"dev-workspace-init": {
 			Description: "Initialize a development workspace",
-			Steps: []schema.PipelineStep{
+			Steps: []pipelineschema.PipelineStep{
 				{Name: "clone", Run: "git clone ${REPO}"},
 				{Name: "setup", Run: "make setup"},
 			},
 		},
 		"deploy": {
 			Description: "Deploy to production",
-			Steps: []schema.PipelineStep{
+			Steps: []pipelineschema.PipelineStep{
 				{Name: "build", Run: "make build"},
 				{Name: "push", Run: "make push"},
 				{Name: "rollout", Run: "make rollout"},
@@ -46,10 +46,10 @@ func TestListPipelines(t *testing.T) {
 func TestListPipelinesJSON(t *testing.T) {
 
 	state := newPipelineTestState()
-	state.addPipelineRoom("#bureau/pipeline:test.local", "!pipeline:test", map[string]schema.PipelineContent{
+	state.addPipelineRoom("#bureau/pipeline:test.local", "!pipeline:test", map[string]pipelineschema.PipelineContent{
 		"init": {
 			Description: "Initialize",
-			Steps: []schema.PipelineStep{
+			Steps: []pipelineschema.PipelineStep{
 				{Name: "step1", Run: "echo hello"},
 			},
 		},

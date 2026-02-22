@@ -10,6 +10,7 @@ import (
 
 	"github.com/bureau-foundation/bureau/lib/ref"
 	"github.com/bureau-foundation/bureau/lib/schema"
+	"github.com/bureau-foundation/bureau/lib/schema/fleet"
 	"github.com/bureau-foundation/bureau/lib/service"
 	"github.com/bureau-foundation/bureau/messaging"
 )
@@ -114,7 +115,7 @@ type machineState struct {
 // fleetServiceState tracks a fleet service definition and its current
 // instances across the fleet.
 type fleetServiceState struct {
-	definition *schema.FleetServiceContent
+	definition *fleet.FleetServiceContent
 
 	// instances maps machine localparts to the PrincipalAssignment
 	// the fleet controller wrote for this service on that machine.
@@ -237,7 +238,7 @@ func (fc *FleetController) processFleetServiceEvent(event messaging.Event) {
 		return
 	}
 
-	content, err := parseEventContent[schema.FleetServiceContent](event)
+	content, err := parseEventContent[fleet.FleetServiceContent](event)
 	if err != nil {
 		fc.logger.Warn("failed to parse fleet service event",
 			"state_key", stateKey,
@@ -265,7 +266,7 @@ func (fc *FleetController) processMachineDefinitionEvent(event messaging.Event) 
 		return
 	}
 
-	content, err := parseEventContent[schema.MachineDefinitionContent](event)
+	content, err := parseEventContent[fleet.MachineDefinitionContent](event)
 	if err != nil {
 		fc.logger.Warn("failed to parse machine definition event",
 			"state_key", stateKey,
@@ -286,7 +287,7 @@ func (fc *FleetController) processFleetConfigEvent(event messaging.Event) {
 		return
 	}
 
-	content, err := parseEventContent[schema.FleetConfigContent](event)
+	content, err := parseEventContent[fleet.FleetConfigContent](event)
 	if err != nil {
 		fc.logger.Warn("failed to parse fleet config event",
 			"state_key", stateKey,
@@ -306,7 +307,7 @@ func (fc *FleetController) processHALeaseEvent(event messaging.Event) {
 		return
 	}
 
-	content, err := parseEventContent[schema.HALeaseContent](event)
+	content, err := parseEventContent[fleet.HALeaseContent](event)
 	if err != nil {
 		fc.logger.Warn("failed to parse HA lease event",
 			"state_key", stateKey,
@@ -681,7 +682,7 @@ func (fc *FleetController) emitDiscoveryNotifications(ctx context.Context, previ
 			continue
 		}
 		fc.sendFleetNotification(ctx,
-			schema.NewFleetConfigRoomDiscoveredMessage(machineLocalpart, roomID.String()))
+			fleet.NewFleetConfigRoomDiscoveredMessage(machineLocalpart, roomID.String()))
 	}
 
 	for serviceLocalpart := range fc.services {
@@ -689,7 +690,7 @@ func (fc *FleetController) emitDiscoveryNotifications(ctx context.Context, previ
 			continue
 		}
 		fc.sendFleetNotification(ctx,
-			schema.NewFleetServiceDiscoveredMessage(serviceLocalpart))
+			fleet.NewFleetServiceDiscoveredMessage(serviceLocalpart))
 	}
 }
 

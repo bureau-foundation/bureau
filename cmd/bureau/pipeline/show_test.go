@@ -7,23 +7,23 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/bureau-foundation/bureau/lib/schema"
+	pipelineschema "github.com/bureau-foundation/bureau/lib/schema/pipeline"
 )
 
 func TestShowPipeline(t *testing.T) {
 
 	state := newPipelineTestState()
-	state.addPipelineRoom("#bureau/pipeline:test.local", "!pipeline:test", map[string]schema.PipelineContent{
+	state.addPipelineRoom("#bureau/pipeline:test.local", "!pipeline:test", map[string]pipelineschema.PipelineContent{
 		"dev-workspace-init": {
 			Description: "Initialize a development workspace",
-			Variables: map[string]schema.PipelineVariable{
+			Variables: map[string]pipelineschema.PipelineVariable{
 				"PROJECT": {Description: "project name", Required: true},
 			},
-			Steps: []schema.PipelineStep{
+			Steps: []pipelineschema.PipelineStep{
 				{Name: "clone", Run: "git clone ${REPO}"},
 				{Name: "setup", Run: "make setup", Timeout: "10m"},
 			},
-			Log: &schema.PipelineLog{Room: "#iree/general:bureau.local"},
+			Log: &pipelineschema.PipelineLog{Room: "#iree/general:bureau.local"},
 		},
 	})
 	startTestServer(t, state)
@@ -41,9 +41,9 @@ func TestShowPipeline(t *testing.T) {
 func TestShowPipelineNotFound(t *testing.T) {
 
 	state := newPipelineTestState()
-	state.addPipelineRoom("#bureau/pipeline:test.local", "!pipeline:test", map[string]schema.PipelineContent{
+	state.addPipelineRoom("#bureau/pipeline:test.local", "!pipeline:test", map[string]pipelineschema.PipelineContent{
 		"exists": {
-			Steps: []schema.PipelineStep{{Name: "x", Run: "echo"}},
+			Steps: []pipelineschema.PipelineStep{{Name: "x", Run: "echo"}},
 		},
 	})
 	startTestServer(t, state)

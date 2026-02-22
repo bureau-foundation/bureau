@@ -16,7 +16,7 @@ import (
 
 	"github.com/bureau-foundation/bureau/lib/clock"
 	"github.com/bureau-foundation/bureau/lib/ref"
-	"github.com/bureau-foundation/bureau/lib/schema"
+	"github.com/bureau-foundation/bureau/lib/schema/fleet"
 	"github.com/bureau-foundation/bureau/lib/service"
 	"github.com/bureau-foundation/bureau/lib/version"
 	"github.com/bureau-foundation/bureau/messaging"
@@ -85,9 +85,9 @@ func run() error {
 		startedAt:     boot.Clock.Now(),
 		machines:      make(map[string]*machineState),
 		services:      make(map[string]*fleetServiceState),
-		definitions:   make(map[string]*schema.MachineDefinitionContent),
-		config:        make(map[string]*schema.FleetConfigContent),
-		leases:        make(map[string]*schema.HALeaseContent),
+		definitions:   make(map[string]*fleet.MachineDefinitionContent),
+		config:        make(map[string]*fleet.FleetConfigContent),
+		leases:        make(map[string]*fleet.HALeaseContent),
 		configRooms:   make(map[string]ref.RoomID),
 		fleetRoomID:   fleetRoomID,
 		machineRoomID: machineRoomID,
@@ -153,9 +153,9 @@ type FleetController struct {
 	// In-memory fleet model, rebuilt from /sync.
 	machines    map[string]*machineState
 	services    map[string]*fleetServiceState
-	definitions map[string]*schema.MachineDefinitionContent
-	config      map[string]*schema.FleetConfigContent
-	leases      map[string]*schema.HALeaseContent
+	definitions map[string]*fleet.MachineDefinitionContent
+	config      map[string]*fleet.FleetConfigContent
+	leases      map[string]*fleet.HALeaseContent
 
 	// configRooms maps machine localparts to their config room IDs.
 	// Populated from room aliases during initial sync.

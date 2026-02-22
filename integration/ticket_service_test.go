@@ -12,8 +12,9 @@ import (
 
 	"github.com/bureau-foundation/bureau/lib/ref"
 	"github.com/bureau-foundation/bureau/lib/schema"
+	"github.com/bureau-foundation/bureau/lib/schema/ticket"
 	"github.com/bureau-foundation/bureau/lib/service"
-	"github.com/bureau-foundation/bureau/lib/template"
+	"github.com/bureau-foundation/bureau/lib/templatedef"
 	"github.com/bureau-foundation/bureau/lib/testutil"
 	"github.com/bureau-foundation/bureau/messaging"
 )
@@ -257,7 +258,7 @@ func TestTicketLifecycleAgent(t *testing.T) {
 	if err != nil {
 		t.Fatalf("parse template ref: %v", err)
 	}
-	_, err = template.Push(ctx, admin, agentTemplateRef, agentTemplateContent(agentBinary, agentOptions{
+	_, err = templatedef.Push(ctx, admin, agentTemplateRef, agentTemplateContent(agentBinary, agentOptions{
 		TemplateName:     "ticket-lifecycle-agent",
 		RequiredServices: []string{"ticket"},
 		ExtraEnv: map[string]string{
@@ -748,8 +749,8 @@ func createTicketProjectRoom(t *testing.T, admin *messaging.DirectSession, name 
 	}
 
 	if _, err := admin.SendStateEvent(ctx, room.RoomID, schema.EventTypeTicketConfig, "",
-		schema.TicketConfigContent{
-			Version: schema.TicketConfigVersion,
+		ticket.TicketConfigContent{
+			Version: ticket.TicketConfigVersion,
 			Prefix:  "tkt",
 		}); err != nil {
 		t.Fatalf("publish ticket config for %s: %v", name, err)
@@ -781,7 +782,7 @@ func waitForMockCompletion(t *testing.T, mock *mockToolSequenceServer) {
 // event with the given title and returns its ticket ID (state key) and
 // content. This is the production observation path: clients watch Matrix
 // state events to learn about ticket changes.
-func waitForTicket(t *testing.T, watch *roomWatch, expectedTitle string) (string, schema.TicketContent) {
+func waitForTicket(t *testing.T, watch *roomWatch, expectedTitle string) (string, ticket.TicketContent) {
 	t.Helper()
 
 	event := watch.WaitForEvent(t, func(event messaging.Event) bool {
@@ -804,7 +805,7 @@ func waitForTicket(t *testing.T, watch *roomWatch, expectedTitle string) (string
 	if err != nil {
 		t.Fatalf("marshal ticket content: %v", err)
 	}
-	var content schema.TicketContent
+	var content ticket.TicketContent
 	if err := json.Unmarshal(contentJSON, &content); err != nil {
 		t.Fatalf("unmarshal ticket content: %v", err)
 	}
@@ -815,7 +816,7 @@ func waitForTicket(t *testing.T, watch *roomWatch, expectedTitle string) (string
 // readTicketState reads the current m.bureau.ticket state event for a
 // known ticket ID. Used after operations (update, close, reopen) where
 // the ticket ID is already known from a previous waitForTicket call.
-func readTicketState(t *testing.T, admin *messaging.DirectSession, roomID ref.RoomID, ticketID string) schema.TicketContent {
+func readTicketState(t *testing.T, admin *messaging.DirectSession, roomID ref.RoomID, ticketID string) ticket.TicketContent {
 	t.Helper()
 
 	raw, err := admin.GetStateEvent(t.Context(), roomID, schema.EventTypeTicket, ticketID)
@@ -823,7 +824,7 @@ func readTicketState(t *testing.T, admin *messaging.DirectSession, roomID ref.Ro
 		t.Fatalf("get ticket %s state: %v", ticketID, err)
 	}
 
-	var content schema.TicketContent
+	var content ticket.TicketContent
 	if err := json.Unmarshal(raw, &content); err != nil {
 		t.Fatalf("unmarshal ticket %s: %v", ticketID, err)
 	}

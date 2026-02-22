@@ -11,8 +11,8 @@ import (
 	"github.com/charmbracelet/lipgloss"
 
 	"github.com/bureau-foundation/bureau/lib/ref"
-	"github.com/bureau-foundation/bureau/lib/schema"
-	"github.com/bureau-foundation/bureau/lib/ticket"
+	"github.com/bureau-foundation/bureau/lib/schema/ticket"
+	"github.com/bureau-foundation/bureau/lib/ticketindex"
 )
 
 // testNow is a fixed time used across dependency graph tests. The
@@ -23,8 +23,8 @@ var testNow = time.Date(2026, 2, 14, 0, 0, 0, 0, time.UTC)
 // relationships for testing the dependency graph renderer. The center
 // ticket (center) is blocked by left-1 and left-2, and blocks right-1.
 func testDependencySource() *IndexSource {
-	index := ticket.NewIndex()
-	index.Put("center", schema.TicketContent{
+	index := ticketindex.NewIndex()
+	index.Put("center", ticket.TicketContent{
 		Version:   1,
 		Title:     "Center ticket",
 		Status:    "in_progress",
@@ -33,21 +33,21 @@ func testDependencySource() *IndexSource {
 		BlockedBy: []string{"left-1", "left-2"},
 		CreatedBy: ref.MustParseUserID("@test:bureau.local"),
 	})
-	index.Put("left-1", schema.TicketContent{
+	index.Put("left-1", ticket.TicketContent{
 		Version:  1,
 		Title:    "Left one",
 		Status:   "closed",
 		Priority: 0,
 		Type:     "task",
 	})
-	index.Put("left-2", schema.TicketContent{
+	index.Put("left-2", ticket.TicketContent{
 		Version:  1,
 		Title:    "Left two",
 		Status:   "open",
 		Priority: 1,
 		Type:     "bug",
 	})
-	index.Put("right-1", schema.TicketContent{
+	index.Put("right-1", ticket.TicketContent{
 		Version:   1,
 		Title:     "Right one",
 		Status:    "blocked",
@@ -142,7 +142,7 @@ func TestBoxDrawingStraightLines(t *testing.T) {
 }
 
 func TestDependencyGraphNoDeps(t *testing.T) {
-	source := NewIndexSource(ticket.NewIndex())
+	source := NewIndexSource(ticketindex.NewIndex())
 	graph := NewDependencyGraph(DefaultTheme, 80)
 
 	rendered, targets := graph.Render("center", nil, nil, source, testNow)
@@ -378,8 +378,8 @@ func TestDependencyGraphNarrowWidth(t *testing.T) {
 
 func TestDependencyGraphSymmetricFan(t *testing.T) {
 	// 3 left, 3 right should produce 3 rows with symmetric layout.
-	index := ticket.NewIndex()
-	index.Put("center", schema.TicketContent{
+	index := ticketindex.NewIndex()
+	index.Put("center", ticket.TicketContent{
 		Version:   1,
 		Title:     "Center",
 		Status:    "open",
@@ -388,7 +388,7 @@ func TestDependencyGraphSymmetricFan(t *testing.T) {
 		BlockedBy: []string{"a", "b", "c"},
 	})
 	for _, ticketID := range []string{"a", "b", "c", "x", "y", "z"} {
-		index.Put(ticketID, schema.TicketContent{
+		index.Put(ticketID, ticket.TicketContent{
 			Version:  1,
 			Title:    "Node " + ticketID,
 			Status:   "open",
@@ -397,7 +397,7 @@ func TestDependencyGraphSymmetricFan(t *testing.T) {
 		})
 	}
 	// Make x, y, z blocked by center.
-	index.Put("x", schema.TicketContent{
+	index.Put("x", ticket.TicketContent{
 		Version:   1,
 		Title:     "Node x",
 		Status:    "open",
@@ -405,7 +405,7 @@ func TestDependencyGraphSymmetricFan(t *testing.T) {
 		Type:      "task",
 		BlockedBy: []string{"center"},
 	})
-	index.Put("y", schema.TicketContent{
+	index.Put("y", ticket.TicketContent{
 		Version:   1,
 		Title:     "Node y",
 		Status:    "open",
@@ -413,7 +413,7 @@ func TestDependencyGraphSymmetricFan(t *testing.T) {
 		Type:      "task",
 		BlockedBy: []string{"center"},
 	})
-	index.Put("z", schema.TicketContent{
+	index.Put("z", ticket.TicketContent{
 		Version:   1,
 		Title:     "Node z",
 		Status:    "open",
@@ -663,8 +663,8 @@ func TestDependencyGraphPriorityIndicators(t *testing.T) {
 func TestDependencyGraphBorrowedPriority(t *testing.T) {
 	// When a ticket has a borrowed priority more urgent than its own,
 	// the label should include the escalation indicator →P{n}.
-	index := ticket.NewIndex()
-	index.Put("center", schema.TicketContent{
+	index := ticketindex.NewIndex()
+	index.Put("center", ticket.TicketContent{
 		Version:   1,
 		Title:     "Center",
 		Status:    "open",
@@ -675,14 +675,14 @@ func TestDependencyGraphBorrowedPriority(t *testing.T) {
 	// blocker is P3 but blocks center (P2) which blocks downstream-p0.
 	// So blocker's borrowed priority should be P0 (from downstream-p0
 	// depending transitively through center).
-	index.Put("blocker", schema.TicketContent{
+	index.Put("blocker", ticket.TicketContent{
 		Version:  1,
 		Title:    "Blocker",
 		Status:   "open",
 		Priority: 3,
 		Type:     "task",
 	})
-	index.Put("downstream-p0", schema.TicketContent{
+	index.Put("downstream-p0", ticket.TicketContent{
 		Version:   1,
 		Title:     "Urgent downstream",
 		Status:    "open",

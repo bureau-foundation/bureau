@@ -15,11 +15,12 @@ go_library(
     importpath = "github.com/bureau-foundation/bureau/cmd/bureau-pipeline-executor",
     visibility = ["//visibility:private"],
     deps = [
-        "//lib/artifact",
-        "//lib/pipeline",
+        "//lib/artifactstore",
+        "//lib/pipelinedef",
         "//lib/proxyclient",
         "//lib/ref",
         "//lib/schema",
+        "//lib/schema/pipeline",
         "//lib/version",
         "//messaging",
     ],
@@ -40,6 +41,6 @@ go_test(
     embed = [":bureau-pipeline-executor_lib"],
     deps = [
         "//lib/clock",
-        "//lib/schema",
+        "//lib/schema/pipeline",
     ],
 )

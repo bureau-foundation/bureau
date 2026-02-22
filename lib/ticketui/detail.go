@@ -11,8 +11,8 @@ import (
 	"github.com/charmbracelet/bubbles/viewport"
 	"github.com/charmbracelet/lipgloss"
 
-	"github.com/bureau-foundation/bureau/lib/schema"
-	"github.com/bureau-foundation/bureau/lib/ticket"
+	"github.com/bureau-foundation/bureau/lib/schema/ticket"
+	"github.com/bureau-foundation/bureau/lib/ticketindex"
 )
 
 // detailHeaderLines is the fixed number of lines consumed by the
@@ -59,7 +59,7 @@ func NewDetailRenderer(theme Theme, width int) DetailRenderer {
 // exactly [detailHeaderLines] lines tall regardless of content. When
 // a score is provided, signal indicators (↑N, →P0, Nd) are
 // right-aligned on Line 1.
-func (renderer DetailRenderer) RenderHeader(entry ticket.Entry, score *ticket.TicketScore) string {
+func (renderer DetailRenderer) RenderHeader(entry ticketindex.Entry, score *ticketindex.TicketScore) string {
 	content := entry.Content
 
 	// Line 1: STATUS  P1  type  id  [labels]  ...signals
@@ -85,7 +85,7 @@ func (renderer DetailRenderer) RenderHeader(entry ticket.Entry, score *ticket.Ti
 // IDs. Layout order: dependency graph, children, parent context,
 // close reason, description, notes. The now parameter drives
 // borrowed-priority computation for graph node indicators.
-func (renderer DetailRenderer) RenderBody(source Source, entry ticket.Entry, now time.Time) (string, []BodyClickTarget) {
+func (renderer DetailRenderer) RenderBody(source Source, entry ticketindex.Entry, now time.Time) (string, []BodyClickTarget) {
 	var allTargets []BodyClickTarget
 	var sections []string
 	totalLines := 0 // Running count of lines produced so far.
@@ -196,7 +196,7 @@ func (renderer DetailRenderer) RenderBody(source Source, entry ticket.Entry, now
 // renderMetaLine builds the first header line: status, priority, type,
 // ID, labels, and right-aligned signal indicators. The score parameter
 // is optional; when nil no indicators are shown.
-func (renderer DetailRenderer) renderMetaLine(ticketID string, content schema.TicketContent, score *ticket.TicketScore) string {
+func (renderer DetailRenderer) renderMetaLine(ticketID string, content ticket.TicketContent, score *ticketindex.TicketScore) string {
 	statusStyle := lipgloss.NewStyle().
 		Foreground(renderer.theme.StatusColor(content.Status)).
 		Bold(true)
@@ -246,7 +246,7 @@ func (renderer DetailRenderer) renderMetaLine(ticketID string, content schema.Ti
 //   - →P0: borrowed priority, only when more urgent than own. Uses
 //     the borrowed priority's color.
 //   - Nd: days since ready, only when > 0. Faint text.
-func (renderer DetailRenderer) renderSignalIndicators(score *ticket.TicketScore, ownPriority int) string {
+func (renderer DetailRenderer) renderSignalIndicators(score *ticketindex.TicketScore, ownPriority int) string {
 	if score == nil {
 		return ""
 	}
@@ -287,7 +287,7 @@ func (renderer DetailRenderer) renderSignalIndicators(score *ticket.TicketScore,
 // renderTimestampLine builds the second header line: timestamps and
 // assignee condensed onto a single line. Timestamps are shortened to
 // just the date (YYYY-MM-DD) to avoid wrapping.
-func (renderer DetailRenderer) renderTimestampLine(content schema.TicketContent) string {
+func (renderer DetailRenderer) renderTimestampLine(content ticket.TicketContent) string {
 	metaStyle := lipgloss.NewStyle().Foreground(renderer.theme.FaintText)
 
 	var parts []string
@@ -451,7 +451,7 @@ func (renderer DetailRenderer) renderMarkdown(text string) (string, error) {
 // renderParentContext renders the parent epic with progress bar.
 // The parent entry line is clickable for navigation. Returns the
 // rendered section and a click target for the parent line.
-func (renderer DetailRenderer) renderParentContext(parentID string, parent schema.TicketContent, source Source) (string, []BodyClickTarget) {
+func (renderer DetailRenderer) renderParentContext(parentID string, parent ticket.TicketContent, source Source) (string, []BodyClickTarget) {
 	headerStyle := lipgloss.NewStyle().
 		Bold(true).
 		Foreground(renderer.theme.NormalText)
@@ -550,7 +550,7 @@ func (renderer DetailRenderer) renderDependencies(title string, ticketIDs []stri
 // renderChildren renders the children of an epic with progress. Each
 // entry is truncated to one line. Returns the rendered section and
 // click targets with line offsets relative to the section.
-func (renderer DetailRenderer) renderChildren(parentID string, children []ticket.Entry, source Source) (string, []BodyClickTarget) {
+func (renderer DetailRenderer) renderChildren(parentID string, children []ticketindex.Entry, source Source) (string, []BodyClickTarget) {
 	headerStyle := lipgloss.NewStyle().
 		Bold(true).
 		Foreground(renderer.theme.NormalText)
@@ -598,7 +598,7 @@ func (renderer DetailRenderer) renderChildren(parentID string, children []ticket
 }
 
 // renderNotes renders ticket notes with author and timestamp.
-func (renderer DetailRenderer) renderNotes(notes []schema.TicketNote) string {
+func (renderer DetailRenderer) renderNotes(notes []ticket.TicketNote) string {
 	headerStyle := lipgloss.NewStyle().
 		Bold(true).
 		Foreground(renderer.theme.NormalText)
@@ -630,7 +630,7 @@ type DetailPane struct {
 	// word wrap adapts to splitter changes.
 	hasEntry bool
 	source   Source
-	entry    ticket.Entry
+	entry    ticketindex.Entry
 
 	// Pre-rendered header string, set by SetContent and rerender.
 	header string
@@ -703,7 +703,7 @@ func (pane *DetailPane) SetSize(width, height int) {
 // When the displayed ticket changes (different entry ID), any active
 // search is cleared because the search was against the previous
 // ticket's body content.
-func (pane *DetailPane) SetContent(source Source, entry ticket.Entry, now time.Time) {
+func (pane *DetailPane) SetContent(source Source, entry ticketindex.Entry, now time.Time) {
 	if entry.ID != pane.entry.ID {
 		pane.search.Clear()
 		// Viewport height may change when the search bar disappears.
@@ -747,7 +747,7 @@ func (pane *DetailPane) SetContent(source Source, entry ticket.Entry, now time.T
 func (pane *DetailPane) Clear() {
 	pane.hasEntry = false
 	pane.source = nil
-	pane.entry = ticket.Entry{}
+	pane.entry = ticketindex.Entry{}
 	pane.header = ""
 	pane.clickTargets = nil
 	pane.rawBody = ""
@@ -792,7 +792,7 @@ func (pane *DetailPane) rerender() {
 
 // computeScore returns a TicketScore pointer for the given ticket, or
 // nil for closed tickets where scoring is not meaningful.
-func (pane *DetailPane) computeScore(source Source, entry ticket.Entry, now time.Time) *ticket.TicketScore {
+func (pane *DetailPane) computeScore(source Source, entry ticketindex.Entry, now time.Time) *ticketindex.TicketScore {
 	if entry.Content.Status == "closed" {
 		return nil
 	}

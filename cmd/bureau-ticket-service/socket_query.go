@@ -12,9 +12,9 @@ import (
 
 	"github.com/bureau-foundation/bureau/lib/codec"
 	"github.com/bureau-foundation/bureau/lib/ref"
-	"github.com/bureau-foundation/bureau/lib/schema"
+	"github.com/bureau-foundation/bureau/lib/schema/ticket"
 	"github.com/bureau-foundation/bureau/lib/servicetoken"
-	"github.com/bureau-foundation/bureau/lib/ticket"
+	"github.com/bureau-foundation/bureau/lib/ticketindex"
 )
 
 // --- Request types ---
@@ -88,8 +88,8 @@ type childrenRequest struct {
 
 // --- Response types ---
 //
-// Query responses use schema types directly (schema.TicketContent,
-// ticket.Entry, ticket.Stats) rather than defining parallel wire
+// Query responses use schema types directly (ticket.TicketContent,
+// ticketindex.Entry, ticketindex.Stats) rather than defining parallel wire
 // types. The CBOR library falls back to json struct tags when cbor
 // tags are absent, so schema types serialize correctly over CBOR.
 // This avoids a shadow schema that silently drifts when fields are
@@ -98,17 +98,17 @@ type childrenRequest struct {
 // Response-only types below add context that doesn't exist in the
 // schema (room ID, computed dependency graph fields).
 
-// entryWithRoom pairs a ticket.Entry with its room ID for cross-room
+// entryWithRoom pairs a ticketindex.Entry with its room ID for cross-room
 // query results. Room-scoped queries leave Room empty since the
 // caller already knows which room they asked about.
 type entryWithRoom struct {
 	ID      string               `json:"id"`
 	Room    string               `json:"room,omitempty"`
-	Content schema.TicketContent `json:"content"`
+	Content ticket.TicketContent `json:"content"`
 }
 
 // entriesFromIndex converts index entries to the wire format.
-func entriesFromIndex(entries []ticket.Entry, room string) []entryWithRoom {
+func entriesFromIndex(entries []ticketindex.Entry, room string) []entryWithRoom {
 	result := make([]entryWithRoom, len(entries))
 	for i, entry := range entries {
 		result[i] = entryWithRoom{
@@ -125,7 +125,7 @@ func entriesFromIndex(entries []ticket.Entry, room string) []entryWithRoom {
 type searchEntryResponse struct {
 	ID      string               `json:"id"`
 	Room    string               `json:"room,omitempty"`
-	Content schema.TicketContent `json:"content"`
+	Content ticket.TicketContent `json:"content"`
 	Score   float64              `json:"score"`
 }
 
@@ -135,7 +135,7 @@ type searchEntryResponse struct {
 type showResponse struct {
 	ID      string               `json:"id"`
 	Room    string               `json:"room"`
-	Content schema.TicketContent `json:"content"`
+	Content ticket.TicketContent `json:"content"`
 
 	// Computed fields from the dependency graph.
 	Blocks      []string `json:"blocks,omitempty"`
@@ -144,7 +144,7 @@ type showResponse struct {
 
 	// Score holds the ranking dimensions for an open ticket. Nil
 	// for closed tickets where scoring is not meaningful.
-	Score *ticket.TicketScore `json:"score,omitempty"`
+	Score *ticketindex.TicketScore `json:"score,omitempty"`
 }
 
 // childrenResponse includes the children list and progress summary.
@@ -165,16 +165,16 @@ type depsResponse struct {
 // for the "ranked" action. Entries are sorted by composite score
 // descending (highest-leverage first).
 type rankedEntryResponse struct {
-	ID      string               `json:"id"`
-	Room    string               `json:"room,omitempty"`
-	Content schema.TicketContent `json:"content"`
-	Score   ticket.TicketScore   `json:"score"`
+	ID      string                  `json:"id"`
+	Room    string                  `json:"room,omitempty"`
+	Content ticket.TicketContent    `json:"content"`
+	Score   ticketindex.TicketScore `json:"score"`
 }
 
 // epicHealthResponse holds health metrics for an epic's children.
 type epicHealthResponse struct {
-	Ticket string                 `json:"ticket"`
-	Health ticket.EpicHealthStats `json:"health"`
+	Ticket string                      `json:"ticket"`
+	Health ticketindex.EpicHealthStats `json:"health"`
 }
 
 // upcomingGateEntry is a single upcoming timer gate with its ticket
@@ -202,7 +202,7 @@ type upcomingGateEntry struct {
 // --- Query helpers ---
 
 // parseFilterAssignee parses a string assignee from a query request into
-// a ref.UserID for use in ticket.Filter. An empty string returns the
+// a ref.UserID for use in ticketindex.Filter. An empty string returns the
 // zero value (no filter). A non-empty string must be a valid Matrix
 // user ID.
 func parseFilterAssignee(raw string) (ref.UserID, error) {
@@ -235,7 +235,7 @@ func (ts *TicketService) handleList(ctx context.Context, token *servicetoken.Tok
 		return nil, fmt.Errorf("invalid assignee filter: %w", err)
 	}
 
-	entries := state.index.List(ticket.Filter{
+	entries := state.index.List(ticketindex.Filter{
 		Status:   request.Status,
 		Priority: request.Priority,
 		Label:    request.Label,
@@ -255,7 +255,7 @@ func (ts *TicketService) roomQuery(
 	token *servicetoken.Token,
 	raw []byte,
 	grant string,
-	queryFunc func(*ticket.Index) []ticket.Entry,
+	queryFunc func(*ticketindex.Index) []ticketindex.Entry,
 ) (any, error) {
 	if err := requireGrant(token, grant); err != nil {
 		return nil, err
@@ -278,13 +278,13 @@ func (ts *TicketService) roomQuery(
 // with all blockers closed and gates satisfied, plus in_progress
 // tickets.
 func (ts *TicketService) handleReady(ctx context.Context, token *servicetoken.Token, raw []byte) (any, error) {
-	return ts.roomQuery(token, raw, "ticket/ready", (*ticket.Index).Ready)
+	return ts.roomQuery(token, raw, "ticket/ready", (*ticketindex.Index).Ready)
 }
 
 // handleBlocked returns open tickets that cannot be started: they
 // have at least one non-closed blocker or unsatisfied gate.
 func (ts *TicketService) handleBlocked(ctx context.Context, token *servicetoken.Token, raw []byte) (any, error) {
-	return ts.roomQuery(token, raw, "ticket/blocked", (*ticket.Index).Blocked)
+	return ts.roomQuery(token, raw, "ticket/blocked", (*ticketindex.Index).Blocked)
 }
 
 // handleRanked returns ready tickets sorted by composite score
@@ -307,7 +307,7 @@ func (ts *TicketService) handleRanked(ctx context.Context, token *servicetoken.T
 		return nil, err
 	}
 
-	ranked := state.index.Ranked(ts.clock.Now(), ticket.DefaultRankWeights())
+	ranked := state.index.Ranked(ts.clock.Now(), ticketindex.DefaultRankWeights())
 	result := make([]rankedEntryResponse, len(ranked))
 	for i, entry := range ranked {
 		result[i] = rankedEntryResponse{
@@ -350,9 +350,9 @@ func (ts *TicketService) handleShow(ctx context.Context, token *servicetoken.Tok
 	// Compute score for non-closed tickets. Scoring a closed ticket
 	// is meaningless (it cannot be assigned) and would produce
 	// confusing results.
-	var score *ticket.TicketScore
+	var score *ticketindex.TicketScore
 	if content.Status != "closed" {
-		ticketScore := state.index.Score(ticketID, ts.clock.Now(), ticket.DefaultRankWeights())
+		ticketScore := state.index.Score(ticketID, ts.clock.Now(), ticketindex.DefaultRankWeights())
 		score = &ticketScore
 	}
 
@@ -422,7 +422,7 @@ func (ts *TicketService) handleGrep(ctx context.Context, token *servicetoken.Tok
 		return nil, fmt.Errorf("invalid assignee filter: %w", err)
 	}
 
-	filter := ticket.Filter{
+	filter := ticketindex.Filter{
 		Status:   request.Status,
 		Priority: request.Priority,
 		Label:    request.Label,
@@ -489,7 +489,7 @@ func (ts *TicketService) handleSearch(ctx context.Context, token *servicetoken.T
 		return nil, fmt.Errorf("invalid assignee filter: %w", err)
 	}
 
-	filter := ticket.Filter{
+	filter := ticketindex.Filter{
 		Status:   request.Status,
 		Priority: request.Priority,
 		Label:    request.Label,

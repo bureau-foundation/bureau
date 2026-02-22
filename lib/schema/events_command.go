@@ -7,6 +7,7 @@ import (
 	"encoding/json"
 
 	"github.com/bureau-foundation/bureau/lib/ref"
+	"github.com/bureau-foundation/bureau/lib/schema/pipeline"
 )
 
 // Matrix m.room.message msgtype constants for Bureau command messages.
@@ -80,19 +81,19 @@ type CommandMessage struct {
 // Fields not relevant to a particular result shape are omitted from JSON
 // via omitempty.
 type CommandResultMessage struct {
-	MsgType    string               `json:"msgtype"`
-	Body       string               `json:"body"`
-	Status     string               `json:"status"`
-	Result     json.RawMessage      `json:"result,omitempty"`
-	Error      string               `json:"error,omitempty"`
-	ExitCode   *int                 `json:"exit_code,omitempty"`
-	DurationMS int64                `json:"duration_ms"`
-	Steps      []PipelineStepResult `json:"steps,omitempty"`
-	Outputs    map[string]string    `json:"outputs,omitempty"`
-	LogEventID ref.EventID          `json:"log_event_id,omitzero"`
-	RequestID  string               `json:"request_id,omitempty"`
-	Principal  string               `json:"principal,omitempty"`
-	RelatesTo  *ThreadRelation      `json:"m.relates_to,omitempty"`
+	MsgType    string                        `json:"msgtype"`
+	Body       string                        `json:"body"`
+	Status     string                        `json:"status"`
+	Result     json.RawMessage               `json:"result,omitempty"`
+	Error      string                        `json:"error,omitempty"`
+	ExitCode   *int                          `json:"exit_code,omitempty"`
+	DurationMS int64                         `json:"duration_ms"`
+	Steps      []pipeline.PipelineStepResult `json:"steps,omitempty"`
+	Outputs    map[string]string             `json:"outputs,omitempty"`
+	LogEventID ref.EventID                   `json:"log_event_id,omitzero"`
+	RequestID  string                        `json:"request_id,omitempty"`
+	Principal  string                        `json:"principal,omitempty"`
+	RelatesTo  *ThreadRelation               `json:"m.relates_to,omitempty"`
 }
 
 // ThreadRelation is the m.relates_to structure for threaded messages

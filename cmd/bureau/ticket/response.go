@@ -4,8 +4,8 @@
 package ticket
 
 import (
-	"github.com/bureau-foundation/bureau/lib/schema"
-	"github.com/bureau-foundation/bureau/lib/ticket"
+	"github.com/bureau-foundation/bureau/lib/schema/ticket"
+	"github.com/bureau-foundation/bureau/lib/ticketindex"
 )
 
 // Response types for decoding CBOR responses from the ticket service
@@ -19,7 +19,7 @@ import (
 type ticketEntry struct {
 	ID      string               `json:"id"             desc:"ticket identifier"`
 	Room    string               `json:"room,omitempty"  desc:"room ID"`
-	Content schema.TicketContent `json:"content"         desc:"ticket content"`
+	Content ticket.TicketContent `json:"content"         desc:"ticket content"`
 }
 
 // showResult is the full detail response for a single ticket,
@@ -27,21 +27,21 @@ type ticketEntry struct {
 type showResult struct {
 	ID      string               `json:"id"      desc:"ticket identifier"`
 	Room    string               `json:"room"    desc:"room ID"`
-	Content schema.TicketContent `json:"content" desc:"ticket content"`
+	Content ticket.TicketContent `json:"content" desc:"ticket content"`
 
-	Blocks      []string            `json:"blocks,omitempty"       desc:"IDs of tickets blocked by this one"`
-	ChildTotal  int                 `json:"child_total,omitempty"  desc:"total child ticket count"`
-	ChildClosed int                 `json:"child_closed,omitempty" desc:"closed child ticket count"`
-	Score       *ticket.TicketScore `json:"score,omitempty"        desc:"computed ranking score"`
+	Blocks      []string                 `json:"blocks,omitempty"       desc:"IDs of tickets blocked by this one"`
+	ChildTotal  int                      `json:"child_total,omitempty"  desc:"total child ticket count"`
+	ChildClosed int                      `json:"child_closed,omitempty" desc:"closed child ticket count"`
+	Score       *ticketindex.TicketScore `json:"score,omitempty"        desc:"computed ranking score"`
 }
 
 // rankedEntry pairs a ticket with its composite score for the
 // "ranked" action. Entries are sorted by score descending.
 type rankedEntry struct {
-	ID      string               `json:"id"             desc:"ticket identifier"`
-	Room    string               `json:"room,omitempty"  desc:"room ID"`
-	Content schema.TicketContent `json:"content"         desc:"ticket content"`
-	Score   ticket.TicketScore   `json:"score"           desc:"composite ranking score"`
+	ID      string                  `json:"id"             desc:"ticket identifier"`
+	Room    string                  `json:"room,omitempty"  desc:"room ID"`
+	Content ticket.TicketContent    `json:"content"         desc:"ticket content"`
+	Score   ticketindex.TicketScore `json:"score"           desc:"composite ranking score"`
 }
 
 // childrenResult includes the children list and progress summary.
@@ -60,8 +60,8 @@ type depsResult struct {
 
 // epicHealthResult holds health metrics for an epic's children.
 type epicHealthResult struct {
-	Ticket string                 `json:"ticket" desc:"epic ticket ID"`
-	Health ticket.EpicHealthStats `json:"health" desc:"epic health statistics"`
+	Ticket string                      `json:"ticket" desc:"epic ticket ID"`
+	Health ticketindex.EpicHealthStats `json:"health" desc:"epic health statistics"`
 }
 
 // serviceInfo is the authenticated diagnostic response from "info".
@@ -104,7 +104,7 @@ type importResult struct {
 type searchEntry struct {
 	ID      string               `json:"id"              desc:"ticket identifier"`
 	Room    string               `json:"room,omitempty"   desc:"room ID"`
-	Content schema.TicketContent `json:"content"          desc:"ticket content"`
+	Content ticket.TicketContent `json:"content"          desc:"ticket content"`
 	Score   float64              `json:"score"            desc:"search relevance score"`
 }
 
@@ -113,7 +113,7 @@ type searchEntry struct {
 type mutationResult struct {
 	ID      string               `json:"id"      desc:"mutated ticket ID"`
 	Room    string               `json:"room"    desc:"room ID"`
-	Content schema.TicketContent `json:"content" desc:"updated ticket content"`
+	Content ticket.TicketContent `json:"content" desc:"updated ticket content"`
 }
 
 // upcomingGateResult is a single upcoming timer gate with its ticket

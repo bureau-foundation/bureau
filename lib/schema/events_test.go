@@ -7,6 +7,7 @@ import (
 	"testing"
 
 	"github.com/bureau-foundation/bureau/lib/ref"
+	"github.com/bureau-foundation/bureau/lib/schema/artifact"
 )
 
 func TestEventTypeConstants(t *testing.T) {
@@ -126,26 +127,11 @@ func TestAdminProtectedEventsUsesConstants(t *testing.T) {
 func TestVersionConstants(t *testing.T) {
 	// Verify version constants are positive. A zero version
 	// constant would mean CanModify can never reject anything.
-	if ArtifactScopeVersion < 1 {
-		t.Errorf("ArtifactScopeVersion = %d, must be >= 1", ArtifactScopeVersion)
+	if artifact.ArtifactScopeVersion < 1 {
+		t.Errorf("ArtifactScopeVersion = %d, must be >= 1", artifact.ArtifactScopeVersion)
 	}
 	if CredentialsVersion < 1 {
 		t.Errorf("CredentialsVersion = %d, must be >= 1", CredentialsVersion)
-	}
-	if TicketContentVersion < 1 {
-		t.Errorf("TicketContentVersion = %d, must be >= 1", TicketContentVersion)
-	}
-	if TicketConfigVersion < 1 {
-		t.Errorf("TicketConfigVersion = %d, must be >= 1", TicketConfigVersion)
-	}
-	if AgentSessionVersion < 1 {
-		t.Errorf("AgentSessionVersion = %d, must be >= 1", AgentSessionVersion)
-	}
-	if AgentContextVersion < 1 {
-		t.Errorf("AgentContextVersion = %d, must be >= 1", AgentContextVersion)
-	}
-	if AgentMetricsVersion < 1 {
-		t.Errorf("AgentMetricsVersion = %d, must be >= 1", AgentMetricsVersion)
 	}
 }
 

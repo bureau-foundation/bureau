@@ -15,9 +15,9 @@ import (
 	"syscall"
 	"time"
 
-	"github.com/bureau-foundation/bureau/lib/artifact"
+	"github.com/bureau-foundation/bureau/lib/artifactstore"
 	"github.com/bureau-foundation/bureau/lib/ref"
-	"github.com/bureau-foundation/bureau/lib/schema"
+	"github.com/bureau-foundation/bureau/lib/schema/pipeline"
 	"github.com/bureau-foundation/bureau/messaging"
 )
 
@@ -45,7 +45,7 @@ type stepResult struct {
 //
 // The artifacts client may be nil — artifact-mode outputs will fail with
 // a clear error if the artifact service is not available.
-func executeStep(ctx context.Context, step schema.PipelineStep, index, total int, session messaging.Session, artifacts *artifact.Client, logger *threadLogger) stepResult {
+func executeStep(ctx context.Context, step pipeline.PipelineStep, index, total int, session messaging.Session, artifacts *artifactstore.Client, logger *threadLogger) stepResult {
 	startTime := time.Now()
 
 	// Parse timeout.
@@ -179,7 +179,7 @@ func executeStep(ctx context.Context, step schema.PipelineStep, index, total int
 	// store counts against the step's time budget.
 	var outputs map[string]string
 	if len(step.Outputs) > 0 {
-		parsed, err := schema.ParseStepOutputs(step.Outputs)
+		parsed, err := pipeline.ParseStepOutputs(step.Outputs)
 		if err != nil {
 			return stepResult{
 				status:   "failed",
@@ -215,7 +215,7 @@ func executeStep(ctx context.Context, step schema.PipelineStep, index, total int
 //
 // The "fail" status (default) means the assertion is a hard requirement that
 // was not met, and the pipeline should report failure.
-func executeAssertState(ctx context.Context, assertion *schema.PipelineAssertState, session messaging.Session) stepResult {
+func executeAssertState(ctx context.Context, assertion *pipeline.PipelineAssertState, session messaging.Session) stepResult {
 	// Parse the room ID from the pipeline step definition.
 	assertRoomID, err := ref.ParseRoomID(assertion.Room)
 	if err != nil {
@@ -313,7 +313,7 @@ func executeAssertState(ctx context.Context, assertion *schema.PipelineAssertSta
 // as a string (64 KB limit, trailing whitespace trimmed). For artifact
 // outputs, the file is streamed to the artifact service and the returned
 // art-* reference becomes the value.
-func captureStepOutputs(ctx context.Context, outputs map[string]schema.PipelineStepOutput, artifacts *artifact.Client) (map[string]string, error) {
+func captureStepOutputs(ctx context.Context, outputs map[string]pipeline.PipelineStepOutput, artifacts *artifactstore.Client) (map[string]string, error) {
 	result := make(map[string]string, len(outputs))
 
 	for name, output := range outputs {
@@ -329,7 +329,7 @@ func captureStepOutputs(ctx context.Context, outputs map[string]schema.PipelineS
 
 // captureOneOutput reads a single output file and returns its value as
 // either inline content or an artifact reference.
-func captureOneOutput(ctx context.Context, name string, output schema.PipelineStepOutput, artifacts *artifact.Client) (string, error) {
+func captureOneOutput(ctx context.Context, name string, output pipeline.PipelineStepOutput, artifacts *artifactstore.Client) (string, error) {
 	if output.Artifact {
 		return captureArtifactOutput(ctx, name, output, artifacts)
 	}
@@ -365,7 +365,7 @@ func captureInlineOutput(path string) (string, error) {
 // the art-* content-addressed reference. The artifact client must be
 // non-nil — the executor creates it at startup when the artifact service
 // socket is available in the sandbox.
-func captureArtifactOutput(ctx context.Context, name string, output schema.PipelineStepOutput, artifacts *artifact.Client) (string, error) {
+func captureArtifactOutput(ctx context.Context, name string, output pipeline.PipelineStepOutput, artifacts *artifactstore.Client) (string, error) {
 	if artifacts == nil {
 		return "", fmt.Errorf(
 			"artifact mode requires the artifact service, but no artifact socket is available in this sandbox; " +
@@ -384,7 +384,7 @@ func captureArtifactOutput(ctx context.Context, name string, output schema.Pipel
 		return "", fmt.Errorf("stat output file %s: %w", output.Path, err)
 	}
 
-	header := &artifact.StoreHeader{
+	header := &artifactstore.StoreHeader{
 		Action:      "store",
 		ContentType: output.ContentType,
 		Filename:    name,
@@ -395,7 +395,7 @@ func captureArtifactOutput(ctx context.Context, name string, output schema.Pipel
 	// For small files, embed the content directly in the header
 	// (avoids the streaming protocol overhead).
 	var reader io.Reader
-	if info.Size() <= artifact.SmallArtifactThreshold {
+	if info.Size() <= artifactstore.SmallArtifactThreshold {
 		data, readErr := io.ReadAll(file)
 		if readErr != nil {
 			return "", fmt.Errorf("reading output file %s: %w", output.Path, readErr)

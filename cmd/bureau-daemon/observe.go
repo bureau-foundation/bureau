@@ -33,6 +33,7 @@ import (
 	"github.com/bureau-foundation/bureau/lib/principal"
 	"github.com/bureau-foundation/bureau/lib/ref"
 	"github.com/bureau-foundation/bureau/lib/schema"
+	"github.com/bureau-foundation/bureau/lib/schema/observation"
 	"github.com/bureau-foundation/bureau/observe"
 )
 
@@ -441,7 +442,7 @@ func (d *Daemon) handleQueryLayout(clientConnection net.Conn, request observeReq
 		return
 	}
 
-	var layoutContent schema.LayoutContent
+	var layoutContent observation.LayoutContent
 	if err := json.Unmarshal(rawLayout, &layoutContent); err != nil {
 		d.sendObserveError(clientConnection,
 			fmt.Sprintf("parse layout for %q: %v", request.Channel, err))

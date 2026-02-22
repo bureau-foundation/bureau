@@ -6,8 +6,8 @@ package ticketui
 import (
 	"testing"
 
-	"github.com/bureau-foundation/bureau/lib/schema"
-	"github.com/bureau-foundation/bureau/lib/ticket"
+	"github.com/bureau-foundation/bureau/lib/schema/ticket"
+	"github.com/bureau-foundation/bureau/lib/ticketindex"
 )
 
 func TestFuzzyMatchBasic(t *testing.T) {
@@ -131,13 +131,13 @@ func TestApplyFuzzyNonContiguousMatch(t *testing.T) {
 
 func TestApplyFuzzySortedByScore(t *testing.T) {
 	// Create entries where one has a much better match than the other.
-	index := ticket.NewIndex()
-	index.Put("tkt-exact", schema.TicketContent{
+	index := ticketindex.NewIndex()
+	index.Put("tkt-exact", ticket.TicketContent{
 		Title:  "pooling is great",
 		Status: "open",
 		Type:   "task",
 	})
-	index.Put("tkt-fuzzy", schema.TicketContent{
+	index.Put("tkt-fuzzy", ticket.TicketContent{
 		Title:  "p-something o-other l-long i-inner n-nope g-gone",
 		Status: "open",
 		Type:   "task",
@@ -158,8 +158,8 @@ func TestApplyFuzzySortedByScore(t *testing.T) {
 }
 
 func TestApplyFuzzyTitlePositions(t *testing.T) {
-	index := ticket.NewIndex()
-	index.Put("tkt-001", schema.TicketContent{
+	index := ticketindex.NewIndex()
+	index.Put("tkt-001", ticket.TicketContent{
 		Title:  "hello world",
 		Status: "open",
 		Type:   "task",

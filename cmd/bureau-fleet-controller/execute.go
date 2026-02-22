@@ -11,6 +11,7 @@ import (
 
 	"github.com/bureau-foundation/bureau/lib/ref"
 	"github.com/bureau-foundation/bureau/lib/schema"
+	"github.com/bureau-foundation/bureau/lib/schema/fleet"
 	"github.com/bureau-foundation/bureau/messaging"
 )
 
@@ -65,7 +66,7 @@ func (fc *FleetController) writeMachineConfig(ctx context.Context, machineLocalp
 // principalName so it can identify its own assignments later.
 // Authorization fields (MatrixPolicy, ServiceVisibility, Authorization)
 // and Payload are propagated from the fleet service definition.
-func (fc *FleetController) buildAssignment(serviceLocalpart string, definition *schema.FleetServiceContent) (schema.PrincipalAssignment, error) {
+func (fc *FleetController) buildAssignment(serviceLocalpart string, definition *fleet.FleetServiceContent) (schema.PrincipalAssignment, error) {
 	// FleetServiceContent.Payload is json.RawMessage (opaque Matrix
 	// storage) while PrincipalAssignment.Payload is map[string]any
 	// (Go-side manipulation). Convert here.

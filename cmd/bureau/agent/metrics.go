@@ -13,7 +13,7 @@ import (
 	"github.com/bureau-foundation/bureau/cmd/bureau/cli"
 	"github.com/bureau-foundation/bureau/lib/principal"
 	"github.com/bureau-foundation/bureau/lib/ref"
-	"github.com/bureau-foundation/bureau/lib/schema"
+	agentschema "github.com/bureau-foundation/bureau/lib/schema/agent"
 )
 
 type agentMetricsParams struct {
@@ -43,7 +43,7 @@ of the m.bureau.agent_metrics state event.`,
 			},
 		},
 		Params:         func() any { return &params },
-		Output:         func() any { return &schema.AgentMetricsContent{} },
+		Output:         func() any { return &agentschema.AgentMetricsContent{} },
 		RequiredGrants: []string{"command/agent/metrics"},
 		Annotations:    cli.ReadOnly(),
 		Run: requireLocalpart("bureau agent metrics <localpart> [--machine <machine>]", func(localpart string) error {
@@ -99,12 +99,12 @@ func runMetrics(localpart string, params agentMetricsParams) error {
 		fmt.Fprintf(os.Stderr, "resolved %s → %s (scanned %d machines)\n", localpart, location.Machine.Localpart(), machineCount)
 	}
 
-	metricsRaw, err := session.GetStateEvent(ctx, location.ConfigRoomID, schema.EventTypeAgentMetrics, localpart)
+	metricsRaw, err := session.GetStateEvent(ctx, location.ConfigRoomID, agentschema.EventTypeAgentMetrics, localpart)
 	if err != nil {
 		return cli.NotFound("no metrics data for %s: %w", localpart, err)
 	}
 
-	var content schema.AgentMetricsContent
+	var content agentschema.AgentMetricsContent
 	if err := json.Unmarshal(metricsRaw, &content); err != nil {
 		return cli.Internal("parse metrics data: %w", err)
 	}

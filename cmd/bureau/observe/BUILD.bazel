@@ -13,7 +13,7 @@ go_library(
     visibility = ["//visibility:public"],
     deps = [
         "//cmd/bureau/cli",
-        "//lib/schema",
+        "//lib/schema/observation",
         "//lib/tmux",
         "//observe",
         "@com_github_spf13_pflag//:pflag",

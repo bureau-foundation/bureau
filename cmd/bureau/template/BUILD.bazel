@@ -21,7 +21,7 @@ go_library(
         "//cmd/bureau/cli",
         "//lib/ref",
         "//lib/schema",
-        "//lib/template",
+        "//lib/templatedef",
         "//messaging",
         "@com_github_tidwall_jsonc//:jsonc",
     ],

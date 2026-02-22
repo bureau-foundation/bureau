@@ -17,7 +17,7 @@ import (
 	"github.com/bureau-foundation/bureau/lib/ref"
 	"github.com/bureau-foundation/bureau/lib/schema"
 	"github.com/bureau-foundation/bureau/lib/secret"
-	"github.com/bureau-foundation/bureau/lib/template"
+	"github.com/bureau-foundation/bureau/lib/templatedef"
 	"github.com/bureau-foundation/bureau/messaging"
 )
 
@@ -815,7 +815,7 @@ func deployAgent(t *testing.T, admin *messaging.DirectSession, machine *testMach
 	if err != nil {
 		t.Fatalf("parse template ref for %q: %v", templateName, err)
 	}
-	_, err = template.Push(ctx, admin, templateRef,
+	_, err = templatedef.Push(ctx, admin, templateRef,
 		agentTemplateContent(options.Binary, options), testServer)
 	if err != nil {
 		t.Fatalf("push agent template %q: %v", templateName, err)
@@ -849,7 +849,7 @@ func deployAgent(t *testing.T, admin *messaging.DirectSession, machine *testMach
 		Principal:   principalEntity,
 		TemplateRef: templateRef,
 		ValidateTemplate: func(ctx context.Context, ref schema.TemplateRef, serverName ref.ServerName) error {
-			_, err := template.Fetch(ctx, admin, ref, serverName)
+			_, err := templatedef.Fetch(ctx, admin, ref, serverName)
 			return err
 		},
 		HomeserverURL: testHomeserverURL,
@@ -926,7 +926,7 @@ func publishTestAgentTemplate(t *testing.T, admin *messaging.DirectSession, mach
 		t.Fatalf("parse template ref for %q: %v", templateName, err)
 	}
 
-	_, err = template.Push(t.Context(), admin, ref,
+	_, err = templatedef.Push(t.Context(), admin, ref,
 		agentTemplateContent(testAgentBinary, agentOptions{TemplateName: templateName}),
 		testServer)
 	if err != nil {

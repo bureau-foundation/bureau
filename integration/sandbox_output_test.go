@@ -9,7 +9,7 @@ import (
 	"testing"
 
 	"github.com/bureau-foundation/bureau/lib/schema"
-	"github.com/bureau-foundation/bureau/lib/template"
+	"github.com/bureau-foundation/bureau/lib/templatedef"
 )
 
 // TestSandboxExitOutputCapture verifies that when a sandbox process exits
@@ -52,7 +52,7 @@ func TestSandboxExitOutputCapture(t *testing.T) {
 	if err != nil {
 		t.Fatalf("parse template ref: %v", err)
 	}
-	_, err = template.Push(t.Context(), admin, failingRef, schema.TemplateContent{
+	_, err = templatedef.Push(t.Context(), admin, failingRef, schema.TemplateContent{
 		Description: "Agent that fails immediately for output capture test",
 		Command:     []string{"/bin/sh", "-c", "echo 'FATAL: bureau-output-capture-test-error' >&2; exit 42"},
 		Namespaces:  &schema.TemplateNamespaces{PID: true},

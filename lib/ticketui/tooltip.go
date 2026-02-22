@@ -10,7 +10,7 @@ import (
 	"github.com/charmbracelet/lipgloss"
 	"github.com/charmbracelet/x/ansi"
 
-	"github.com/bureau-foundation/bureau/lib/schema"
+	ticketschema "github.com/bureau-foundation/bureau/lib/schema/ticket"
 )
 
 // tooltipMaxWidth is the maximum width of the tooltip box in visible
@@ -20,7 +20,7 @@ const tooltipMaxWidth = 50
 // tooltipState holds the data for a visible hover tooltip.
 type tooltipState struct {
 	ticketID string
-	content  schema.TicketContent
+	content  ticketschema.TicketContent
 
 	// Screen coordinates where the tooltip box is anchored (top-left).
 	anchorX int
@@ -45,7 +45,7 @@ type tooltipState struct {
 //	title (truncated to fit)
 //	description line 1...
 //	description line 2...
-func renderTooltip(ticketID string, content schema.TicketContent, theme Theme, maxWidth int) []string {
+func renderTooltip(ticketID string, content ticketschema.TicketContent, theme Theme, maxWidth int) []string {
 	if maxWidth < 10 {
 		maxWidth = 10
 	}

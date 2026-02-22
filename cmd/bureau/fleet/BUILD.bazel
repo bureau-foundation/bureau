@@ -23,6 +23,7 @@ go_library(
         "//cmd/bureau/cli",
         "//lib/ref",
         "//lib/schema",
+        "//lib/schema/fleet",
         "//lib/secret",
         "//lib/service",
         "//messaging",

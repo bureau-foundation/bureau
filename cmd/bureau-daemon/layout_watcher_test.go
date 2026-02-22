@@ -17,6 +17,7 @@ import (
 	"github.com/bureau-foundation/bureau/lib/principal"
 	"github.com/bureau-foundation/bureau/lib/ref"
 	"github.com/bureau-foundation/bureau/lib/schema"
+	"github.com/bureau-foundation/bureau/lib/schema/observation"
 	"github.com/bureau-foundation/bureau/lib/testutil"
 	"github.com/bureau-foundation/bureau/lib/tmux"
 	"github.com/bureau-foundation/bureau/messaging"
@@ -149,7 +150,7 @@ func TestLayoutWatcherPublishOnChange(t *testing.T) {
 		t.Fatal("layout event was not published to Matrix")
 	}
 
-	var content schema.LayoutContent
+	var content observation.LayoutContent
 	if err := json.Unmarshal(raw, &content); err != nil {
 		t.Fatalf("unmarshal published layout: %v", err)
 	}
@@ -186,15 +187,15 @@ func TestLayoutWatcherRestoreOnCreate(t *testing.T) {
 
 	// Pre-populate Matrix with a 2-window layout. The state key is
 	// the account localpart.
-	matrixState.setStateEvent("!config:test", schema.EventTypeLayout, entity.AccountLocalpart(), schema.LayoutContent{
-		Windows: []schema.LayoutWindow{
+	matrixState.setStateEvent("!config:test", schema.EventTypeLayout, entity.AccountLocalpart(), observation.LayoutContent{
+		Windows: []observation.LayoutWindow{
 			{
 				Name:  "main",
-				Panes: []schema.LayoutPane{{Command: "cat"}},
+				Panes: []observation.LayoutPane{{Command: "cat"}},
 			},
 			{
 				Name:  "shell",
-				Panes: []schema.LayoutPane{{Command: "cat"}},
+				Panes: []observation.LayoutPane{{Command: "cat"}},
 			},
 		},
 		SourceMachine: "@machine/other:bureau.local",

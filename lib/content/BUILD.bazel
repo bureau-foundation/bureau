@@ -15,8 +15,8 @@ go_library(
     importpath = "github.com/bureau-foundation/bureau/lib/content",
     visibility = ["//visibility:public"],
     deps = [
-        "//lib/pipeline",
-        "//lib/schema",
+        "//lib/pipelinedef",
+        "//lib/schema/pipeline",
     ],
 )
 

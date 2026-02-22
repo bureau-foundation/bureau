@@ -1,0 +1,150 @@
+# Copyright 2026 The Bureau Authors
+# SPDX-License-Identifier: Apache-2.0
+
+load("@rules_go//go:def.bzl", "go_library", "go_test")
+
+go_library(
+    name = "artifact",
+    srcs = [
+        "cache.go",
+        "cache_device.go",
+        "cache_index.go",
+        "cache_ring.go",
+        "chunker.go",
+        "client.go",
+        "compress.go",
+        "container.go",
+        "doc.go",
+        "encrypt.go",
+        "hash.go",
+        "index.go",
+        "metadata.go",
+        "reconstruction.go",
+        "refindex.go",
+        "store.go",
+        "tagstore.go",
+        "transfer.go",
+    ],
+    importpath = "github.com/bureau-foundation/bureau/lib/artifact",
+    visibility = ["//visibility:public"],
+    deps = [
+        "//lib/codec",
+        "//lib/secret",
+        "@com_github_klauspost_compress//zstd",
+        "@com_github_pierrec_lz4_v4//:lz4",
+        "@com_github_zeebo_blake3//:blake3",
+        "@org_golang_x_crypto//chacha20poly1305",
+        "@org_golang_x_crypto//hkdf",
+    ] + select({
+        "@rules_go//go/platform:android": [
+            "@org_golang_x_sys//unix",
+        ],
+        "@rules_go//go/platform:darwin": [
+            "@org_golang_x_sys//unix",
+        ],
+        "@rules_go//go/platform:ios": [
+            "@org_golang_x_sys//unix",
+        ],
+        "@rules_go//go/platform:linux": [
+            "@org_golang_x_sys//unix",
+        ],
+        "//conditions:default": [],
+    }),
+)
+
+go_test(
+    name = "artifact_test",
+    srcs = [
+        "cache_test.go",
+        "chunker_test.go",
+        "compress_test.go",
+        "container_test.go",
+        "encrypt_test.go",
+        "hash_test.go",
+        "index_test.go",
+        "metadata_test.go",
+        "reconstruction_test.go",
+        "refindex_test.go",
+        "store_test.go",
+        "tagstore_test.go",
+        "transfer_test.go",
+    ],
+    embed = [":artifact"],
+    deps = [
+        "//lib/codec",
+        "//lib/secret",
+    ],
+)
+
+go_library(
+    name = "artifactstore",
+    srcs = [
+        "cache.go",
+        "cache_device.go",
+        "cache_index.go",
+        "cache_ring.go",
+        "chunker.go",
+        "client.go",
+        "compress.go",
+        "container.go",
+        "doc.go",
+        "encrypt.go",
+        "hash.go",
+        "index.go",
+        "metadata.go",
+        "reconstruction.go",
+        "refindex.go",
+        "store.go",
+        "tagstore.go",
+        "transfer.go",
+    ],
+    importpath = "github.com/bureau-foundation/bureau/lib/artifactstore",
+    visibility = ["//visibility:public"],
+    deps = [
+        "//lib/codec",
+        "//lib/secret",
+        "@com_github_klauspost_compress//zstd",
+        "@com_github_pierrec_lz4_v4//:lz4",
+        "@com_github_zeebo_blake3//:blake3",
+        "@org_golang_x_crypto//chacha20poly1305",
+        "@org_golang_x_crypto//hkdf",
+    ] + select({
+        "@rules_go//go/platform:android": [
+            "@org_golang_x_sys//unix",
+        ],
+        "@rules_go//go/platform:darwin": [
+            "@org_golang_x_sys//unix",
+        ],
+        "@rules_go//go/platform:ios": [
+            "@org_golang_x_sys//unix",
+        ],
+        "@rules_go//go/platform:linux": [
+            "@org_golang_x_sys//unix",
+        ],
+        "//conditions:default": [],
+    }),
+)
+
+go_test(
+    name = "artifactstore_test",
+    srcs = [
+        "cache_test.go",
+        "chunker_test.go",
+        "compress_test.go",
+        "container_test.go",
+        "encrypt_test.go",
+        "hash_test.go",
+        "index_test.go",
+        "metadata_test.go",
+        "reconstruction_test.go",
+        "refindex_test.go",
+        "store_test.go",
+        "tagstore_test.go",
+        "transfer_test.go",
+    ],
+    embed = [":artifactstore"],
+    deps = [
+        "//lib/codec",
+        "//lib/secret",
+    ],
+)

@@ -10,15 +10,15 @@ import (
 	tea "github.com/charmbracelet/bubbletea"
 
 	"github.com/bureau-foundation/bureau/lib/ref"
-	"github.com/bureau-foundation/bureau/lib/schema"
-	"github.com/bureau-foundation/bureau/lib/ticket"
+	"github.com/bureau-foundation/bureau/lib/schema/ticket"
+	"github.com/bureau-foundation/bureau/lib/ticketindex"
 )
 
 // testSource creates a minimal ticket index with 4 tickets for testing.
 // Two are ready (open, no blockers), one closed, one in-progress.
 func testSource() *IndexSource {
-	index := ticket.NewIndex()
-	index.Put("tkt-001", schema.TicketContent{
+	index := ticketindex.NewIndex()
+	index.Put("tkt-001", ticket.TicketContent{
 		Version:   1,
 		Title:     "Fix connection pooling leak",
 		Body:      "The connection pool is leaking under high load.",
@@ -31,7 +31,7 @@ func testSource() *IndexSource {
 		CreatedAt: "2026-02-01T00:00:00Z",
 		UpdatedAt: "2026-02-01T00:00:00Z",
 	})
-	index.Put("tkt-002", schema.TicketContent{
+	index.Put("tkt-002", ticket.TicketContent{
 		Version:   1,
 		Title:     "Implement retry backoff",
 		Status:    "open",
@@ -42,7 +42,7 @@ func testSource() *IndexSource {
 		CreatedAt: "2026-02-02T00:00:00Z",
 		UpdatedAt: "2026-02-02T00:00:00Z",
 	})
-	index.Put("tkt-003", schema.TicketContent{
+	index.Put("tkt-003", ticket.TicketContent{
 		Version:   1,
 		Title:     "Update CI pipeline config",
 		Status:    "closed",
@@ -53,7 +53,7 @@ func testSource() *IndexSource {
 		UpdatedAt: "2026-02-03T00:00:00Z",
 		ClosedAt:  "2026-02-04T00:00:00Z",
 	})
-	index.Put("tkt-004", schema.TicketContent{
+	index.Put("tkt-004", ticket.TicketContent{
 		Version:   1,
 		Title:     "Layout crash on resize",
 		Status:    "in_progress",
@@ -71,10 +71,10 @@ func testSource() *IndexSource {
 // testGroupedSource creates a ticket index with epic/child relationships
 // for testing the grouped ready view.
 func testGroupedSource() *IndexSource {
-	index := ticket.NewIndex()
+	index := ticketindex.NewIndex()
 
 	// Epic 1: priority 1
-	index.Put("epic-1", schema.TicketContent{
+	index.Put("epic-1", ticket.TicketContent{
 		Version:   1,
 		Title:     "Migrate to gRPC",
 		Status:    "open",
@@ -85,7 +85,7 @@ func testGroupedSource() *IndexSource {
 		UpdatedAt: "2026-01-01T00:00:00Z",
 	})
 	// Children of epic-1.
-	index.Put("child-1a", schema.TicketContent{
+	index.Put("child-1a", ticket.TicketContent{
 		Version:   1,
 		Title:     "Proto definitions",
 		Status:    "open",
@@ -96,7 +96,7 @@ func testGroupedSource() *IndexSource {
 		CreatedAt: "2026-01-02T00:00:00Z",
 		UpdatedAt: "2026-01-02T00:00:00Z",
 	})
-	index.Put("child-1b", schema.TicketContent{
+	index.Put("child-1b", ticket.TicketContent{
 		Version:   1,
 		Title:     "Server stubs",
 		Status:    "open",
@@ -107,7 +107,7 @@ func testGroupedSource() *IndexSource {
 		CreatedAt: "2026-01-03T00:00:00Z",
 		UpdatedAt: "2026-01-03T00:00:00Z",
 	})
-	index.Put("child-1c", schema.TicketContent{
+	index.Put("child-1c", ticket.TicketContent{
 		Version:   1,
 		Title:     "Client migration",
 		Status:    "closed",
@@ -121,7 +121,7 @@ func testGroupedSource() *IndexSource {
 	})
 
 	// Epic 2: priority 0 (should sort first)
-	index.Put("epic-2", schema.TicketContent{
+	index.Put("epic-2", ticket.TicketContent{
 		Version:   1,
 		Title:     "Security hardening",
 		Status:    "open",
@@ -131,7 +131,7 @@ func testGroupedSource() *IndexSource {
 		CreatedAt: "2026-01-10T00:00:00Z",
 		UpdatedAt: "2026-01-10T00:00:00Z",
 	})
-	index.Put("child-2a", schema.TicketContent{
+	index.Put("child-2a", ticket.TicketContent{
 		Version:   1,
 		Title:     "Auth middleware",
 		Status:    "open",
@@ -144,7 +144,7 @@ func testGroupedSource() *IndexSource {
 	})
 
 	// Ungrouped ticket (no parent, not an epic).
-	index.Put("standalone", schema.TicketContent{
+	index.Put("standalone", ticket.TicketContent{
 		Version:   1,
 		Title:     "Fix typo in docs",
 		Status:    "open",
@@ -311,7 +311,7 @@ func TestModelView(t *testing.T) {
 }
 
 func TestModelEmptyState(t *testing.T) {
-	index := ticket.NewIndex()
+	index := ticketindex.NewIndex()
 	source := NewIndexSource(index)
 	model := NewModel(source)
 
@@ -753,8 +753,8 @@ func TestModelMouseClickFocusesDetailPane(t *testing.T) {
 // and C are all open. B is blocked by A. C is on the All tab only
 // (closed).
 func testDependencyModelSource() *IndexSource {
-	index := ticket.NewIndex()
-	index.Put("tkt-a", schema.TicketContent{
+	index := ticketindex.NewIndex()
+	index.Put("tkt-a", ticket.TicketContent{
 		Version:   1,
 		Title:     "Ticket A",
 		Status:    "open",
@@ -764,7 +764,7 @@ func testDependencyModelSource() *IndexSource {
 		CreatedAt: "2026-01-01T00:00:00Z",
 		UpdatedAt: "2026-01-01T00:00:00Z",
 	})
-	index.Put("tkt-b", schema.TicketContent{
+	index.Put("tkt-b", ticket.TicketContent{
 		Version:   1,
 		Title:     "Ticket B",
 		Status:    "open",
@@ -775,7 +775,7 @@ func testDependencyModelSource() *IndexSource {
 		CreatedAt: "2026-01-02T00:00:00Z",
 		UpdatedAt: "2026-01-02T00:00:00Z",
 	})
-	index.Put("tkt-c", schema.TicketContent{
+	index.Put("tkt-c", ticket.TicketContent{
 		Version:   1,
 		Title:     "Ticket C",
 		Status:    "closed",

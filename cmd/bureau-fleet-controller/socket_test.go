@@ -19,6 +19,7 @@ import (
 	"github.com/bureau-foundation/bureau/lib/clock"
 	"github.com/bureau-foundation/bureau/lib/ref"
 	"github.com/bureau-foundation/bureau/lib/schema"
+	"github.com/bureau-foundation/bureau/lib/schema/fleet"
 	"github.com/bureau-foundation/bureau/lib/service"
 	"github.com/bureau-foundation/bureau/lib/servicetoken"
 )
@@ -242,9 +243,9 @@ func sampleFleetController(t *testing.T) *FleetController {
 
 	// Fleet service 1: whisper STT.
 	fc.services["service/stt/whisper"] = &fleetServiceState{
-		definition: &schema.FleetServiceContent{
+		definition: &fleet.FleetServiceContent{
 			Template: "bureau/template:whisper-stt",
-			Replicas: schema.ReplicaSpec{Min: 1},
+			Replicas: fleet.ReplicaSpec{Min: 1},
 			Failover: "migrate",
 			Priority: 10,
 		},
@@ -258,9 +259,9 @@ func sampleFleetController(t *testing.T) *FleetController {
 
 	// Fleet service 2: worker with no instances.
 	fc.services["service/batch/worker"] = &fleetServiceState{
-		definition: &schema.FleetServiceContent{
+		definition: &fleet.FleetServiceContent{
 			Template: "bureau/template:worker",
-			Replicas: schema.ReplicaSpec{Min: 2},
+			Replicas: fleet.ReplicaSpec{Min: 2},
 			Failover: "alert",
 			Priority: 50,
 		},
@@ -268,9 +269,9 @@ func sampleFleetController(t *testing.T) *FleetController {
 	}
 
 	// One machine definition.
-	fc.definitions["gpu-cloud-pool"] = &schema.MachineDefinitionContent{
+	fc.definitions["gpu-cloud-pool"] = &fleet.MachineDefinitionContent{
 		Provider: "gcloud",
-		Resources: schema.MachineResources{
+		Resources: fleet.MachineResources{
 			CPUCores: 8,
 			MemoryMB: 32768,
 		},

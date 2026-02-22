@@ -16,6 +16,7 @@ import (
 	"github.com/bureau-foundation/bureau/lib/principal"
 	"github.com/bureau-foundation/bureau/lib/ref"
 	"github.com/bureau-foundation/bureau/lib/schema"
+	"github.com/bureau-foundation/bureau/lib/schema/workspace"
 	"github.com/bureau-foundation/bureau/messaging"
 )
 
@@ -200,17 +201,17 @@ func runCreate(alias string, session *cli.SessionConfig, machine, templateRef st
 	}
 
 	// Publish the ProjectConfig state event.
-	projectConfig := schema.ProjectConfig{
+	projectConfig := workspace.ProjectConfig{
 		WorkspacePath: project,
 		Repository:    repository,
 	}
 	if repository != "" {
 		projectConfig.DefaultBranch = branch
-		projectConfig.Worktrees = map[string]schema.WorktreeConfig{
+		projectConfig.Worktrees = map[string]workspace.WorktreeConfig{
 			worktreePath: {Branch: branch},
 		}
 	} else {
-		projectConfig.Directories = map[string]schema.DirectoryConfig{
+		projectConfig.Directories = map[string]workspace.DirectoryConfig{
 			worktreePath: {},
 		}
 	}
@@ -223,7 +224,7 @@ func runCreate(alias string, session *cli.SessionConfig, machine, templateRef st
 	// updates this to "active" when setup completes, and "bureau workspace
 	// destroy" updates it to "teardown" to trigger agent shutdown and
 	// teardown principal launch.
-	_, err = sess.SendStateEvent(ctx, workspaceRoomID, schema.EventTypeWorkspace, "", schema.WorkspaceState{
+	_, err = sess.SendStateEvent(ctx, workspaceRoomID, schema.EventTypeWorkspace, "", workspace.WorkspaceState{
 		Status:    "pending",
 		Project:   project,
 		Machine:   machine,

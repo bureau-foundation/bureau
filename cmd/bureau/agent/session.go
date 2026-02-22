@@ -13,7 +13,7 @@ import (
 	"github.com/bureau-foundation/bureau/cmd/bureau/cli"
 	"github.com/bureau-foundation/bureau/lib/principal"
 	"github.com/bureau-foundation/bureau/lib/ref"
-	"github.com/bureau-foundation/bureau/lib/schema"
+	agentschema "github.com/bureau-foundation/bureau/lib/schema/agent"
 )
 
 type agentSessionParams struct {
@@ -43,7 +43,7 @@ This is a direct view of the m.bureau.agent_session state event.`,
 			},
 		},
 		Params:         func() any { return &params },
-		Output:         func() any { return &schema.AgentSessionContent{} },
+		Output:         func() any { return &agentschema.AgentSessionContent{} },
 		RequiredGrants: []string{"command/agent/session"},
 		Annotations:    cli.ReadOnly(),
 		Run: requireLocalpart("bureau agent session <localpart> [--machine <machine>]", func(localpart string) error {
@@ -99,12 +99,12 @@ func runSession(localpart string, params agentSessionParams) error {
 		fmt.Fprintf(os.Stderr, "resolved %s → %s (scanned %d machines)\n", localpart, location.Machine.Localpart(), machineCount)
 	}
 
-	sessionRaw, err := session.GetStateEvent(ctx, location.ConfigRoomID, schema.EventTypeAgentSession, localpart)
+	sessionRaw, err := session.GetStateEvent(ctx, location.ConfigRoomID, agentschema.EventTypeAgentSession, localpart)
 	if err != nil {
 		return cli.NotFound("no session data for %s: %w", localpart, err)
 	}
 
-	var content schema.AgentSessionContent
+	var content agentschema.AgentSessionContent
 	if err := json.Unmarshal(sessionRaw, &content); err != nil {
 		return cli.Internal("parse session data: %w", err)
 	}

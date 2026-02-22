@@ -16,7 +16,7 @@ import (
 	"github.com/charmbracelet/lipgloss"
 	"github.com/charmbracelet/x/ansi"
 
-	"github.com/bureau-foundation/bureau/lib/ticket"
+	"github.com/bureau-foundation/bureau/lib/ticketindex"
 )
 
 // Tab identifies which data view is active.
@@ -146,10 +146,10 @@ type ListItem struct {
 	EpicTotal int
 	Collapsed bool
 	// For headers: health metrics (nil on non-ready tabs or ungrouped).
-	EpicHealth *ticket.EpicHealthStats
+	EpicHealth *ticketindex.EpicHealthStats
 
 	// For ticket rows: the ticket entry.
-	Entry ticket.Entry
+	Entry ticketindex.Entry
 }
 
 // navPosition records the viewer state at a point in time so
@@ -178,9 +178,9 @@ type Model struct {
 	// List state. items is the displayed list (may include group headers
 	// for the ready tab). entries is the underlying ticket data before
 	// grouping. stats comes from the source snapshot.
-	entries      []ticket.Entry
+	entries      []ticketindex.Entry
 	items        []ListItem
-	stats        ticket.Stats
+	stats        ticketindex.Stats
 	cursor       int
 	scrollOffset int
 	selectedID   string // Stable focus: track selection by ticket ID.
@@ -1022,7 +1022,7 @@ func (model *Model) refreshFromSource() {
 	// Apply filter if there's active filter text.
 	if model.filter.Input != "" {
 		results := model.filter.ApplyFuzzy(snapshot.Entries, model.source)
-		model.entries = make([]ticket.Entry, len(results))
+		model.entries = make([]ticketindex.Entry, len(results))
 		model.filterHighlights = make(map[string][]int, len(results))
 		for index, result := range results {
 			model.entries[index] = result.Entry
@@ -1057,7 +1057,7 @@ func (model *Model) applyFilter() {
 
 	if model.filter.Input != "" {
 		results := model.filter.ApplyFuzzy(snapshot.Entries, model.source)
-		model.entries = make([]ticket.Entry, len(results))
+		model.entries = make([]ticketindex.Entry, len(results))
 		model.filterHighlights = make(map[string][]int, len(results))
 		for index, result := range results {
 			model.entries[index] = result.Entry
@@ -1124,11 +1124,11 @@ func (model *Model) buildGroupedItems() []ListItem {
 	type epicGroup struct {
 		epicID      string
 		epicContent *epicInfo
-		children    []ticket.Entry
+		children    []ticketindex.Entry
 	}
 
 	groups := make(map[string]*epicGroup)
-	var ungrouped []ticket.Entry
+	var ungrouped []ticketindex.Entry
 
 	for _, entry := range model.entries {
 		if entry.Content.Parent == "" {
@@ -1459,7 +1459,7 @@ func (model *Model) syncDetailPane() {
 			content, ok := model.source.Get(item.EpicID)
 			if ok {
 				model.selectedID = item.EpicID
-				model.detailPane.SetContent(model.source, ticket.Entry{
+				model.detailPane.SetContent(model.source, ticketindex.Entry{
 					ID:      item.EpicID,
 					Content: content,
 				}, now)
@@ -1629,7 +1629,7 @@ func (model Model) renderListPane() string {
 		} else {
 			// On the Ready tab, compute and pass scoring info for
 			// leverage/urgency indicators. Other tabs pass nil.
-			var score *ticket.TicketScore
+			var score *ticketindex.TicketScore
 			if model.activeTab == TabReady {
 				ticketScore := model.source.Score(item.Entry.ID, now)
 				score = &ticketScore

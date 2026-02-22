@@ -10,14 +10,14 @@ import (
 	"github.com/charmbracelet/lipgloss"
 	"github.com/junegunn/fzf/src/util"
 
-	"github.com/bureau-foundation/bureau/lib/ticket"
+	"github.com/bureau-foundation/bureau/lib/ticketindex"
 )
 
 // FilterResult holds a matched entry with its fuzzy match metadata.
 // Produced by [FilterModel.ApplyFuzzy] and consumed by the list
 // renderer for character-level match highlighting.
 type FilterResult struct {
-	Entry          ticket.Entry
+	Entry          ticketindex.Entry
 	Score          int   // Best fuzzy score across all searchable fields.
 	TitlePositions []int // Matched rune positions in the title (for highlighting).
 }
@@ -40,7 +40,7 @@ type FilterModel struct {
 // An empty filter matches everything. Matching is case-insensitive
 // substring against each searchable field — if any field contains
 // the query, the entry matches.
-func (filter *FilterModel) MatchesEntry(entry ticket.Entry, source Source) bool {
+func (filter *FilterModel) MatchesEntry(entry ticketindex.Entry, source Source) bool {
 	if filter.Input == "" {
 		return true
 	}
@@ -93,12 +93,12 @@ func (filter *FilterModel) MatchesEntry(entry ticket.Entry, source Source) bool 
 
 // Apply filters a slice of entries, returning only those that match
 // the current filter text.
-func (filter *FilterModel) Apply(entries []ticket.Entry, source Source) []ticket.Entry {
+func (filter *FilterModel) Apply(entries []ticketindex.Entry, source Source) []ticketindex.Entry {
 	if filter.Input == "" {
 		return entries
 	}
 
-	var result []ticket.Entry
+	var result []ticketindex.Entry
 	for _, entry := range entries {
 		if filter.MatchesEntry(entry, source) {
 			result = append(result, entry)
@@ -112,7 +112,7 @@ func (filter *FilterModel) Apply(entries []ticket.Entry, source Source) []ticket
 // the fuzzy score and the character positions of matches within the
 // title (for highlighting in the list view). When the filter input
 // is empty, returns all entries with zero scores and no positions.
-func (filter *FilterModel) ApplyFuzzy(entries []ticket.Entry, source Source) []FilterResult {
+func (filter *FilterModel) ApplyFuzzy(entries []ticketindex.Entry, source Source) []FilterResult {
 	if filter.Input == "" {
 		results := make([]FilterResult, len(entries))
 		for index, entry := range entries {
@@ -169,7 +169,7 @@ func (filter *FilterModel) ApplyFuzzy(entries []ticket.Entry, source Source) []F
 // ticket entry. These are the same fields that MatchesEntry checks:
 // ticket ID, title, labels (joined), assignee, type, status, and
 // parent epic title.
-func searchableFields(entry ticket.Entry, source Source) []string {
+func searchableFields(entry ticketindex.Entry, source Source) []string {
 	fields := []string{
 		entry.ID,
 		entry.Content.Title,

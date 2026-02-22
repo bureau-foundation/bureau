@@ -18,6 +18,7 @@ import (
 	"github.com/bureau-foundation/bureau/cmd/bureau/cli"
 	"github.com/bureau-foundation/bureau/lib/ref"
 	"github.com/bureau-foundation/bureau/lib/schema"
+	pipelineschema "github.com/bureau-foundation/bureau/lib/schema/pipeline"
 	"github.com/bureau-foundation/bureau/messaging"
 )
 
@@ -66,7 +67,7 @@ func newPipelineTestState() *pipelineTestState {
 }
 
 // addPipelineRoom sets up a room with pipeline state events for list tests.
-func (s *pipelineTestState) addPipelineRoom(roomAlias, roomID string, pipelines map[string]schema.PipelineContent) {
+func (s *pipelineTestState) addPipelineRoom(roomAlias, roomID string, pipelines map[string]pipelineschema.PipelineContent) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 

@@ -9,7 +9,7 @@ import (
 
 	"github.com/charmbracelet/lipgloss"
 
-	"github.com/bureau-foundation/bureau/lib/ticket"
+	"github.com/bureau-foundation/bureau/lib/ticketindex"
 )
 
 // Column widths for the list table. The title column fills remaining
@@ -82,7 +82,7 @@ const unblockIndicatorWidth = 4
 //
 //	🐛P0 ● tkt-3vk5  Fix connection pooling leak [infra]
 //	📋P2 tkt-2ccg    Implement retry backoff [transport] ↑3
-func (renderer ListRenderer) RenderRow(entry ticket.Entry, selected bool, score *ticket.TicketScore, matchPositions []int) string {
+func (renderer ListRenderer) RenderRow(entry ticketindex.Entry, selected bool, score *ticketindex.TicketScore, matchPositions []int) string {
 	// Title width uses worst-case left portion (with status icon)
 	// so truncation is consistent across rows.
 	titleWidth := renderer.width - maxLeftWidth - columnWidthID
@@ -158,7 +158,7 @@ func (renderer ListRenderer) renderUnblockIndicator(count int, selected bool) st
 // may differ from the ticket's own priority when borrowed priority
 // escalates the visual urgency. matchPositions contains rune indices
 // in the original title that should be highlighted.
-func (renderer ListRenderer) renderNormalRow(entry ticket.Entry, titleLabels string, displayPriorityColor int, matchPositions []int) string {
+func (renderer ListRenderer) renderNormalRow(entry ticketindex.Entry, titleLabels string, displayPriorityColor int, matchPositions []int) string {
 	priority := entry.Content.Priority
 	status := entry.Content.Status
 
@@ -213,7 +213,7 @@ func (renderer ListRenderer) renderNormalRow(entry ticket.Entry, titleLabels str
 // background. All text uses the selected foreground color.
 // matchPositions contains rune indices in the original title that
 // should be highlighted (with bold+underline on the selection bg).
-func (renderer ListRenderer) renderSelectedRow(entry ticket.Entry, titleLabels string, matchPositions []int) string {
+func (renderer ListRenderer) renderSelectedRow(entry ticketindex.Entry, titleLabels string, matchPositions []int) string {
 	baseStyle := lipgloss.NewStyle().
 		Background(renderer.theme.SelectedBackground).
 		Foreground(renderer.theme.SelectedForeground)

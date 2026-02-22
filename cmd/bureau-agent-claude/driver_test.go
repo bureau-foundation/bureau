@@ -8,7 +8,7 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/bureau-foundation/bureau/lib/agent"
+	"github.com/bureau-foundation/bureau/lib/agentdriver"
 )
 
 // Sample stream-json output from Claude Code (representative fragments).
@@ -24,7 +24,7 @@ func TestParseOutputEventTypes(t *testing.T) {
 	t.Parallel()
 
 	driver := &claudeDriver{}
-	events := make(chan agent.Event, 64)
+	events := make(chan agentdriver.Event, 64)
 	reader := strings.NewReader(sampleStreamJSON)
 
 	err := driver.ParseOutput(context.Background(), reader, events)
@@ -33,7 +33,7 @@ func TestParseOutputEventTypes(t *testing.T) {
 	}
 	close(events)
 
-	var collected []agent.Event
+	var collected []agentdriver.Event
 	for event := range events {
 		collected = append(collected, event)
 	}
@@ -43,7 +43,7 @@ func TestParseOutputEventTypes(t *testing.T) {
 	}
 
 	// Event 0: system init.
-	if collected[0].Type != agent.EventTypeSystem {
+	if collected[0].Type != agentdriver.EventTypeSystem {
 		t.Errorf("event[0].Type = %q, want system", collected[0].Type)
 	}
 	if collected[0].System.Subtype != "init" {
@@ -54,7 +54,7 @@ func TestParseOutputEventTypes(t *testing.T) {
 	}
 
 	// Event 1: assistant text.
-	if collected[1].Type != agent.EventTypeResponse {
+	if collected[1].Type != agentdriver.EventTypeResponse {
 		t.Errorf("event[1].Type = %q, want response", collected[1].Type)
 	}
 	if collected[1].Response.Content != "I'll read the file first." {
@@ -62,7 +62,7 @@ func TestParseOutputEventTypes(t *testing.T) {
 	}
 
 	// Event 2: tool use.
-	if collected[2].Type != agent.EventTypeToolCall {
+	if collected[2].Type != agentdriver.EventTypeToolCall {
 		t.Errorf("event[2].Type = %q, want tool_call", collected[2].Type)
 	}
 	if collected[2].ToolCall.Name != "Read" {
@@ -73,7 +73,7 @@ func TestParseOutputEventTypes(t *testing.T) {
 	}
 
 	// Event 3: tool result.
-	if collected[3].Type != agent.EventTypeToolResult {
+	if collected[3].Type != agentdriver.EventTypeToolResult {
 		t.Errorf("event[3].Type = %q, want tool_result", collected[3].Type)
 	}
 	if collected[3].ToolResult.ID != "tu-1" {
@@ -87,12 +87,12 @@ func TestParseOutputEventTypes(t *testing.T) {
 	}
 
 	// Event 4: second assistant text.
-	if collected[4].Type != agent.EventTypeResponse {
+	if collected[4].Type != agentdriver.EventTypeResponse {
 		t.Errorf("event[4].Type = %q, want response", collected[4].Type)
 	}
 
 	// Event 5: result metrics.
-	if collected[5].Type != agent.EventTypeMetric {
+	if collected[5].Type != agentdriver.EventTypeMetric {
 		t.Errorf("event[5].Type = %q, want metric", collected[5].Type)
 	}
 	if collected[5].Metric.InputTokens != 2500 {
@@ -120,7 +120,7 @@ func TestParseOutputMalformedLine(t *testing.T) {
 	t.Parallel()
 
 	driver := &claudeDriver{}
-	events := make(chan agent.Event, 64)
+	events := make(chan agentdriver.Event, 64)
 	reader := strings.NewReader("not valid json\n{\"type\":\"system\",\"subtype\":\"init\"}\n")
 
 	err := driver.ParseOutput(context.Background(), reader, events)
@@ -129,7 +129,7 @@ func TestParseOutputMalformedLine(t *testing.T) {
 	}
 	close(events)
 
-	var collected []agent.Event
+	var collected []agentdriver.Event
 	for event := range events {
 		collected = append(collected, event)
 	}
@@ -139,12 +139,12 @@ func TestParseOutputMalformedLine(t *testing.T) {
 	}
 
 	// Malformed line should produce an output event with raw content.
-	if collected[0].Type != agent.EventTypeOutput {
+	if collected[0].Type != agentdriver.EventTypeOutput {
 		t.Errorf("malformed line should produce output event, got %q", collected[0].Type)
 	}
 
 	// Valid line should still parse correctly.
-	if collected[1].Type != agent.EventTypeSystem {
+	if collected[1].Type != agentdriver.EventTypeSystem {
 		t.Errorf("valid line should produce system event, got %q", collected[1].Type)
 	}
 }
@@ -153,7 +153,7 @@ func TestParseOutputUnknownType(t *testing.T) {
 	t.Parallel()
 
 	driver := &claudeDriver{}
-	events := make(chan agent.Event, 64)
+	events := make(chan agentdriver.Event, 64)
 	reader := strings.NewReader(`{"type":"future_event","data":"something new"}` + "\n")
 
 	err := driver.ParseOutput(context.Background(), reader, events)
@@ -162,7 +162,7 @@ func TestParseOutputUnknownType(t *testing.T) {
 	}
 	close(events)
 
-	var collected []agent.Event
+	var collected []agentdriver.Event
 	for event := range events {
 		collected = append(collected, event)
 	}
@@ -172,7 +172,7 @@ func TestParseOutputUnknownType(t *testing.T) {
 	}
 
 	// Unknown types should produce output events with raw JSON preserved.
-	if collected[0].Type != agent.EventTypeOutput {
+	if collected[0].Type != agentdriver.EventTypeOutput {
 		t.Errorf("unknown type should produce output event, got %q", collected[0].Type)
 	}
 	if collected[0].Output == nil {
@@ -187,7 +187,7 @@ func TestParseOutputEmptyLines(t *testing.T) {
 	t.Parallel()
 
 	driver := &claudeDriver{}
-	events := make(chan agent.Event, 64)
+	events := make(chan agentdriver.Event, 64)
 	reader := strings.NewReader("\n\n{\"type\":\"system\",\"subtype\":\"init\"}\n\n")
 
 	err := driver.ParseOutput(context.Background(), reader, events)
@@ -196,7 +196,7 @@ func TestParseOutputEmptyLines(t *testing.T) {
 	}
 	close(events)
 
-	var collected []agent.Event
+	var collected []agentdriver.Event
 	for event := range events {
 		collected = append(collected, event)
 	}
@@ -211,7 +211,7 @@ func TestParseOutputToolError(t *testing.T) {
 	t.Parallel()
 
 	driver := &claudeDriver{}
-	events := make(chan agent.Event, 64)
+	events := make(chan agentdriver.Event, 64)
 	reader := strings.NewReader(`{"type":"tool","subtype":"result","tool_use_id":"tu-2","content":"permission denied","is_error":true}` + "\n")
 
 	err := driver.ParseOutput(context.Background(), reader, events)
@@ -220,7 +220,7 @@ func TestParseOutputToolError(t *testing.T) {
 	}
 	close(events)
 
-	var collected []agent.Event
+	var collected []agentdriver.Event
 	for event := range events {
 		collected = append(collected, event)
 	}

@@ -16,7 +16,7 @@ import (
 	"github.com/spf13/pflag"
 
 	"github.com/bureau-foundation/bureau/cmd/bureau/cli"
-	"github.com/bureau-foundation/bureau/lib/schema"
+	"github.com/bureau-foundation/bureau/lib/schema/observation"
 	"github.com/bureau-foundation/bureau/lib/tmux"
 	"github.com/bureau-foundation/bureau/observe"
 	"golang.org/x/term"
@@ -322,7 +322,7 @@ display their role identity.`,
 }
 
 // loadLayoutFile reads a layout from a JSON file. The file format matches
-// the schema.LayoutContent wire format (the same JSON that appears in
+// the observation.LayoutContent wire format (the same JSON that appears in
 // m.bureau.layout state events).
 func loadLayoutFile(path string) (*observe.Layout, error) {
 	data, err := os.ReadFile(path)
@@ -330,7 +330,7 @@ func loadLayoutFile(path string) (*observe.Layout, error) {
 		return nil, err
 	}
 
-	var content schema.LayoutContent
+	var content observation.LayoutContent
 	if err := json.Unmarshal(data, &content); err != nil {
 		return nil, cli.Internal("parsing layout JSON: %w", err)
 	}

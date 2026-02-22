@@ -18,9 +18,10 @@ go_library(
     visibility = ["//visibility:public"],
     deps = [
         "//cmd/bureau/cli",
-        "//lib/pipeline",
+        "//lib/pipelinedef",
         "//lib/ref",
         "//lib/schema",
+        "//lib/schema/pipeline",
     ],
 )
 
@@ -37,9 +38,10 @@ go_test(
     embed = [":pipeline"],
     deps = [
         "//cmd/bureau/cli",
-        "//lib/pipeline",
+        "//lib/pipelinedef",
         "//lib/ref",
         "//lib/schema",
+        "//lib/schema/pipeline",
         "//messaging",
     ],
 )

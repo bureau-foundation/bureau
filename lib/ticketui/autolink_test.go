@@ -9,30 +9,30 @@ import (
 
 	"github.com/charmbracelet/x/ansi"
 
-	"github.com/bureau-foundation/bureau/lib/schema"
-	"github.com/bureau-foundation/bureau/lib/ticket"
+	"github.com/bureau-foundation/bureau/lib/schema/ticket"
+	"github.com/bureau-foundation/bureau/lib/ticketindex"
 )
 
 // autolinkTestSource creates a source with known tickets for autolink tests.
 func autolinkTestSource() *IndexSource {
-	index := ticket.NewIndex()
-	index.Put("tkt-001", schema.TicketContent{
+	index := ticketindex.NewIndex()
+	index.Put("tkt-001", ticket.TicketContent{
 		Title:    "First ticket",
 		Status:   "open",
 		Priority: 1,
 	})
-	index.Put("tkt-002", schema.TicketContent{
+	index.Put("tkt-002", ticket.TicketContent{
 		Title:    "Second ticket",
 		Status:   "closed",
 		Priority: 2,
 	})
-	index.Put("epic-1", schema.TicketContent{
+	index.Put("epic-1", ticket.TicketContent{
 		Title:    "Epic one",
 		Status:   "open",
 		Priority: 0,
 		Type:     "epic",
 	})
-	index.Put("tkt-3abc", schema.TicketContent{
+	index.Put("tkt-3abc", ticket.TicketContent{
 		Title:    "Hex-suffix ticket",
 		Status:   "in_progress",
 		Priority: 2,

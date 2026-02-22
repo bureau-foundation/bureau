@@ -9,7 +9,7 @@ import (
 	"strconv"
 	"strings"
 
-	"github.com/bureau-foundation/bureau/lib/schema"
+	"github.com/bureau-foundation/bureau/lib/schema/observation"
 	"github.com/bureau-foundation/bureau/lib/tmux"
 )
 
@@ -450,16 +450,16 @@ func labelsEqual(a, b map[string]string) bool {
 // LayoutToSchema converts a runtime Layout to its Matrix wire-format
 // representation. The SourceMachine field is not set here — the caller
 // (the daemon) stamps it before publishing.
-func LayoutToSchema(layout *Layout) schema.LayoutContent {
-	content := schema.LayoutContent{
+func LayoutToSchema(layout *Layout) observation.LayoutContent {
+	content := observation.LayoutContent{
 		Prefix: layout.Prefix,
 	}
 	for _, window := range layout.Windows {
-		schemaWindow := schema.LayoutWindow{
+		schemaWindow := observation.LayoutWindow{
 			Name: window.Name,
 		}
 		for _, pane := range window.Panes {
-			schemaPane := schema.LayoutPane{
+			schemaPane := observation.LayoutPane{
 				Observe: pane.Observe,
 				Command: pane.Command,
 				Role:    pane.Role,
@@ -467,7 +467,7 @@ func LayoutToSchema(layout *Layout) schema.LayoutContent {
 				Size:    pane.Size,
 			}
 			if pane.ObserveMembers != nil {
-				schemaPane.ObserveMembers = &schema.LayoutMemberFilter{
+				schemaPane.ObserveMembers = &observation.LayoutMemberFilter{
 					Labels: pane.ObserveMembers.Labels,
 				}
 			}
@@ -482,7 +482,7 @@ func LayoutToSchema(layout *Layout) schema.LayoutContent {
 // Layout type. The SourceMachine and SealedMetadata fields from the
 // schema are not carried into the runtime type — they're consumed
 // by the daemon directly.
-func SchemaToLayout(content schema.LayoutContent) *Layout {
+func SchemaToLayout(content observation.LayoutContent) *Layout {
 	layout := &Layout{
 		Prefix: content.Prefix,
 	}

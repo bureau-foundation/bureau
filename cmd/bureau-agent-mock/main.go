@@ -1,7 +1,7 @@
 // Copyright 2026 The Bureau Authors
 // SPDX-License-Identifier: Apache-2.0
 
-// bureau-agent-mock is a test binary that exercises lib/agent.Run with a
+// bureau-agent-mock is a test binary that exercises lib/agentdriver.Run with a
 // mock Driver. It proves the agent lifecycle works end-to-end in a real
 // Bureau sandbox: proxy client connectivity, context building, session
 // logging, event processing, Matrix messaging, and graceful shutdown.
@@ -21,24 +21,24 @@ import (
 	"os"
 	"time"
 
-	"github.com/bureau-foundation/bureau/lib/agent"
+	"github.com/bureau-foundation/bureau/lib/agentdriver"
 )
 
 func main() {
-	config := agent.RunConfigFromEnvironment()
+	config := agentdriver.RunConfigFromEnvironment()
 	config.SessionLogPath = "/run/bureau/session.jsonl"
 
-	if err := agent.Run(context.Background(), &mockDriver{}, config); err != nil {
+	if err := agentdriver.Run(context.Background(), &mockDriver{}, config); err != nil {
 		fmt.Fprintf(os.Stderr, "bureau-agent-mock: %v\n", err)
 		os.Exit(1)
 	}
 }
 
-// mockDriver implements agent.Driver with an internal pipe instead of an
+// mockDriver implements agentdriver.Driver with an internal pipe instead of an
 // external process.
 type mockDriver struct{}
 
-// mockProcess wraps an internal pipe to implement agent.Process.
+// mockProcess wraps an internal pipe to implement agentdriver.Process.
 type mockProcess struct {
 	stdinWriter *io.PipeWriter
 	done        chan struct{}
@@ -57,7 +57,7 @@ func (process *mockProcess) Signal(signal os.Signal) error {
 	return nil
 }
 
-func (driver *mockDriver) Start(ctx context.Context, config agent.DriverConfig) (agent.Process, io.ReadCloser, error) {
+func (driver *mockDriver) Start(ctx context.Context, config agentdriver.DriverConfig) (agentdriver.Process, io.ReadCloser, error) {
 	_, stdinWriter := io.Pipe()
 	stdoutReader, stdoutWriter := io.Pipe()
 	done := make(chan struct{})
@@ -92,7 +92,7 @@ func (driver *mockDriver) Start(ctx context.Context, config agent.DriverConfig) 
 	return process, stdoutReader, nil
 }
 
-func (driver *mockDriver) ParseOutput(ctx context.Context, stdout io.Reader, events chan<- agent.Event) error {
+func (driver *mockDriver) ParseOutput(ctx context.Context, stdout io.Reader, events chan<- agentdriver.Event) error {
 	scanner := bufio.NewScanner(stdout)
 	for scanner.Scan() {
 		line := scanner.Bytes()
@@ -105,10 +105,10 @@ func (driver *mockDriver) ParseOutput(ctx context.Context, stdout io.Reader, eve
 			Subtype string `json:"subtype"`
 		}
 		if json.Unmarshal(line, &envelope) != nil {
-			events <- agent.Event{
+			events <- agentdriver.Event{
 				Timestamp: time.Now(),
-				Type:      agent.EventTypeOutput,
-				Output:    &agent.OutputEvent{Raw: json.RawMessage(line)},
+				Type:      agentdriver.EventTypeOutput,
+				Output:    &agentdriver.OutputEvent{Raw: json.RawMessage(line)},
 			}
 			continue
 		}
@@ -120,7 +120,7 @@ func (driver *mockDriver) ParseOutput(ctx context.Context, stdout io.Reader, eve
 				Message string `json:"message"`
 			}
 			json.Unmarshal(line, &data)
-			events <- agent.Event{Timestamp: now, Type: agent.EventTypeSystem, System: &agent.SystemEvent{Subtype: envelope.Subtype, Message: data.Message}}
+			events <- agentdriver.Event{Timestamp: now, Type: agentdriver.EventTypeSystem, System: &agentdriver.SystemEvent{Subtype: envelope.Subtype, Message: data.Message}}
 		case "assistant":
 			switch envelope.Subtype {
 			case "text":
@@ -128,7 +128,7 @@ func (driver *mockDriver) ParseOutput(ctx context.Context, stdout io.Reader, eve
 					Text string `json:"text"`
 				}
 				json.Unmarshal(line, &data)
-				events <- agent.Event{Timestamp: now, Type: agent.EventTypeResponse, Response: &agent.ResponseEvent{Content: data.Text}}
+				events <- agentdriver.Event{Timestamp: now, Type: agentdriver.EventTypeResponse, Response: &agentdriver.ResponseEvent{Content: data.Text}}
 			case "tool_use":
 				var data struct {
 					ID    string          `json:"tool_use_id"`
@@ -136,7 +136,7 @@ func (driver *mockDriver) ParseOutput(ctx context.Context, stdout io.Reader, eve
 					Input json.RawMessage `json:"input"`
 				}
 				json.Unmarshal(line, &data)
-				events <- agent.Event{Timestamp: now, Type: agent.EventTypeToolCall, ToolCall: &agent.ToolCallEvent{ID: data.ID, Name: data.Name, Input: data.Input}}
+				events <- agentdriver.Event{Timestamp: now, Type: agentdriver.EventTypeToolCall, ToolCall: &agentdriver.ToolCallEvent{ID: data.ID, Name: data.Name, Input: data.Input}}
 			}
 		case "tool":
 			var data struct {
@@ -145,7 +145,7 @@ func (driver *mockDriver) ParseOutput(ctx context.Context, stdout io.Reader, eve
 				IsError bool   `json:"is_error"`
 			}
 			json.Unmarshal(line, &data)
-			events <- agent.Event{Timestamp: now, Type: agent.EventTypeToolResult, ToolResult: &agent.ToolResultEvent{ID: data.ID, Output: data.Content, IsError: data.IsError}}
+			events <- agentdriver.Event{Timestamp: now, Type: agentdriver.EventTypeToolResult, ToolResult: &agentdriver.ToolResultEvent{ID: data.ID, Output: data.Content, IsError: data.IsError}}
 		case "result":
 			var data struct {
 				CostUSD      float64 `json:"cost_usd"`
@@ -154,14 +154,14 @@ func (driver *mockDriver) ParseOutput(ctx context.Context, stdout io.Reader, eve
 				TurnCount    int64   `json:"num_turns"`
 			}
 			json.Unmarshal(line, &data)
-			events <- agent.Event{Timestamp: now, Type: agent.EventTypeMetric, Metric: &agent.MetricEvent{InputTokens: data.InputTokens, OutputTokens: data.OutputTokens, CostUSD: data.CostUSD, TurnCount: data.TurnCount}}
+			events <- agentdriver.Event{Timestamp: now, Type: agentdriver.EventTypeMetric, Metric: &agentdriver.MetricEvent{InputTokens: data.InputTokens, OutputTokens: data.OutputTokens, CostUSD: data.CostUSD, TurnCount: data.TurnCount}}
 		default:
-			events <- agent.Event{Timestamp: now, Type: agent.EventTypeOutput, Output: &agent.OutputEvent{Raw: json.RawMessage(append([]byte(nil), line...))}}
+			events <- agentdriver.Event{Timestamp: now, Type: agentdriver.EventTypeOutput, Output: &agentdriver.OutputEvent{Raw: json.RawMessage(append([]byte(nil), line...))}}
 		}
 	}
 	return scanner.Err()
 }
 
-func (driver *mockDriver) Interrupt(process agent.Process) error {
+func (driver *mockDriver) Interrupt(process agentdriver.Process) error {
 	return process.Signal(os.Interrupt)
 }

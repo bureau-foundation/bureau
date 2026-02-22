@@ -12,7 +12,7 @@ import (
 	"github.com/bureau-foundation/bureau/cmd/bureau/cli"
 	"github.com/bureau-foundation/bureau/lib/principal"
 	"github.com/bureau-foundation/bureau/lib/ref"
-	"github.com/bureau-foundation/bureau/lib/schema"
+	agentschema "github.com/bureau-foundation/bureau/lib/schema/agent"
 )
 
 type agentShowParams struct {
@@ -24,13 +24,13 @@ type agentShowParams struct {
 }
 
 type agentShowResult struct {
-	PrincipalUserID string                      `json:"principal_user_id"`
-	MachineName     string                      `json:"machine"`
-	Template        string                      `json:"template"`
-	AutoStart       bool                        `json:"auto_start"`
-	Labels          map[string]string           `json:"labels,omitempty"`
-	Session         *schema.AgentSessionContent `json:"session,omitempty"`
-	Metrics         *schema.AgentMetricsContent `json:"metrics,omitempty"`
+	PrincipalUserID string                           `json:"principal_user_id"`
+	MachineName     string                           `json:"machine"`
+	Template        string                           `json:"template"`
+	AutoStart       bool                             `json:"auto_start"`
+	Labels          map[string]string                `json:"labels,omitempty"`
+	Session         *agentschema.AgentSessionContent `json:"session,omitempty"`
+	Metrics         *agentschema.AgentMetricsContent `json:"metrics,omitempty"`
 }
 
 func showCommand() *cli.Command {

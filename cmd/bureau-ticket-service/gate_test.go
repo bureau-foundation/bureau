@@ -14,14 +14,15 @@ import (
 	"github.com/bureau-foundation/bureau/lib/clock"
 	"github.com/bureau-foundation/bureau/lib/ref"
 	"github.com/bureau-foundation/bureau/lib/schema"
-	"github.com/bureau-foundation/bureau/lib/ticket"
+	"github.com/bureau-foundation/bureau/lib/schema/ticket"
+	"github.com/bureau-foundation/bureau/lib/ticketindex"
 	"github.com/bureau-foundation/bureau/messaging"
 )
 
 // --- matchGateEvent unit tests ---
 
 func TestMatchPipelineGateMatches(t *testing.T) {
-	gate := &schema.TicketGate{
+	gate := &ticket.TicketGate{
 		ID:          "ci-pass",
 		Type:        "pipeline",
 		Status:      "pending",
@@ -44,7 +45,7 @@ func TestMatchPipelineGateMatches(t *testing.T) {
 }
 
 func TestMatchPipelineGateWrongRef(t *testing.T) {
-	gate := &schema.TicketGate{
+	gate := &ticket.TicketGate{
 		ID:          "ci-pass",
 		Type:        "pipeline",
 		Status:      "pending",
@@ -67,7 +68,7 @@ func TestMatchPipelineGateWrongRef(t *testing.T) {
 }
 
 func TestMatchPipelineGateWrongConclusion(t *testing.T) {
-	gate := &schema.TicketGate{
+	gate := &ticket.TicketGate{
 		ID:          "ci-pass",
 		Type:        "pipeline",
 		Status:      "pending",
@@ -90,7 +91,7 @@ func TestMatchPipelineGateWrongConclusion(t *testing.T) {
 }
 
 func TestMatchPipelineGateAnyConclusionMatches(t *testing.T) {
-	gate := &schema.TicketGate{
+	gate := &ticket.TicketGate{
 		ID:          "ci-done",
 		Type:        "pipeline",
 		Status:      "pending",
@@ -113,7 +114,7 @@ func TestMatchPipelineGateAnyConclusionMatches(t *testing.T) {
 }
 
 func TestMatchPipelineGateWrongEventType(t *testing.T) {
-	gate := &schema.TicketGate{
+	gate := &ticket.TicketGate{
 		ID:          "ci-pass",
 		Type:        "pipeline",
 		Status:      "pending",
@@ -137,7 +138,7 @@ func TestMatchPipelineGateWrongEventType(t *testing.T) {
 // --- Ticket gate tests ---
 
 func TestMatchTicketGateClosedMatches(t *testing.T) {
-	gate := &schema.TicketGate{
+	gate := &ticket.TicketGate{
 		ID:       "blocker-done",
 		Type:     "ticket",
 		Status:   "pending",
@@ -158,7 +159,7 @@ func TestMatchTicketGateClosedMatches(t *testing.T) {
 }
 
 func TestMatchTicketGateNotClosedDoesNotMatch(t *testing.T) {
-	gate := &schema.TicketGate{
+	gate := &ticket.TicketGate{
 		ID:       "blocker-done",
 		Type:     "ticket",
 		Status:   "pending",
@@ -179,7 +180,7 @@ func TestMatchTicketGateNotClosedDoesNotMatch(t *testing.T) {
 }
 
 func TestMatchTicketGateWrongTicketID(t *testing.T) {
-	gate := &schema.TicketGate{
+	gate := &ticket.TicketGate{
 		ID:       "blocker-done",
 		Type:     "ticket",
 		Status:   "pending",
@@ -202,7 +203,7 @@ func TestMatchTicketGateWrongTicketID(t *testing.T) {
 // --- State event gate tests ---
 
 func TestMatchStateEventGateBasicMatch(t *testing.T) {
-	gate := &schema.TicketGate{
+	gate := &ticket.TicketGate{
 		ID:        "deploy-ready",
 		Type:      "state_event",
 		Status:    "pending",
@@ -224,7 +225,7 @@ func TestMatchStateEventGateBasicMatch(t *testing.T) {
 }
 
 func TestMatchStateEventGateWrongEventType(t *testing.T) {
-	gate := &schema.TicketGate{
+	gate := &ticket.TicketGate{
 		ID:        "deploy-ready",
 		Type:      "state_event",
 		Status:    "pending",
@@ -243,7 +244,7 @@ func TestMatchStateEventGateWrongEventType(t *testing.T) {
 }
 
 func TestMatchStateEventGateWrongStateKey(t *testing.T) {
-	gate := &schema.TicketGate{
+	gate := &ticket.TicketGate{
 		ID:        "deploy-ready",
 		Type:      "state_event",
 		Status:    "pending",
@@ -263,7 +264,7 @@ func TestMatchStateEventGateWrongStateKey(t *testing.T) {
 }
 
 func TestMatchStateEventGateNoStateKeyMatchesAny(t *testing.T) {
-	gate := &schema.TicketGate{
+	gate := &ticket.TicketGate{
 		ID:        "any-workspace",
 		Type:      "state_event",
 		Status:    "pending",
@@ -283,7 +284,7 @@ func TestMatchStateEventGateNoStateKeyMatchesAny(t *testing.T) {
 }
 
 func TestMatchStateEventGateWithContentMatch(t *testing.T) {
-	gate := &schema.TicketGate{
+	gate := &ticket.TicketGate{
 		ID:        "status-active",
 		Type:      "state_event",
 		Status:    "pending",
@@ -307,7 +308,7 @@ func TestMatchStateEventGateWithContentMatch(t *testing.T) {
 }
 
 func TestMatchStateEventGateContentMatchFails(t *testing.T) {
-	gate := &schema.TicketGate{
+	gate := &ticket.TicketGate{
 		ID:        "status-active",
 		Type:      "state_event",
 		Status:    "pending",
@@ -331,7 +332,7 @@ func TestMatchStateEventGateContentMatchFails(t *testing.T) {
 }
 
 func TestMatchStateEventGateWithNumericContentMatch(t *testing.T) {
-	gate := &schema.TicketGate{
+	gate := &ticket.TicketGate{
 		ID:        "high-priority",
 		Type:      "state_event",
 		Status:    "pending",
@@ -355,7 +356,7 @@ func TestMatchStateEventGateWithNumericContentMatch(t *testing.T) {
 }
 
 func TestMatchStateEventGateSkipsCrossRoom(t *testing.T) {
-	gate := &schema.TicketGate{
+	gate := &ticket.TicketGate{
 		ID:        "cross-room",
 		Type:      "state_event",
 		Status:    "pending",
@@ -379,13 +380,13 @@ func TestMatchStateEventGateSkipsCrossRoom(t *testing.T) {
 func TestHumanGateNotAutoMatched(t *testing.T) {
 	ts := newGateTestService()
 	roomID := testRoomID("!room:local")
-	ts.rooms[roomID] = newTrackedRoom(map[string]schema.TicketContent{
+	ts.rooms[roomID] = newTrackedRoom(map[string]ticket.TicketContent{
 		"tkt-1": {
 			Version: 1,
 			Title:   "gated ticket",
 			Status:  "open",
 			Type:    "task",
-			Gates: []schema.TicketGate{
+			Gates: []ticket.TicketGate{
 				{
 					ID:     "approval",
 					Type:   "human",
@@ -416,7 +417,7 @@ func TestHumanGateNotAutoMatched(t *testing.T) {
 // --- Timer gate tests ---
 
 func TestTimerExpiredTrue(t *testing.T) {
-	gate := &schema.TicketGate{
+	gate := &ticket.TicketGate{
 		CreatedAt: "2026-01-01T00:00:00Z",
 		Duration:  "1h",
 		Target:    "2026-01-01T01:00:00Z",
@@ -432,7 +433,7 @@ func TestTimerExpiredTrue(t *testing.T) {
 }
 
 func TestTimerExpiredExactDeadline(t *testing.T) {
-	gate := &schema.TicketGate{
+	gate := &ticket.TicketGate{
 		CreatedAt: "2026-01-01T00:00:00Z",
 		Duration:  "1h",
 		Target:    "2026-01-01T01:00:00Z",
@@ -448,7 +449,7 @@ func TestTimerExpiredExactDeadline(t *testing.T) {
 }
 
 func TestTimerNotExpired(t *testing.T) {
-	gate := &schema.TicketGate{
+	gate := &ticket.TicketGate{
 		CreatedAt: "2026-01-01T00:00:00Z",
 		Duration:  "24h",
 		Target:    "2026-01-02T00:00:00Z",
@@ -466,7 +467,7 @@ func TestTimerNotExpired(t *testing.T) {
 func TestTimerEmptyTargetNotExpired(t *testing.T) {
 	// Timer with no Target (e.g., base="unblocked" with open
 	// blockers) should never fire.
-	gate := &schema.TicketGate{
+	gate := &ticket.TicketGate{
 		CreatedAt: "2026-01-01T00:00:00Z",
 		Duration:  "1h",
 		Base:      "unblocked",
@@ -483,7 +484,7 @@ func TestTimerEmptyTargetNotExpired(t *testing.T) {
 }
 
 func TestTimerInvalidTarget(t *testing.T) {
-	gate := &schema.TicketGate{
+	gate := &ticket.TicketGate{
 		Target: "not-a-timestamp",
 	}
 	_, err := timerExpired(gate, time.Date(2026, 6, 1, 0, 0, 0, 0, time.UTC))
@@ -507,7 +508,7 @@ func TestFireExpiredTimersSatisfiesExpired(t *testing.T) {
 	}
 
 	roomID := testRoomID("!room:local")
-	ts.rooms[roomID] = newTrackedRoom(map[string]schema.TicketContent{
+	ts.rooms[roomID] = newTrackedRoom(map[string]ticket.TicketContent{
 		"tkt-timer": {
 			Version:   1,
 			Title:     "timer gated",
@@ -515,7 +516,7 @@ func TestFireExpiredTimersSatisfiesExpired(t *testing.T) {
 			Type:      "task",
 			CreatedAt: "2026-01-01T00:00:00Z",
 			UpdatedAt: "2026-01-01T00:00:00Z",
-			Gates: []schema.TicketGate{
+			Gates: []ticket.TicketGate{
 				{
 					ID:        "soak",
 					Type:      "timer",
@@ -562,7 +563,7 @@ func TestFireExpiredTimersSkipsUnexpired(t *testing.T) {
 	}
 
 	roomID := testRoomID("!room:local")
-	ts.rooms[roomID] = newTrackedRoom(map[string]schema.TicketContent{
+	ts.rooms[roomID] = newTrackedRoom(map[string]ticket.TicketContent{
 		"tkt-timer": {
 			Version:   1,
 			Title:     "timer gated",
@@ -570,7 +571,7 @@ func TestFireExpiredTimersSkipsUnexpired(t *testing.T) {
 			Type:      "task",
 			CreatedAt: "2026-01-01T00:00:00Z",
 			UpdatedAt: "2026-01-01T00:00:00Z",
-			Gates: []schema.TicketGate{
+			Gates: []ticket.TicketGate{
 				{
 					ID:        "soak",
 					Type:      "timer",
@@ -612,7 +613,7 @@ func TestFireExpiredTimersSkipsEmptyTarget(t *testing.T) {
 	}
 
 	roomID := testRoomID("!room:local")
-	ts.rooms[roomID] = newTrackedRoom(map[string]schema.TicketContent{
+	ts.rooms[roomID] = newTrackedRoom(map[string]ticket.TicketContent{
 		"tkt-unblocked-pending": {
 			Version:   1,
 			Title:     "waiting for unblock",
@@ -621,7 +622,7 @@ func TestFireExpiredTimersSkipsEmptyTarget(t *testing.T) {
 			BlockedBy: []string{"tkt-blocker"},
 			CreatedAt: "2026-01-01T00:00:00Z",
 			UpdatedAt: "2026-01-01T00:00:00Z",
-			Gates: []schema.TicketGate{
+			Gates: []ticket.TicketGate{
 				{
 					ID:        "soak",
 					Type:      "timer",
@@ -673,7 +674,7 @@ func TestFireExpiredTimersLazyDeletion(t *testing.T) {
 	}
 
 	roomID := testRoomID("!room:local")
-	ts.rooms[roomID] = newTrackedRoom(map[string]schema.TicketContent{
+	ts.rooms[roomID] = newTrackedRoom(map[string]ticket.TicketContent{
 		"tkt-timer": {
 			Version:   1,
 			Title:     "already satisfied",
@@ -681,7 +682,7 @@ func TestFireExpiredTimersLazyDeletion(t *testing.T) {
 			Type:      "task",
 			CreatedAt: "2026-01-01T00:00:00Z",
 			UpdatedAt: "2026-01-01T00:00:00Z",
-			Gates: []schema.TicketGate{
+			Gates: []ticket.TicketGate{
 				{
 					ID:        "soak",
 					Type:      "timer",
@@ -696,8 +697,8 @@ func TestFireExpiredTimersLazyDeletion(t *testing.T) {
 
 	// Manually push a heap entry for the gate (simulating a push
 	// that happened before the gate was satisfied externally).
-	ts.pushTimerGates(roomID, "tkt-timer", &schema.TicketContent{
-		Gates: []schema.TicketGate{
+	ts.pushTimerGates(roomID, "tkt-timer", &ticket.TicketContent{
+		Gates: []ticket.TicketGate{
 			{
 				ID:     "soak",
 				Type:   "timer",
@@ -727,8 +728,8 @@ func TestTimerHeapOrdering(t *testing.T) {
 	}
 
 	// Push entries in non-chronological order.
-	content := &schema.TicketContent{
-		Gates: []schema.TicketGate{
+	content := &ticket.TicketContent{
+		Gates: []ticket.TicketGate{
 			{ID: "late", Type: "timer", Status: "pending", Target: "2026-01-01T03:00:00Z"},
 			{ID: "early", Type: "timer", Status: "pending", Target: "2026-01-01T01:00:00Z"},
 			{ID: "mid", Type: "timer", Status: "pending", Target: "2026-01-01T02:00:00Z"},
@@ -762,7 +763,7 @@ func TestTimerLoopEndToEnd(t *testing.T) {
 	}
 
 	roomID := testRoomID("!room:local")
-	ts.rooms[roomID] = newTrackedRoom(map[string]schema.TicketContent{
+	ts.rooms[roomID] = newTrackedRoom(map[string]ticket.TicketContent{
 		"tkt-timer": {
 			Version:   1,
 			Title:     "timer gated",
@@ -770,7 +771,7 @@ func TestTimerLoopEndToEnd(t *testing.T) {
 			Type:      "task",
 			CreatedAt: "2026-01-01T00:00:00Z",
 			UpdatedAt: "2026-01-01T00:00:00Z",
-			Gates: []schema.TicketGate{
+			Gates: []ticket.TicketGate{
 				{
 					ID:        "soak",
 					Type:      "timer",
@@ -832,7 +833,7 @@ func TestTimerLoopRescheduleOnNewEntry(t *testing.T) {
 	}
 
 	roomID := testRoomID("!room:local")
-	ts.rooms[roomID] = newTrackedRoom(map[string]schema.TicketContent{
+	ts.rooms[roomID] = newTrackedRoom(map[string]ticket.TicketContent{
 		"tkt-far": {
 			Version:   1,
 			Title:     "far timer",
@@ -840,7 +841,7 @@ func TestTimerLoopRescheduleOnNewEntry(t *testing.T) {
 			Type:      "task",
 			CreatedAt: "2026-01-01T00:00:00Z",
 			UpdatedAt: "2026-01-01T00:00:00Z",
-			Gates: []schema.TicketGate{
+			Gates: []ticket.TicketGate{
 				{
 					ID:        "far-gate",
 					Type:      "timer",
@@ -863,14 +864,14 @@ func TestTimerLoopRescheduleOnNewEntry(t *testing.T) {
 
 	// Now push a closer timer (1h) while holding the lock.
 	ts.mu.Lock()
-	ts.rooms[roomID].index.Put("tkt-near", schema.TicketContent{
+	ts.rooms[roomID].index.Put("tkt-near", ticket.TicketContent{
 		Version:   1,
 		Title:     "near timer",
 		Status:    "open",
 		Type:      "task",
 		CreatedAt: "2026-01-01T00:00:00Z",
 		UpdatedAt: "2026-01-01T00:00:00Z",
-		Gates: []schema.TicketGate{
+		Gates: []ticket.TicketGate{
 			{
 				ID:        "near-gate",
 				Type:      "timer",
@@ -881,8 +882,8 @@ func TestTimerLoopRescheduleOnNewEntry(t *testing.T) {
 			},
 		},
 	})
-	ts.pushTimerGates(roomID, "tkt-near", &schema.TicketContent{
-		Gates: []schema.TicketGate{
+	ts.pushTimerGates(roomID, "tkt-near", &ticket.TicketContent{
+		Gates: []ticket.TicketGate{
 			{
 				ID:     "near-gate",
 				Type:   "timer",
@@ -933,14 +934,14 @@ func TestSatisfyGateWritesToMatrixAndUpdatesIndex(t *testing.T) {
 	}
 
 	roomID := testRoomID("!room:local")
-	content := schema.TicketContent{
+	content := ticket.TicketContent{
 		Version:   1,
 		Title:     "gated",
 		Status:    "open",
 		Type:      "task",
 		CreatedAt: "2026-01-01T00:00:00Z",
 		UpdatedAt: "2026-01-01T00:00:00Z",
-		Gates: []schema.TicketGate{
+		Gates: []ticket.TicketGate{
 			{
 				ID:        "ci-pass",
 				Type:      "pipeline",
@@ -949,7 +950,7 @@ func TestSatisfyGateWritesToMatrixAndUpdatesIndex(t *testing.T) {
 			},
 		},
 	}
-	ts.rooms[roomID] = newTrackedRoom(map[string]schema.TicketContent{
+	ts.rooms[roomID] = newTrackedRoom(map[string]ticket.TicketContent{
 		"tkt-1": content,
 	})
 
@@ -995,7 +996,7 @@ func TestEvaluateGatesForEventsPipelineGate(t *testing.T) {
 	ts := newGateTestServiceWithWriter(writer)
 	roomID := testRoomID("!room:local")
 
-	ts.rooms[roomID] = newTrackedRoom(map[string]schema.TicketContent{
+	ts.rooms[roomID] = newTrackedRoom(map[string]ticket.TicketContent{
 		"tkt-1": {
 			Version:   1,
 			Title:     "needs CI",
@@ -1003,7 +1004,7 @@ func TestEvaluateGatesForEventsPipelineGate(t *testing.T) {
 			Type:      "task",
 			CreatedAt: "2026-01-01T00:00:00Z",
 			UpdatedAt: "2026-01-01T00:00:00Z",
-			Gates: []schema.TicketGate{
+			Gates: []ticket.TicketGate{
 				{
 					ID:          "ci",
 					Type:        "pipeline",
@@ -1045,7 +1046,7 @@ func TestEvaluateGatesForEventsTicketGate(t *testing.T) {
 	roomID := testRoomID("!room:local")
 
 	// Ticket tkt-2 has a gate waiting for tkt-1 to close.
-	ts.rooms[roomID] = newTrackedRoom(map[string]schema.TicketContent{
+	ts.rooms[roomID] = newTrackedRoom(map[string]ticket.TicketContent{
 		"tkt-1": {
 			Version:   1,
 			Title:     "blocker",
@@ -1061,7 +1062,7 @@ func TestEvaluateGatesForEventsTicketGate(t *testing.T) {
 			Type:      "task",
 			CreatedAt: "2026-01-01T00:00:00Z",
 			UpdatedAt: "2026-01-01T00:00:00Z",
-			Gates: []schema.TicketGate{
+			Gates: []ticket.TicketGate{
 				{
 					ID:        "blocker-done",
 					Type:      "ticket",
@@ -1098,7 +1099,7 @@ func TestEvaluateGatesForEventsMultipleGatesOnOneTicket(t *testing.T) {
 	ts := newGateTestServiceWithWriter(writer)
 	roomID := testRoomID("!room:local")
 
-	ts.rooms[roomID] = newTrackedRoom(map[string]schema.TicketContent{
+	ts.rooms[roomID] = newTrackedRoom(map[string]ticket.TicketContent{
 		"tkt-1": {
 			Version:   1,
 			Title:     "multi-gated",
@@ -1106,7 +1107,7 @@ func TestEvaluateGatesForEventsMultipleGatesOnOneTicket(t *testing.T) {
 			Type:      "task",
 			CreatedAt: "2026-01-01T00:00:00Z",
 			UpdatedAt: "2026-01-01T00:00:00Z",
-			Gates: []schema.TicketGate{
+			Gates: []ticket.TicketGate{
 				{
 					ID:          "ci",
 					Type:        "pipeline",
@@ -1156,7 +1157,7 @@ func TestEvaluateGatesForEventsBothGatesSatisfiedByBatchEvents(t *testing.T) {
 	ts := newGateTestServiceWithWriter(writer)
 	roomID := testRoomID("!room:local")
 
-	ts.rooms[roomID] = newTrackedRoom(map[string]schema.TicketContent{
+	ts.rooms[roomID] = newTrackedRoom(map[string]ticket.TicketContent{
 		"tkt-1": {
 			Version:   1,
 			Title:     "multi-gated",
@@ -1164,7 +1165,7 @@ func TestEvaluateGatesForEventsBothGatesSatisfiedByBatchEvents(t *testing.T) {
 			Type:      "task",
 			CreatedAt: "2026-01-01T00:00:00Z",
 			UpdatedAt: "2026-01-01T00:00:00Z",
-			Gates: []schema.TicketGate{
+			Gates: []ticket.TicketGate{
 				{
 					ID:          "ci",
 					Type:        "pipeline",
@@ -1228,7 +1229,7 @@ func TestEvaluateGatesSkipsAlreadySatisfiedGates(t *testing.T) {
 	ts := newGateTestServiceWithWriter(writer)
 	roomID := testRoomID("!room:local")
 
-	ts.rooms[roomID] = newTrackedRoom(map[string]schema.TicketContent{
+	ts.rooms[roomID] = newTrackedRoom(map[string]ticket.TicketContent{
 		"tkt-1": {
 			Version:   1,
 			Title:     "already satisfied",
@@ -1236,7 +1237,7 @@ func TestEvaluateGatesSkipsAlreadySatisfiedGates(t *testing.T) {
 			Type:      "task",
 			CreatedAt: "2026-01-01T00:00:00Z",
 			UpdatedAt: "2026-01-01T00:00:00Z",
-			Gates: []schema.TicketGate{
+			Gates: []ticket.TicketGate{
 				{
 					ID:          "ci",
 					Type:        "pipeline",
@@ -1275,7 +1276,7 @@ func TestEvaluateGatesNoMatchDoesNotWrite(t *testing.T) {
 	ts := newGateTestServiceWithWriter(writer)
 	roomID := testRoomID("!room:local")
 
-	ts.rooms[roomID] = newTrackedRoom(map[string]schema.TicketContent{
+	ts.rooms[roomID] = newTrackedRoom(map[string]ticket.TicketContent{
 		"tkt-1": {
 			Version:   1,
 			Title:     "gated",
@@ -1283,7 +1284,7 @@ func TestEvaluateGatesNoMatchDoesNotWrite(t *testing.T) {
 			Type:      "task",
 			CreatedAt: "2026-01-01T00:00:00Z",
 			UpdatedAt: "2026-01-01T00:00:00Z",
-			Gates: []schema.TicketGate{
+			Gates: []ticket.TicketGate{
 				{
 					ID:          "ci",
 					Type:        "pipeline",
@@ -1324,7 +1325,7 @@ func TestProcessRoomSyncTriggersGateEvaluation(t *testing.T) {
 	ts := newGateTestServiceWithWriter(writer)
 	roomID := testRoomID("!room:local")
 
-	ts.rooms[roomID] = newTrackedRoom(map[string]schema.TicketContent{
+	ts.rooms[roomID] = newTrackedRoom(map[string]ticket.TicketContent{
 		"tkt-1": {
 			Version:   1,
 			Title:     "needs CI",
@@ -1332,7 +1333,7 @@ func TestProcessRoomSyncTriggersGateEvaluation(t *testing.T) {
 			Type:      "task",
 			CreatedAt: "2026-01-01T00:00:00Z",
 			UpdatedAt: "2026-01-01T00:00:00Z",
-			Gates: []schema.TicketGate{
+			Gates: []ticket.TicketGate{
 				{
 					ID:          "ci",
 					Type:        "pipeline",
@@ -1378,7 +1379,7 @@ func TestProcessRoomSyncTicketCloseTriggersGate(t *testing.T) {
 
 	// tkt-2 has a ticket gate waiting for tkt-1 to close.
 	// tkt-1 starts as "open" in the index.
-	ts.rooms[roomID] = newTrackedRoom(map[string]schema.TicketContent{
+	ts.rooms[roomID] = newTrackedRoom(map[string]ticket.TicketContent{
 		"tkt-1": {
 			Version:   1,
 			Title:     "blocker",
@@ -1394,7 +1395,7 @@ func TestProcessRoomSyncTicketCloseTriggersGate(t *testing.T) {
 			Type:      "task",
 			CreatedAt: "2026-01-01T00:00:00Z",
 			UpdatedAt: "2026-01-01T00:00:00Z",
-			Gates: []schema.TicketGate{
+			Gates: []ticket.TicketGate{
 				{
 					ID:        "wait-for-blocker",
 					Type:      "ticket",
@@ -1407,7 +1408,7 @@ func TestProcessRoomSyncTicketCloseTriggersGate(t *testing.T) {
 	})
 
 	// tkt-1 transitions to closed via /sync.
-	closedContent := toContentMap(t, schema.TicketContent{
+	closedContent := toContentMap(t, ticket.TicketContent{
 		Version:   1,
 		Title:     "blocker",
 		Status:    "closed",
@@ -1453,7 +1454,7 @@ func TestProcessRoomSyncTicketCloseTriggersGate(t *testing.T) {
 // function matches identically.
 
 func TestMatchStateEventConditionBasic(t *testing.T) {
-	gate := &schema.TicketGate{
+	gate := &ticket.TicketGate{
 		Type:      "state_event",
 		EventType: "m.bureau.workspace",
 	}
@@ -1468,7 +1469,7 @@ func TestMatchStateEventConditionBasic(t *testing.T) {
 }
 
 func TestMatchStateEventConditionWrongType(t *testing.T) {
-	gate := &schema.TicketGate{
+	gate := &ticket.TicketGate{
 		Type:      "state_event",
 		EventType: "m.bureau.workspace",
 	}
@@ -1483,7 +1484,7 @@ func TestMatchStateEventConditionWrongType(t *testing.T) {
 }
 
 func TestMatchStateEventConditionStateKey(t *testing.T) {
-	gate := &schema.TicketGate{
+	gate := &ticket.TicketGate{
 		Type:      "state_event",
 		EventType: "m.bureau.workspace",
 		StateKey:  "ws-1",
@@ -1499,7 +1500,7 @@ func TestMatchStateEventConditionStateKey(t *testing.T) {
 }
 
 func TestMatchStateEventConditionWrongStateKey(t *testing.T) {
-	gate := &schema.TicketGate{
+	gate := &ticket.TicketGate{
 		Type:      "state_event",
 		EventType: "m.bureau.workspace",
 		StateKey:  "ws-1",
@@ -1535,7 +1536,7 @@ func TestCrossRoomGateSatisfiedByWatchedRoomEvent(t *testing.T) {
 
 	// Ticket room has a cross-room gate watching CI results.
 	ticketRoomID := testRoomID("!tickets:local")
-	ts.rooms[ticketRoomID] = newTrackedRoom(map[string]schema.TicketContent{
+	ts.rooms[ticketRoomID] = newTrackedRoom(map[string]ticket.TicketContent{
 		"tkt-1": {
 			Version:   1,
 			Title:     "needs CI from other room",
@@ -1543,7 +1544,7 @@ func TestCrossRoomGateSatisfiedByWatchedRoomEvent(t *testing.T) {
 			Type:      "task",
 			CreatedAt: "2026-01-01T00:00:00Z",
 			UpdatedAt: "2026-01-01T00:00:00Z",
-			Gates: []schema.TicketGate{
+			Gates: []ticket.TicketGate{
 				{
 					ID:        "cross-ci",
 					Type:      "state_event",
@@ -1611,7 +1612,7 @@ func TestCrossRoomGateNoEventsFromWatchedRoom(t *testing.T) {
 	}
 
 	ticketRoomID := testRoomID("!tickets:local")
-	ts.rooms[ticketRoomID] = newTrackedRoom(map[string]schema.TicketContent{
+	ts.rooms[ticketRoomID] = newTrackedRoom(map[string]ticket.TicketContent{
 		"tkt-1": {
 			Version:   1,
 			Title:     "needs CI",
@@ -1619,7 +1620,7 @@ func TestCrossRoomGateNoEventsFromWatchedRoom(t *testing.T) {
 			Type:      "task",
 			CreatedAt: "2026-01-01T00:00:00Z",
 			UpdatedAt: "2026-01-01T00:00:00Z",
-			Gates: []schema.TicketGate{
+			Gates: []ticket.TicketGate{
 				{
 					ID:        "cross-ci",
 					Type:      "state_event",
@@ -1674,7 +1675,7 @@ func TestCrossRoomGateUnresolvableAlias(t *testing.T) {
 	}
 
 	ticketRoomID := testRoomID("!tickets:local")
-	ts.rooms[ticketRoomID] = newTrackedRoom(map[string]schema.TicketContent{
+	ts.rooms[ticketRoomID] = newTrackedRoom(map[string]ticket.TicketContent{
 		"tkt-1": {
 			Version:   1,
 			Title:     "bad alias gate",
@@ -1682,7 +1683,7 @@ func TestCrossRoomGateUnresolvableAlias(t *testing.T) {
 			Type:      "task",
 			CreatedAt: "2026-01-01T00:00:00Z",
 			UpdatedAt: "2026-01-01T00:00:00Z",
-			Gates: []schema.TicketGate{
+			Gates: []ticket.TicketGate{
 				{
 					ID:        "cross-ci",
 					Type:      "state_event",
@@ -1760,7 +1761,7 @@ func TestCrossRoomGateSkipsSameRoomGates(t *testing.T) {
 	}
 
 	ticketRoomID := testRoomID("!tickets:local")
-	ts.rooms[ticketRoomID] = newTrackedRoom(map[string]schema.TicketContent{
+	ts.rooms[ticketRoomID] = newTrackedRoom(map[string]ticket.TicketContent{
 		"tkt-1": {
 			Version:   1,
 			Title:     "same-room gate",
@@ -1768,7 +1769,7 @@ func TestCrossRoomGateSkipsSameRoomGates(t *testing.T) {
 			Type:      "task",
 			CreatedAt: "2026-01-01T00:00:00Z",
 			UpdatedAt: "2026-01-01T00:00:00Z",
-			Gates: []schema.TicketGate{
+			Gates: []ticket.TicketGate{
 				{
 					ID:        "local",
 					Type:      "state_event",
@@ -1828,7 +1829,7 @@ func TestCrossRoomGateSkipsNonStateEventTypes(t *testing.T) {
 	}
 
 	ticketRoomID := testRoomID("!tickets:local")
-	ts.rooms[ticketRoomID] = newTrackedRoom(map[string]schema.TicketContent{
+	ts.rooms[ticketRoomID] = newTrackedRoom(map[string]ticket.TicketContent{
 		"tkt-1": {
 			Version:   1,
 			Title:     "pipeline gate with alias",
@@ -1836,7 +1837,7 @@ func TestCrossRoomGateSkipsNonStateEventTypes(t *testing.T) {
 			Type:      "task",
 			CreatedAt: "2026-01-01T00:00:00Z",
 			UpdatedAt: "2026-01-01T00:00:00Z",
-			Gates: []schema.TicketGate{
+			Gates: []ticket.TicketGate{
 				{
 					ID:          "ci",
 					Type:        "pipeline",
@@ -1891,7 +1892,7 @@ func TestCrossRoomGateContentMatch(t *testing.T) {
 	}
 
 	ticketRoomID := testRoomID("!tickets:local")
-	ts.rooms[ticketRoomID] = newTrackedRoom(map[string]schema.TicketContent{
+	ts.rooms[ticketRoomID] = newTrackedRoom(map[string]ticket.TicketContent{
 		"tkt-1": {
 			Version:   1,
 			Title:     "wait for staging deploy",
@@ -1899,7 +1900,7 @@ func TestCrossRoomGateContentMatch(t *testing.T) {
 			Type:      "task",
 			CreatedAt: "2026-01-01T00:00:00Z",
 			UpdatedAt: "2026-01-01T00:00:00Z",
-			Gates: []schema.TicketGate{
+			Gates: []ticket.TicketGate{
 				{
 					ID:        "staging-deploy",
 					Type:      "state_event",
@@ -1982,7 +1983,7 @@ func TestCrossRoomGateTimelineEvents(t *testing.T) {
 	}
 
 	ticketRoomID := testRoomID("!tickets:local")
-	ts.rooms[ticketRoomID] = newTrackedRoom(map[string]schema.TicketContent{
+	ts.rooms[ticketRoomID] = newTrackedRoom(map[string]ticket.TicketContent{
 		"tkt-1": {
 			Version:   1,
 			Title:     "timeline event gate",
@@ -1990,7 +1991,7 @@ func TestCrossRoomGateTimelineEvents(t *testing.T) {
 			Type:      "task",
 			CreatedAt: "2026-01-01T00:00:00Z",
 			UpdatedAt: "2026-01-01T00:00:00Z",
-			Gates: []schema.TicketGate{
+			Gates: []ticket.TicketGate{
 				{
 					ID:        "cross-ci",
 					Type:      "state_event",
@@ -2045,7 +2046,7 @@ func TestCrossRoomGateNilResolverIsNoOp(t *testing.T) {
 	}
 
 	ticketRoomID := testRoomID("!tickets:local")
-	ts.rooms[ticketRoomID] = newTrackedRoom(map[string]schema.TicketContent{
+	ts.rooms[ticketRoomID] = newTrackedRoom(map[string]ticket.TicketContent{
 		"tkt-1": {
 			Version:   1,
 			Title:     "cross-room gate",
@@ -2053,7 +2054,7 @@ func TestCrossRoomGateNilResolverIsNoOp(t *testing.T) {
 			Type:      "task",
 			CreatedAt: "2026-01-01T00:00:00Z",
 			UpdatedAt: "2026-01-01T00:00:00Z",
-			Gates: []schema.TicketGate{
+			Gates: []ticket.TicketGate{
 				{
 					ID:        "cross-ci",
 					Type:      "state_event",
@@ -2141,7 +2142,7 @@ func TestHandleSyncCrossRoomGateEvaluation(t *testing.T) {
 	}
 
 	ticketRoomID := testRoomID("!tickets:local")
-	ts.rooms[ticketRoomID] = newTrackedRoom(map[string]schema.TicketContent{
+	ts.rooms[ticketRoomID] = newTrackedRoom(map[string]ticket.TicketContent{
 		"tkt-1": {
 			Version:   1,
 			Title:     "cross-room via handleSync",
@@ -2149,7 +2150,7 @@ func TestHandleSyncCrossRoomGateEvaluation(t *testing.T) {
 			Type:      "task",
 			CreatedAt: "2026-01-01T00:00:00Z",
 			UpdatedAt: "2026-01-01T00:00:00Z",
-			Gates: []schema.TicketGate{
+			Gates: []ticket.TicketGate{
 				{
 					ID:        "cross-ci",
 					Type:      "state_event",
@@ -2198,7 +2199,7 @@ func TestHandleSyncCrossRoomGateEvaluation(t *testing.T) {
 // --- computeTimerTarget tests ---
 
 func TestComputeTimerTargetCreatedBase(t *testing.T) {
-	gate := &schema.TicketGate{
+	gate := &ticket.TicketGate{
 		ID:        "soak",
 		Type:      "timer",
 		Status:    "pending",
@@ -2217,7 +2218,7 @@ func TestComputeTimerTargetCreatedBase(t *testing.T) {
 }
 
 func TestComputeTimerTargetSkipsExistingTarget(t *testing.T) {
-	gate := &schema.TicketGate{
+	gate := &ticket.TicketGate{
 		ID:       "soak",
 		Type:     "timer",
 		Status:   "pending",
@@ -2237,7 +2238,7 @@ func TestComputeTimerTargetSkipsExistingTarget(t *testing.T) {
 }
 
 func TestComputeTimerTargetSkipsNonTimer(t *testing.T) {
-	gate := &schema.TicketGate{
+	gate := &ticket.TicketGate{
 		ID:       "ci",
 		Type:     "pipeline",
 		Status:   "pending",
@@ -2255,7 +2256,7 @@ func TestComputeTimerTargetSkipsNonTimer(t *testing.T) {
 }
 
 func TestComputeTimerTargetInvalidDuration(t *testing.T) {
-	gate := &schema.TicketGate{
+	gate := &ticket.TicketGate{
 		ID:       "soak",
 		Type:     "timer",
 		Status:   "pending",
@@ -2272,14 +2273,14 @@ func TestComputeTimerTargetInvalidDuration(t *testing.T) {
 
 func TestEnrichTimerTargetsCreatedBase(t *testing.T) {
 	index := newTestIndex(nil)
-	content := &schema.TicketContent{
+	content := &ticket.TicketContent{
 		Version:   1,
 		Title:     "timer test",
 		Status:    "open",
 		Type:      "task",
 		CreatedAt: "2026-01-01T10:00:00Z",
 		UpdatedAt: "2026-01-01T10:00:00Z",
-		Gates: []schema.TicketGate{
+		Gates: []ticket.TicketGate{
 			{
 				ID:        "soak",
 				Type:      "timer",
@@ -2299,14 +2300,14 @@ func TestEnrichTimerTargetsCreatedBase(t *testing.T) {
 
 func TestEnrichTimerTargetsExplicitCreatedBase(t *testing.T) {
 	index := newTestIndex(nil)
-	content := &schema.TicketContent{
+	content := &ticket.TicketContent{
 		Version:   1,
 		Title:     "timer test",
 		Status:    "open",
 		Type:      "task",
 		CreatedAt: "2026-01-01T10:00:00Z",
 		UpdatedAt: "2026-01-01T10:00:00Z",
-		Gates: []schema.TicketGate{
+		Gates: []ticket.TicketGate{
 			{
 				ID:        "soak",
 				Type:      "timer",
@@ -2327,7 +2328,7 @@ func TestEnrichTimerTargetsExplicitCreatedBase(t *testing.T) {
 
 func TestEnrichTimerTargetsUnblockedBaseNoBlockers(t *testing.T) {
 	index := newTestIndex(nil)
-	content := &schema.TicketContent{
+	content := &ticket.TicketContent{
 		Version:   1,
 		Title:     "unblocked timer",
 		Status:    "open",
@@ -2335,7 +2336,7 @@ func TestEnrichTimerTargetsUnblockedBaseNoBlockers(t *testing.T) {
 		CreatedAt: "2026-01-01T10:00:00Z",
 		UpdatedAt: "2026-01-01T10:00:00Z",
 		// No BlockedBy — effectively unblocked at creation.
-		Gates: []schema.TicketGate{
+		Gates: []ticket.TicketGate{
 			{
 				ID:        "soak",
 				Type:      "timer",
@@ -2355,7 +2356,7 @@ func TestEnrichTimerTargetsUnblockedBaseNoBlockers(t *testing.T) {
 }
 
 func TestEnrichTimerTargetsUnblockedBaseBlockersClosed(t *testing.T) {
-	index := newTestIndex(map[string]schema.TicketContent{
+	index := newTestIndex(map[string]ticket.TicketContent{
 		"tkt-blocker": {
 			Version:   1,
 			Title:     "blocker",
@@ -2366,7 +2367,7 @@ func TestEnrichTimerTargetsUnblockedBaseBlockersClosed(t *testing.T) {
 		},
 	})
 
-	content := &schema.TicketContent{
+	content := &ticket.TicketContent{
 		Version:   1,
 		Title:     "unblocked timer",
 		Status:    "open",
@@ -2374,7 +2375,7 @@ func TestEnrichTimerTargetsUnblockedBaseBlockersClosed(t *testing.T) {
 		BlockedBy: []string{"tkt-blocker"},
 		CreatedAt: "2026-01-01T10:00:00Z",
 		UpdatedAt: "2026-01-01T10:00:00Z",
-		Gates: []schema.TicketGate{
+		Gates: []ticket.TicketGate{
 			{
 				ID:        "soak",
 				Type:      "timer",
@@ -2395,7 +2396,7 @@ func TestEnrichTimerTargetsUnblockedBaseBlockersClosed(t *testing.T) {
 }
 
 func TestEnrichTimerTargetsUnblockedBaseBlockersOpen(t *testing.T) {
-	index := newTestIndex(map[string]schema.TicketContent{
+	index := newTestIndex(map[string]ticket.TicketContent{
 		"tkt-blocker": {
 			Version:   1,
 			Title:     "blocker",
@@ -2406,7 +2407,7 @@ func TestEnrichTimerTargetsUnblockedBaseBlockersOpen(t *testing.T) {
 		},
 	})
 
-	content := &schema.TicketContent{
+	content := &ticket.TicketContent{
 		Version:   1,
 		Title:     "unblocked timer",
 		Status:    "open",
@@ -2414,7 +2415,7 @@ func TestEnrichTimerTargetsUnblockedBaseBlockersOpen(t *testing.T) {
 		BlockedBy: []string{"tkt-blocker"},
 		CreatedAt: "2026-01-01T10:00:00Z",
 		UpdatedAt: "2026-01-01T10:00:00Z",
-		Gates: []schema.TicketGate{
+		Gates: []ticket.TicketGate{
 			{
 				ID:        "soak",
 				Type:      "timer",
@@ -2436,14 +2437,14 @@ func TestEnrichTimerTargetsUnblockedBaseBlockersOpen(t *testing.T) {
 
 func TestEnrichTimerTargetsPreservesCallerTarget(t *testing.T) {
 	index := newTestIndex(nil)
-	content := &schema.TicketContent{
+	content := &ticket.TicketContent{
 		Version:   1,
 		Title:     "absolute timer",
 		Status:    "open",
 		Type:      "task",
 		CreatedAt: "2026-01-01T10:00:00Z",
 		UpdatedAt: "2026-01-01T10:00:00Z",
-		Gates: []schema.TicketGate{
+		Gates: []ticket.TicketGate{
 			{
 				ID:        "deadline",
 				Type:      "timer",
@@ -2476,7 +2477,7 @@ func TestResolveUnblockedTimerTargetsComputesTarget(t *testing.T) {
 	}
 
 	roomID := testRoomID("!room:local")
-	ts.rooms[roomID] = newTrackedRoom(map[string]schema.TicketContent{
+	ts.rooms[roomID] = newTrackedRoom(map[string]ticket.TicketContent{
 		"tkt-blocker": {
 			Version:   1,
 			Title:     "blocker",
@@ -2494,7 +2495,7 @@ func TestResolveUnblockedTimerTargetsComputesTarget(t *testing.T) {
 			BlockedBy: []string{"tkt-blocker"},
 			CreatedAt: "2026-01-15T00:00:00Z",
 			UpdatedAt: "2026-01-15T00:00:00Z",
-			Gates: []schema.TicketGate{
+			Gates: []ticket.TicketGate{
 				{
 					ID:        "soak-after-unblock",
 					Type:      "timer",
@@ -2536,7 +2537,7 @@ func TestResolveUnblockedTimerTargetsSkipsPartiallyBlocked(t *testing.T) {
 	}
 
 	roomID := testRoomID("!room:local")
-	ts.rooms[roomID] = newTrackedRoom(map[string]schema.TicketContent{
+	ts.rooms[roomID] = newTrackedRoom(map[string]ticket.TicketContent{
 		"tkt-blocker-a": {
 			Version:   1,
 			Title:     "blocker A",
@@ -2561,7 +2562,7 @@ func TestResolveUnblockedTimerTargetsSkipsPartiallyBlocked(t *testing.T) {
 			BlockedBy: []string{"tkt-blocker-a", "tkt-blocker-b"},
 			CreatedAt: "2026-01-15T00:00:00Z",
 			UpdatedAt: "2026-01-15T00:00:00Z",
-			Gates: []schema.TicketGate{
+			Gates: []ticket.TicketGate{
 				{
 					ID:        "soak",
 					Type:      "timer",
@@ -2598,7 +2599,7 @@ func TestResolveUnblockedTimerTargetsSkipsCreatedBase(t *testing.T) {
 	}
 
 	roomID := testRoomID("!room:local")
-	ts.rooms[roomID] = newTrackedRoom(map[string]schema.TicketContent{
+	ts.rooms[roomID] = newTrackedRoom(map[string]ticket.TicketContent{
 		"tkt-blocker": {
 			Version:   1,
 			Title:     "blocker",
@@ -2615,7 +2616,7 @@ func TestResolveUnblockedTimerTargetsSkipsCreatedBase(t *testing.T) {
 			BlockedBy: []string{"tkt-blocker"},
 			CreatedAt: "2026-01-15T00:00:00Z",
 			UpdatedAt: "2026-01-15T00:00:00Z",
-			Gates: []schema.TicketGate{
+			Gates: []ticket.TicketGate{
 				{
 					ID:        "soak",
 					Type:      "timer",
@@ -2653,7 +2654,7 @@ func TestResolveUnblockedTimerTargetsMultipleBlockersSameBatch(t *testing.T) {
 	}
 
 	roomID := testRoomID("!room:local")
-	ts.rooms[roomID] = newTrackedRoom(map[string]schema.TicketContent{
+	ts.rooms[roomID] = newTrackedRoom(map[string]ticket.TicketContent{
 		"tkt-blocker-a": {
 			Version:   1,
 			Title:     "blocker A",
@@ -2678,7 +2679,7 @@ func TestResolveUnblockedTimerTargetsMultipleBlockersSameBatch(t *testing.T) {
 			BlockedBy: []string{"tkt-blocker-a", "tkt-blocker-b"},
 			CreatedAt: "2026-01-15T00:00:00Z",
 			UpdatedAt: "2026-01-15T00:00:00Z",
-			Gates: []schema.TicketGate{
+			Gates: []ticket.TicketGate{
 				{
 					ID:        "soak",
 					Type:      "timer",
@@ -2709,8 +2710,8 @@ func TestResolveUnblockedTimerTargetsMultipleBlockersSameBatch(t *testing.T) {
 
 // newTestIndex creates a ticket index pre-populated with the given
 // tickets. Used by enrichTimerTargets tests.
-func newTestIndex(tickets map[string]schema.TicketContent) *ticket.Index {
-	index := ticket.NewIndex()
+func newTestIndex(tickets map[string]ticket.TicketContent) *ticketindex.Index {
+	index := ticketindex.NewIndex()
 	for id, content := range tickets {
 		index.Put(id, content)
 	}
@@ -2798,8 +2799,8 @@ func newGateTestServiceWithWriter(writer matrixWriter) *TicketService {
 // --- hasRecurringGates tests ---
 
 func TestHasRecurringGatesWithSchedule(t *testing.T) {
-	content := &schema.TicketContent{
-		Gates: []schema.TicketGate{
+	content := &ticket.TicketContent{
+		Gates: []ticket.TicketGate{
 			{ID: "daily", Type: "timer", Status: "satisfied", Schedule: "0 7 * * *"},
 		},
 	}
@@ -2809,8 +2810,8 @@ func TestHasRecurringGatesWithSchedule(t *testing.T) {
 }
 
 func TestHasRecurringGatesWithInterval(t *testing.T) {
-	content := &schema.TicketContent{
-		Gates: []schema.TicketGate{
+	content := &ticket.TicketContent{
+		Gates: []ticket.TicketGate{
 			{ID: "poll", Type: "timer", Status: "satisfied", Interval: "4h"},
 		},
 	}
@@ -2820,8 +2821,8 @@ func TestHasRecurringGatesWithInterval(t *testing.T) {
 }
 
 func TestHasRecurringGatesNonRecurring(t *testing.T) {
-	content := &schema.TicketContent{
-		Gates: []schema.TicketGate{
+	content := &ticket.TicketContent{
+		Gates: []ticket.TicketGate{
 			{ID: "soak", Type: "timer", Status: "satisfied", Duration: "1h", Target: "2026-01-01T01:00:00Z"},
 		},
 	}
@@ -2831,8 +2832,8 @@ func TestHasRecurringGatesNonRecurring(t *testing.T) {
 }
 
 func TestHasRecurringGatesNonTimer(t *testing.T) {
-	content := &schema.TicketContent{
-		Gates: []schema.TicketGate{
+	content := &ticket.TicketContent{
+		Gates: []ticket.TicketGate{
 			{ID: "ci", Type: "pipeline", Status: "pending", PipelineRef: "build"},
 		},
 	}
@@ -2842,7 +2843,7 @@ func TestHasRecurringGatesNonTimer(t *testing.T) {
 }
 
 func TestHasRecurringGatesEmpty(t *testing.T) {
-	content := &schema.TicketContent{}
+	content := &ticket.TicketContent{}
 	if hasRecurringGates(content) {
 		t.Fatal("empty gates should not be detected as recurring")
 	}
@@ -2855,8 +2856,8 @@ func TestRearmRecurringGatesSchedule(t *testing.T) {
 	// Close happens at 2026-01-15 12:00:00 UTC.
 	// Next occurrence should be 2026-01-16 07:00:00 UTC.
 	now := time.Date(2026, 1, 15, 12, 0, 0, 0, time.UTC)
-	content := &schema.TicketContent{
-		Gates: []schema.TicketGate{
+	content := &ticket.TicketContent{
+		Gates: []ticket.TicketGate{
 			{
 				ID:          "daily",
 				Type:        "timer",
@@ -2905,8 +2906,8 @@ func TestRearmRecurringGatesInterval(t *testing.T) {
 	// Gate with interval "4h". Close happens at 2026-01-15 12:00:00 UTC.
 	// Next occurrence: now + 4h = 2026-01-15 16:00:00 UTC.
 	now := time.Date(2026, 1, 15, 12, 0, 0, 0, time.UTC)
-	content := &schema.TicketContent{
-		Gates: []schema.TicketGate{
+	content := &ticket.TicketContent{
+		Gates: []ticket.TicketGate{
 			{
 				ID:          "poll",
 				Type:        "timer",
@@ -2946,8 +2947,8 @@ func TestRearmRecurringGatesMaxOccurrencesExhausted(t *testing.T) {
 	// Gate has fired 4 times, MaxOccurrences is 5. After this fire
 	// (FireCount becomes 5), it reaches the limit and should NOT re-arm.
 	now := time.Date(2026, 1, 15, 12, 0, 0, 0, time.UTC)
-	content := &schema.TicketContent{
-		Gates: []schema.TicketGate{
+	content := &ticket.TicketContent{
+		Gates: []ticket.TicketGate{
 			{
 				ID:             "daily",
 				Type:           "timer",
@@ -2990,8 +2991,8 @@ func TestRearmRecurringGatesMaxOccurrencesNotYetExhausted(t *testing.T) {
 	// FireCount is 3, MaxOccurrences is 5. After this fire
 	// (FireCount becomes 4), limit not reached — should re-arm.
 	now := time.Date(2026, 1, 15, 12, 0, 0, 0, time.UTC)
-	content := &schema.TicketContent{
-		Gates: []schema.TicketGate{
+	content := &ticket.TicketContent{
+		Gates: []ticket.TicketGate{
 			{
 				ID:             "daily",
 				Type:           "timer",
@@ -3028,8 +3029,8 @@ func TestRearmRecurringGatesMaxOccurrencesNotYetExhausted(t *testing.T) {
 func TestRearmRecurringGatesUnlimitedOccurrences(t *testing.T) {
 	// MaxOccurrences=0 means unlimited. Should always re-arm.
 	now := time.Date(2026, 1, 15, 12, 0, 0, 0, time.UTC)
-	content := &schema.TicketContent{
-		Gates: []schema.TicketGate{
+	content := &ticket.TicketContent{
+		Gates: []ticket.TicketGate{
 			{
 				ID:             "daily",
 				Type:           "timer",
@@ -3062,8 +3063,8 @@ func TestRearmRecurringGatesMixedGates(t *testing.T) {
 	// Ticket has both a recurring timer gate and a non-recurring
 	// pipeline gate. Only the timer gate should be re-armed.
 	now := time.Date(2026, 1, 15, 12, 0, 0, 0, time.UTC)
-	content := &schema.TicketContent{
-		Gates: []schema.TicketGate{
+	content := &ticket.TicketContent{
+		Gates: []ticket.TicketGate{
 			{
 				ID:          "ci",
 				Type:        "pipeline",
@@ -3114,8 +3115,8 @@ func TestRearmRecurringGatesMixedGates(t *testing.T) {
 
 func TestRearmRecurringGatesInvalidSchedule(t *testing.T) {
 	now := time.Date(2026, 1, 15, 12, 0, 0, 0, time.UTC)
-	content := &schema.TicketContent{
-		Gates: []schema.TicketGate{
+	content := &ticket.TicketContent{
+		Gates: []ticket.TicketGate{
 			{
 				ID:       "bad",
 				Type:     "timer",
@@ -3134,8 +3135,8 @@ func TestRearmRecurringGatesInvalidSchedule(t *testing.T) {
 
 func TestRearmRecurringGatesInvalidInterval(t *testing.T) {
 	now := time.Date(2026, 1, 15, 12, 0, 0, 0, time.UTC)
-	content := &schema.TicketContent{
-		Gates: []schema.TicketGate{
+	content := &ticket.TicketContent{
+		Gates: []ticket.TicketGate{
 			{
 				ID:       "bad",
 				Type:     "timer",
@@ -3162,8 +3163,8 @@ func TestRearmRecurringGatesMissedOccurrences(t *testing.T) {
 	// Missed: Jan 13 07:00, Jan 14 07:00, Jan 15 07:00.
 	// Next target should be Jan 16 07:00.
 	now := time.Date(2026, 1, 15, 12, 0, 0, 0, time.UTC)
-	content := &schema.TicketContent{
-		Gates: []schema.TicketGate{
+	content := &ticket.TicketContent{
+		Gates: []ticket.TicketGate{
 			{
 				ID:          "daily",
 				Type:        "timer",
@@ -3201,8 +3202,8 @@ func TestRearmRecurringGatesMissedOccurrences(t *testing.T) {
 // --- stripRecurringGates tests ---
 
 func TestStripRecurringGatesRemovesRecurring(t *testing.T) {
-	content := &schema.TicketContent{
-		Gates: []schema.TicketGate{
+	content := &ticket.TicketContent{
+		Gates: []ticket.TicketGate{
 			{ID: "ci", Type: "pipeline", Status: "satisfied", PipelineRef: "build"},
 			{ID: "daily", Type: "timer", Status: "satisfied", Schedule: "0 7 * * *"},
 			{ID: "soak", Type: "timer", Status: "pending", Duration: "1h"},
@@ -3224,8 +3225,8 @@ func TestStripRecurringGatesRemovesRecurring(t *testing.T) {
 }
 
 func TestStripRecurringGatesNoRecurring(t *testing.T) {
-	content := &schema.TicketContent{
-		Gates: []schema.TicketGate{
+	content := &ticket.TicketContent{
+		Gates: []ticket.TicketGate{
 			{ID: "ci", Type: "pipeline", Status: "satisfied", PipelineRef: "build"},
 			{ID: "soak", Type: "timer", Status: "pending", Duration: "1h"},
 		},
@@ -3239,8 +3240,8 @@ func TestStripRecurringGatesNoRecurring(t *testing.T) {
 }
 
 func TestStripRecurringGatesAllRecurring(t *testing.T) {
-	content := &schema.TicketContent{
-		Gates: []schema.TicketGate{
+	content := &ticket.TicketContent{
+		Gates: []ticket.TicketGate{
 			{ID: "daily", Type: "timer", Status: "satisfied", Schedule: "0 7 * * *"},
 			{ID: "poll", Type: "timer", Status: "satisfied", Interval: "4h"},
 		},

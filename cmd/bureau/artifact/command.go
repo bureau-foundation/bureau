@@ -22,7 +22,7 @@ import (
 	"github.com/spf13/pflag"
 
 	"github.com/bureau-foundation/bureau/cmd/bureau/cli"
-	"github.com/bureau-foundation/bureau/lib/artifact"
+	"github.com/bureau-foundation/bureau/lib/artifactstore"
 )
 
 // Sandbox-standard paths for the artifact service role. When an agent
@@ -138,8 +138,8 @@ func defaultArtifactTokenPath() string {
 }
 
 // connect creates an artifact client from the connection parameters.
-func (c *ArtifactConnection) connect() (*artifact.Client, error) {
-	return artifact.NewClient(c.SocketPath, c.TokenPath)
+func (c *ArtifactConnection) connect() (*artifactstore.Client, error) {
+	return artifactstore.NewClient(c.SocketPath, c.TokenPath)
 }
 
 // formatSize returns a human-readable file size.
@@ -205,7 +205,7 @@ unrecognized extensions.`,
 			},
 		},
 		Params:         func() any { return &params },
-		Output:         func() any { return &artifact.StoreResponse{} },
+		Output:         func() any { return &artifactstore.StoreResponse{} },
 		Annotations:    cli.Create(),
 		RequiredGrants: []string{"command/artifact/store"},
 		Run: func(args []string) error {
@@ -221,7 +221,7 @@ unrecognized extensions.`,
 
 			if len(args) == 0 || args[0] == "-" {
 				content = os.Stdin
-				size = artifact.SizeUnknown
+				size = artifactstore.SizeUnknown
 			} else {
 				filePath := args[0]
 				file, err := os.Open(filePath)
@@ -247,7 +247,7 @@ unrecognized extensions.`,
 				params.ContentType = "application/octet-stream"
 			}
 
-			header := &artifact.StoreHeader{
+			header := &artifactstore.StoreHeader{
 				ContentType: params.ContentType,
 				Filename:    filename,
 				Size:        size,
@@ -261,7 +261,7 @@ unrecognized extensions.`,
 			}
 
 			// For small files, embed data in the header.
-			if size >= 0 && size <= artifact.SmallArtifactThreshold {
+			if size >= 0 && size <= artifactstore.SmallArtifactThreshold {
 				data, err := io.ReadAll(content)
 				if err != nil {
 					return cli.Internal("reading content: %w", err)
@@ -393,7 +393,7 @@ storage details.`,
 			},
 		},
 		Params:         func() any { return &params },
-		Output:         func() any { return &artifact.ArtifactMetadata{} },
+		Output:         func() any { return &artifactstore.ArtifactMetadata{} },
 		Annotations:    cli.ReadOnly(),
 		RequiredGrants: []string{"command/artifact/show"},
 		Run: func(args []string) error {
@@ -433,7 +433,7 @@ storage details.`,
 			if meta.CachePolicy != "" {
 				fmt.Fprintf(writer, "Cache Policy:\t%s\n", meta.CachePolicy)
 			}
-			fmt.Fprintf(writer, "Visibility:\t%s\n", artifact.NormalizeVisibility(meta.Visibility))
+			fmt.Fprintf(writer, "Visibility:\t%s\n", artifactstore.NormalizeVisibility(meta.Visibility))
 			if meta.TTL != "" {
 				fmt.Fprintf(writer, "TTL:\t%s\n", meta.TTL)
 			}
@@ -464,7 +464,7 @@ func existsCommand() *cli.Command {
 		Description: `Check if an artifact exists in the store. Exits 0 if it exists,
 1 if it does not. With --json, outputs the exists response.`,
 		Params:         func() any { return &params },
-		Output:         func() any { return &artifact.ExistsResponse{} },
+		Output:         func() any { return &artifactstore.ExistsResponse{} },
 		Annotations:    cli.ReadOnly(),
 		RequiredGrants: []string{"command/artifact/exists"},
 		Run: func(args []string) error {
@@ -542,7 +542,7 @@ are sorted by storage time (newest first).`,
 			},
 		},
 		Params:         func() any { return &params },
-		Output:         func() any { return &artifact.ListResponse{} },
+		Output:         func() any { return &artifactstore.ListResponse{} },
 		Annotations:    cli.ReadOnly(),
 		RequiredGrants: []string{"command/artifact/list"},
 		Run: func(args []string) error {
@@ -552,7 +552,7 @@ are sorted by storage time (newest first).`,
 				return err
 			}
 
-			response, err := client.List(ctx, artifact.ListRequest{
+			response, err := client.List(ctx, artifactstore.ListRequest{
 				ContentType: params.ContentType,
 				Label:       params.Label,
 				CachePolicy: params.CachePolicy,
@@ -633,7 +633,7 @@ specify the previous target hash for CAS updates.`,
 			},
 		},
 		Params:         func() any { return &params },
-		Output:         func() any { return &artifact.TagResponse{} },
+		Output:         func() any { return &artifactstore.TagResponse{} },
 		Annotations:    cli.Idempotent(),
 		RequiredGrants: []string{"command/artifact/tag"},
 		Run: func(args []string) error {
@@ -680,7 +680,7 @@ func resolveCommand() *cli.Command {
 canonical artifact reference. Useful for scripting: the output is
 always the full ref.`,
 		Params:         func() any { return &params },
-		Output:         func() any { return &artifact.ResolveResponse{} },
+		Output:         func() any { return &artifactstore.ResolveResponse{} },
 		Annotations:    cli.ReadOnly(),
 		RequiredGrants: []string{"command/artifact/resolve"},
 		Run: func(args []string) error {
@@ -736,7 +736,7 @@ func tagsCommand() *cli.Command {
 			},
 		},
 		Params:         func() any { return &params },
-		Output:         func() any { return &artifact.TagsResponse{} },
+		Output:         func() any { return &artifactstore.TagsResponse{} },
 		Annotations:    cli.ReadOnly(),
 		RequiredGrants: []string{"command/artifact/tags"},
 		Run: func(args []string) error {
@@ -822,7 +822,7 @@ type pinParams struct {
 func pinToggleCommand(
 	name, summary, verb string,
 	annotations *cli.ToolAnnotations,
-	call func(*artifact.Client, context.Context, string) (*artifact.PinResponse, error),
+	call func(*artifactstore.Client, context.Context, string) (*artifactstore.PinResponse, error),
 ) *cli.Command {
 	var params pinParams
 
@@ -833,7 +833,7 @@ func pinToggleCommand(
 		Summary:        summary,
 		Usage:          usage,
 		Params:         func() any { return &params },
-		Output:         func() any { return &artifact.PinResponse{} },
+		Output:         func() any { return &artifactstore.PinResponse{} },
 		Annotations:    annotations,
 		RequiredGrants: []string{"command/artifact/" + name},
 		Run: func(args []string) error {
@@ -864,12 +864,12 @@ func pinToggleCommand(
 
 func pinCommand() *cli.Command {
 	return pinToggleCommand("pin", "Pin an artifact (protect from GC)", "pinned",
-		cli.Idempotent(), (*artifact.Client).Pin)
+		cli.Idempotent(), (*artifactstore.Client).Pin)
 }
 
 func unpinCommand() *cli.Command {
 	return pinToggleCommand("unpin", "Unpin an artifact (allow GC)", "unpinned",
-		cli.Idempotent(), (*artifact.Client).Unpin)
+		cli.Idempotent(), (*artifactstore.Client).Unpin)
 }
 
 // --- gc ---
@@ -902,7 +902,7 @@ Use --dry-run to see what would be removed without actually deleting.`,
 			},
 		},
 		Params:         func() any { return &params },
-		Output:         func() any { return &artifact.GCResponse{} },
+		Output:         func() any { return &artifactstore.GCResponse{} },
 		Annotations:    cli.Destructive(),
 		RequiredGrants: []string{"command/artifact/gc"},
 		Run: func(args []string) error {
@@ -953,7 +953,7 @@ func statusCommand() *cli.Command {
 		Description: `Show service liveness information. This action does not require
 authentication — it is a health check.`,
 		Params:         func() any { return &params },
-		Output:         func() any { return &artifact.StatusResponse{} },
+		Output:         func() any { return &artifactstore.StatusResponse{} },
 		Annotations:    cli.ReadOnly(),
 		RequiredGrants: []string{"command/artifact/status"},
 		Run: func(args []string) error {
@@ -962,7 +962,7 @@ authentication — it is a health check.`,
 			// but don't fail if the token file is missing.
 			client, err := params.connect()
 			if err != nil {
-				client = artifact.NewClientFromToken(params.SocketPath, nil)
+				client = artifactstore.NewClientFromToken(params.SocketPath, nil)
 			}
 
 			response, err := client.Status(ctx)

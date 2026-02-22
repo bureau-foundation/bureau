@@ -10,7 +10,7 @@ import (
 
 	"github.com/bureau-foundation/bureau/cmd/bureau/cli"
 	"github.com/bureau-foundation/bureau/cmd/bureau/mcp"
-	"github.com/bureau-foundation/bureau/lib/agent"
+	"github.com/bureau-foundation/bureau/lib/agentdriver"
 	"github.com/bureau-foundation/bureau/lib/schema"
 )
 
@@ -22,8 +22,8 @@ func TestParseLoopEvent_Response(t *testing.T) {
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
-	if event.Type != agent.EventTypeResponse {
-		t.Errorf("Type = %q, want %q", event.Type, agent.EventTypeResponse)
+	if event.Type != agentdriver.EventTypeResponse {
+		t.Errorf("Type = %q, want %q", event.Type, agentdriver.EventTypeResponse)
 	}
 	if event.Response == nil {
 		t.Fatal("Response is nil")
@@ -41,8 +41,8 @@ func TestParseLoopEvent_ToolCall(t *testing.T) {
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
-	if event.Type != agent.EventTypeToolCall {
-		t.Errorf("Type = %q, want %q", event.Type, agent.EventTypeToolCall)
+	if event.Type != agentdriver.EventTypeToolCall {
+		t.Errorf("Type = %q, want %q", event.Type, agentdriver.EventTypeToolCall)
 	}
 	if event.ToolCall == nil {
 		t.Fatal("ToolCall is nil")
@@ -66,8 +66,8 @@ func TestParseLoopEvent_ToolResult(t *testing.T) {
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
-	if event.Type != agent.EventTypeToolResult {
-		t.Errorf("Type = %q, want %q", event.Type, agent.EventTypeToolResult)
+	if event.Type != agentdriver.EventTypeToolResult {
+		t.Errorf("Type = %q, want %q", event.Type, agentdriver.EventTypeToolResult)
 	}
 	if event.ToolResult == nil {
 		t.Fatal("ToolResult is nil")
@@ -88,8 +88,8 @@ func TestParseLoopEvent_ToolResultError(t *testing.T) {
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
-	if event.Type != agent.EventTypeToolResult {
-		t.Errorf("Type = %q, want %q", event.Type, agent.EventTypeToolResult)
+	if event.Type != agentdriver.EventTypeToolResult {
+		t.Errorf("Type = %q, want %q", event.Type, agentdriver.EventTypeToolResult)
 	}
 	if !event.ToolResult.IsError {
 		t.Error("IsError = false, want true")
@@ -107,8 +107,8 @@ func TestParseLoopEvent_Prompt(t *testing.T) {
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
-	if event.Type != agent.EventTypePrompt {
-		t.Errorf("Type = %q, want %q", event.Type, agent.EventTypePrompt)
+	if event.Type != agentdriver.EventTypePrompt {
+		t.Errorf("Type = %q, want %q", event.Type, agentdriver.EventTypePrompt)
 	}
 	if event.Prompt.Content != "please check ticket #5" {
 		t.Errorf("Content = %q", event.Prompt.Content)
@@ -126,8 +126,8 @@ func TestParseLoopEvent_Metric(t *testing.T) {
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
-	if event.Type != agent.EventTypeMetric {
-		t.Errorf("Type = %q, want %q", event.Type, agent.EventTypeMetric)
+	if event.Type != agentdriver.EventTypeMetric {
+		t.Errorf("Type = %q, want %q", event.Type, agentdriver.EventTypeMetric)
 	}
 	if event.Metric == nil {
 		t.Fatal("Metric is nil")
@@ -154,8 +154,8 @@ func TestParseLoopEvent_Error(t *testing.T) {
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
-	if event.Type != agent.EventTypeError {
-		t.Errorf("Type = %q, want %q", event.Type, agent.EventTypeError)
+	if event.Type != agentdriver.EventTypeError {
+		t.Errorf("Type = %q, want %q", event.Type, agentdriver.EventTypeError)
 	}
 	if event.Error == nil {
 		t.Fatal("Error is nil")
@@ -173,8 +173,8 @@ func TestParseLoopEvent_System(t *testing.T) {
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
-	if event.Type != agent.EventTypeSystem {
-		t.Errorf("Type = %q, want %q", event.Type, agent.EventTypeSystem)
+	if event.Type != agentdriver.EventTypeSystem {
+		t.Errorf("Type = %q, want %q", event.Type, agentdriver.EventTypeSystem)
 	}
 	if event.System.Subtype != "init" {
 		t.Errorf("Subtype = %q, want %q", event.System.Subtype, "init")
@@ -189,8 +189,8 @@ func TestParseLoopEvent_UnknownType(t *testing.T) {
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
-	if event.Type != agent.EventTypeOutput {
-		t.Errorf("Type = %q, want %q", event.Type, agent.EventTypeOutput)
+	if event.Type != agentdriver.EventTypeOutput {
+		t.Errorf("Type = %q, want %q", event.Type, agentdriver.EventTypeOutput)
 	}
 	if event.Output == nil {
 		t.Fatal("Output is nil")

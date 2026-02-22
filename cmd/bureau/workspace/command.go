@@ -15,6 +15,7 @@ import (
 	"github.com/bureau-foundation/bureau/lib/principal"
 	"github.com/bureau-foundation/bureau/lib/ref"
 	"github.com/bureau-foundation/bureau/lib/schema"
+	"github.com/bureau-foundation/bureau/lib/schema/workspace"
 	"github.com/bureau-foundation/bureau/messaging"
 )
 
@@ -174,7 +175,7 @@ func runDestroy(alias string, session *cli.SessionConfig, mode, serverNameString
 	if err != nil {
 		return cli.Internal("reading workspace state: %w", err)
 	}
-	var workspaceState schema.WorkspaceState
+	var workspaceState workspace.WorkspaceState
 	if err := json.Unmarshal(workspaceContent, &workspaceState); err != nil {
 		return cli.Internal("parsing workspace state: %w", err)
 	}
@@ -303,7 +304,7 @@ func extractWorkspaceInfo(ctx context.Context, session messaging.Session, roomID
 		return nil, err
 	}
 
-	var project *schema.ProjectConfig
+	var project *workspace.ProjectConfig
 	var projectKey string
 	var alias string
 	var workspaceStatus string
@@ -317,7 +318,7 @@ func extractWorkspaceInfo(ctx context.Context, session messaging.Session, roomID
 			if marshalError != nil {
 				continue
 			}
-			var config schema.ProjectConfig
+			var config workspace.ProjectConfig
 			if json.Unmarshal(raw, &config) != nil {
 				continue
 			}

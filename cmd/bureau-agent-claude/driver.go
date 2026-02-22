@@ -14,13 +14,13 @@ import (
 	"syscall"
 	"time"
 
-	"github.com/bureau-foundation/bureau/lib/agent"
+	"github.com/bureau-foundation/bureau/lib/agentdriver"
 )
 
-// claudeDriver implements agent.Driver for Claude Code.
+// claudeDriver implements agentdriver.Driver for Claude Code.
 type claudeDriver struct{}
 
-// claudeProcess wraps an exec.Cmd to implement agent.Process.
+// claudeProcess wraps an exec.Cmd to implement agentdriver.Process.
 type claudeProcess struct {
 	command *exec.Cmd
 	stdin   io.WriteCloser
@@ -42,7 +42,7 @@ func (process *claudeProcess) Signal(signal os.Signal) error {
 }
 
 // Start spawns a Claude Code process with stream-json output.
-func (driver *claudeDriver) Start(ctx context.Context, config agent.DriverConfig) (agent.Process, io.ReadCloser, error) {
+func (driver *claudeDriver) Start(ctx context.Context, config agentdriver.DriverConfig) (agentdriver.Process, io.ReadCloser, error) {
 	binaryPath := os.Getenv("CLAUDE_BINARY")
 	if binaryPath == "" {
 		binaryPath = "claude"
@@ -98,7 +98,7 @@ func (driver *claudeDriver) Start(ctx context.Context, config agent.DriverConfig
 //   - {"type":"tool","subtype":"result",...} → EventTypeToolResult
 //   - {"type":"result","subtype":"success",...} → EventTypeMetric
 //   - Unknown types → EventTypeOutput (raw JSON preserved)
-func (driver *claudeDriver) ParseOutput(ctx context.Context, stdout io.Reader, events chan<- agent.Event) error {
+func (driver *claudeDriver) ParseOutput(ctx context.Context, stdout io.Reader, events chan<- agentdriver.Event) error {
 	scanner := bufio.NewScanner(stdout)
 	// Claude Code can produce long lines (tool results with large file contents).
 	scanner.Buffer(make([]byte, 0, 64*1024), 1024*1024)
@@ -118,10 +118,10 @@ func (driver *claudeDriver) ParseOutput(ctx context.Context, stdout io.Reader, e
 		event, err := parseStreamJSONLine(line)
 		if err != nil {
 			// Malformed line — log as output event with raw content.
-			events <- agent.Event{
+			events <- agentdriver.Event{
 				Timestamp: time.Now(),
-				Type:      agent.EventTypeOutput,
-				Output:    &agent.OutputEvent{Raw: json.RawMessage(line)},
+				Type:      agentdriver.EventTypeOutput,
+				Output:    &agentdriver.OutputEvent{Raw: json.RawMessage(line)},
 			}
 			continue
 		}
@@ -134,7 +134,7 @@ func (driver *claudeDriver) ParseOutput(ctx context.Context, stdout io.Reader, e
 
 // Interrupt sends SIGINT to Claude Code, which finishes the current tool
 // call and exits gracefully.
-func (driver *claudeDriver) Interrupt(process agent.Process) error {
+func (driver *claudeDriver) Interrupt(process agentdriver.Process) error {
 	return process.Signal(syscall.SIGINT)
 }
 
@@ -145,21 +145,21 @@ type streamJSONEvent struct {
 }
 
 // parseStreamJSONLine parses a single line of Claude Code stream-json output
-// into a structured agent.Event.
-func parseStreamJSONLine(line []byte) (agent.Event, error) {
+// into a structured agentdriver.Event.
+func parseStreamJSONLine(line []byte) (agentdriver.Event, error) {
 	var envelope streamJSONEvent
 	if err := json.Unmarshal(line, &envelope); err != nil {
-		return agent.Event{}, fmt.Errorf("parsing stream-json envelope: %w", err)
+		return agentdriver.Event{}, fmt.Errorf("parsing stream-json envelope: %w", err)
 	}
 
 	now := time.Now()
 
 	switch envelope.Type {
 	case "system":
-		return agent.Event{
+		return agentdriver.Event{
 			Timestamp: now,
-			Type:      agent.EventTypeSystem,
-			System: &agent.SystemEvent{
+			Type:      agentdriver.EventTypeSystem,
+			System: &agentdriver.SystemEvent{
 				Subtype: envelope.Subtype,
 				Message: extractStringField(line, "message"),
 			},
@@ -176,22 +176,22 @@ func parseStreamJSONLine(line []byte) (agent.Event, error) {
 
 	default:
 		// Unknown event type — preserve as raw output.
-		return agent.Event{
+		return agentdriver.Event{
 			Timestamp: now,
-			Type:      agent.EventTypeOutput,
-			Output:    &agent.OutputEvent{Raw: json.RawMessage(append([]byte(nil), line...))},
+			Type:      agentdriver.EventTypeOutput,
+			Output:    &agentdriver.OutputEvent{Raw: json.RawMessage(append([]byte(nil), line...))},
 		}, nil
 	}
 }
 
 // parseAssistantEvent handles {"type":"assistant",...} events.
-func parseAssistantEvent(timestamp time.Time, subtype string, line []byte) (agent.Event, error) {
+func parseAssistantEvent(timestamp time.Time, subtype string, line []byte) (agentdriver.Event, error) {
 	switch subtype {
 	case "text":
-		return agent.Event{
+		return agentdriver.Event{
 			Timestamp: timestamp,
-			Type:      agent.EventTypeResponse,
-			Response: &agent.ResponseEvent{
+			Type:      agentdriver.EventTypeResponse,
+			Response: &agentdriver.ResponseEvent{
 				Content: extractStringField(line, "text"),
 			},
 		}, nil
@@ -203,10 +203,10 @@ func parseAssistantEvent(timestamp time.Time, subtype string, line []byte) (agen
 			Input json.RawMessage `json:"input"`
 		}
 		json.Unmarshal(line, &toolUse)
-		return agent.Event{
+		return agentdriver.Event{
 			Timestamp: timestamp,
-			Type:      agent.EventTypeToolCall,
-			ToolCall: &agent.ToolCallEvent{
+			Type:      agentdriver.EventTypeToolCall,
+			ToolCall: &agentdriver.ToolCallEvent{
 				ID:    toolUse.ID,
 				Name:  toolUse.Name,
 				Input: toolUse.Input,
@@ -214,16 +214,16 @@ func parseAssistantEvent(timestamp time.Time, subtype string, line []byte) (agen
 		}, nil
 
 	default:
-		return agent.Event{
+		return agentdriver.Event{
 			Timestamp: timestamp,
-			Type:      agent.EventTypeOutput,
-			Output:    &agent.OutputEvent{Raw: json.RawMessage(append([]byte(nil), line...))},
+			Type:      agentdriver.EventTypeOutput,
+			Output:    &agentdriver.OutputEvent{Raw: json.RawMessage(append([]byte(nil), line...))},
 		}, nil
 	}
 }
 
 // parseToolEvent handles {"type":"tool",...} events.
-func parseToolEvent(timestamp time.Time, subtype string, line []byte) (agent.Event, error) {
+func parseToolEvent(timestamp time.Time, subtype string, line []byte) (agentdriver.Event, error) {
 	switch subtype {
 	case "result":
 		var toolResult struct {
@@ -232,10 +232,10 @@ func parseToolEvent(timestamp time.Time, subtype string, line []byte) (agent.Eve
 			Content   string `json:"content"`
 		}
 		json.Unmarshal(line, &toolResult)
-		return agent.Event{
+		return agentdriver.Event{
 			Timestamp: timestamp,
-			Type:      agent.EventTypeToolResult,
-			ToolResult: &agent.ToolResultEvent{
+			Type:      agentdriver.EventTypeToolResult,
+			ToolResult: &agentdriver.ToolResultEvent{
 				ID:      toolResult.ToolUseID,
 				IsError: toolResult.IsError,
 				Output:  toolResult.Content,
@@ -243,16 +243,16 @@ func parseToolEvent(timestamp time.Time, subtype string, line []byte) (agent.Eve
 		}, nil
 
 	default:
-		return agent.Event{
+		return agentdriver.Event{
 			Timestamp: timestamp,
-			Type:      agent.EventTypeOutput,
-			Output:    &agent.OutputEvent{Raw: json.RawMessage(append([]byte(nil), line...))},
+			Type:      agentdriver.EventTypeOutput,
+			Output:    &agentdriver.OutputEvent{Raw: json.RawMessage(append([]byte(nil), line...))},
 		}, nil
 	}
 }
 
 // parseResultEvent handles {"type":"result",...} events, extracting metrics.
-func parseResultEvent(timestamp time.Time, line []byte) (agent.Event, error) {
+func parseResultEvent(timestamp time.Time, line []byte) (agentdriver.Event, error) {
 	var result struct {
 		CostUSD          float64 `json:"cost_usd"`
 		InputTokens      int64   `json:"input_tokens"`
@@ -270,10 +270,10 @@ func parseResultEvent(timestamp time.Time, line []byte) (agent.Event, error) {
 		durationSeconds = result.DurationMS / 1000.0
 	}
 
-	return agent.Event{
+	return agentdriver.Event{
 		Timestamp: timestamp,
-		Type:      agent.EventTypeMetric,
-		Metric: &agent.MetricEvent{
+		Type:      agentdriver.EventTypeMetric,
+		Metric: &agentdriver.MetricEvent{
 			InputTokens:     result.InputTokens,
 			OutputTokens:    result.OutputTokens,
 			CacheReadTokens: result.CacheReadTokens,

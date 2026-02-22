@@ -9,6 +9,7 @@ import (
 	"time"
 
 	"github.com/bureau-foundation/bureau/lib/schema"
+	"github.com/bureau-foundation/bureau/lib/schema/fleet"
 )
 
 // Health state constants for machines in the fleet.
@@ -113,14 +114,14 @@ func (fc *FleetController) executeFailover(ctx context.Context, machineLocalpart
 			continue
 		}
 
-		fc.publishFleetAlert(ctx, schema.FleetAlertContent{
+		fc.publishFleetAlert(ctx, fleet.FleetAlertContent{
 			AlertType: "failover",
 			Fleet:     fc.principalName,
 			Service:   serviceLocalpart,
 			Machine:   machineLocalpart,
 			Message: fmt.Sprintf("machine %s offline, removed service %s",
 				machineLocalpart, serviceLocalpart),
-			ProposedActions: []schema.ProposedAction{
+			ProposedActions: []fleet.ProposedAction{
 				{
 					Action:      "place",
 					Service:     serviceLocalpart,
@@ -134,7 +135,7 @@ func (fc *FleetController) executeFailover(ctx context.Context, machineLocalpart
 // publishFleetAlert writes a FleetAlertContent event to the fleet room
 // as a state event. The state key combines the alert type, service, and
 // machine to allow multiple active alerts without collision.
-func (fc *FleetController) publishFleetAlert(ctx context.Context, alert schema.FleetAlertContent) {
+func (fc *FleetController) publishFleetAlert(ctx context.Context, alert fleet.FleetAlertContent) {
 	stateKey := alertStateKey(alert)
 	_, err := fc.configStore.SendStateEvent(ctx, fc.fleetRoomID,
 		schema.EventTypeFleetAlert, stateKey, alert)
@@ -150,7 +151,7 @@ func (fc *FleetController) publishFleetAlert(ctx context.Context, alert schema.F
 
 // alertStateKey constructs a unique state key for a fleet alert from
 // its type, service, and machine.
-func alertStateKey(alert schema.FleetAlertContent) string {
+func alertStateKey(alert fleet.FleetAlertContent) string {
 	key := alert.AlertType
 	if alert.Service != "" {
 		key += "/" + alert.Service

@@ -12,6 +12,7 @@ import (
 
 	"github.com/bureau-foundation/bureau/lib/ref"
 	"github.com/bureau-foundation/bureau/lib/schema"
+	agentschema "github.com/bureau-foundation/bureau/lib/schema/agent"
 	"github.com/bureau-foundation/bureau/lib/testutil"
 )
 
@@ -135,11 +136,11 @@ func TestAgentServiceSessionTracking(t *testing.T) {
 
 	// Verify session state: no active session, latest session recorded.
 	sessionRaw, err := admin.GetStateEvent(ctx, machine.ConfigRoomID,
-		schema.EventTypeAgentSession, agent.Account.UserID.Localpart())
+		agentschema.EventTypeAgentSession, agent.Account.UserID.Localpart())
 	if err != nil {
 		t.Fatalf("get agent session state: %v", err)
 	}
-	var sessionContent schema.AgentSessionContent
+	var sessionContent agentschema.AgentSessionContent
 	if err := json.Unmarshal(sessionRaw, &sessionContent); err != nil {
 		t.Fatalf("unmarshal agent session: %v", err)
 	}
@@ -154,11 +155,11 @@ func TestAgentServiceSessionTracking(t *testing.T) {
 	// Verify metrics: one session counted, non-zero token counts from
 	// the mock driver's metric event (input_tokens: 100, output_tokens: 50).
 	metricsRaw, err := admin.GetStateEvent(ctx, machine.ConfigRoomID,
-		schema.EventTypeAgentMetrics, agent.Account.UserID.Localpart())
+		agentschema.EventTypeAgentMetrics, agent.Account.UserID.Localpart())
 	if err != nil {
 		t.Fatalf("get agent metrics state: %v", err)
 	}
-	var metricsContent schema.AgentMetricsContent
+	var metricsContent agentschema.AgentMetricsContent
 	if err := json.Unmarshal(metricsRaw, &metricsContent); err != nil {
 		t.Fatalf("unmarshal agent metrics: %v", err)
 	}

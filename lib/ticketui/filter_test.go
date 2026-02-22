@@ -7,17 +7,17 @@ import (
 	"testing"
 
 	"github.com/bureau-foundation/bureau/lib/ref"
-	"github.com/bureau-foundation/bureau/lib/schema"
-	"github.com/bureau-foundation/bureau/lib/ticket"
+	"github.com/bureau-foundation/bureau/lib/schema/ticket"
+	"github.com/bureau-foundation/bureau/lib/ticketindex"
 )
 
 func TestFilterMatchesTitle(t *testing.T) {
 	source := testSource()
 	filter := FilterModel{Input: "pooling"}
 
-	entry := ticket.Entry{
+	entry := ticketindex.Entry{
 		ID: "tkt-001",
-		Content: schema.TicketContent{
+		Content: ticket.TicketContent{
 			Title: "Fix connection pooling leak",
 		},
 	}
@@ -31,9 +31,9 @@ func TestFilterMatchesLabel(t *testing.T) {
 	source := testSource()
 	filter := FilterModel{Input: "transport"}
 
-	entry := ticket.Entry{
+	entry := ticketindex.Entry{
 		ID: "tkt-002",
-		Content: schema.TicketContent{
+		Content: ticket.TicketContent{
 			Title:  "Implement retry backoff",
 			Labels: []string{"transport"},
 		},
@@ -48,9 +48,9 @@ func TestFilterMatchesID(t *testing.T) {
 	source := testSource()
 	filter := FilterModel{Input: "tkt-003"}
 
-	entry := ticket.Entry{
+	entry := ticketindex.Entry{
 		ID: "tkt-003",
-		Content: schema.TicketContent{
+		Content: ticket.TicketContent{
 			Title: "Update CI pipeline config",
 		},
 	}
@@ -64,9 +64,9 @@ func TestFilterMatchesAssignee(t *testing.T) {
 	source := testSource()
 	filter := FilterModel{Input: "iree"}
 
-	entry := ticket.Entry{
+	entry := ticketindex.Entry{
 		ID: "tkt-001",
-		Content: schema.TicketContent{
+		Content: ticket.TicketContent{
 			Title:    "Fix connection pooling leak",
 			Assignee: ref.MustParseUserID("@iree/pm:bureau.local"),
 		},
@@ -81,9 +81,9 @@ func TestFilterMatchesType(t *testing.T) {
 	source := testSource()
 	filter := FilterModel{Input: "bug"}
 
-	entry := ticket.Entry{
+	entry := ticketindex.Entry{
 		ID: "tkt-001",
-		Content: schema.TicketContent{
+		Content: ticket.TicketContent{
 			Title: "Fix connection pooling leak",
 			Type:  "bug",
 		},
@@ -98,9 +98,9 @@ func TestFilterCaseInsensitive(t *testing.T) {
 	source := testSource()
 	filter := FilterModel{Input: "POOLING"}
 
-	entry := ticket.Entry{
+	entry := ticketindex.Entry{
 		ID: "tkt-001",
-		Content: schema.TicketContent{
+		Content: ticket.TicketContent{
 			Title: "Fix connection pooling leak",
 		},
 	}
@@ -114,9 +114,9 @@ func TestFilterNoMatch(t *testing.T) {
 	source := testSource()
 	filter := FilterModel{Input: "xyz-nonexistent"}
 
-	entry := ticket.Entry{
+	entry := ticketindex.Entry{
 		ID: "tkt-001",
-		Content: schema.TicketContent{
+		Content: ticket.TicketContent{
 			Title: "Fix connection pooling leak",
 			Type:  "bug",
 		},
@@ -131,9 +131,9 @@ func TestFilterEmptyMatchesAll(t *testing.T) {
 	source := testSource()
 	filter := FilterModel{Input: ""}
 
-	entry := ticket.Entry{
+	entry := ticketindex.Entry{
 		ID:      "tkt-001",
-		Content: schema.TicketContent{Title: "Anything"},
+		Content: ticket.TicketContent{Title: "Anything"},
 	}
 
 	if !filter.MatchesEntry(entry, source) {

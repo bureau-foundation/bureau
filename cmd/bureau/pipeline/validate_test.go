@@ -9,8 +9,8 @@ import (
 	"strings"
 	"testing"
 
-	libpipeline "github.com/bureau-foundation/bureau/lib/pipeline"
-	"github.com/bureau-foundation/bureau/lib/schema"
+	"github.com/bureau-foundation/bureau/lib/pipelinedef"
+	"github.com/bureau-foundation/bureau/lib/schema/pipeline"
 )
 
 func TestValidateValidPipeline(t *testing.T) {
@@ -123,21 +123,21 @@ func TestValidateWithIssues(t *testing.T) {
 }
 
 // TestValidatePipelineContent exercises the validation rules via
-// lib/pipeline.Validate directly. This covers the structural checks
+// lib/pipelinedef.Validate directly. This covers the structural checks
 // that the CLI validate command delegates to.
 func TestValidatePipelineContent(t *testing.T) {
 	t.Parallel()
 
 	tests := []struct {
 		name           string
-		content        *schema.PipelineContent
+		content        *pipeline.PipelineContent
 		expectedIssues int
 		wantSubstrings []string
 	}{
 		{
 			name: "valid run step",
-			content: &schema.PipelineContent{
-				Steps: []schema.PipelineStep{
+			content: &pipeline.PipelineContent{
+				Steps: []pipeline.PipelineStep{
 					{Name: "build", Run: "make build"},
 				},
 			},
@@ -145,11 +145,11 @@ func TestValidatePipelineContent(t *testing.T) {
 		},
 		{
 			name: "valid publish step",
-			content: &schema.PipelineContent{
-				Steps: []schema.PipelineStep{
+			content: &pipeline.PipelineContent{
+				Steps: []pipeline.PipelineStep{
 					{
 						Name: "publish-config",
-						Publish: &schema.PipelinePublish{
+						Publish: &pipeline.PipelinePublish{
 							EventType: "m.bureau.workspace",
 							Room:      "#iree/config:bureau.local",
 							Content:   map[string]any{"status": "ready"},
@@ -161,7 +161,7 @@ func TestValidatePipelineContent(t *testing.T) {
 		},
 		{
 			name: "no steps",
-			content: &schema.PipelineContent{
+			content: &pipeline.PipelineContent{
 				Description: "empty pipeline",
 			},
 			expectedIssues: 1,
@@ -169,8 +169,8 @@ func TestValidatePipelineContent(t *testing.T) {
 		},
 		{
 			name: "step missing name",
-			content: &schema.PipelineContent{
-				Steps: []schema.PipelineStep{
+			content: &pipeline.PipelineContent{
+				Steps: []pipeline.PipelineStep{
 					{Run: "echo hello"},
 				},
 			},
@@ -179,12 +179,12 @@ func TestValidatePipelineContent(t *testing.T) {
 		},
 		{
 			name: "step with both run and publish",
-			content: &schema.PipelineContent{
-				Steps: []schema.PipelineStep{
+			content: &pipeline.PipelineContent{
+				Steps: []pipeline.PipelineStep{
 					{
 						Name: "conflict",
 						Run:  "echo hello",
-						Publish: &schema.PipelinePublish{
+						Publish: &pipeline.PipelinePublish{
 							EventType: "m.test",
 							Room:      "#test:local",
 							Content:   map[string]any{},
@@ -197,8 +197,8 @@ func TestValidatePipelineContent(t *testing.T) {
 		},
 		{
 			name: "step with neither run nor publish nor assert_state",
-			content: &schema.PipelineContent{
-				Steps: []schema.PipelineStep{
+			content: &pipeline.PipelineContent{
+				Steps: []pipeline.PipelineStep{
 					{Name: "nothing"},
 				},
 			},
@@ -207,12 +207,12 @@ func TestValidatePipelineContent(t *testing.T) {
 		},
 		{
 			name: "check on publish step",
-			content: &schema.PipelineContent{
-				Steps: []schema.PipelineStep{
+			content: &pipeline.PipelineContent{
+				Steps: []pipeline.PipelineStep{
 					{
 						Name:  "bad-check",
 						Check: "curl http://localhost",
-						Publish: &schema.PipelinePublish{
+						Publish: &pipeline.PipelinePublish{
 							EventType: "m.test",
 							Room:      "#test:local",
 							Content:   map[string]any{},
@@ -225,12 +225,12 @@ func TestValidatePipelineContent(t *testing.T) {
 		},
 		{
 			name: "interactive on publish step",
-			content: &schema.PipelineContent{
-				Steps: []schema.PipelineStep{
+			content: &pipeline.PipelineContent{
+				Steps: []pipeline.PipelineStep{
 					{
 						Name:        "bad-interactive",
 						Interactive: true,
-						Publish: &schema.PipelinePublish{
+						Publish: &pipeline.PipelinePublish{
 							EventType: "m.test",
 							Room:      "#test:local",
 							Content:   map[string]any{},
@@ -243,12 +243,12 @@ func TestValidatePipelineContent(t *testing.T) {
 		},
 		{
 			name: "grace_period on publish step",
-			content: &schema.PipelineContent{
-				Steps: []schema.PipelineStep{
+			content: &pipeline.PipelineContent{
+				Steps: []pipeline.PipelineStep{
 					{
 						Name:        "bad-grace",
 						GracePeriod: "10s",
-						Publish: &schema.PipelinePublish{
+						Publish: &pipeline.PipelinePublish{
 							EventType: "m.test",
 							Room:      "#test:local",
 							Content:   map[string]any{},
@@ -261,11 +261,11 @@ func TestValidatePipelineContent(t *testing.T) {
 		},
 		{
 			name: "publish missing event_type",
-			content: &schema.PipelineContent{
-				Steps: []schema.PipelineStep{
+			content: &pipeline.PipelineContent{
+				Steps: []pipeline.PipelineStep{
 					{
 						Name: "bad-publish",
-						Publish: &schema.PipelinePublish{
+						Publish: &pipeline.PipelinePublish{
 							Room:    "#test:local",
 							Content: map[string]any{},
 						},
@@ -277,11 +277,11 @@ func TestValidatePipelineContent(t *testing.T) {
 		},
 		{
 			name: "publish missing room",
-			content: &schema.PipelineContent{
-				Steps: []schema.PipelineStep{
+			content: &pipeline.PipelineContent{
+				Steps: []pipeline.PipelineStep{
 					{
 						Name: "bad-publish",
-						Publish: &schema.PipelinePublish{
+						Publish: &pipeline.PipelinePublish{
 							EventType: "m.test",
 							Content:   map[string]any{},
 						},
@@ -293,11 +293,11 @@ func TestValidatePipelineContent(t *testing.T) {
 		},
 		{
 			name: "publish missing content",
-			content: &schema.PipelineContent{
-				Steps: []schema.PipelineStep{
+			content: &pipeline.PipelineContent{
+				Steps: []pipeline.PipelineStep{
 					{
 						Name: "bad-publish",
-						Publish: &schema.PipelinePublish{
+						Publish: &pipeline.PipelinePublish{
 							EventType: "m.test",
 							Room:      "#test:local",
 						},
@@ -309,8 +309,8 @@ func TestValidatePipelineContent(t *testing.T) {
 		},
 		{
 			name: "invalid timeout",
-			content: &schema.PipelineContent{
-				Steps: []schema.PipelineStep{
+			content: &pipeline.PipelineContent{
+				Steps: []pipeline.PipelineStep{
 					{Name: "slow", Run: "sleep 100", Timeout: "not-a-duration"},
 				},
 			},
@@ -319,8 +319,8 @@ func TestValidatePipelineContent(t *testing.T) {
 		},
 		{
 			name: "invalid grace_period",
-			content: &schema.PipelineContent{
-				Steps: []schema.PipelineStep{
+			content: &pipeline.PipelineContent{
+				Steps: []pipeline.PipelineStep{
 					{Name: "slow", Run: "sleep 100", GracePeriod: "xyz"},
 				},
 			},
@@ -329,29 +329,29 @@ func TestValidatePipelineContent(t *testing.T) {
 		},
 		{
 			name: "log without room",
-			content: &schema.PipelineContent{
-				Steps: []schema.PipelineStep{
+			content: &pipeline.PipelineContent{
+				Steps: []pipeline.PipelineStep{
 					{Name: "build", Run: "make"},
 				},
-				Log: &schema.PipelineLog{},
+				Log: &pipeline.PipelineLog{},
 			},
 			expectedIssues: 1,
 			wantSubstrings: []string{"log.room is required"},
 		},
 		{
 			name: "valid with log room",
-			content: &schema.PipelineContent{
-				Steps: []schema.PipelineStep{
+			content: &pipeline.PipelineContent{
+				Steps: []pipeline.PipelineStep{
 					{Name: "build", Run: "make"},
 				},
-				Log: &schema.PipelineLog{Room: "#iree/amdgpu/general:bureau.local"},
+				Log: &pipeline.PipelineLog{Room: "#iree/amdgpu/general:bureau.local"},
 			},
 			expectedIssues: 0,
 		},
 		{
 			name: "valid with timeout and grace_period",
-			content: &schema.PipelineContent{
-				Steps: []schema.PipelineStep{
+			content: &pipeline.PipelineContent{
+				Steps: []pipeline.PipelineStep{
 					{Name: "build", Run: "make", Timeout: "30m", GracePeriod: "10s"},
 				},
 			},
@@ -359,8 +359,8 @@ func TestValidatePipelineContent(t *testing.T) {
 		},
 		{
 			name: "valid with when guard",
-			content: &schema.PipelineContent{
-				Steps: []schema.PipelineStep{
+			content: &pipeline.PipelineContent{
+				Steps: []pipeline.PipelineStep{
 					{Name: "optional", Run: "echo done", When: "${DEPLOY}"},
 				},
 			},
@@ -368,13 +368,13 @@ func TestValidatePipelineContent(t *testing.T) {
 		},
 		{
 			name: "multiple issues",
-			content: &schema.PipelineContent{
-				Steps: []schema.PipelineStep{
+			content: &pipeline.PipelineContent{
+				Steps: []pipeline.PipelineStep{
 					{Run: "echo no-name"}, // missing name
-					{Name: "both", Run: "echo", Publish: &schema.PipelinePublish{EventType: "m.test", Room: "#r:l", Content: map[string]any{}}}, // both set
+					{Name: "both", Run: "echo", Publish: &pipeline.PipelinePublish{EventType: "m.test", Room: "#r:l", Content: map[string]any{}}}, // both set
 					{Name: "neither"}, // neither set
 				},
-				Log: &schema.PipelineLog{},
+				Log: &pipeline.PipelineLog{},
 			},
 			expectedIssues: 4, // missing name + both set + neither set + log.room
 		},
@@ -384,7 +384,7 @@ func TestValidatePipelineContent(t *testing.T) {
 		t.Run(testCase.name, func(t *testing.T) {
 			t.Parallel()
 
-			issues := libpipeline.Validate(testCase.content)
+			issues := pipelinedef.Validate(testCase.content)
 			if len(issues) != testCase.expectedIssues {
 				t.Fatalf("got %d issues, want %d:\n%s", len(issues), testCase.expectedIssues, strings.Join(issues, "\n"))
 			}
@@ -430,7 +430,7 @@ func TestReadPipelineFile(t *testing.T) {
 			t.Fatalf("WriteFile: %v", err)
 		}
 
-		content, err := libpipeline.ReadFile(path)
+		content, err := pipelinedef.ReadFile(path)
 		if err != nil {
 			t.Fatalf("ReadFile: %v", err)
 		}
@@ -470,7 +470,7 @@ func TestReadPipelineFile(t *testing.T) {
 			t.Fatalf("WriteFile: %v", err)
 		}
 
-		content, err := libpipeline.ReadFile(path)
+		content, err := pipelinedef.ReadFile(path)
 		if err != nil {
 			t.Fatalf("ReadFile: %v", err)
 		}
@@ -510,7 +510,7 @@ func TestReadPipelineFile(t *testing.T) {
 			t.Fatalf("WriteFile: %v", err)
 		}
 
-		content, err := libpipeline.ReadFile(path)
+		content, err := pipelinedef.ReadFile(path)
 		if err != nil {
 			t.Fatalf("ReadFile: %v", err)
 		}
@@ -533,7 +533,7 @@ func TestReadPipelineFile(t *testing.T) {
 	t.Run("nonexistent file", func(t *testing.T) {
 		t.Parallel()
 
-		_, err := libpipeline.ReadFile("/nonexistent/pipeline.json")
+		_, err := pipelinedef.ReadFile("/nonexistent/pipeline.json")
 		if err == nil {
 			t.Fatal("expected error for nonexistent file")
 		}
@@ -548,7 +548,7 @@ func TestReadPipelineFile(t *testing.T) {
 			t.Fatalf("WriteFile: %v", err)
 		}
 
-		_, err := libpipeline.ReadFile(path)
+		_, err := pipelinedef.ReadFile(path)
 		if err == nil {
 			t.Fatal("expected error for invalid JSON")
 		}

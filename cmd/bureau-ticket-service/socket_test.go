@@ -19,10 +19,10 @@ import (
 	"github.com/bureau-foundation/bureau/lib/clock"
 	"github.com/bureau-foundation/bureau/lib/codec"
 	"github.com/bureau-foundation/bureau/lib/ref"
-	"github.com/bureau-foundation/bureau/lib/schema"
+	"github.com/bureau-foundation/bureau/lib/schema/ticket"
 	"github.com/bureau-foundation/bureau/lib/service"
 	"github.com/bureau-foundation/bureau/lib/servicetoken"
-	"github.com/bureau-foundation/bureau/lib/ticket"
+	"github.com/bureau-foundation/bureau/lib/ticketindex"
 )
 
 // testClockEpoch is the fixed time used by the fake clock in ticket
@@ -253,9 +253,9 @@ func waitForSocket(t *testing.T, path string) {
 
 // ticketFixture returns a minimal valid TicketContent. The title and
 // status are parameterized; everything else gets sensible defaults.
-func ticketFixture(title, status string) schema.TicketContent {
-	return schema.TicketContent{
-		Version:   schema.TicketContentVersion,
+func ticketFixture(title, status string) ticket.TicketContent {
+	return ticket.TicketContent{
+		Version:   ticket.TicketContentVersion,
 		Title:     title,
 		Status:    status,
 		Priority:  2,
@@ -282,7 +282,7 @@ func requireServiceError(t *testing.T, err error) *service.ServiceError {
 // sampleRooms returns a two-room setup for testing. Room A has 3
 // tickets (2 open, 1 closed); room B has 1 ticket with a dependency.
 func sampleRooms() map[ref.RoomID]*roomState {
-	roomA := newTrackedRoom(map[string]schema.TicketContent{
+	roomA := newTrackedRoom(map[string]ticket.TicketContent{
 		"tkt-1": {
 			Version:   1,
 			Title:     "implement login",
@@ -316,7 +316,7 @@ func sampleRooms() map[ref.RoomID]*roomState {
 		},
 	})
 
-	roomB := newTrackedRoom(map[string]schema.TicketContent{
+	roomB := newTrackedRoom(map[string]ticket.TicketContent{
 		"tkt-10": {
 			Version:   1,
 			Title:     "deploy service",
@@ -509,7 +509,7 @@ func TestHandleReady(t *testing.T) {
 func TestHandleBlocked(t *testing.T) {
 	// Create a room where tkt-3 is blocked by tkt-1 (which is open).
 	rooms := map[ref.RoomID]*roomState{
-		testRoomID("!room:local"): newTrackedRoom(map[string]schema.TicketContent{
+		testRoomID("!room:local"): newTrackedRoom(map[string]ticket.TicketContent{
 			"tkt-1": {Version: 1, Title: "blocker", Status: "open", Priority: 1, CreatedAt: "2026-01-01T00:00:00Z"},
 			"tkt-3": {Version: 1, Title: "blocked", Status: "open", Priority: 2, BlockedBy: []string{"tkt-1"}, CreatedAt: "2026-01-02T00:00:00Z"},
 		}),
@@ -781,7 +781,7 @@ func TestHandleStats(t *testing.T) {
 	client, cleanup := testServer(t, sampleRooms())
 	defer cleanup()
 
-	var result ticket.Stats
+	var result ticketindex.Stats
 	err := client.Call(context.Background(), "stats", map[string]any{
 		"room": "!roomA:local",
 	}, &result)
@@ -857,7 +857,7 @@ func TestHandleRanked(t *testing.T) {
 	// Set up a room with scoring-relevant structure: one ticket
 	// that unblocks another (high leverage) and one that doesn't.
 	rooms := map[ref.RoomID]*roomState{
-		testRoomID("!room:local"): newTrackedRoom(map[string]schema.TicketContent{
+		testRoomID("!room:local"): newTrackedRoom(map[string]ticket.TicketContent{
 			"tkt-blocker": {
 				Version:   1,
 				Title:     "high leverage blocker",
@@ -928,7 +928,7 @@ func TestHandleRanked(t *testing.T) {
 
 func TestHandleRankedEmpty(t *testing.T) {
 	rooms := map[ref.RoomID]*roomState{
-		testRoomID("!room:local"): newTrackedRoom(map[string]schema.TicketContent{
+		testRoomID("!room:local"): newTrackedRoom(map[string]ticket.TicketContent{
 			"tkt-closed": {
 				Version:   1,
 				Title:     "all done",
@@ -968,7 +968,7 @@ func TestHandleRankedMissingRoom(t *testing.T) {
 
 func TestHandleEpicHealth(t *testing.T) {
 	rooms := map[ref.RoomID]*roomState{
-		testRoomID("!room:local"): newTrackedRoom(map[string]schema.TicketContent{
+		testRoomID("!room:local"): newTrackedRoom(map[string]ticket.TicketContent{
 			"tkt-epic": {
 				Version:   1,
 				Title:     "the epic",
@@ -1124,7 +1124,7 @@ func TestHandleShowCrossRoom(t *testing.T) {
 // ensures the schema types (json-tagged) round-trip correctly through
 // our CBOR wire protocol.
 func TestSchemaContentRoundTripViaCBOR(t *testing.T) {
-	original := schema.TicketContent{
+	original := ticket.TicketContent{
 		Version:   1,
 		Title:     "round-trip test",
 		Body:      "body text",
@@ -1138,7 +1138,7 @@ func TestSchemaContentRoundTripViaCBOR(t *testing.T) {
 		CreatedBy: ref.MustParseUserID("@creator:bureau.local"),
 		CreatedAt: "2026-01-01T00:00:00Z",
 		UpdatedAt: "2026-01-02T00:00:00Z",
-		Notes: []schema.TicketNote{
+		Notes: []ticket.TicketNote{
 			{ID: "n-1", Author: ref.MustParseUserID("@author:bureau.local"), Body: "note body", CreatedAt: "2026-01-01T00:00:00Z"},
 		},
 	}
@@ -1148,7 +1148,7 @@ func TestSchemaContentRoundTripViaCBOR(t *testing.T) {
 		t.Fatalf("Marshal: %v", err)
 	}
 
-	var decoded schema.TicketContent
+	var decoded ticket.TicketContent
 	if err := codec.Unmarshal(data, &decoded); err != nil {
 		t.Fatalf("Unmarshal: %v", err)
 	}
@@ -1228,7 +1228,7 @@ func testMutationServerWithTimers(t *testing.T, rooms map[ref.RoomID]*roomState)
 // mutationRooms returns a room with tickets in various states suitable
 // for mutation testing.
 func mutationRooms() map[ref.RoomID]*roomState {
-	room := newTrackedRoom(map[string]schema.TicketContent{
+	room := newTrackedRoom(map[string]ticket.TicketContent{
 		"tkt-open": {
 			Version:   1,
 			Title:     "open ticket",
@@ -1268,7 +1268,7 @@ func mutationRooms() map[ref.RoomID]*roomState {
 			Status:   "open",
 			Priority: 2,
 			Type:     "task",
-			Gates: []schema.TicketGate{
+			Gates: []ticket.TicketGate{
 				{
 					ID:          "human-review",
 					Type:        "human",
@@ -1669,7 +1669,7 @@ func TestHandleCloseAlreadyClosed(t *testing.T) {
 // recurringRooms returns rooms with tickets that have recurring timer
 // gates, suitable for testing the auto-rearm behavior of handleClose.
 func recurringRooms() map[ref.RoomID]*roomState {
-	room := newTrackedRoom(map[string]schema.TicketContent{
+	room := newTrackedRoom(map[string]ticket.TicketContent{
 		"tkt-recurring-schedule": {
 			Version:   1,
 			Title:     "daily standup",
@@ -1679,7 +1679,7 @@ func recurringRooms() map[ref.RoomID]*roomState {
 			CreatedBy: ref.MustParseUserID("@agent/creator:bureau.local"),
 			CreatedAt: "2026-01-10T00:00:00Z",
 			UpdatedAt: "2026-01-10T00:00:00Z",
-			Gates: []schema.TicketGate{
+			Gates: []ticket.TicketGate{
 				{
 					ID:        "daily",
 					Type:      "timer",
@@ -1701,7 +1701,7 @@ func recurringRooms() map[ref.RoomID]*roomState {
 			CreatedBy: ref.MustParseUserID("@agent/creator:bureau.local"),
 			CreatedAt: "2026-01-10T00:00:00Z",
 			UpdatedAt: "2026-01-10T00:00:00Z",
-			Gates: []schema.TicketGate{
+			Gates: []ticket.TicketGate{
 				{
 					ID:        "poll",
 					Type:      "timer",
@@ -1723,7 +1723,7 @@ func recurringRooms() map[ref.RoomID]*roomState {
 			CreatedBy: ref.MustParseUserID("@agent/creator:bureau.local"),
 			CreatedAt: "2026-01-10T00:00:00Z",
 			UpdatedAt: "2026-01-10T00:00:00Z",
-			Gates: []schema.TicketGate{
+			Gates: []ticket.TicketGate{
 				{
 					ID:             "limited",
 					Type:           "timer",
@@ -2073,7 +2073,7 @@ func TestHandleResolveGate(t *testing.T) {
 	}
 
 	// Find the human-review gate in the response.
-	var gate *schema.TicketGate
+	var gate *ticket.TicketGate
 	for i := range result.Content.Gates {
 		if result.Content.Gates[i].ID == "human-review" {
 			gate = &result.Content.Gates[i]
@@ -2158,7 +2158,7 @@ func TestHandleUpdateGate(t *testing.T) {
 		t.Fatalf("Call: %v", err)
 	}
 
-	var gate *schema.TicketGate
+	var gate *ticket.TicketGate
 	for i := range result.Content.Gates {
 		if result.Content.Gates[i].ID == "ci-pass" {
 			gate = &result.Content.Gates[i]
@@ -2752,7 +2752,7 @@ func TestWildcardGrantCoversCloseAndReopen(t *testing.T) {
 
 func TestHandleUpcomingGates(t *testing.T) {
 	rooms := map[ref.RoomID]*roomState{
-		testRoomID("!room1:bureau.local"): newTrackedRoom(map[string]schema.TicketContent{
+		testRoomID("!room1:bureau.local"): newTrackedRoom(map[string]ticket.TicketContent{
 			"tkt-timer1": {
 				Version:   1,
 				Title:     "scheduled check",
@@ -2762,7 +2762,7 @@ func TestHandleUpcomingGates(t *testing.T) {
 				CreatedBy: ref.MustParseUserID("@agent/creator:bureau.local"),
 				CreatedAt: "2026-01-01T00:00:00Z",
 				UpdatedAt: "2026-01-01T00:00:00Z",
-				Gates: []schema.TicketGate{
+				Gates: []ticket.TicketGate{
 					{
 						ID:       "schedule",
 						Type:     "timer",
@@ -2781,7 +2781,7 @@ func TestHandleUpcomingGates(t *testing.T) {
 				CreatedBy: ref.MustParseUserID("@agent/creator:bureau.local"),
 				CreatedAt: "2026-01-01T00:00:00Z",
 				UpdatedAt: "2026-01-01T00:00:00Z",
-				Gates: []schema.TicketGate{
+				Gates: []ticket.TicketGate{
 					{
 						ID:       "interval",
 						Type:     "timer",
@@ -2800,7 +2800,7 @@ func TestHandleUpcomingGates(t *testing.T) {
 				CreatedBy: ref.MustParseUserID("@agent/creator:bureau.local"),
 				CreatedAt: "2026-01-01T00:00:00Z",
 				UpdatedAt: "2026-01-01T00:00:00Z",
-				Gates: []schema.TicketGate{
+				Gates: []ticket.TicketGate{
 					{
 						ID:          "done",
 						Type:        "timer",
@@ -2862,26 +2862,26 @@ func TestHandleUpcomingGates(t *testing.T) {
 
 func TestHandleUpcomingGatesRoomFilter(t *testing.T) {
 	rooms := map[ref.RoomID]*roomState{
-		testRoomID("!room1:bureau.local"): newTrackedRoom(map[string]schema.TicketContent{
+		testRoomID("!room1:bureau.local"): newTrackedRoom(map[string]ticket.TicketContent{
 			"tkt-a": {
 				Version: 1, Title: "room1 task", Status: "open",
 				Priority: 2, Type: "chore",
 				CreatedBy: ref.MustParseUserID("@agent/creator:bureau.local"),
 				CreatedAt: "2026-01-01T00:00:00Z",
 				UpdatedAt: "2026-01-01T00:00:00Z",
-				Gates: []schema.TicketGate{
+				Gates: []ticket.TicketGate{
 					{ID: "t", Type: "timer", Status: "pending", Target: "2026-01-16T00:00:00Z"},
 				},
 			},
 		}),
-		testRoomID("!room2:bureau.local"): newTrackedRoom(map[string]schema.TicketContent{
+		testRoomID("!room2:bureau.local"): newTrackedRoom(map[string]ticket.TicketContent{
 			"tkt-b": {
 				Version: 1, Title: "room2 task", Status: "open",
 				Priority: 2, Type: "chore",
 				CreatedBy: ref.MustParseUserID("@agent/creator:bureau.local"),
 				CreatedAt: "2026-01-01T00:00:00Z",
 				UpdatedAt: "2026-01-01T00:00:00Z",
-				Gates: []schema.TicketGate{
+				Gates: []ticket.TicketGate{
 					{ID: "t", Type: "timer", Status: "pending", Target: "2026-01-17T00:00:00Z"},
 				},
 			},
@@ -2931,7 +2931,7 @@ func TestHandleUpcomingGatesEmpty(t *testing.T) {
 // means a state event was written, so the test checks whether the
 // write produced the expected gate status. If the gate never reaches
 // the expected status, Go's test timeout catches the hang.
-func waitForGateStatus(t *testing.T, env *testEnv, room, ticketID, gateID, expectedStatus string) schema.TicketContent {
+func waitForGateStatus(t *testing.T, env *testEnv, room, ticketID, gateID, expectedStatus string) ticket.TicketContent {
 	t.Helper()
 
 	for {
@@ -3116,7 +3116,7 @@ func TestTimerLifecycleMaxOccurrences(t *testing.T) {
 	// A recurring gate with max_occurrences=2 should stop rearming
 	// after 2 fires.
 	rooms := map[ref.RoomID]*roomState{
-		testRoomID("!room:bureau.local"): newTrackedRoom(map[string]schema.TicketContent{
+		testRoomID("!room:bureau.local"): newTrackedRoom(map[string]ticket.TicketContent{
 			"tkt-max": {
 				Version:   1,
 				Title:     "limited recurring",
@@ -3126,7 +3126,7 @@ func TestTimerLifecycleMaxOccurrences(t *testing.T) {
 				CreatedBy: ref.MustParseUserID("@agent/creator:bureau.local"),
 				CreatedAt: "2026-01-01T00:00:00Z",
 				UpdatedAt: "2026-01-01T00:00:00Z",
-				Gates: []schema.TicketGate{
+				Gates: []ticket.TicketGate{
 					{
 						ID:             "interval",
 						Type:           "timer",
@@ -3260,7 +3260,7 @@ func TestDeadlineCRUD(t *testing.T) {
 	})
 
 	t.Run("UpdateSetDeadline", func(t *testing.T) {
-		rooms := map[ref.RoomID]*roomState{testRoomID(room): newTrackedRoom(map[string]schema.TicketContent{
+		rooms := map[ref.RoomID]*roomState{testRoomID(room): newTrackedRoom(map[string]ticket.TicketContent{
 			"tkt-1": ticketFixture("No deadline yet", "open"),
 		})}
 		env := testMutationServer(t, rooms)
@@ -3281,7 +3281,7 @@ func TestDeadlineCRUD(t *testing.T) {
 	t.Run("UpdateClearDeadline", func(t *testing.T) {
 		fixture := ticketFixture("Has deadline", "open")
 		fixture.Deadline = "2026-04-01T00:00:00Z"
-		rooms := map[ref.RoomID]*roomState{testRoomID(room): newTrackedRoom(map[string]schema.TicketContent{
+		rooms := map[ref.RoomID]*roomState{testRoomID(room): newTrackedRoom(map[string]ticket.TicketContent{
 			"tkt-1": fixture,
 		})}
 		env := testMutationServer(t, rooms)

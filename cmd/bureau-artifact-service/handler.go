@@ -14,7 +14,7 @@ import (
 	"sync"
 	"time"
 
-	"github.com/bureau-foundation/bureau/lib/artifact"
+	"github.com/bureau-foundation/bureau/lib/artifactstore"
 	"github.com/bureau-foundation/bureau/lib/codec"
 	"github.com/bureau-foundation/bureau/lib/service"
 	"github.com/bureau-foundation/bureau/lib/servicetoken"
@@ -99,7 +99,7 @@ func (as *ArtifactService) handleConnection(ctx context.Context, conn net.Conn) 
 
 	// Read the first message. This is always a length-prefixed CBOR
 	// message containing at minimum an "action" field.
-	raw, err := artifact.ReadRawMessage(conn)
+	raw, err := artifactstore.ReadRawMessage(conn)
 	if err != nil {
 		if errors.Is(err, os.ErrDeadlineExceeded) {
 			return
@@ -238,7 +238,7 @@ func (as *ArtifactService) authenticate(conn net.Conn, raw []byte, action, grant
 // --- Store action ---
 
 func (as *ArtifactService) handleStore(ctx context.Context, conn net.Conn, raw []byte) {
-	var header artifact.StoreHeader
+	var header artifactstore.StoreHeader
 	if err := codec.Unmarshal(raw, &header); err != nil {
 		as.writeError(conn, fmt.Sprintf("invalid store header: %v", err))
 		return
@@ -246,8 +246,8 @@ func (as *ArtifactService) handleStore(ctx context.Context, conn net.Conn, raw [
 
 	// Normalize and validate visibility before any writes.
 	// Default to private per security-by-default design.
-	header.Visibility = artifact.NormalizeVisibility(header.Visibility)
-	if err := artifact.ValidateVisibility(header.Visibility); err != nil {
+	header.Visibility = artifactstore.NormalizeVisibility(header.Visibility)
+	if err := artifactstore.ValidateVisibility(header.Visibility); err != nil {
 		as.writeError(conn, err.Error())
 		return
 	}
@@ -264,7 +264,7 @@ func (as *ArtifactService) handleStore(ctx context.Context, conn net.Conn, raw [
 	// lock. Push operations are read-only against the local store
 	// and can run concurrently with other writes.
 	targets := as.resolvePushTargets(&header)
-	var pushResults []artifact.PushResult
+	var pushResults []artifactstore.PushResult
 	if len(targets) > 0 {
 		pushResults = as.executePushes(ctx, storeResult.FileHash, meta, targets)
 		for _, result := range pushResults {
@@ -277,9 +277,9 @@ func (as *ArtifactService) handleStore(ctx context.Context, conn net.Conn, raw [
 	}
 
 	// Send the store response.
-	response := &artifact.StoreResponse{
+	response := &artifactstore.StoreResponse{
 		Ref:            storeResult.Ref,
-		Hash:           artifact.FormatHash(storeResult.FileHash),
+		Hash:           artifactstore.FormatHash(storeResult.FileHash),
 		Size:           storeResult.Size,
 		ChunkCount:     storeResult.ChunkCount,
 		ContainerCount: storeResult.ContainerCount,
@@ -288,7 +288,7 @@ func (as *ArtifactService) handleStore(ctx context.Context, conn net.Conn, raw [
 		PushResults:    pushResults,
 	}
 	conn.SetWriteDeadline(time.Now().Add(writeTimeout))
-	if err := artifact.WriteMessage(conn, response); err != nil {
+	if err := artifactstore.WriteMessage(conn, response); err != nil {
 		as.logger.Debug("failed to write store response", "error", err)
 	}
 }
@@ -297,11 +297,11 @@ func (as *ArtifactService) handleStore(ctx context.Context, conn net.Conn, raw [
 // metadata, updates indexes, and creates a tag if requested. Holds
 // the write mutex for the duration. On error, writes the error
 // response to conn and returns the error.
-func (as *ArtifactService) storeLocally(ctx context.Context, conn net.Conn, header *artifact.StoreHeader) (*artifact.StoreResult, *artifact.ArtifactMetadata, error) {
+func (as *ArtifactService) storeLocally(ctx context.Context, conn net.Conn, header *artifactstore.StoreHeader) (*artifactstore.StoreResult, *artifactstore.ArtifactMetadata, error) {
 	as.writeMu.Lock()
 	defer as.writeMu.Unlock()
 
-	var storeResult *artifact.StoreResult
+	var storeResult *artifactstore.StoreResult
 	var err error
 
 	if header.Data != nil {
@@ -311,7 +311,7 @@ func (as *ArtifactService) storeLocally(ctx context.Context, conn net.Conn, head
 		// Large artifact: binary data follows the header. Remove
 		// the read deadline — streaming can take a long time.
 		conn.SetReadDeadline(time.Time{})
-		reader := artifact.DataReader(conn, header.Size)
+		reader := artifactstore.DataReader(conn, header.Size)
 		storeResult, err = as.store.Write(reader, header.ContentType, nil)
 	}
 
@@ -321,7 +321,7 @@ func (as *ArtifactService) storeLocally(ctx context.Context, conn net.Conn, head
 	}
 
 	// Persist metadata.
-	meta := &artifact.ArtifactMetadata{
+	meta := &artifactstore.ArtifactMetadata{
 		FileHash:       storeResult.FileHash,
 		Ref:            storeResult.Ref,
 		ContentType:    header.ContentType,
@@ -376,7 +376,7 @@ func (as *ArtifactService) storeLocally(ctx context.Context, conn net.Conn, head
 // --- Fetch action ---
 
 func (as *ArtifactService) handleFetch(ctx context.Context, conn net.Conn, raw []byte) {
-	var request artifact.FetchRequest
+	var request artifactstore.FetchRequest
 	if err := codec.Unmarshal(raw, &request); err != nil {
 		as.writeError(conn, fmt.Sprintf("invalid fetch request: %v", err))
 		return
@@ -416,43 +416,43 @@ func (as *ArtifactService) handleFetch(ctx context.Context, conn net.Conn, raw [
 		return
 	}
 
-	if record.Size <= int64(artifact.SmallArtifactThreshold) {
+	if record.Size <= int64(artifactstore.SmallArtifactThreshold) {
 		// Small artifact: embed content in the response.
 		content, err := as.store.ReadContent(fileHash)
 		if err != nil {
 			as.writeError(conn, fmt.Sprintf("reading content: %v", err))
 			return
 		}
-		response := &artifact.FetchResponse{
+		response := &artifactstore.FetchResponse{
 			Size:        record.Size,
 			ContentType: meta.ContentType,
 			Filename:    meta.Filename,
-			Hash:        artifact.FormatHash(fileHash),
+			Hash:        artifactstore.FormatHash(fileHash),
 			ChunkCount:  record.ChunkCount,
 			Compression: meta.Compression,
 			Visibility:  meta.Visibility,
 			Data:        content,
 		}
 		conn.SetWriteDeadline(time.Now().Add(writeTimeout))
-		if err := artifact.WriteMessage(conn, response); err != nil {
+		if err := artifactstore.WriteMessage(conn, response); err != nil {
 			as.logger.Debug("failed to write fetch response", "error", err)
 		}
 		return
 	}
 
 	// Large artifact: send response header, then stream content.
-	response := &artifact.FetchResponse{
+	response := &artifactstore.FetchResponse{
 		Size:        record.Size,
 		ContentType: meta.ContentType,
 		Filename:    meta.Filename,
-		Hash:        artifact.FormatHash(fileHash),
+		Hash:        artifactstore.FormatHash(fileHash),
 		ChunkCount:  record.ChunkCount,
 		Compression: meta.Compression,
 		Visibility:  meta.Visibility,
 		// Data is nil — content follows as a sized binary stream.
 	}
 	conn.SetWriteDeadline(time.Now().Add(writeTimeout))
-	if err := artifact.WriteMessage(conn, response); err != nil {
+	if err := artifactstore.WriteMessage(conn, response); err != nil {
 		as.logger.Debug("failed to write fetch response header", "error", err)
 		return
 	}
@@ -462,7 +462,7 @@ func (as *ArtifactService) handleFetch(ctx context.Context, conn net.Conn, raw [
 	conn.SetWriteDeadline(time.Time{})
 	if _, err := as.store.Read(fileHash, conn); err != nil {
 		as.logger.Error("fetch stream failed",
-			"ref", artifact.FormatRef(fileHash),
+			"ref", artifactstore.FormatRef(fileHash),
 			"error", err,
 		)
 		// Connection is committed to the binary protocol. The client
@@ -488,17 +488,17 @@ type refRequest struct {
 // resolves the ref to a full file hash. Returns the hash and true
 // on success. On failure, writes an error response to conn and
 // returns false.
-func (as *ArtifactService) resolveRefRequest(conn net.Conn, raw []byte) (artifact.Hash, bool) {
+func (as *ArtifactService) resolveRefRequest(conn net.Conn, raw []byte) (artifactstore.Hash, bool) {
 	var request refRequest
 	if err := codec.Unmarshal(raw, &request); err != nil {
 		as.writeError(conn, fmt.Sprintf("invalid request: %v", err))
-		return artifact.Hash{}, false
+		return artifactstore.Hash{}, false
 	}
 
 	fileHash, err := as.resolveRef(request.Ref)
 	if err != nil {
 		as.writeError(conn, err.Error())
-		return artifact.Hash{}, false
+		return artifactstore.Hash{}, false
 	}
 
 	return fileHash, true
@@ -517,7 +517,7 @@ func (as *ArtifactService) handleExists(ctx context.Context, conn net.Conn, raw 
 		if as.isUpstreamRef(request.Ref) {
 			upstreamSocket, upstreamToken := as.getUpstream()
 			if upstreamSocket != "" {
-				upstream := artifact.NewClientFromToken(upstreamSocket, upstreamToken)
+				upstream := artifactstore.NewClientFromToken(upstreamSocket, upstreamToken)
 				upstreamResult, upstreamErr := upstream.Exists(ctx, request.Ref)
 				if upstreamErr == nil && upstreamResult.Exists {
 					as.writeResult(conn, *upstreamResult)
@@ -525,14 +525,14 @@ func (as *ArtifactService) handleExists(ctx context.Context, conn net.Conn, raw 
 				}
 			}
 		}
-		as.writeResult(conn, artifact.ExistsResponse{Exists: false})
+		as.writeResult(conn, artifactstore.ExistsResponse{Exists: false})
 		return
 	}
 
-	response := artifact.ExistsResponse{
+	response := artifactstore.ExistsResponse{
 		Exists: true,
-		Hash:   artifact.FormatHash(fileHash),
-		Ref:    artifact.FormatRef(fileHash),
+		Hash:   artifactstore.FormatHash(fileHash),
+		Ref:    artifactstore.FormatRef(fileHash),
 	}
 
 	record, err := as.store.Stat(fileHash)
@@ -576,7 +576,7 @@ func (as *ArtifactService) handleReconstruction(ctx context.Context, conn net.Co
 func (as *ArtifactService) handleStatus(ctx context.Context, conn net.Conn, raw []byte) {
 	uptime := as.clock.Now().Sub(as.startedAt)
 
-	as.writeResult(conn, artifact.StatusResponse{
+	as.writeResult(conn, artifactstore.StatusResponse{
 		UptimeSeconds: uptime.Seconds(),
 		Artifacts:     as.refIndex.Len(),
 		Rooms:         len(as.rooms),
@@ -590,15 +590,15 @@ func (as *ArtifactService) handleStatus(ctx context.Context, conn net.Conn, raw 
 //   - 64-character hex string (full hash)
 //   - "art-" prefix + 12 hex characters (short ref)
 //   - tag name (looked up in the tag store)
-func (as *ArtifactService) resolveRef(ref string) (artifact.Hash, error) {
+func (as *ArtifactService) resolveRef(ref string) (artifactstore.Hash, error) {
 	// Try full hash first (64 hex chars).
 	if len(ref) == 64 {
-		hash, err := artifact.ParseHash(ref)
+		hash, err := artifactstore.ParseHash(ref)
 		if err == nil {
 			if as.store.Exists(hash) {
 				return hash, nil
 			}
-			return artifact.Hash{}, fmt.Errorf("artifact %s not found", ref)
+			return artifactstore.Hash{}, fmt.Errorf("artifact %s not found", ref)
 		}
 	}
 
@@ -612,7 +612,7 @@ func (as *ArtifactService) resolveRef(ref string) (artifact.Hash, error) {
 		return tag.Target, nil
 	}
 
-	return artifact.Hash{}, fmt.Errorf(
+	return artifactstore.Hash{}, fmt.Errorf(
 		"unknown artifact reference %q: not a hash, short ref (art-<hex>), or tag name",
 		ref,
 	)
@@ -621,13 +621,13 @@ func (as *ArtifactService) resolveRef(ref string) (artifact.Hash, error) {
 // --- List action ---
 
 func (as *ArtifactService) handleList(ctx context.Context, conn net.Conn, raw []byte) {
-	var request artifact.ListRequest
+	var request artifactstore.ListRequest
 	if err := codec.Unmarshal(raw, &request); err != nil {
 		as.writeError(conn, fmt.Sprintf("invalid list request: %v", err))
 		return
 	}
 
-	filter := artifact.ArtifactFilter{
+	filter := artifactstore.ArtifactFilter{
 		ContentType: request.ContentType,
 		Label:       request.Label,
 		CachePolicy: request.CachePolicy,
@@ -640,11 +640,11 @@ func (as *ArtifactService) handleList(ctx context.Context, conn net.Conn, raw []
 
 	entries, total := as.artifactIndex.List(filter)
 
-	summaries := make([]artifact.ArtifactSummary, len(entries))
+	summaries := make([]artifactstore.ArtifactSummary, len(entries))
 	for i, entry := range entries {
-		summaries[i] = artifact.ArtifactSummary{
-			Hash:        artifact.FormatHash(entry.FileHash),
-			Ref:         artifact.FormatRef(entry.FileHash),
+		summaries[i] = artifactstore.ArtifactSummary{
+			Hash:        artifactstore.FormatHash(entry.FileHash),
+			Ref:         artifactstore.FormatRef(entry.FileHash),
 			ContentType: entry.Metadata.ContentType,
 			Filename:    entry.Metadata.Filename,
 			Size:        entry.Metadata.Size,
@@ -655,7 +655,7 @@ func (as *ArtifactService) handleList(ctx context.Context, conn net.Conn, raw []
 		}
 	}
 
-	as.writeResult(conn, artifact.ListResponse{
+	as.writeResult(conn, artifactstore.ListResponse{
 		Artifacts: summaries,
 		Total:     total,
 	})
@@ -664,7 +664,7 @@ func (as *ArtifactService) handleList(ctx context.Context, conn net.Conn, raw []
 // --- Tag actions ---
 
 func (as *ArtifactService) handleTag(ctx context.Context, conn net.Conn, raw []byte) {
-	var request artifact.TagRequest
+	var request artifactstore.TagRequest
 	if err := codec.Unmarshal(raw, &request); err != nil {
 		as.writeError(conn, fmt.Sprintf("invalid tag request: %v", err))
 		return
@@ -687,9 +687,9 @@ func (as *ArtifactService) handleTag(ctx context.Context, conn net.Conn, raw []b
 	}
 
 	// Parse expected_previous if provided (for compare-and-swap).
-	var expectedPrevious *artifact.Hash
+	var expectedPrevious *artifactstore.Hash
 	if request.ExpectedPrevious != "" {
-		parsed, err := artifact.ParseHash(request.ExpectedPrevious)
+		parsed, err := artifactstore.ParseHash(request.ExpectedPrevious)
 		if err != nil {
 			as.writeError(conn, fmt.Sprintf("invalid expected_previous hash: %v", err))
 			return
@@ -700,7 +700,7 @@ func (as *ArtifactService) handleTag(ctx context.Context, conn net.Conn, raw []b
 	// Record the previous target before the update (for the response).
 	var previousRef string
 	if existing, exists := as.tagStore.Get(request.Name); exists {
-		previousRef = artifact.FormatRef(existing.Target)
+		previousRef = artifactstore.FormatRef(existing.Target)
 	}
 
 	as.writeMu.Lock()
@@ -713,19 +713,19 @@ func (as *ArtifactService) handleTag(ctx context.Context, conn net.Conn, raw []b
 
 	as.logger.Info("tag set",
 		"tag", request.Name,
-		"ref", artifact.FormatRef(fileHash),
+		"ref", artifactstore.FormatRef(fileHash),
 	)
 
-	as.writeResult(conn, artifact.TagResponse{
+	as.writeResult(conn, artifactstore.TagResponse{
 		Name:     request.Name,
-		Hash:     artifact.FormatHash(fileHash),
-		Ref:      artifact.FormatRef(fileHash),
+		Hash:     artifactstore.FormatHash(fileHash),
+		Ref:      artifactstore.FormatRef(fileHash),
 		Previous: previousRef,
 	})
 }
 
 func (as *ArtifactService) handleDeleteTag(ctx context.Context, conn net.Conn, raw []byte) {
-	var request artifact.DeleteTagRequest
+	var request artifactstore.DeleteTagRequest
 	if err := codec.Unmarshal(raw, &request); err != nil {
 		as.writeError(conn, fmt.Sprintf("invalid delete-tag request: %v", err))
 		return
@@ -746,11 +746,11 @@ func (as *ArtifactService) handleDeleteTag(ctx context.Context, conn net.Conn, r
 
 	as.logger.Info("tag deleted", "tag", request.Name)
 
-	as.writeResult(conn, artifact.DeleteTagResponse{Deleted: request.Name})
+	as.writeResult(conn, artifactstore.DeleteTagResponse{Deleted: request.Name})
 }
 
 func (as *ArtifactService) handleResolve(ctx context.Context, conn net.Conn, raw []byte) {
-	var request artifact.ResolveRequest
+	var request artifactstore.ResolveRequest
 	if err := codec.Unmarshal(raw, &request); err != nil {
 		as.writeError(conn, fmt.Sprintf("invalid resolve request: %v", err))
 		return
@@ -768,9 +768,9 @@ func (as *ArtifactService) handleResolve(ctx context.Context, conn net.Conn, raw
 	}
 
 	// Check if the ref was a tag name.
-	response := artifact.ResolveResponse{
-		Hash: artifact.FormatHash(fileHash),
-		Ref:  artifact.FormatRef(fileHash),
+	response := artifactstore.ResolveResponse{
+		Hash: artifactstore.FormatHash(fileHash),
+		Ref:  artifactstore.FormatRef(fileHash),
 	}
 	if _, exists := as.tagStore.Get(request.Ref); exists {
 		response.Tag = request.Ref
@@ -780,7 +780,7 @@ func (as *ArtifactService) handleResolve(ctx context.Context, conn net.Conn, raw
 }
 
 func (as *ArtifactService) handleTags(ctx context.Context, conn net.Conn, raw []byte) {
-	var request artifact.TagsRequest
+	var request artifactstore.TagsRequest
 	if err := codec.Unmarshal(raw, &request); err != nil {
 		as.writeError(conn, fmt.Sprintf("invalid tags request: %v", err))
 		return
@@ -788,22 +788,22 @@ func (as *ArtifactService) handleTags(ctx context.Context, conn net.Conn, raw []
 
 	records := as.tagStore.List(request.Prefix)
 
-	tags := make([]artifact.TagEntry, len(records))
+	tags := make([]artifactstore.TagEntry, len(records))
 	for i, record := range records {
-		tags[i] = artifact.TagEntry{
+		tags[i] = artifactstore.TagEntry{
 			Name: record.Name,
-			Hash: artifact.FormatHash(record.Target),
-			Ref:  artifact.FormatRef(record.Target),
+			Hash: artifactstore.FormatHash(record.Target),
+			Ref:  artifactstore.FormatRef(record.Target),
 		}
 	}
 
-	as.writeResult(conn, artifact.TagsResponse{Tags: tags})
+	as.writeResult(conn, artifactstore.TagsResponse{Tags: tags})
 }
 
 // --- Pin/Unpin actions ---
 
 func (as *ArtifactService) handlePin(ctx context.Context, conn net.Conn, raw []byte) {
-	var request artifact.PinRequest
+	var request artifactstore.PinRequest
 	if err := codec.Unmarshal(raw, &request); err != nil {
 		as.writeError(conn, fmt.Sprintf("invalid pin request: %v", err))
 		return
@@ -849,30 +849,30 @@ func (as *ArtifactService) handlePin(ctx context.Context, conn net.Conn, raw []b
 			containerData, err := as.readContainerBytes(segment.Container)
 			if err != nil {
 				as.writeError(conn, fmt.Sprintf("reading container %s: %v",
-					artifact.FormatHash(segment.Container), err))
+					artifactstore.FormatHash(segment.Container), err))
 				return
 			}
 			if err := as.cache.Pin(segment.Container, containerData); err != nil {
 				as.writeError(conn, fmt.Sprintf("pinning container %s: %v",
-					artifact.FormatHash(segment.Container), err))
+					artifactstore.FormatHash(segment.Container), err))
 				return
 			}
 		}
 	}
 
 	as.logger.Info("artifact pinned",
-		"ref", artifact.FormatRef(fileHash),
+		"ref", artifactstore.FormatRef(fileHash),
 	)
 
-	as.writeResult(conn, artifact.PinResponse{
-		Hash:        artifact.FormatHash(fileHash),
-		Ref:         artifact.FormatRef(fileHash),
+	as.writeResult(conn, artifactstore.PinResponse{
+		Hash:        artifactstore.FormatHash(fileHash),
+		Ref:         artifactstore.FormatRef(fileHash),
 		CachePolicy: "pin",
 	})
 }
 
 func (as *ArtifactService) handleUnpin(ctx context.Context, conn net.Conn, raw []byte) {
-	var request artifact.UnpinRequest
+	var request artifactstore.UnpinRequest
 	if err := codec.Unmarshal(raw, &request); err != nil {
 		as.writeError(conn, fmt.Sprintf("invalid unpin request: %v", err))
 		return
@@ -900,7 +900,7 @@ func (as *ArtifactService) handleUnpin(ctx context.Context, conn net.Conn, raw [
 
 	if meta.CachePolicy != "pin" {
 		as.writeError(conn, fmt.Sprintf("artifact %s is not pinned (cache_policy=%q)",
-			artifact.FormatRef(fileHash), meta.CachePolicy))
+			artifactstore.FormatRef(fileHash), meta.CachePolicy))
 		return
 	}
 
@@ -928,19 +928,19 @@ func (as *ArtifactService) handleUnpin(ctx context.Context, conn net.Conn, raw [
 	}
 
 	as.logger.Info("artifact unpinned",
-		"ref", artifact.FormatRef(fileHash),
+		"ref", artifactstore.FormatRef(fileHash),
 	)
 
-	as.writeResult(conn, artifact.UnpinResponse{
-		Hash:        artifact.FormatHash(fileHash),
-		Ref:         artifact.FormatRef(fileHash),
+	as.writeResult(conn, artifactstore.UnpinResponse{
+		Hash:        artifactstore.FormatHash(fileHash),
+		Ref:         artifactstore.FormatRef(fileHash),
 		CachePolicy: "",
 	})
 }
 
 // readContainerBytes reads raw container bytes from disk.
-func (as *ArtifactService) readContainerBytes(containerHash artifact.Hash) ([]byte, error) {
-	hex := artifact.FormatHash(containerHash)
+func (as *ArtifactService) readContainerBytes(containerHash artifactstore.Hash) ([]byte, error) {
+	hex := artifactstore.FormatHash(containerHash)
 	containerPath := as.store.ContainerPath(containerHash)
 	data, err := os.ReadFile(containerPath)
 	if err != nil {
@@ -952,7 +952,7 @@ func (as *ArtifactService) readContainerBytes(containerHash artifact.Hash) ([]by
 // --- GC action ---
 
 func (as *ArtifactService) handleGC(ctx context.Context, conn net.Conn, raw []byte) {
-	var request artifact.GCRequest
+	var request artifactstore.GCRequest
 	if err := codec.Unmarshal(raw, &request); err != nil {
 		as.writeError(conn, fmt.Sprintf("invalid gc request: %v", err))
 		return
@@ -969,11 +969,11 @@ func (as *ArtifactService) handleGC(ctx context.Context, conn net.Conn, raw []by
 	// Walk all artifacts in the index. Partition into protected and
 	// candidates for removal. Page through in MaxListLimit-sized batches
 	// to handle stores larger than the default list limit.
-	var allArtifacts []artifact.ArtifactEntry
+	var allArtifacts []artifactstore.ArtifactEntry
 	offset := 0
 	for {
-		entries, total := as.artifactIndex.List(artifact.ArtifactFilter{
-			Limit:  artifact.MaxListLimit,
+		entries, total := as.artifactIndex.List(artifactstore.ArtifactFilter{
+			Limit:  artifactstore.MaxListLimit,
 			Offset: offset,
 		})
 		allArtifacts = append(allArtifacts, entries...)
@@ -983,8 +983,8 @@ func (as *ArtifactService) handleGC(ctx context.Context, conn net.Conn, raw []by
 		}
 	}
 
-	var removable []artifact.ArtifactEntry
-	protected := make(map[artifact.Hash]struct{})
+	var removable []artifactstore.ArtifactEntry
+	protected := make(map[artifactstore.Hash]struct{})
 
 	for _, entry := range allArtifacts {
 		// Protected: pinned artifacts.
@@ -1033,7 +1033,7 @@ func (as *ArtifactService) handleGC(ctx context.Context, conn net.Conn, raw []by
 			bytesFreed += entry.Metadata.Size
 		}
 
-		as.writeResult(conn, artifact.GCResponse{
+		as.writeResult(conn, artifactstore.GCResponse{
 			ArtifactsRemoved:  len(removable),
 			ContainersRemoved: 0,
 			BytesFreed:        bytesFreed,
@@ -1044,7 +1044,7 @@ func (as *ArtifactService) handleGC(ctx context.Context, conn net.Conn, raw []by
 
 	// Build the live container set from all remaining (non-removable)
 	// artifacts' reconstruction records.
-	liveContainers := make(map[artifact.Hash]struct{})
+	liveContainers := make(map[artifactstore.Hash]struct{})
 	for hash := range protected {
 		record, err := as.store.Stat(hash)
 		if err != nil {
@@ -1091,7 +1091,7 @@ func (as *ArtifactService) handleGC(ctx context.Context, conn net.Conn, raw []by
 		"bytes_freed", totalBytesFreed,
 	)
 
-	as.writeResult(conn, artifact.GCResponse{
+	as.writeResult(conn, artifactstore.GCResponse{
 		ArtifactsRemoved:  artifactsRemoved,
 		ContainersRemoved: totalContainersRemoved,
 		BytesFreed:        totalBytesFreed,
@@ -1120,7 +1120,7 @@ func parseTTL(ttl string) (time.Duration, error) {
 func (as *ArtifactService) handleCacheStatus(ctx context.Context, conn net.Conn, raw []byte) {
 	stats := as.artifactIndex.Stats()
 
-	response := artifact.CacheStatusResponse{
+	response := artifactstore.CacheStatusResponse{
 		StoreArtifacts: stats.Total,
 		StoreSizeBytes: stats.TotalSize,
 		TagCount:       as.tagStore.Len(),
@@ -1328,7 +1328,7 @@ type resolvedPushTarget struct {
 // Returns the resolved targets. Unknown machine localparts are
 // included with an empty socketPath so executePushes can report
 // the error in PushResult.
-func (as *ArtifactService) resolvePushTargets(header *artifact.StoreHeader) []resolvedPushTarget {
+func (as *ArtifactService) resolvePushTargets(header *artifactstore.StoreHeader) []resolvedPushTarget {
 	var targets []resolvedPushTarget
 
 	if len(header.PushTargets) > 0 {
@@ -1367,8 +1367,8 @@ func (as *ArtifactService) resolvePushTargets(header *artifact.StoreHeader) []re
 
 // executePushes pushes an artifact to all resolved targets in
 // parallel. Returns a PushResult for each target.
-func (as *ArtifactService) executePushes(ctx context.Context, fileHash artifact.Hash, meta *artifact.ArtifactMetadata, targets []resolvedPushTarget) []artifact.PushResult {
-	results := make([]artifact.PushResult, len(targets))
+func (as *ArtifactService) executePushes(ctx context.Context, fileHash artifactstore.Hash, meta *artifactstore.ArtifactMetadata, targets []resolvedPushTarget) []artifactstore.PushResult {
+	results := make([]artifactstore.PushResult, len(targets))
 	var waitGroup sync.WaitGroup
 
 	for i, target := range targets {
@@ -1387,21 +1387,21 @@ func (as *ArtifactService) executePushes(ctx context.Context, fileHash artifact.
 // has an empty socketPath (unknown machine), returns an error result
 // without attempting a connection. For known targets, reads the
 // artifact content and stores it on the remote service.
-func (as *ArtifactService) pushToTarget(ctx context.Context, fileHash artifact.Hash, meta *artifact.ArtifactMetadata, target resolvedPushTarget) artifact.PushResult {
+func (as *ArtifactService) pushToTarget(ctx context.Context, fileHash artifactstore.Hash, meta *artifactstore.ArtifactMetadata, target resolvedPushTarget) artifactstore.PushResult {
 	if target.socketPath == "" {
-		return artifact.PushResult{
+		return artifactstore.PushResult{
 			Target: target.name,
 			OK:     false,
 			Error:  fmt.Sprintf("unknown push target %q", target.name),
 		}
 	}
 
-	client := artifact.NewClientFromToken(target.socketPath, target.token)
+	client := artifactstore.NewClientFromToken(target.socketPath, target.token)
 
 	// Build the store header from the local artifact's metadata.
 	// No PushTargets (prevent recursive push) and no "replicate"
 	// cache policy (prevent recursive replication).
-	header := &artifact.StoreHeader{
+	header := &artifactstore.StoreHeader{
 		ContentType: meta.ContentType,
 		Filename:    meta.Filename,
 		Description: meta.Description,
@@ -1412,18 +1412,18 @@ func (as *ArtifactService) pushToTarget(ctx context.Context, fileHash artifact.H
 
 	record, err := as.store.Stat(fileHash)
 	if err != nil {
-		return artifact.PushResult{
+		return artifactstore.PushResult{
 			Target: target.name,
 			OK:     false,
 			Error:  fmt.Sprintf("reading reconstruction record: %v", err),
 		}
 	}
 
-	if record.Size <= int64(artifact.SmallArtifactThreshold) {
+	if record.Size <= int64(artifactstore.SmallArtifactThreshold) {
 		// Small artifact: read content and embed in the header.
 		content, err := as.store.ReadContent(fileHash)
 		if err != nil {
-			return artifact.PushResult{
+			return artifactstore.PushResult{
 				Target: target.name,
 				OK:     false,
 				Error:  fmt.Sprintf("reading content for push: %v", err),
@@ -1433,7 +1433,7 @@ func (as *ArtifactService) pushToTarget(ctx context.Context, fileHash artifact.H
 
 		_, err = client.Store(ctx, header, nil)
 		if err != nil {
-			return artifact.PushResult{
+			return artifactstore.PushResult{
 				Target: target.name,
 				OK:     false,
 				Error:  fmt.Sprintf("pushing artifact: %v", err),
@@ -1452,7 +1452,7 @@ func (as *ArtifactService) pushToTarget(ctx context.Context, fileHash artifact.H
 		_, err = client.Store(ctx, header, pipeReader)
 		if err != nil {
 			pipeReader.Close()
-			return artifact.PushResult{
+			return artifactstore.PushResult{
 				Target: target.name,
 				OK:     false,
 				Error:  fmt.Sprintf("pushing artifact: %v", err),
@@ -1462,11 +1462,11 @@ func (as *ArtifactService) pushToTarget(ctx context.Context, fileHash artifact.H
 
 	as.logger.Info("artifact pushed to target",
 		"target", target.name,
-		"ref", artifact.FormatRef(fileHash),
+		"ref", artifactstore.FormatRef(fileHash),
 		"size", record.Size,
 	)
 
-	return artifact.PushResult{
+	return artifactstore.PushResult{
 		Target: target.name,
 		OK:     true,
 	}
@@ -1500,18 +1500,18 @@ func (as *ArtifactService) isUpstreamRef(ref string) bool {
 // The re-store approach fetches the full content and writes it through
 // the local store's normal CDC+compression pipeline. CDC is
 // deterministic, so identical containers are produced and deduplicated.
-func (as *ArtifactService) fetchFromUpstream(ctx context.Context, conn net.Conn, ref string) (artifact.Hash, bool) {
+func (as *ArtifactService) fetchFromUpstream(ctx context.Context, conn net.Conn, ref string) (artifactstore.Hash, bool) {
 	upstreamSocket, upstreamToken := as.getUpstream()
 	if upstreamSocket == "" {
 		as.writeError(conn, fmt.Sprintf("artifact %s not found", ref))
-		return artifact.Hash{}, false
+		return artifactstore.Hash{}, false
 	}
 
-	upstream := artifact.NewClientFromToken(upstreamSocket, upstreamToken)
+	upstream := artifactstore.NewClientFromToken(upstreamSocket, upstreamToken)
 	result, err := upstream.Fetch(ctx, ref)
 	if err != nil {
 		as.writeError(conn, fmt.Sprintf("artifact %s not found locally; upstream fetch failed: %v", ref, err))
-		return artifact.Hash{}, false
+		return artifactstore.Hash{}, false
 	}
 	defer result.Content.Close()
 
@@ -1519,7 +1519,7 @@ func (as *ArtifactService) fetchFromUpstream(ctx context.Context, conn net.Conn,
 	content, err := io.ReadAll(result.Content)
 	if err != nil {
 		as.writeError(conn, fmt.Sprintf("reading upstream content for %s: %v", ref, err))
-		return artifact.Hash{}, false
+		return artifactstore.Hash{}, false
 	}
 
 	// Store locally through the standard write pipeline.
@@ -1528,7 +1528,7 @@ func (as *ArtifactService) fetchFromUpstream(ctx context.Context, conn net.Conn,
 	if err != nil {
 		as.writeMu.Unlock()
 		as.writeError(conn, fmt.Sprintf("storing upstream artifact %s locally: %v", ref, err))
-		return artifact.Hash{}, false
+		return artifactstore.Hash{}, false
 	}
 
 	// Persist metadata. We carry forward the content type, filename,
@@ -1540,12 +1540,12 @@ func (as *ArtifactService) fetchFromUpstream(ctx context.Context, conn net.Conn,
 	// Visibility must be preserved: a private artifact at the upstream
 	// must remain private in the local cache. Default to private if
 	// the upstream didn't include visibility (older service version).
-	meta := &artifact.ArtifactMetadata{
+	meta := &artifactstore.ArtifactMetadata{
 		FileHash:       storeResult.FileHash,
 		Ref:            storeResult.Ref,
 		ContentType:    result.Response.ContentType,
 		Filename:       result.Response.Filename,
-		Visibility:     artifact.NormalizeVisibility(result.Response.Visibility),
+		Visibility:     artifactstore.NormalizeVisibility(result.Response.Visibility),
 		Size:           storeResult.Size,
 		ChunkCount:     storeResult.ChunkCount,
 		ContainerCount: storeResult.ContainerCount,
@@ -1555,7 +1555,7 @@ func (as *ArtifactService) fetchFromUpstream(ctx context.Context, conn net.Conn,
 	if err := as.metadataStore.Write(meta); err != nil {
 		as.writeMu.Unlock()
 		as.writeError(conn, fmt.Sprintf("persisting metadata for upstream artifact %s: %v", ref, err))
-		return artifact.Hash{}, false
+		return artifactstore.Hash{}, false
 	}
 
 	as.refIndex.Add(storeResult.FileHash)
@@ -1576,7 +1576,7 @@ func (as *ArtifactService) fetchFromUpstream(ctx context.Context, conn net.Conn,
 // writeError sends an ErrorResponse to the client.
 func (as *ArtifactService) writeError(conn net.Conn, message string) {
 	conn.SetWriteDeadline(time.Now().Add(writeTimeout))
-	if err := artifact.WriteMessage(conn, artifact.ErrorResponse{Error: message}); err != nil {
+	if err := artifactstore.WriteMessage(conn, artifactstore.ErrorResponse{Error: message}); err != nil {
 		as.logger.Debug("failed to write error response", "error", err)
 	}
 }
@@ -1585,7 +1585,7 @@ func (as *ArtifactService) writeError(conn net.Conn, message string) {
 // encoded directly as a CBOR message — no wrapping envelope.
 func (as *ArtifactService) writeResult(conn net.Conn, result any) {
 	conn.SetWriteDeadline(time.Now().Add(writeTimeout))
-	if err := artifact.WriteMessage(conn, result); err != nil {
+	if err := artifactstore.WriteMessage(conn, result); err != nil {
 		as.logger.Debug("failed to write result", "error", err)
 	}
 }

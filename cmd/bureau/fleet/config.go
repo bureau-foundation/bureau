@@ -14,6 +14,7 @@ import (
 	"github.com/bureau-foundation/bureau/cmd/bureau/cli"
 	"github.com/bureau-foundation/bureau/lib/ref"
 	"github.com/bureau-foundation/bureau/lib/schema"
+	fleetschema "github.com/bureau-foundation/bureau/lib/schema/fleet"
 	"github.com/bureau-foundation/bureau/messaging"
 )
 
@@ -35,9 +36,9 @@ type configParams struct {
 
 // configResult is the JSON output of the config command.
 type configResult struct {
-	Fleet   ref.Fleet                 `json:"fleet"   desc:"fleet reference"`
-	Service ref.Service               `json:"service" desc:"fleet controller service reference"`
-	Config  schema.FleetConfigContent `json:"config"  desc:"fleet controller configuration"`
+	Fleet   ref.Fleet                      `json:"fleet"   desc:"fleet reference"`
+	Service ref.Service                    `json:"service" desc:"fleet controller service reference"`
+	Config  fleetschema.FleetConfigContent `json:"config"  desc:"fleet controller configuration"`
 }
 
 func configCommand() *cli.Command {
@@ -139,7 +140,7 @@ func runConfig(fleetLocalpart string, params *configParams) error {
 	}
 
 	// Read existing config.
-	var config schema.FleetConfigContent
+	var config fleetschema.FleetConfigContent
 	existingContent, err := session.GetStateEvent(ctx, fleetRoomID, schema.EventTypeFleetConfig, stateKey)
 	if err == nil {
 		if unmarshalErr := json.Unmarshal(existingContent, &config); unmarshalErr != nil {

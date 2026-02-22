@@ -16,6 +16,7 @@ import (
 	"github.com/bureau-foundation/bureau/lib/clock"
 	"github.com/bureau-foundation/bureau/lib/ref"
 	"github.com/bureau-foundation/bureau/lib/schema"
+	"github.com/bureau-foundation/bureau/lib/schema/fleet"
 	"github.com/bureau-foundation/bureau/messaging"
 )
 
@@ -77,9 +78,9 @@ func newTestFleetController(t *testing.T) *FleetController {
 		fleet:         testFleet(t),
 		machines:      make(map[string]*machineState),
 		services:      make(map[string]*fleetServiceState),
-		definitions:   make(map[string]*schema.MachineDefinitionContent),
-		config:        make(map[string]*schema.FleetConfigContent),
-		leases:        make(map[string]*schema.HALeaseContent),
+		definitions:   make(map[string]*fleet.MachineDefinitionContent),
+		config:        make(map[string]*fleet.FleetConfigContent),
+		leases:        make(map[string]*fleet.HALeaseContent),
 		configRooms:   make(map[string]ref.RoomID),
 		fleetRoomID:   fleetRoomID,
 		machineRoomID: machineRoomID,
@@ -154,33 +155,33 @@ func TestBuildSyncFilterIncludesFleetTypes(t *testing.T) {
 func TestProcessFleetRoomState(t *testing.T) {
 	fc := newTestFleetController(t)
 
-	fleetServiceContent := toContentMap(t, schema.FleetServiceContent{
+	fleetServiceContent := toContentMap(t, fleet.FleetServiceContent{
 		Template: "bureau/template:whisper-stt",
-		Replicas: schema.ReplicaSpec{Min: 1},
-		Placement: schema.PlacementConstraints{
+		Replicas: fleet.ReplicaSpec{Min: 1},
+		Placement: fleet.PlacementConstraints{
 			Requires: []string{"gpu"},
 		},
 		Failover: "migrate",
 		Priority: 10,
 	})
 
-	machineDefinitionContent := toContentMap(t, schema.MachineDefinitionContent{
+	machineDefinitionContent := toContentMap(t, fleet.MachineDefinitionContent{
 		Provider: "local",
 		Labels:   map[string]string{"gpu": "rtx4090"},
-		Resources: schema.MachineResources{
+		Resources: fleet.MachineResources{
 			CPUCores: 16,
 			MemoryMB: 65536,
 			GPU:      "rtx4090",
 			GPUCount: 1,
 		},
-		Provisioning: schema.ProvisioningConfig{
+		Provisioning: fleet.ProvisioningConfig{
 			MACAddress: "aa:bb:cc:dd:ee:ff",
 		},
-		Scaling: schema.ScalingConfig{
+		Scaling: fleet.ScalingConfig{
 			MinInstances: 0,
 			MaxInstances: 1,
 		},
-		Lifecycle: schema.MachineLifecycleConfig{
+		Lifecycle: fleet.MachineLifecycleConfig{
 			ProvisionOn: "demand",
 			WakeMethod:  "wol",
 		},
@@ -448,9 +449,9 @@ func TestHandleSyncLeaveConfigRoomCleansUpServiceInstances(t *testing.T) {
 	fc.configRooms["machine/workstation"] = mustRoomID("!config-ws:local")
 
 	fc.services["service/stt/whisper"] = &fleetServiceState{
-		definition: &schema.FleetServiceContent{
+		definition: &fleet.FleetServiceContent{
 			Template: "bureau/template:whisper-stt",
-			Replicas: schema.ReplicaSpec{Min: 1},
+			Replicas: fleet.ReplicaSpec{Min: 1},
 		},
 		instances: map[string]*schema.PrincipalAssignment{
 			"machine/workstation": assignment,
@@ -496,7 +497,7 @@ func TestHandleSyncLeaveMachineRoomClearsAllState(t *testing.T) {
 	}
 
 	fc.services["service/worker"] = &fleetServiceState{
-		definition: &schema.FleetServiceContent{Template: "t"},
+		definition: &fleet.FleetServiceContent{Template: "t"},
 		instances: map[string]*schema.PrincipalAssignment{
 			"machine/alpha": assignment,
 		},
@@ -526,9 +527,9 @@ func TestProcessMachineConfigTracksServiceInstances(t *testing.T) {
 
 	// Pre-populate a service definition so instance tracking works.
 	fc.services["service/stt/whisper"] = &fleetServiceState{
-		definition: &schema.FleetServiceContent{
+		definition: &fleet.FleetServiceContent{
 			Template: "bureau/template:whisper-stt",
-			Replicas: schema.ReplicaSpec{Min: 1},
+			Replicas: fleet.ReplicaSpec{Min: 1},
 		},
 		instances: make(map[string]*schema.PrincipalAssignment),
 	}
@@ -585,7 +586,7 @@ func TestProcessMachineConfigRemovesStaleInstances(t *testing.T) {
 
 	// Pre-populate service instances.
 	fc.services["service/stt/whisper"] = &fleetServiceState{
-		definition: &schema.FleetServiceContent{Template: "t"},
+		definition: &fleet.FleetServiceContent{Template: "t"},
 		instances: map[string]*schema.PrincipalAssignment{
 			"machine/workstation": oldAssignment,
 		},
@@ -713,7 +714,7 @@ func TestPendingEchoSkipsStaleConfigEvent(t *testing.T) {
 	fc.configRooms["machine/workstation"] = mustRoomID("!config-ws:local")
 
 	fc.services["service/stt/whisper"] = &fleetServiceState{
-		definition: &schema.FleetServiceContent{Template: "t"},
+		definition: &fleet.FleetServiceContent{Template: "t"},
 		instances: map[string]*schema.PrincipalAssignment{
 			"machine/workstation": placedAssignment,
 		},
@@ -776,7 +777,7 @@ func TestPendingEchoClearsOnEchoArrival(t *testing.T) {
 	fc.configRooms["machine/workstation"] = mustRoomID("!config-ws:local")
 
 	fc.services["service/stt/whisper"] = &fleetServiceState{
-		definition: &schema.FleetServiceContent{Template: "t"},
+		definition: &fleet.FleetServiceContent{Template: "t"},
 		instances: map[string]*schema.PrincipalAssignment{
 			"machine/workstation": placedAssignment,
 		},
@@ -833,7 +834,7 @@ func TestPendingEchoAllowsSubsequentEvents(t *testing.T) {
 	fc.configRooms["machine/workstation"] = mustRoomID("!config-ws:local")
 
 	fc.services["service/stt/whisper"] = &fleetServiceState{
-		definition: &schema.FleetServiceContent{Template: "t"},
+		definition: &fleet.FleetServiceContent{Template: "t"},
 		instances:  make(map[string]*schema.PrincipalAssignment),
 	}
 
@@ -936,7 +937,7 @@ func TestNoPendingEchoPassesThrough(t *testing.T) {
 	fc.configRooms["machine/workstation"] = mustRoomID("!config-ws:local")
 
 	fc.services["service/stt/whisper"] = &fleetServiceState{
-		definition: &schema.FleetServiceContent{Template: "t"},
+		definition: &fleet.FleetServiceContent{Template: "t"},
 		instances:  make(map[string]*schema.PrincipalAssignment),
 	}
 

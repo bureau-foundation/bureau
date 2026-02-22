@@ -17,6 +17,7 @@ import (
 	"github.com/bureau-foundation/bureau/lib/clock"
 	"github.com/bureau-foundation/bureau/lib/ref"
 	"github.com/bureau-foundation/bureau/lib/schema"
+	"github.com/bureau-foundation/bureau/lib/schema/fleet"
 	"github.com/bureau-foundation/bureau/messaging"
 )
 
@@ -39,10 +40,10 @@ type haWatchdog struct {
 
 	// criticalServices caches ha_class:critical service definitions
 	// from #bureau/fleet. Keyed by service localpart.
-	criticalServices map[string]*schema.FleetServiceContent
+	criticalServices map[string]*fleet.FleetServiceContent
 
 	// leases caches current HA lease state. Keyed by service localpart.
-	leases map[string]*schema.HALeaseContent
+	leases map[string]*fleet.HALeaseContent
 
 	// heldLeases tracks leases this daemon currently holds and is
 	// actively renewing. Each entry's CancelFunc stops the renewal
@@ -72,8 +73,8 @@ type haWatchdog struct {
 func newHAWatchdog(daemon *Daemon, baseDelay time.Duration, logger *slog.Logger) *haWatchdog {
 	return &haWatchdog{
 		daemon:           daemon,
-		criticalServices: make(map[string]*schema.FleetServiceContent),
-		leases:           make(map[string]*schema.HALeaseContent),
+		criticalServices: make(map[string]*fleet.FleetServiceContent),
+		leases:           make(map[string]*fleet.HALeaseContent),
 		heldLeases:       make(map[string]context.CancelFunc),
 		clock:            daemon.clock,
 		baseDelay:        baseDelay,
@@ -91,8 +92,8 @@ func (w *haWatchdog) syncFleetState(ctx context.Context) {
 		return
 	}
 
-	newCriticalServices := make(map[string]*schema.FleetServiceContent)
-	newLeases := make(map[string]*schema.HALeaseContent)
+	newCriticalServices := make(map[string]*fleet.FleetServiceContent)
+	newLeases := make(map[string]*fleet.HALeaseContent)
 
 	for _, event := range events {
 		if event.StateKey == nil {
@@ -107,7 +108,7 @@ func (w *haWatchdog) syncFleetState(ctx context.Context) {
 
 		switch event.Type {
 		case schema.EventTypeFleetService:
-			var definition schema.FleetServiceContent
+			var definition fleet.FleetServiceContent
 			if err := json.Unmarshal(contentJSON, &definition); err != nil {
 				w.logger.Warn("parsing fleet service definition",
 					"state_key", stateKey, "error", err)
@@ -118,7 +119,7 @@ func (w *haWatchdog) syncFleetState(ctx context.Context) {
 			}
 
 		case schema.EventTypeHALease:
-			var lease schema.HALeaseContent
+			var lease fleet.HALeaseContent
 			if err := json.Unmarshal(contentJSON, &lease); err != nil {
 				w.logger.Warn("parsing HA lease",
 					"state_key", stateKey, "error", err)
@@ -146,11 +147,11 @@ func (w *haWatchdog) evaluate(ctx context.Context) {
 	w.mu.Lock()
 	// Snapshot the state under the lock so we can release it before
 	// doing I/O (Matrix calls, sleeps).
-	services := make(map[string]*schema.FleetServiceContent, len(w.criticalServices))
+	services := make(map[string]*fleet.FleetServiceContent, len(w.criticalServices))
 	for key, value := range w.criticalServices {
 		services[key] = value
 	}
-	leases := make(map[string]*schema.HALeaseContent, len(w.leases))
+	leases := make(map[string]*fleet.HALeaseContent, len(w.leases))
 	for key, value := range w.leases {
 		leases[key] = value
 	}
@@ -179,7 +180,7 @@ func (w *haWatchdog) evaluate(ctx context.Context) {
 		// Attempt acquisition in a goroutine so we don't block the
 		// sync loop. The acquisition involves random delays and
 		// Matrix round-trips.
-		go func(localpart string, def *schema.FleetServiceContent) {
+		go func(localpart string, def *fleet.FleetServiceContent) {
 			if err := w.attemptAcquisition(ctx, localpart, def); err != nil {
 				w.logger.Error("HA lease acquisition failed",
 					"service", localpart, "error", err)
@@ -192,7 +193,7 @@ func (w *haWatchdog) evaluate(ctx context.Context) {
 // lease has not expired. The lease ExpiresAt field serves as the
 // heartbeat proxy: a healthy holder renews the lease at ttl/3 intervals,
 // so an unexpired lease implies recent activity.
-func (w *haWatchdog) isLeaseHealthy(lease *schema.HALeaseContent, now time.Time) bool {
+func (w *haWatchdog) isLeaseHealthy(lease *fleet.HALeaseContent, now time.Time) bool {
 	if lease == nil || lease.Holder == "" {
 		return false
 	}
@@ -208,7 +209,7 @@ func (w *haWatchdog) isLeaseHealthy(lease *schema.HALeaseContent, now time.Time)
 
 // isEligible checks whether this daemon's machine can host the given
 // service based on placement constraints.
-func (w *haWatchdog) isEligible(definition *schema.FleetServiceContent) bool {
+func (w *haWatchdog) isEligible(definition *fleet.FleetServiceContent) bool {
 	constraints := definition.Placement
 
 	// Check allowed_machines globs. If the list is non-empty, this
@@ -282,7 +283,7 @@ func labelSatisfied(requirement string, labels map[string]string) bool {
 // last-writer-wins semantics: multiple daemons may attempt to acquire
 // the same lease simultaneously, and the verify step detects whether
 // we won.
-func (w *haWatchdog) attemptAcquisition(ctx context.Context, serviceLocalpart string, definition *schema.FleetServiceContent) error {
+func (w *haWatchdog) attemptAcquisition(ctx context.Context, serviceLocalpart string, definition *fleet.FleetServiceContent) error {
 	// Determine delay range based on preference. Preferred machines
 	// get shorter delays (1-3 × baseDelay), others get longer delays
 	// (4-10 × baseDelay). When baseDelay is 0 (integration tests),
@@ -340,7 +341,7 @@ func (w *haWatchdog) attemptAcquisition(ctx context.Context, serviceLocalpart st
 	// Write our lease claim.
 	now := w.clock.Now()
 	ttl := w.leaseTTL()
-	newLease := schema.HALeaseContent{
+	newLease := fleet.HALeaseContent{
 		Holder:     w.daemon.machine.Localpart(),
 		Service:    serviceLocalpart,
 		AcquiredAt: now.UTC().Format(time.RFC3339),
@@ -392,7 +393,7 @@ func (w *haWatchdog) attemptAcquisition(ctx context.Context, serviceLocalpart st
 
 // readLease fetches the current HALeaseContent for a service from Matrix.
 // Returns nil (not an error) if no lease event exists.
-func (w *haWatchdog) readLease(ctx context.Context, serviceLocalpart string) (*schema.HALeaseContent, error) {
+func (w *haWatchdog) readLease(ctx context.Context, serviceLocalpart string) (*fleet.HALeaseContent, error) {
 	raw, err := w.daemon.session.GetStateEvent(ctx, w.daemon.fleetRoomID,
 		schema.EventTypeHALease, serviceLocalpart)
 	if err != nil {
@@ -402,7 +403,7 @@ func (w *haWatchdog) readLease(ctx context.Context, serviceLocalpart string) (*s
 		return nil, err
 	}
 
-	var lease schema.HALeaseContent
+	var lease fleet.HALeaseContent
 	if err := json.Unmarshal(raw, &lease); err != nil {
 		return nil, fmt.Errorf("parsing lease: %w", err)
 	}
@@ -412,7 +413,7 @@ func (w *haWatchdog) readLease(ctx context.Context, serviceLocalpart string) (*s
 // startHosting begins hosting a service after winning the lease. It writes
 // a PrincipalAssignment to the daemon's own config room and starts a
 // renewal goroutine.
-func (w *haWatchdog) startHosting(ctx context.Context, serviceLocalpart string, definition *schema.FleetServiceContent, ttl time.Duration) {
+func (w *haWatchdog) startHosting(ctx context.Context, serviceLocalpart string, definition *fleet.FleetServiceContent, ttl time.Duration) {
 	// Write PrincipalAssignment to our config room so the reconcile
 	// loop picks it up and starts the sandbox.
 	payload, err := fleetPayloadToMap(definition.Payload)
@@ -509,7 +510,7 @@ func (w *haWatchdog) renewLease(ctx context.Context, serviceLocalpart string, tt
 			return
 		case <-ticker.C:
 			now := w.clock.Now()
-			lease := schema.HALeaseContent{
+			lease := fleet.HALeaseContent{
 				Holder:     w.daemon.machine.Localpart(),
 				Service:    serviceLocalpart,
 				AcquiredAt: now.UTC().Format(time.RFC3339),
@@ -549,7 +550,7 @@ func (w *haWatchdog) releaseLease(ctx context.Context, serviceLocalpart string) 
 
 	// Write an expired lease so other daemons see it immediately.
 	now := w.clock.Now()
-	lease := schema.HALeaseContent{
+	lease := fleet.HALeaseContent{
 		Holder:     w.daemon.machine.Localpart(),
 		Service:    serviceLocalpart,
 		AcquiredAt: now.UTC().Format(time.RFC3339),
@@ -588,7 +589,7 @@ func (w *haWatchdog) leaseTTL() time.Duration {
 
 // leaseHolder returns the holder of a lease, or "<none>" if the lease
 // is nil or has no holder.
-func leaseHolder(lease *schema.HALeaseContent) string {
+func leaseHolder(lease *fleet.HALeaseContent) string {
 	if lease == nil || lease.Holder == "" {
 		return "<none>"
 	}

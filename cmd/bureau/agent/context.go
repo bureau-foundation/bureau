@@ -16,7 +16,7 @@ import (
 	"github.com/bureau-foundation/bureau/cmd/bureau/cli"
 	"github.com/bureau-foundation/bureau/lib/principal"
 	"github.com/bureau-foundation/bureau/lib/ref"
-	"github.com/bureau-foundation/bureau/lib/schema"
+	agentschema "github.com/bureau-foundation/bureau/lib/schema/agent"
 )
 
 // contextCommand returns the "context" parent command with list and show
@@ -47,9 +47,9 @@ type contextListParams struct {
 }
 
 type contextListResult struct {
-	Localpart string                         `json:"localpart"`
-	Machine   string                         `json:"machine"`
-	Entries   map[string]schema.ContextEntry `json:"entries"`
+	Localpart string                              `json:"localpart"`
+	Machine   string                              `json:"machine"`
+	Entries   map[string]agentschema.ContextEntry `json:"entries"`
 }
 
 func contextListCommand() *cli.Command {
@@ -125,12 +125,12 @@ func runContextList(localpart string, params contextListParams) error {
 		fmt.Fprintf(os.Stderr, "resolved %s → %s (scanned %d machines)\n", localpart, location.Machine.Localpart(), machineCount)
 	}
 
-	contextRaw, err := session.GetStateEvent(ctx, location.ConfigRoomID, schema.EventTypeAgentContext, localpart)
+	contextRaw, err := session.GetStateEvent(ctx, location.ConfigRoomID, agentschema.EventTypeAgentContext, localpart)
 	if err != nil {
 		return cli.NotFound("no context data for %s: %w", localpart, err)
 	}
 
-	var content schema.AgentContextContent
+	var content agentschema.AgentContextContent
 	if err := json.Unmarshal(contextRaw, &content); err != nil {
 		return cli.Internal("parse context data: %w", err)
 	}
@@ -138,7 +138,7 @@ func runContextList(localpart string, params contextListParams) error {
 	// Apply prefix filter.
 	entries := content.Entries
 	if params.Prefix != "" {
-		filtered := make(map[string]schema.ContextEntry)
+		filtered := make(map[string]agentschema.ContextEntry)
 		for key, entry := range entries {
 			if strings.HasPrefix(key, params.Prefix) {
 				filtered[key] = entry
@@ -208,7 +208,7 @@ available.`,
 			},
 		},
 		Params:         func() any { return &params },
-		Output:         func() any { return &schema.ContextEntry{} },
+		Output:         func() any { return &agentschema.ContextEntry{} },
 		RequiredGrants: []string{"command/agent/context/show"},
 		Annotations:    cli.ReadOnly(),
 		Run: func(args []string) error {
@@ -275,12 +275,12 @@ func runContextShow(localpart, key string, params contextShowParams) error {
 		fmt.Fprintf(os.Stderr, "resolved %s → %s (scanned %d machines)\n", localpart, location.Machine.Localpart(), machineCount)
 	}
 
-	contextRaw, err := session.GetStateEvent(ctx, location.ConfigRoomID, schema.EventTypeAgentContext, localpart)
+	contextRaw, err := session.GetStateEvent(ctx, location.ConfigRoomID, agentschema.EventTypeAgentContext, localpart)
 	if err != nil {
 		return cli.NotFound("no context data for %s: %w", localpart, err)
 	}
 
-	var content schema.AgentContextContent
+	var content agentschema.AgentContextContent
 	if err := json.Unmarshal(contextRaw, &content); err != nil {
 		return cli.Internal("parse context data: %w", err)
 	}

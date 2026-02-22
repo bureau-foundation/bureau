@@ -23,6 +23,8 @@ observe/       Primitive 4: live terminal access (relay, protocol, ring buffer, 
 messaging/     Primitive 5: Matrix client-server API wrapper (Client + Session)
 transport/     Cross-machine service routing (TCP now, WebRTC future)
 lib/           Supporting packages:
+  agentdriver/   Agent process runtime (spawning, output parsing, session logging)
+  artifactstore/ CAS engine (BLAKE3 hashing, CDC chunking, compression, containers, cache)
   binhash/       Binary identity hashing for self-update
   bootstrap/     First-boot homeserver setup helpers
   config/        YAML config loading
@@ -31,13 +33,22 @@ lib/           Supporting packages:
   hwinfo/        Hardware fingerprinting for machine identity
   netutil/       Network utility helpers
   nix/           Nix store path and environment resolution
-  pipeline/      JSONC pipeline parsing, variable substitution, step validation
+  pipelinedef/   JSONC pipeline parsing, variable substitution, step validation
   principal/     Localpart validation, Matrix ID construction, socket path mapping
-  schema/        Matrix state event types and content structs (Bureau protocol)
+  schema/        Bureau protocol types (Matrix state event content structs)
+    agent/       Agent session, context, and metrics event types
+    artifact/    Artifact scope configuration event types
+    fleet/       Fleet service, machine, HA lease, alert event types
+    observation/ Layout, window, pane event types
+    pipeline/    Pipeline definition, step, result event types
+    ticket/      Ticket content, gate, note, attachment event types
+    workspace/   Workspace state, worktree, project config event types
   sealed/        age encryption/decryption for credential bundles
   secret/        Guarded memory for secret material (zero-on-close)
-  template/      Template resolution and merge logic
+  templatedef/   Template resolution, inheritance walking, merge logic
   testutil/      Shared test helpers (SocketDir, DataBinary)
+  ticketindex/   In-memory ticket index (readiness, search, dependency tracking)
+  ticketui/      Terminal UI components for ticket display
   tmux/          tmux server/session management
   version/       Build version info
   watchdog/      Binary self-update detection

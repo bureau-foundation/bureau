@@ -20,6 +20,7 @@ import (
 	"github.com/bureau-foundation/bureau/lib/principal"
 	"github.com/bureau-foundation/bureau/lib/ref"
 	"github.com/bureau-foundation/bureau/lib/schema"
+	"github.com/bureau-foundation/bureau/lib/schema/workspace"
 )
 
 // handleWorkspaceWorktreeAdd validates parameters and spawns an async pipeline
@@ -81,7 +82,7 @@ func handleWorkspaceWorktreeAdd(ctx context.Context, d *Daemon, roomID ref.RoomI
 	// pipeline. This lets other principals gate on worktree existence
 	// via StartCondition, and ensures the worktree has a state event
 	// even if the pipeline fails to start.
-	if _, err := d.session.SendStateEvent(ctx, roomID, schema.EventTypeWorktree, worktreePath, schema.WorktreeState{
+	if _, err := d.session.SendStateEvent(ctx, roomID, schema.EventTypeWorktree, worktreePath, workspace.WorktreeState{
 		Status:       "creating",
 		Project:      project,
 		WorktreePath: worktreePath,
@@ -163,7 +164,7 @@ func handleWorkspaceWorktreeRemove(ctx context.Context, d *Daemon, roomID ref.Ro
 	// pipeline. The deinit pipeline's assert_state step verifies this
 	// state still holds at execution time, preventing races where
 	// removal was cancelled between queueing and execution.
-	if _, err := d.session.SendStateEvent(ctx, roomID, schema.EventTypeWorktree, worktreePath, schema.WorktreeState{
+	if _, err := d.session.SendStateEvent(ctx, roomID, schema.EventTypeWorktree, worktreePath, workspace.WorktreeState{
 		Status:       "removing",
 		Project:      project,
 		WorktreePath: worktreePath,

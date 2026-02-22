@@ -21,6 +21,7 @@ import (
 	"github.com/bureau-foundation/bureau/lib/principal"
 	"github.com/bureau-foundation/bureau/lib/ref"
 	"github.com/bureau-foundation/bureau/lib/schema"
+	"github.com/bureau-foundation/bureau/lib/schema/observation"
 	"github.com/bureau-foundation/bureau/lib/testutil"
 	"github.com/bureau-foundation/bureau/messaging"
 	"github.com/bureau-foundation/bureau/observe"
@@ -144,17 +145,17 @@ func TestQueryLayoutChannelDashboard(t *testing.T) {
 	// Set up mock data: alias → room ID, layout state event, members.
 	matrixState.setRoomAlias(ref.MustParseRoomAlias(channelAlias), channelRoomID)
 
-	matrixState.setStateEvent(channelRoomID, schema.EventTypeLayout, "", schema.LayoutContent{
-		Windows: []schema.LayoutWindow{
+	matrixState.setStateEvent(channelRoomID, schema.EventTypeLayout, "", observation.LayoutContent{
+		Windows: []observation.LayoutWindow{
 			{
 				Name: "agents",
-				Panes: []schema.LayoutPane{
-					{ObserveMembers: &schema.LayoutMemberFilter{}},
+				Panes: []observation.LayoutPane{
+					{ObserveMembers: &observation.LayoutMemberFilter{}},
 				},
 			},
 			{
 				Name: "tools",
-				Panes: []schema.LayoutPane{
+				Panes: []observation.LayoutPane{
 					{Command: "htop"},
 				},
 			},
@@ -217,11 +218,11 @@ func TestQueryLayoutStaticLayout(t *testing.T) {
 	channelRoomID := "!static-room:bureau.local"
 
 	matrixState.setRoomAlias(ref.MustParseRoomAlias(channelAlias), channelRoomID)
-	matrixState.setStateEvent(channelRoomID, schema.EventTypeLayout, "", schema.LayoutContent{
-		Windows: []schema.LayoutWindow{
+	matrixState.setStateEvent(channelRoomID, schema.EventTypeLayout, "", observation.LayoutContent{
+		Windows: []observation.LayoutWindow{
 			{
 				Name: "main",
-				Panes: []schema.LayoutPane{
+				Panes: []observation.LayoutPane{
 					{Observe: "iree/amdgpu/pm"},
 					{Observe: "iree/amdgpu/compiler", Split: "horizontal"},
 				},
@@ -333,12 +334,12 @@ func TestQueryLayoutExcludesNonBureauMembers(t *testing.T) {
 	channelRoomID := "!mixed-room:bureau.local"
 
 	matrixState.setRoomAlias(ref.MustParseRoomAlias(channelAlias), channelRoomID)
-	matrixState.setStateEvent(channelRoomID, schema.EventTypeLayout, "", schema.LayoutContent{
-		Windows: []schema.LayoutWindow{
+	matrixState.setStateEvent(channelRoomID, schema.EventTypeLayout, "", observation.LayoutContent{
+		Windows: []observation.LayoutWindow{
 			{
 				Name: "all",
-				Panes: []schema.LayoutPane{
-					{ObserveMembers: &schema.LayoutMemberFilter{}},
+				Panes: []observation.LayoutPane{
+					{ObserveMembers: &observation.LayoutMemberFilter{}},
 				},
 			},
 		},
@@ -405,12 +406,12 @@ func TestQueryLayoutLabelFiltering(t *testing.T) {
 	matrixState.setRoomAlias(ref.MustParseRoomAlias(channelAlias), channelRoomID)
 
 	// Layout filters to only agents.
-	matrixState.setStateEvent(channelRoomID, schema.EventTypeLayout, "", schema.LayoutContent{
-		Windows: []schema.LayoutWindow{
+	matrixState.setStateEvent(channelRoomID, schema.EventTypeLayout, "", observation.LayoutContent{
+		Windows: []observation.LayoutWindow{
 			{
 				Name: "agents",
-				Panes: []schema.LayoutPane{
-					{ObserveMembers: &schema.LayoutMemberFilter{
+				Panes: []observation.LayoutPane{
+					{ObserveMembers: &observation.LayoutMemberFilter{
 						Labels: map[string]string{"role": "agent"},
 					}},
 				},
@@ -482,12 +483,12 @@ func TestQueryLayoutMultiLabelFiltering(t *testing.T) {
 	channelRoomID := "!multi-label-room:bureau.local"
 
 	matrixState.setRoomAlias(ref.MustParseRoomAlias(channelAlias), channelRoomID)
-	matrixState.setStateEvent(channelRoomID, schema.EventTypeLayout, "", schema.LayoutContent{
-		Windows: []schema.LayoutWindow{
+	matrixState.setStateEvent(channelRoomID, schema.EventTypeLayout, "", observation.LayoutContent{
+		Windows: []observation.LayoutWindow{
 			{
 				Name: "iree-agents",
-				Panes: []schema.LayoutPane{
-					{ObserveMembers: &schema.LayoutMemberFilter{
+				Panes: []observation.LayoutPane{
+					{ObserveMembers: &observation.LayoutMemberFilter{
 						Labels: map[string]string{"role": "agent", "team": "iree"},
 					}},
 				},
@@ -547,20 +548,20 @@ func TestQueryLayoutCrossMachineMembersNoLabels(t *testing.T) {
 	matrixState.setRoomAlias(ref.MustParseRoomAlias(channelAlias), channelRoomID)
 
 	// Two windows: one with label filter, one without.
-	matrixState.setStateEvent(channelRoomID, schema.EventTypeLayout, "", schema.LayoutContent{
-		Windows: []schema.LayoutWindow{
+	matrixState.setStateEvent(channelRoomID, schema.EventTypeLayout, "", observation.LayoutContent{
+		Windows: []observation.LayoutWindow{
 			{
 				Name: "agents",
-				Panes: []schema.LayoutPane{
-					{ObserveMembers: &schema.LayoutMemberFilter{
+				Panes: []observation.LayoutPane{
+					{ObserveMembers: &observation.LayoutMemberFilter{
 						Labels: map[string]string{"role": "agent"},
 					}},
 				},
 			},
 			{
 				Name: "all",
-				Panes: []schema.LayoutPane{
-					{ObserveMembers: &schema.LayoutMemberFilter{}},
+				Panes: []observation.LayoutPane{
+					{ObserveMembers: &observation.LayoutMemberFilter{}},
 				},
 			},
 		},

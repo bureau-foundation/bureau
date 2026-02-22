@@ -15,6 +15,7 @@ import (
 	"github.com/bureau-foundation/bureau/lib/principal"
 	"github.com/bureau-foundation/bureau/lib/ref"
 	"github.com/bureau-foundation/bureau/lib/schema"
+	"github.com/bureau-foundation/bureau/lib/schema/workspace"
 	"github.com/bureau-foundation/bureau/lib/servicetoken"
 	"github.com/bureau-foundation/bureau/lib/testutil"
 	"github.com/bureau-foundation/bureau/messaging"
@@ -249,7 +250,7 @@ func TestReconcile_ServiceMountsWorkspaceRoom(t *testing.T) {
 	})
 
 	// Workspace event so the StartCondition resolves and gives us the workspace room ID.
-	matrixState.setStateEvent(workspaceRoomID, schema.EventTypeWorkspace, "", schema.WorkspaceState{
+	matrixState.setStateEvent(workspaceRoomID, schema.EventTypeWorkspace, "", workspace.WorkspaceState{
 		Status:    "active",
 		Project:   "iree",
 		Machine:   machineName,

@@ -11,7 +11,8 @@ import (
 
 	"github.com/bureau-foundation/bureau/lib/ref"
 	"github.com/bureau-foundation/bureau/lib/schema"
-	"github.com/bureau-foundation/bureau/lib/template"
+	"github.com/bureau-foundation/bureau/lib/schema/workspace"
+	"github.com/bureau-foundation/bureau/lib/templatedef"
 	"github.com/bureau-foundation/bureau/messaging"
 )
 
@@ -85,7 +86,7 @@ func TestWorkspaceCommands(t *testing.T) {
 
 	// Publish workspace state.
 	_, err = admin.SendStateEvent(ctx, workspaceRoomID,
-		schema.EventTypeWorkspace, "", schema.WorkspaceState{
+		schema.EventTypeWorkspace, "", workspace.WorkspaceState{
 			Status:    "active",
 			Project:   "testproj",
 			Machine:   machine.Name,
@@ -359,7 +360,7 @@ func TestWorkspaceWorktreeHandlers(t *testing.T) {
 	workspaceRoomID := createTestWorkspaceRoom(t, admin, workspaceAlias, machine.UserID, adminUserID, spaceRoomID)
 
 	_, err = admin.SendStateEvent(ctx, workspaceRoomID,
-		schema.EventTypeWorkspace, "", schema.WorkspaceState{
+		schema.EventTypeWorkspace, "", workspace.WorkspaceState{
 			Status:    "active",
 			Project:   "wtproj",
 			Machine:   machine.Name,
@@ -635,7 +636,7 @@ func TestWorkspaceWorktreeLifecycle(t *testing.T) {
 	if err != nil {
 		t.Fatalf("parse agent template ref: %v", err)
 	}
-	_, err = template.Push(ctx, admin, agentTemplateRef, schema.TemplateContent{
+	_, err = templatedef.Push(ctx, admin, agentTemplateRef, schema.TemplateContent{
 		Description: "Long-running agent for worktree lifecycle integration tests",
 		Command:     []string{"sleep", "infinity"},
 		Environment: runnerEnv,

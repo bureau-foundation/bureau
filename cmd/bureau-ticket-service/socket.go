@@ -10,9 +10,10 @@ import (
 
 	"github.com/bureau-foundation/bureau/lib/ref"
 	"github.com/bureau-foundation/bureau/lib/schema"
+	"github.com/bureau-foundation/bureau/lib/schema/ticket"
 	"github.com/bureau-foundation/bureau/lib/service"
 	"github.com/bureau-foundation/bureau/lib/servicetoken"
-	"github.com/bureau-foundation/bureau/lib/ticket"
+	"github.com/bureau-foundation/bureau/lib/ticketindex"
 )
 
 // withReadLock wraps an authenticated handler with a read lock on
@@ -173,23 +174,23 @@ func (ts *TicketService) requireRoom(roomIDString string) (ref.RoomID, *roomStat
 // If requestRoom is a room alias localpart, it is matched against
 // tracked rooms' canonical aliases. If both the ticket reference and
 // requestRoom carry room context, they must agree.
-func (ts *TicketService) resolveTicket(requestRoom, ticketRefStr string) (ref.RoomID, *roomState, string, schema.TicketContent, error) {
-	ticketRef := ticket.ParseTicketRef(ticketRefStr)
+func (ts *TicketService) resolveTicket(requestRoom, ticketRefStr string) (ref.RoomID, *roomState, string, ticket.TicketContent, error) {
+	ticketRef := ticketindex.ParseTicketRef(ticketRefStr)
 
 	// Determine room context: from the reference, from the request, or both.
 	roomID, err := ts.resolveRoomContext(requestRoom, ticketRef)
 	if err != nil {
-		return ref.RoomID{}, nil, "", schema.TicketContent{}, err
+		return ref.RoomID{}, nil, "", ticket.TicketContent{}, err
 	}
 
 	state, exists := ts.rooms[roomID]
 	if !exists {
-		return ref.RoomID{}, nil, "", schema.TicketContent{}, fmt.Errorf("room %s is not tracked by this service", roomID)
+		return ref.RoomID{}, nil, "", ticket.TicketContent{}, fmt.Errorf("room %s is not tracked by this service", roomID)
 	}
 
 	content, exists := state.index.Get(ticketRef.Ticket)
 	if !exists {
-		return ref.RoomID{}, nil, "", schema.TicketContent{}, fmt.Errorf("ticket %s not found in room %s", ticketRef.Ticket, roomID)
+		return ref.RoomID{}, nil, "", ticket.TicketContent{}, fmt.Errorf("ticket %s not found in room %s", ticketRef.Ticket, roomID)
 	}
 
 	return roomID, state, ticketRef.Ticket, content, nil
@@ -199,7 +200,7 @@ func (ts *TicketService) resolveTicket(requestRoom, ticketRefStr string) (ref.Ro
 // explicit Room field on the request and the room qualifier embedded
 // in a ticket reference. Returns an error if no room context is
 // available or if both sources disagree.
-func (ts *TicketService) resolveRoomContext(requestRoom string, ticketRef ticket.TicketRef) (ref.RoomID, error) {
+func (ts *TicketService) resolveRoomContext(requestRoom string, ticketRef ticketindex.TicketRef) (ref.RoomID, error) {
 	refRoomID, refFound := ts.resolveRoomRef(ticketRef)
 	requestRoomID, requestFound := ts.resolveRoomString(requestRoom)
 
@@ -221,7 +222,7 @@ func (ts *TicketService) resolveRoomContext(requestRoom string, ticketRef ticket
 // resolveRoomRef resolves the room qualifier from a parsed ticket
 // reference to a room ID. Returns empty string if the reference is
 // bare or the room cannot be resolved.
-func (ts *TicketService) resolveRoomRef(ticketRef ticket.TicketRef) (ref.RoomID, bool) {
+func (ts *TicketService) resolveRoomRef(ticketRef ticketindex.TicketRef) (ref.RoomID, bool) {
 	if ticketRef.IsBare() {
 		return ref.RoomID{}, false
 	}
@@ -282,7 +283,7 @@ type matrixWriter interface {
 
 // findGate returns the index of a gate with the given ID in the gates
 // slice, or -1 if not found.
-func findGate(gates []schema.TicketGate, gateID string) int {
+func findGate(gates []ticket.TicketGate, gateID string) int {
 	for i := range gates {
 		if gates[i].ID == gateID {
 			return i

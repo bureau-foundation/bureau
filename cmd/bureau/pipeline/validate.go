@@ -8,7 +8,7 @@ import (
 	"os"
 
 	"github.com/bureau-foundation/bureau/cmd/bureau/cli"
-	libpipeline "github.com/bureau-foundation/bureau/lib/pipeline"
+	"github.com/bureau-foundation/bureau/lib/pipelinedef"
 )
 
 // pipelineValidateParams holds the parameters for the pipeline validate command.
@@ -59,12 +59,12 @@ before validation.`,
 			}
 
 			path := args[0]
-			content, err := libpipeline.ReadFile(path)
+			content, err := pipelinedef.ReadFile(path)
 			if err != nil {
 				return err
 			}
 
-			issues := libpipeline.Validate(content)
+			issues := pipelinedef.Validate(content)
 
 			if done, err := params.EmitJSON(validationResult{
 				File:   path,

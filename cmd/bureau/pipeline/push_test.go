@@ -9,6 +9,7 @@ import (
 	"testing"
 
 	"github.com/bureau-foundation/bureau/lib/schema"
+	pipelineschema "github.com/bureau-foundation/bureau/lib/schema/pipeline"
 )
 
 func TestPushPipeline(t *testing.T) {
@@ -52,7 +53,7 @@ func TestPushPipeline(t *testing.T) {
 	}
 
 	// Verify the body is valid PipelineContent.
-	var content schema.PipelineContent
+	var content pipelineschema.PipelineContent
 	if err := json.Unmarshal(event.Body, &content); err != nil {
 		t.Fatalf("unmarshal sent body: %v", err)
 	}

@@ -801,3 +801,248 @@ func TestConfigRoomPowerLevels(t *testing.T) {
 		}
 	}
 }
+
+func TestPrincipalResourceUsageRoundTrip(t *testing.T) {
+	original := PrincipalResourceUsage{
+		CPUPercent:  42,
+		MemoryMB:    2048,
+		GPUPercent:  79,
+		GPUMemoryMB: 12288,
+		Status:      "running",
+	}
+
+	data, err := json.Marshal(original)
+	if err != nil {
+		t.Fatalf("Marshal: %v", err)
+	}
+
+	var raw map[string]any
+	if err := json.Unmarshal(data, &raw); err != nil {
+		t.Fatalf("Unmarshal to map: %v", err)
+	}
+
+	assertField(t, raw, "cpu_percent", float64(42))
+	assertField(t, raw, "memory_mb", float64(2048))
+	assertField(t, raw, "gpu_percent", float64(79))
+	assertField(t, raw, "gpu_memory_mb", float64(12288))
+	assertField(t, raw, "status", "running")
+
+	var decoded PrincipalResourceUsage
+	if err := json.Unmarshal(data, &decoded); err != nil {
+		t.Fatalf("Unmarshal: %v", err)
+	}
+	if decoded != original {
+		t.Errorf("round-trip mismatch: got %+v, want %+v", decoded, original)
+	}
+}
+
+func TestPrincipalResourceUsageOmitsGPU(t *testing.T) {
+	// Non-GPU sandbox: GPU fields should be omitted.
+	usage := PrincipalResourceUsage{
+		CPUPercent: 15,
+		MemoryMB:   512,
+		Status:     "idle",
+	}
+
+	data, err := json.Marshal(usage)
+	if err != nil {
+		t.Fatalf("Marshal: %v", err)
+	}
+
+	var raw map[string]any
+	if err := json.Unmarshal(data, &raw); err != nil {
+		t.Fatalf("Unmarshal to map: %v", err)
+	}
+
+	for _, field := range []string{"gpu_percent", "gpu_memory_mb"} {
+		if _, exists := raw[field]; exists {
+			t.Errorf("%s should be omitted when zero", field)
+		}
+	}
+}
+
+func TestMachineStatusWithPrincipals(t *testing.T) {
+	// Enriched heartbeat with per-principal resource usage.
+	status := MachineStatus{
+		Principal:     "@machine/workstation:bureau.local",
+		CPUPercent:    65,
+		MemoryUsedMB:  24576,
+		Sandboxes:     SandboxCounts{Running: 3},
+		UptimeSeconds: 86400,
+		Principals: map[string]PrincipalResourceUsage{
+			"service/stt/whisper": {
+				CPUPercent:  30,
+				MemoryMB:    8192,
+				GPUPercent:  79,
+				GPUMemoryMB: 12288,
+				Status:      "running",
+			},
+			"iree/amdgpu/pm": {
+				CPUPercent: 25,
+				MemoryMB:   4096,
+				Status:     "running",
+			},
+			"service/ticket/iree": {
+				CPUPercent: 2,
+				MemoryMB:   256,
+				Status:     "idle",
+			},
+		},
+	}
+
+	data, err := json.Marshal(status)
+	if err != nil {
+		t.Fatalf("Marshal: %v", err)
+	}
+
+	var raw map[string]any
+	if err := json.Unmarshal(data, &raw); err != nil {
+		t.Fatalf("Unmarshal to map: %v", err)
+	}
+
+	// Verify principals map is present.
+	principals, ok := raw["principals"].(map[string]any)
+	if !ok {
+		t.Fatal("principals field missing or wrong type")
+	}
+	if len(principals) != 3 {
+		t.Fatalf("principals count = %d, want 3", len(principals))
+	}
+
+	// Verify a specific principal.
+	whisper, ok := principals["service/stt/whisper"].(map[string]any)
+	if !ok {
+		t.Fatal("service/stt/whisper missing from principals")
+	}
+	assertField(t, whisper, "cpu_percent", float64(30))
+	assertField(t, whisper, "memory_mb", float64(8192))
+	assertField(t, whisper, "gpu_percent", float64(79))
+	assertField(t, whisper, "status", "running")
+
+	var decoded MachineStatus
+	if err := json.Unmarshal(data, &decoded); err != nil {
+		t.Fatalf("Unmarshal: %v", err)
+	}
+	if len(decoded.Principals) != 3 {
+		t.Fatalf("round-trip principals count = %d, want 3", len(decoded.Principals))
+	}
+	decodedWhisper := decoded.Principals["service/stt/whisper"]
+	if decodedWhisper.CPUPercent != 30 || decodedWhisper.GPUPercent != 79 {
+		t.Errorf("round-trip whisper: got %+v", decodedWhisper)
+	}
+}
+
+func TestMachineStatusWithoutPrincipals(t *testing.T) {
+	// Old-style heartbeat without per-principal data.
+	status := MachineStatus{
+		Principal:     "@machine/pi-kitchen:bureau.local",
+		CPUPercent:    15,
+		MemoryUsedMB:  819,
+		Sandboxes:     SandboxCounts{Running: 1},
+		UptimeSeconds: 3600,
+	}
+
+	data, err := json.Marshal(status)
+	if err != nil {
+		t.Fatalf("Marshal: %v", err)
+	}
+
+	var raw map[string]any
+	if err := json.Unmarshal(data, &raw); err != nil {
+		t.Fatalf("Unmarshal to map: %v", err)
+	}
+
+	// Principals should be omitted from old-style heartbeats.
+	if _, exists := raw["principals"]; exists {
+		t.Error("principals should be omitted when nil")
+	}
+
+	// Verify backward compat: old heartbeat still round-trips cleanly.
+	var decoded MachineStatus
+	if err := json.Unmarshal(data, &decoded); err != nil {
+		t.Fatalf("Unmarshal: %v", err)
+	}
+	if decoded.Principals != nil {
+		t.Error("Principals should be nil when absent from JSON")
+	}
+	if decoded.CPUPercent != 15 {
+		t.Errorf("CPUPercent: got %d, want 15", decoded.CPUPercent)
+	}
+}
+
+func TestMachineInfoWithLabels(t *testing.T) {
+	info := MachineInfo{
+		Principal:     "@machine/workstation:bureau.local",
+		Hostname:      "workstation",
+		KernelVersion: "6.14.0-37-generic",
+		CPU: CPUInfo{
+			Model:          "AMD Ryzen Threadripper PRO 7995WX 96-Cores",
+			Sockets:        1,
+			CoresPerSocket: 96,
+			ThreadsPerCore: 2,
+		},
+		MemoryTotalMB: 515413,
+		Labels: map[string]string{
+			"persistent": "true",
+			"gpu":        "rtx4090",
+			"tier":       "production",
+		},
+		DaemonVersion: "v0.1.0-dev",
+	}
+
+	data, err := json.Marshal(info)
+	if err != nil {
+		t.Fatalf("Marshal: %v", err)
+	}
+
+	var raw map[string]any
+	if err := json.Unmarshal(data, &raw); err != nil {
+		t.Fatalf("Unmarshal to map: %v", err)
+	}
+
+	labels, ok := raw["labels"].(map[string]any)
+	if !ok {
+		t.Fatal("labels field missing or wrong type")
+	}
+	assertField(t, labels, "persistent", "true")
+	assertField(t, labels, "gpu", "rtx4090")
+	assertField(t, labels, "tier", "production")
+
+	var decoded MachineInfo
+	if err := json.Unmarshal(data, &decoded); err != nil {
+		t.Fatalf("Unmarshal: %v", err)
+	}
+	if !reflect.DeepEqual(decoded.Labels, info.Labels) {
+		t.Errorf("Labels: got %v, want %v", decoded.Labels, info.Labels)
+	}
+}
+
+func TestMachineInfoLabelsOmittedWhenEmpty(t *testing.T) {
+	info := MachineInfo{
+		Principal:     "@machine/pi-kitchen:bureau.local",
+		Hostname:      "pi-kitchen",
+		KernelVersion: "6.8.0-44-generic",
+		CPU: CPUInfo{
+			Model:          "BCM2712",
+			Sockets:        1,
+			CoresPerSocket: 4,
+			ThreadsPerCore: 1,
+		},
+		MemoryTotalMB: 8192,
+		DaemonVersion: "v0.1.0-dev",
+	}
+
+	data, err := json.Marshal(info)
+	if err != nil {
+		t.Fatalf("Marshal: %v", err)
+	}
+
+	var raw map[string]any
+	if err := json.Unmarshal(data, &raw); err != nil {
+		t.Fatalf("Unmarshal to map: %v", err)
+	}
+
+	if _, exists := raw["labels"]; exists {
+		t.Error("labels should be omitted when nil")
+	}
+}

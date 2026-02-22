@@ -11,7 +11,7 @@ go_library(
     ],
     importpath = "github.com/bureau-foundation/bureau/cmd/bureau-agent-claude",
     visibility = ["//visibility:private"],
-    deps = ["//lib/agent"],
+    deps = ["//lib/agentdriver"],
 )
 
 go_binary(
@@ -24,5 +24,5 @@ go_test(
     name = "bureau-agent-claude_test",
     srcs = ["driver_test.go"],
     embed = [":bureau-agent-claude_lib"],
-    deps = ["//lib/agent"],
+    deps = ["//lib/agentdriver"],
 )

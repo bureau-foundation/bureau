@@ -18,6 +18,7 @@ go_library(
         "//lib/principal",
         "//lib/ref",
         "//lib/schema",
+        "//lib/schema/workspace",
         "//messaging",
     ],
 )

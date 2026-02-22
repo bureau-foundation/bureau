@@ -11,6 +11,7 @@ import (
 
 	"github.com/bureau-foundation/bureau/lib/codec"
 	"github.com/bureau-foundation/bureau/lib/schema"
+	"github.com/bureau-foundation/bureau/lib/schema/fleet"
 	"github.com/bureau-foundation/bureau/lib/service"
 	"github.com/bureau-foundation/bureau/lib/servicetoken"
 )
@@ -279,9 +280,9 @@ type showServiceRequest struct {
 
 // showServiceResponse is the full detail view of a single fleet service.
 type showServiceResponse struct {
-	Localpart  string                      `cbor:"localpart"`
-	Definition *schema.FleetServiceContent `cbor:"definition"`
-	Instances  []serviceInstance           `cbor:"instances"`
+	Localpart  string                     `cbor:"localpart"`
+	Definition *fleet.FleetServiceContent `cbor:"definition"`
+	Instances  []serviceInstance          `cbor:"instances"`
 }
 
 // serviceInstance pairs a machine localpart with the PrincipalAssignment

@@ -15,7 +15,7 @@ import (
 	"github.com/bureau-foundation/bureau/lib/ref"
 	"github.com/bureau-foundation/bureau/lib/schema"
 	"github.com/bureau-foundation/bureau/lib/secret"
-	"github.com/bureau-foundation/bureau/lib/template"
+	"github.com/bureau-foundation/bureau/lib/templatedef"
 	"github.com/bureau-foundation/bureau/messaging"
 )
 
@@ -193,7 +193,7 @@ func runCreate(templateRef schema.TemplateRef, serverName ref.ServerName, params
 		Principal:   principalEntity,
 		TemplateRef: templateRef,
 		ValidateTemplate: func(ctx context.Context, templateRef schema.TemplateRef, serverName ref.ServerName) error {
-			_, err := template.Fetch(ctx, adminSession, templateRef, serverName)
+			_, err := templatedef.Fetch(ctx, adminSession, templateRef, serverName)
 			return err
 		},
 		HomeserverURL: homeserverURL,

@@ -14,6 +14,7 @@ import (
 	"github.com/bureau-foundation/bureau/lib/clock"
 	"github.com/bureau-foundation/bureau/lib/ref"
 	"github.com/bureau-foundation/bureau/lib/schema"
+	"github.com/bureau-foundation/bureau/lib/schema/fleet"
 	"github.com/bureau-foundation/bureau/messaging"
 )
 
@@ -28,7 +29,7 @@ func TestHeartbeatIntervalDefault(t *testing.T) {
 
 func TestHeartbeatIntervalFromConfig(t *testing.T) {
 	fc := newTestFleetController(t)
-	fc.config["global"] = &schema.FleetConfigContent{
+	fc.config["global"] = &fleet.FleetConfigContent{
 		HeartbeatIntervalSeconds: 10,
 	}
 	if got := fc.heartbeatInterval(); got != 10*time.Second {
@@ -38,7 +39,7 @@ func TestHeartbeatIntervalFromConfig(t *testing.T) {
 
 func TestHeartbeatIntervalIgnoresZero(t *testing.T) {
 	fc := newTestFleetController(t)
-	fc.config["global"] = &schema.FleetConfigContent{
+	fc.config["global"] = &fleet.FleetConfigContent{
 		HeartbeatIntervalSeconds: 0,
 	}
 	if got := fc.heartbeatInterval(); got != defaultHeartbeatInterval {
@@ -118,9 +119,9 @@ func TestCheckMachineHealthOfflineTriggersFailover(t *testing.T) {
 	fc.configRooms["machine/a"] = mustRoomID("!config-a:local")
 
 	fc.services["service/web"] = &fleetServiceState{
-		definition: &schema.FleetServiceContent{
+		definition: &fleet.FleetServiceContent{
 			Template: "bureau/template:web",
-			Replicas: schema.ReplicaSpec{Min: 1, Max: 3},
+			Replicas: fleet.ReplicaSpec{Min: 1, Max: 3},
 		},
 		instances: map[string]*schema.PrincipalAssignment{
 			"machine/a": fc.machines["machine/a"].assignments["service/web"],
@@ -212,7 +213,7 @@ func TestCheckMachineHealthCustomInterval(t *testing.T) {
 	fc.configStore = newFakeConfigStore()
 
 	// Set a 10-second heartbeat interval.
-	fc.config["global"] = &schema.FleetConfigContent{
+	fc.config["global"] = &fleet.FleetConfigContent{
 		HeartbeatIntervalSeconds: 10,
 	}
 
@@ -239,7 +240,7 @@ func TestCheckMachineHealthCustomIntervalOffline(t *testing.T) {
 	fc.configStore = newFakeConfigStore()
 
 	// Set a 10-second heartbeat interval.
-	fc.config["global"] = &schema.FleetConfigContent{
+	fc.config["global"] = &fleet.FleetConfigContent{
 		HeartbeatIntervalSeconds: 10,
 	}
 
@@ -291,18 +292,18 @@ func TestExecuteFailoverMultipleServices(t *testing.T) {
 	fc.configRooms["machine/a"] = mustRoomID("!config-a:local")
 
 	fc.services["service/web"] = &fleetServiceState{
-		definition: &schema.FleetServiceContent{
+		definition: &fleet.FleetServiceContent{
 			Template: "bureau/template:web",
-			Replicas: schema.ReplicaSpec{Min: 1, Max: 3},
+			Replicas: fleet.ReplicaSpec{Min: 1, Max: 3},
 		},
 		instances: map[string]*schema.PrincipalAssignment{
 			"machine/a": fc.machines["machine/a"].assignments["service/web"],
 		},
 	}
 	fc.services["service/api"] = &fleetServiceState{
-		definition: &schema.FleetServiceContent{
+		definition: &fleet.FleetServiceContent{
 			Template: "bureau/template:api",
-			Replicas: schema.ReplicaSpec{Min: 1, Max: 3},
+			Replicas: fleet.ReplicaSpec{Min: 1, Max: 3},
 		},
 		instances: map[string]*schema.PrincipalAssignment{
 			"machine/a": fc.machines["machine/a"].assignments["service/api"],
@@ -364,7 +365,7 @@ func TestPublishFleetAlert(t *testing.T) {
 	store := newFakeConfigStore()
 	fc.configStore = store
 
-	alert := schema.FleetAlertContent{
+	alert := fleet.FleetAlertContent{
 		AlertType: "failover",
 		Fleet:     "service/fleet/prod",
 		Service:   "service/web",
@@ -380,7 +381,7 @@ func TestPublishFleetAlert(t *testing.T) {
 		t.Fatal("expected alert event in config store")
 	}
 
-	var written schema.FleetAlertContent
+	var written fleet.FleetAlertContent
 	if err := json.Unmarshal(raw, &written); err != nil {
 		t.Fatalf("unmarshaling alert: %v", err)
 	}
@@ -397,22 +398,22 @@ func TestPublishFleetAlert(t *testing.T) {
 func TestAlertStateKey(t *testing.T) {
 	tests := []struct {
 		name  string
-		alert schema.FleetAlertContent
+		alert fleet.FleetAlertContent
 		want  string
 	}{
 		{
 			name:  "all fields",
-			alert: schema.FleetAlertContent{AlertType: "failover", Service: "svc/a", Machine: "machine/x"},
+			alert: fleet.FleetAlertContent{AlertType: "failover", Service: "svc/a", Machine: "machine/x"},
 			want:  "failover/svc/a/machine/x",
 		},
 		{
 			name:  "no machine",
-			alert: schema.FleetAlertContent{AlertType: "capacity_request", Service: "svc/a"},
+			alert: fleet.FleetAlertContent{AlertType: "capacity_request", Service: "svc/a"},
 			want:  "capacity_request/svc/a",
 		},
 		{
 			name:  "type only",
-			alert: schema.FleetAlertContent{AlertType: "rollback"},
+			alert: fleet.FleetAlertContent{AlertType: "rollback"},
 			want:  "rollback",
 		},
 	}

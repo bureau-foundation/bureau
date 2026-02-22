@@ -12,6 +12,7 @@ import (
 
 	"github.com/bureau-foundation/bureau/lib/ref"
 	"github.com/bureau-foundation/bureau/lib/schema"
+	"github.com/bureau-foundation/bureau/lib/schema/fleet"
 	"github.com/bureau-foundation/bureau/messaging"
 )
 
@@ -213,9 +214,9 @@ func TestWriteMachineConfigNoConfigRoom(t *testing.T) {
 func TestBuildAssignment(t *testing.T) {
 	fc, _ := newExecuteTestController(t)
 
-	definition := &schema.FleetServiceContent{
+	definition := &fleet.FleetServiceContent{
 		Template: "bureau/template:whisper-stt",
-		Replicas: schema.ReplicaSpec{Min: 2},
+		Replicas: fleet.ReplicaSpec{Min: 2},
 		Payload:  json.RawMessage(`{"model":"whisper-large","language":"en"}`),
 	}
 
@@ -250,9 +251,9 @@ func TestBuildAssignment(t *testing.T) {
 func TestBuildAssignmentMalformedPayload(t *testing.T) {
 	fc, _ := newExecuteTestController(t)
 
-	definition := &schema.FleetServiceContent{
+	definition := &fleet.FleetServiceContent{
 		Template: "bureau/template:worker",
-		Replicas: schema.ReplicaSpec{Min: 1},
+		Replicas: fleet.ReplicaSpec{Min: 1},
 		Payload:  json.RawMessage(`not valid json`),
 	}
 
@@ -265,9 +266,9 @@ func TestBuildAssignmentMalformedPayload(t *testing.T) {
 func TestBuildAssignmentPropagatesAuthorization(t *testing.T) {
 	fc, _ := newExecuteTestController(t)
 
-	definition := &schema.FleetServiceContent{
+	definition := &fleet.FleetServiceContent{
 		Template: "bureau/template:ticket-service",
-		Replicas: schema.ReplicaSpec{Min: 1},
+		Replicas: fleet.ReplicaSpec{Min: 1},
 		MatrixPolicy: &schema.MatrixPolicy{
 			AllowJoin:   true,
 			AllowInvite: true,
@@ -313,9 +314,9 @@ func TestBuildAssignmentPropagatesAuthorization(t *testing.T) {
 func TestBuildAssignmentNilAuthorization(t *testing.T) {
 	fc, _ := newExecuteTestController(t)
 
-	definition := &schema.FleetServiceContent{
+	definition := &fleet.FleetServiceContent{
 		Template: "bureau/template:worker",
-		Replicas: schema.ReplicaSpec{Min: 1},
+		Replicas: fleet.ReplicaSpec{Min: 1},
 	}
 
 	assignment, err := fc.buildAssignment("service/worker", definition)
@@ -348,9 +349,9 @@ func TestPlaceHappyPath(t *testing.T) {
 	fc.configRooms["machine/workstation"] = mustRoomID("!config-ws:local")
 
 	fc.services["service/stt/whisper"] = &fleetServiceState{
-		definition: &schema.FleetServiceContent{
+		definition: &fleet.FleetServiceContent{
 			Template: "bureau/template:whisper-stt",
-			Replicas: schema.ReplicaSpec{Min: 1},
+			Replicas: fleet.ReplicaSpec{Min: 1},
 		},
 		instances: make(map[string]*schema.PrincipalAssignment),
 	}
@@ -404,9 +405,9 @@ func TestPlacePreservesExistingPrincipals(t *testing.T) {
 	fc.configRooms["machine/workstation"] = mustRoomID("!config-ws:local")
 
 	fc.services["service/stt/whisper"] = &fleetServiceState{
-		definition: &schema.FleetServiceContent{
+		definition: &fleet.FleetServiceContent{
 			Template: "bureau/template:whisper-stt",
-			Replicas: schema.ReplicaSpec{Min: 1},
+			Replicas: fleet.ReplicaSpec{Min: 1},
 		},
 		instances: make(map[string]*schema.PrincipalAssignment),
 	}
@@ -483,7 +484,7 @@ func TestPlaceMachineNotFound(t *testing.T) {
 	fc, _ := newExecuteTestController(t)
 
 	fc.services["service/stt/whisper"] = &fleetServiceState{
-		definition: &schema.FleetServiceContent{Template: "t"},
+		definition: &fleet.FleetServiceContent{Template: "t"},
 		instances:  make(map[string]*schema.PrincipalAssignment),
 	}
 
@@ -502,7 +503,7 @@ func TestPlaceMachineNoConfigRoom(t *testing.T) {
 		// configRoomID left at zero value: no config room.
 	}
 	fc.services["service/stt/whisper"] = &fleetServiceState{
-		definition: &schema.FleetServiceContent{Template: "t"},
+		definition: &fleet.FleetServiceContent{Template: "t"},
 		instances:  make(map[string]*schema.PrincipalAssignment),
 	}
 
@@ -528,7 +529,7 @@ func TestPlaceAlreadyPlaced(t *testing.T) {
 	}
 	fc.configRooms["machine/workstation"] = mustRoomID("!config-ws:local")
 	fc.services["service/stt/whisper"] = &fleetServiceState{
-		definition: &schema.FleetServiceContent{Template: "t"},
+		definition: &fleet.FleetServiceContent{Template: "t"},
 		instances:  make(map[string]*schema.PrincipalAssignment),
 	}
 
@@ -560,9 +561,9 @@ func TestUnplaceHappyPath(t *testing.T) {
 	fc.configRooms["machine/workstation"] = mustRoomID("!config-ws:local")
 
 	fc.services["service/stt/whisper"] = &fleetServiceState{
-		definition: &schema.FleetServiceContent{
+		definition: &fleet.FleetServiceContent{
 			Template: "bureau/template:whisper-stt",
-			Replicas: schema.ReplicaSpec{Min: 1},
+			Replicas: fleet.ReplicaSpec{Min: 1},
 		},
 		instances: map[string]*schema.PrincipalAssignment{
 			"machine/workstation": existingAssignment,
@@ -676,14 +677,14 @@ func TestReconcileUnderReplicated(t *testing.T) {
 
 	// Service needs min 2 replicas but has 0 instances.
 	fc.services["service/worker"] = &fleetServiceState{
-		definition: &schema.FleetServiceContent{
+		definition: &fleet.FleetServiceContent{
 			Template: "bureau/template:worker",
-			Replicas: schema.ReplicaSpec{Min: 2},
-			Resources: schema.ResourceRequirements{
+			Replicas: fleet.ReplicaSpec{Min: 2},
+			Resources: fleet.ResourceRequirements{
 				MemoryMB: 2048,
 				GPU:      true,
 			},
-			Placement: schema.PlacementConstraints{
+			Placement: fleet.PlacementConstraints{
 				Requires: []string{"gpu"},
 			},
 		},
@@ -708,14 +709,14 @@ func TestReconcileOverReplicated(t *testing.T) {
 	fc, store := newExecuteTestController(t)
 
 	// Service has max 1 but is on 2 machines.
-	definition := &schema.FleetServiceContent{
+	definition := &fleet.FleetServiceContent{
 		Template: "bureau/template:worker",
-		Replicas: schema.ReplicaSpec{Min: 1, Max: 1},
-		Resources: schema.ResourceRequirements{
+		Replicas: fleet.ReplicaSpec{Min: 1, Max: 1},
+		Resources: fleet.ResourceRequirements{
 			MemoryMB: 2048,
 			GPU:      true,
 		},
-		Placement: schema.PlacementConstraints{
+		Placement: fleet.PlacementConstraints{
 			Requires: []string{"gpu"},
 		},
 	}
@@ -810,14 +811,14 @@ func TestReconcileAlreadySatisfied(t *testing.T) {
 	fc.configRooms["machine/workstation"] = mustRoomID("!config-ws:local")
 
 	fc.services["service/worker"] = &fleetServiceState{
-		definition: &schema.FleetServiceContent{
+		definition: &fleet.FleetServiceContent{
 			Template: "bureau/template:worker",
-			Replicas: schema.ReplicaSpec{Min: 1},
-			Resources: schema.ResourceRequirements{
+			Replicas: fleet.ReplicaSpec{Min: 1},
+			Resources: fleet.ResourceRequirements{
 				MemoryMB: 2048,
 				GPU:      true,
 			},
-			Placement: schema.PlacementConstraints{
+			Placement: fleet.PlacementConstraints{
 				Requires: []string{"gpu"},
 			},
 		},
@@ -859,14 +860,14 @@ func TestReconcileInsufficientMachines(t *testing.T) {
 	fc.configRooms["machine/workstation"] = mustRoomID("!config-ws:local")
 
 	fc.services["service/worker"] = &fleetServiceState{
-		definition: &schema.FleetServiceContent{
+		definition: &fleet.FleetServiceContent{
 			Template: "bureau/template:worker",
-			Replicas: schema.ReplicaSpec{Min: 3},
-			Resources: schema.ResourceRequirements{
+			Replicas: fleet.ReplicaSpec{Min: 3},
+			Resources: fleet.ResourceRequirements{
 				MemoryMB: 2048,
 				GPU:      true,
 			},
-			Placement: schema.PlacementConstraints{
+			Placement: fleet.PlacementConstraints{
 				Requires: []string{"gpu"},
 			},
 		},
@@ -914,9 +915,9 @@ func TestRebuildServiceInstances(t *testing.T) {
 	// Service exists but instances are empty (simulating post-initial-sync
 	// before rebuild).
 	fc.services["service/stt/whisper"] = &fleetServiceState{
-		definition: &schema.FleetServiceContent{
+		definition: &fleet.FleetServiceContent{
 			Template: "bureau/template:whisper-stt",
-			Replicas: schema.ReplicaSpec{Min: 2},
+			Replicas: fleet.ReplicaSpec{Min: 2},
 		},
 		instances: make(map[string]*schema.PrincipalAssignment),
 	}
@@ -949,7 +950,7 @@ func TestRebuildServiceInstancesIgnoresUnknownServices(t *testing.T) {
 	}
 
 	fc.services["service/worker"] = &fleetServiceState{
-		definition: &schema.FleetServiceContent{Template: "t"},
+		definition: &fleet.FleetServiceContent{Template: "t"},
 		instances:  make(map[string]*schema.PrincipalAssignment),
 	}
 

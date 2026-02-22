@@ -8,7 +8,7 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/bureau-foundation/bureau/lib/schema"
+	"github.com/bureau-foundation/bureau/lib/schema/observation"
 )
 
 func TestReadTmuxLayoutSinglePane(t *testing.T) {
@@ -790,18 +790,18 @@ func TestLayoutToSchemaAllPaneTypes(t *testing.T) {
 
 func TestSchemaToLayoutAllPaneTypes(t *testing.T) {
 	t.Parallel()
-	content := schema.LayoutContent{
+	content := observation.LayoutContent{
 		Prefix:         "C-b",
 		SourceMachine:  "@machine/workstation:bureau.local",
 		SealedMetadata: "encrypted-blob",
-		Windows: []schema.LayoutWindow{
+		Windows: []observation.LayoutWindow{
 			{
 				Name: "mixed",
-				Panes: []schema.LayoutPane{
+				Panes: []observation.LayoutPane{
 					{Observe: "iree/amdgpu/pm"},
 					{Command: "htop", Split: "horizontal", Size: 30},
 					{Role: "shell", Split: "vertical", Size: 50},
-					{ObserveMembers: &schema.LayoutMemberFilter{Labels: map[string]string{"role": "service"}}},
+					{ObserveMembers: &observation.LayoutMemberFilter{Labels: map[string]string{"role": "service"}}},
 				},
 			},
 		},

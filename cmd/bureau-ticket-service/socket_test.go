@@ -12,6 +12,7 @@ import (
 	"log/slog"
 	"os"
 	"path/filepath"
+	"strings"
 	"sync"
 	"testing"
 	"time"
@@ -3419,5 +3420,389 @@ func TestDeadlineStaleEntryIgnored(t *testing.T) {
 			}
 			return
 		}
+	}
+}
+
+// --- Pipeline ticket tests ---
+
+// TestHandleCreatePipelineTicket verifies that creating a ticket with
+// type "pipeline" generates a pip- prefixed ID and stores the
+// PipelineExecutionContent.
+func TestHandleCreatePipelineTicket(t *testing.T) {
+	env := testMutationServer(t, mutationRooms())
+	defer env.cleanup()
+
+	var result createResponse
+	err := env.client.Call(context.Background(), "create", map[string]any{
+		"room":     "!room:bureau.local",
+		"title":    "deploy staging",
+		"type":     "pipeline",
+		"priority": 1,
+		"pipeline": map[string]any{
+			"pipeline_ref": "pipelines/deploy",
+			"total_steps":  3,
+		},
+	}, &result)
+	if err != nil {
+		t.Fatalf("Call: %v", err)
+	}
+
+	// Pipeline tickets must use the pip- prefix.
+	if !strings.HasPrefix(result.ID, "pip-") {
+		t.Errorf("expected pip- prefix, got ID %q", result.ID)
+	}
+
+	// Verify pipeline content is stored.
+	content, exists := env.service.rooms[testRoomID("!room:bureau.local")].index.Get(result.ID)
+	if !exists {
+		t.Fatalf("ticket %s not in index", result.ID)
+	}
+	if content.Type != "pipeline" {
+		t.Errorf("type: got %q, want 'pipeline'", content.Type)
+	}
+	if content.Pipeline == nil {
+		t.Fatal("pipeline content is nil")
+	}
+	if content.Pipeline.PipelineRef != "pipelines/deploy" {
+		t.Errorf("pipeline_ref: got %q, want 'pipelines/deploy'", content.Pipeline.PipelineRef)
+	}
+	if content.Pipeline.TotalSteps != 3 {
+		t.Errorf("total_steps: got %d, want 3", content.Pipeline.TotalSteps)
+	}
+}
+
+// TestHandleCreatePipelineMissingContent verifies that creating a
+// pipeline-type ticket without PipelineExecutionContent is rejected.
+func TestHandleCreatePipelineMissingContent(t *testing.T) {
+	env := testMutationServer(t, mutationRooms())
+	defer env.cleanup()
+
+	err := env.client.Call(context.Background(), "create", map[string]any{
+		"room":     "!room:bureau.local",
+		"title":    "deploy staging",
+		"type":     "pipeline",
+		"priority": 1,
+	}, nil)
+	serviceErr := requireServiceError(t, err)
+	if !strings.Contains(serviceErr.Message, "pipeline content is required") {
+		t.Errorf("unexpected error: %s", serviceErr.Message)
+	}
+}
+
+// TestHandleCreateNonPipelineWithPipelineContent verifies that creating
+// a non-pipeline ticket with PipelineExecutionContent is rejected.
+func TestHandleCreateNonPipelineWithPipelineContent(t *testing.T) {
+	env := testMutationServer(t, mutationRooms())
+	defer env.cleanup()
+
+	err := env.client.Call(context.Background(), "create", map[string]any{
+		"room":     "!room:bureau.local",
+		"title":    "regular task",
+		"type":     "task",
+		"priority": 2,
+		"pipeline": map[string]any{
+			"pipeline_ref": "pipelines/deploy",
+			"total_steps":  3,
+		},
+	}, nil)
+	serviceErr := requireServiceError(t, err)
+	if !strings.Contains(serviceErr.Message, "pipeline content must be nil") {
+		t.Errorf("unexpected error: %s", serviceErr.Message)
+	}
+}
+
+// TestHandleUpdatePipelineProgress verifies that pipeline-specific
+// fields (current_step, current_step_name, conclusion) can be updated
+// via the Pipeline field on the update request.
+func TestHandleUpdatePipelineProgress(t *testing.T) {
+	room := newTrackedRoom(map[string]ticket.TicketContent{
+		"pip-deploy": {
+			Version:  1,
+			Title:    "deploy staging",
+			Status:   "in_progress",
+			Priority: 1,
+			Type:     "pipeline",
+			Pipeline: &ticket.PipelineExecutionContent{
+				PipelineRef: "pipelines/deploy",
+				TotalSteps:  3,
+			},
+			Assignee:  ref.MustParseUserID("@agent/executor:bureau.local"),
+			CreatedBy: ref.MustParseUserID("@agent/creator:bureau.local"),
+			CreatedAt: "2026-01-01T00:00:00Z",
+			UpdatedAt: "2026-01-01T00:00:00Z",
+		},
+	})
+	rooms := map[ref.RoomID]*roomState{
+		testRoomID("!room:bureau.local"): room,
+	}
+
+	env := testMutationServer(t, rooms)
+	defer env.cleanup()
+
+	var result mutationResponse
+	err := env.client.Call(context.Background(), "update", map[string]any{
+		"ticket": "pip-deploy",
+		"room":   "!room:bureau.local",
+		"pipeline": map[string]any{
+			"pipeline_ref":      "pipelines/deploy",
+			"total_steps":       3,
+			"current_step":      2,
+			"current_step_name": "run tests",
+		},
+	}, &result)
+	if err != nil {
+		t.Fatalf("Call: %v", err)
+	}
+
+	if result.Content.Pipeline == nil {
+		t.Fatal("pipeline content is nil in response")
+	}
+	if result.Content.Pipeline.CurrentStep != 2 {
+		t.Errorf("current_step: got %d, want 2", result.Content.Pipeline.CurrentStep)
+	}
+	if result.Content.Pipeline.CurrentStepName != "run tests" {
+		t.Errorf("current_step_name: got %q, want 'run tests'", result.Content.Pipeline.CurrentStepName)
+	}
+}
+
+// TestHandleUpdateTypeFromPipelineAutoClearsPipelineContent verifies
+// that changing a ticket's type away from "pipeline" auto-clears the
+// Pipeline content, since the CBOR request format cannot express
+// "set to nil".
+func TestHandleUpdateTypeFromPipelineAutoClearsPipelineContent(t *testing.T) {
+	room := newTrackedRoom(map[string]ticket.TicketContent{
+		"pip-deploy": {
+			Version:  1,
+			Title:    "deploy staging",
+			Status:   "open",
+			Priority: 1,
+			Type:     "pipeline",
+			Pipeline: &ticket.PipelineExecutionContent{
+				PipelineRef: "pipelines/deploy",
+				TotalSteps:  3,
+				Conclusion:  "failure",
+			},
+			CreatedBy: ref.MustParseUserID("@agent/creator:bureau.local"),
+			CreatedAt: "2026-01-01T00:00:00Z",
+			UpdatedAt: "2026-01-01T00:00:00Z",
+		},
+	})
+	rooms := map[ref.RoomID]*roomState{
+		testRoomID("!room:bureau.local"): room,
+	}
+
+	env := testMutationServer(t, rooms)
+	defer env.cleanup()
+
+	var result mutationResponse
+	err := env.client.Call(context.Background(), "update", map[string]any{
+		"ticket": "pip-deploy",
+		"room":   "!room:bureau.local",
+		"type":   "task",
+	}, &result)
+	if err != nil {
+		t.Fatalf("Call: %v", err)
+	}
+
+	if result.Content.Type != "task" {
+		t.Errorf("type: got %q, want 'task'", result.Content.Type)
+	}
+	if result.Content.Pipeline != nil {
+		t.Error("pipeline content should be nil after changing type away from pipeline")
+	}
+}
+
+// TestHandleUpdateTypeToPipelineRequiresContent verifies that changing
+// a ticket's type to "pipeline" without providing Pipeline content in
+// the same request is rejected by validation.
+func TestHandleUpdateTypeToPipelineRequiresContent(t *testing.T) {
+	env := testMutationServer(t, mutationRooms())
+	defer env.cleanup()
+
+	err := env.client.Call(context.Background(), "update", map[string]any{
+		"ticket": "tkt-open",
+		"room":   "!room:bureau.local",
+		"type":   "pipeline",
+	}, nil)
+	serviceErr := requireServiceError(t, err)
+	if !strings.Contains(serviceErr.Message, "pipeline content is required") {
+		t.Errorf("unexpected error: %s", serviceErr.Message)
+	}
+}
+
+// TestHandleCreateAllowedTypesEnforced verifies that the room's
+// AllowedTypes configuration restricts which ticket types can be
+// created.
+func TestHandleCreateAllowedTypesEnforced(t *testing.T) {
+	room := newTrackedRoom(nil)
+	room.config.AllowedTypes = []string{"task", "bug"}
+	rooms := map[ref.RoomID]*roomState{
+		testRoomID("!room:bureau.local"): room,
+	}
+
+	env := testMutationServer(t, rooms)
+	defer env.cleanup()
+
+	// Creating a "task" should succeed.
+	var result createResponse
+	err := env.client.Call(context.Background(), "create", map[string]any{
+		"room":     "!room:bureau.local",
+		"title":    "allowed task",
+		"type":     "task",
+		"priority": 2,
+	}, &result)
+	if err != nil {
+		t.Fatalf("creating allowed type: %v", err)
+	}
+
+	// Creating a "pipeline" should be rejected.
+	err = env.client.Call(context.Background(), "create", map[string]any{
+		"room":     "!room:bureau.local",
+		"title":    "deploy staging",
+		"type":     "pipeline",
+		"priority": 1,
+		"pipeline": map[string]any{
+			"pipeline_ref": "pipelines/deploy",
+			"total_steps":  3,
+		},
+	}, nil)
+	serviceErr := requireServiceError(t, err)
+	if !strings.Contains(serviceErr.Message, "not allowed") {
+		t.Errorf("unexpected error: %s", serviceErr.Message)
+	}
+}
+
+// TestHandleUpdateAllowedTypesEnforced verifies that AllowedTypes is
+// checked when a ticket's type is changed via update.
+func TestHandleUpdateAllowedTypesEnforced(t *testing.T) {
+	room := newTrackedRoom(map[string]ticket.TicketContent{
+		"tkt-task": {
+			Version:   1,
+			Title:     "some task",
+			Status:    "open",
+			Priority:  2,
+			Type:      "task",
+			CreatedBy: ref.MustParseUserID("@agent/creator:bureau.local"),
+			CreatedAt: "2026-01-01T00:00:00Z",
+			UpdatedAt: "2026-01-01T00:00:00Z",
+		},
+	})
+	room.config.AllowedTypes = []string{"task", "bug"}
+	rooms := map[ref.RoomID]*roomState{
+		testRoomID("!room:bureau.local"): room,
+	}
+
+	env := testMutationServer(t, rooms)
+	defer env.cleanup()
+
+	// Changing type to "bug" (allowed) should succeed.
+	var result mutationResponse
+	err := env.client.Call(context.Background(), "update", map[string]any{
+		"ticket": "tkt-task",
+		"room":   "!room:bureau.local",
+		"type":   "bug",
+	}, &result)
+	if err != nil {
+		t.Fatalf("changing to allowed type: %v", err)
+	}
+
+	// Changing type to "feature" (not allowed) should be rejected.
+	err = env.client.Call(context.Background(), "update", map[string]any{
+		"ticket": "tkt-task",
+		"room":   "!room:bureau.local",
+		"type":   "feature",
+	}, nil)
+	serviceErr := requireServiceError(t, err)
+	if !strings.Contains(serviceErr.Message, "not allowed") {
+		t.Errorf("unexpected error: %s", serviceErr.Message)
+	}
+}
+
+// TestHandleBatchCreatePipelineTickets verifies that batch-create
+// generates pip- prefixed IDs for pipeline-type tickets and tkt-
+// prefixed IDs for non-pipeline tickets in the same batch.
+func TestHandleBatchCreatePipelineTickets(t *testing.T) {
+	env := testMutationServer(t, mutationRooms())
+	defer env.cleanup()
+
+	var result batchCreateResponse
+	err := env.client.Call(context.Background(), "batch-create", map[string]any{
+		"room": "!room:bureau.local",
+		"tickets": []map[string]any{
+			{
+				"ref":      "deploy",
+				"title":    "deploy staging",
+				"type":     "pipeline",
+				"priority": 1,
+				"pipeline": map[string]any{
+					"pipeline_ref": "pipelines/deploy",
+					"total_steps":  5,
+				},
+			},
+			{
+				"ref":      "task",
+				"title":    "review deploy",
+				"type":     "task",
+				"priority": 2,
+			},
+		},
+	}, &result)
+	if err != nil {
+		t.Fatalf("Call: %v", err)
+	}
+
+	deployID := result.Refs["deploy"]
+	taskID := result.Refs["task"]
+
+	if !strings.HasPrefix(deployID, "pip-") {
+		t.Errorf("pipeline ticket should have pip- prefix, got %q", deployID)
+	}
+	if !strings.HasPrefix(taskID, "tkt-") {
+		t.Errorf("task ticket should have tkt- prefix, got %q", taskID)
+	}
+
+	// Verify pipeline content was stored.
+	index := env.service.rooms[testRoomID("!room:bureau.local")].index
+	content, exists := index.Get(deployID)
+	if !exists {
+		t.Fatalf("pipeline ticket %s not in index", deployID)
+	}
+	if content.Pipeline == nil {
+		t.Fatal("pipeline content is nil")
+	}
+	if content.Pipeline.PipelineRef != "pipelines/deploy" {
+		t.Errorf("pipeline_ref: got %q", content.Pipeline.PipelineRef)
+	}
+	if content.Pipeline.TotalSteps != 5 {
+		t.Errorf("total_steps: got %d, want 5", content.Pipeline.TotalSteps)
+	}
+}
+
+// TestHandleBatchCreateAllowedTypesEnforced verifies that AllowedTypes
+// is checked per-entry in a batch create. If any entry has a
+// disallowed type, the entire batch is rejected.
+func TestHandleBatchCreateAllowedTypesEnforced(t *testing.T) {
+	room := newTrackedRoom(nil)
+	room.config.AllowedTypes = []string{"task"}
+	rooms := map[ref.RoomID]*roomState{
+		testRoomID("!room:bureau.local"): room,
+	}
+
+	env := testMutationServer(t, rooms)
+	defer env.cleanup()
+
+	err := env.client.Call(context.Background(), "batch-create", map[string]any{
+		"room": "!room:bureau.local",
+		"tickets": []map[string]any{
+			{"ref": "a", "title": "ok task", "type": "task", "priority": 2},
+			{"ref": "b", "title": "bad pipeline", "type": "pipeline", "priority": 1, "pipeline": map[string]any{
+				"pipeline_ref": "pipelines/test",
+				"total_steps":  1,
+			}},
+		},
+	}, nil)
+	serviceErr := requireServiceError(t, err)
+	if !strings.Contains(serviceErr.Message, "not allowed") {
+		t.Errorf("unexpected error: %s", serviceErr.Message)
 	}
 }

@@ -14,19 +14,42 @@ import (
 	"github.com/bureau-foundation/bureau/lib/codec"
 	"github.com/bureau-foundation/bureau/lib/cron"
 	"github.com/bureau-foundation/bureau/lib/ref"
-	ticketschema "github.com/bureau-foundation/bureau/lib/schema/ticket"
+	"github.com/bureau-foundation/bureau/lib/schema/ticket"
 	"github.com/bureau-foundation/bureau/lib/servicetoken"
 )
 
 // --- Ticket ID generation ---
 
-// ticketPrefix returns the ID prefix configured for a room, defaulting
-// to "tkt" if no prefix is set.
-func ticketPrefix(config *ticketschema.TicketConfigContent) string {
+// ticketPrefix returns the ID prefix for a ticket based on its type
+// and the room configuration. Type-specific prefixes (e.g., "pip" for
+// pipeline tickets) take precedence over the room's configured prefix.
+// Falls back to "tkt" if neither the type nor the room config specifies
+// a prefix.
+func ticketPrefix(config *ticket.TicketConfigContent, ticketType string) string {
+	if typePrefix := ticket.PrefixForType(ticketType); typePrefix != "" {
+		return typePrefix
+	}
 	if config.Prefix != "" {
 		return config.Prefix
 	}
 	return "tkt"
+}
+
+// checkAllowedType validates that the given ticket type is permitted by
+// the room's AllowedTypes configuration. Returns nil if the type is
+// allowed (either AllowedTypes is empty, meaning all types are allowed,
+// or the type appears in the list). Returns a descriptive error if the
+// type is restricted.
+func checkAllowedType(config *ticket.TicketConfigContent, ticketType string) error {
+	if len(config.AllowedTypes) == 0 {
+		return nil
+	}
+	for _, allowed := range config.AllowedTypes {
+		if allowed == ticketType {
+			return nil
+		}
+	}
+	return fmt.Errorf("ticket type %q is not allowed in this room (allowed: %v)", ticketType, config.AllowedTypes)
 }
 
 // generateTicketID produces a unique ticket ID by hashing the room ID,
@@ -34,8 +57,8 @@ func ticketPrefix(config *ticketschema.TicketConfigContent) string {
 // that avoids collision with existing tickets and the exclusion set.
 // The exclusion set handles intra-batch collisions when generating
 // multiple IDs in a single batch-create call; pass nil for single creates.
-func (ts *TicketService) generateTicketID(state *roomState, roomID, timestamp, title string, exclude map[string]struct{}) string {
-	prefix := ticketPrefix(state.config)
+func (ts *TicketService) generateTicketID(state *roomState, ticketType, roomID, timestamp, title string, exclude map[string]struct{}) string {
+	prefix := ticketPrefix(state.config, ticketType)
 	input := roomID + "\n" + timestamp + "\n" + title
 	hash := sha256.Sum256([]byte(input))
 	hexHash := hex.EncodeToString(hash[:])
@@ -62,10 +85,10 @@ func (ts *TicketService) generateTicketID(state *roomState, roomID, timestamp, t
 // schedule or interval must be non-empty (the caller enforces mutual
 // exclusivity). The returned gate has a computed initial Target and
 // is ready to be appended to the request's Gates slice.
-func (ts *TicketService) synthesizeRecurringGate(schedule, interval string) (ticketschema.TicketGate, error) {
+func (ts *TicketService) synthesizeRecurringGate(schedule, interval string) (ticket.TicketGate, error) {
 	now := ts.clock.Now()
 
-	gate := ticketschema.TicketGate{
+	gate := ticket.TicketGate{
 		Type:   "timer",
 		Status: "pending",
 	}
@@ -73,11 +96,11 @@ func (ts *TicketService) synthesizeRecurringGate(schedule, interval string) (tic
 	if schedule != "" {
 		parsed, err := cron.Parse(schedule)
 		if err != nil {
-			return ticketschema.TicketGate{}, fmt.Errorf("invalid schedule %q: %w", schedule, err)
+			return ticket.TicketGate{}, fmt.Errorf("invalid schedule %q: %w", schedule, err)
 		}
 		target, err := parsed.Next(now)
 		if err != nil {
-			return ticketschema.TicketGate{}, fmt.Errorf("cannot compute first cron occurrence for %q: %w", schedule, err)
+			return ticket.TicketGate{}, fmt.Errorf("cannot compute first cron occurrence for %q: %w", schedule, err)
 		}
 		gate.ID = "schedule"
 		gate.Schedule = schedule
@@ -85,10 +108,10 @@ func (ts *TicketService) synthesizeRecurringGate(schedule, interval string) (tic
 	} else {
 		duration, err := time.ParseDuration(interval)
 		if err != nil {
-			return ticketschema.TicketGate{}, fmt.Errorf("invalid interval %q: %w", interval, err)
+			return ticket.TicketGate{}, fmt.Errorf("invalid interval %q: %w", interval, err)
 		}
-		if duration < ticketschema.MinTimerRecurrence {
-			return ticketschema.TicketGate{}, fmt.Errorf("interval must be >= %s", ticketschema.MinTimerRecurrence)
+		if duration < ticket.MinTimerRecurrence {
+			return ticket.TicketGate{}, fmt.Errorf("interval must be >= %s", ticket.MinTimerRecurrence)
 		}
 		gate.ID = "interval"
 		gate.Interval = interval
@@ -102,31 +125,31 @@ func (ts *TicketService) synthesizeRecurringGate(schedule, interval string) (tic
 // from the convenience defer_until or defer_for fields on a create
 // request. Exactly one must be non-empty (the caller enforces mutual
 // exclusivity).
-func (ts *TicketService) synthesizeDeferGate(until, forDuration string) (ticketschema.TicketGate, error) {
+func (ts *TicketService) synthesizeDeferGate(until, forDuration string) (ticket.TicketGate, error) {
 	now := ts.clock.Now()
 
 	var target time.Time
 	if until != "" {
 		parsed, err := time.Parse(time.RFC3339, until)
 		if err != nil {
-			return ticketschema.TicketGate{}, fmt.Errorf("invalid defer_until time: %w", err)
+			return ticket.TicketGate{}, fmt.Errorf("invalid defer_until time: %w", err)
 		}
 		if !parsed.After(now) {
-			return ticketschema.TicketGate{}, fmt.Errorf("defer_until time %s is not in the future", until)
+			return ticket.TicketGate{}, fmt.Errorf("defer_until time %s is not in the future", until)
 		}
 		target = parsed
 	} else {
 		duration, err := time.ParseDuration(forDuration)
 		if err != nil {
-			return ticketschema.TicketGate{}, fmt.Errorf("invalid defer_for duration: %w", err)
+			return ticket.TicketGate{}, fmt.Errorf("invalid defer_for duration: %w", err)
 		}
 		if duration <= 0 {
-			return ticketschema.TicketGate{}, errors.New("defer_for duration must be positive")
+			return ticket.TicketGate{}, errors.New("defer_for duration must be positive")
 		}
 		target = now.Add(duration)
 	}
 
-	return ticketschema.TicketGate{
+	return ticket.TicketGate{
 		ID:     "defer",
 		Type:   "timer",
 		Status: "pending",
@@ -206,16 +229,17 @@ func validateStatusTransition(currentStatus, proposedStatus string, currentAssig
 // initial Target. These are mutually exclusive with each other and
 // additive with any explicit Gates in the request.
 type createRequest struct {
-	Room      string                     `cbor:"room"`
-	Title     string                     `cbor:"title"`
-	Body      string                     `cbor:"body,omitempty"`
-	Type      string                     `cbor:"type"`
-	Priority  int                        `cbor:"priority"`
-	Labels    []string                   `cbor:"labels,omitempty"`
-	Parent    string                     `cbor:"parent,omitempty"`
-	BlockedBy []string                   `cbor:"blocked_by,omitempty"`
-	Gates     []ticketschema.TicketGate  `cbor:"gates,omitempty"`
-	Origin    *ticketschema.TicketOrigin `cbor:"origin,omitempty"`
+	Room      string                           `cbor:"room"`
+	Title     string                           `cbor:"title"`
+	Body      string                           `cbor:"body,omitempty"`
+	Type      string                           `cbor:"type"`
+	Priority  int                              `cbor:"priority"`
+	Labels    []string                         `cbor:"labels,omitempty"`
+	Parent    string                           `cbor:"parent,omitempty"`
+	BlockedBy []string                         `cbor:"blocked_by,omitempty"`
+	Gates     []ticket.TicketGate              `cbor:"gates,omitempty"`
+	Origin    *ticket.TicketOrigin             `cbor:"origin,omitempty"`
+	Pipeline  *ticket.PipelineExecutionContent `cbor:"pipeline,omitempty"`
 
 	// Schedule is a cron expression (e.g., "0 7 * * *") that
 	// creates a recurring timer gate with ID "schedule". The
@@ -260,6 +284,12 @@ type updateRequest struct {
 	Parent    *string   `cbor:"parent,omitempty"`
 	BlockedBy *[]string `cbor:"blocked_by,omitempty"`
 	Deadline  *string   `cbor:"deadline,omitempty"`
+
+	// Pipeline replaces the ticket's pipeline execution content.
+	// Only valid for pipeline-type tickets. When provided, the
+	// entire PipelineExecutionContent is replaced. The executor
+	// uses this to update progress (current_step, conclusion).
+	Pipeline *ticket.PipelineExecutionContent `cbor:"pipeline,omitempty"`
 }
 
 // closeRequest is the input for the "close" action.
@@ -294,16 +324,17 @@ type batchCreateRequest struct {
 // The Ref field is a symbolic name used for intra-batch blocked_by
 // and parent references.
 type batchCreateEntry struct {
-	Ref       string                     `cbor:"ref"`
-	Title     string                     `cbor:"title"`
-	Body      string                     `cbor:"body,omitempty"`
-	Type      string                     `cbor:"type"`
-	Priority  int                        `cbor:"priority"`
-	Labels    []string                   `cbor:"labels,omitempty"`
-	Parent    string                     `cbor:"parent,omitempty"`
-	BlockedBy []string                   `cbor:"blocked_by,omitempty"`
-	Gates     []ticketschema.TicketGate  `cbor:"gates,omitempty"`
-	Origin    *ticketschema.TicketOrigin `cbor:"origin,omitempty"`
+	Ref       string                           `cbor:"ref"`
+	Title     string                           `cbor:"title"`
+	Body      string                           `cbor:"body,omitempty"`
+	Type      string                           `cbor:"type"`
+	Priority  int                              `cbor:"priority"`
+	Labels    []string                         `cbor:"labels,omitempty"`
+	Parent    string                           `cbor:"parent,omitempty"`
+	BlockedBy []string                         `cbor:"blocked_by,omitempty"`
+	Gates     []ticket.TicketGate              `cbor:"gates,omitempty"`
+	Origin    *ticket.TicketOrigin             `cbor:"origin,omitempty"`
+	Pipeline  *ticket.PipelineExecutionContent `cbor:"pipeline,omitempty"`
 }
 
 // importRequest is the input for the "import" action.
@@ -317,8 +348,8 @@ type importRequest struct {
 // and the content is the full TicketContent (preserving status,
 // timestamps, assignee, notes, etc.).
 type importEntry struct {
-	ID      string                     `cbor:"id"`
-	Content ticketschema.TicketContent `cbor:"content"`
+	ID      string               `cbor:"id"`
+	Content ticket.TicketContent `cbor:"content"`
 }
 
 // importResponse is returned by the "import" action.
@@ -372,9 +403,9 @@ type batchCreateResponse struct {
 // and gate operations. Returns the full updated content so the caller
 // does not need a separate show call.
 type mutationResponse struct {
-	ID      string                     `json:"id"`
-	Room    string                     `json:"room"`
-	Content ticketschema.TicketContent `json:"content"`
+	ID      string               `json:"id"`
+	Room    string               `json:"room"`
+	Content ticket.TicketContent `json:"content"`
 }
 
 // --- Mutation handlers ---
@@ -421,9 +452,14 @@ func (ts *TicketService) handleCreate(ctx context.Context, token *servicetoken.T
 		return nil, err
 	}
 
+	// Enforce room-level type restrictions.
+	if err := checkAllowedType(state.config, request.Type); err != nil {
+		return nil, err
+	}
+
 	now := ts.clock.Now().UTC().Format(time.RFC3339)
-	content := ticketschema.TicketContent{
-		Version:   ticketschema.TicketContentVersion,
+	content := ticket.TicketContent{
+		Version:   ticket.TicketContentVersion,
 		Title:     request.Title,
 		Body:      request.Body,
 		Status:    "open",
@@ -434,6 +470,7 @@ func (ts *TicketService) handleCreate(ctx context.Context, token *servicetoken.T
 		BlockedBy: request.BlockedBy,
 		Gates:     request.Gates,
 		Origin:    request.Origin,
+		Pipeline:  request.Pipeline,
 		Deadline:  request.Deadline,
 		CreatedBy: token.Subject,
 		CreatedAt: now,
@@ -471,7 +508,7 @@ func (ts *TicketService) handleCreate(ctx context.Context, token *servicetoken.T
 		}
 	}
 
-	ticketID := ts.generateTicketID(state, request.Room, now, content.Title, nil)
+	ticketID := ts.generateTicketID(state, request.Type, request.Room, now, content.Title, nil)
 
 	// Write to Matrix and update the local index so the creator sees
 	// the result without a /sync round-trip. putWithEcho records the
@@ -533,7 +570,20 @@ func (ts *TicketService) handleUpdate(ctx context.Context, token *servicetoken.T
 		content.Priority = *request.Priority
 	}
 	if request.Type != nil {
+		oldType := content.Type
 		content.Type = *request.Type
+
+		// Auto-clear pipeline content when changing away from pipeline
+		// type. The CBOR request format uses nil to mean "not provided",
+		// so there is no way for the caller to explicitly clear it.
+		if oldType == "pipeline" && content.Type != "pipeline" {
+			content.Pipeline = nil
+		}
+
+		// Enforce room-level type restrictions.
+		if err := checkAllowedType(state.config, content.Type); err != nil {
+			return nil, err
+		}
 	}
 	if request.Labels != nil {
 		content.Labels = *request.Labels
@@ -546,6 +596,9 @@ func (ts *TicketService) handleUpdate(ctx context.Context, token *servicetoken.T
 	}
 	if request.Deadline != nil {
 		content.Deadline = *request.Deadline
+	}
+	if request.Pipeline != nil {
+		content.Pipeline = request.Pipeline
 	}
 
 	// Determine the proposed status and assignee, starting from
@@ -899,7 +952,7 @@ func (ts *TicketService) handleBatchCreate(ctx context.Context, token *serviceto
 
 	type pendingTicket struct {
 		id      string
-		content ticketschema.TicketContent
+		content ticket.TicketContent
 	}
 	tickets := make([]pendingTicket, len(request.Tickets))
 	refToID := make(map[string]string, len(request.Tickets))
@@ -914,12 +967,17 @@ func (ts *TicketService) handleBatchCreate(ctx context.Context, token *serviceto
 			return nil, fmt.Errorf("tickets[%d]: duplicate ref %q", i, entry.Ref)
 		}
 
-		ticketID := ts.generateTicketID(state, roomID.String(), now, entry.Title, batchIDs)
+		// Enforce room-level type restrictions.
+		if err := checkAllowedType(state.config, entry.Type); err != nil {
+			return nil, fmt.Errorf("tickets[%d]: %w", i, err)
+		}
+
+		ticketID := ts.generateTicketID(state, entry.Type, roomID.String(), now, entry.Title, batchIDs)
 		batchIDs[ticketID] = struct{}{}
 		refToID[entry.Ref] = ticketID
 
-		content := ticketschema.TicketContent{
-			Version:   ticketschema.TicketContentVersion,
+		content := ticket.TicketContent{
+			Version:   ticket.TicketContentVersion,
 			Title:     entry.Title,
 			Body:      entry.Body,
 			Status:    "open",
@@ -930,6 +988,7 @@ func (ts *TicketService) handleBatchCreate(ctx context.Context, token *serviceto
 			BlockedBy: entry.BlockedBy,
 			Gates:     entry.Gates,
 			Origin:    entry.Origin,
+			Pipeline:  entry.Pipeline,
 			CreatedBy: token.Subject,
 			CreatedAt: now,
 			UpdatedAt: now,
@@ -1042,6 +1101,11 @@ func (ts *TicketService) handleImport(ctx context.Context, token *servicetoken.T
 	// Phase 1: Validate all tickets.
 	for i, entry := range request.Tickets {
 		if err := entry.Content.Validate(); err != nil {
+			return nil, fmt.Errorf("tickets[%d] (%s): %w", i, entry.ID, err)
+		}
+
+		// Enforce room-level type restrictions.
+		if err := checkAllowedType(state.config, entry.Content.Type); err != nil {
 			return nil, fmt.Errorf("tickets[%d] (%s): %w", i, entry.ID, err)
 		}
 
@@ -1275,7 +1339,7 @@ func (ts *TicketService) handleDefer(ctx context.Context, token *servicetoken.To
 		gate.SatisfiedBy = ""
 	} else {
 		// Create a new defer gate.
-		content.Gates = append(content.Gates, ticketschema.TicketGate{
+		content.Gates = append(content.Gates, ticket.TicketGate{
 			ID:        "defer",
 			Type:      "timer",
 			Status:    "pending",

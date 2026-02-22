@@ -8,6 +8,8 @@ import (
 
 	"github.com/charmbracelet/lipgloss"
 	"github.com/charmbracelet/x/ansi"
+
+	"github.com/bureau-foundation/bureau/lib/ref"
 )
 
 // DropdownOption is a single selectable item in a dropdown overlay.
@@ -78,6 +80,55 @@ func PriorityOptions() []DropdownOption {
 		{Label: "P3", Value: "3"},
 		{Label: "P4", Value: "4"},
 	}
+}
+
+// AssigneeOptions builds dropdown options from a member list for the
+// assignee picker. Each member is displayed with a presence indicator
+// dot (green for online, yellow for unavailable, dim for offline or
+// unknown). If the ticket currently has an assignee, an "Unassign"
+// option is prepended. The returned cursor is pre-positioned on the
+// current assignee if one exists, or 0 otherwise.
+func AssigneeOptions(members []MemberInfo, currentAssignee ref.UserID) (options []DropdownOption, cursor int) {
+	if !currentAssignee.IsZero() {
+		options = append(options, DropdownOption{
+			Label: "  Unassign",
+			Value: "",
+		})
+	}
+
+	for _, member := range members {
+		dot := "○" // dim dot for offline/unknown
+		switch member.Presence {
+		case "online":
+			dot = "●" // filled dot for online
+		case "unavailable":
+			dot = "◐" // half dot for unavailable
+		}
+
+		// Show @localpart rather than full Matrix ID for readability.
+		displayName := member.DisplayName
+		if displayName == "" {
+			displayName = member.UserID.Localpart()
+		}
+
+		label := dot + " " + displayName
+		options = append(options, DropdownOption{
+			Label: label,
+			Value: member.UserID.String(),
+		})
+	}
+
+	// Pre-select the current assignee if one exists.
+	if !currentAssignee.IsZero() {
+		for index, option := range options {
+			if option.Value == currentAssignee.String() {
+				cursor = index
+				break
+			}
+		}
+	}
+
+	return options, cursor
 }
 
 // MoveUp moves the cursor up by one, wrapping to the bottom.

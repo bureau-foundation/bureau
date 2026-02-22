@@ -12,6 +12,7 @@ import (
 	"github.com/charmbracelet/bubbles/viewport"
 	"github.com/charmbracelet/lipgloss"
 
+	"github.com/bureau-foundation/bureau/lib/ref"
 	"github.com/bureau-foundation/bureau/lib/schema/ticket"
 	"github.com/bureau-foundation/bureau/lib/ticketindex"
 )
@@ -77,15 +78,20 @@ func NewDetailRenderer(theme Theme, width int) DetailRenderer {
 // exactly [detailHeaderLines] lines tall regardless of content. When
 // a score is provided, signal indicators (↑N, →P0, Nd) are
 // right-aligned on Line 1. Returns a HeaderRenderResult with the
-// rendered string and click targets for status, priority, and title.
-func (renderer DetailRenderer) RenderHeader(entry ticketindex.Entry, score *ticketindex.TicketScore) HeaderRenderResult {
+// rendered string and click targets for status, priority, title, and
+// assignee.
+//
+// The presenceLookup function maps a user ID to their presence state
+// ("online", "unavailable", "offline"). Pass nil when presence
+// information is unavailable (e.g., file-backed mode).
+func (renderer DetailRenderer) RenderHeader(entry ticketindex.Entry, score *ticketindex.TicketScore, presenceLookup func(ref.UserID) string) HeaderRenderResult {
 	content := entry.Content
 
 	// Line 1: STATUS  P1  type  id  [labels]  ...signals
 	line1, statusEnd, priorityStart, priorityEnd := renderer.renderMetaLine(entry.ID, content, score)
 
 	// Line 2: timestamps + assignee, condensed onto one line.
-	line2 := renderer.renderTimestampLine(content)
+	line2, assigneeStart, assigneeEnd := renderer.renderTimestampLine(content, presenceLookup)
 
 	// Lines 3-4: title, hard-capped at 2 lines.
 	titleLine1, titleLine2 := renderer.renderTitleLines(content.Title)
@@ -116,6 +122,16 @@ func (renderer DetailRenderer) RenderHeader(entry ticketindex.Entry, score *tick
 		EndX:   priorityEnd,
 		Field:  "priority",
 	})
+
+	// Assignee: line 1, columns assigneeStart..assigneeEnd.
+	if assigneeEnd > assigneeStart {
+		targets = append(targets, HeaderClickTarget{
+			Line:   1,
+			StartX: assigneeStart,
+			EndX:   assigneeEnd,
+			Field:  "assignee",
+		})
+	}
 
 	// Title: lines 2-3, full width.
 	if content.Title != "" {
@@ -381,7 +397,12 @@ func (renderer DetailRenderer) renderSignalIndicators(score *ticketindex.TicketS
 // renderTimestampLine builds the second header line: timestamps and
 // assignee condensed onto a single line. Timestamps are shortened to
 // just the date (YYYY-MM-DD) to avoid wrapping.
-func (renderer DetailRenderer) renderTimestampLine(content ticket.TicketContent) string {
+//
+// Returns the rendered line plus the column range of the assignee
+// region for click target computation:
+//   - assigneeStart: inclusive start column (0 if no assignee region)
+//   - assigneeEnd: exclusive end column (0 if no assignee region)
+func (renderer DetailRenderer) renderTimestampLine(content ticket.TicketContent, presenceLookup func(ref.UserID) string) (line string, assigneeStart, assigneeEnd int) {
 	metaStyle := lipgloss.NewStyle().Foreground(renderer.theme.FaintText)
 
 	var parts []string
@@ -397,12 +418,74 @@ func (renderer DetailRenderer) renderTimestampLine(content ticket.TicketContent)
 	if content.ClosedAt != "" {
 		parts = append(parts, "closed "+shortenTimestamp(content.ClosedAt))
 	}
-	if !content.Assignee.IsZero() {
-		parts = append(parts, content.Assignee.String())
+
+	// Track the visible character position before the assignee region.
+	prefix := strings.Join(parts, "  ")
+	prefixWidth := lipgloss.Width(prefix)
+	if len(parts) > 0 {
+		prefixWidth += 2 // "  " gap before the assignee region.
 	}
 
-	line := strings.Join(parts, "  ")
-	return metaStyle.Render(lipgloss.NewStyle().Width(renderer.width).MaxWidth(renderer.width).Render(line))
+	// Build the styled assignee region: presence dot + user ID, or
+	// faint "unassigned" placeholder.
+	var assigneeStyled string
+	var assigneeVisibleWidth int
+
+	if !content.Assignee.IsZero() {
+		presence := ""
+		if presenceLookup != nil {
+			presence = presenceLookup(content.Assignee)
+		}
+		dot := presenceDot(presence)
+		dotStyle := presenceDotStyle(renderer.theme, presence)
+		assigneeStyled = dotStyle.Render(dot) + " " + metaStyle.Render(content.Assignee.String())
+		// Visible width: dot (1) + space (1) + user ID string.
+		assigneeVisibleWidth = 2 + lipgloss.Width(content.Assignee.String())
+	} else {
+		assigneeStyle := lipgloss.NewStyle().Foreground(renderer.theme.FaintText).Faint(true)
+		assigneeStyled = assigneeStyle.Render("unassigned")
+		assigneeVisibleWidth = len("unassigned")
+	}
+
+	assigneeStart = prefixWidth
+	assigneeEnd = assigneeStart + assigneeVisibleWidth
+
+	// Assemble the full line.
+	var fullLine string
+	if len(parts) > 0 {
+		fullLine = metaStyle.Render(prefix) + "  " + assigneeStyled
+	} else {
+		fullLine = assigneeStyled
+	}
+
+	line = lipgloss.NewStyle().Width(renderer.width).MaxWidth(renderer.width).Render(fullLine)
+	return line, assigneeStart, assigneeEnd
+}
+
+// presenceDot returns a Unicode dot character for a presence state.
+func presenceDot(presence string) string {
+	switch presence {
+	case "online":
+		return "●"
+	case "unavailable":
+		return "◐"
+	default:
+		return "○"
+	}
+}
+
+// presenceDotStyle returns a lipgloss style for the presence dot
+// color: green for online, yellow for unavailable, dim for offline
+// or unknown.
+func presenceDotStyle(theme Theme, presence string) lipgloss.Style {
+	switch presence {
+	case "online":
+		return lipgloss.NewStyle().Foreground(theme.StatusOpen)
+	case "unavailable":
+		return lipgloss.NewStyle().Foreground(theme.PriorityColor(1))
+	default:
+		return lipgloss.NewStyle().Foreground(theme.FaintText)
+	}
 }
 
 // shortenTimestamp extracts just the date from an ISO 8601 timestamp
@@ -894,10 +977,14 @@ type DetailPane struct {
 	clickTargets []BodyClickTarget
 
 	// headerClickTargets maps regions in the fixed header to
-	// interactive fields (status, priority, title). Set by
-	// SetContent and rerender; used by the model to handle
+	// interactive fields (status, priority, title, assignee). Set
+	// by SetContent and rerender; used by the model to handle
 	// mutation triggers via mouse clicks on header elements.
 	headerClickTargets []HeaderClickTarget
+
+	// presenceLookup resolves a user ID to their presence state.
+	// Set by SetPresenceLookup; nil when presence is unavailable.
+	presenceLookup func(ref.UserID) string
 
 	// Search state for in-body text search.
 	search SearchModel
@@ -913,6 +1000,14 @@ func NewDetailPane(theme Theme) DetailPane {
 	return DetailPane{
 		theme: theme,
 	}
+}
+
+// SetPresenceLookup configures the function used to resolve user
+// presence state for the assignee display. Called by the model when
+// member data becomes available (after the subscribe stream reaches
+// caught_up and the member list is fetched).
+func (pane *DetailPane) SetPresenceLookup(lookup func(ref.UserID) string) {
+	pane.presenceLookup = lookup
 }
 
 // bodyHeight returns the number of lines available for the scrollable
@@ -972,7 +1067,7 @@ func (pane *DetailPane) SetContent(source Source, entry ticketindex.Entry, now t
 	contentWidth := pane.contentWidth()
 	renderer := NewDetailRenderer(pane.theme, contentWidth)
 	score := pane.computeScore(source, entry, now)
-	headerResult := renderer.RenderHeader(entry, score)
+	headerResult := renderer.RenderHeader(entry, score, pane.presenceLookup)
 	pane.header = headerResult.Rendered
 	pane.headerClickTargets = headerResult.Targets
 	body, clickTargets := renderer.RenderBody(source, entry, now)
@@ -1020,7 +1115,7 @@ func (pane *DetailPane) rerender() {
 	contentWidth := pane.contentWidth()
 	renderer := NewDetailRenderer(pane.theme, contentWidth)
 	score := pane.computeScore(pane.source, pane.entry, pane.renderTime)
-	headerResult := renderer.RenderHeader(pane.entry, score)
+	headerResult := renderer.RenderHeader(pane.entry, score, pane.presenceLookup)
 	pane.header = headerResult.Rendered
 	pane.headerClickTargets = headerResult.Targets
 	body, clickTargets := renderer.RenderBody(pane.source, pane.entry, pane.renderTime)

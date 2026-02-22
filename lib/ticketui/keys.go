@@ -38,6 +38,9 @@ type KeyMap struct {
 	FilterActivate key.Binding // Enter filter mode.
 	FilterClear    key.Binding // Clear filter and exit filter mode.
 
+	// Mutations.
+	Assign key.Binding // Open the assignee dropdown (detail pane).
+
 	// Detail search (active when the detail pane has a search query).
 	SearchNext     key.Binding // Jump to next match in detail search.
 	SearchPrevious key.Binding // Jump to previous match in detail search.
@@ -111,6 +114,10 @@ var DefaultKeyMap = KeyMap{
 	NavigateBack: key.NewBinding(
 		key.WithKeys("backspace"),
 		key.WithHelp("BS", "back"),
+	),
+	Assign: key.NewBinding(
+		key.WithKeys("a"),
+		key.WithHelp("a", "assign"),
 	),
 	FilterActivate: key.NewBinding(
 		key.WithKeys("/"),

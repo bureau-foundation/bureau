@@ -43,6 +43,12 @@ type ServiceSource struct {
 	roomID       string
 	loadingState atomic.Value // stores string
 
+	// members caches the list of joined room members with presence
+	// state, fetched from the ticket service's list-members query
+	// after the subscribe stream reaches caught_up. Used by the
+	// assignee dropdown. Stores []MemberInfo; nil until fetched.
+	members atomic.Value
+
 	cancel context.CancelFunc
 	logger *slog.Logger
 }
@@ -202,6 +208,7 @@ func (source *ServiceSource) processFrames(decoder *codec.Decoder) error {
 			source.loadingState.Store("caught_up")
 			source.logger.Info("subscribe stream caught_up",
 				"room_id", source.roomID)
+			go source.fetchMembers()
 		case "heartbeat":
 			// Connection liveness — no action needed.
 		case "resync":
@@ -219,13 +226,15 @@ func (source *ServiceSource) processFrames(decoder *codec.Decoder) error {
 	}
 }
 
-// clearIndex replaces the local index with a fresh empty one. Called
-// on disconnection and resync to ensure the next snapshot starts from
-// a clean slate.
+// clearIndex replaces the local index with a fresh empty one and
+// invalidates the member cache. Called on disconnection and resync to
+// ensure the next snapshot starts from a clean slate. The member cache
+// is re-fetched when the stream next reaches caught_up.
 func (source *ServiceSource) clearIndex() {
 	source.mutex.Lock()
 	source.index = ticketindex.NewIndex()
 	source.mutex.Unlock()
+	source.members = atomic.Value{}
 }
 
 // --- Mutator implementation ---
@@ -313,4 +322,83 @@ func (source *ServiceSource) AddNote(ctx context.Context, ticketID, body string)
 		"body":   body,
 	}
 	return source.mutationClient().Call(ctx, "add-note", fields, nil)
+}
+
+// UpdateAssignee assigns or unassigns a ticket. Handles the ticket
+// service's assignee/status atomicity constraint:
+//   - Assign (non-empty, ticket is open/blocked): transitions to
+//     in_progress with the given assignee
+//   - Reassign (non-empty, ticket already in_progress): updates the
+//     assignee without changing status
+//   - Unassign (empty): transitions to open, which auto-clears the
+//     assignee server-side
+func (source *ServiceSource) UpdateAssignee(ctx context.Context, ticketID, assignee string) error {
+	if assignee == "" {
+		// Unassign: transition to open, server auto-clears assignee.
+		fields := map[string]any{
+			"ticket": ticketID,
+			"status": "open",
+		}
+		return source.mutationClient().Call(ctx, "update", fields, nil)
+	}
+
+	// Check current status to decide whether to also transition.
+	currentContent, exists := source.Get(ticketID)
+	if !exists {
+		return fmt.Errorf("ticket %s not found", ticketID)
+	}
+
+	fields := map[string]any{
+		"ticket":   ticketID,
+		"assignee": assignee,
+	}
+
+	if currentContent.Status != "in_progress" {
+		// Assigning to an open/blocked ticket: must also transition
+		// to in_progress to satisfy the atomicity constraint.
+		fields["status"] = "in_progress"
+	}
+
+	return source.mutationClient().Call(ctx, "update", fields, nil)
+}
+
+// --- Member list ---
+
+// Members returns the cached list of joined room members, sorted by
+// presence (online first) then alphabetically by display name. Returns
+// nil if members have not been fetched yet (before the subscribe stream
+// reaches caught_up).
+func (source *ServiceSource) Members() []MemberInfo {
+	value := source.members.Load()
+	if value == nil {
+		return nil
+	}
+	return value.([]MemberInfo)
+}
+
+// fetchMembers queries the ticket service for joined room members and
+// caches the result. Called asynchronously when the subscribe stream
+// reaches caught_up. Errors are logged but not propagated — the
+// assignee dropdown simply stays unavailable until the next reconnect.
+func (source *ServiceSource) fetchMembers() {
+	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+	defer cancel()
+
+	fields := map[string]any{
+		"room": source.roomID,
+	}
+	var result []MemberInfo
+	if err := source.mutationClient().Call(ctx, "list-members", fields, &result); err != nil {
+		source.logger.Warn("failed to fetch room members",
+			"room_id", source.roomID,
+			"error", err,
+		)
+		return
+	}
+
+	source.members.Store(result)
+	source.logger.Info("fetched room members",
+		"room_id", source.roomID,
+		"count", len(result),
+	)
 }

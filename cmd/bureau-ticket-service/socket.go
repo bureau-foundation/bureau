@@ -70,6 +70,7 @@ func (ts *TicketService) registerActions(server *service.SocketServer) {
 	server.HandleAuth("deps", ts.withReadLock(ts.handleDeps))
 	server.HandleAuth("epic-health", ts.withReadLock(ts.handleEpicHealth))
 	server.HandleAuth("upcoming-gates", ts.withReadLock(ts.handleUpcomingGates))
+	server.HandleAuth("list-members", ts.withReadLock(ts.handleListMembers))
 
 	// Mutation actions — write lock, all write to Matrix and update
 	// the local index.

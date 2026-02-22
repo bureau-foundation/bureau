@@ -777,3 +777,91 @@ func (ts *TicketService) handleListRooms(ctx context.Context, token *servicetoke
 
 	return rooms, nil
 }
+
+// --- List members ---
+
+// memberInfo describes a single joined member of a tracked room,
+// enriched with presence state from the ticket service's /sync loop.
+// The TUI uses this to populate the assignee dropdown with
+// availability indicators.
+type memberInfo struct {
+	UserID          string `cbor:"user_id"`
+	DisplayName     string `cbor:"display_name"`
+	Presence        string `cbor:"presence"`
+	CurrentlyActive bool   `cbor:"currently_active"`
+}
+
+// presenceRank returns a sort key for presence states. Lower values
+// sort first: online users appear before unavailable, which appear
+// before offline or unknown.
+func presenceRank(presence string) int {
+	switch presence {
+	case "online":
+		return 0
+	case "unavailable":
+		return 1
+	case "offline":
+		return 2
+	default:
+		return 3
+	}
+}
+
+// handleListMembers returns the joined members of a tracked room,
+// enriched with presence state. The response is sorted by presence
+// (online first, then unavailable, then offline/unknown), with
+// alphabetical ordering by display name within each group.
+//
+// This handler runs under the read lock. The GetRoomMembers HTTP call
+// runs while the lock is held — the same pattern mutation handlers use
+// with the write lock during SendStateEvent calls.
+func (ts *TicketService) handleListMembers(ctx context.Context, token *servicetoken.Token, raw []byte) (any, error) {
+	if err := requireGrant(token, "ticket/list-members"); err != nil {
+		return nil, err
+	}
+
+	var request roomRequest
+	if err := codec.Unmarshal(raw, &request); err != nil {
+		return nil, fmt.Errorf("invalid request: %w", err)
+	}
+
+	roomID, _, err := ts.requireRoom(request.Room)
+	if err != nil {
+		return nil, err
+	}
+
+	members, err := ts.session.GetRoomMembers(ctx, roomID)
+	if err != nil {
+		return nil, fmt.Errorf("get room members: %w", err)
+	}
+
+	// Filter to joined members and enrich with presence state.
+	result := make([]memberInfo, 0, len(members))
+	for _, member := range members {
+		if member.Membership != "join" {
+			continue
+		}
+		info := memberInfo{
+			UserID:      member.UserID.String(),
+			DisplayName: member.DisplayName,
+		}
+		if presence, exists := ts.presence[member.UserID]; exists {
+			info.Presence = presence.Presence
+			info.CurrentlyActive = presence.CurrentlyActive
+		}
+		result = append(result, info)
+	}
+
+	// Sort by presence (online first), then alphabetical by display
+	// name within each presence group.
+	sort.Slice(result, func(i, j int) bool {
+		rankI := presenceRank(result[i].Presence)
+		rankJ := presenceRank(result[j].Presence)
+		if rankI != rankJ {
+			return rankI < rankJ
+		}
+		return result[i].DisplayName < result[j].DisplayName
+	})
+
+	return result, nil
+}

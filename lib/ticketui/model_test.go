@@ -1363,3 +1363,233 @@ func TestPipelineNonPipelineExcluded(t *testing.T) {
 		}
 	}
 }
+
+// --- Assignee dropdown tests ---
+
+// TestAssigneeDropdownOptions verifies that the dropdown option builder
+// produces correct labels and ordering.
+func TestAssigneeDropdownOptions(t *testing.T) {
+	t.Parallel()
+
+	members := []MemberInfo{
+		{UserID: ref.MustParseUserID("@alice:bureau.local"), DisplayName: "Alice", Presence: "online"},
+		{UserID: ref.MustParseUserID("@bob:bureau.local"), DisplayName: "Bob", Presence: "unavailable"},
+		{UserID: ref.MustParseUserID("@carol:bureau.local"), DisplayName: "", Presence: "offline"},
+	}
+
+	t.Run("no current assignee", func(t *testing.T) {
+		t.Parallel()
+		options, cursor := AssigneeOptions(members, ref.UserID{})
+
+		if cursor != 0 {
+			t.Errorf("expected cursor 0 for no assignee, got %d", cursor)
+		}
+
+		// No unassign option when there's no current assignee.
+		if len(options) != 3 {
+			t.Fatalf("expected 3 options, got %d", len(options))
+		}
+
+		// Each option should have a presence dot.
+		if !strings.Contains(options[0].Label, "●") {
+			t.Errorf("expected online dot in first option, got %q", options[0].Label)
+		}
+		if !strings.Contains(options[1].Label, "◐") {
+			t.Errorf("expected unavailable dot in second option, got %q", options[1].Label)
+		}
+		if !strings.Contains(options[2].Label, "○") {
+			t.Errorf("expected offline dot in third option, got %q", options[2].Label)
+		}
+
+		// Member with empty display name should show localpart.
+		if !strings.Contains(options[2].Label, "carol") {
+			t.Errorf("expected localpart fallback in third option, got %q", options[2].Label)
+		}
+
+		// Values should be full Matrix user IDs.
+		if options[0].Value != "@alice:bureau.local" {
+			t.Errorf("expected @alice:bureau.local, got %q", options[0].Value)
+		}
+	})
+
+	t.Run("with current assignee", func(t *testing.T) {
+		t.Parallel()
+		currentAssignee := ref.MustParseUserID("@bob:bureau.local")
+		options, cursor := AssigneeOptions(members, currentAssignee)
+
+		// Should have unassign option at the front.
+		if len(options) != 4 {
+			t.Fatalf("expected 4 options (unassign + 3 members), got %d", len(options))
+		}
+		if options[0].Value != "" {
+			t.Errorf("expected empty value for unassign option, got %q", options[0].Value)
+		}
+
+		// Cursor should pre-select the current assignee.
+		if options[cursor].Value != "@bob:bureau.local" {
+			t.Errorf("expected cursor on bob, got option %d: %q", cursor, options[cursor].Value)
+		}
+	})
+}
+
+// TestAssigneeClickTarget verifies that the header click target for the
+// assignee field is registered on line 1 with the correct column range.
+func TestAssigneeClickTarget(t *testing.T) {
+	t.Parallel()
+
+	renderer := NewDetailRenderer(DefaultTheme, 80)
+
+	entry := ticketindex.Entry{
+		ID: "tkt-001",
+		Content: ticket.TicketContent{
+			Version:   1,
+			Title:     "Test ticket",
+			Status:    "in_progress",
+			Priority:  1,
+			Type:      "task",
+			Assignee:  ref.MustParseUserID("@alice:bureau.local"),
+			CreatedBy: ref.MustParseUserID("@ben:bureau.local"),
+			CreatedAt: "2026-02-01T00:00:00Z",
+			UpdatedAt: "2026-02-01T00:00:00Z",
+		},
+	}
+
+	result := renderer.RenderHeader(entry, nil, func(userID ref.UserID) string {
+		if userID == ref.MustParseUserID("@alice:bureau.local") {
+			return "online"
+		}
+		return ""
+	})
+
+	var assigneeTarget *HeaderClickTarget
+	for index := range result.Targets {
+		if result.Targets[index].Field == "assignee" {
+			assigneeTarget = &result.Targets[index]
+			break
+		}
+	}
+
+	if assigneeTarget == nil {
+		t.Fatal("expected an assignee click target in the header")
+	}
+
+	if assigneeTarget.Line != 1 {
+		t.Errorf("expected assignee target on line 1, got %d", assigneeTarget.Line)
+	}
+
+	if assigneeTarget.StartX >= assigneeTarget.EndX {
+		t.Errorf("expected non-empty assignee region, got %d..%d",
+			assigneeTarget.StartX, assigneeTarget.EndX)
+	}
+}
+
+// TestAssigneeClickTargetUnassigned verifies the click target exists
+// even when no assignee is set (for the "unassigned" placeholder).
+func TestAssigneeClickTargetUnassigned(t *testing.T) {
+	t.Parallel()
+
+	renderer := NewDetailRenderer(DefaultTheme, 80)
+
+	entry := ticketindex.Entry{
+		ID: "tkt-002",
+		Content: ticket.TicketContent{
+			Version:   1,
+			Title:     "Unassigned ticket",
+			Status:    "open",
+			Priority:  2,
+			Type:      "task",
+			CreatedBy: ref.MustParseUserID("@ben:bureau.local"),
+			CreatedAt: "2026-02-01T00:00:00Z",
+			UpdatedAt: "2026-02-01T00:00:00Z",
+		},
+	}
+
+	result := renderer.RenderHeader(entry, nil, nil)
+
+	var assigneeTarget *HeaderClickTarget
+	for index := range result.Targets {
+		if result.Targets[index].Field == "assignee" {
+			assigneeTarget = &result.Targets[index]
+			break
+		}
+	}
+
+	if assigneeTarget == nil {
+		t.Fatal("expected an assignee click target for unassigned ticket")
+	}
+
+	if assigneeTarget.Line != 1 {
+		t.Errorf("expected assignee target on line 1, got %d", assigneeTarget.Line)
+	}
+}
+
+// TestAssigneeDropdownNotShownInFileMode verifies that opening the
+// assignee dropdown does nothing when the source does not implement
+// MemberLister (i.e., in file-backed mode).
+func TestAssigneeDropdownNotShownInFileMode(t *testing.T) {
+	t.Parallel()
+
+	source := testSource()
+	model := NewModel(source)
+	model.width = 120
+	model.height = 40
+	model.ready = true
+
+	// Select the first ticket.
+	model.cursor = 0
+	if len(model.items) > 0 && !model.items[0].IsHeader {
+		model.selectedID = model.items[0].Entry.ID
+	}
+
+	// Try to open assignee dropdown via keyboard shortcut.
+	model.openAssigneeDropdown(0, 0)
+
+	if model.activeDropdown != nil {
+		t.Error("expected no dropdown in file-backed mode (IndexSource does not implement MemberLister)")
+	}
+
+	// Also check via handleHeaderClick.
+	cmd := model.handleHeaderClick("assignee", 50, 1)
+	if cmd != nil {
+		t.Error("expected no command from assignee click in file-backed mode")
+	}
+	if model.activeDropdown != nil {
+		t.Error("expected no dropdown from assignee header click in file-backed mode")
+	}
+}
+
+// TestAssigneeDropdownClosedTicket verifies that the assignee dropdown
+// cannot be opened on a closed ticket (status must change first).
+func TestAssigneeDropdownClosedTicket(t *testing.T) {
+	t.Parallel()
+
+	source := testSource()
+	model := NewModel(source)
+	model.width = 120
+	model.height = 40
+	model.ready = true
+	// The detail pane needs a valid size before switching to a tab
+	// that renders ticket content (TabAll has no section headers,
+	// so syncDetailPane calls SetContent immediately).
+	model.detailPane.SetSize(60, 40)
+
+	// Select the closed ticket (tkt-003).
+	model.switchTab(TabAll)
+	for index, item := range model.items {
+		if !item.IsHeader && item.Entry.ID == "tkt-003" {
+			model.cursor = index
+			model.selectedID = item.Entry.ID
+			break
+		}
+	}
+
+	// Even if the source supported MemberLister, we test the closed
+	// ticket guard. IndexSource doesn't implement MemberLister, so
+	// the dropdown won't open for that reason either. The test
+	// validates that the method returns nil without panicking.
+	model.openAssigneeDropdown(0, 0)
+
+	if model.activeDropdown != nil {
+		t.Error("expected no dropdown on closed ticket")
+	}
+}

@@ -8,6 +8,7 @@ import (
 	"sync"
 	"time"
 
+	"github.com/bureau-foundation/bureau/lib/ref"
 	"github.com/bureau-foundation/bureau/lib/schema/ticket"
 	"github.com/bureau-foundation/bureau/lib/ticketindex"
 )
@@ -114,6 +115,43 @@ type Mutator interface {
 	// AddNote appends a note to the ticket. The author and
 	// timestamp are set by the ticket service.
 	AddNote(ctx context.Context, ticketID, body string) error
+
+	// UpdateAssignee assigns or unassigns a ticket. The ticket
+	// service enforces assignee/status atomicity (in_progress
+	// requires an assignee, and an assignee requires in_progress),
+	// so this method handles the coupling:
+	//   - Assign (non-empty, ticket is open/blocked): transitions
+	//     to in_progress with the given assignee
+	//   - Reassign (non-empty, ticket already in_progress): updates
+	//     the assignee without changing status
+	//   - Unassign (empty): transitions to open, which auto-clears
+	//     the assignee
+	UpdateAssignee(ctx context.Context, ticketID, assignee string) error
+}
+
+// MemberInfo describes a joined member of a tracked room, enriched
+// with presence state from the ticket service's /sync loop. Used by
+// the assignee dropdown to show availability indicators.
+type MemberInfo struct {
+	UserID          ref.UserID `cbor:"user_id"`
+	DisplayName     string     `cbor:"display_name"`
+	Presence        string     `cbor:"presence"`
+	CurrentlyActive bool       `cbor:"currently_active"`
+}
+
+// MemberLister is an optional interface that Source implementations can
+// provide to supply room member information for the assignee dropdown.
+// The TUI checks for this via type assertion on the source; when
+// present, the assignee click target and keyboard shortcut are enabled.
+//
+// ServiceSource implements this interface; IndexSource does not (there
+// is no ticket service to query in file mode).
+type MemberLister interface {
+	// Members returns the cached list of joined members for the
+	// connected room, sorted by presence (online first) and then
+	// alphabetically by display name. Returns nil if members have
+	// not been fetched yet.
+	Members() []MemberInfo
 }
 
 // LoadingStater is an optional interface that Source implementations can

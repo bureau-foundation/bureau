@@ -18,6 +18,7 @@ import (
 	"github.com/charmbracelet/lipgloss"
 	"github.com/charmbracelet/x/ansi"
 
+	"github.com/bureau-foundation/bureau/lib/ref"
 	"github.com/bureau-foundation/bureau/lib/schema/ticket"
 	"github.com/bureau-foundation/bureau/lib/ticketindex"
 )
@@ -305,6 +306,22 @@ func NewModel(source Source) Model {
 		if model.cursor < len(model.items) && !model.items[model.cursor].IsHeader {
 			model.selectedID = model.items[model.cursor].Entry.ID
 		}
+	}
+
+	// Set up presence lookup if the source provides member data.
+	// The closure always reads the latest cached members via the
+	// atomic Members() accessor, so it stays current as the cache
+	// is refreshed on reconnect.
+	if memberLister, ok := source.(MemberLister); ok {
+		model.detailPane.SetPresenceLookup(func(userID ref.UserID) string {
+			members := memberLister.Members()
+			for _, member := range members {
+				if member.UserID == userID {
+					return member.Presence
+				}
+			}
+			return ""
+		})
 	}
 
 	return model
@@ -1680,6 +1697,10 @@ func (model *Model) handleDetailKeys(message tea.KeyMsg) {
 	case key.Matches(message, model.keys.End):
 		model.detailPane.viewport.GotoBottom()
 
+	// Assignee shortcut: 'a' opens the assignee dropdown.
+	case key.Matches(message, model.keys.Assign):
+		model.openAssigneeDropdown(0, 0)
+
 	// Search match navigation: only active when there's a search query.
 	// When no search is active, 'n' opens the note modal (if the source
 	// supports mutations).
@@ -1802,7 +1823,69 @@ func (model *Model) handleHeaderClick(field string, screenX, screenY int) tea.Cm
 		model.titleEditID = model.selectedID
 		model.focusRegion = FocusTitleEdit
 		model.updateTitleEditHeader()
+
+	case "assignee":
+		return model.openAssigneeDropdown(screenX, screenY)
 	}
+
+	return nil
+}
+
+// openAssigneeDropdown opens the assignee dropdown if the source
+// supports both mutations and member listing. When opened via mouse
+// click, screenX/screenY position the dropdown below the clicked
+// field. When opened via keyboard ('a'), the dropdown is anchored to
+// a default position.
+func (model *Model) openAssigneeDropdown(screenX, screenY int) tea.Cmd {
+	if _, ok := model.source.(Mutator); !ok {
+		return nil
+	}
+
+	memberLister, ok := model.source.(MemberLister)
+	if !ok {
+		return nil
+	}
+
+	members := memberLister.Members()
+	if members == nil {
+		return nil
+	}
+
+	if model.selectedID == "" {
+		return nil
+	}
+
+	content, exists := model.source.Get(model.selectedID)
+	if !exists {
+		return nil
+	}
+
+	// Closed tickets cannot have an assignee — status must change first.
+	if content.Status == "closed" {
+		return nil
+	}
+
+	options, cursor := AssigneeOptions(members, content.Assignee)
+	if len(options) == 0 {
+		return nil
+	}
+
+	// Default anchor for keyboard activation: below the header,
+	// offset to roughly where the assignee field sits.
+	if screenX == 0 && screenY == 0 {
+		screenX = model.listWidth() + 2
+		screenY = 2
+	}
+
+	model.activeDropdown = &DropdownOverlay{
+		Options:  options,
+		Cursor:   cursor,
+		AnchorX:  screenX,
+		AnchorY:  screenY + 1,
+		Field:    "assignee",
+		TicketID: model.selectedID,
+	}
+	model.focusRegion = FocusDropdown
 
 	return nil
 }
@@ -1837,6 +1920,13 @@ func (model Model) handleDropdownSelect(message dropdownSelectMsg) (tea.Model, t
 		}
 		return model, func() tea.Msg {
 			err := mutator.UpdatePriority(context.Background(), message.ticketID, priority)
+			return mutationResultMsg{err: err}
+		}
+
+	case "assignee":
+		assignee := message.value
+		return model, func() tea.Msg {
+			err := mutator.UpdateAssignee(context.Background(), message.ticketID, assignee)
 			return mutationResultMsg{err: err}
 		}
 	}
@@ -1993,7 +2083,7 @@ func (model *Model) updateTitleEditHeader() {
 		ticketScore := model.source.Score(editedEntry.ID, model.detailPane.renderTime)
 		score = &ticketScore
 	}
-	headerResult := renderer.RenderHeader(editedEntry, score)
+	headerResult := renderer.RenderHeader(editedEntry, score, model.detailPane.presenceLookup)
 	model.detailPane.header = headerResult.Rendered
 	model.detailPane.headerClickTargets = headerResult.Targets
 }

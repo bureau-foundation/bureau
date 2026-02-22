@@ -38,7 +38,7 @@ Shows each machine's name, public key, and last status heartbeat
 (if available). Reads from the fleet's machine room state.`,
 		Usage:          "bureau machine list <fleet-localpart> [flags]",
 		Params:         func() any { return &params },
-		Output:         func() any { return &[]machineEntry{} },
+		Output:         func() any { return &[]MachineEntry{} },
 		RequiredGrants: []string{"command/machine/list"},
 		Annotations:    cli.ReadOnly(),
 		Run: func(args []string) error {
@@ -63,8 +63,8 @@ Shows each machine's name, public key, and last status heartbeat
 	}
 }
 
-// machineEntry collects the key, status, and hardware info for a single machine.
-type machineEntry struct {
+// MachineEntry collects the key, status, and hardware info for a single machine.
+type MachineEntry struct {
 	Name      string `json:"name"                  desc:"machine name"`
 	PublicKey string `json:"public_key"            desc:"SSH public key"`
 	Algorithm string `json:"algorithm"             desc:"key algorithm"`
@@ -75,31 +75,23 @@ type machineEntry struct {
 	MemoryMB  int    `json:"memory_mb"             desc:"total memory in megabytes"`
 }
 
-func runList(ctx context.Context, session messaging.Session, fleetLocalpart string, jsonOutput *cli.JSONOutput) error {
-	// Derive server name from the connected session's identity.
-	server, err := ref.ServerFromUserID(session.UserID().String())
-	if err != nil {
-		return cli.Internal("cannot determine server name from session: %w", err)
-	}
-
-	fleet, err := ref.ParseFleet(fleetLocalpart, server)
-	if err != nil {
-		return cli.Validation("%v", err)
-	}
-
+// ListMachines returns all machines that have published keys or status to
+// the fleet's machine room. The caller provides a connected session, a
+// typed Fleet reference, and a context with an appropriate deadline.
+func ListMachines(ctx context.Context, session messaging.Session, fleet ref.Fleet) ([]*MachineEntry, error) {
 	machineAlias := fleet.MachineRoomAlias()
 	machineRoomID, err := session.ResolveAlias(ctx, machineAlias)
 	if err != nil {
-		return cli.NotFound("resolve fleet machine room %q: %w", machineAlias, err)
+		return nil, cli.NotFound("resolve fleet machine room %q: %w", machineAlias, err)
 	}
 
 	events, err := session.GetRoomState(ctx, machineRoomID)
 	if err != nil {
-		return cli.Internal("get machine room state: %w", err)
+		return nil, cli.Internal("get machine room state: %w", err)
 	}
 
 	// Index machine keys, statuses, and hardware info by state_key (machine name).
-	machines := make(map[string]*machineEntry)
+	machines := make(map[string]*MachineEntry)
 
 	for _, event := range events {
 		if event.StateKey == nil {
@@ -165,15 +157,31 @@ func runList(ctx context.Context, session messaging.Session, fleetLocalpart stri
 		}
 	}
 
-	if len(machines) == 0 {
-		fmt.Fprintln(os.Stderr, "No machines found in the fleet.")
-		return nil
-	}
-
-	// Collect into a stable slice for output.
-	entries := make([]*machineEntry, 0, len(machines))
+	entries := make([]*MachineEntry, 0, len(machines))
 	for _, entry := range machines {
 		entries = append(entries, entry)
+	}
+	return entries, nil
+}
+
+func runList(ctx context.Context, session messaging.Session, fleetLocalpart string, jsonOutput *cli.JSONOutput) error {
+	server, err := ref.ServerFromUserID(session.UserID().String())
+	if err != nil {
+		return cli.Internal("cannot determine server name from session: %w", err)
+	}
+	fleet, err := ref.ParseFleet(fleetLocalpart, server)
+	if err != nil {
+		return cli.Validation("%v", err)
+	}
+
+	entries, err := ListMachines(ctx, session, fleet)
+	if err != nil {
+		return err
+	}
+
+	if len(entries) == 0 {
+		fmt.Fprintln(os.Stderr, "No machines found in the fleet.")
+		return nil
 	}
 
 	if done, err := jsonOutput.EmitJSON(entries); done {
@@ -209,10 +217,10 @@ func runList(ctx context.Context, session messaging.Session, fleetLocalpart stri
 
 // getOrCreate returns the machineEntry for the given name, creating it
 // if it doesn't exist yet.
-func getOrCreate(machines map[string]*machineEntry, name string) *machineEntry {
+func getOrCreate(machines map[string]*MachineEntry, name string) *MachineEntry {
 	entry, exists := machines[name]
 	if !exists {
-		entry = &machineEntry{Name: name}
+		entry = &MachineEntry{Name: name}
 		machines[name] = entry
 	}
 	return entry

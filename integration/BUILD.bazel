@@ -80,6 +80,8 @@ go_test(
     local = True,
     tags = ["manual"],
     deps = [
+        "//cmd/bureau/machine",
+        "//cmd/bureau/workspace",
         "//lib/bootstrap",
         "//lib/codec",
         "//lib/credential",

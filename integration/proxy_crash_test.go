@@ -5,19 +5,12 @@ package integration_test
 
 import (
 	"net"
-	"os"
-	"os/exec"
-	"path/filepath"
 	"syscall"
 	"testing"
 	"time"
 
-	"github.com/bureau-foundation/bureau/lib/bootstrap"
 	"github.com/bureau-foundation/bureau/lib/codec"
-	"github.com/bureau-foundation/bureau/lib/credential"
 	"github.com/bureau-foundation/bureau/lib/ipc"
-	"github.com/bureau-foundation/bureau/lib/principal"
-	"github.com/bureau-foundation/bureau/lib/ref"
 	"github.com/bureau-foundation/bureau/lib/schema"
 )
 
@@ -34,140 +27,29 @@ func TestProxyCrashRecovery(t *testing.T) {
 	t.Parallel()
 	const principalLocalpart = "agent/proxy-crash"
 
-	launcherBinary := resolvedBinary(t, "LAUNCHER_BINARY")
-	daemonBinary := resolvedBinary(t, "DAEMON_BINARY")
-	proxyBinary := resolvedBinary(t, "PROXY_BINARY")
-
-	ctx := t.Context()
 	admin := adminSession(t)
 	defer admin.Close()
 
 	fleet := createTestFleet(t, admin)
-	machineRef, err := ref.NewMachine(fleet.Ref, "proxy-crash")
-	if err != nil {
-		t.Fatalf("create machine ref: %v", err)
-	}
-	machineName := machineRef.Localpart()
-	machineUserID := machineRef.UserID()
+	machine := newTestMachine(t, fleet, "proxy-crash")
 
-	// --- Phase 1: Provision and first boot ---
-	stateDir := t.TempDir()
-	bootstrapPath := filepath.Join(stateDir, "bootstrap.json")
-	runDir := tempSocketDir(t)
-	workspaceRoot := filepath.Join(stateDir, "workspace")
-	cacheRoot := filepath.Join(stateDir, "cache")
-	launcherSocket := principal.LauncherSocketPath(runDir)
-
-	runBureauOrFail(t, "machine", "provision", fleet.Prefix, "proxy-crash",
-		"--credential-file", credentialFile,
-		"--output", bootstrapPath,
-	)
-
-	bootstrapConfig, err := bootstrap.ReadConfig(bootstrapPath)
-	if err != nil {
-		t.Fatalf("read bootstrap config: %v", err)
-	}
-	_ = bootstrapConfig
-
-	firstBootCmd := exec.Command(launcherBinary,
-		"--bootstrap-file", bootstrapPath,
-		"--first-boot-only",
-		"--machine-name", machineName,
-		"--server-name", testServerName,
-		"--fleet", fleet.Prefix,
-		"--run-dir", runDir,
-		"--state-dir", stateDir,
-		"--workspace-root", workspaceRoot,
-		"--cache-root", cacheRoot,
-	)
-	firstBootCmd.Stdout = os.Stderr
-	firstBootCmd.Stderr = os.Stderr
-	if err := firstBootCmd.Run(); err != nil {
-		t.Fatalf("first boot failed: %v", err)
-	}
-
-	// --- Phase 2: Start launcher + daemon, deploy a principal ---
-	startProcess(t, "launcher", launcherBinary,
-		"--homeserver", testHomeserverURL,
-		"--machine-name", machineName,
-		"--server-name", testServerName,
-		"--fleet", fleet.Prefix,
-		"--run-dir", runDir,
-		"--state-dir", stateDir,
-		"--workspace-root", workspaceRoot,
-		"--cache-root", cacheRoot,
-		"--proxy-binary", proxyBinary,
-	)
-	waitForFile(t, launcherSocket)
-
-	statusWatch := watchRoom(t, admin, fleet.MachineRoomID)
-
-	startProcess(t, "daemon", daemonBinary,
-		"--homeserver", testHomeserverURL,
-		"--machine-name", machineName,
-		"--server-name", testServerName,
-		"--run-dir", runDir,
-		"--state-dir", stateDir,
-		"--admin-user", "bureau-admin",
-		"--status-interval", "2s",
-		"--fleet", fleet.Prefix,
-	)
-
-	// Wait for the daemon to come alive.
-	statusWatch.WaitForStateEvent(t,
-		schema.EventTypeMachineStatus, machineName)
-
-	// Resolve config room and push credentials + config.
-	configAlias := machineRef.RoomAlias()
-	configRoomID, err := admin.ResolveAlias(ctx, configAlias)
-	if err != nil {
-		t.Fatalf("config room not created: %v", err)
-	}
-	if _, err := admin.JoinRoom(ctx, configRoomID); err != nil {
-		t.Fatalf("admin join config room: %v", err)
-	}
-
-	// Register the principal, provision credentials, and deploy.
-	account := registerFleetPrincipal(t, fleet, principalLocalpart, "pass-proxy-crash-agent")
-
-	principalEntity, entityErr := ref.NewEntityFromAccountLocalpart(machineRef.Fleet(), principalLocalpart)
-	if entityErr != nil {
-		t.Fatalf("build principal entity: %v", entityErr)
-	}
-
-	_, err = credential.Provision(ctx, admin, credential.ProvisionParams{
-		Machine:       machineRef,
-		Principal:     principalEntity,
-		MachineRoomID: fleet.MachineRoomID,
-		Credentials: map[string]string{
-			"MATRIX_TOKEN":          account.Token,
-			"MATRIX_USER_ID":        account.UserID.String(),
-			"MATRIX_HOMESERVER_URL": testHomeserverURL,
-		},
+	startMachine(t, admin, machine, machineOptions{
+		LauncherBinary: resolvedBinary(t, "LAUNCHER_BINARY"),
+		DaemonBinary:   resolvedBinary(t, "DAEMON_BINARY"),
+		ProxyBinary:    resolvedBinary(t, "PROXY_BINARY"),
+		Fleet:          fleet,
 	})
-	if err != nil {
-		t.Fatalf("provision credentials: %v", err)
-	}
 
-	_, err = admin.SendStateEvent(ctx, configRoomID, schema.EventTypeMachineConfig,
-		machineName, schema.MachineConfig{
-			Principals: []schema.PrincipalAssignment{
-				{
-					Principal: principalEntity,
-					AutoStart: true,
-					MatrixPolicy: &schema.MatrixPolicy{
-						AllowJoin: true,
-					},
-				},
-			},
-		})
-	if err != nil {
-		t.Fatalf("push machine config: %v", err)
-	}
+	// --- Deploy a principal ---
+	account := registerFleetPrincipal(t, fleet, principalLocalpart, "pass-proxy-crash-agent")
+	proxySockets := deployPrincipals(t, admin, machine, deploymentConfig{
+		Principals: []principalSpec{{
+			Account:      account,
+			MatrixPolicy: &schema.MatrixPolicy{AllowJoin: true},
+		}},
+	})
 
-	// Wait for the proxy socket — proves the sandbox was created.
-	proxySocket := principalSocketPath(t, machineRef, runDir, principalLocalpart)
-	waitForFile(t, proxySocket)
+	proxySocket := proxySockets[principalLocalpart]
 	t.Log("principal deployed, proxy socket exists")
 
 	// Verify the proxy works before the crash.
@@ -179,13 +61,13 @@ func TestProxyCrashRecovery(t *testing.T) {
 	t.Log("proxy serving correctly")
 
 	// --- Phase 3: Get the proxy PID via launcher IPC ---
-	proxyPID := launcherListProxyPID(t, launcherSocket, principalLocalpart)
+	proxyPID := launcherListProxyPID(t, machine.LauncherSocket, principalLocalpart)
 	t.Logf("proxy PID = %d", proxyPID)
 
 	// --- Phase 4: Kill the proxy with SIGKILL ---
 	// Set up a room watch BEFORE the kill so we only see messages that
 	// arrive after the crash event.
-	watch := watchRoom(t, admin, configRoomID)
+	watch := watchRoom(t, admin, machine.ConfigRoomID)
 
 	t.Log("killing proxy with SIGKILL")
 	if err := syscall.Kill(proxyPID, syscall.SIGKILL); err != nil {
@@ -198,7 +80,7 @@ func TestProxyCrashRecovery(t *testing.T) {
 	// "recovered". This is the definitive signal that the full cycle
 	// (detection → cleanup → re-creation) completed.
 	waitForNotification[schema.ProxyCrashMessage](
-		t, &watch, schema.MsgTypeProxyCrash, machineUserID,
+		t, &watch, schema.MsgTypeProxyCrash, machine.UserID,
 		func(m schema.ProxyCrashMessage) bool {
 			return m.Principal == principalLocalpart && m.Status == "recovered"
 		}, "proxy crash recovery for "+principalLocalpart)

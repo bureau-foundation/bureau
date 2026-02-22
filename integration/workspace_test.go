@@ -103,26 +103,15 @@ func TestWorkspaceStartConditionLifecycle(t *testing.T) {
 	// The daemon reads this from the config room via /sync and reconciles.
 	// Setup starts immediately, agent and teardown are deferred by their
 	// StartConditions.
-	buildEntity := func(localpart string) ref.Entity {
-		entity, entityErr := ref.NewEntityFromAccountLocalpart(machine.Ref.Fleet(), localpart)
-		if entityErr != nil {
-			t.Fatalf("build principal entity for %s: %v", localpart, entityErr)
-		}
-		return entity
-	}
-	machineConfig := schema.MachineConfig{
-		Principals: []schema.PrincipalAssignment{
+	pushMachineConfig(t, admin, machine, deploymentConfig{
+		Principals: []principalSpec{
 			{
-				Principal: buildEntity(setupAccount.Localpart),
-				Template:  "",
-				AutoStart: true,
-				Labels:    map[string]string{"role": "setup"},
+				Account: setupAccount,
+				Labels:  map[string]string{"role": "setup"},
 			},
 			{
-				Principal: buildEntity(agentAccount.Localpart),
-				Template:  "",
-				AutoStart: true,
-				Labels:    map[string]string{"role": "agent"},
+				Account: agentAccount,
+				Labels:  map[string]string{"role": "agent"},
 				StartCondition: &schema.StartCondition{
 					EventType:    schema.EventTypeWorkspace,
 					StateKey:     "",
@@ -131,10 +120,8 @@ func TestWorkspaceStartConditionLifecycle(t *testing.T) {
 				},
 			},
 			{
-				Principal: buildEntity(teardownAccount.Localpart),
-				Template:  "",
-				AutoStart: true,
-				Labels:    map[string]string{"role": "teardown"},
+				Account: teardownAccount,
+				Labels:  map[string]string{"role": "teardown"},
 				StartCondition: &schema.StartCondition{
 					EventType:    schema.EventTypeWorkspace,
 					StateKey:     "",
@@ -143,12 +130,7 @@ func TestWorkspaceStartConditionLifecycle(t *testing.T) {
 				},
 			},
 		},
-	}
-	_, err = admin.SendStateEvent(ctx, machine.ConfigRoomID,
-		schema.EventTypeMachineConfig, machine.Name, machineConfig)
-	if err != nil {
-		t.Fatalf("push machine config: %v", err)
-	}
+	})
 
 	setupSocket := machine.PrincipalSocketPath(t, setupAccount.Localpart)
 	agentSocket := machine.PrincipalSocketPath(t, agentAccount.Localpart)
@@ -222,19 +204,19 @@ func TestWorkspaceStartConditionLifecycle(t *testing.T) {
 }
 
 // TestWorkspaceCLILifecycle exercises the full workspace lifecycle through
-// the CLI commands: "bureau workspace create" and "bureau workspace destroy".
-// Unlike TestWorkspaceStartConditionLifecycle (which uses proxy-only
-// principals and admin-published state changes), this test proves the
-// end-to-end path that a Bureau developer uses:
+// the production workspace.Create and workspace.Destroy APIs. Unlike
+// TestWorkspaceStartConditionLifecycle (which uses proxy-only principals
+// and admin-published state changes), this test proves the end-to-end
+// path that the workspace commands implement:
 //
-//   - "bureau workspace create" creates the workspace room, publishes config,
+//   - workspace.Create creates the workspace room, publishes config,
 //     and assigns setup/agent/teardown principals on the machine
 //   - The daemon's pipeline executor overlay wires the setup principal's
 //     sandbox (base template + pipeline_ref → executor binary overlay)
 //   - Setup pipeline (dev-workspace-init) clones a git repo and publishes
 //     workspace status "active"
 //   - Agent principal starts when workspace becomes active (StartCondition)
-//   - "bureau workspace destroy" transitions the workspace to "teardown"
+//   - workspace.Destroy transitions the workspace to "teardown"
 //   - Agent stops (condition "active" no longer matches)
 //   - Teardown pipeline (dev-workspace-deinit) archives the workspace and
 //     publishes status "archived"
@@ -278,10 +260,7 @@ func TestWorkspaceCLILifecycle(t *testing.T) {
 	// accounts still need pipeline room membership for workspace
 	// setup/teardown pipelines (the pipeline executor authenticates
 	// as the principal via the proxy).
-	pipelineRoomID, err := admin.ResolveAlias(ctx, testNamespace.PipelineRoomAlias())
-	if err != nil {
-		t.Fatalf("resolve pipeline room: %v", err)
-	}
+	pipelineRoomID := resolvePipelineRoom(t, admin)
 
 	// --- Publish agent template ---
 	// The agent principal needs a sandbox command that stays alive. The
@@ -356,22 +335,15 @@ func TestWorkspaceCLILifecycle(t *testing.T) {
 		}
 	}
 
-	// --- Phase 1: Create workspace via CLI ---
-	t.Log("phase 1: running 'bureau workspace create'")
-	runBureauOrFail(t, "workspace", "create", "wscli/main",
-		"--machine", machine.Name,
-		"--template", "bureau/template:test-ws-agent",
-		"--param", "repository=/workspace/seed.git",
-		"--credential-file", credentialFile,
-		"--homeserver", testHomeserverURL,
-		"--server-name", testServerName,
-	)
+	// --- Phase 1: Create workspace via API ---
+	t.Log("phase 1: creating workspace")
+	createWorkspace(t, admin, machine.Ref, "wscli/main", "bureau/template:test-ws-agent",
+		map[string]string{"repository": "/workspace/seed.git"})
 
-	// Resolve the workspace room created by the CLI so we can watch its
-	// status transitions.
+	// Resolve the workspace room so we can watch its status transitions.
 	workspaceRoomID, err := admin.ResolveAlias(ctx, ref.MustParseRoomAlias("#wscli/main:"+testServerName))
 	if err != nil {
-		t.Fatalf("resolve workspace room created by CLI: %v", err)
+		t.Fatalf("resolve workspace room: %v", err)
 	}
 
 	// --- Phase 2: Wait for setup pipeline to complete ---
@@ -426,13 +398,9 @@ func TestWorkspaceCLILifecycle(t *testing.T) {
 	}
 	t.Log("agent proxy identity verified: " + agentIdentity)
 
-	// --- Phase 4: Destroy workspace via CLI ---
-	t.Log("phase 4: running 'bureau workspace destroy'")
-	runBureauOrFail(t, "workspace", "destroy", "wscli/main",
-		"--credential-file", credentialFile,
-		"--homeserver", testHomeserverURL,
-		"--server-name", testServerName,
-	)
+	// --- Phase 4: Destroy workspace via API ---
+	t.Log("phase 4: destroying workspace")
+	destroyWorkspace(t, admin, "wscli/main")
 
 	// Agent stops (condition "active" no longer matches "teardown").
 	waitForFileGone(t, agentSocket)
@@ -445,7 +413,7 @@ func TestWorkspaceCLILifecycle(t *testing.T) {
 	// Verify teardown pipeline published a successful result.
 	verifyPipelineResult(t, admin, workspaceRoomID, "dev-workspace-deinit", "success")
 
-	t.Log("full CLI-driven workspace lifecycle verified: create → active → destroy → archived")
+	t.Log("workspace lifecycle verified: create → active → destroy → archived")
 }
 
 // --- Workspace test helpers ---

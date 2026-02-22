@@ -634,10 +634,7 @@ func TestWorkspaceWorktreeLifecycle(t *testing.T) {
 	// Resolve the pipeline room for principal invitations. The machine
 	// itself was invited to all global rooms (template, pipeline, system,
 	// machine, service, fleet) during provisioning (startMachineLauncher).
-	pipelineRoomID, err := admin.ResolveAlias(ctx, testNamespace.PipelineRoomAlias())
-	if err != nil {
-		t.Fatalf("resolve pipeline room: %v", err)
-	}
+	pipelineRoomID := resolvePipelineRoom(t, admin)
 
 	// --- Publish agent template ---
 	agentTemplateRef, err := schema.ParseTemplateRef("bureau/template:test-wt-agent")
@@ -695,16 +692,10 @@ func TestWorkspaceWorktreeLifecycle(t *testing.T) {
 		}
 	}
 
-	// --- Phase 1: Create workspace via CLI ---
-	t.Log("phase 1: creating workspace via CLI")
-	runBureauOrFail(t, "workspace", "create", "wswt/main",
-		"--machine", machine.Name,
-		"--template", "bureau/template:test-wt-agent",
-		"--param", "repository=/workspace/seed.git",
-		"--credential-file", credentialFile,
-		"--homeserver", testHomeserverURL,
-		"--server-name", testServerName,
-	)
+	// --- Phase 1: Create workspace via API ---
+	t.Log("phase 1: creating workspace")
+	createWorkspace(t, admin, machine.Ref, "wswt/main", "bureau/template:test-wt-agent",
+		map[string]string{"repository": "/workspace/seed.git"})
 
 	workspaceRoomID, err := admin.ResolveAlias(ctx, ref.MustParseRoomAlias("#wswt/main:"+testServerName))
 	if err != nil {
@@ -835,12 +826,8 @@ func TestWorkspaceWorktreeLifecycle(t *testing.T) {
 	t.Log("worktree directory removed from disk")
 
 	// --- Phase 8: Destroy workspace ---
-	t.Log("phase 8: destroying workspace via CLI")
-	runBureauOrFail(t, "workspace", "destroy", "wswt/main",
-		"--credential-file", credentialFile,
-		"--homeserver", testHomeserverURL,
-		"--server-name", testServerName,
-	)
+	t.Log("phase 8: destroying workspace")
+	destroyWorkspace(t, admin, "wswt/main")
 
 	waitForFileGone(t, agentSocket)
 	t.Log("agent proxy socket disappeared after workspace entered teardown")

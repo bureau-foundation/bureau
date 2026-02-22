@@ -113,6 +113,8 @@ type principalSpec struct {
 	MatrixPolicy      *schema.MatrixPolicy        // optional per-principal policy
 	ServiceVisibility []string                    // optional: glob patterns for service discovery
 	Authorization     *schema.AuthorizationPolicy // optional: full authorization policy (overrides shorthand fields)
+	Labels            map[string]string           // optional: key-value labels for the principal assignment
+	StartCondition    *schema.StartCondition      // optional: condition that must be true before the principal starts
 }
 
 // deploymentConfig describes what principals to deploy on a machine and
@@ -202,18 +204,12 @@ func startMachineLauncher(t *testing.T, admin *messaging.DirectSession, machine 
 		proxyBinary = resolvedBinary(t, "PROXY_BINARY")
 	}
 
-	// Provision the machine via the production CLI command. This registers
-	// the account, invites to all global rooms, creates the config room,
+	// Provision the machine via the production API. This registers the
+	// account, invites to all global rooms, creates the config room,
 	// and writes a bootstrap config with the one-time password.
 	bootstrapFile := filepath.Join(machine.StateDir, "bootstrap.json")
-	_, bareMachineName, err := ref.ExtractEntityName(machine.Name)
-	if err != nil {
-		t.Fatalf("extract entity name from %q: %v", machine.Name, err)
-	}
-	runBureauOrFail(t, "machine", "provision", options.Fleet.Prefix, bareMachineName,
-		"--credential-file", credentialFile,
-		"--output", bootstrapFile,
-	)
+	client := adminClient(t)
+	provisionMachine(t, client, admin, machine.Ref, bootstrapFile)
 
 	// The daemon publishes MachineStatus to the fleet's machine room.
 	machine.MachineRoomID = options.Fleet.MachineRoomID
@@ -633,6 +629,8 @@ func pushMachineConfig(t *testing.T, admin *messaging.DirectSession, machine *te
 			MatrixPolicy:      spec.MatrixPolicy,
 			ServiceVisibility: spec.ServiceVisibility,
 			Authorization:     spec.Authorization,
+			Labels:            spec.Labels,
+			StartCondition:    spec.StartCondition,
 		}
 	}
 

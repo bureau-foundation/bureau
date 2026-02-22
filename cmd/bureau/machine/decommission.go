@@ -16,9 +16,13 @@ import (
 	"github.com/bureau-foundation/bureau/messaging"
 )
 
-// decommissionParams holds the parameters for the machine decommission command.
-// Credential file paths are excluded from MCP schema since they involve reading
-// secrets from files.
+// DecommissionParams holds the parameters for machine decommission.
+type DecommissionParams struct {
+	// Machine is the typed machine reference within the fleet.
+	Machine ref.Machine
+}
+
+// decommissionParams holds the CLI-specific parameters for the machine decommission command.
 type decommissionParams struct {
 	cli.SessionConfig
 }
@@ -69,92 +73,75 @@ failure explicitly.`,
 				return cli.Validation("--credential-file is required")
 			}
 
-			return runDecommission(args[0], args[1], &params)
+			ctx, cancel := context.WithTimeout(context.Background(), 60*time.Second)
+			defer cancel()
+
+			genericSession, err := params.SessionConfig.Connect(ctx)
+			if err != nil {
+				return cli.Internal("connect: %w", err)
+			}
+			defer genericSession.Close()
+
+			session, ok := genericSession.(*messaging.DirectSession)
+			if !ok {
+				return cli.Internal("decommission requires a direct session (credential file), not a proxy session")
+			}
+
+			server, err := ref.ServerFromUserID(session.UserID().String())
+			if err != nil {
+				return cli.Internal("cannot determine server name from session: %w", err)
+			}
+			fleet, err := ref.ParseFleet(args[0], server)
+			if err != nil {
+				return cli.Validation("%v", err)
+			}
+			machine, err := ref.NewMachine(fleet, args[1])
+			if err != nil {
+				return cli.Validation("invalid machine name: %v", err)
+			}
+
+			return Decommission(ctx, session, DecommissionParams{
+				Machine: machine,
+			})
 		},
 	}
 }
 
-func runDecommission(fleetLocalpart, machineName string, params *decommissionParams) error {
-	ctx, cancel := context.WithTimeout(context.Background(), 60*time.Second)
-	defer cancel()
-
-	credentials, err := cli.ReadCredentialFile(params.SessionConfig.CredentialFile)
-	if err != nil {
-		return cli.Internal("read credential file: %w", err)
-	}
-
-	homeserverURL := credentials["MATRIX_HOMESERVER_URL"]
-	if homeserverURL == "" {
-		return cli.Validation("credential file missing MATRIX_HOMESERVER_URL")
-	}
-	adminUserID := credentials["MATRIX_ADMIN_USER"]
-	adminToken := credentials["MATRIX_ADMIN_TOKEN"]
-	if adminUserID == "" || adminToken == "" {
-		return cli.Validation("credential file missing MATRIX_ADMIN_USER or MATRIX_ADMIN_TOKEN")
-	}
-
-	// Derive server name from admin user ID.
-	server, err := ref.ServerFromUserID(adminUserID)
-	if err != nil {
-		return cli.Internal("cannot determine server name from admin user ID: %w", err)
-	}
-
-	// Parse and validate the fleet localpart.
-	fleet, err := ref.ParseFleet(fleetLocalpart, server)
-	if err != nil {
-		return cli.Validation("%v", err)
-	}
-
-	// Construct the machine ref within the fleet.
-	machine, err := ref.NewMachine(fleet, machineName)
-	if err != nil {
-		return cli.Validation("invalid machine name: %v", err)
-	}
-
+// Decommission removes a machine from the Bureau fleet by clearing its
+// state events, kicking it from all Bureau rooms, and verifying zero
+// remaining memberships. The caller provides a DirectSession (required
+// for KickUser) and a context with an appropriate deadline.
+//
+// After decommission, the machine name can be re-provisioned with Provision.
+func Decommission(ctx context.Context, session *messaging.DirectSession, params DecommissionParams) error {
+	machine := params.Machine
+	fleet := machine.Fleet()
 	machineUsername := machine.Localpart()
 	machineUserID := machine.UserID()
-
-	client, err := messaging.NewClient(messaging.ClientConfig{
-		HomeserverURL: homeserverURL,
-	})
-	if err != nil {
-		return cli.Internal("create matrix client: %w", err)
-	}
-
-	parsedAdminUserID, err := ref.ParseUserID(adminUserID)
-	if err != nil {
-		return cli.Internal("parse admin user ID: %w", err)
-	}
-
-	adminSession, err := client.SessionFromToken(parsedAdminUserID, adminToken)
-	if err != nil {
-		return cli.Internal("create admin session: %w", err)
-	}
-	defer adminSession.Close()
 
 	fmt.Fprintf(os.Stderr, "Decommissioning %s (%s)...\n", machineUsername, machineUserID)
 
 	// Resolve global Bureau rooms (template, pipeline, system) for kick.
 	namespace := fleet.Namespace()
-	globalRooms, failedRooms, resolveErrors := resolveGlobalRooms(ctx, adminSession, namespace)
+	globalRooms, failedRooms, resolveErrors := resolveGlobalRooms(ctx, session, namespace)
 	for index, room := range failedRooms {
 		fmt.Fprintf(os.Stderr, "  Warning: could not resolve %s: %v\n", room.displayName, resolveErrors[index])
 	}
 
 	// Resolve the fleet-scoped rooms for state event cleanup and kicking.
-	machineRoomID, serviceRoomID, fleetRoomID, err := resolveFleetRooms(ctx, adminSession, fleet)
+	machineRoomID, serviceRoomID, fleetRoomID, err := resolveFleetRooms(ctx, session, fleet)
 	if err != nil {
 		return cli.NotFound("fleet rooms could not be resolved — cannot clear machine state: %w", err)
 	}
 
-	_, err = adminSession.SendStateEvent(ctx, machineRoomID, schema.EventTypeMachineKey, machineUsername, map[string]any{})
+	_, err = session.SendStateEvent(ctx, machineRoomID, schema.EventTypeMachineKey, machineUsername, map[string]any{})
 	if err != nil {
 		fmt.Fprintf(os.Stderr, "  Warning: could not clear machine_key: %v\n", err)
 	} else {
 		fmt.Fprintf(os.Stderr, "  Cleared machine_key\n")
 	}
 
-	_, err = adminSession.SendStateEvent(ctx, machineRoomID, schema.EventTypeMachineStatus, machineUsername, map[string]any{})
+	_, err = session.SendStateEvent(ctx, machineRoomID, schema.EventTypeMachineStatus, machineUsername, map[string]any{})
 	if err != nil {
 		fmt.Fprintf(os.Stderr, "  Warning: could not clear machine_status: %v\n", err)
 	} else {
@@ -163,7 +150,7 @@ func runDecommission(fleetLocalpart, machineName string, params *decommissionPar
 
 	// Clean up the per-machine config room: clear state events and kick.
 	configAlias := machine.RoomAlias()
-	configRoomID, err := adminSession.ResolveAlias(ctx, configAlias)
+	configRoomID, err := session.ResolveAlias(ctx, configAlias)
 	if err != nil {
 		if messaging.IsMatrixError(err, messaging.ErrCodeNotFound) {
 			fmt.Fprintf(os.Stderr, "  Config room %s does not exist (skipping)\n", configAlias)
@@ -172,7 +159,7 @@ func runDecommission(fleetLocalpart, machineName string, params *decommissionPar
 		}
 	} else {
 		// Clear machine_config.
-		_, err = adminSession.SendStateEvent(ctx, configRoomID, schema.EventTypeMachineConfig, machineUsername, map[string]any{})
+		_, err = session.SendStateEvent(ctx, configRoomID, schema.EventTypeMachineConfig, machineUsername, map[string]any{})
 		if err != nil {
 			fmt.Fprintf(os.Stderr, "  Warning: could not clear machine_config: %v\n", err)
 		} else {
@@ -180,11 +167,11 @@ func runDecommission(fleetLocalpart, machineName string, params *decommissionPar
 		}
 
 		// Find and clear all credentials state events in the config room.
-		if _, err := clearConfigRoomCredentials(ctx, adminSession, configRoomID); err != nil {
+		if _, err := clearConfigRoomCredentials(ctx, session, configRoomID); err != nil {
 			fmt.Fprintf(os.Stderr, "  Warning: %v\n", err)
 		}
 
-		err = adminSession.KickUser(ctx, configRoomID, machineUserID, "machine decommissioned")
+		err = session.KickUser(ctx, configRoomID, machineUserID, "machine decommissioned")
 		if err != nil {
 			fmt.Fprintf(os.Stderr, "  Warning: could not kick from config room: %v\n", err)
 		} else {
@@ -193,7 +180,7 @@ func runDecommission(fleetLocalpart, machineName string, params *decommissionPar
 	}
 
 	for _, room := range globalRooms {
-		err = adminSession.KickUser(ctx, room.roomID, machineUserID, "machine decommissioned")
+		err = session.KickUser(ctx, room.roomID, machineUserID, "machine decommissioned")
 		if err != nil {
 			fmt.Fprintf(os.Stderr, "  Warning: could not kick from %s: %v\n", room.alias, err)
 		} else {
@@ -208,7 +195,7 @@ func runDecommission(fleetLocalpart, machineName string, params *decommissionPar
 		{machineRoom: machineRoom{displayName: "fleet config room"}, roomID: fleetRoomID},
 	}
 	for _, room := range fleetRooms {
-		err = adminSession.KickUser(ctx, room.roomID, machineUserID, "machine decommissioned")
+		err = session.KickUser(ctx, room.roomID, machineUserID, "machine decommissioned")
 		if err != nil {
 			fmt.Fprintf(os.Stderr, "  Warning: could not kick from %s: %v\n", room.displayName, err)
 		} else {
@@ -223,7 +210,7 @@ func runDecommission(fleetLocalpart, machineName string, params *decommissionPar
 	allRooms := make([]resolvedRoom, 0, len(globalRooms)+len(fleetRooms))
 	allRooms = append(allRooms, globalRooms...)
 	allRooms = append(allRooms, fleetRooms...)
-	activeRooms := checkMachineMembership(ctx, adminSession, machineUserID, allRooms)
+	activeRooms := checkMachineMembership(ctx, session, machineUserID, allRooms)
 
 	// Also check the config room if it exists.
 	if !configRoomID.IsZero() {
@@ -232,7 +219,7 @@ func runDecommission(fleetLocalpart, machineName string, params *decommissionPar
 			alias:       configAlias,
 			roomID:      configRoomID,
 		}
-		configActive := checkMachineMembership(ctx, adminSession, machineUserID, []resolvedRoom{configResolved})
+		configActive := checkMachineMembership(ctx, session, machineUserID, []resolvedRoom{configResolved})
 		activeRooms = append(activeRooms, configActive...)
 	}
 

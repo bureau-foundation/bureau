@@ -36,8 +36,32 @@ type createParams struct {
 	AgentCount int      `json:"agent_count" flag:"agent-count" desc:"number of agent principals to create" default:"1"`
 }
 
-// createResult is the JSON output for workspace create.
-type createResult struct {
+// CreateParams holds the parameters for workspace creation. Callers that
+// use the programmatic API pass these directly; CLI callers build them
+// from flags and positional arguments.
+type CreateParams struct {
+	// Alias is the workspace alias (e.g., "iree/amdgpu/inference").
+	// Must have at least two segments: project/worktree-path.
+	Alias string
+
+	// Machine is the typed machine reference within the fleet. The
+	// server name is derived from this ref. Must be the resolved
+	// machine, not "local" (the CLI wrapper handles that resolution).
+	Machine ref.Machine
+
+	// Template is the sandbox template ref for agent principals
+	// (e.g., "bureau/template:base").
+	Template string
+
+	// Params holds key-value parameters like "repository" and "branch".
+	Params map[string]string
+
+	// AgentCount is the number of agent principals to create.
+	AgentCount int
+}
+
+// CreateResult holds the result of workspace creation.
+type CreateResult struct {
 	Alias      string     `json:"alias"                desc:"workspace alias"`
 	RoomAlias  string     `json:"room_alias"           desc:"full Matrix room alias"`
 	RoomID     ref.RoomID `json:"room_id"              desc:"Matrix room ID"`
@@ -96,7 +120,7 @@ All worktrees in a project share a single bare git object store at
 			},
 		},
 		Params:         func() any { return &params },
-		Output:         func() any { return &createResult{} },
+		Output:         func() any { return &CreateResult{} },
 		RequiredGrants: []string{"command/workspace/create"},
 		Annotations:    cli.Create(),
 		Run: func(args []string) error {
@@ -125,37 +149,27 @@ All worktrees in a project share a single bare git object store at
 	}
 }
 
-func runCreate(alias string, session *cli.SessionConfig, machine, templateRef string, rawParams []string, serverNameString string, agentCount int, jsonOutput *cli.JSONOutput) error {
+// runCreate is the CLI wrapper: resolves "local" machine, parses raw
+// params, connects a session, calls Create, and formats the output.
+func runCreate(alias string, sessionConfig *cli.SessionConfig, machineName, templateRef string, rawParams []string, serverNameString string, agentCount int, jsonOutput *cli.JSONOutput) error {
 	serverName, err := ref.ParseServerName(serverNameString)
 	if err != nil {
 		return fmt.Errorf("invalid --server-name: %w", err)
 	}
 
-	// Validate the workspace alias.
-	if err := principal.ValidateLocalpart(alias); err != nil {
-		return cli.Validation("invalid workspace alias: %w", err)
-	}
-
-	// The alias must have at least two segments: project/worktree.
-	project, worktreePath, hasWorktree := strings.Cut(alias, "/")
-	if !hasWorktree {
-		return cli.Validation("workspace alias must have at least two segments (project/path), got %q", alias)
-	}
-
 	// Resolve "local" to the actual machine localpart from the launcher's
-	// session file. This lets operators skip looking up the full machine name
-	// when running on the target machine itself.
-	if machine == "local" {
+	// session file.
+	if machineName == "local" {
 		resolved, err := cli.ResolveLocalMachine()
 		if err != nil {
 			return cli.NotFound("resolving local machine identity: %w", err)
 		}
-		machine = resolved
-		fmt.Fprintf(os.Stderr, "Resolved --machine=local to %s\n", machine)
+		machineName = resolved
+		fmt.Fprintf(os.Stderr, "Resolved --machine=local to %s\n", machineName)
 	}
 
-	// Parse and validate the machine localpart as a typed ref.
-	machineRef, err := ref.ParseMachine(machine, serverName)
+	// Parse the machine localpart into a typed ref.
+	machineRef, err := ref.ParseMachine(machineName, serverName)
 	if err != nil {
 		return cli.Validation("invalid machine name: %v", err)
 	}
@@ -164,6 +178,81 @@ func runCreate(alias string, session *cli.SessionConfig, machine, templateRef st
 	paramMap, err := parseParams(rawParams)
 	if err != nil {
 		return err
+	}
+
+	ctx, cancel := context.WithTimeout(context.Background(), 60*time.Second)
+	defer cancel()
+
+	session, err := sessionConfig.Connect(ctx)
+	if err != nil {
+		return cli.Internal("connect: %w", err)
+	}
+	defer session.Close()
+
+	result, err := Create(ctx, session, CreateParams{
+		Alias:      alias,
+		Machine:    machineRef,
+		Template:   templateRef,
+		Params:     paramMap,
+		AgentCount: agentCount,
+	})
+	if err != nil {
+		return err
+	}
+
+	if done, emitError := jsonOutput.EmitJSON(result); done {
+		return emitError
+	}
+
+	fmt.Fprintf(os.Stderr, "Workspace created:\n")
+	fmt.Fprintf(os.Stderr, "  Room:     %s (%s)\n", result.RoomAlias, result.RoomID)
+	fmt.Fprintf(os.Stderr, "  Project:  %s\n", result.Project)
+	if result.Repository != "" {
+		fmt.Fprintf(os.Stderr, "  Repo:     %s (branch: %s)\n", result.Repository, result.Branch)
+	}
+	fmt.Fprintf(os.Stderr, "  Machine:  %s\n", result.Machine)
+	fmt.Fprintf(os.Stderr, "  Principals:\n")
+	for _, name := range result.Principals {
+		fmt.Fprintf(os.Stderr, "    %s\n", name)
+	}
+	fmt.Fprintf(os.Stderr, "\nNext steps:\n")
+	fmt.Fprintf(os.Stderr, "  1. Provision credentials: bureau-credentials provision --principal <localpart> --machine %s ...\n", machineName)
+	fmt.Fprintf(os.Stderr, "  2. Observe setup: bureau observe %s/setup\n", alias)
+
+	return nil
+}
+
+// Create creates a new workspace by setting up the Matrix room, publishing
+// state events, and configuring principals on the target machine. The daemon
+// picks up the configuration via /sync and spawns a setup principal to
+// clone the repo, create worktrees, and prepare the workspace. Agent
+// principals start only after the setup principal publishes
+// m.bureau.workspace with status "active".
+//
+// The caller provides a connected session and a context with an appropriate
+// deadline. This function does not create its own session, which allows
+// callers (integration tests, MCP tools, batched commands) to reuse an
+// existing session and avoid competing for /sync responses.
+func Create(ctx context.Context, session messaging.Session, params CreateParams) (*CreateResult, error) {
+	// Validate the workspace alias.
+	if err := principal.ValidateLocalpart(params.Alias); err != nil {
+		return nil, cli.Validation("invalid workspace alias: %w", err)
+	}
+
+	// The alias must have at least two segments: project/worktree.
+	project, worktreePath, hasWorktree := strings.Cut(params.Alias, "/")
+	if !hasWorktree {
+		return nil, cli.Validation("workspace alias must have at least two segments (project/path), got %q", params.Alias)
+	}
+
+	machineRef := params.Machine
+	serverName := machineRef.Server()
+
+	// Copy the params map so we don't mutate the caller's map, and
+	// resolve the branch parameter.
+	paramMap := make(map[string]string)
+	for key, value := range params.Params {
+		paramMap[key] = value
 	}
 	repository := paramMap["repository"]
 	branch := paramMap["branch"]
@@ -174,32 +263,23 @@ func runCreate(alias string, session *cli.SessionConfig, machine, templateRef st
 	// (setup principal's payload reads it from here).
 	paramMap["branch"] = branch
 
-	ctx, cancel := context.WithTimeout(context.Background(), 60*time.Second)
-	defer cancel()
-
-	sess, err := session.Connect(ctx)
-	if err != nil {
-		return cli.Internal("connect: %w", err)
-	}
-	defer sess.Close()
-
-	adminUserID := sess.UserID()
+	adminUserID := session.UserID()
 	machineUserID := machineRef.UserID()
 
 	// Resolve the Bureau space. The workspace room will be added as a child.
 	spaceAlias, err := ref.ParseRoomAlias(schema.FullRoomAlias("bureau", serverName))
 	if err != nil {
-		return cli.Validation("invalid space alias: %w", err)
+		return nil, cli.Validation("invalid space alias: %w", err)
 	}
-	spaceRoomID, err := sess.ResolveAlias(ctx, spaceAlias)
+	spaceRoomID, err := session.ResolveAlias(ctx, spaceAlias)
 	if err != nil {
-		return cli.NotFound("resolve Bureau space %s: %w (has 'bureau matrix setup' been run?)", spaceAlias, err)
+		return nil, cli.NotFound("resolve Bureau space %s: %w (has 'bureau matrix setup' been run?)", spaceAlias, err)
 	}
 
 	// Ensure the workspace room exists (idempotent).
-	workspaceRoomID, err := ensureWorkspaceRoom(ctx, sess, alias, serverName, adminUserID, machineUserID, spaceRoomID)
+	workspaceRoomID, err := ensureWorkspaceRoom(ctx, session, params.Alias, serverName, adminUserID, machineUserID, spaceRoomID)
 	if err != nil {
-		return cli.Internal("ensuring workspace room: %w", err)
+		return nil, cli.Internal("ensuring workspace room: %w", err)
 	}
 
 	// Publish the ProjectConfig state event.
@@ -217,23 +297,23 @@ func runCreate(alias string, session *cli.SessionConfig, machine, templateRef st
 			worktreePath: {},
 		}
 	}
-	_, err = sess.SendStateEvent(ctx, workspaceRoomID, schema.EventTypeProject, project, projectConfig)
+	_, err = session.SendStateEvent(ctx, workspaceRoomID, schema.EventTypeProject, project, projectConfig)
 	if err != nil {
-		return cli.Internal("publishing project config: %w", err)
+		return nil, cli.Internal("publishing project config: %w", err)
 	}
 
 	// Publish the initial workspace lifecycle event. The setup principal
-	// updates this to "active" when setup completes, and "bureau workspace
-	// destroy" updates it to "teardown" to trigger agent shutdown and
-	// teardown principal launch.
-	_, err = sess.SendStateEvent(ctx, workspaceRoomID, schema.EventTypeWorkspace, "", workspace.WorkspaceState{
+	// updates this to "active" when setup completes, and Destroy updates
+	// it to "teardown" to trigger agent shutdown and teardown principal
+	// launch.
+	_, err = session.SendStateEvent(ctx, workspaceRoomID, schema.EventTypeWorkspace, "", workspace.WorkspaceState{
 		Status:    "pending",
 		Project:   project,
-		Machine:   machine,
+		Machine:   machineRef.Localpart(),
 		UpdatedAt: time.Now().UTC().Format(time.RFC3339),
 	})
 	if err != nil {
-		return cli.Internal("publishing workspace state: %w", err)
+		return nil, cli.Internal("publishing workspace state: %w", err)
 	}
 
 	// Enable pipeline ticket management in the workspace room. Workspace
@@ -241,13 +321,13 @@ func runCreate(alias string, session *cli.SessionConfig, machine, templateRef st
 	// progress. The ticket config must be in the room before the daemon
 	// creates pip- tickets, and before the ticket service joins — the
 	// ticket service only tracks rooms that have ticket config.
-	_, err = sess.SendStateEvent(ctx, workspaceRoomID, schema.EventTypeTicketConfig, "", ticket.TicketConfigContent{
+	_, err = session.SendStateEvent(ctx, workspaceRoomID, schema.EventTypeTicketConfig, "", ticket.TicketConfigContent{
 		Version:      ticket.TicketConfigVersion,
 		Prefix:       "pip",
 		AllowedTypes: []string{"pipeline"},
 	})
 	if err != nil {
-		return cli.Internal("publishing ticket config: %w", err)
+		return nil, cli.Internal("publishing ticket config: %w", err)
 	}
 
 	// Ensure the ticket service is in the workspace room before
@@ -256,83 +336,57 @@ func runCreate(alias string, session *cli.SessionConfig, machine, templateRef st
 	// ticket creation fails and enters backoff. EnsureServiceInRoom
 	// invites the service and blocks (via /sync long-poll) until it
 	// joins, eliminating the race.
-	ticketService, found, queryErr := service.QueryFirst(ctx, sess, machineRef.Fleet(),
+	ticketService, found, queryErr := service.QueryFirst(ctx, session, machineRef.Fleet(),
 		service.And(service.OnMachine(machineRef), service.HasCapability("dependency-graph")))
 	if queryErr != nil {
 		fmt.Fprintf(os.Stderr, "  Warning: failed to query service directory: %v\n", queryErr)
 	} else if found {
-		if ensureErr := service.EnsureServiceInRoom(ctx, sess, workspaceRoomID, ticketService.Principal.UserID()); ensureErr != nil {
+		if ensureErr := service.EnsureServiceInRoom(ctx, session, workspaceRoomID, ticketService.Principal.UserID()); ensureErr != nil {
 			fmt.Fprintf(os.Stderr, "  Warning: ticket service failed to join workspace room: %v\n", ensureErr)
 		}
 	} else {
-		fmt.Fprintf(os.Stderr, "  Warning: no ticket service found for machine %s — pipeline execution will fail until one is deployed\n", machine)
+		fmt.Fprintf(os.Stderr, "  Warning: no ticket service found for machine %s — pipeline execution will fail until one is deployed\n", machineRef.Localpart())
 	}
 
 	// Build principal assignments (setup + agents + teardown).
-	assignments, err := buildPrincipalAssignments(alias, templateRef, agentCount, serverName, machineRef, workspaceRoomID, paramMap)
+	assignments, err := buildPrincipalAssignments(params.Alias, params.Template, params.AgentCount, serverName, machineRef, workspaceRoomID, paramMap)
 	if err != nil {
-		return cli.Internal("building principal assignments: %w", err)
+		return nil, cli.Internal("building principal assignments: %w", err)
 	}
 
 	// Update the machine's MachineConfig with the new principals.
-	err = updateMachineConfig(ctx, sess, machineRef, assignments)
+	err = updateMachineConfig(ctx, session, machineRef, assignments)
 	if err != nil {
-		return cli.Internal("updating machine config: %w", err)
+		return nil, cli.Internal("updating machine config: %w", err)
 	}
 
 	// Invite the machine daemon to the workspace room so it can read
 	// workspace state events (needed for StartCondition evaluation).
-	err = sess.InviteUser(ctx, workspaceRoomID, machineUserID)
+	err = session.InviteUser(ctx, workspaceRoomID, machineUserID)
 	if err != nil {
 		// M_FORBIDDEN is fine — the machine may already be a member.
 		if !messaging.IsMatrixError(err, "M_FORBIDDEN") {
-			return cli.Internal("inviting machine %s to workspace room: %w", machineUserID, err)
+			return nil, cli.Internal("inviting machine %s to workspace room: %w", machineUserID, err)
 		}
 	}
 
-	fullAlias := schema.FullRoomAlias(alias, serverName)
+	fullAlias := schema.FullRoomAlias(params.Alias, serverName)
 
 	var principalNames []string
 	for _, assignment := range assignments {
 		principalNames = append(principalNames, assignment.Principal.Localpart())
 	}
-	if done, err := jsonOutput.EmitJSON(createResult{
-		Alias:      alias,
+
+	return &CreateResult{
+		Alias:      params.Alias,
 		RoomAlias:  fullAlias,
 		RoomID:     workspaceRoomID,
 		Project:    project,
 		Repository: repository,
 		Branch:     branch,
-		Machine:    machine,
+		Machine:    machineRef.Localpart(),
 		Principals: principalNames,
-	}); done {
-		return err
-	}
-
-	fmt.Fprintf(os.Stderr, "Workspace created:\n")
-	fmt.Fprintf(os.Stderr, "  Room:     %s (%s)\n", fullAlias, workspaceRoomID)
-	fmt.Fprintf(os.Stderr, "  Project:  %s\n", project)
-	if repository != "" {
-		fmt.Fprintf(os.Stderr, "  Repo:     %s (branch: %s)\n", repository, branch)
-	}
-	fmt.Fprintf(os.Stderr, "  Machine:  %s\n", machine)
-	fmt.Fprintf(os.Stderr, "  Principals:\n")
-	for _, assignment := range assignments {
-		suffix := ""
-		if assignment.StartCondition != nil {
-			if status, ok := assignment.StartCondition.ContentMatch["status"]; ok {
-				suffix = fmt.Sprintf(" (waits for workspace %s)", status.StringValue())
-			} else {
-				suffix = " (conditional)"
-			}
-		}
-		fmt.Fprintf(os.Stderr, "    %s (template=%s)%s\n", assignment.Principal.Localpart(), assignment.Template, suffix)
-	}
-	fmt.Fprintf(os.Stderr, "\nNext steps:\n")
-	fmt.Fprintf(os.Stderr, "  1. Provision credentials: bureau-credentials provision --principal <localpart> --machine %s ...\n", machine)
-	fmt.Fprintf(os.Stderr, "  2. Observe setup: bureau observe %s/setup\n", alias)
-
-	return nil
+	}, nil
 }
 
 // ensureWorkspaceRoom creates the workspace room if it doesn't already exist.

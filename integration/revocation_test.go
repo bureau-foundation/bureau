@@ -239,10 +239,7 @@ func TestMachineRevocation_CLIRevoke(t *testing.T) {
 	// all credentials, causing the daemon to reconcile and remove
 	// principals.
 	const revokeReason = "integration test: emergency revocation"
-	runBureauOrFail(t, "machine", "revoke", fleet.Prefix, "revoke-cli",
-		"--credential-file", credentialFile,
-		"--reason", revokeReason,
-	)
+	revokeMachine(t, admin, machine.Ref, revokeReason)
 	t.Log("bureau machine revoke completed")
 
 	// Wait for both proxy sockets to disappear. On homeservers with

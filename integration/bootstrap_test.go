@@ -56,22 +56,21 @@ func TestBootstrapScript(t *testing.T) {
 	bootstrapFleet := createTestFleet(t, admin)
 
 	// --- Provision the machine account on Matrix ---
+	machineRef, err := ref.NewMachine(bootstrapFleet.Ref, "bootstrap-script")
+	if err != nil {
+		t.Fatalf("create machine ref: %v", err)
+	}
+	machineName := machineRef.Localpart()
+
 	bootstrapPath := filepath.Join(t.TempDir(), "bootstrap.json")
-	runBureauOrFail(t, "machine", "provision", bootstrapFleet.Prefix, "bootstrap-script",
-		"--credential-file", credentialFile,
-		"--output", bootstrapPath,
-	)
+	bootstrapClient := adminClient(t)
+	provisionMachine(t, bootstrapClient, admin, machineRef, bootstrapPath)
 
 	bootstrapConfig, err := bootstrap.ReadConfig(bootstrapPath)
 	if err != nil {
 		t.Fatalf("read bootstrap config: %v", err)
 	}
 	t.Logf("machine provisioned: %s (password length %d)", bootstrapConfig.MachineName, len(bootstrapConfig.Password))
-	machineName := bootstrapConfig.MachineName
-	machineRef, err := ref.ParseMachine(machineName, testServer)
-	if err != nil {
-		t.Fatalf("parse machine ref: %v", err)
-	}
 
 	// --- Build the Docker image ---
 	dockerfilePath := filepath.Join(workspaceRoot, "deploy", "test", "Dockerfile.machine")
@@ -234,44 +233,28 @@ func TestBootstrapScript(t *testing.T) {
 
 		// Register and deploy a minimal principal (no template, just proxy).
 		principalAccount := registerFleetPrincipal(t, bootstrapFleet, "agent/bootstrap-test", "test-password")
-		pushCredentials(t, admin, &testMachine{
+		containerMachine := &testMachine{
 			Ref:           machineRef,
 			Name:          machineName,
 			PublicKey:     machineKey.PublicKey,
 			ConfigRoomID:  configRoomID,
 			MachineRoomID: bootstrapFleet.MachineRoomID,
-		}, principalAccount)
-
-		// Push machine config to trigger sandbox creation.
-		principalEntity, entityErr := ref.NewEntityFromAccountLocalpart(
-			bootstrapFleet.Ref, principalAccount.Localpart)
-		if entityErr != nil {
-			t.Fatalf("construct principal entity ref: %v", entityErr)
 		}
-		_, err = admin.SendStateEvent(t.Context(), configRoomID,
-			schema.EventTypeMachineConfig, machineName, schema.MachineConfig{
-				Principals: []schema.PrincipalAssignment{{
-					Principal: principalEntity,
-					AutoStart: true,
-				}},
-			})
-		if err != nil {
-			t.Fatalf("push machine config: %v", err)
-		}
+		pushCredentials(t, admin, containerMachine, principalAccount)
+		pushMachineConfig(t, admin, containerMachine, deploymentConfig{
+			Principals: []principalSpec{{Account: principalAccount}},
+		})
 
 		// Wait for the proxy socket inside the container. The socket
-		// path is fleet-scoped: /run/bureau/fleet/<name>/<type>/<entity>.sock
-		fleetRunDir := bootstrapFleet.Ref.RunDir("/run/bureau")
-		proxySocketPath := principalEntity.SocketPath(fleetRunDir)
+		// path matches the container's /run/bureau layout.
+		proxySocketPath := principalSocketPath(t, machineRef, "/run/bureau", principalAccount.Localpart)
 		waitForFileInContainer(t, containerID, proxySocketPath, 30*time.Second)
 		t.Log("proxy socket appeared — sandbox created inside Docker container")
 	})
 
 	// --- Cleanup ---
 	// Decommission the machine from Matrix.
-	runBureauOrFail(t, "machine", "decommission", bootstrapFleet.Prefix, "bootstrap-script",
-		"--credential-file", credentialFile,
-	)
+	decommissionMachine(t, admin, machineRef)
 	t.Log("bootstrap script test complete")
 }
 

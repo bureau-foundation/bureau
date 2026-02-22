@@ -63,21 +63,13 @@ func TestPipelineExecution(t *testing.T) {
 		ticketSvc.Entity, machine.UserID.String())
 
 	// --- Publish pipeline definition ---
-	pipelineRoomID, err := admin.ResolveAlias(ctx, testNamespace.PipelineRoomAlias())
-	if err != nil {
-		t.Fatalf("resolve pipeline room: %v", err)
-	}
-
-	if _, err := admin.SendStateEvent(ctx, pipelineRoomID, schema.EventTypePipeline, "test-greet",
-		pipeline.PipelineContent{
-			Description: "Integration test pipeline",
-			Steps: []pipeline.PipelineStep{
-				{Name: "greet", Run: "echo hello"},
-				{Name: "farewell", Run: "echo goodbye"},
-			},
-		}); err != nil {
-		t.Fatalf("publish pipeline definition: %v", err)
-	}
+	publishPipelineDefinition(t, admin, "test-greet", pipeline.PipelineContent{
+		Description: "Integration test pipeline",
+		Steps: []pipeline.PipelineStep{
+			{Name: "greet", Run: "echo hello"},
+			{Name: "farewell", Run: "echo goodbye"},
+		},
+	})
 
 	// --- Execute pipeline ---
 	requestID := "test-pipeline-" + t.Name()
@@ -207,21 +199,13 @@ func TestPipelineExecutionFailure(t *testing.T) {
 		ticketSvc.Entity, machine.UserID.String())
 
 	// --- Publish failing pipeline definition ---
-	pipelineRoomID, err := admin.ResolveAlias(ctx, testNamespace.PipelineRoomAlias())
-	if err != nil {
-		t.Fatalf("resolve pipeline room: %v", err)
-	}
-
-	if _, err := admin.SendStateEvent(ctx, pipelineRoomID, schema.EventTypePipeline, "test-fail",
-		pipeline.PipelineContent{
-			Description: "Failing pipeline",
-			Steps: []pipeline.PipelineStep{
-				{Name: "setup", Run: "echo starting"},
-				{Name: "fail-step", Run: "exit 1"},
-			},
-		}); err != nil {
-		t.Fatalf("publish failing pipeline definition: %v", err)
-	}
+	publishPipelineDefinition(t, admin, "test-fail", pipeline.PipelineContent{
+		Description: "Failing pipeline",
+		Steps: []pipeline.PipelineStep{
+			{Name: "setup", Run: "echo starting"},
+			{Name: "fail-step", Run: "exit 1"},
+		},
+	})
 
 	// --- Execute pipeline ---
 	requestID := "test-pipeline-fail-" + t.Name()
@@ -331,35 +315,27 @@ func TestPipelineParameterPropagation(t *testing.T) {
 		ticketSvc.Entity, machine.UserID.String())
 
 	// --- Publish pipeline definition with variable declaration ---
-	pipelineRoomID, err := admin.ResolveAlias(ctx, testNamespace.PipelineRoomAlias())
-	if err != nil {
-		t.Fatalf("resolve pipeline room: %v", err)
-	}
-
-	if _, err := admin.SendStateEvent(ctx, pipelineRoomID, schema.EventTypePipeline, "test-params",
-		pipeline.PipelineContent{
-			Description: "Parameter propagation test",
-			Variables: map[string]pipeline.PipelineVariable{
-				"PROJECT": {
-					Description: "project name",
-					Required:    true,
-				},
+	publishPipelineDefinition(t, admin, "test-params", pipeline.PipelineContent{
+		Description: "Parameter propagation test",
+		Variables: map[string]pipeline.PipelineVariable{
+			"PROJECT": {
+				Description: "project name",
+				Required:    true,
 			},
-			Steps: []pipeline.PipelineStep{
-				// test(1) returns 0 (success) if the string comparison
-				// is true. If PROJECT was not propagated or resolved,
-				// this fails.
-				{Name: "verify-project", Run: `test "${PROJECT}" = "iree"`},
-			},
-		}); err != nil {
-		t.Fatalf("publish parameter test pipeline definition: %v", err)
-	}
+		},
+		Steps: []pipeline.PipelineStep{
+			// test(1) returns 0 (success) if the string comparison
+			// is true. If PROJECT was not propagated or resolved,
+			// this fails.
+			{Name: "verify-project", Run: `test "${PROJECT}" = "iree"`},
+		},
+	})
 
 	// --- Execute pipeline with variable ---
 	requestID := "test-pipeline-params-" + t.Name()
 	resultWatch := watchRoom(t, admin, machine.ConfigRoomID)
 
-	_, err = admin.SendEvent(ctx, machine.ConfigRoomID, schema.MatrixEventTypeMessage,
+	if _, err := admin.SendEvent(ctx, machine.ConfigRoomID, schema.MatrixEventTypeMessage,
 		schema.CommandMessage{
 			MsgType:   schema.MsgTypeCommand,
 			Body:      "pipeline.execute: parameter propagation test",
@@ -373,8 +349,7 @@ func TestPipelineParameterPropagation(t *testing.T) {
 				// and ResolveVariables makes it available as ${PROJECT}.
 				"PROJECT": "iree",
 			},
-		})
-	if err != nil {
+		}); err != nil {
 		t.Fatalf("send pipeline.execute command: %v", err)
 	}
 

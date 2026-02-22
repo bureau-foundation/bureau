@@ -54,14 +54,11 @@ func TestMachineLifecycle(t *testing.T) {
 	machineUserID := machineRef.UserID()
 	machineRoomID := fleet.MachineRoomID
 
-	// --- Phase 1: Provision via CLI ---
+	// --- Phase 1: Provision via API ---
 	stateDir := t.TempDir()
 	bootstrapPath := filepath.Join(stateDir, "bootstrap.json")
-
-	runBureauOrFail(t, "machine", "provision", fleet.Prefix, "lifecycle",
-		"--credential-file", credentialFile,
-		"--output", bootstrapPath,
-	)
+	client := adminClient(t)
+	provisionMachine(t, client, admin, machineRef, bootstrapPath)
 
 	// Read the bootstrap config to capture the one-time password.
 	bootstrapConfig, err := bootstrap.ReadConfig(bootstrapPath)
@@ -212,14 +209,17 @@ func TestMachineLifecycle(t *testing.T) {
 			t.Fatal("config room resolved to empty room ID")
 		}
 
-		// Verify machine appears in "bureau machine list".
-		listOutput := runBureauOrFail(t, "machine", "list", fleet.Prefix,
-			"--homeserver", testHomeserverURL,
-			"--token", admin.AccessToken(),
-			"--user-id", "@bureau-admin:"+testServerName,
-		)
-		if !strings.Contains(listOutput, machineName) {
-			t.Errorf("bureau machine list output does not contain %q:\n%s", machineName, listOutput)
+		// Verify machine appears in the fleet machine list.
+		entries := listMachines(t, admin, fleet.Ref)
+		found := false
+		for _, entry := range entries {
+			if entry.Name == machineName {
+				found = true
+				break
+			}
+		}
+		if !found {
+			t.Errorf("machine %q not found in fleet machine list (%d entries)", machineName, len(entries))
 		}
 	})
 	// Subtest cleanup stops daemon and launcher (LIFO).
@@ -263,9 +263,7 @@ func TestMachineLifecycle(t *testing.T) {
 	})
 
 	// --- Phase 6: Decommission ---
-	runBureauOrFail(t, "machine", "decommission", fleet.Prefix, "lifecycle",
-		"--credential-file", credentialFile,
-	)
+	decommissionMachine(t, admin, machineRef)
 
 	// Verify machine key was cleared (empty content).
 	clearedKeyJSON, err := admin.GetStateEvent(ctx, machineRoomID,
@@ -332,14 +330,9 @@ func TestTwoMachineFleet(t *testing.T) {
 	bootstrapPathA := filepath.Join(stateDirA, "bootstrap.json")
 	bootstrapPathB := filepath.Join(stateDirB, "bootstrap.json")
 
-	runBureauOrFail(t, "machine", "provision", twoMachineFleet.Prefix, "fleet-a",
-		"--credential-file", credentialFile,
-		"--output", bootstrapPathA,
-	)
-	runBureauOrFail(t, "machine", "provision", twoMachineFleet.Prefix, "fleet-b",
-		"--credential-file", credentialFile,
-		"--output", bootstrapPathB,
-	)
+	twoMachineClient := adminClient(t)
+	provisionMachine(t, twoMachineClient, admin, machineARef, bootstrapPathA)
+	provisionMachine(t, twoMachineClient, admin, machineBRef, bootstrapPathB)
 	t.Log("both machines provisioned")
 
 	// --- First boot both machines ---
@@ -586,12 +579,8 @@ func TestTwoMachineFleet(t *testing.T) {
 	t.Log("cross-machine message exchange verified")
 
 	// --- Decommission both machines ---
-	runBureauOrFail(t, "machine", "decommission", twoMachineFleet.Prefix, "fleet-a",
-		"--credential-file", credentialFile,
-	)
-	runBureauOrFail(t, "machine", "decommission", twoMachineFleet.Prefix, "fleet-b",
-		"--credential-file", credentialFile,
-	)
+	decommissionMachine(t, admin, machineARef)
+	decommissionMachine(t, admin, machineBRef)
 
 	// Verify both machine keys are cleared.
 	for _, name := range []string{machineAName, machineBName} {

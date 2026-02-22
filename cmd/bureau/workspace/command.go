@@ -78,7 +78,21 @@ firewalls.`,
 	}
 }
 
-// destroyParams holds the parameters for the workspace destroy command.
+// DestroyParams holds the parameters for workspace destruction. Callers
+// that use the programmatic API pass these directly; CLI callers build
+// them from flags.
+type DestroyParams struct {
+	// Alias is the workspace alias (e.g., "iree/amdgpu/inference").
+	Alias string
+
+	// Mode is the teardown mode: "archive" or "delete".
+	Mode string
+
+	// ServerName is the Matrix server name.
+	ServerName ref.ServerName
+}
+
+// destroyParams holds the CLI-specific parameters for the workspace destroy command.
 type destroyParams struct {
 	cli.SessionConfig
 	Mode       string `json:"mode"        flag:"mode"        desc:"teardown mode: archive or delete" default:"archive"`
@@ -128,50 +142,64 @@ Use "bureau matrix room leave" separately to remove the room.`,
 				return cli.Validation("--mode must be \"archive\" or \"delete\", got %q", params.Mode)
 			}
 
-			return runDestroy(args[0], &params.SessionConfig, params.Mode, params.ServerName)
+			serverName, err := ref.ParseServerName(params.ServerName)
+			if err != nil {
+				return fmt.Errorf("invalid --server-name: %w", err)
+			}
+
+			ctx, cancel := context.WithTimeout(context.Background(), 60*time.Second)
+			defer cancel()
+
+			session, err := params.SessionConfig.Connect(ctx)
+			if err != nil {
+				return cli.Internal("connect: %w", err)
+			}
+			defer session.Close()
+
+			err = Destroy(ctx, session, DestroyParams{
+				Alias:      args[0],
+				Mode:       params.Mode,
+				ServerName: serverName,
+			})
+			if err != nil {
+				return err
+			}
+
+			fmt.Fprintf(os.Stderr, "Workspace %s transitioning to teardown (mode=%s)\n", args[0], params.Mode)
+			fmt.Fprintf(os.Stderr, "  Agents gated on \"active\" will stop on next reconcile cycle.\n")
+			fmt.Fprintf(os.Stderr, "  Teardown principal will start and run the deinit pipeline.\n")
+			return nil
 		},
 	}
 }
 
-// runDestroy transitions a workspace to "teardown" status. The daemon's
+// Destroy transitions a workspace to "teardown" status. The daemon's
 // continuous enforcement handles the rest: agents gated on "active" stop,
 // and the teardown principal gated on "teardown" starts.
 //
-// The function patches the teardown principal's payload with the requested
-// mode BEFORE updating the workspace status. Both changes arrive in the
-// same /sync batch, so the daemon sees the correct payload when the
-// teardown principal's condition becomes true.
-func runDestroy(alias string, session *cli.SessionConfig, mode, serverNameString string) error {
-	if err := principal.ValidateLocalpart(alias); err != nil {
+// The teardown mode is carried in the workspace event itself — the daemon
+// captures this event content when the StartCondition matches and delivers
+// it as /run/bureau/trigger.json.
+//
+// The caller provides a connected session and a context with an appropriate
+// deadline. This function does not create its own session.
+func Destroy(ctx context.Context, session messaging.Session, params DestroyParams) error {
+	if err := principal.ValidateLocalpart(params.Alias); err != nil {
 		return cli.Validation("invalid workspace alias: %w", err)
 	}
 
-	serverName, err := ref.ParseServerName(serverNameString)
-	if err != nil {
-		return fmt.Errorf("invalid --server-name: %w", err)
-	}
-
-	ctx, cancel := context.WithTimeout(context.Background(), 60*time.Second)
-	defer cancel()
-
-	sess, err := session.Connect(ctx)
-	if err != nil {
-		return cli.Internal("connect: %w", err)
-	}
-	defer sess.Close()
-
 	// Resolve the workspace room.
-	fullAlias, err := ref.ParseRoomAlias(schema.FullRoomAlias(alias, serverName))
+	fullAlias, err := ref.ParseRoomAlias(schema.FullRoomAlias(params.Alias, params.ServerName))
 	if err != nil {
-		return cli.Validation("invalid room alias %q: %w", alias, err)
+		return cli.Validation("invalid room alias %q: %w", params.Alias, err)
 	}
-	workspaceRoomID, err := sess.ResolveAlias(ctx, fullAlias)
+	workspaceRoomID, err := session.ResolveAlias(ctx, fullAlias)
 	if err != nil {
 		return cli.NotFound("resolve workspace room %s: %w", fullAlias, err)
 	}
 
 	// Read the current workspace state and verify status is "active".
-	workspaceContent, err := sess.GetStateEvent(ctx, workspaceRoomID, schema.EventTypeWorkspace, "")
+	workspaceContent, err := session.GetStateEvent(ctx, workspaceRoomID, schema.EventTypeWorkspace, "")
 	if err != nil {
 		return cli.Internal("reading workspace state: %w", err)
 	}
@@ -180,27 +208,20 @@ func runDestroy(alias string, session *cli.SessionConfig, mode, serverNameString
 		return cli.Internal("parsing workspace state: %w", err)
 	}
 	if workspaceState.Status != "active" {
-		return cli.Conflict("workspace %s is in status %q, expected \"active\"", alias, workspaceState.Status)
+		return cli.Conflict("workspace %s is in status %q, expected \"active\"", params.Alias, workspaceState.Status)
 	}
 
 	// Transition the workspace to "teardown" with the requested mode.
 	// The daemon's continuous enforcement handles the rest: agents gated
 	// on "active" stop, and the teardown principal gated on "teardown"
-	// starts. The teardown mode is carried in the workspace event itself
-	// — the daemon captures this event content when the StartCondition
-	// matches and delivers it as /run/bureau/trigger.json. No
-	// MachineConfig patching needed.
+	// starts.
 	workspaceState.Status = "teardown"
-	workspaceState.TeardownMode = mode
+	workspaceState.TeardownMode = params.Mode
 	workspaceState.UpdatedAt = time.Now().UTC().Format(time.RFC3339)
-	_, err = sess.SendStateEvent(ctx, workspaceRoomID, schema.EventTypeWorkspace, "", workspaceState)
+	_, err = session.SendStateEvent(ctx, workspaceRoomID, schema.EventTypeWorkspace, "", workspaceState)
 	if err != nil {
 		return cli.Internal("publishing teardown status: %w", err)
 	}
-
-	fmt.Fprintf(os.Stderr, "Workspace %s transitioning to teardown (mode=%s)\n", alias, mode)
-	fmt.Fprintf(os.Stderr, "  Agents gated on \"active\" will stop on next reconcile cycle.\n")
-	fmt.Fprintf(os.Stderr, "  Teardown principal will start and run the deinit pipeline.\n")
 
 	return nil
 }

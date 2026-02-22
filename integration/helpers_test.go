@@ -33,8 +33,13 @@ import (
 	"testing"
 	"time"
 
+	"github.com/bureau-foundation/bureau/cmd/bureau/machine"
+	"github.com/bureau-foundation/bureau/cmd/bureau/workspace"
+	"github.com/bureau-foundation/bureau/lib/bootstrap"
 	"github.com/bureau-foundation/bureau/lib/ref"
 	"github.com/bureau-foundation/bureau/lib/schema"
+	"github.com/bureau-foundation/bureau/lib/schema/pipeline"
+	"github.com/bureau-foundation/bureau/lib/secret"
 	"github.com/bureau-foundation/bureau/lib/testutil"
 	"github.com/bureau-foundation/bureau/messaging"
 )
@@ -462,6 +467,126 @@ func adminSession(t *testing.T) *messaging.DirectSession {
 	return session
 }
 
+// adminClient creates a Matrix client using the homeserver URL from the
+// credential file. The client is needed for operations like Register
+// (machine provisioning) that the Session interface doesn't cover.
+func adminClient(t *testing.T) *messaging.Client {
+	t.Helper()
+	credentials := loadCredentials(t)
+	homeserverURL := credentials["MATRIX_HOMESERVER_URL"]
+	if homeserverURL == "" {
+		t.Fatal("MATRIX_HOMESERVER_URL missing from credential file")
+	}
+	client, err := messaging.NewClient(messaging.ClientConfig{
+		HomeserverURL: homeserverURL,
+	})
+	if err != nil {
+		t.Fatalf("create matrix client: %v", err)
+	}
+	return client
+}
+
+// provisionMachine provisions a machine via the production API (not the
+// CLI subprocess). Returns the bootstrap config path. The caller typically
+// passes this path to the launcher's --bootstrap-file flag.
+func provisionMachine(t *testing.T, client *messaging.Client, admin *messaging.DirectSession, machineRef ref.Machine, bootstrapPath string) {
+	t.Helper()
+	ctx := t.Context()
+
+	registrationToken, err := secret.NewFromString(testRegistrationToken)
+	if err != nil {
+		t.Fatalf("protect registration token: %v", err)
+	}
+	defer registrationToken.Close()
+
+	result, err := machine.Provision(ctx, client, admin, machine.ProvisionParams{
+		Machine:           machineRef,
+		HomeserverURL:     testHomeserverURL,
+		RegistrationToken: registrationToken,
+	})
+	if err != nil {
+		t.Fatalf("provision machine %s: %v", machineRef.Localpart(), err)
+	}
+
+	if err := bootstrap.WriteConfig(bootstrapPath, result.Config); err != nil {
+		t.Fatalf("write bootstrap config: %v", err)
+	}
+}
+
+// decommissionMachine decommissions a machine via the production API (not
+// the CLI subprocess).
+func decommissionMachine(t *testing.T, admin *messaging.DirectSession, machineRef ref.Machine) {
+	t.Helper()
+	ctx := t.Context()
+
+	if err := machine.Decommission(ctx, admin, machine.DecommissionParams{
+		Machine: machineRef,
+	}); err != nil {
+		t.Fatalf("decommission machine %s: %v", machineRef.Localpart(), err)
+	}
+}
+
+// revokeMachine performs emergency credential revocation via the production
+// API (not the CLI subprocess).
+func revokeMachine(t *testing.T, admin *messaging.DirectSession, machineRef ref.Machine, reason string) {
+	t.Helper()
+	ctx := t.Context()
+
+	if err := machine.Revoke(ctx, admin, machine.RevokeParams{
+		Machine: machineRef,
+		Reason:  reason,
+	}); err != nil {
+		t.Fatalf("revoke machine %s: %v", machineRef.Localpart(), err)
+	}
+}
+
+// listMachines lists fleet machines via the production API (not the CLI
+// subprocess). Returns the machine entries.
+func listMachines(t *testing.T, session messaging.Session, fleet ref.Fleet) []*machine.MachineEntry {
+	t.Helper()
+	ctx := t.Context()
+
+	entries, err := machine.ListMachines(ctx, session, fleet)
+	if err != nil {
+		t.Fatalf("list machines in %s: %v", fleet.Localpart(), err)
+	}
+	return entries
+}
+
+// createWorkspace creates a workspace via the production API (not the CLI
+// subprocess). Returns the creation result.
+func createWorkspace(t *testing.T, session messaging.Session, machineRef ref.Machine, alias, template string, params map[string]string) *workspace.CreateResult {
+	t.Helper()
+	ctx := t.Context()
+
+	result, err := workspace.Create(ctx, session, workspace.CreateParams{
+		Alias:      alias,
+		Machine:    machineRef,
+		Template:   template,
+		Params:     params,
+		AgentCount: 1,
+	})
+	if err != nil {
+		t.Fatalf("create workspace %s: %v", alias, err)
+	}
+	return result
+}
+
+// destroyWorkspace transitions a workspace to teardown via the production
+// API (not the CLI subprocess).
+func destroyWorkspace(t *testing.T, session messaging.Session, alias string) {
+	t.Helper()
+	ctx := t.Context()
+
+	if err := workspace.Destroy(ctx, session, workspace.DestroyParams{
+		Alias:      alias,
+		Mode:       "archive",
+		ServerName: testServer,
+	}); err != nil {
+		t.Fatalf("destroy workspace %s: %v", alias, err)
+	}
+}
+
 // loadCredentials reads the key=value credential file written by setup.
 func loadCredentials(t *testing.T) map[string]string {
 	t.Helper()
@@ -568,6 +693,35 @@ func createTestFleet(t *testing.T, admin *messaging.DirectSession) *testFleet {
 		ServiceRoomID: serviceRoom.RoomID,
 	}
 }
+
+// --- Namespace Room Helpers ---
+
+// resolvePipelineRoom resolves the namespace-scoped pipeline room alias
+// and returns its room ID. Fails the test if the room doesn't exist
+// (it's created during TestMain's bureau matrix setup).
+func resolvePipelineRoom(t *testing.T, admin *messaging.DirectSession) ref.RoomID {
+	t.Helper()
+	roomID, err := admin.ResolveAlias(t.Context(), testNamespace.PipelineRoomAlias())
+	if err != nil {
+		t.Fatalf("resolve pipeline room: %v", err)
+	}
+	return roomID
+}
+
+// publishPipelineDefinition resolves the pipeline room and publishes a
+// pipeline definition as a state event. This is the test equivalent of
+// "bureau pipeline push" — it uses the same state event type and content
+// schema.
+func publishPipelineDefinition(t *testing.T, admin *messaging.DirectSession, name string, content pipeline.PipelineContent) {
+	t.Helper()
+	pipelineRoomID := resolvePipelineRoom(t, admin)
+	if _, err := admin.SendStateEvent(t.Context(), pipelineRoomID,
+		schema.EventTypePipeline, name, content); err != nil {
+		t.Fatalf("publish pipeline %s: %v", name, err)
+	}
+}
+
+// --- Binary Resolution ---
 
 // resolvedBinary resolves a binary path from a Bazel environment variable.
 // Skips the test if the binary is not available (allows running the Matrix

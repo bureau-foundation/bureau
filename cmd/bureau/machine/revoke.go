@@ -17,7 +17,17 @@ import (
 	"github.com/bureau-foundation/bureau/messaging"
 )
 
-// revokeParams holds the parameters for the machine revoke command.
+// RevokeParams holds the parameters for machine credential revocation.
+type RevokeParams struct {
+	// Machine is the typed machine reference within the fleet.
+	Machine ref.Machine
+
+	// Reason is the human-readable reason for revocation, recorded in
+	// the credential revocation event.
+	Reason string
+}
+
+// revokeParams holds the CLI-specific parameters for the machine revoke command.
 type revokeParams struct {
 	cli.SessionConfig
 	Reason string `json:"reason" flag:"reason" desc:"reason for revocation (recorded in revocation event)"`
@@ -75,66 +85,76 @@ depending on the homeserver — this is by design for emergency revocation.`,
 				return cli.Validation("--credential-file is required")
 			}
 
-			return runRevoke(args[0], args[1], &params)
+			ctx, cancel := context.WithTimeout(context.Background(), 60*time.Second)
+			defer cancel()
+
+			credentials, err := cli.ReadCredentialFile(params.SessionConfig.CredentialFile)
+			if err != nil {
+				return cli.Internal("read credential file: %w", err)
+			}
+
+			homeserverURL := credentials["MATRIX_HOMESERVER_URL"]
+			if homeserverURL == "" {
+				return cli.Validation("credential file missing MATRIX_HOMESERVER_URL")
+			}
+			adminUserIDString := credentials["MATRIX_ADMIN_USER"]
+			adminToken := credentials["MATRIX_ADMIN_TOKEN"]
+			if adminUserIDString == "" || adminToken == "" {
+				return cli.Validation("credential file missing MATRIX_ADMIN_USER or MATRIX_ADMIN_TOKEN")
+			}
+
+			adminUserID, err := ref.ParseUserID(adminUserIDString)
+			if err != nil {
+				return cli.Internal("parse admin user ID: %w", err)
+			}
+
+			server, err := ref.ServerFromUserID(adminUserIDString)
+			if err != nil {
+				return cli.Internal("cannot determine server name from admin user ID: %w", err)
+			}
+
+			fleet, err := ref.ParseFleet(args[0], server)
+			if err != nil {
+				return cli.Validation("%v", err)
+			}
+			machine, err := ref.NewMachine(fleet, args[1])
+			if err != nil {
+				return cli.Validation("invalid machine name: %v", err)
+			}
+
+			client, err := messaging.NewClient(messaging.ClientConfig{
+				HomeserverURL: homeserverURL,
+			})
+			if err != nil {
+				return cli.Internal("create matrix client: %w", err)
+			}
+
+			adminSession, err := client.SessionFromToken(adminUserID, adminToken)
+			if err != nil {
+				return cli.Internal("create admin session: %w", err)
+			}
+			defer adminSession.Close()
+
+			return Revoke(ctx, adminSession, RevokeParams{
+				Machine: machine,
+				Reason:  params.Reason,
+			})
 		},
 	}
 }
 
-func runRevoke(fleetLocalpart, machineName string, params *revokeParams) error {
-	ctx, cancel := context.WithTimeout(context.Background(), 60*time.Second)
-	defer cancel()
-
-	credentials, err := cli.ReadCredentialFile(params.SessionConfig.CredentialFile)
-	if err != nil {
-		return cli.Internal("read credential file: %w", err)
-	}
-
-	homeserverURL := credentials["MATRIX_HOMESERVER_URL"]
-	if homeserverURL == "" {
-		return cli.Validation("credential file missing MATRIX_HOMESERVER_URL")
-	}
-	adminUserIDString := credentials["MATRIX_ADMIN_USER"]
-	adminToken := credentials["MATRIX_ADMIN_TOKEN"]
-	if adminUserIDString == "" || adminToken == "" {
-		return cli.Validation("credential file missing MATRIX_ADMIN_USER or MATRIX_ADMIN_TOKEN")
-	}
-
-	adminUserID, err := ref.ParseUserID(adminUserIDString)
-	if err != nil {
-		return cli.Internal("parse admin user ID: %w", err)
-	}
-
-	// Derive server name from admin user ID.
-	server, err := ref.ServerFromUserID(adminUserIDString)
-	if err != nil {
-		return cli.Internal("cannot determine server name from admin user ID: %w", err)
-	}
-
-	// Parse and validate the fleet localpart.
-	fleet, err := ref.ParseFleet(fleetLocalpart, server)
-	if err != nil {
-		return cli.Validation("%v", err)
-	}
-
-	// Construct the machine ref within the fleet.
-	machine, err := ref.NewMachine(fleet, machineName)
-	if err != nil {
-		return cli.Validation("invalid machine name: %v", err)
-	}
-
-	client, err := messaging.NewClient(messaging.ClientConfig{
-		HomeserverURL: homeserverURL,
-	})
-	if err != nil {
-		return cli.Internal("create matrix client: %w", err)
-	}
-
-	adminSession, err := client.SessionFromToken(adminUserID, adminToken)
-	if err != nil {
-		return cli.Internal("create admin session: %w", err)
-	}
-	defer adminSession.Close()
-
+// Revoke performs emergency credential revocation for a compromised machine.
+// It executes three layers of defense:
+//   - Layer 1: Deactivates the machine's Matrix account (daemon self-destructs)
+//   - Layer 2: Clears credential state events, kicks from all rooms
+//   - Layer 3: Outstanding service tokens expire via natural TTL
+//
+// The caller provides a DirectSession (required for account deactivation,
+// password reset, and KickUser) and a context with an appropriate deadline.
+func Revoke(ctx context.Context, adminSession *messaging.DirectSession, params RevokeParams) error {
+	machine := params.Machine
+	fleet := machine.Fleet()
+	adminUserID := adminSession.UserID()
 	machineUsername := machine.Localpart()
 	machineUserID := machine.UserID()
 

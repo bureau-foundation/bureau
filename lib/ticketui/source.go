@@ -41,6 +41,11 @@ type Source interface {
 	// All returns every ticket regardless of status.
 	All() Snapshot
 
+	// Pipelines returns all pipeline tickets (Type == "pipeline")
+	// across all statuses. Used by the Pipelines tab for sectioned
+	// display (active, waiting, scheduled, history).
+	Pipelines() Snapshot
+
 	// Get returns a single ticket by ID.
 	Get(ticketID string) (ticket.TicketContent, bool)
 
@@ -185,6 +190,16 @@ func (source *IndexSource) All() Snapshot {
 	defer source.mutex.RUnlock()
 	return Snapshot{
 		Entries: source.index.List(ticketindex.Filter{}),
+		Stats:   source.index.Stats(),
+	}
+}
+
+// Pipelines returns all pipeline tickets across all statuses.
+func (source *IndexSource) Pipelines() Snapshot {
+	source.mutex.RLock()
+	defer source.mutex.RUnlock()
+	return Snapshot{
+		Entries: source.index.List(ticketindex.Filter{Type: "pipeline"}),
 		Stats:   source.index.Stats(),
 	}
 }

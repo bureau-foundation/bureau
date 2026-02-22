@@ -18,6 +18,7 @@ import (
 	"github.com/charmbracelet/lipgloss"
 	"github.com/charmbracelet/x/ansi"
 
+	"github.com/bureau-foundation/bureau/lib/schema/ticket"
 	"github.com/bureau-foundation/bureau/lib/ticketindex"
 )
 
@@ -31,6 +32,8 @@ const (
 	TabBlocked
 	// TabAll shows every ticket regardless of status.
 	TabAll
+	// TabPipelines shows pipeline tickets grouped by execution state.
+	TabPipelines
 )
 
 // FocusRegion identifies which pane has keyboard focus.
@@ -74,6 +77,14 @@ const (
 	// "ungrouped" header so it participates in collapse/expand like
 	// real epic groups.
 	ungroupedEpicID = "_ungrouped"
+
+	// Pipeline section sentinel IDs for the Pipelines tab. These
+	// are used as EpicID in section headers so collapse/expand
+	// works for pipeline sections.
+	pipelineSectionActive    = "_pipeline_active"
+	pipelineSectionWaiting   = "_pipeline_waiting"
+	pipelineSectionScheduled = "_pipeline_scheduled"
+	pipelineSectionHistory   = "_pipeline_history"
 )
 
 // sourceEventMsg wraps a Source Event for delivery through the
@@ -391,6 +402,11 @@ func (model Model) Update(message tea.Msg) (tea.Model, tea.Cmd) {
 
 		case key.Matches(message, model.keys.TabAll):
 			model.switchTab(TabAll)
+
+		case key.Matches(message, model.keys.TabPipelines):
+			if model.hasPipelinesTab() {
+				model.switchTab(TabPipelines)
+			}
 
 		case key.Matches(message, model.keys.FilterActivate):
 			if model.focusRegion == FocusDetail {
@@ -1108,9 +1124,23 @@ func (model *Model) refreshFromSource() {
 		snapshot = model.source.Blocked()
 	case TabAll:
 		snapshot = model.source.All()
+	case TabPipelines:
+		snapshot = model.source.Pipelines()
 	}
 
 	model.stats = snapshot.Stats
+
+	// Recompute tab hit ranges when stats change — the Pipelines tab
+	// may appear or disappear based on pipeline ticket count.
+	model.computeTabHitRanges()
+
+	// If all pipeline tickets were removed while viewing the Pipelines
+	// tab, fall back to All. Re-fetch the snapshot for the new tab.
+	if model.activeTab == TabPipelines && !model.hasPipelinesTab() {
+		model.activeTab = TabAll
+		snapshot = model.source.All()
+		model.stats = snapshot.Stats
+	}
 
 	// Apply filter if there's active filter text.
 	if model.filter.Input != "" {
@@ -1144,6 +1174,8 @@ func (model *Model) applyFilter() {
 		snapshot = model.source.Blocked()
 	case TabAll:
 		snapshot = model.source.All()
+	case TabPipelines:
+		snapshot = model.source.Pipelines()
 	}
 
 	model.stats = snapshot.Stats
@@ -1182,20 +1214,21 @@ func (model *Model) applyFilter() {
 	model.syncDetailPane()
 }
 
-// rebuildItems constructs the items list from entries. For the ready
-// tab, tickets are grouped by parent epic. For other tabs, items are
-// a flat list of ticket entries.
+// rebuildItems constructs the items list from entries. The Ready tab
+// groups by parent epic, the Pipelines tab groups by execution state,
+// and all other tabs produce a flat list.
 func (model *Model) rebuildItems() {
-	if model.activeTab != TabReady {
+	switch model.activeTab {
+	case TabReady:
+		model.items = model.buildGroupedItems()
+	case TabPipelines:
+		model.items = model.buildPipelineItems()
+	default:
 		model.items = make([]ListItem, len(model.entries))
 		for index, entry := range model.entries {
 			model.items[index] = ListItem{Entry: entry}
 		}
-		return
 	}
-
-	// Group ready tickets by parent epic.
-	model.items = model.buildGroupedItems()
 }
 
 // buildGroupedItems constructs the ready view with epic grouping.
@@ -1315,6 +1348,127 @@ func (model *Model) buildGroupedItems() []ListItem {
 	return items
 }
 
+// buildPipelineItems groups pipeline entries into four sections:
+// Active (in_progress), Waiting (open without pending timer gates),
+// Scheduled (open with pending timer gates), and History (closed).
+// Each section gets a collapsible header, and entries within each
+// section are sorted by their natural ordering.
+func (model *Model) buildPipelineItems() []ListItem {
+	var active, waiting, scheduled, history []ticketindex.Entry
+
+	for _, entry := range model.entries {
+		switch entry.Content.Status {
+		case "in_progress":
+			active = append(active, entry)
+		case "closed":
+			history = append(history, entry)
+		default:
+			if hasPendingTimerGate(entry.Content) {
+				scheduled = append(scheduled, entry)
+			} else {
+				waiting = append(waiting, entry)
+			}
+		}
+	}
+
+	// Active and Waiting: priority ascending, then creation time.
+	sortByPriorityThenCreated(active)
+	sortByPriorityThenCreated(waiting)
+	// Scheduled: soonest fire time first.
+	sortByNextFireTime(scheduled)
+	// History: most recently closed first.
+	sortByClosedAtDescending(history)
+
+	var items []ListItem
+
+	appendPipelineSection := func(sectionID, title string, entries []ticketindex.Entry) {
+		if len(entries) == 0 {
+			return
+		}
+		collapsed := model.collapsedEpics[sectionID]
+		items = append(items, ListItem{
+			IsHeader:  true,
+			EpicID:    sectionID,
+			EpicTitle: fmt.Sprintf("%s (%d)", title, len(entries)),
+			EpicTotal: len(entries),
+			Collapsed: collapsed,
+		})
+		if !collapsed {
+			for _, entry := range entries {
+				items = append(items, ListItem{Entry: entry})
+			}
+		}
+	}
+
+	appendPipelineSection(pipelineSectionActive, "Active", active)
+	appendPipelineSection(pipelineSectionWaiting, "Waiting", waiting)
+	appendPipelineSection(pipelineSectionScheduled, "Scheduled", scheduled)
+	appendPipelineSection(pipelineSectionHistory, "History", history)
+
+	return items
+}
+
+// hasPendingTimerGate reports whether the ticket has at least one
+// timer gate with status "pending".
+func hasPendingTimerGate(content ticket.TicketContent) bool {
+	for index := range content.Gates {
+		if content.Gates[index].Type == "timer" && content.Gates[index].Status == "pending" {
+			return true
+		}
+	}
+	return false
+}
+
+// firstPendingTimerGateTarget returns the Target of the first pending
+// timer gate, or empty string if none exists. Timer gate targets are
+// RFC 3339 timestamps, so string comparison gives chronological order.
+func firstPendingTimerGateTarget(content ticket.TicketContent) string {
+	for index := range content.Gates {
+		gate := &content.Gates[index]
+		if gate.Type == "timer" && gate.Status == "pending" && gate.Target != "" {
+			return gate.Target
+		}
+	}
+	return ""
+}
+
+// sortByPriorityThenCreated sorts entries by priority ascending (P0
+// first), then by creation time ascending (oldest first).
+func sortByPriorityThenCreated(entries []ticketindex.Entry) {
+	slices.SortFunc(entries, func(a, b ticketindex.Entry) int {
+		if a.Content.Priority != b.Content.Priority {
+			return a.Content.Priority - b.Content.Priority
+		}
+		return strings.Compare(a.Content.CreatedAt, b.Content.CreatedAt)
+	})
+}
+
+// sortByNextFireTime sorts entries by the Target of their first
+// pending timer gate (soonest first). Entries without a target sort
+// after those with one.
+func sortByNextFireTime(entries []ticketindex.Entry) {
+	slices.SortFunc(entries, func(a, b ticketindex.Entry) int {
+		targetA := firstPendingTimerGateTarget(a.Content)
+		targetB := firstPendingTimerGateTarget(b.Content)
+		// Entries without a target sort last.
+		if targetA == "" && targetB != "" {
+			return 1
+		}
+		if targetA != "" && targetB == "" {
+			return -1
+		}
+		return strings.Compare(targetA, targetB)
+	})
+}
+
+// sortByClosedAtDescending sorts entries by ClosedAt timestamp
+// descending (most recently closed first).
+func sortByClosedAtDescending(entries []ticketindex.Entry) {
+	slices.SortFunc(entries, func(a, b ticketindex.Entry) int {
+		return strings.Compare(b.Content.ClosedAt, a.Content.ClosedAt)
+	})
+}
+
 // restoreSelection attempts to find the previously selected ticket ID
 // in the rebuilt items list and move the cursor there. If not found,
 // clamps the cursor to a valid position.
@@ -1331,8 +1485,17 @@ func (model *Model) restoreSelection() {
 		}
 	}
 
-	// Selected ticket is no longer in the list. Clamp cursor.
-	model.cursor = model.clampedIndex(model.cursor)
+	// Selected ticket is no longer in the list. Jump to the first
+	// non-header item rather than clamping the stale cursor position,
+	// which would land on the last item if the previous tab had more
+	// entries than the current one.
+	for index, item := range model.items {
+		if !item.IsHeader {
+			model.cursor = index
+			return
+		}
+	}
+	model.cursor = 0
 }
 
 // clampedIndex returns position clamped to valid item bounds.
@@ -1911,8 +2074,9 @@ func (model *Model) syncDetailPane() {
 	item := model.items[model.cursor]
 	if item.IsHeader {
 		// Show the epic ticket in the detail pane if this header
-		// corresponds to a real epic (not the ungrouped sentinel).
-		if item.EpicID != "" && item.EpicID != ungroupedEpicID {
+		// corresponds to a real epic (not a sentinel like ungrouped
+		// or pipeline section headers).
+		if item.EpicID != "" && !strings.HasPrefix(item.EpicID, "_") {
 			content, ok := model.source.Get(item.EpicID)
 			if ok {
 				model.selectedID = item.EpicID
@@ -2096,6 +2260,8 @@ func (model Model) renderListPane() string {
 		var row string
 		if item.IsHeader {
 			row = renderer.RenderGroupHeader(item, rowWidth, selected)
+		} else if model.activeTab == TabPipelines {
+			row = renderer.RenderPipelineRow(item.Entry, selected, model.filterHighlights[item.Entry.ID])
 		} else {
 			// On the Ready tab, compute and pass scoring info for
 			// leverage/urgency indicators. Other tabs pass nil.
@@ -2230,39 +2396,65 @@ func (model Model) renderEmpty() string {
 	)
 }
 
-// tabDefs is the fixed list of tab definitions used by both the
-// header renderer and the hit range computation.
-var tabDefs = []struct {
+// tabDef pairs a tab label with its Tab constant.
+type tabDef struct {
 	label string
 	tab   Tab
-}{
+}
+
+// coreTabDefs are the tabs always shown regardless of ticket content.
+var coreTabDefs = []tabDef{
 	{"1:Ready", TabReady},
 	{"2:Blocked", TabBlocked},
 	{"3:All", TabAll},
+}
+
+// pipelinesTabDef is appended when the index contains pipeline tickets.
+var pipelinesTabDef = tabDef{"4:Pipelines", TabPipelines}
+
+// visibleTabs returns the tab definitions that should be shown. The
+// Pipelines tab is only shown when the index contains at least one
+// pipeline ticket — file-mode viewers with no pipelines don't get
+// a dead tab.
+func (model Model) visibleTabs() []tabDef {
+	if model.stats.ByType["pipeline"] > 0 {
+		tabs := make([]tabDef, len(coreTabDefs)+1)
+		copy(tabs, coreTabDefs)
+		tabs[len(coreTabDefs)] = pipelinesTabDef
+		return tabs
+	}
+	return coreTabDefs
+}
+
+// hasPipelinesTab reports whether the Pipelines tab is currently
+// visible based on the model's stats.
+func (model Model) hasPipelinesTab() bool {
+	return model.stats.ByType["pipeline"] > 0
 }
 
 // computeTabHitRanges calculates the X positions of each tab label
 // in the header line. Called on window resize so mouse clicks on
 // the header can switch tabs.
 func (model *Model) computeTabHitRanges() {
+	tabs := model.visibleTabs()
 	model.tabHitRanges = model.tabHitRanges[:0]
 	cursor := 3 // Leading "───"
 
-	for index, tabDef := range tabDefs {
+	for index, definition := range tabs {
 		cursor++ // Space before label.
 		labelStart := cursor
-		cursor += lipgloss.Width(tabDef.label)
+		cursor += lipgloss.Width(definition.label)
 
 		model.tabHitRanges = append(model.tabHitRanges, tabHitRange{
 			startX: labelStart,
 			endX:   cursor,
-			tab:    tabDef.tab,
+			tab:    definition.tab,
 		})
 
 		cursor++ // Space after label.
 
 		// Separator between tabs (3 chars) and after last tab (1 char).
-		if index == len(tabDefs)-1 {
+		if index == len(tabs)-1 {
 			cursor++
 		} else {
 			cursor += 3
@@ -2292,22 +2484,23 @@ func (model Model) renderHeader() string {
 	leftParts := sep + sep + sep // Leading "───"
 	cursor := 3
 
-	for index, tabDef := range tabDefs {
+	tabs := model.visibleTabs()
+	for index, definition := range tabs {
 		leftParts += " "
 		cursor++
 
-		if model.activeTab == tabDef.tab {
-			leftParts += activeStyle.Render(tabDef.label)
+		if model.activeTab == definition.tab {
+			leftParts += activeStyle.Render(definition.label)
 		} else {
-			leftParts += inactiveStyle.Render(tabDef.label)
+			leftParts += inactiveStyle.Render(definition.label)
 		}
-		cursor += lipgloss.Width(tabDef.label)
+		cursor += lipgloss.Width(definition.label)
 
 		leftParts += " "
 		cursor++
 
 		sepCount := 3
-		if index == len(tabDefs)-1 {
+		if index == len(tabs)-1 {
 			sepCount = 1
 		}
 		for range sepCount {
@@ -2380,8 +2573,12 @@ func (model Model) renderHelp() string {
 		focusIndicator = "NOTE"
 	}
 
-	help := fmt.Sprintf(" [%s] q quit  ↑↓ navigate  ←→ collapse/expand  BS back  Tab focus  ]/[ resize  1/2/3 tabs  / filter",
-		focusIndicator)
+	tabHint := "1/2/3 tabs"
+	if model.hasPipelinesTab() {
+		tabHint = "1-4 tabs"
+	}
+	help := fmt.Sprintf(" [%s] q quit  ↑↓ navigate  ←→ collapse/expand  BS back  Tab focus  ]/[ resize  %s  / filter",
+		focusIndicator, tabHint)
 
 	// Show search match hint when detail has an active search.
 	if model.focusRegion == FocusDetail && model.detailPane.search.Input != "" {

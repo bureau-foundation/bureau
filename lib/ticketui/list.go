@@ -6,9 +6,11 @@ package ticketui
 import (
 	"fmt"
 	"strings"
+	"time"
 
 	"github.com/charmbracelet/lipgloss"
 
+	"github.com/bureau-foundation/bureau/lib/schema/ticket"
 	"github.com/bureau-foundation/bureau/lib/ticketindex"
 )
 
@@ -346,6 +348,259 @@ func highlightTitle(titleLabels string, originalTitle string, positions []int, b
 	}
 
 	return result.String()
+}
+
+// RenderPipelineRow renders a pipeline ticket as a formatted list row.
+// Shows the pipeline reference as the primary identifier rather than
+// the ticket title, with a pipeline-specific status suffix (step
+// progress, conclusion, or schedule time). Falls back to RenderRow
+// if the ticket has no pipeline content.
+//
+// Row layout:
+//
+//	🚀P2 ● pip-3vk5  deploy/staging  Deploy to staging  [4/10 clone-repo]
+//	└──emoji+pri+status+id──────────┘ └──pipeline ref──┘ └──title (faint)┘ └──suffix──┘
+func (renderer ListRenderer) RenderPipelineRow(entry ticketindex.Entry, selected bool, matchPositions []int) string {
+	if entry.Content.Pipeline == nil {
+		return renderer.RenderRow(entry, selected, nil, matchPositions)
+	}
+
+	pipeline := entry.Content.Pipeline
+	suffix := pipelineSuffix(entry.Content)
+	suffixWidth := lipgloss.Width(suffix)
+
+	// Available width after the left portion (indent+emoji+priority+
+	// status icon+space) and ID column.
+	contentWidth := renderer.width - maxLeftWidth - columnWidthID
+	if contentWidth < 10 {
+		contentWidth = 10
+	}
+
+	// Reserve space for the suffix with a space separator.
+	textWidth := contentWidth
+	if suffix != "" {
+		textWidth = contentWidth - suffixWidth - 1
+		if textWidth < 10 {
+			textWidth = 10
+		}
+	}
+
+	// Build the text: pipeline ref + title. Pipeline ref gets priority
+	// space; the title is shown in faint text if room permits.
+	pipelineRef := pipeline.PipelineRef
+	title := entry.Content.Title
+
+	if selected {
+		return renderer.renderSelectedPipelineRow(entry, pipelineRef, title, suffix, textWidth, contentWidth)
+	}
+	return renderer.renderNormalPipelineRow(entry, pipelineRef, title, suffix, textWidth, contentWidth)
+}
+
+// renderNormalPipelineRow renders a pipeline row with per-component colors.
+func (renderer ListRenderer) renderNormalPipelineRow(
+	entry ticketindex.Entry,
+	pipelineRef, title, suffix string,
+	textWidth, contentWidth int,
+) string {
+	priority := entry.Content.Priority
+	status := entry.Content.Status
+
+	typePriorityStyle := lipgloss.NewStyle().
+		Foreground(renderer.theme.PriorityColor(priority)).
+		Bold(priority <= 1)
+
+	idStyle := lipgloss.NewStyle().
+		Width(columnWidthID).
+		Foreground(renderer.theme.StatusColor(status))
+
+	refStyle := lipgloss.NewStyle().
+		Foreground(renderer.theme.NormalText)
+
+	titleStyle := lipgloss.NewStyle().
+		Foreground(renderer.theme.FaintText)
+
+	suffixStyle := renderer.pipelineSuffixStyle(entry.Content)
+
+	typePriorityText := typeIcon(entry.Content.Type) + fmt.Sprintf("P%d", priority)
+
+	icon := statusIconString(status)
+	var statusPart string
+	if icon != "" {
+		statusPart = " " + lipgloss.NewStyle().
+			Foreground(renderer.theme.StatusColor(status)).
+			Render(icon)
+	} else {
+		statusPart = "  "
+	}
+
+	// Compose the text portion: ref + title, truncated to fit.
+	textPart := composePipelineText(pipelineRef, title, textWidth, refStyle, titleStyle)
+
+	// Pad and append suffix.
+	textRendered := textPart
+	textRenderedWidth := lipgloss.Width(textPart)
+	if suffix != "" {
+		gap := contentWidth - textRenderedWidth - lipgloss.Width(suffix)
+		if gap < 1 {
+			gap = 1
+		}
+		textRendered += strings.Repeat(" ", gap) + suffixStyle.Render(suffix)
+	}
+
+	row := " " +
+		typePriorityStyle.Render(typePriorityText) +
+		statusPart +
+		" " +
+		idStyle.Render(entry.ID) +
+		textRendered
+
+	return lipgloss.NewStyle().Width(renderer.width).MaxWidth(renderer.width).Render(row)
+}
+
+// renderSelectedPipelineRow renders the selected pipeline row with
+// highlight background.
+func (renderer ListRenderer) renderSelectedPipelineRow(
+	entry ticketindex.Entry,
+	pipelineRef, title, suffix string,
+	textWidth, contentWidth int,
+) string {
+	baseStyle := lipgloss.NewStyle().
+		Background(renderer.theme.SelectedBackground).
+		Foreground(renderer.theme.SelectedForeground)
+
+	typePriorityText := typeIcon(entry.Content.Type) + fmt.Sprintf("P%d", entry.Content.Priority)
+
+	icon := statusIconString(entry.Content.Status)
+	var statusPart string
+	if icon != "" {
+		statusPart = " " + baseStyle.Render(icon)
+	} else {
+		statusPart = "  "
+	}
+
+	// Compose the text: ref + title using the base style for both.
+	textPart := composePipelineText(pipelineRef, title, textWidth, baseStyle, baseStyle)
+
+	textRendered := textPart
+	textRenderedWidth := lipgloss.Width(textPart)
+	if suffix != "" {
+		gap := contentWidth - textRenderedWidth - lipgloss.Width(suffix)
+		if gap < 1 {
+			gap = 1
+		}
+		textRendered += strings.Repeat(" ", gap) + baseStyle.Render(suffix)
+	}
+
+	row := " " +
+		baseStyle.Bold(true).Render(typePriorityText) +
+		statusPart +
+		" " +
+		baseStyle.Width(columnWidthID).Bold(false).Render(entry.ID) +
+		textRendered
+
+	return baseStyle.Width(renderer.width).MaxWidth(renderer.width).Render(row)
+}
+
+// composePipelineText combines the pipeline ref and title into a
+// single text portion, truncating to fit the available width. The
+// pipeline ref gets priority; the title is appended in faint style
+// only if space remains.
+func composePipelineText(pipelineRef, title string, maxWidth int, refStyle, titleStyle lipgloss.Style) string {
+	refWidth := lipgloss.Width(pipelineRef)
+
+	if refWidth >= maxWidth {
+		return refStyle.Render(truncateString(pipelineRef, maxWidth-1) + "…")
+	}
+
+	result := refStyle.Render(pipelineRef)
+
+	// Append title if there's room (need at least 2 chars: space + 1 char).
+	remaining := maxWidth - refWidth
+	if remaining >= 4 && title != "" {
+		separator := "  "
+		titleSpace := remaining - len(separator)
+		if lipgloss.Width(title) > titleSpace {
+			title = truncateString(title, titleSpace-1) + "…"
+		}
+		result += titleStyle.Render(separator + title)
+	}
+
+	return result
+}
+
+// pipelineSuffix returns the right-side status indicator for a
+// pipeline ticket row, based on its execution state.
+func pipelineSuffix(content ticket.TicketContent) string {
+	pipeline := content.Pipeline
+	if pipeline == nil {
+		return ""
+	}
+
+	switch content.Status {
+	case "in_progress":
+		if pipeline.TotalSteps > 0 && pipeline.CurrentStepName != "" {
+			return fmt.Sprintf("[%d/%d %s]", pipeline.CurrentStep, pipeline.TotalSteps, pipeline.CurrentStepName)
+		}
+		if pipeline.TotalSteps > 0 {
+			return fmt.Sprintf("[%d/%d]", pipeline.CurrentStep, pipeline.TotalSteps)
+		}
+		return ""
+
+	case "closed":
+		switch pipeline.Conclusion {
+		case "success":
+			return "✓ success"
+		case "failure":
+			return "✗ failure"
+		case "aborted":
+			return "✗ aborted"
+		case "cancelled":
+			return "✗ cancelled"
+		default:
+			return ""
+		}
+
+	default:
+		target := firstPendingTimerGateTarget(content)
+		if target != "" {
+			return "⏲ " + compactTimestamp(target)
+		}
+		return ""
+	}
+}
+
+// pipelineSuffixStyle returns the styling for a pipeline suffix
+// based on the ticket's state and conclusion.
+func (renderer ListRenderer) pipelineSuffixStyle(content ticket.TicketContent) lipgloss.Style {
+	pipeline := content.Pipeline
+	if pipeline == nil {
+		return lipgloss.NewStyle().Foreground(renderer.theme.FaintText)
+	}
+
+	switch content.Status {
+	case "in_progress":
+		return lipgloss.NewStyle().Foreground(renderer.theme.StatusInProgress)
+	case "closed":
+		switch pipeline.Conclusion {
+		case "success":
+			return lipgloss.NewStyle().Foreground(renderer.theme.StatusOpen).Bold(true)
+		case "failure", "aborted", "cancelled":
+			return lipgloss.NewStyle().Foreground(renderer.theme.PriorityColor(0)).Bold(true)
+		}
+	}
+
+	return lipgloss.NewStyle().Foreground(renderer.theme.FaintText)
+}
+
+// compactTimestamp converts an RFC 3339 timestamp to a compact
+// human-readable format like "Feb 22 03:00". Falls back to the
+// original string if parsing fails.
+func compactTimestamp(rfc3339 string) string {
+	parsed, err := time.Parse(time.RFC3339, rfc3339)
+	if err != nil {
+		return rfc3339
+	}
+	return parsed.Format("Jan 2 15:04")
 }
 
 // truncateString truncates a string to maxWidth visual characters.

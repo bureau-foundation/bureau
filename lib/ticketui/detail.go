@@ -5,6 +5,7 @@ package ticketui
 
 import (
 	"fmt"
+	"slices"
 	"strings"
 	"time"
 
@@ -212,6 +213,26 @@ func (renderer DetailRenderer) RenderBody(source Source, entry ticketindex.Entry
 	}
 	if depString != "" {
 		addSection(depString, depTargets)
+	}
+
+	// Pipeline-specific sections: execution progress, variables,
+	// and schedule info. Shown for pipeline tickets between the
+	// dependency graph and the structural sections (children, parent).
+	if entry.Content.Type == "pipeline" {
+		executionSection := renderer.renderPipelineExecution(entry.Content)
+		if executionSection != "" {
+			addSection(executionSection, nil)
+		}
+
+		if entry.Content.Pipeline != nil && len(entry.Content.Pipeline.Variables) > 0 {
+			variablesSection := renderer.renderPipelineVariables(entry.Content.Pipeline.Variables)
+			addSection(variablesSection, nil)
+		}
+
+		scheduleSection := renderer.renderPipelineSchedule(entry.Content)
+		if scheduleSection != "" {
+			addSection(scheduleSection, nil)
+		}
 	}
 
 	// Children (for epics).
@@ -686,6 +707,160 @@ func (renderer DetailRenderer) renderNotes(notes []ticket.TicketNote) string {
 	}
 
 	return headerStyle.Render("Notes") + "\n" + strings.Join(lines, "\n")
+}
+
+// renderPipelineExecution renders the pipeline execution section:
+// pipeline reference, progress bar (for active pipelines), and
+// conclusion badge (for completed pipelines).
+func (renderer DetailRenderer) renderPipelineExecution(content ticket.TicketContent) string {
+	pipeline := content.Pipeline
+	if pipeline == nil {
+		return ""
+	}
+
+	headerStyle := lipgloss.NewStyle().
+		Bold(true).
+		Foreground(renderer.theme.NormalText)
+	contentStyle := lipgloss.NewStyle().
+		Foreground(renderer.theme.NormalText)
+	labelStyle := lipgloss.NewStyle().
+		Foreground(renderer.theme.FaintText)
+
+	var lines []string
+
+	lines = append(lines, labelStyle.Render("ref: ")+contentStyle.Render(pipeline.PipelineRef))
+
+	// Progress bar for active pipelines.
+	if content.Status == "in_progress" && pipeline.TotalSteps > 0 {
+		barWidth := 20
+		filled := barWidth * pipeline.CurrentStep / pipeline.TotalSteps
+		if filled > barWidth {
+			filled = barWidth
+		}
+		bar := strings.Repeat("█", filled) + strings.Repeat("░", barWidth-filled)
+
+		stepLabel := ""
+		if pipeline.CurrentStepName != "" {
+			stepLabel = ": " + pipeline.CurrentStepName
+		}
+
+		progressText := fmt.Sprintf("%s %d/%d%s",
+			bar, pipeline.CurrentStep, pipeline.TotalSteps, stepLabel)
+		lines = append(lines, contentStyle.Render(progressText))
+	}
+
+	// Conclusion badge for completed pipelines.
+	if pipeline.Conclusion != "" {
+		conclusionRendered := renderer.conclusionStyle(pipeline.Conclusion).Render(pipeline.Conclusion)
+		lines = append(lines, labelStyle.Render("conclusion: ")+conclusionRendered)
+	}
+
+	return headerStyle.Render("Pipeline Execution") + "\n" + strings.Join(lines, "\n")
+}
+
+// renderPipelineVariables renders a sorted key=value table of
+// resolved pipeline variables.
+func (renderer DetailRenderer) renderPipelineVariables(variables map[string]string) string {
+	headerStyle := lipgloss.NewStyle().
+		Bold(true).
+		Foreground(renderer.theme.NormalText)
+	keyStyle := lipgloss.NewStyle().
+		Foreground(renderer.theme.FaintText)
+	valueStyle := lipgloss.NewStyle().
+		Foreground(renderer.theme.NormalText)
+
+	keys := make([]string, 0, len(variables))
+	for variableName := range variables {
+		keys = append(keys, variableName)
+	}
+	slices.Sort(keys)
+
+	var lines []string
+	for _, variableName := range keys {
+		line := keyStyle.Render(variableName+": ") + valueStyle.Render(variables[variableName])
+		if lipgloss.Width(line) > renderer.width {
+			line = truncateString(line, renderer.width-1) + "…"
+		}
+		lines = append(lines, line)
+	}
+
+	return headerStyle.Render("Variables") + "\n" + strings.Join(lines, "\n")
+}
+
+// renderPipelineSchedule renders timer gate details for pipeline
+// tickets that have timer-based scheduling. Shows the gate status,
+// target time, schedule or interval expression, and fire count.
+func (renderer DetailRenderer) renderPipelineSchedule(content ticket.TicketContent) string {
+	var timerGates []ticket.TicketGate
+	for index := range content.Gates {
+		if content.Gates[index].Type == "timer" {
+			timerGates = append(timerGates, content.Gates[index])
+		}
+	}
+	if len(timerGates) == 0 {
+		return ""
+	}
+
+	headerStyle := lipgloss.NewStyle().
+		Bold(true).
+		Foreground(renderer.theme.NormalText)
+	contentStyle := lipgloss.NewStyle().
+		Foreground(renderer.theme.NormalText)
+	labelStyle := lipgloss.NewStyle().
+		Foreground(renderer.theme.FaintText)
+
+	var lines []string
+	for _, gate := range timerGates {
+		// Gate ID and status.
+		statusIndicator := "⏲ pending"
+		statusColor := renderer.theme.StatusInProgress
+		if gate.Status == "satisfied" {
+			statusIndicator = "✓ satisfied"
+			statusColor = renderer.theme.StatusOpen
+		}
+		statusStyle := lipgloss.NewStyle().Foreground(statusColor)
+
+		gateLabel := gate.ID
+		if gate.Description != "" {
+			gateLabel += ": " + gate.Description
+		}
+		lines = append(lines, statusStyle.Render(statusIndicator)+"  "+contentStyle.Render(gateLabel))
+
+		if gate.Target != "" {
+			lines = append(lines, labelStyle.Render("  target: ")+contentStyle.Render(gate.Target))
+		}
+		if gate.Schedule != "" {
+			lines = append(lines, labelStyle.Render("  schedule: ")+contentStyle.Render(gate.Schedule))
+		}
+		if gate.Interval != "" {
+			lines = append(lines, labelStyle.Render("  interval: ")+contentStyle.Render(gate.Interval))
+		}
+		if gate.IsRecurring() {
+			recurrence := fmt.Sprintf("fired %d times", gate.FireCount)
+			if gate.MaxOccurrences > 0 {
+				recurrence += fmt.Sprintf(" (max %d)", gate.MaxOccurrences)
+			}
+			lines = append(lines, labelStyle.Render("  ")+contentStyle.Render(recurrence))
+		}
+	}
+
+	return headerStyle.Render("Schedule") + "\n" + strings.Join(lines, "\n")
+}
+
+// conclusionStyle returns a lipgloss style for rendering a pipeline
+// conclusion badge. Success is green, failure is red/bold, and
+// aborted/cancelled use the high-priority color.
+func (renderer DetailRenderer) conclusionStyle(conclusion string) lipgloss.Style {
+	switch conclusion {
+	case "success":
+		return lipgloss.NewStyle().Foreground(renderer.theme.StatusOpen).Bold(true)
+	case "failure":
+		return lipgloss.NewStyle().Foreground(renderer.theme.PriorityColor(0)).Bold(true)
+	case "aborted", "cancelled":
+		return lipgloss.NewStyle().Foreground(renderer.theme.PriorityColor(1))
+	default:
+		return lipgloss.NewStyle().Foreground(renderer.theme.FaintText)
+	}
 }
 
 // DetailPane wraps a bubbles viewport for scrollable detail content.

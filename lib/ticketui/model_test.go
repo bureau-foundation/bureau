@@ -943,3 +943,423 @@ func TestNewNavigationClearsForwardStack(t *testing.T) {
 		t.Errorf("new navigation should clear forward stack, got %d entries", len(model.navForward))
 	}
 }
+
+// testPipelineSource creates a ticket index with pipeline tickets in
+// various execution states for testing the Pipelines tab.
+func testPipelineSource() *IndexSource {
+	index := ticketindex.NewIndex()
+
+	// Active: in_progress, currently executing.
+	index.Put("pip-001", ticket.TicketContent{
+		Version:   1,
+		Title:     "Deploy staging",
+		Status:    "in_progress",
+		Priority:  2,
+		Type:      "pipeline",
+		Assignee:  ref.MustParseUserID("@executor:bureau.local"),
+		CreatedBy: ref.MustParseUserID("@ci:bureau.local"),
+		CreatedAt: "2026-02-20T10:00:00Z",
+		UpdatedAt: "2026-02-20T10:05:00Z",
+		Pipeline: &ticket.PipelineExecutionContent{
+			PipelineRef:     "deploy/staging",
+			TotalSteps:      10,
+			CurrentStep:     4,
+			CurrentStepName: "clone-repo",
+		},
+	})
+
+	// Waiting: open, no gates, no blockers — ready to execute.
+	index.Put("pip-002", ticket.TicketContent{
+		Version:   1,
+		Title:     "CI main",
+		Status:    "open",
+		Priority:  1,
+		Type:      "pipeline",
+		CreatedBy: ref.MustParseUserID("@ci:bureau.local"),
+		CreatedAt: "2026-02-20T09:00:00Z",
+		UpdatedAt: "2026-02-20T09:00:00Z",
+		Pipeline: &ticket.PipelineExecutionContent{
+			PipelineRef: "ci/main",
+			TotalSteps:  5,
+		},
+	})
+
+	// Scheduled: open with a pending timer gate.
+	index.Put("pip-003", ticket.TicketContent{
+		Version:   1,
+		Title:     "Nightly build",
+		Status:    "open",
+		Priority:  3,
+		Type:      "pipeline",
+		CreatedBy: ref.MustParseUserID("@ci:bureau.local"),
+		CreatedAt: "2026-02-19T00:00:00Z",
+		UpdatedAt: "2026-02-19T00:00:00Z",
+		Gates: []ticket.TicketGate{{
+			ID:       "nightly-timer",
+			Type:     "timer",
+			Status:   "pending",
+			Target:   "2026-02-22T03:00:00Z",
+			Schedule: "0 3 * * *",
+		}},
+		Pipeline: &ticket.PipelineExecutionContent{
+			PipelineRef: "nightly/build",
+			TotalSteps:  8,
+		},
+	})
+
+	// Scheduled: open with a later timer gate (for sort order test).
+	index.Put("pip-006", ticket.TicketContent{
+		Version:   1,
+		Title:     "Weekly cleanup",
+		Status:    "open",
+		Priority:  4,
+		Type:      "pipeline",
+		CreatedBy: ref.MustParseUserID("@ci:bureau.local"),
+		CreatedAt: "2026-02-18T00:00:00Z",
+		UpdatedAt: "2026-02-18T00:00:00Z",
+		Gates: []ticket.TicketGate{{
+			ID:        "weekly-timer",
+			Type:      "timer",
+			Status:    "pending",
+			Target:    "2026-02-24T00:00:00Z",
+			Schedule:  "0 0 * * 0",
+			FireCount: 5,
+		}},
+		Pipeline: &ticket.PipelineExecutionContent{
+			PipelineRef: "cleanup/weekly",
+			TotalSteps:  3,
+		},
+	})
+
+	// History: closed, success.
+	index.Put("pip-004", ticket.TicketContent{
+		Version:   1,
+		Title:     "CI main prior run",
+		Status:    "closed",
+		Priority:  1,
+		Type:      "pipeline",
+		CreatedBy: ref.MustParseUserID("@ci:bureau.local"),
+		CreatedAt: "2026-02-19T08:00:00Z",
+		UpdatedAt: "2026-02-19T08:10:00Z",
+		ClosedAt:  "2026-02-19T08:10:00Z",
+		Pipeline: &ticket.PipelineExecutionContent{
+			PipelineRef: "ci/main",
+			TotalSteps:  5,
+			CurrentStep: 5,
+			Conclusion:  "success",
+		},
+	})
+
+	// History: closed, failure (older).
+	index.Put("pip-005", ticket.TicketContent{
+		Version:   1,
+		Title:     "Deploy staging failed",
+		Status:    "closed",
+		Priority:  2,
+		Type:      "pipeline",
+		CreatedBy: ref.MustParseUserID("@ci:bureau.local"),
+		CreatedAt: "2026-02-18T14:00:00Z",
+		UpdatedAt: "2026-02-18T14:05:00Z",
+		ClosedAt:  "2026-02-18T14:05:00Z",
+		Pipeline: &ticket.PipelineExecutionContent{
+			PipelineRef: "deploy/staging",
+			TotalSteps:  10,
+			CurrentStep: 3,
+			Conclusion:  "failure",
+		},
+	})
+
+	// Non-pipeline ticket: should NOT appear on the Pipelines tab.
+	index.Put("tkt-001", ticket.TicketContent{
+		Version:   1,
+		Title:     "Regular task",
+		Status:    "open",
+		Priority:  2,
+		Type:      "task",
+		CreatedBy: ref.MustParseUserID("@ben:bureau.local"),
+		CreatedAt: "2026-02-20T00:00:00Z",
+		UpdatedAt: "2026-02-20T00:00:00Z",
+	})
+
+	return NewIndexSource(index)
+}
+
+// TestPipelinesSnapshot verifies that IndexSource.Pipelines() returns
+// only pipeline tickets and excludes non-pipeline tickets.
+func TestPipelinesSnapshot(t *testing.T) {
+	source := testPipelineSource()
+	snapshot := source.Pipelines()
+
+	for _, entry := range snapshot.Entries {
+		if entry.Content.Type != "pipeline" {
+			t.Errorf("Pipelines() returned non-pipeline ticket %s (type=%s)", entry.ID, entry.Content.Type)
+		}
+	}
+
+	// Should include all 6 pipeline tickets, not tkt-001.
+	if len(snapshot.Entries) != 6 {
+		t.Errorf("expected 6 pipeline entries, got %d", len(snapshot.Entries))
+	}
+}
+
+// TestPipelinesSectionGrouping verifies that pipeline tickets are
+// classified into the correct sections (Active, Waiting, Scheduled,
+// History).
+func TestPipelinesSectionGrouping(t *testing.T) {
+	source := testPipelineSource()
+	model := NewModel(source)
+	model.width = 120
+	model.height = 40
+	model.ready = true
+	model.switchTab(TabPipelines)
+
+	// Collect section headers and their tickets.
+	type section struct {
+		header    ListItem
+		ticketIDs []string
+	}
+	var sections []section
+
+	for _, item := range model.items {
+		if item.IsHeader {
+			sections = append(sections, section{header: item})
+		} else if len(sections) > 0 {
+			sections[len(sections)-1].ticketIDs = append(
+				sections[len(sections)-1].ticketIDs, item.Entry.ID)
+		}
+	}
+
+	// Expect 4 sections: Active, Waiting, Scheduled, History.
+	if len(sections) != 4 {
+		t.Fatalf("expected 4 sections, got %d", len(sections))
+	}
+
+	// Active section should contain pip-001 (in_progress).
+	if sections[0].header.EpicID != pipelineSectionActive {
+		t.Errorf("first section should be Active, got %s", sections[0].header.EpicID)
+	}
+	if len(sections[0].ticketIDs) != 1 || sections[0].ticketIDs[0] != "pip-001" {
+		t.Errorf("Active section should contain [pip-001], got %v", sections[0].ticketIDs)
+	}
+
+	// Waiting section should contain pip-002.
+	if sections[1].header.EpicID != pipelineSectionWaiting {
+		t.Errorf("second section should be Waiting, got %s", sections[1].header.EpicID)
+	}
+	if len(sections[1].ticketIDs) != 1 || sections[1].ticketIDs[0] != "pip-002" {
+		t.Errorf("Waiting section should contain [pip-002], got %v", sections[1].ticketIDs)
+	}
+
+	// Scheduled section should contain pip-003, pip-006.
+	if sections[2].header.EpicID != pipelineSectionScheduled {
+		t.Errorf("third section should be Scheduled, got %s", sections[2].header.EpicID)
+	}
+	if len(sections[2].ticketIDs) != 2 {
+		t.Errorf("Scheduled section should have 2 tickets, got %d", len(sections[2].ticketIDs))
+	}
+
+	// History section should contain pip-004, pip-005.
+	if sections[3].header.EpicID != pipelineSectionHistory {
+		t.Errorf("fourth section should be History, got %s", sections[3].header.EpicID)
+	}
+	if len(sections[3].ticketIDs) != 2 {
+		t.Errorf("History section should have 2 tickets, got %d", len(sections[3].ticketIDs))
+	}
+}
+
+// TestPipelinesSectionSorting verifies sorting within each pipeline
+// section: Active/Waiting by priority, Scheduled by next fire time,
+// History by ClosedAt descending.
+func TestPipelinesSectionSorting(t *testing.T) {
+	source := testPipelineSource()
+	model := NewModel(source)
+	model.width = 120
+	model.height = 40
+	model.ready = true
+	model.switchTab(TabPipelines)
+
+	// Find the Scheduled section and verify fire time ordering.
+	inScheduled := false
+	var scheduledIDs []string
+	for _, item := range model.items {
+		if item.IsHeader {
+			inScheduled = item.EpicID == pipelineSectionScheduled
+			continue
+		}
+		if inScheduled {
+			scheduledIDs = append(scheduledIDs, item.Entry.ID)
+		}
+	}
+	// pip-003 has target 2026-02-22, pip-006 has target 2026-02-24.
+	if len(scheduledIDs) == 2 {
+		if scheduledIDs[0] != "pip-003" || scheduledIDs[1] != "pip-006" {
+			t.Errorf("Scheduled section should be sorted by fire time: expected [pip-003, pip-006], got %v", scheduledIDs)
+		}
+	}
+
+	// Find the History section and verify ClosedAt descending.
+	inHistory := false
+	var historyIDs []string
+	for _, item := range model.items {
+		if item.IsHeader {
+			inHistory = item.EpicID == pipelineSectionHistory
+			continue
+		}
+		if inHistory {
+			historyIDs = append(historyIDs, item.Entry.ID)
+		}
+	}
+	// pip-004 closed 2026-02-19T08:10, pip-005 closed 2026-02-18T14:05.
+	// Descending: pip-004 first.
+	if len(historyIDs) == 2 {
+		if historyIDs[0] != "pip-004" || historyIDs[1] != "pip-005" {
+			t.Errorf("History section should be sorted by ClosedAt descending: expected [pip-004, pip-005], got %v", historyIDs)
+		}
+	}
+}
+
+// TestPipelinesSectionCollapse verifies that pipeline section headers
+// can be collapsed and expanded.
+func TestPipelinesSectionCollapse(t *testing.T) {
+	source := testPipelineSource()
+	model := NewModel(source)
+	model.width = 120
+	model.height = 40
+	model.ready = true
+	model.switchTab(TabPipelines)
+
+	// Count total items before collapse.
+	totalBefore := len(model.items)
+
+	// Collapse the History section.
+	model.collapsedEpics[pipelineSectionHistory] = true
+	model.rebuildItems()
+
+	totalAfter := len(model.items)
+
+	// History had 2 tickets; collapsing should remove them from items.
+	expectedReduction := 2
+	if totalBefore-totalAfter != expectedReduction {
+		t.Errorf("collapsing History should remove %d items: before=%d, after=%d",
+			expectedReduction, totalBefore, totalAfter)
+	}
+
+	// Verify the History header is still present and marked collapsed.
+	for _, item := range model.items {
+		if item.IsHeader && item.EpicID == pipelineSectionHistory {
+			if !item.Collapsed {
+				t.Error("History header should be marked collapsed")
+			}
+			return
+		}
+	}
+	t.Error("History header not found after collapse")
+}
+
+// TestPipelineFilterMatchesPipelineRef verifies that fuzzy filtering
+// on the Pipelines tab matches against the pipeline reference field.
+func TestPipelineFilterMatchesPipelineRef(t *testing.T) {
+	source := testPipelineSource()
+	model := NewModel(source)
+	model.width = 120
+	model.height = 40
+	model.ready = true
+	model.switchTab(TabPipelines)
+
+	// Filter by "deploy" — should match pip-001 (deploy/staging)
+	// and pip-005 (deploy/staging).
+	model.filter.Input = "deploy"
+	model.applyFilter()
+
+	// Collect non-header entries.
+	var matchedIDs []string
+	for _, item := range model.items {
+		if !item.IsHeader {
+			matchedIDs = append(matchedIDs, item.Entry.ID)
+		}
+	}
+
+	if len(matchedIDs) != 2 {
+		t.Fatalf("expected 2 matches for 'deploy', got %d: %v", len(matchedIDs), matchedIDs)
+	}
+
+	// Both should be deploy-related pipelines.
+	for _, matchedID := range matchedIDs {
+		if matchedID != "pip-001" && matchedID != "pip-005" {
+			t.Errorf("unexpected match %s for 'deploy' filter", matchedID)
+		}
+	}
+}
+
+// TestPipelineNilDefensive verifies that a pipeline ticket with
+// Type "pipeline" but nil Pipeline field does not cause a panic.
+func TestPipelineNilDefensive(t *testing.T) {
+	index := ticketindex.NewIndex()
+	index.Put("pip-nil", ticket.TicketContent{
+		Version:   1,
+		Title:     "Broken pipeline ticket",
+		Status:    "open",
+		Priority:  2,
+		Type:      "pipeline",
+		CreatedBy: ref.MustParseUserID("@ci:bureau.local"),
+		CreatedAt: "2026-02-20T00:00:00Z",
+		UpdatedAt: "2026-02-20T00:00:00Z",
+		// Pipeline: nil — deliberately omitted.
+	})
+	source := NewIndexSource(index)
+
+	model := NewModel(source)
+	model.width = 120
+	model.height = 40
+	model.ready = true
+	model.switchTab(TabPipelines)
+
+	// Should not panic. The ticket should appear in the Waiting section
+	// (open, no timer gates).
+	found := false
+	for _, item := range model.items {
+		if !item.IsHeader && item.Entry.ID == "pip-nil" {
+			found = true
+		}
+	}
+	if !found {
+		t.Error("pip-nil should appear in the Pipelines tab")
+	}
+
+	// Verify that rendering a pipeline row with nil Pipeline doesn't
+	// panic — it should fall back to the regular RenderRow.
+	renderer := NewListRenderer(DefaultTheme, 80)
+	entry := ticketindex.Entry{
+		ID: "pip-nil",
+		Content: ticket.TicketContent{
+			Type:     "pipeline",
+			Title:    "Broken pipeline ticket",
+			Status:   "open",
+			Priority: 2,
+		},
+	}
+	// Should not panic.
+	_ = renderer.RenderPipelineRow(entry, false, nil)
+	_ = renderer.RenderPipelineRow(entry, true, nil)
+}
+
+// TestPipelineNonPipelineExcluded verifies that non-pipeline tickets
+// do not appear on the Pipelines tab.
+func TestPipelineNonPipelineExcluded(t *testing.T) {
+	source := testPipelineSource()
+	model := NewModel(source)
+	model.width = 120
+	model.height = 40
+	model.ready = true
+	model.switchTab(TabPipelines)
+
+	for _, item := range model.items {
+		if item.IsHeader {
+			continue
+		}
+		if item.Entry.Content.Type != "pipeline" {
+			t.Errorf("non-pipeline ticket %s (type=%s) appeared on Pipelines tab",
+				item.Entry.ID, item.Entry.Content.Type)
+		}
+	}
+}

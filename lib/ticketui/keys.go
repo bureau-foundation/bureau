@@ -26,9 +26,10 @@ type KeyMap struct {
 	SplitShrink key.Binding // Shrink list pane (push detail left).
 
 	// Tab switching.
-	TabReady   key.Binding
-	TabBlocked key.Binding
-	TabAll     key.Binding
+	TabReady     key.Binding
+	TabBlocked   key.Binding
+	TabAll       key.Binding
+	TabPipelines key.Binding
 
 	// Navigation history.
 	NavigateBack key.Binding // Go back to the previous ticket.
@@ -102,6 +103,10 @@ var DefaultKeyMap = KeyMap{
 	TabAll: key.NewBinding(
 		key.WithKeys("3"),
 		key.WithHelp("3", "all"),
+	),
+	TabPipelines: key.NewBinding(
+		key.WithKeys("4"),
+		key.WithHelp("4", "pipelines"),
 	),
 	NavigateBack: key.NewBinding(
 		key.WithKeys("backspace"),

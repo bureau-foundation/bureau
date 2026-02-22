@@ -186,6 +186,12 @@ func searchableFields(entry ticketindex.Entry, source Source) []string {
 		}
 	}
 
+	// Include pipeline reference so fuzzy filtering on the Pipelines
+	// tab can match against pipeline definition names.
+	if entry.Content.Pipeline != nil {
+		fields = append(fields, entry.Content.Pipeline.PipelineRef)
+	}
+
 	return fields
 }
 

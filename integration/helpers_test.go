@@ -21,6 +21,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"io"
+	"log/slog"
 	"net"
 	"net/http"
 	"os"
@@ -707,11 +708,16 @@ func provisionMachine(t *testing.T, client *messaging.Client, admin *messaging.D
 	}
 	defer registrationToken.Close()
 
+	logger := slog.New(slog.NewJSONHandler(os.Stderr, nil)).With(
+		"test", t.Name(),
+		"machine", machineRef.Localpart(),
+	)
+
 	result, err := machine.Provision(ctx, client, admin, machine.ProvisionParams{
 		Machine:           machineRef,
 		HomeserverURL:     testHomeserverURL,
 		RegistrationToken: registrationToken,
-	})
+	}, logger)
 	if err != nil {
 		t.Fatalf("provision machine %s: %v", machineRef.Localpart(), err)
 	}
@@ -727,9 +733,14 @@ func decommissionMachine(t *testing.T, admin *messaging.DirectSession, machineRe
 	t.Helper()
 	ctx := t.Context()
 
+	logger := slog.New(slog.NewJSONHandler(os.Stderr, nil)).With(
+		"test", t.Name(),
+		"machine", machineRef.Localpart(),
+	)
+
 	if err := machine.Decommission(ctx, admin, machine.DecommissionParams{
 		Machine: machineRef,
-	}); err != nil {
+	}, logger); err != nil {
 		t.Fatalf("decommission machine %s: %v", machineRef.Localpart(), err)
 	}
 }
@@ -740,10 +751,15 @@ func revokeMachine(t *testing.T, admin *messaging.DirectSession, machineRef ref.
 	t.Helper()
 	ctx := t.Context()
 
+	logger := slog.New(slog.NewJSONHandler(os.Stderr, nil)).With(
+		"test", t.Name(),
+		"machine", machineRef.Localpart(),
+	)
+
 	if err := machine.Revoke(ctx, admin, machine.RevokeParams{
 		Machine: machineRef,
 		Reason:  reason,
-	}); err != nil {
+	}, logger); err != nil {
 		t.Fatalf("revoke machine %s: %v", machineRef.Localpart(), err)
 	}
 }

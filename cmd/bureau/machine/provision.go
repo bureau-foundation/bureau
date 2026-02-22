@@ -9,6 +9,7 @@ import (
 	"encoding/hex"
 	"encoding/json"
 	"fmt"
+	"log/slog"
 	"os"
 	"strings"
 	"time"
@@ -171,15 +172,24 @@ accidental or intentional spoofing of active machines.`,
 				return cli.Validation("invalid machine name: %v", err)
 			}
 
+			logger := cli.NewCommandLogger().With(
+				"command", "machine/provision",
+				"fleet", fleet.Localpart(),
+				"machine", machine.Localpart(),
+			)
+
 			result, err := Provision(ctx, client, adminSession, ProvisionParams{
 				Machine:           machine,
 				HomeserverURL:     homeserverURL,
 				RegistrationToken: registrationTokenBuffer,
-			})
+			}, logger)
 			if err != nil {
 				return err
 			}
 
+			// User-facing output: bootstrap config and next-step instructions.
+			// These stay as fmt.Fprintf because they are CLI display text,
+			// not operational logging.
 			if params.OutputPath != "" {
 				if err := bootstrap.WriteConfig(params.OutputPath, result.Config); err != nil {
 					return cli.Internal("write bootstrap config: %w", err)
@@ -211,7 +221,7 @@ accidental or intentional spoofing of active machines.`,
 // This function does not read credential files or create sessions. The CLI
 // wrapper handles credential acquisition; integration tests and other
 // programmatic callers provide their own client and session.
-func Provision(ctx context.Context, client *messaging.Client, adminSession *messaging.DirectSession, params ProvisionParams) (*ProvisionResult, error) {
+func Provision(ctx context.Context, client *messaging.Client, adminSession *messaging.DirectSession, params ProvisionParams, logger *slog.Logger) (*ProvisionResult, error) {
 	machine := params.Machine
 	fleet := machine.Fleet()
 	server := fleet.Server()
@@ -237,7 +247,7 @@ func Provision(ctx context.Context, client *messaging.Client, adminSession *mess
 	// Register the machine account. Use the one-time password (NOT a
 	// derived password from the registration token). The launcher will
 	// rotate this password on first boot.
-	fmt.Fprintf(os.Stderr, "Registering machine account %s...\n", machineUserID)
+	logger.Info("registering machine account", "machine_user_id", machineUserID.String())
 
 	_, registerError := client.Register(ctx, messaging.RegisterRequest{
 		Username:          machineUsername,
@@ -250,8 +260,8 @@ func Provision(ctx context.Context, client *messaging.Client, adminSession *mess
 			// machine has been fully decommissioned: zero Bureau room
 			// memberships and cleared state events. Otherwise it could be
 			// an active machine or a partially decommissioned one.
-			fmt.Fprintf(os.Stderr, "  Account already exists — verifying decommission status...\n")
-			if err := verifyFullDecommission(ctx, adminSession, machine, machineUsername, machineUserID); err != nil {
+			logger.Info("account already exists, verifying decommission status")
+			if err := verifyFullDecommission(ctx, adminSession, machine, machineUsername, machineUserID, logger); err != nil {
 				return nil, err
 			}
 			// Decommission verified. Reset the password to our one-time
@@ -264,12 +274,12 @@ func Provision(ctx context.Context, client *messaging.Client, adminSession *mess
 				}
 				return nil, cli.Internal("reset password for re-provisioned machine: %w", resetErr)
 			}
-			fmt.Fprintf(os.Stderr, "  Password reset for re-provisioning\n")
+			logger.Info("password reset for re-provisioning")
 		} else {
 			return nil, cli.Internal("register machine account: %w", registerError)
 		}
 	} else {
-		fmt.Fprintf(os.Stderr, "  Account created: %s\n", machineUserID)
+		logger.Info("account created", "machine_user_id", machineUserID.String())
 	}
 
 	// Resolve all global Bureau rooms and invite the machine to each.
@@ -287,9 +297,9 @@ func Provision(ctx context.Context, client *messaging.Client, adminSession *mess
 			if !messaging.IsMatrixError(err, messaging.ErrCodeForbidden) {
 				return nil, cli.Internal("invite machine to %s: %w", room.alias, err)
 			}
-			fmt.Fprintf(os.Stderr, "  Already invited to %s\n", room.alias)
+			logger.Info("already invited to room", "room", room.alias)
 		} else {
-			fmt.Fprintf(os.Stderr, "  Invited to %s\n", room.alias)
+			logger.Info("invited to room", "room", room.alias)
 		}
 	}
 
@@ -310,9 +320,9 @@ func Provision(ctx context.Context, client *messaging.Client, adminSession *mess
 			if !messaging.IsMatrixError(err, messaging.ErrCodeForbidden) {
 				return nil, cli.Internal("invite machine to %s: %w", fleetRoom.name, err)
 			}
-			fmt.Fprintf(os.Stderr, "  Already invited to %s\n", fleetRoom.name)
+			logger.Info("already invited to room", "room", fleetRoom.name)
 		} else {
-			fmt.Fprintf(os.Stderr, "  Invited to %s\n", fleetRoom.name)
+			logger.Info("invited to room", "room", fleetRoom.name)
 		}
 	}
 
@@ -322,7 +332,7 @@ func Provision(ctx context.Context, client *messaging.Client, adminSession *mess
 	// fleet-scoped localpart IS the room alias localpart.
 	configAlias := machine.RoomAlias()
 
-	fmt.Fprintf(os.Stderr, "Creating config room %s...\n", configAlias)
+	logger.Info("creating config room", "alias", configAlias)
 	configRoom, createError := adminSession.CreateRoom(ctx, messaging.CreateRoomRequest{
 		Name:       "Config: " + machineUsername,
 		Topic:      "Machine configuration and credentials for " + machineUsername,
@@ -335,7 +345,7 @@ func Provision(ctx context.Context, client *messaging.Client, adminSession *mess
 		if messaging.IsMatrixError(createError, messaging.ErrCodeRoomInUse) {
 			// Config room already exists from a previous provision. Resolve
 			// it and re-invite the machine (it was kicked during decommission).
-			fmt.Fprintf(os.Stderr, "  Config room already exists, re-inviting machine...\n")
+			logger.Info("config room already exists, re-inviting machine")
 			configRoomID, err := adminSession.ResolveAlias(ctx, configAlias)
 			if err != nil {
 				return nil, cli.Internal("resolve existing config room %q: %w", configAlias, err)
@@ -344,9 +354,9 @@ func Provision(ctx context.Context, client *messaging.Client, adminSession *mess
 				if !messaging.IsMatrixError(err, messaging.ErrCodeForbidden) {
 					return nil, cli.Internal("re-invite machine to config room: %w", err)
 				}
-				fmt.Fprintf(os.Stderr, "  Already invited to config room\n")
+				logger.Info("already invited to config room")
 			} else {
-				fmt.Fprintf(os.Stderr, "  Re-invited to config room\n")
+				logger.Info("re-invited to config room")
 			}
 		} else {
 			return nil, cli.Internal("create config room: %w", createError)
@@ -360,7 +370,7 @@ func Provision(ctx context.Context, client *messaging.Client, adminSession *mess
 		if err != nil {
 			return nil, cli.Internal("set config room power levels: %w", err)
 		}
-		fmt.Fprintf(os.Stderr, "  Config room created: %s\n", configRoom.RoomID)
+		logger.Info("config room created", "room_id", configRoom.RoomID.String())
 	}
 
 	// Build the bootstrap config. The MachineName and FleetPrefix fields
@@ -383,7 +393,7 @@ func Provision(ctx context.Context, client *messaging.Client, adminSession *mess
 // This is the security gate for re-provisioning. Without it, provision
 // could be used to take over an active machine's identity by resetting
 // its password and re-bootstrapping.
-func verifyFullDecommission(ctx context.Context, session messaging.Session, machine ref.Machine, machineUsername string, machineUserID ref.UserID) error {
+func verifyFullDecommission(ctx context.Context, session messaging.Session, machine ref.Machine, machineUsername string, machineUserID ref.UserID, logger *slog.Logger) error {
 	// Resolve all global Bureau rooms.
 	namespace := machine.Fleet().Namespace()
 	globalRooms, failedRooms, _ := resolveGlobalRooms(ctx, session, namespace)
@@ -417,10 +427,14 @@ func verifyFullDecommission(ctx context.Context, session messaging.Session, mach
 	// it was never created (half-baked provision).
 
 	if len(activeRooms) > 0 {
-		fmt.Fprintf(os.Stderr, "  Machine still has active membership in %d Bureau room(s):\n", len(activeRooms))
-		for _, room := range activeRooms {
-			fmt.Fprintf(os.Stderr, "    - %s (%s)\n", room.displayName, room.roomID)
+		roomDescriptions := make([]string, len(activeRooms))
+		for index, room := range activeRooms {
+			roomDescriptions[index] = fmt.Sprintf("%s (%s)", room.displayName, room.roomID)
 		}
+		logger.Warn("machine has active Bureau room memberships",
+			"count", len(activeRooms),
+			"rooms", roomDescriptions,
+		)
 		return cli.Conflict("machine account %s exists and is not fully decommissioned — run 'bureau machine decommission %s %s' first",
 			machineUserID, machine.Fleet().Localpart(), machine.Name())
 	}
@@ -456,6 +470,6 @@ func verifyFullDecommission(ctx context.Context, session messaging.Session, mach
 		}
 	}
 
-	fmt.Fprintf(os.Stderr, "  Decommission verified: zero memberships, cleared state\n")
+	logger.Info("decommission verified, zero memberships and cleared state")
 	return nil
 }

@@ -13,6 +13,7 @@ go_library(
         "exit.go",
         "json.go",
         "local_machine.go",
+        "logger.go",
         "login.go",
         "operator_session.go",
         "params.go",

@@ -7,6 +7,7 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"log/slog"
 	"os"
 	"time"
 
@@ -100,9 +101,23 @@ failure explicitly.`,
 				return cli.Validation("invalid machine name: %v", err)
 			}
 
-			return Decommission(ctx, session, DecommissionParams{
+			logger := cli.NewCommandLogger().With(
+				"command", "machine/decommission",
+				"fleet", fleet.Localpart(),
+				"machine", machine.Localpart(),
+			)
+
+			if err := Decommission(ctx, session, DecommissionParams{
 				Machine: machine,
-			})
+			}, logger); err != nil {
+				return err
+			}
+
+			// User-facing re-provision hint stays as CLI display text.
+			fmt.Fprintf(os.Stderr, "To re-provision, run: bureau machine provision %s %s --credential-file <creds>\n",
+				fleet.Localpart(), machine.Name())
+
+			return nil
 		},
 	}
 }
@@ -113,19 +128,24 @@ failure explicitly.`,
 // for KickUser) and a context with an appropriate deadline.
 //
 // After decommission, the machine name can be re-provisioned with Provision.
-func Decommission(ctx context.Context, session *messaging.DirectSession, params DecommissionParams) error {
+func Decommission(ctx context.Context, session *messaging.DirectSession, params DecommissionParams, logger *slog.Logger) error {
 	machine := params.Machine
 	fleet := machine.Fleet()
 	machineUsername := machine.Localpart()
 	machineUserID := machine.UserID()
 
-	fmt.Fprintf(os.Stderr, "Decommissioning %s (%s)...\n", machineUsername, machineUserID)
+	logger.Info("decommissioning machine",
+		"machine_user_id", machineUserID.String(),
+	)
 
 	// Resolve global Bureau rooms (template, pipeline, system) for kick.
 	namespace := fleet.Namespace()
 	globalRooms, failedRooms, resolveErrors := resolveGlobalRooms(ctx, session, namespace)
 	for index, room := range failedRooms {
-		fmt.Fprintf(os.Stderr, "  Warning: could not resolve %s: %v\n", room.displayName, resolveErrors[index])
+		logger.Warn("could not resolve global room",
+			"room", room.displayName,
+			"error", resolveErrors[index],
+		)
 	}
 
 	// Resolve the fleet-scoped rooms for state event cleanup and kicking.
@@ -136,16 +156,16 @@ func Decommission(ctx context.Context, session *messaging.DirectSession, params 
 
 	_, err = session.SendStateEvent(ctx, machineRoomID, schema.EventTypeMachineKey, machineUsername, map[string]any{})
 	if err != nil {
-		fmt.Fprintf(os.Stderr, "  Warning: could not clear machine_key: %v\n", err)
+		logger.Warn("could not clear machine_key", "error", err)
 	} else {
-		fmt.Fprintf(os.Stderr, "  Cleared machine_key\n")
+		logger.Info("cleared machine_key")
 	}
 
 	_, err = session.SendStateEvent(ctx, machineRoomID, schema.EventTypeMachineStatus, machineUsername, map[string]any{})
 	if err != nil {
-		fmt.Fprintf(os.Stderr, "  Warning: could not clear machine_status: %v\n", err)
+		logger.Warn("could not clear machine_status", "error", err)
 	} else {
-		fmt.Fprintf(os.Stderr, "  Cleared machine_status\n")
+		logger.Info("cleared machine_status")
 	}
 
 	// Clean up the per-machine config room: clear state events and kick.
@@ -153,7 +173,7 @@ func Decommission(ctx context.Context, session *messaging.DirectSession, params 
 	configRoomID, err := session.ResolveAlias(ctx, configAlias)
 	if err != nil {
 		if messaging.IsMatrixError(err, messaging.ErrCodeNotFound) {
-			fmt.Fprintf(os.Stderr, "  Config room %s does not exist (skipping)\n", configAlias)
+			logger.Info("config room does not exist, skipping", "alias", configAlias)
 		} else {
 			return cli.NotFound("resolve config room %q: %w", configAlias, err)
 		}
@@ -161,30 +181,30 @@ func Decommission(ctx context.Context, session *messaging.DirectSession, params 
 		// Clear machine_config.
 		_, err = session.SendStateEvent(ctx, configRoomID, schema.EventTypeMachineConfig, machineUsername, map[string]any{})
 		if err != nil {
-			fmt.Fprintf(os.Stderr, "  Warning: could not clear machine_config: %v\n", err)
+			logger.Warn("could not clear machine_config", "error", err)
 		} else {
-			fmt.Fprintf(os.Stderr, "  Cleared machine_config from config room\n")
+			logger.Info("cleared machine_config from config room")
 		}
 
 		// Find and clear all credentials state events in the config room.
-		if _, err := clearConfigRoomCredentials(ctx, session, configRoomID); err != nil {
-			fmt.Fprintf(os.Stderr, "  Warning: %v\n", err)
+		if _, err := clearConfigRoomCredentials(ctx, session, configRoomID, logger); err != nil {
+			logger.Warn("could not clear config room credentials", "error", err)
 		}
 
 		err = session.KickUser(ctx, configRoomID, machineUserID, "machine decommissioned")
 		if err != nil {
-			fmt.Fprintf(os.Stderr, "  Warning: could not kick from config room: %v\n", err)
+			logger.Warn("could not kick from config room", "error", err)
 		} else {
-			fmt.Fprintf(os.Stderr, "  Kicked from config room\n")
+			logger.Info("kicked from config room")
 		}
 	}
 
 	for _, room := range globalRooms {
 		err = session.KickUser(ctx, room.roomID, machineUserID, "machine decommissioned")
 		if err != nil {
-			fmt.Fprintf(os.Stderr, "  Warning: could not kick from %s: %v\n", room.alias, err)
+			logger.Warn("could not kick from room", "room", room.alias, "error", err)
 		} else {
-			fmt.Fprintf(os.Stderr, "  Kicked from %s\n", room.alias)
+			logger.Info("kicked from room", "room", room.alias)
 		}
 	}
 
@@ -197,16 +217,16 @@ func Decommission(ctx context.Context, session *messaging.DirectSession, params 
 	for _, room := range fleetRooms {
 		err = session.KickUser(ctx, room.roomID, machineUserID, "machine decommissioned")
 		if err != nil {
-			fmt.Fprintf(os.Stderr, "  Warning: could not kick from %s: %v\n", room.displayName, err)
+			logger.Warn("could not kick from room", "room", room.displayName, "error", err)
 		} else {
-			fmt.Fprintf(os.Stderr, "  Kicked from %s\n", room.displayName)
+			logger.Info("kicked from room", "room", room.displayName)
 		}
 	}
 
 	// Verify: check that the machine has zero active memberships in Bureau
 	// rooms. This catches cases where a kick silently failed or a race
 	// condition left stale membership.
-	fmt.Fprintf(os.Stderr, "\nVerifying cleanup...\n")
+	logger.Info("verifying cleanup")
 	allRooms := make([]resolvedRoom, 0, len(globalRooms)+len(fleetRooms))
 	allRooms = append(allRooms, globalRooms...)
 	allRooms = append(allRooms, fleetRooms...)
@@ -224,16 +244,20 @@ func Decommission(ctx context.Context, session *messaging.DirectSession, params 
 	}
 
 	if len(activeRooms) > 0 {
-		fmt.Fprintf(os.Stderr, "  FAILED: machine still has active membership in %d room(s):\n", len(activeRooms))
-		for _, room := range activeRooms {
-			fmt.Fprintf(os.Stderr, "    - %s (%s)\n", room.displayName, room.roomID)
+		roomDescriptions := make([]string, len(activeRooms))
+		for index, room := range activeRooms {
+			roomDescriptions[index] = fmt.Sprintf("%s (%s)", room.displayName, room.roomID)
 		}
+		logger.Error("machine still has active room memberships after decommission",
+			"count", len(activeRooms),
+			"rooms", roomDescriptions,
+		)
 		return cli.Internal("decommission incomplete: machine still has %d active room membership(s) — re-provisioning will not be possible until these are cleared", len(activeRooms))
 	}
 
-	fmt.Fprintf(os.Stderr, "  All Bureau room memberships cleared\n")
-	fmt.Fprintf(os.Stderr, "\nMachine %s decommissioned.\n", machineUsername)
-	fmt.Fprintf(os.Stderr, "To re-provision, run: bureau machine provision %s %s --credential-file <creds>\n", fleet.Localpart(), machine.Name())
+	logger.Info("machine decommissioned",
+		"machine_name", machine.Name(),
+	)
 
 	return nil
 }
@@ -242,7 +266,7 @@ func Decommission(ctx context.Context, session *messaging.DirectSession, params 
 // in the config room and clears them by sending empty content. Returns the
 // state keys (principal localparts) of credentials that were successfully
 // cleared, plus any errors encountered reading room state.
-func clearConfigRoomCredentials(ctx context.Context, session messaging.Session, roomID ref.RoomID) ([]string, error) {
+func clearConfigRoomCredentials(ctx context.Context, session messaging.Session, roomID ref.RoomID, logger *slog.Logger) ([]string, error) {
 	events, err := session.GetRoomState(ctx, roomID)
 	if err != nil {
 		return nil, cli.Internal("read config room state: %w", err)
@@ -268,14 +292,14 @@ func clearConfigRoomCredentials(ctx context.Context, session messaging.Session, 
 
 		_, err = session.SendStateEvent(ctx, roomID, schema.EventTypeCredentials, *event.StateKey, map[string]any{})
 		if err != nil {
-			fmt.Fprintf(os.Stderr, "  Warning: could not clear credentials for %s: %v\n", *event.StateKey, err)
+			logger.Warn("could not clear credentials", "principal", *event.StateKey, "error", err)
 		} else {
 			cleared = append(cleared, *event.StateKey)
 		}
 	}
 
 	if len(cleared) > 0 {
-		fmt.Fprintf(os.Stderr, "  Cleared %d credential(s) from config room\n", len(cleared))
+		logger.Info("cleared credentials from config room", "count", len(cleared))
 	}
 	return cleared, nil
 }

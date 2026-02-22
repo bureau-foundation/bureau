@@ -7,8 +7,7 @@ import (
 	"context"
 	"crypto/rand"
 	"encoding/hex"
-	"fmt"
-	"os"
+	"log/slog"
 	"time"
 
 	"github.com/bureau-foundation/bureau/cmd/bureau/cli"
@@ -114,10 +113,16 @@ depending on the homeserver — this is by design for emergency revocation.`,
 				return cli.Validation("invalid machine name: %v", err)
 			}
 
+			logger := cli.NewCommandLogger().With(
+				"command", "machine/revoke",
+				"fleet", fleet.Localpart(),
+				"machine", machine.Localpart(),
+			)
+
 			return Revoke(ctx, adminSession, RevokeParams{
 				Machine: machine,
 				Reason:  params.Reason,
-			})
+			}, logger)
 		},
 	}
 }
@@ -130,14 +135,17 @@ depending on the homeserver — this is by design for emergency revocation.`,
 //
 // The caller provides a DirectSession (required for account deactivation,
 // password reset, and KickUser) and a context with an appropriate deadline.
-func Revoke(ctx context.Context, adminSession *messaging.DirectSession, params RevokeParams) error {
+func Revoke(ctx context.Context, adminSession *messaging.DirectSession, params RevokeParams, logger *slog.Logger) error {
 	machine := params.Machine
 	fleet := machine.Fleet()
 	adminUserID := adminSession.UserID()
 	machineUsername := machine.Localpart()
 	machineUserID := machine.UserID()
 
-	fmt.Fprintf(os.Stderr, "EMERGENCY REVOCATION: %s (%s)\n\n", machineUsername, machineUserID)
+	logger.Warn("emergency revocation initiated",
+		"machine_user_id", machineUserID.String(),
+		"reason", params.Reason,
+	)
 
 	// Layer 1: Deactivate the Matrix account. This causes the daemon to
 	// detect an auth failure on its next /sync, triggering emergency
@@ -150,39 +158,42 @@ func Revoke(ctx context.Context, adminSession *messaging.DirectSession, params R
 	// password reset invalidates all access tokens, producing the same
 	// M_UNKNOWN_TOKEN auth failure on the daemon's next /sync.
 	accountDeactivated := true
-	fmt.Fprintf(os.Stderr, "Layer 1: Deactivating machine account...\n")
+	logger.Info("deactivating machine account", "layer", 1)
 	if err := adminSession.DeactivateUser(ctx, machineUserID, false); err != nil {
 		if messaging.IsMatrixError(err, messaging.ErrCodeUnrecognized) {
-			fmt.Fprintf(os.Stderr, "  Deactivate endpoint not supported, falling back to password reset...\n")
+			logger.Info("deactivate endpoint not supported, falling back to password reset")
 			randomPassword, passwordErr := generateRandomPassword()
 			if passwordErr != nil {
 				accountDeactivated = false
-				fmt.Fprintf(os.Stderr, "  WARNING: could not generate random password: %v\n", passwordErr)
+				logger.Warn("could not generate random password for fallback", "error", passwordErr)
 			} else if resetErr := adminSession.ResetUserPassword(ctx, machineUserID, randomPassword, true); resetErr != nil {
 				accountDeactivated = false
-				fmt.Fprintf(os.Stderr, "  WARNING: password reset failed: %v\n", resetErr)
+				logger.Warn("password reset failed", "error", resetErr)
 			} else {
-				fmt.Fprintf(os.Stderr, "  Password reset with token invalidation — daemon will self-destruct on next sync\n")
+				logger.Info("password reset with token invalidation applied")
 			}
 		} else {
 			accountDeactivated = false
-			fmt.Fprintf(os.Stderr, "  WARNING: account deactivation failed: %v\n", err)
+			logger.Warn("account deactivation failed", "error", err)
 		}
 		if !accountDeactivated {
-			fmt.Fprintf(os.Stderr, "  Continuing with state cleanup (Layer 2)...\n")
+			logger.Info("continuing with state cleanup", "layer", 2)
 		}
 	} else {
-		fmt.Fprintf(os.Stderr, "  Account deactivated — daemon will self-destruct on next sync\n")
+		logger.Info("account deactivated")
 	}
 
 	// Layer 2: Clean up state events and kick from rooms.
-	fmt.Fprintf(os.Stderr, "\nLayer 2: Clearing state and revoking access...\n")
+	logger.Info("clearing state and revoking access", "layer", 2)
 
 	// Resolve global Bureau rooms (template, pipeline, system) for kick.
 	namespace := fleet.Namespace()
 	globalRooms, failedRooms, resolveErrors := resolveGlobalRooms(ctx, adminSession, namespace)
 	for index, room := range failedRooms {
-		fmt.Fprintf(os.Stderr, "  Warning: could not resolve %s: %v\n", room.displayName, resolveErrors[index])
+		logger.Warn("could not resolve global room",
+			"room", room.displayName,
+			"error", resolveErrors[index],
+		)
 	}
 
 	// Resolve the fleet-scoped rooms for state event cleanup and kicking.
@@ -205,24 +216,24 @@ func Revoke(ctx context.Context, adminSession *messaging.DirectSession, params R
 		return cli.NotFound("resolve config room %q: %w", configAlias, err)
 	}
 	if !configRoomExists {
-		fmt.Fprintf(os.Stderr, "  Config room %s does not exist (skipping)\n", configAlias)
+		logger.Info("config room does not exist, skipping", "alias", configAlias)
 	}
 
 	if configRoomExists {
 		err = adminSession.KickUser(ctx, configRoomID, machineUserID, "machine credentials revoked")
 		if err != nil {
-			fmt.Fprintf(os.Stderr, "  Warning: could not kick from config room: %v\n", err)
+			logger.Warn("could not kick from config room", "error", err)
 		} else {
-			fmt.Fprintf(os.Stderr, "  Kicked from config room\n")
+			logger.Info("kicked from config room")
 		}
 	}
 
 	for _, room := range globalRooms {
 		err = adminSession.KickUser(ctx, room.roomID, machineUserID, "machine credentials revoked")
 		if err != nil {
-			fmt.Fprintf(os.Stderr, "  Warning: could not kick from %s: %v\n", room.alias, err)
+			logger.Warn("could not kick from room", "room", room.alias, "error", err)
 		} else {
-			fmt.Fprintf(os.Stderr, "  Kicked from %s\n", room.alias)
+			logger.Info("kicked from room", "room", room.alias)
 		}
 	}
 
@@ -237,9 +248,9 @@ func Revoke(ctx context.Context, adminSession *messaging.DirectSession, params R
 	for _, room := range fleetRooms {
 		err = adminSession.KickUser(ctx, room.roomID, machineUserID, "machine credentials revoked")
 		if err != nil {
-			fmt.Fprintf(os.Stderr, "  Warning: could not kick from %s: %v\n", room.name, err)
+			logger.Warn("could not kick from room", "room", room.name, "error", err)
 		} else {
-			fmt.Fprintf(os.Stderr, "  Kicked from %s\n", room.name)
+			logger.Info("kicked from room", "room", room.name)
 		}
 	}
 
@@ -247,16 +258,16 @@ func Revoke(ctx context.Context, adminSession *messaging.DirectSession, params R
 	// rooms, so it cannot overwrite these cleared values.
 	_, err = adminSession.SendStateEvent(ctx, machineRoomID, schema.EventTypeMachineKey, machineUsername, map[string]any{})
 	if err != nil {
-		fmt.Fprintf(os.Stderr, "  Warning: could not clear machine_key: %v\n", err)
+		logger.Warn("could not clear machine_key", "error", err)
 	} else {
-		fmt.Fprintf(os.Stderr, "  Cleared machine_key\n")
+		logger.Info("cleared machine_key")
 	}
 
 	_, err = adminSession.SendStateEvent(ctx, machineRoomID, schema.EventTypeMachineStatus, machineUsername, map[string]any{})
 	if err != nil {
-		fmt.Fprintf(os.Stderr, "  Warning: could not clear machine_status: %v\n", err)
+		logger.Warn("could not clear machine_status", "error", err)
 	} else {
-		fmt.Fprintf(os.Stderr, "  Cleared machine_status\n")
+		logger.Info("cleared machine_status")
 	}
 
 	var principals []string
@@ -265,14 +276,14 @@ func Revoke(ctx context.Context, adminSession *messaging.DirectSession, params R
 	if configRoomExists {
 		_, err = adminSession.SendStateEvent(ctx, configRoomID, schema.EventTypeMachineConfig, machineUsername, map[string]any{})
 		if err != nil {
-			fmt.Fprintf(os.Stderr, "  Warning: could not clear machine_config: %v\n", err)
+			logger.Warn("could not clear machine_config", "error", err)
 		} else {
-			fmt.Fprintf(os.Stderr, "  Cleared machine_config\n")
+			logger.Info("cleared machine_config")
 		}
 
-		cleared, err := clearConfigRoomCredentials(ctx, adminSession, configRoomID)
+		cleared, err := clearConfigRoomCredentials(ctx, adminSession, configRoomID, logger)
 		if err != nil {
-			fmt.Fprintf(os.Stderr, "  Warning: %v\n", err)
+			logger.Warn("could not clear config room credentials", "error", err)
 		} else {
 			principals = cleared
 			credentialKeys = cleared
@@ -295,25 +306,20 @@ func Revoke(ctx context.Context, adminSession *messaging.DirectSession, params R
 	_, err = adminSession.SendStateEvent(ctx, machineRoomID,
 		schema.EventTypeCredentialRevocation, machineUsername, revocationContent)
 	if err != nil {
-		fmt.Fprintf(os.Stderr, "  Warning: could not publish revocation event: %v\n", err)
+		logger.Warn("could not publish revocation event", "error", err)
 	} else {
-		fmt.Fprintf(os.Stderr, "  Published credential revocation event to machine room\n")
+		logger.Info("published credential revocation event")
 	}
 
-	// Print summary.
-	fmt.Fprintf(os.Stderr, "\n--- Revocation Summary ---\n")
-	fmt.Fprintf(os.Stderr, "Machine:            %s\n", machineUsername)
-	fmt.Fprintf(os.Stderr, "Account deactivated: %v\n", accountDeactivated)
-	fmt.Fprintf(os.Stderr, "Principals affected: %d\n", len(principals))
-	for _, name := range principals {
-		fmt.Fprintf(os.Stderr, "  - %s\n", name)
-	}
+	// Revocation summary as a single structured event.
+	logger.Info("revocation complete",
+		"account_deactivated", accountDeactivated,
+		"principals_affected", len(principals),
+		"principals", principals,
+	)
 	if !accountDeactivated {
-		fmt.Fprintf(os.Stderr, "\nWARNING: Account deactivation failed. The daemon may still be\n")
-		fmt.Fprintf(os.Stderr, "running. Credentials have been cleared from state, but the\n")
-		fmt.Fprintf(os.Stderr, "daemon's in-memory copy persists until it restarts.\n")
+		logger.Warn("account deactivation failed, daemon may still be running with in-memory credentials until restart")
 	}
-	fmt.Fprintf(os.Stderr, "\nOutstanding service tokens will expire within 5 minutes (TTL).\n")
 
 	return nil
 }

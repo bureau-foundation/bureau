@@ -50,10 +50,10 @@ func (powerLevels *PowerLevels) SetEventLevel(eventType ref.EventType, level int
 	powerLevels.Events[string(eventType)] = level
 }
 
-// PowerLevelSession is the subset of the Matrix client-server API needed
-// for power level read-modify-write operations. Satisfied implicitly by
+// StateSession is the subset of the Matrix client-server API needed for
+// state event read-modify-write operations. Satisfied implicitly by
 // messaging.Session, messaging.DirectSession, and proxyclient.ProxySession.
-type PowerLevelSession interface {
+type StateSession interface {
 	GetStateEvent(ctx context.Context, roomID ref.RoomID, eventType ref.EventType, stateKey string) (json.RawMessage, error)
 	SendStateEvent(ctx context.Context, roomID ref.RoomID, eventType ref.EventType, stateKey string, content any) (ref.EventID, error)
 }
@@ -73,7 +73,7 @@ type PowerLevelGrants struct {
 // This is the canonical way to modify power levels in an existing room.
 // For setting power levels at room creation time, use PowerLevelContentOverride
 // in the CreateRoomRequest instead.
-func GrantPowerLevels(ctx context.Context, session PowerLevelSession, roomID ref.RoomID, grants PowerLevelGrants) error {
+func GrantPowerLevels(ctx context.Context, session StateSession, roomID ref.RoomID, grants PowerLevelGrants) error {
 	content, err := session.GetStateEvent(ctx, roomID, MatrixEventTypePowerLevels, "")
 	if err != nil {
 		return fmt.Errorf("reading power levels for %s: %w", roomID, err)

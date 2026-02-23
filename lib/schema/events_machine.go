@@ -3,7 +3,13 @@
 
 package schema
 
-import "github.com/bureau-foundation/bureau/lib/ref"
+import (
+	"context"
+	"encoding/json"
+	"fmt"
+
+	"github.com/bureau-foundation/bureau/lib/ref"
+)
 
 // MachineKey is the content of an EventTypeMachineKey state event.
 // Published by the launcher at first boot after generating the machine's
@@ -455,4 +461,31 @@ type WebRTCSignal struct {
 	// Used to detect stale signals: if the receiver has already processed
 	// a newer signal for this peer pair, this one is ignored.
 	Timestamp string `json:"timestamp"`
+}
+
+// SetMachineLabels reads the current MachineInfo state event for a machine,
+// replaces its Labels field, and writes the updated event back. This is a
+// read-modify-write operation that preserves all other MachineInfo fields
+// (hostname, CPU, memory, GPUs, daemon version) published by the daemon.
+//
+// The roomID is the fleet-scoped machine room (fleet.MachineRoomID) where
+// the daemon publishes MachineInfo. The stateKey is the machine's localpart.
+func SetMachineLabels(ctx context.Context, session StateSession, roomID ref.RoomID, stateKey string, labels map[string]string) error {
+	raw, err := session.GetStateEvent(ctx, roomID, EventTypeMachineInfo, stateKey)
+	if err != nil {
+		return fmt.Errorf("reading machine info for %s: %w", stateKey, err)
+	}
+
+	var info MachineInfo
+	if err := json.Unmarshal(raw, &info); err != nil {
+		return fmt.Errorf("parsing machine info for %s: %w", stateKey, err)
+	}
+
+	info.Labels = labels
+
+	if _, err := session.SendStateEvent(ctx, roomID, EventTypeMachineInfo, stateKey, info); err != nil {
+		return fmt.Errorf("writing machine info labels for %s: %w", stateKey, err)
+	}
+
+	return nil
 }

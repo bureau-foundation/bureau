@@ -1041,3 +1041,206 @@ func TestFleetAuthorizationDenied(t *testing.T) {
 		}
 	})
 }
+
+// TestFleetEligibilityConstraints verifies the fleet controller's placement
+// constraint enforcement end-to-end. The placement engine (scoreMachine in
+// placement.go) evaluates candidate machines against a service's
+// PlacementConstraints and returns ineligible (-1) for machines that fail
+// any constraint. The plan API exposes this as a dry-run: scorePlacement
+// filters out ineligible machines and returns only eligible candidates.
+//
+// This test verifies the full path through real Matrix state: daemon
+// publishes MachineInfo with labels → fleet controller reads via /sync →
+// plan API filters correctly based on constraints.
+//
+// Three sub-tests:
+//   - RequiredLabels: key=value label matching (gpu=h100 vs gpu=t4)
+//   - LabelPresenceOnly: key presence without value matching
+//   - AntiAffinity: machine assignment exclusion
+func TestFleetEligibilityConstraints(t *testing.T) {
+	t.Parallel()
+
+	admin := adminSession(t)
+	defer admin.Close()
+	fleet := createTestFleet(t, admin)
+	ctx := t.Context()
+
+	// Boot two machines with proxy support. Proxy is needed for the
+	// place call in the AntiAffinity sub-test (place writes MachineConfig
+	// which triggers daemon reconciliation).
+	machineA := newTestMachine(t, fleet, "fleet-elig-a")
+	machineB := newTestMachine(t, fleet, "fleet-elig-b")
+	machineOpts := machineOptions{
+		LauncherBinary: resolvedBinary(t, "LAUNCHER_BINARY"),
+		DaemonBinary:   resolvedBinary(t, "DAEMON_BINARY"),
+		ProxyBinary:    resolvedBinary(t, "PROXY_BINARY"),
+		Fleet:          fleet,
+	}
+	startMachine(t, admin, machineA, machineOpts)
+	startMachine(t, admin, machineB, machineOpts)
+
+	// Set labels on both machines. SetMachineLabels reads the
+	// daemon-published MachineInfo, replaces the Labels field, and
+	// writes back — preserving the daemon's hardware inventory while
+	// adding test-specific labels. Both machines' MachineInfo live
+	// in the same fleet-scoped machine room, differentiated by state
+	// key (machine localpart).
+	for _, labelEntry := range []struct {
+		machine *testMachine
+		labels  map[string]string
+	}{
+		{machineA, map[string]string{"gpu": "h100", "tier": "production"}},
+		{machineB, map[string]string{"gpu": "t4", "tier": "production"}},
+	} {
+		if err := schema.SetMachineLabels(ctx, admin, labelEntry.machine.MachineRoomID,
+			labelEntry.machine.Name, labelEntry.labels); err != nil {
+			t.Fatalf("set labels for %s: %v", labelEntry.machine.Name, err)
+		}
+	}
+
+	// Push empty MachineConfig to both machines so the fleet controller
+	// can discover their config rooms.
+	pushMachineConfig(t, admin, machineA, deploymentConfig{})
+	pushMachineConfig(t, admin, machineB, deploymentConfig{})
+
+	// Create a fleet room watch before starting the fleet controller so
+	// the admin's sync checkpoint captures config room discovery events.
+	discoverWatch := watchRoom(t, admin, fleet.FleetRoomID)
+
+	controllerName := "service/fleet/eligibility-test"
+	fc := startFleetController(t, admin, machineA, controllerName, fleet)
+	grantFleetControllerConfigAccess(t, admin, fc, machineB)
+
+	operatorToken := mintFleetToken(t, fleet, machineA, []string{"fleet/**"})
+	authClient := fleetClient(t, fc, operatorToken)
+
+	// Wait for the fleet controller to discover both config rooms.
+	waitForFleetConfigRoom(t, &discoverWatch, fc, machineA.Name)
+	waitForFleetConfigRoom(t, &discoverWatch, fc, machineB.Name)
+
+	// planCandidateMachines calls the plan API and returns the set of
+	// candidate machine localparts.
+	planCandidateMachines := func(t *testing.T, serviceLocalpart string) map[string]bool {
+		t.Helper()
+		var response fleetPlanResponse
+		if err := authClient.Call(ctx, "plan",
+			map[string]any{"service": serviceLocalpart}, &response); err != nil {
+			t.Fatalf("plan %s: %v", serviceLocalpart, err)
+		}
+		candidates := make(map[string]bool, len(response.Candidates))
+		for _, candidate := range response.Candidates {
+			candidates[candidate.Machine] = true
+		}
+		return candidates
+	}
+
+	// publishAndDiscover publishes a fleet service and waits for the
+	// fleet controller to process it via /sync.
+	publishAndDiscover := func(t *testing.T, serviceLocalpart string, definition fleetschema.FleetServiceContent) {
+		t.Helper()
+		serviceWatch := watchRoom(t, admin, fleet.FleetRoomID)
+		publishFleetService(t, admin, fleet.FleetRoomID, serviceLocalpart, definition)
+		waitForFleetService(t, &serviceWatch, fc, serviceLocalpart)
+	}
+
+	// --- RequiredLabels: key=value matching ---
+	// Service requires gpu=h100. MachineA has gpu:h100, machineB has
+	// gpu:t4. Only machineA should be eligible.
+	t.Run("RequiredLabels", func(t *testing.T) {
+		serviceLocalpart := "service/stt/elig-required"
+		publishAndDiscover(t, serviceLocalpart, fleetschema.FleetServiceContent{
+			Template: "bureau/template:whisper-stt",
+			Replicas: fleetschema.ReplicaSpec{Min: 0},
+			Placement: fleetschema.PlacementConstraints{
+				Requires:        []string{"gpu=h100"},
+				AllowedMachines: []string{machineA.Name, machineB.Name},
+			},
+			Failover: "none",
+		})
+
+		candidates := planCandidateMachines(t, serviceLocalpart)
+		if !candidates[machineA.Name] {
+			t.Errorf("machineA (%s) should be eligible (has gpu=h100)", machineA.Name)
+		}
+		if candidates[machineB.Name] {
+			t.Errorf("machineB (%s) should be ineligible (has gpu=t4, not h100)", machineB.Name)
+		}
+	})
+
+	// --- LabelPresenceOnly: key presence without value matching ---
+	// Service requires "gpu" (no =value). Both machines have a gpu
+	// label (different values). Both should be eligible.
+	t.Run("LabelPresenceOnly", func(t *testing.T) {
+		serviceLocalpart := "service/stt/elig-presence"
+		publishAndDiscover(t, serviceLocalpart, fleetschema.FleetServiceContent{
+			Template: "bureau/template:whisper-stt",
+			Replicas: fleetschema.ReplicaSpec{Min: 0},
+			Placement: fleetschema.PlacementConstraints{
+				Requires:        []string{"gpu"},
+				AllowedMachines: []string{machineA.Name, machineB.Name},
+			},
+			Failover: "none",
+		})
+
+		candidates := planCandidateMachines(t, serviceLocalpart)
+		if !candidates[machineA.Name] {
+			t.Errorf("machineA (%s) should be eligible (has gpu label)", machineA.Name)
+		}
+		if !candidates[machineB.Name] {
+			t.Errorf("machineB (%s) should be eligible (has gpu label)", machineB.Name)
+		}
+	})
+
+	// --- AntiAffinity: machine assignment exclusion ---
+	// Place a baseline service on machineA, then publish a second
+	// service with AntiAffinity pointing to the baseline. The plan
+	// API should exclude machineA (hosts the baseline) and return
+	// only machineB.
+	t.Run("AntiAffinity", func(t *testing.T) {
+		// Publish and discover the baseline service.
+		baselineLocalpart := "service/stt/elig-baseline"
+		publishAndDiscover(t, baselineLocalpart, fleetschema.FleetServiceContent{
+			Template: "bureau/template:baseline-stt",
+			Replicas: fleetschema.ReplicaSpec{Min: 0},
+			Placement: fleetschema.PlacementConstraints{
+				AllowedMachines: []string{machineA.Name, machineB.Name},
+			},
+			Failover: "none",
+		})
+
+		// Place the baseline on machineA. The fleet controller updates
+		// its in-memory machine.assignments map synchronously during the
+		// place call (execute.go:162), so the subsequent plan call will
+		// see the assignment without any async delay. The daemon will
+		// attempt to reconcile the placed service but will skip it
+		// (no template or credentials provisioned) — that's fine, we
+		// only need the fleet controller's in-memory state.
+		var placeResponse fleetPlaceResponse
+		if err := authClient.Call(ctx, "place", map[string]any{
+			"service": baselineLocalpart,
+			"machine": machineA.Name,
+		}, &placeResponse); err != nil {
+			t.Fatalf("place baseline on machineA: %v", err)
+		}
+
+		// Publish a second service with anti-affinity to the baseline.
+		antiAffinityLocalpart := "service/stt/elig-anti"
+		publishAndDiscover(t, antiAffinityLocalpart, fleetschema.FleetServiceContent{
+			Template: "bureau/template:anti-stt",
+			Replicas: fleetschema.ReplicaSpec{Min: 0},
+			Placement: fleetschema.PlacementConstraints{
+				AntiAffinity:    []string{baselineLocalpart},
+				AllowedMachines: []string{machineA.Name, machineB.Name},
+			},
+			Failover: "none",
+		})
+
+		candidates := planCandidateMachines(t, antiAffinityLocalpart)
+		if candidates[machineA.Name] {
+			t.Errorf("machineA (%s) should be ineligible (hosts baseline service)", machineA.Name)
+		}
+		if !candidates[machineB.Name] {
+			t.Errorf("machineB (%s) should be eligible (does not host baseline)", machineB.Name)
+		}
+	})
+}

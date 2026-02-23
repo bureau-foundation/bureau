@@ -1055,23 +1055,24 @@ func serviceTemplateContent(binary string) schema.TemplateContent {
 }
 
 // deployService deploys a Bureau service binary using the production
-// principal.Create() path for account setup, then starts the binary as a
-// machine-level process (outside any sandbox).
+// principal.Create() path for account setup, then starts the binary
+// directly (outside any sandbox) using the flag-based bootstrap path.
 //
 // The deployment sequence:
 //   - Pushes a service template to Matrix via templatedef.Push
 //   - Calls principal.Create(AutoStart: false) to register the Matrix
 //     account, provision encrypted credentials, join the config room,
-//     and publish a MachineConfig assignment the daemon ignores
+//     and publish a MachineConfig assignment
 //   - Writes session.json via service.SaveSession for service.Bootstrap
 //   - Invites the service to the system room, fleet service room, and
 //     any ExtraRooms
 //   - Creates the socket parent directory and starts the binary
 //   - Waits for the socket file and daemon service directory update
 //
-// This parallels deployAgent but for services that run outside sandboxes.
-// Services use service.Bootstrap() with session.json instead of proxy-based
-// credentials.
+// AutoStart is false so the daemon does not create a sandbox for the
+// service. The daemon still processes the principal for authorization
+// index building. The service binary is started directly with CLI flags
+// and uses service.Bootstrap() with session.json for its Matrix session.
 func deployService(
 	t *testing.T,
 	admin *messaging.DirectSession,
@@ -1116,8 +1117,9 @@ func deployService(
 	serviceWatch := watchRoom(t, admin, machine.ConfigRoomID)
 
 	// Create the principal via the production path. AutoStart is false
-	// because services run as machine-level processes, not in sandboxes.
-	// The daemon skips AutoStart=false principals during reconciliation.
+	// so the daemon does not create a sandbox — the test starts the
+	// binary directly. The daemon still processes the principal for
+	// authorization index building and service directory routing.
 	client, err := messaging.NewClient(messaging.ClientConfig{
 		HomeserverURL: testHomeserverURL,
 	})

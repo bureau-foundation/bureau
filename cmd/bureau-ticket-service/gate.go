@@ -126,6 +126,8 @@ func matchGateEvent(gate *ticket.TicketGate, event messaging.Event) bool {
 		return matchPipelineGate(gate, event)
 	case "ticket":
 		return matchTicketGate(gate, event)
+	case "review":
+		return matchReviewGate(gate, event)
 	case "state_event":
 		return matchStateEventGate(gate, event)
 	default:
@@ -171,6 +173,49 @@ func matchTicketGate(gate *ticket.TicketGate, event messaging.Event) bool {
 
 	status, _ := event.Content["status"].(string)
 	return status == "closed"
+}
+
+// matchReviewGate checks whether a ticket state event indicates that
+// all reviewers have approved. The review gate watches its own ticket's
+// state event and is satisfied when every reviewer in the review field
+// has disposition "approved".
+func matchReviewGate(gate *ticket.TicketGate, event messaging.Event) bool {
+	if event.Type != schema.EventTypeTicket {
+		return false
+	}
+
+	// The event content is a map[string]any from the raw Matrix JSON.
+	// Extract the review field and check reviewer dispositions.
+	reviewRaw, exists := event.Content["review"]
+	if !exists {
+		return false
+	}
+	reviewMap, ok := reviewRaw.(map[string]any)
+	if !ok {
+		return false
+	}
+
+	reviewersRaw, exists := reviewMap["reviewers"]
+	if !exists {
+		return false
+	}
+	reviewersList, ok := reviewersRaw.([]any)
+	if !ok || len(reviewersList) == 0 {
+		return false
+	}
+
+	for _, entryRaw := range reviewersList {
+		entry, ok := entryRaw.(map[string]any)
+		if !ok {
+			return false
+		}
+		disposition, _ := entry["disposition"].(string)
+		if disposition != "approved" {
+			return false
+		}
+	}
+
+	return true
 }
 
 // matchStateEventGate checks whether a state event satisfies a

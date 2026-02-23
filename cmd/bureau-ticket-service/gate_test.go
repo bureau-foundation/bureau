@@ -3440,3 +3440,195 @@ func TestFormatDuration(t *testing.T) {
 		})
 	}
 }
+
+// --- matchReviewGate unit tests ---
+
+func TestMatchReviewGateAllApproved(t *testing.T) {
+	gate := &ticket.TicketGate{
+		ID:     "review-approval",
+		Type:   "review",
+		Status: "pending",
+	}
+
+	event := messaging.Event{
+		Type:     schema.EventTypeTicket,
+		StateKey: stringPtr("tkt-review"),
+		Content: map[string]any{
+			"status": "review",
+			"review": map[string]any{
+				"reviewers": []any{
+					map[string]any{"user_id": "@alice:bureau.local", "disposition": "approved"},
+					map[string]any{"user_id": "@bob:bureau.local", "disposition": "approved"},
+				},
+			},
+		},
+	}
+
+	if !matchGateEvent(gate, event) {
+		t.Fatal("review gate should match when all reviewers approved")
+	}
+}
+
+func TestMatchReviewGatePendingReviewer(t *testing.T) {
+	gate := &ticket.TicketGate{
+		ID:     "review-approval",
+		Type:   "review",
+		Status: "pending",
+	}
+
+	event := messaging.Event{
+		Type:     schema.EventTypeTicket,
+		StateKey: stringPtr("tkt-review"),
+		Content: map[string]any{
+			"status": "review",
+			"review": map[string]any{
+				"reviewers": []any{
+					map[string]any{"user_id": "@alice:bureau.local", "disposition": "approved"},
+					map[string]any{"user_id": "@bob:bureau.local", "disposition": "pending"},
+				},
+			},
+		},
+	}
+
+	if matchGateEvent(gate, event) {
+		t.Fatal("review gate should not match when a reviewer is still pending")
+	}
+}
+
+func TestMatchReviewGateChangesRequested(t *testing.T) {
+	gate := &ticket.TicketGate{
+		ID:     "review-approval",
+		Type:   "review",
+		Status: "pending",
+	}
+
+	event := messaging.Event{
+		Type:     schema.EventTypeTicket,
+		StateKey: stringPtr("tkt-review"),
+		Content: map[string]any{
+			"status": "review",
+			"review": map[string]any{
+				"reviewers": []any{
+					map[string]any{"user_id": "@alice:bureau.local", "disposition": "approved"},
+					map[string]any{"user_id": "@bob:bureau.local", "disposition": "changes_requested"},
+				},
+			},
+		},
+	}
+
+	if matchGateEvent(gate, event) {
+		t.Fatal("review gate should not match when a reviewer requested changes")
+	}
+}
+
+func TestMatchReviewGateNoReview(t *testing.T) {
+	gate := &ticket.TicketGate{
+		ID:     "review-approval",
+		Type:   "review",
+		Status: "pending",
+	}
+
+	event := messaging.Event{
+		Type:     schema.EventTypeTicket,
+		StateKey: stringPtr("tkt-review"),
+		Content: map[string]any{
+			"status": "open",
+		},
+	}
+
+	if matchGateEvent(gate, event) {
+		t.Fatal("review gate should not match when review field is absent")
+	}
+}
+
+func TestMatchReviewGateEmptyReviewers(t *testing.T) {
+	gate := &ticket.TicketGate{
+		ID:     "review-approval",
+		Type:   "review",
+		Status: "pending",
+	}
+
+	event := messaging.Event{
+		Type:     schema.EventTypeTicket,
+		StateKey: stringPtr("tkt-review"),
+		Content: map[string]any{
+			"status": "review",
+			"review": map[string]any{
+				"reviewers": []any{},
+			},
+		},
+	}
+
+	if matchGateEvent(gate, event) {
+		t.Fatal("review gate should not match when reviewers list is empty")
+	}
+}
+
+func TestMatchReviewGateWrongEventType(t *testing.T) {
+	gate := &ticket.TicketGate{
+		ID:     "review-approval",
+		Type:   "review",
+		Status: "pending",
+	}
+
+	event := messaging.Event{
+		Type:     schema.EventTypePipelineResult,
+		StateKey: stringPtr("tkt-review"),
+		Content:  map[string]any{},
+	}
+
+	if matchGateEvent(gate, event) {
+		t.Fatal("review gate should not match non-ticket events")
+	}
+}
+
+func TestMatchReviewGateSingleReviewerApproved(t *testing.T) {
+	gate := &ticket.TicketGate{
+		ID:     "review-approval",
+		Type:   "review",
+		Status: "pending",
+	}
+
+	event := messaging.Event{
+		Type:     schema.EventTypeTicket,
+		StateKey: stringPtr("tkt-review"),
+		Content: map[string]any{
+			"status": "review",
+			"review": map[string]any{
+				"reviewers": []any{
+					map[string]any{"user_id": "@alice:bureau.local", "disposition": "approved"},
+				},
+			},
+		},
+	}
+
+	if !matchGateEvent(gate, event) {
+		t.Fatal("review gate should match with single approved reviewer")
+	}
+}
+
+func TestMatchReviewGateCommented(t *testing.T) {
+	gate := &ticket.TicketGate{
+		ID:     "review-approval",
+		Type:   "review",
+		Status: "pending",
+	}
+
+	event := messaging.Event{
+		Type:     schema.EventTypeTicket,
+		StateKey: stringPtr("tkt-review"),
+		Content: map[string]any{
+			"status": "review",
+			"review": map[string]any{
+				"reviewers": []any{
+					map[string]any{"user_id": "@alice:bureau.local", "disposition": "approved"},
+					map[string]any{"user_id": "@bob:bureau.local", "disposition": "commented"},
+				},
+			},
+		},
+	}
+
+	if matchGateEvent(gate, event) {
+		t.Fatal("review gate should not match when a reviewer only commented")
+	}
+}

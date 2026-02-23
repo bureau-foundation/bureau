@@ -497,7 +497,9 @@ func (idx *Index) WatchedGates(eventType ref.EventType, stateKey string) []GateW
 // watchKeysForGate computes the watch map keys for a gate. Returns nil
 // for gate types that are not event-driven (human, timer) or that are
 // handled by a separate evaluation path (cross-room state_event gates).
-func watchKeysForGate(gate *ticket.TicketGate) []gateWatchKey {
+// The ticketID parameter is the ID of the ticket that owns this gate,
+// needed by review gates which watch their own ticket's state event.
+func watchKeysForGate(gate *ticket.TicketGate, ticketID string) []gateWatchKey {
 	switch gate.Type {
 	case "pipeline":
 		// Pipeline gates watch for pipeline_result events with any
@@ -513,6 +515,13 @@ func watchKeysForGate(gate *ticket.TicketGate) []gateWatchKey {
 			return nil
 		}
 		return []gateWatchKey{{eventType: schema.EventTypeTicket, stateKey: gate.TicketID}}
+
+	case "review":
+		// Review gates watch their own ticket's state event. When a
+		// reviewer sets their disposition, the ticket is written to
+		// Matrix, and the gate evaluator checks whether all reviewers
+		// have approved.
+		return []gateWatchKey{{eventType: schema.EventTypeTicket, stateKey: ticketID}}
 
 	case "state_event":
 		// Cross-room gates (RoomAlias set) are evaluated separately
@@ -541,7 +550,7 @@ func (idx *Index) addGateWatches(ticketID string, content *ticket.TicketContent)
 		if content.Gates[i].Status != "pending" {
 			continue
 		}
-		for _, key := range watchKeysForGate(&content.Gates[i]) {
+		for _, key := range watchKeysForGate(&content.Gates[i], ticketID) {
 			watch := GateWatch{TicketID: ticketID, GateIndex: i}
 			set, exists := idx.gateWatch[key]
 			if !exists {
@@ -565,7 +574,7 @@ func (idx *Index) addGateWatches(ticketID string, content *ticket.TicketContent)
 // gates that were never in the watch map.
 func (idx *Index) removeGateWatches(ticketID string, content *ticket.TicketContent) {
 	for i := range content.Gates {
-		for _, key := range watchKeysForGate(&content.Gates[i]) {
+		for _, key := range watchKeysForGate(&content.Gates[i], ticketID) {
 			watch := GateWatch{TicketID: ticketID, GateIndex: i}
 			set, exists := idx.gateWatch[key]
 			if !exists {

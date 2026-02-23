@@ -1103,6 +1103,37 @@ func TestWatchedGatesTicketGate(t *testing.T) {
 	}
 }
 
+func TestWatchedGatesReviewGate(t *testing.T) {
+	idx := NewIndex()
+
+	tc := makeTicket("Gated by review")
+	tc.Gates = []ticket.TicketGate{
+		{ID: "review-approval", Type: "review", Status: "pending"},
+	}
+	idx.Put("tkt-a", tc)
+
+	// Review gates watch their own ticket's state event.
+	watches := idx.WatchedGates(schema.EventTypeTicket, "tkt-a")
+	if len(watches) != 1 {
+		t.Fatalf("WatchedGates for review gate = %d, want 1", len(watches))
+	}
+	if watches[0].TicketID != "tkt-a" || watches[0].GateIndex != 0 {
+		t.Errorf("watch = %+v, want {tkt-a, 0}", watches[0])
+	}
+
+	// A different ticket ID should not match.
+	watches = idx.WatchedGates(schema.EventTypeTicket, "tkt-other")
+	if len(watches) != 0 {
+		t.Errorf("WatchedGates for other ticket = %d, want 0", len(watches))
+	}
+
+	// An unrelated event type should not match.
+	watches = idx.WatchedGates(schema.EventTypePipelineResult, "tkt-a")
+	if len(watches) != 0 {
+		t.Errorf("WatchedGates for wrong event type = %d, want 0", len(watches))
+	}
+}
+
 func TestWatchedGatesStateEventGateExactKey(t *testing.T) {
 	idx := NewIndex()
 

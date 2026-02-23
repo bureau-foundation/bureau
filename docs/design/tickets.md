@@ -174,6 +174,13 @@ the whole ticket is the natural operation.
   the gate's target. Supports one-shot delays, absolute target times,
   and recurring schedules. See [Scheduling and Recurrence](#scheduling-and-recurrence).
 
+- **`review`** — watches the ticket's own review field. Satisfied when
+  every reviewer in the `TicketReview.Reviewers` list has disposition
+  `"approved"`. Any pending, changes_requested, or commented reviewer
+  blocks satisfaction. No type-specific fields — the gate implicitly
+  watches the ticket it is attached to. Use for making review
+  completion a blocking readiness condition. See [Review](#review).
+
 **Evaluation flow:** The ticket service's /sync loop delivers state
 event updates. The service checks all pending gates across all tickets
 in the affected room. For each matching gate, it transitions status to

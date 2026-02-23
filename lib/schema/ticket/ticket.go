@@ -466,6 +466,10 @@ func (g *TicketGate) Validate() error {
 		if g.TicketID == "" {
 			return fmt.Errorf("gate %q: ticket_id is required for ticket gates", g.ID)
 		}
+	case "review":
+		// Review gates have no type-specific fields. They implicitly
+		// watch the ticket they are attached to and are satisfied when
+		// all reviewers have disposition "approved".
 	case "timer":
 		if err := g.validateTimer(); err != nil {
 			return err

@@ -785,10 +785,10 @@ func (ts *TicketService) handleListRooms(ctx context.Context, token *servicetoke
 // The TUI uses this to populate the assignee dropdown with
 // availability indicators.
 type memberInfo struct {
-	UserID          string `cbor:"user_id"`
-	DisplayName     string `cbor:"display_name"`
-	Presence        string `cbor:"presence"`
-	CurrentlyActive bool   `cbor:"currently_active"`
+	UserID          ref.UserID `cbor:"user_id"`
+	DisplayName     string     `cbor:"display_name"`
+	Presence        string     `cbor:"presence"`
+	CurrentlyActive bool       `cbor:"currently_active"`
 }
 
 // presenceRank returns a sort key for presence states. Lower values
@@ -842,7 +842,7 @@ func (ts *TicketService) handleListMembers(ctx context.Context, token *serviceto
 			continue
 		}
 		info := memberInfo{
-			UserID:      member.UserID.String(),
+			UserID:      member.UserID,
 			DisplayName: member.DisplayName,
 		}
 		if presence, exists := ts.presence[member.UserID]; exists {

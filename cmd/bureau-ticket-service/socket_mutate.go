@@ -290,18 +290,18 @@ type createRequest struct {
 // distinguish "not provided" (nil) from "set to zero value" (non-nil
 // pointing to the zero value). Only non-nil fields are applied.
 type updateRequest struct {
-	Room      string    `cbor:"room,omitempty"`
-	Ticket    string    `cbor:"ticket"`
-	Title     *string   `cbor:"title,omitempty"`
-	Body      *string   `cbor:"body,omitempty"`
-	Status    *string   `cbor:"status,omitempty"`
-	Priority  *int      `cbor:"priority,omitempty"`
-	Type      *string   `cbor:"type,omitempty"`
-	Labels    *[]string `cbor:"labels,omitempty"`
-	Assignee  *string   `cbor:"assignee,omitempty"`
-	Parent    *string   `cbor:"parent,omitempty"`
-	BlockedBy *[]string `cbor:"blocked_by,omitempty"`
-	Deadline  *string   `cbor:"deadline,omitempty"`
+	Room      string      `cbor:"room,omitempty"`
+	Ticket    string      `cbor:"ticket"`
+	Title     *string     `cbor:"title,omitempty"`
+	Body      *string     `cbor:"body,omitempty"`
+	Status    *string     `cbor:"status,omitempty"`
+	Priority  *int        `cbor:"priority,omitempty"`
+	Type      *string     `cbor:"type,omitempty"`
+	Labels    *[]string   `cbor:"labels,omitempty"`
+	Assignee  *ref.UserID `cbor:"assignee,omitempty"`
+	Parent    *string     `cbor:"parent,omitempty"`
+	BlockedBy *[]string   `cbor:"blocked_by,omitempty"`
+	Deadline  *string     `cbor:"deadline,omitempty"`
 
 	// Review replaces the ticket's review content. When provided,
 	// the entire TicketReview is replaced. Use this to set up
@@ -655,15 +655,7 @@ func (ts *TicketService) handleUpdate(ctx context.Context, token *servicetoken.T
 	}
 	proposedAssignee := content.Assignee
 	if request.Assignee != nil {
-		if *request.Assignee == "" {
-			proposedAssignee = ref.UserID{}
-		} else {
-			parsed, err := ref.ParseUserID(*request.Assignee)
-			if err != nil {
-				return nil, fmt.Errorf("invalid assignee: %w", err)
-			}
-			proposedAssignee = parsed
-		}
+		proposedAssignee = *request.Assignee
 	}
 
 	// Validate status transition if the client explicitly sent a status

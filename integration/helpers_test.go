@@ -94,9 +94,18 @@ var (
 // is kept as a process-lifetime session for bootstrapping per-test admin
 // users (inviting them to global rooms and granting PL 100).
 var (
-	sharedAdmin    *messaging.DirectSession
-	sharedAdminMu  sync.Mutex // protects lazy init of sharedAdmin
-	globalRoomPLMu sync.Mutex // serializes power level read-modify-write on global rooms
+	sharedAdmin   *messaging.DirectSession
+	sharedAdminMu sync.Mutex // protects lazy init of sharedAdmin
+
+	// globalPLBatcher coalesces power level grants from concurrent tests.
+	// Each room is independently serialized: while one goroutine flushes
+	// grants for room A, another can concurrently flush room B. Grants
+	// that arrive while a flush is in progress are included in the next
+	// flush, naturally batching multiple users into one read-modify-write.
+	globalPLBatcher = powerLevelBatcher{
+		pending:  make(map[ref.RoomID]map[ref.UserID]int),
+		flushMus: make(map[ref.RoomID]*sync.Mutex),
+	}
 )
 
 var (
@@ -551,14 +560,10 @@ func adminSession(t *testing.T) *messaging.DirectSession {
 		}
 	}
 
-	// Grant PL 100 in all global rooms. The lock serializes the
-	// read-modify-write of m.room.power_levels state events so
-	// concurrent tests don't overwrite each other's PL grants.
-	globalRoomPLMu.Lock()
-	defer globalRoomPLMu.Unlock()
-	for _, roomID := range globalRooms {
-		grantPowerLevel(t, shared, roomID, account.UserID, 100)
-	}
+	// Grant PL 100 in all global rooms. The batcher uses per-room mutexes
+	// (5 rooms can flush in parallel) and coalesces grants from concurrent
+	// tests into batched writes.
+	globalPLBatcher.grant(t, shared, globalRooms, account.UserID, 100)
 
 	t.Cleanup(func() { session.Close() })
 	return session
@@ -649,27 +654,96 @@ func getSharedAdminSession(t *testing.T) *messaging.DirectSession {
 	return sharedAdmin
 }
 
-// grantPowerLevel reads the current m.room.power_levels state event in
-// the given room, adds or updates the specified user's power level, and
-// writes the updated event back. Caller must hold globalRoomPLMu.
-func grantPowerLevel(t *testing.T, admin *messaging.DirectSession, roomID ref.RoomID, userID ref.UserID, level int) {
+// powerLevelBatcher coalesces power level grants from concurrent tests
+// into batched writes. Each room is independently serialized via its own
+// mutex: while one goroutine flushes grants for room A, another can
+// concurrently flush room B. Grants that arrive while a flush is in
+// progress are picked up by the next flush, naturally batching multiple
+// users into one read-modify-write cycle.
+//
+// The coalescing happens without timers or explicit batching windows.
+// When goroutine X holds a room's flush mutex and writes PL for users
+// [A, B], goroutines Y and Z add their users to the pending map. When
+// X releases the mutex, Y acquires it and writes PL for all accumulated
+// users in one round-trip. Z finds no pending grants and returns
+// immediately — Y already flushed Z's grant.
+type powerLevelBatcher struct {
+	mu       sync.Mutex
+	pending  map[ref.RoomID]map[ref.UserID]int
+	flushMus map[ref.RoomID]*sync.Mutex
+}
+
+// grant registers power level grants for a user across multiple rooms and
+// flushes each room. Blocks until all grants are committed.
+func (batcher *powerLevelBatcher) grant(
+	t *testing.T,
+	session *messaging.DirectSession,
+	rooms []ref.RoomID,
+	userID ref.UserID,
+	level int,
+) {
 	t.Helper()
-	ctx := t.Context()
 
-	powerLevelJSON, err := admin.GetStateEvent(ctx, roomID, schema.MatrixEventTypePowerLevels, "")
-	if err != nil {
-		t.Fatalf("get power levels for %s: %v", roomID, err)
+	// Register grants for all rooms.
+	batcher.mu.Lock()
+	for _, roomID := range rooms {
+		if batcher.pending[roomID] == nil {
+			batcher.pending[roomID] = make(map[ref.UserID]int)
+		}
+		batcher.pending[roomID][userID] = level
+		if batcher.flushMus[roomID] == nil {
+			batcher.flushMus[roomID] = &sync.Mutex{}
+		}
+	}
+	batcher.mu.Unlock()
+
+	// Flush each room independently. Per-room mutexes enable parallelism
+	// across rooms; coalescing happens when the flusher grabs all pending
+	// grants accumulated while waiting for the mutex.
+	for _, roomID := range rooms {
+		batcher.flushRoom(t, session, roomID)
+	}
+}
+
+// flushRoom acquires the per-room flush mutex, takes all pending grants,
+// and writes them in a single GrantPowerLevels call. If another goroutine
+// already flushed our grant, the pending map is empty and we return
+// immediately.
+func (batcher *powerLevelBatcher) flushRoom(
+	t *testing.T,
+	session *messaging.DirectSession,
+	roomID ref.RoomID,
+) {
+	t.Helper()
+
+	batcher.mu.Lock()
+	flushMu := batcher.flushMus[roomID]
+	batcher.mu.Unlock()
+
+	flushMu.Lock()
+	defer flushMu.Unlock()
+
+	// Take all pending grants for this room. May include grants from
+	// other goroutines that arrived while we waited for flushMu.
+	batcher.mu.Lock()
+	grants := batcher.pending[roomID]
+	delete(batcher.pending, roomID)
+	batcher.mu.Unlock()
+
+	if len(grants) == 0 {
+		return
 	}
 
-	var powerLevels schema.PowerLevels
-	if err := json.Unmarshal(powerLevelJSON, &powerLevels); err != nil {
-		t.Fatalf("unmarshal power levels for %s: %v", roomID, err)
+	// Copy into a typed map for GrantPowerLevels. The pending map uses
+	// ref.UserID keys directly; GrantPowerLevels expects the same type.
+	typedGrants := make(map[ref.UserID]int, len(grants))
+	for userID, level := range grants {
+		typedGrants[userID] = level
 	}
 
-	powerLevels.SetUserLevel(userID, level)
-
-	if _, err := admin.SendStateEvent(ctx, roomID, schema.MatrixEventTypePowerLevels, "", powerLevels); err != nil {
-		t.Fatalf("set power level %d for %s in %s: %v", level, userID, roomID, err)
+	if err := schema.GrantPowerLevels(t.Context(), session, roomID,
+		schema.PowerLevelGrants{Users: typedGrants}); err != nil {
+		t.Fatalf("batch PL grant in %s: %v", roomID, err)
 	}
 }
 

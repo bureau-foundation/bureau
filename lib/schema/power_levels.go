@@ -3,7 +3,13 @@
 
 package schema
 
-import "github.com/bureau-foundation/bureau/lib/ref"
+import (
+	"context"
+	"encoding/json"
+	"fmt"
+
+	"github.com/bureau-foundation/bureau/lib/ref"
+)
 
 // PowerLevels is a typed representation of the Matrix m.room.power_levels
 // state event content. It supports typed read-modify-write operations:
@@ -42,4 +48,52 @@ func (powerLevels *PowerLevels) SetEventLevel(eventType ref.EventType, level int
 		powerLevels.Events = make(map[string]int)
 	}
 	powerLevels.Events[string(eventType)] = level
+}
+
+// PowerLevelSession is the subset of the Matrix client-server API needed
+// for power level read-modify-write operations. Satisfied implicitly by
+// messaging.Session, messaging.DirectSession, and proxyclient.ProxySession.
+type PowerLevelSession interface {
+	GetStateEvent(ctx context.Context, roomID ref.RoomID, eventType ref.EventType, stateKey string) (json.RawMessage, error)
+	SendStateEvent(ctx context.Context, roomID ref.RoomID, eventType ref.EventType, stateKey string, content any) (ref.EventID, error)
+}
+
+// PowerLevelGrants specifies user and event type power level changes to
+// apply in a single read-modify-write operation. Either or both maps may
+// be non-empty; nil maps are skipped.
+type PowerLevelGrants struct {
+	Users  map[ref.UserID]int
+	Events map[ref.EventType]int
+}
+
+// GrantPowerLevels reads the current m.room.power_levels state event from
+// a room, applies all user and event type grants, and writes the updated
+// event back. One GET + one PUT regardless of how many grants are included.
+//
+// This is the canonical way to modify power levels in an existing room.
+// For setting power levels at room creation time, use PowerLevelContentOverride
+// in the CreateRoomRequest instead.
+func GrantPowerLevels(ctx context.Context, session PowerLevelSession, roomID ref.RoomID, grants PowerLevelGrants) error {
+	content, err := session.GetStateEvent(ctx, roomID, MatrixEventTypePowerLevels, "")
+	if err != nil {
+		return fmt.Errorf("reading power levels for %s: %w", roomID, err)
+	}
+
+	var powerLevels PowerLevels
+	if err := json.Unmarshal(content, &powerLevels); err != nil {
+		return fmt.Errorf("parsing power levels for %s: %w", roomID, err)
+	}
+
+	for userID, level := range grants.Users {
+		powerLevels.SetUserLevel(userID, level)
+	}
+	for eventType, level := range grants.Events {
+		powerLevels.SetEventLevel(eventType, level)
+	}
+
+	if _, err := session.SendStateEvent(ctx, roomID, MatrixEventTypePowerLevels, "", powerLevels); err != nil {
+		return fmt.Errorf("writing power levels for %s: %w", roomID, err)
+	}
+
+	return nil
 }

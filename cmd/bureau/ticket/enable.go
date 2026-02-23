@@ -5,7 +5,6 @@ package ticket
 
 import (
 	"context"
-	"encoding/json"
 	"fmt"
 	"log/slog"
 	"time"
@@ -387,38 +386,19 @@ func ConfigureRoom(ctx context.Context, logger *slog.Logger, session messaging.S
 	return nil
 }
 
-// configureTicketPowerLevels performs a read-modify-write on a room's
+// configureTicketPowerLevels performs a batched read-modify-write on a room's
 // m.room.power_levels to add ticket-related entries:
 //   - Service principal user gets PL 10
 //   - m.bureau.ticket event type requires PL 10
 //   - m.bureau.ticket_config requires PL 100 (admin-only)
 //   - m.bureau.room_service requires PL 100 (admin-only)
 func configureTicketPowerLevels(ctx context.Context, session messaging.Session, roomID ref.RoomID, serviceUserID ref.UserID) error {
-	// Read current power levels.
-	content, err := session.GetStateEvent(ctx, roomID, schema.MatrixEventTypePowerLevels, "")
-	if err != nil {
-		return cli.Internal("reading power levels: %w", err)
-	}
-
-	var powerLevels schema.PowerLevels
-	if err := json.Unmarshal(content, &powerLevels); err != nil {
-		return cli.Internal("parsing power levels: %w", err)
-	}
-
-	// Service principal needs PL 10 to write ticket events.
-	powerLevels.SetUserLevel(serviceUserID, 10)
-
-	// Ticket events are writable at PL 10; config and service binding
-	// require admin (PL 100).
-	powerLevels.SetEventLevel(schema.EventTypeTicket, 10)
-	powerLevels.SetEventLevel(schema.EventTypeTicketConfig, 100)
-	powerLevels.SetEventLevel(schema.EventTypeRoomService, 100)
-
-	// Write back the updated power levels.
-	_, err = session.SendStateEvent(ctx, roomID, schema.MatrixEventTypePowerLevels, "", powerLevels)
-	if err != nil {
-		return cli.Internal("updating power levels: %w", err)
-	}
-
-	return nil
+	return schema.GrantPowerLevels(ctx, session, roomID, schema.PowerLevelGrants{
+		Users: map[ref.UserID]int{serviceUserID: 10},
+		Events: map[ref.EventType]int{
+			schema.EventTypeTicket:       10,
+			schema.EventTypeTicketConfig: 100,
+			schema.EventTypeRoomService:  100,
+		},
+	})
 }

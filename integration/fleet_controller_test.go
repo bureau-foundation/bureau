@@ -4,7 +4,6 @@
 package integration_test
 
 import (
-	"encoding/json"
 	"errors"
 	"strings"
 	"testing"
@@ -169,8 +168,7 @@ func publishFleetService(t *testing.T, admin *messaging.DirectSession, fleetRoom
 
 // grantFleetControllerConfigAccess invites a fleet controller to a machine's
 // config room and grants it PL 50 so it can read/write MachineConfig for
-// placement. The admin (PL 100) reads current power levels, adds the fleet
-// controller at PL 50, and writes the updated power levels back.
+// placement.
 func grantFleetControllerConfigAccess(t *testing.T, admin *messaging.DirectSession, fc *fleetController, machine *testMachine) {
 	t.Helper()
 	ctx := t.Context()
@@ -186,23 +184,11 @@ func grantFleetControllerConfigAccess(t *testing.T, admin *messaging.DirectSessi
 		}
 	}
 
-	// Read current power levels, add fleet controller at PL 50, write back.
-	powerLevelJSON, err := admin.GetStateEvent(ctx, machine.ConfigRoomID,
-		schema.MatrixEventTypePowerLevels, "")
-	if err != nil {
-		t.Fatalf("read config room power levels: %v", err)
-	}
-
-	var powerLevels schema.PowerLevels
-	if err := json.Unmarshal(powerLevelJSON, &powerLevels); err != nil {
-		t.Fatalf("unmarshal config room power levels: %v", err)
-	}
-
-	powerLevels.SetUserLevel(fc.UserID, schema.PowerLevelOperator)
-
-	if _, err := admin.SendStateEvent(ctx, machine.ConfigRoomID,
-		schema.MatrixEventTypePowerLevels, "", powerLevels); err != nil {
-		t.Fatalf("grant fleet controller PL 50 in config room: %v", err)
+	// Grant fleet controller PL 50 in the config room.
+	if err := schema.GrantPowerLevels(ctx, admin, machine.ConfigRoomID, schema.PowerLevelGrants{
+		Users: map[ref.UserID]int{fc.UserID: schema.PowerLevelOperator},
+	}); err != nil {
+		t.Fatalf("grant fleet controller PL in config room: %v", err)
 	}
 }
 

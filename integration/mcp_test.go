@@ -81,7 +81,7 @@ func TestMCPServer(t *testing.T) {
 
 	// Watch for the authorized tool's Matrix message before sending the prompt.
 	responseWatch := watchRoom(t, admin, machine.ConfigRoomID)
-	if _, err := admin.SendMessage(ctx, machine.ConfigRoomID, messaging.NewTextMessage("Test MCP authorization")); err != nil {
+	if _, err := admin.SendMessage(ctx, machine.ConfigRoomID, messaging.NewTargetedTextMessage("Test MCP authorization", agent.Account.UserID)); err != nil {
 		t.Fatalf("sending prompt to agent: %v", err)
 	}
 

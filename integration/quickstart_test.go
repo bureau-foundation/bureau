@@ -91,7 +91,7 @@ func TestQuickstartTestAgent(t *testing.T) {
 	ackWatch := watchRoom(t, admin, machine.ConfigRoomID)
 
 	if _, err := admin.SendMessage(ctx, machine.ConfigRoomID,
-		messaging.NewTextMessage("hello from test harness")); err != nil {
+		messaging.NewTargetedTextMessage("hello from test harness", agent.UserID)); err != nil {
 		t.Fatalf("send message to test agent: %v", err)
 	}
 

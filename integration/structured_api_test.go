@@ -111,7 +111,7 @@ func TestStructuredAgentAPI(t *testing.T) {
 	registerProxyHTTPService(t, agent.AdminSocketPath, "anthropic", mock.Server.URL)
 
 	// Send the prompt that triggers the agent loop.
-	if _, err := admin.SendMessage(ctx, machine.ConfigRoomID, messaging.NewTextMessage("Test structured API")); err != nil {
+	if _, err := admin.SendMessage(ctx, machine.ConfigRoomID, messaging.NewTargetedTextMessage("Test structured API", agent.Account.UserID)); err != nil {
 		t.Fatalf("sending prompt to agent: %v", err)
 	}
 

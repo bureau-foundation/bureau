@@ -53,10 +53,25 @@ type StateEvent struct {
 
 // MessageContent is the content body of a Matrix message event (m.room.message).
 // Threads are first-class: set RelatesTo to send messages within a thread.
+//
+// Target scopes a message to a specific agent. Machine-originated messages
+// (daemon, test harness, services) always set Target so that only the
+// intended agent's message pump injects the prompt. Human-originated
+// messages use Mentions (or body @-patterns) for chat-model routing:
+// agents mentioned receive the message, no mentions means broadcast.
 type MessageContent struct {
 	MsgType   string     `json:"msgtype"`
 	Body      string     `json:"body"`
+	Target    string     `json:"target,omitempty"`
+	Mentions  *Mentions  `json:"m.mentions,omitempty"`
 	RelatesTo *RelatesTo `json:"m.relates_to,omitempty"`
+}
+
+// Mentions identifies users referenced in a message. Follows the Matrix
+// spec m.mentions format: a list of fully-qualified Matrix user IDs
+// (e.g., "@agent/worker:bureau.local") that the message is addressed to.
+type Mentions struct {
+	UserIDs []string `json:"user_ids,omitempty"`
 }
 
 // RelatesTo expresses relationships between events.
@@ -74,10 +89,24 @@ type InReplyTo struct {
 }
 
 // NewTextMessage creates a plain text message with no thread context.
+// Use NewTargetedTextMessage for machine-originated messages that should
+// be delivered to a specific agent.
 func NewTextMessage(body string) MessageContent {
 	return MessageContent{
 		MsgType: "m.text",
 		Body:    body,
+	}
+}
+
+// NewTargetedTextMessage creates a plain text message scoped to a specific
+// agent. The target is the fully-qualified Matrix user ID of the intended
+// recipient. The agent's message pump will only inject messages whose
+// target matches its own user ID.
+func NewTargetedTextMessage(body string, target ref.UserID) MessageContent {
+	return MessageContent{
+		MsgType: "m.text",
+		Body:    body,
+		Target:  target.String(),
 	}
 }
 

@@ -119,7 +119,7 @@ func TestPayloadDeliveryAndHotReload(t *testing.T) {
 	ackWatch := watchRoom(t, admin, machine.ConfigRoomID)
 
 	_, err := admin.SendMessage(ctx, machine.ConfigRoomID,
-		messaging.NewTextMessage("verify-payload-update"))
+		messaging.NewTargetedTextMessage("verify-payload-update", agent.UserID))
 	if err != nil {
 		t.Fatalf("send trigger message to agent: %v", err)
 	}
@@ -244,7 +244,7 @@ func TestPayloadHotReloadFromEmpty(t *testing.T) {
 	ackWatch := watchRoom(t, admin, machine.ConfigRoomID)
 
 	_, err := admin.SendMessage(ctx, machine.ConfigRoomID,
-		messaging.NewTextMessage("verify-payload-from-empty"))
+		messaging.NewTargetedTextMessage("verify-payload-from-empty", agent.UserID))
 	if err != nil {
 		t.Fatalf("send trigger message to agent: %v", err)
 	}

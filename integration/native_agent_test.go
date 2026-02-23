@@ -82,7 +82,7 @@ func TestNativeAgentEndToEnd(t *testing.T) {
 	// Send a Matrix message to the agent. This is the first prompt:
 	// the agent loop picks it up from stdin and calls the LLM.
 	responseWatch := watchRoom(t, admin, machine.ConfigRoomID)
-	if _, err := admin.SendMessage(ctx, machine.ConfigRoomID, messaging.NewTextMessage("Echo hello for me")); err != nil {
+	if _, err := admin.SendMessage(ctx, machine.ConfigRoomID, messaging.NewTargetedTextMessage("Echo hello for me", agent.Account.UserID)); err != nil {
 		t.Fatalf("sending prompt to agent: %v", err)
 	}
 
@@ -182,7 +182,7 @@ func TestNativeAgentContextTruncation(t *testing.T) {
 	for turn := 0; turn < turnCount; turn++ {
 		responseWatch := watchRoom(t, admin, machine.ConfigRoomID)
 		prompt := fmt.Sprintf("Turn %d: echo this", turn)
-		if _, err := admin.SendMessage(ctx, machine.ConfigRoomID, messaging.NewTextMessage(prompt)); err != nil {
+		if _, err := admin.SendMessage(ctx, machine.ConfigRoomID, messaging.NewTargetedTextMessage(prompt, agent.Account.UserID)); err != nil {
 			t.Fatalf("sending prompt for turn %d: %v", turn, err)
 		}
 

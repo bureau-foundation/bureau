@@ -11,6 +11,7 @@ import (
 	"log/slog"
 	"os"
 	"os/signal"
+	"slices"
 	"strings"
 	"syscall"
 	"time"
@@ -500,10 +501,33 @@ func runMessagePump(ctx context.Context, session messaging.Session, roomID ref.R
 				continue
 			}
 			body, _ := event.Content["body"].(string)
-			if body != "" {
-				logger.Info("injecting message from Matrix", "sender", event.Sender)
-				fmt.Fprintf(stdin, "%s\n", body)
+			if body == "" {
+				continue
 			}
+
+			// Route messages using the chat model:
+			// - Machine-originated messages set "target" to a specific agent's user ID.
+			// - Human-originated messages use @mentions (structured m.mentions
+			//   or body @-patterns) to address specific agents.
+			// - Messages with no target and no mentions are broadcast to all agents.
+			target, _ := event.Content["target"].(string)
+			if target != "" {
+				if target != ownUserID.String() {
+					logger.Debug("skipping targeted message for other agent",
+						"target", target, "sender", event.Sender)
+					continue
+				}
+			} else {
+				mentions := extractEventMentions(event.Content, body)
+				if len(mentions) > 0 && !slices.Contains(mentions, ownUserID.String()) {
+					logger.Debug("skipping mentioned message not addressed to this agent",
+						"mentions", mentions, "sender", event.Sender)
+					continue
+				}
+			}
+
+			logger.Info("injecting message from Matrix", "sender", event.Sender)
+			fmt.Fprintf(stdin, "%s\n", body)
 		}
 	}
 }

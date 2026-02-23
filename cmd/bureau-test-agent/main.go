@@ -112,10 +112,9 @@ func run() error {
 	}
 	log("ready signal sent")
 
-	// Step 5: Wait for an incoming message from an external user via /sync
-	// long-polling. Skip messages from self and from the machine daemon —
-	// the daemon posts operational messages (service directory updates,
-	// policy changes) to the config room that are not intended for the agent.
+	// Step 5: Wait for a targeted message via /sync long-polling. Only
+	// messages with target == ownUserID are accepted. This filters out
+	// messages from self, the daemon, and other agents sharing the room.
 	machineUserID := machine.UserID()
 	log("waiting for incoming message...")
 	message, err := waitForMessage(ctx, session, configRoomID, whoamiUserID, machineUserID)
@@ -169,9 +168,12 @@ func readPayloadJSON() string {
 	return string(compact)
 }
 
-// waitForMessage uses Matrix /sync long-polling to wait for a message from
-// an external user (someone other than the agent itself or the machine
-// daemon). The homeserver holds each /sync request for up to 30 seconds,
+// waitForMessage uses Matrix /sync long-polling to wait for a targeted
+// message from an external user. Only messages with a "target" field
+// matching ownUserID are accepted — this prevents agents sharing a config
+// room from triggering each other (e.g., one agent's "quickstart-test-ready"
+// message being picked up by another agent as its incoming prompt).
+// The homeserver holds each /sync request for up to 30 seconds,
 // returning immediately when new events arrive. Returns the message body.
 func waitForMessage(ctx context.Context, session messaging.Session, roomID ref.RoomID, ownUserID, machineUserID ref.UserID) (string, error) {
 	filter := buildRoomMessageFilter(roomID.String())
@@ -218,6 +220,14 @@ func waitForMessage(ctx context.Context, session messaging.Session, roomID ref.R
 			}
 			msgtype, _ := event.Content["msgtype"].(string)
 			if msgtype != "m.text" {
+				continue
+			}
+			// Only accept messages explicitly targeted to this agent.
+			// All test harness messages use NewTargetedTextMessage, so
+			// untargeted messages (other agents' ready signals, acks,
+			// daemon notifications) are correctly ignored.
+			target, _ := event.Content["target"].(string)
+			if target != ownUserID.String() {
 				continue
 			}
 			body, _ := event.Content["body"].(string)

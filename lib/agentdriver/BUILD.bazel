@@ -10,6 +10,7 @@ go_library(
         "doc.go",
         "driver.go",
         "event.go",
+        "mention.go",
         "run.go",
         "serviceclient.go",
         "session_log.go",
@@ -30,6 +31,7 @@ go_test(
     name = "agentdriver_test",
     srcs = [
         "context_test.go",
+        "mention_test.go",
         "run_test.go",
         "serviceclient_test.go",
         "session_log_test.go",

@@ -93,7 +93,7 @@ func TestTicketServiceAgent(t *testing.T) {
 
 	// Send prompt to trigger the agent loop.
 	projectWatch := watchRoom(t, admin, projectRoomID)
-	if _, err := admin.SendMessage(ctx, machine.ConfigRoomID, messaging.NewTextMessage("Create a ticket")); err != nil {
+	if _, err := admin.SendMessage(ctx, machine.ConfigRoomID, messaging.NewTargetedTextMessage("Create a ticket", agent.Account.UserID)); err != nil {
 		t.Fatalf("sending prompt to agent: %v", err)
 	}
 
@@ -270,13 +270,14 @@ func TestTicketLifecycleAgent(t *testing.T) {
 		return currentAdminSocket
 	}
 
-	// sendStep registers a mock on the admin socket, sends a prompt to
-	// the config room, and waits for mock completion.
-	sendStep := func(t *testing.T, adminSocket string, steps []mockToolStep, prompt string) {
+	// sendStep registers a mock on the admin socket, sends a targeted prompt
+	// to the config room, and waits for mock completion. The target scopes the
+	// message to a specific agent so other agents in the room ignore it.
+	sendStep := func(t *testing.T, adminSocket string, target ref.UserID, steps []mockToolStep, prompt string) {
 		t.Helper()
 		mock := newMockToolSequence(t, steps)
 		registerProxyHTTPService(t, adminSocket, "anthropic", mock.URL)
-		if _, err := admin.SendMessage(ctx, machine.ConfigRoomID, messaging.NewTextMessage(prompt)); err != nil {
+		if _, err := admin.SendMessage(ctx, machine.ConfigRoomID, messaging.NewTargetedTextMessage(prompt, target)); err != nil {
 			t.Fatalf("send prompt: %v", err)
 		}
 		waitForMockCompletion(t, mock)
@@ -294,7 +295,7 @@ func TestTicketLifecycleAgent(t *testing.T) {
 
 		adminSocket := deployAgent(t, pmAccount, pmGrants)
 
-		sendStep(t, adminSocket, []mockToolStep{{
+		sendStep(t, adminSocket, pmAccount.UserID, []mockToolStep{{
 			ToolName: "bureau_ticket_create",
 			ToolInput: func() map[string]any {
 				return map[string]any{
@@ -312,7 +313,7 @@ func TestTicketLifecycleAgent(t *testing.T) {
 		}
 		t.Logf("alpha ticket %s created", alphaTicketID)
 
-		sendStep(t, adminSocket, []mockToolStep{{
+		sendStep(t, adminSocket, pmAccount.UserID, []mockToolStep{{
 			ToolName: "bureau_ticket_create",
 			ToolInput: func() map[string]any {
 				return map[string]any{
@@ -337,7 +338,7 @@ func TestTicketLifecycleAgent(t *testing.T) {
 		adminSocket := deployAgent(t, pmAccount, pmGrants)
 
 		// Create.
-		sendStep(t, adminSocket, []mockToolStep{{
+		sendStep(t, adminSocket, pmAccount.UserID, []mockToolStep{{
 			ToolName: "bureau_ticket_create",
 			ToolInput: func() map[string]any {
 				return map[string]any{
@@ -357,7 +358,7 @@ func TestTicketLifecycleAgent(t *testing.T) {
 
 		// Claim (open → in_progress).
 		pmUserID := pmAccount.UserID
-		sendStep(t, adminSocket, []mockToolStep{{
+		sendStep(t, adminSocket, pmAccount.UserID, []mockToolStep{{
 			ToolName: "bureau_ticket_update",
 			ToolInput: func() map[string]any {
 				return map[string]any{
@@ -378,7 +379,7 @@ func TestTicketLifecycleAgent(t *testing.T) {
 		}
 
 		// Close (in_progress → closed).
-		sendStep(t, adminSocket, []mockToolStep{{
+		sendStep(t, adminSocket, pmAccount.UserID, []mockToolStep{{
 			ToolName: "bureau_ticket_close",
 			ToolInput: func() map[string]any {
 				return map[string]any{
@@ -398,7 +399,7 @@ func TestTicketLifecycleAgent(t *testing.T) {
 		}
 
 		// Reopen (closed → open).
-		sendStep(t, adminSocket, []mockToolStep{{
+		sendStep(t, adminSocket, pmAccount.UserID, []mockToolStep{{
 			ToolName: "bureau_ticket_reopen",
 			ToolInput: func() map[string]any {
 				return map[string]any{
@@ -425,7 +426,7 @@ func TestTicketLifecycleAgent(t *testing.T) {
 		// Worker creates, claims, and tries to close a ticket.
 		workerSocket := deployAgent(t, workerAccount, workerGrants)
 
-		sendStep(t, workerSocket, []mockToolStep{{
+		sendStep(t, workerSocket, workerAccount.UserID, []mockToolStep{{
 			ToolName: "bureau_ticket_create",
 			ToolInput: func() map[string]any {
 				return map[string]any{
@@ -441,7 +442,7 @@ func TestTicketLifecycleAgent(t *testing.T) {
 		t.Logf("worker created %s", ticketID)
 
 		workerUserID := workerAccount.UserID
-		sendStep(t, workerSocket, []mockToolStep{{
+		sendStep(t, workerSocket, workerAccount.UserID, []mockToolStep{{
 			ToolName: "bureau_ticket_update",
 			ToolInput: func() map[string]any {
 				return map[string]any{
@@ -459,7 +460,7 @@ func TestTicketLifecycleAgent(t *testing.T) {
 		}
 
 		// Worker tries to close — service rejects (no ticket/close grant).
-		sendStep(t, workerSocket, []mockToolStep{{
+		sendStep(t, workerSocket, workerAccount.UserID, []mockToolStep{{
 			ToolName: "bureau_ticket_close",
 			ToolInput: func() map[string]any {
 				return map[string]any{
@@ -479,7 +480,7 @@ func TestTicketLifecycleAgent(t *testing.T) {
 		// Switch to PM — close and reopen succeed.
 		pmSocket := deployAgent(t, pmAccount, pmGrants)
 
-		sendStep(t, pmSocket, []mockToolStep{{
+		sendStep(t, pmSocket, pmAccount.UserID, []mockToolStep{{
 			ToolName: "bureau_ticket_close",
 			ToolInput: func() map[string]any {
 				return map[string]any{
@@ -498,7 +499,7 @@ func TestTicketLifecycleAgent(t *testing.T) {
 		// Switch back to worker — reopen should fail.
 		workerSocket = deployAgent(t, workerAccount, workerGrants)
 
-		sendStep(t, workerSocket, []mockToolStep{{
+		sendStep(t, workerSocket, workerAccount.UserID, []mockToolStep{{
 			ToolName: "bureau_ticket_reopen",
 			ToolInput: func() map[string]any {
 				return map[string]any{
@@ -517,7 +518,7 @@ func TestTicketLifecycleAgent(t *testing.T) {
 		// Switch to PM — reopen succeeds.
 		pmSocket = deployAgent(t, pmAccount, pmGrants)
 
-		sendStep(t, pmSocket, []mockToolStep{{
+		sendStep(t, pmSocket, pmAccount.UserID, []mockToolStep{{
 			ToolName: "bureau_ticket_reopen",
 			ToolInput: func() map[string]any {
 				return map[string]any{
@@ -541,7 +542,7 @@ func TestTicketLifecycleAgent(t *testing.T) {
 		// Worker creates and claims a ticket.
 		workerSocket := deployAgent(t, workerAccount, workerGrants)
 
-		sendStep(t, workerSocket, []mockToolStep{{
+		sendStep(t, workerSocket, workerAccount.UserID, []mockToolStep{{
 			ToolName: "bureau_ticket_create",
 			ToolInput: func() map[string]any {
 				return map[string]any{
@@ -556,7 +557,7 @@ func TestTicketLifecycleAgent(t *testing.T) {
 		ticketID, _ := waitForTicket(t, &projectWatch, "Contention target")
 
 		workerUserID := workerAccount.UserID
-		sendStep(t, workerSocket, []mockToolStep{{
+		sendStep(t, workerSocket, workerAccount.UserID, []mockToolStep{{
 			ToolName: "bureau_ticket_update",
 			ToolInput: func() map[string]any {
 				return map[string]any{
@@ -577,7 +578,7 @@ func TestTicketLifecycleAgent(t *testing.T) {
 		pmSocket := deployAgent(t, pmAccount, pmGrants)
 
 		pmUserID := pmAccount.UserID
-		sendStep(t, pmSocket, []mockToolStep{{
+		sendStep(t, pmSocket, pmAccount.UserID, []mockToolStep{{
 			ToolName: "bureau_ticket_update",
 			ToolInput: func() map[string]any {
 				return map[string]any{

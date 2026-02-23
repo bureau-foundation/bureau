@@ -32,6 +32,22 @@ type PowerLevels struct {
 	Notifications map[string]int `json:"notifications,omitempty"`
 }
 
+// UserLevel returns the power level for a Matrix user ID string. If the user
+// has an explicit entry in the Users map, that value is returned. Otherwise
+// falls back to UsersDefault. If UsersDefault is also nil (not set), returns 0
+// per the Matrix spec default.
+func (powerLevels *PowerLevels) UserLevel(userID string) int {
+	if powerLevels.Users != nil {
+		if level, ok := powerLevels.Users[userID]; ok {
+			return level
+		}
+	}
+	if powerLevels.UsersDefault != nil {
+		return *powerLevels.UsersDefault
+	}
+	return 0
+}
+
 // SetUserLevel sets the power level for a Matrix user ID. Initializes the
 // Users map if nil.
 func (powerLevels *PowerLevels) SetUserLevel(userID ref.UserID, level int) {

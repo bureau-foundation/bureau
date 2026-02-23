@@ -1266,7 +1266,7 @@ func TestRebuildAuthorizationIndex(t *testing.T) {
 		},
 	}
 
-	daemon.rebuildAuthorizationIndex(config)
+	daemon.rebuildAuthorizationIndex(config, nil, nil)
 
 	// Both principals should be in the index.
 	principals := daemon.authorizationIndex.Principals()
@@ -1309,7 +1309,7 @@ func TestRebuildAuthorizationIndex_RemovesStalePrincipals(t *testing.T) {
 			{Principal: testEntity(t, daemon.fleet, "agent/alpha")},
 			{Principal: testEntity(t, daemon.fleet, "agent/beta")},
 		},
-	})
+	}, nil, nil)
 
 	if len(daemon.authorizationIndex.Principals()) != 2 {
 		t.Fatalf("after first rebuild: principals = %d, want 2", len(daemon.authorizationIndex.Principals()))
@@ -1320,7 +1320,7 @@ func TestRebuildAuthorizationIndex_RemovesStalePrincipals(t *testing.T) {
 		Principals: []schema.PrincipalAssignment{
 			{Principal: testEntity(t, daemon.fleet, "agent/alpha")},
 		},
-	})
+	}, nil, nil)
 
 	principals := daemon.authorizationIndex.Principals()
 	if len(principals) != 1 {
@@ -1353,7 +1353,7 @@ func TestRebuildAuthorizationIndex_PreservesTemporalGrants(t *testing.T) {
 	}
 
 	// First rebuild establishes the principal.
-	daemon.rebuildAuthorizationIndex(config)
+	daemon.rebuildAuthorizationIndex(config, nil, nil)
 
 	// Add a temporal grant between rebuilds.
 	temporalGrant := schema.Grant{
@@ -1373,7 +1373,7 @@ func TestRebuildAuthorizationIndex_PreservesTemporalGrants(t *testing.T) {
 
 	// Second rebuild with the same config. The temporal grant should survive
 	// because SetPrincipal preserves existing temporal entries.
-	daemon.rebuildAuthorizationIndex(config)
+	daemon.rebuildAuthorizationIndex(config, nil, nil)
 
 	grants := daemon.authorizationIndex.Grants(alphaUserID)
 	if len(grants) != 1 {
@@ -1381,6 +1381,240 @@ func TestRebuildAuthorizationIndex_PreservesTemporalGrants(t *testing.T) {
 	}
 	if grants[0].Ticket != "test-temporal-grant" {
 		t.Errorf("preserved grant ticket = %q, want %q", grants[0].Ticket, "test-temporal-grant")
+	}
+}
+
+func TestRebuildAuthorizationIndex_RoomLevelMemberGrants(t *testing.T) {
+	t.Parallel()
+
+	daemon, _ := newTestDaemon(t)
+	workspaceRoomID := mustRoomID("!workspace:test")
+	daemon.configRoomID = mustRoomID("!config:test")
+
+	alpha := testEntity(t, daemon.fleet, "agent/alpha")
+	beta := testEntity(t, daemon.fleet, "agent/beta")
+
+	config := &schema.MachineConfig{
+		Principals: []schema.PrincipalAssignment{
+			{Principal: alpha, AutoStart: true},
+			{Principal: beta, AutoStart: true},
+		},
+	}
+
+	// alpha is in the workspace room; beta is not.
+	conditionRoomIDs := map[ref.Entity]ref.RoomID{
+		alpha: workspaceRoomID,
+	}
+
+	// The workspace room has a room-level authorization policy with
+	// MemberGrants. The config room does not.
+	roomPolicies := map[ref.RoomID]*fetchedRoomPolicy{
+		workspaceRoomID: {
+			policy: schema.RoomAuthorizationPolicy{
+				MemberGrants: []schema.Grant{
+					{Actions: []string{"ticket/create"}, Targets: []string{"**:**"}},
+				},
+			},
+		},
+	}
+
+	daemon.rebuildAuthorizationIndex(config, conditionRoomIDs, roomPolicies)
+
+	// alpha should have the room-level MemberGrants (config room has no
+	// policy, workspace room does).
+	alphaGrants := daemon.authorizationIndex.Grants(alpha.UserID())
+	if len(alphaGrants) != 1 {
+		t.Fatalf("alpha grants = %d, want 1 (room-level MemberGrant)", len(alphaGrants))
+	}
+	if alphaGrants[0].Actions[0] != "ticket/create" {
+		t.Errorf("alpha grant action = %q, want %q", alphaGrants[0].Actions[0], "ticket/create")
+	}
+	expectedSource := schema.SourceRoom(workspaceRoomID.String())
+	if alphaGrants[0].Source != expectedSource {
+		t.Errorf("alpha grant source = %q, want %q", alphaGrants[0].Source, expectedSource)
+	}
+
+	// beta is only in the config room (which has no policy), so no
+	// room-level grants.
+	betaGrants := daemon.authorizationIndex.Grants(beta.UserID())
+	if len(betaGrants) != 0 {
+		t.Fatalf("beta grants = %d, want 0 (no room-level grants)", len(betaGrants))
+	}
+}
+
+func TestRebuildAuthorizationIndex_PowerLevelGrants(t *testing.T) {
+	t.Parallel()
+
+	daemon, _ := newTestDaemon(t)
+	workspaceRoomID := mustRoomID("!workspace:test")
+	daemon.configRoomID = mustRoomID("!config:test")
+
+	alpha := testEntity(t, daemon.fleet, "agent/alpha")
+	beta := testEntity(t, daemon.fleet, "agent/beta")
+
+	config := &schema.MachineConfig{
+		Principals: []schema.PrincipalAssignment{
+			{Principal: alpha, AutoStart: true},
+			{Principal: beta, AutoStart: true},
+		},
+	}
+
+	// Both principals are in the workspace room.
+	conditionRoomIDs := map[ref.Entity]ref.RoomID{
+		alpha: workspaceRoomID,
+		beta:  workspaceRoomID,
+	}
+
+	// Room has MemberGrants (PL 0) and PowerLevelGrants at PL 50.
+	// alpha has PL 100, beta has PL 0 (default).
+	roomPolicies := map[ref.RoomID]*fetchedRoomPolicy{
+		workspaceRoomID: {
+			policy: schema.RoomAuthorizationPolicy{
+				MemberGrants: []schema.Grant{
+					{Actions: []string{"observe/*"}},
+				},
+				PowerLevelGrants: map[string][]schema.Grant{
+					"50": {
+						{Actions: []string{"interrupt"}, Targets: []string{"**:**"}},
+					},
+				},
+			},
+			powerLevels: schema.PowerLevels{
+				Users: map[string]int{
+					alpha.UserID().String(): 100,
+				},
+			},
+		},
+	}
+
+	daemon.rebuildAuthorizationIndex(config, conditionRoomIDs, roomPolicies)
+
+	// alpha (PL 100) gets both MemberGrants and PL 50 grants.
+	alphaGrants := daemon.authorizationIndex.Grants(alpha.UserID())
+	if len(alphaGrants) != 2 {
+		t.Fatalf("alpha grants = %d, want 2 (MemberGrant + PowerLevelGrant)", len(alphaGrants))
+	}
+	// First grant: MemberGrant (observe/*).
+	if alphaGrants[0].Actions[0] != "observe/*" {
+		t.Errorf("alpha grants[0] action = %q, want %q", alphaGrants[0].Actions[0], "observe/*")
+	}
+	// Second grant: PowerLevelGrant at PL 50 (interrupt).
+	if alphaGrants[1].Actions[0] != "interrupt" {
+		t.Errorf("alpha grants[1] action = %q, want %q", alphaGrants[1].Actions[0], "interrupt")
+	}
+
+	// beta (PL 0, below 50) gets only MemberGrants.
+	betaGrants := daemon.authorizationIndex.Grants(beta.UserID())
+	if len(betaGrants) != 1 {
+		t.Fatalf("beta grants = %d, want 1 (MemberGrant only)", len(betaGrants))
+	}
+	if betaGrants[0].Actions[0] != "observe/*" {
+		t.Errorf("beta grants[0] action = %q, want %q", betaGrants[0].Actions[0], "observe/*")
+	}
+}
+
+func TestRebuildAuthorizationIndex_RoomGrantsMergeWithPrincipalPolicy(t *testing.T) {
+	t.Parallel()
+
+	daemon, _ := newTestDaemon(t)
+	workspaceRoomID := mustRoomID("!workspace:test")
+	daemon.configRoomID = mustRoomID("!config:test")
+
+	alpha := testEntity(t, daemon.fleet, "agent/alpha")
+
+	config := &schema.MachineConfig{
+		DefaultPolicy: &schema.AuthorizationPolicy{
+			Grants: []schema.Grant{{Actions: []string{"service/discover"}}},
+		},
+		Principals: []schema.PrincipalAssignment{
+			{
+				Principal: alpha,
+				AutoStart: true,
+				Authorization: &schema.AuthorizationPolicy{
+					Grants: []schema.Grant{{Actions: []string{"matrix/join"}}},
+				},
+			},
+		},
+	}
+
+	conditionRoomIDs := map[ref.Entity]ref.RoomID{
+		alpha: workspaceRoomID,
+	}
+
+	roomPolicies := map[ref.RoomID]*fetchedRoomPolicy{
+		workspaceRoomID: {
+			policy: schema.RoomAuthorizationPolicy{
+				MemberGrants: []schema.Grant{
+					{Actions: []string{"observe/*"}},
+				},
+			},
+		},
+	}
+
+	daemon.rebuildAuthorizationIndex(config, conditionRoomIDs, roomPolicies)
+
+	// alpha should have all three grant sources:
+	// 1. machine-default: service/discover
+	// 2. per-principal: matrix/join
+	// 3. room-level: observe/*
+	grants := daemon.authorizationIndex.Grants(alpha.UserID())
+	if len(grants) != 3 {
+		t.Fatalf("grants = %d, want 3 (default + principal + room)", len(grants))
+	}
+
+	// Verify source provenance and ordering.
+	if grants[0].Source != schema.SourceMachineDefault {
+		t.Errorf("grants[0].Source = %q, want %q", grants[0].Source, schema.SourceMachineDefault)
+	}
+	if grants[1].Source != schema.SourcePrincipal {
+		t.Errorf("grants[1].Source = %q, want %q", grants[1].Source, schema.SourcePrincipal)
+	}
+	expectedRoomSource := schema.SourceRoom(workspaceRoomID.String())
+	if grants[2].Source != expectedRoomSource {
+		t.Errorf("grants[2].Source = %q, want %q", grants[2].Source, expectedRoomSource)
+	}
+}
+
+func TestRebuildAuthorizationIndex_PayloadWorkspaceRoomID(t *testing.T) {
+	t.Parallel()
+
+	daemon, _ := newTestDaemon(t)
+	workspaceRoomID := mustRoomID("!workspace-payload:test")
+	daemon.configRoomID = mustRoomID("!config:test")
+
+	alpha := testEntity(t, daemon.fleet, "agent/alpha")
+
+	config := &schema.MachineConfig{
+		Principals: []schema.PrincipalAssignment{
+			{
+				Principal: alpha,
+				AutoStart: true,
+				Payload: map[string]any{
+					"WORKSPACE_ROOM_ID": workspaceRoomID.String(),
+				},
+			},
+		},
+	}
+
+	// No conditionRoomIDs — the workspace room comes from the payload.
+	roomPolicies := map[ref.RoomID]*fetchedRoomPolicy{
+		workspaceRoomID: {
+			policy: schema.RoomAuthorizationPolicy{
+				MemberGrants: []schema.Grant{
+					{Actions: []string{"ticket/view"}},
+				},
+			},
+		},
+	}
+
+	daemon.rebuildAuthorizationIndex(config, nil, roomPolicies)
+
+	grants := daemon.authorizationIndex.Grants(alpha.UserID())
+	if len(grants) != 1 {
+		t.Fatalf("grants = %d, want 1 (room-level from payload WORKSPACE_ROOM_ID)", len(grants))
+	}
+	if grants[0].Actions[0] != "ticket/view" {
+		t.Errorf("grant action = %q, want %q", grants[0].Actions[0], "ticket/view")
 	}
 }
 

@@ -14,6 +14,7 @@ import (
 	"os/exec"
 	"path/filepath"
 	"reflect"
+	"strconv"
 	"strings"
 	"time"
 
@@ -50,21 +51,6 @@ func (d *Daemon) reconcile(ctx context.Context) error {
 	// daemon's running state.
 	d.lastConfig = config
 
-	// Rebuild the authorization index from the current config. Each
-	// principal gets its machine-default grants/allowances merged with
-	// any per-principal authorization policy. SetPrincipal preserves
-	// temporal grants that were added incrementally via /sync.
-	// Principals removed from config are cleaned up from the index.
-	d.rebuildAuthorizationIndex(config)
-
-	// Check for Bureau core binary updates before principal reconciliation.
-	// Proxy binary updates take effect immediately (for future sandbox
-	// creation). Daemon binary changes trigger exec() self-replacement.
-	// Launcher binary changes are detected but not yet acted on.
-	if config.BureauVersion != nil {
-		d.reconcileBureauVersion(ctx, config.BureauVersion)
-	}
-
 	// Determine the desired set of principals. Conditions are evaluated
 	// here (not in the "create missing" pass) so that running principals
 	// whose conditions become false are excluded from the desired set.
@@ -72,6 +58,10 @@ func (d *Daemon) reconcile(ctx context.Context) error {
 	// state-driven lifecycle orchestration: when a workspace status
 	// changes from "active" to "teardown", agents gated on "active"
 	// stop, and a teardown principal gated on "teardown" starts.
+	//
+	// This loop runs before the authorization index rebuild because
+	// conditionRoomIDs maps principals to their workspace rooms, which
+	// the index rebuild needs to fetch room-level authorization policies.
 	desired := make(map[ref.Entity]schema.PrincipalAssignment, len(config.Principals))
 	triggerContents := make(map[ref.Entity][]byte)
 	conditionRoomIDs := make(map[ref.Entity]ref.RoomID) // principal → resolved workspace room ID
@@ -91,6 +81,27 @@ func (d *Daemon) reconcile(ctx context.Context) error {
 		if !conditionRoomID.IsZero() {
 			conditionRoomIDs[principal] = conditionRoomID
 		}
+	}
+
+	// Fetch room-level authorization policies from rooms that principals
+	// belong to. This is done before the index rebuild so the fetched
+	// data can be merged without network calls inside the rebuild.
+	roomPolicies := d.fetchRoomAuthorizationPolicies(ctx, config, conditionRoomIDs)
+
+	// Rebuild the authorization index from the current config. Each
+	// principal gets its machine-default grants/allowances merged with
+	// any per-principal authorization policy and room-level grants.
+	// SetPrincipal preserves temporal grants that were added
+	// incrementally via /sync. Principals removed from config are
+	// cleaned up from the index.
+	d.rebuildAuthorizationIndex(config, conditionRoomIDs, roomPolicies)
+
+	// Check for Bureau core binary updates before principal reconciliation.
+	// Proxy binary updates take effect immediately (for future sandbox
+	// creation). Daemon binary changes trigger exec() self-replacement.
+	// Launcher binary changes are detected but not yet acted on.
+	if config.BureauVersion != nil {
+		d.reconcileBureauVersion(ctx, config.BureauVersion)
 	}
 
 	// Check for credential rotation on running principals. When the
@@ -1156,18 +1167,119 @@ func (d *Daemon) readCredentials(ctx context.Context, principal ref.Entity) (*sc
 	return &credentials, nil
 }
 
-// rebuildAuthorizationIndex rebuilds the authorization index from the
-// current MachineConfig. For each principal in the config, it merges the
-// machine-wide DefaultPolicy with the per-principal Authorization policy
-// and calls SetPrincipal to update the index. SetPrincipal preserves any
-// temporal grants that were added incrementally via /sync.
+// fetchedRoomPolicy holds a pre-fetched room authorization policy and the
+// room's power levels. Fetched before the authorization index rebuild so
+// the rebuild function makes no network calls (keeps existing tests working
+// and separates fetch concerns from merge logic).
+type fetchedRoomPolicy struct {
+	policy      schema.RoomAuthorizationPolicy
+	powerLevels schema.PowerLevels
+}
+
+// fetchRoomAuthorizationPolicies fetches EventTypeAuthorization and
+// MatrixEventTypePowerLevels from every room that principals belong to.
+// Returns a map from room ID to fetched policy. Rooms without an
+// authorization policy are omitted from the result.
 //
-// Principals that were previously in the index but are no longer in the
-// config are removed. This handles principals being removed from the
-// MachineConfig (decommissioned, moved to another machine, etc.).
+// The set of rooms is: config room + workspace rooms from conditionRoomIDs
+// + workspace rooms from assignment Payload["WORKSPACE_ROOM_ID"].
+func (d *Daemon) fetchRoomAuthorizationPolicies(
+	ctx context.Context,
+	config *schema.MachineConfig,
+	conditionRoomIDs map[ref.Entity]ref.RoomID,
+) map[ref.RoomID]*fetchedRoomPolicy {
+	// Collect unique rooms to fetch from.
+	rooms := make(map[ref.RoomID]bool)
+	if !d.configRoomID.IsZero() {
+		rooms[d.configRoomID] = true
+	}
+	for _, roomID := range conditionRoomIDs {
+		if !roomID.IsZero() {
+			rooms[roomID] = true
+		}
+	}
+	for _, assignment := range config.Principals {
+		if value, ok := assignment.Payload["WORKSPACE_ROOM_ID"].(string); ok {
+			if parsed, parseErr := ref.ParseRoomID(value); parseErr == nil && !parsed.IsZero() {
+				rooms[parsed] = true
+			}
+		}
+	}
+
+	result := make(map[ref.RoomID]*fetchedRoomPolicy)
+	for roomID := range rooms {
+		// Fetch the authorization policy.
+		rawPolicy, err := d.session.GetStateEvent(ctx, roomID, schema.EventTypeAuthorization, "")
+		if err != nil {
+			if messaging.IsMatrixError(err, messaging.ErrCodeNotFound) {
+				// No authorization policy in this room — skip it.
+				continue
+			}
+			d.logger.Warn("failed to fetch room authorization policy",
+				"room_id", roomID,
+				"error", err,
+			)
+			continue
+		}
+
+		var policy schema.RoomAuthorizationPolicy
+		if err := json.Unmarshal(rawPolicy, &policy); err != nil {
+			d.logger.Warn("failed to parse room authorization policy",
+				"room_id", roomID,
+				"error", err,
+			)
+			continue
+		}
+
+		fetched := &fetchedRoomPolicy{policy: policy}
+
+		// Fetch power levels if the policy has PowerLevelGrants.
+		if len(policy.PowerLevelGrants) > 0 {
+			rawPowerLevels, err := d.session.GetStateEvent(ctx, roomID, schema.MatrixEventTypePowerLevels, "")
+			if err != nil {
+				d.logger.Warn("failed to fetch power levels for room with PowerLevelGrants",
+					"room_id", roomID,
+					"error", err,
+				)
+				// Proceed without power levels — MemberGrants still apply,
+				// but PowerLevelGrants cannot be evaluated without knowing
+				// each user's power level.
+			} else if err := json.Unmarshal(rawPowerLevels, &fetched.powerLevels); err != nil {
+				d.logger.Warn("failed to parse power levels",
+					"room_id", roomID,
+					"error", err,
+				)
+			}
+		}
+
+		result[roomID] = fetched
+	}
+	return result
+}
+
+// rebuildAuthorizationIndex rebuilds the authorization index from the
+// current MachineConfig and room-level policies. For each principal in the
+// config, it merges:
+//   - Machine-wide DefaultPolicy
+//   - Per-principal Authorization policy
+//   - Room-level MemberGrants from all rooms the principal belongs to
+//   - Room-level PowerLevelGrants the principal qualifies for (based on
+//     their power level in each room)
+//
+// SetPrincipal preserves any temporal grants that were added incrementally
+// via /sync. Principals removed from config are cleaned up from the index.
+//
+// conditionRoomIDs maps principals to their workspace rooms (from
+// StartCondition evaluation). roomPolicies holds pre-fetched room-level
+// authorization policies and power levels. Both may be nil (no room-level
+// policies to merge).
 //
 // Caller must hold reconcileMu.
-func (d *Daemon) rebuildAuthorizationIndex(config *schema.MachineConfig) {
+func (d *Daemon) rebuildAuthorizationIndex(
+	config *schema.MachineConfig,
+	conditionRoomIDs map[ref.Entity]ref.RoomID,
+	roomPolicies map[ref.RoomID]*fetchedRoomPolicy,
+) {
 	// Lazily initialize the index. Production code always sets this in
 	// the Daemon constructor; tests that predate authorization may omit
 	// it. Lazy init avoids updating every existing test site while
@@ -1189,6 +1301,45 @@ func (d *Daemon) rebuildAuthorizationIndex(config *schema.MachineConfig) {
 		// denials are appended to the machine defaults. A principal cannot
 		// have fewer permissions than the machine default.
 		merged := mergeAuthorizationPolicy(config.DefaultPolicy, assignment.Authorization)
+
+		// Merge room-level grants from all rooms this principal belongs to.
+		// A principal belongs to the config room (always) plus their
+		// workspace room (from StartCondition or Payload).
+		if len(roomPolicies) > 0 {
+			principalRooms := d.resolvePrincipalRooms(assignment.Principal, conditionRoomIDs, assignment.Payload)
+			for _, roomID := range principalRooms {
+				fetched, ok := roomPolicies[roomID]
+				if !ok {
+					continue
+				}
+				source := schema.SourceRoom(roomID.String())
+
+				// MemberGrants apply to all room members.
+				merged.Grants = appendGrantsWithSource(merged.Grants, fetched.policy.MemberGrants, source)
+
+				// PowerLevelGrants apply based on the principal's power
+				// level in the room. A principal with PL >= key gets the
+				// associated grants.
+				if len(fetched.policy.PowerLevelGrants) > 0 {
+					userLevel := fetched.powerLevels.UserLevel(userID.String())
+					for levelString, grants := range fetched.policy.PowerLevelGrants {
+						level, err := strconv.Atoi(levelString)
+						if err != nil {
+							d.logger.Warn("invalid power level key in room authorization policy",
+								"room_id", roomID,
+								"level_key", levelString,
+								"error", err,
+							)
+							continue
+						}
+						if userLevel >= level {
+							merged.Grants = appendGrantsWithSource(merged.Grants, grants, source)
+						}
+					}
+				}
+			}
+		}
+
 		d.authorizationIndex.SetPrincipal(userID, merged)
 	}
 
@@ -1201,6 +1352,39 @@ func (d *Daemon) rebuildAuthorizationIndex(config *schema.MachineConfig) {
 				"principal", userID)
 		}
 	}
+}
+
+// resolvePrincipalRooms returns the set of rooms a principal belongs to.
+// Every principal belongs to the config room. Principals with StartConditions
+// also belong to their workspace room (from conditionRoomIDs). Principals
+// with WORKSPACE_ROOM_ID in their payload also belong to that room.
+func (d *Daemon) resolvePrincipalRooms(
+	principal ref.Entity,
+	conditionRoomIDs map[ref.Entity]ref.RoomID,
+	payload map[string]any,
+) []ref.RoomID {
+	rooms := make([]ref.RoomID, 0, 2)
+
+	if !d.configRoomID.IsZero() {
+		rooms = append(rooms, d.configRoomID)
+	}
+
+	// Workspace room from StartCondition evaluation.
+	if conditionRoomIDs != nil {
+		if roomID, ok := conditionRoomIDs[principal]; ok && !roomID.IsZero() {
+			rooms = append(rooms, roomID)
+			return rooms // Don't duplicate — payload WORKSPACE_ROOM_ID is the same room.
+		}
+	}
+
+	// Workspace room from static payload.
+	if value, ok := payload["WORKSPACE_ROOM_ID"].(string); ok {
+		if parsed, err := ref.ParseRoomID(value); err == nil && !parsed.IsZero() {
+			rooms = append(rooms, parsed)
+		}
+	}
+
+	return rooms
 }
 
 // mergeAuthorizationPolicy merges a machine-wide default policy with a

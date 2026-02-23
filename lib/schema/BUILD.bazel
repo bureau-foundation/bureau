@@ -46,6 +46,7 @@ go_test(
         "events_workspace_test.go",
         "match_test.go",
         "pipeline_ref_test.go",
+        "power_levels_test.go",
         "rooms_test.go",
         "sandbox_spec_test.go",
         "template_ref_test.go",

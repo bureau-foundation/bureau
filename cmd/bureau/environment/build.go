@@ -71,7 +71,7 @@ with symlinks into /nix/store for all packages in the profile.`,
 				Command:     "bureau environment build workstation --flake path:./environment",
 			},
 		},
-		Run: func(_ context.Context, args []string, _ *slog.Logger) error {
+		Run: func(_ context.Context, args []string, logger *slog.Logger) error {
 			// In CLI mode, profile comes as a positional argument.
 			// In JSON/MCP mode, it's populated from the JSON input.
 			if len(args) == 1 {
@@ -95,7 +95,7 @@ with symlinks into /nix/store for all packages in the profile.`,
 				return err
 			}
 
-			fmt.Fprintf(os.Stderr, "Building profile %q from %s...\n", profile, params.FlakeRef)
+			logger.Info("building profile", "profile", profile, "flake", params.FlakeRef)
 
 			storePath, err := buildProfile(params.FlakeRef, profile, outLink, options)
 			if err != nil {

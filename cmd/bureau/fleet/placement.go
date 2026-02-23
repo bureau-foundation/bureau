@@ -5,10 +5,7 @@ package fleet
 
 import (
 	"context"
-	"fmt"
 	"log/slog"
-	"os"
-	"text/tabwriter"
 
 	"github.com/bureau-foundation/bureau/cmd/bureau/cli"
 )
@@ -64,7 +61,7 @@ eligibility).`,
 		Output:         func() any { return &placeResult{} },
 		Annotations:    cli.Create(),
 		RequiredGrants: []string{"command/fleet/place"},
-		Run: func(_ context.Context, args []string, _ *slog.Logger) error {
+		Run: func(ctx context.Context, args []string, logger *slog.Logger) error {
 			if len(args) == 0 {
 				return cli.Validation("service localpart required\n\nUsage: bureau fleet place <service> [flags]")
 			}
@@ -75,7 +72,7 @@ eligibility).`,
 				return err
 			}
 
-			ctx, cancel := callContext()
+			ctx, cancel := callContext(ctx)
 			defer cancel()
 
 			fields := map[string]any{
@@ -100,11 +97,7 @@ eligibility).`,
 				return err
 			}
 
-			fmt.Fprintf(os.Stderr, "Placed %s on %s", result.Service, result.Machine)
-			if result.Score >= 0 {
-				fmt.Fprintf(os.Stderr, " (score: %d)", result.Score)
-			}
-			fmt.Fprintln(os.Stderr)
+			logger.Info("placed service", "service", result.Service, "machine", result.Machine, "score", result.Score)
 			return nil
 		},
 	}
@@ -151,7 +144,7 @@ daemon to tear down the service's sandbox.`,
 		Output:         func() any { return &unplaceResult{} },
 		Annotations:    cli.Destructive(),
 		RequiredGrants: []string{"command/fleet/unplace"},
-		Run: func(_ context.Context, args []string, _ *slog.Logger) error {
+		Run: func(ctx context.Context, args []string, logger *slog.Logger) error {
 			if len(args) == 0 {
 				return cli.Validation("service localpart required\n\nUsage: bureau fleet unplace <service> --machine <machine> [flags]")
 			}
@@ -165,7 +158,7 @@ daemon to tear down the service's sandbox.`,
 				return err
 			}
 
-			ctx, cancel := callContext()
+			ctx, cancel := callContext(ctx)
 			defer cancel()
 
 			var response unplaceResponse
@@ -185,7 +178,7 @@ daemon to tear down the service's sandbox.`,
 				return err
 			}
 
-			fmt.Fprintf(os.Stderr, "Removed %s from %s\n", result.Service, result.Machine)
+			logger.Info("removed service from machine", "service", result.Service, "machine", result.Machine)
 			return nil
 		},
 	}
@@ -249,7 +242,7 @@ placement. Use this to preview what "place" would choose.`,
 		Output:         func() any { return &planResult{} },
 		Annotations:    cli.ReadOnly(),
 		RequiredGrants: []string{"command/fleet/plan"},
-		Run: func(_ context.Context, args []string, _ *slog.Logger) error {
+		Run: func(ctx context.Context, args []string, logger *slog.Logger) error {
 			if len(args) == 0 {
 				return cli.Validation("service localpart required\n\nUsage: bureau fleet plan <service> [flags]")
 			}
@@ -260,7 +253,7 @@ placement. Use this to preview what "place" would choose.`,
 				return err
 			}
 
-			ctx, cancel := callContext()
+			ctx, cancel := callContext(ctx)
 			defer cancel()
 
 			var response planResponseData
@@ -288,29 +281,14 @@ placement. Use this to preview what "place" would choose.`,
 				return err
 			}
 
-			// Text output.
-			fmt.Fprintf(os.Stderr, "Placement plan for %s\n\n", result.Service)
-
-			if len(result.CurrentMachines) > 0 {
-				fmt.Fprintf(os.Stderr, "Current placement:\n")
-				for _, machine := range result.CurrentMachines {
-					fmt.Fprintf(os.Stderr, "  %s\n", machine)
-				}
-				fmt.Fprintln(os.Stderr)
-			} else {
-				fmt.Fprintf(os.Stderr, "Current placement: none\n\n")
-			}
-
-			if len(result.Candidates) > 0 {
-				fmt.Fprintf(os.Stderr, "Candidates:\n")
-				writer := tabwriter.NewWriter(os.Stderr, 0, 4, 2, ' ', 0)
-				fmt.Fprintf(writer, "  MACHINE\tSCORE\n")
-				for _, candidate := range result.Candidates {
-					fmt.Fprintf(writer, "  %s\t%d\n", candidate.Machine, candidate.Score)
-				}
-				writer.Flush()
-			} else {
-				fmt.Fprintf(os.Stderr, "Candidates: none (no eligible machines)\n")
+			// Structured log output: one line per candidate, plus a summary.
+			logger.Info("placement plan",
+				"service", result.Service,
+				"current_machines", result.CurrentMachines,
+				"candidate_count", len(result.Candidates),
+			)
+			for _, candidate := range result.Candidates {
+				logger.Info("candidate", "machine", candidate.Machine, "score", candidate.Score)
 			}
 
 			return nil

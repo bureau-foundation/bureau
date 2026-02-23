@@ -75,8 +75,9 @@ func (c *TicketConnection) connect() (*service.ServiceClient, error) {
 }
 
 // callContext returns a context with a reasonable timeout for service
-// calls. Most ticket operations are fast (in-memory index queries),
-// but batch creates can involve multiple Matrix writes.
-func callContext() (context.Context, context.CancelFunc) {
-	return context.WithTimeout(context.Background(), 30*time.Second)
+// calls derived from the provided parent. Most ticket operations are
+// fast (in-memory index queries), but batch creates can involve
+// multiple Matrix writes.
+func callContext(parent context.Context) (context.Context, context.CancelFunc) {
+	return context.WithTimeout(parent, 30*time.Second)
 }

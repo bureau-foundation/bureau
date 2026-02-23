@@ -5,9 +5,7 @@ package ticket
 
 import (
 	"context"
-	"fmt"
 	"log/slog"
-	"os"
 	"slices"
 
 	"github.com/bureau-foundation/bureau/cmd/bureau/cli"
@@ -64,7 +62,7 @@ cycle.`,
 		Output:         func() any { return &mutationResult{} },
 		Annotations:    cli.Idempotent(),
 		RequiredGrants: []string{"command/ticket/dep/add"},
-		Run: func(_ context.Context, args []string, _ *slog.Logger) error {
+		Run: func(ctx context.Context, args []string, logger *slog.Logger) error {
 			if len(args) >= 1 {
 				params.Ticket = args[0]
 			}
@@ -86,7 +84,7 @@ cycle.`,
 				return err
 			}
 
-			ctx, cancel := callContext()
+			ctx, cancel := callContext(ctx)
 			defer cancel()
 
 			// Read-modify-write: fetch current ticket, add dependency,
@@ -102,7 +100,7 @@ cycle.`,
 
 			blockedBy := current.Content.BlockedBy
 			if slices.Contains(blockedBy, params.DependsOn) {
-				fmt.Fprintf(os.Stderr, "%s already depends on %s\n", params.Ticket, params.DependsOn)
+				logger.Info("dependency already exists", "ticket", params.Ticket, "depends_on", params.DependsOn)
 				return nil
 			}
 
@@ -124,7 +122,7 @@ cycle.`,
 				return err
 			}
 
-			fmt.Fprintf(os.Stderr, "%s now depends on %s\n", params.Ticket, params.DependsOn)
+			logger.Info("dependency added", "ticket", params.Ticket, "depends_on", params.DependsOn)
 			return nil
 		},
 	}
@@ -158,7 +156,7 @@ func depRemoveCommand() *cli.Command {
 		Output:         func() any { return &mutationResult{} },
 		Annotations:    cli.Idempotent(),
 		RequiredGrants: []string{"command/ticket/dep/remove"},
-		Run: func(_ context.Context, args []string, _ *slog.Logger) error {
+		Run: func(ctx context.Context, args []string, logger *slog.Logger) error {
 			if len(args) >= 1 {
 				params.Ticket = args[0]
 			}
@@ -180,7 +178,7 @@ func depRemoveCommand() *cli.Command {
 				return err
 			}
 
-			ctx, cancel := callContext()
+			ctx, cancel := callContext(ctx)
 			defer cancel()
 
 			// Read-modify-write: fetch current ticket, remove dependency,
@@ -218,7 +216,7 @@ func depRemoveCommand() *cli.Command {
 				return err
 			}
 
-			fmt.Fprintf(os.Stderr, "%s no longer depends on %s\n", params.Ticket, params.DependsOn)
+			logger.Info("dependency removed", "ticket", params.Ticket, "depends_on", params.DependsOn)
 			return nil
 		},
 	}

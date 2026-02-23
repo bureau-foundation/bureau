@@ -5,7 +5,6 @@ package pipeline
 
 import (
 	"context"
-	"fmt"
 	"log/slog"
 	"os"
 
@@ -59,7 +58,7 @@ Exit code 0 for conclusion "success", 1 otherwise.`,
 		},
 		Params: func() any { return &params },
 		Output: func() any { return &waitResult{} },
-		Run: func(_ context.Context, args []string, _ *slog.Logger) error {
+		Run: func(ctx context.Context, args []string, logger *slog.Logger) error {
 			if len(args) == 1 {
 				params.TicketID = args[0]
 			} else if len(args) > 1 {
@@ -83,7 +82,7 @@ Exit code 0 for conclusion "success", 1 otherwise.`,
 			}
 
 			// Connect to Matrix.
-			ctx, cancel, session, err := cli.ConnectOperator()
+			ctx, cancel, session, err := cli.ConnectOperator(ctx)
 			if err != nil {
 				return err
 			}
@@ -99,13 +98,13 @@ Exit code 0 for conclusion "success", 1 otherwise.`,
 				return err
 			}
 
-			return emitWaitResult(params, ticketID, *final)
+			return emitWaitResult(logger, params, ticketID, *final)
 		},
 	}
 }
 
 // emitWaitResult formats and outputs the final ticket state.
-func emitWaitResult(params pipelineWaitParams, ticketID ref.TicketID, content ticket.TicketContent) error {
+func emitWaitResult(logger *slog.Logger, params pipelineWaitParams, ticketID ref.TicketID, content ticket.TicketContent) error {
 	pipelineRef := ""
 	conclusion := ""
 	stepCount := 0
@@ -128,15 +127,13 @@ func emitWaitResult(params pipelineWaitParams, ticketID ref.TicketID, content ti
 		return err
 	}
 
-	fmt.Fprintf(os.Stderr, "Pipeline %s %s\n", ticketID, conclusion)
-	if pipelineRef != "" {
-		fmt.Fprintf(os.Stderr, "  pipeline:   %s\n", pipelineRef)
-	}
-	fmt.Fprintf(os.Stderr, "  conclusion: %s\n", conclusion)
-	fmt.Fprintf(os.Stderr, "  steps:      %d\n", stepCount)
-	if len(content.Notes) > 0 {
-		fmt.Fprintf(os.Stderr, "  notes:      %d\n", len(content.Notes))
-	}
+	logger.Info("pipeline completed",
+		"ticket_id", ticketID,
+		"conclusion", conclusion,
+		"pipeline_ref", pipelineRef,
+		"steps", stepCount,
+		"notes", len(content.Notes),
+	)
 
 	if conclusion != "success" {
 		return &cli.ExitError{Code: 1}

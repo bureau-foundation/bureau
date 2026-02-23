@@ -71,7 +71,7 @@ Use --json for machine-readable output suitable for monitoring or CI.`,
 		Output:         func() any { return &doctorJSONOutput{} },
 		Params:         func() any { return &params },
 		RequiredGrants: []string{"command/matrix/doctor"},
-		Run: func(_ context.Context, args []string, _ *slog.Logger) error {
+		Run: func(ctx context.Context, args []string, logger *slog.Logger) error {
 			if len(args) > 0 {
 				return cli.Validation("unexpected argument: %s", args[0])
 			}
@@ -79,7 +79,7 @@ Use --json for machine-readable output suitable for monitoring or CI.`,
 				return cli.Validation("--dry-run requires --fix")
 			}
 
-			ctx, cancel := context.WithTimeout(context.Background(), 60*time.Second)
+			ctx, cancel := context.WithTimeout(ctx, 60*time.Second)
 			defer cancel()
 
 			homeserverURL, err := params.SessionConfig.ResolveHomeserverURL()
@@ -106,10 +106,6 @@ Use --json for machine-readable output suitable for monitoring or CI.`,
 			if err != nil {
 				return cli.Internal("connect: %w", err)
 			}
-
-			logger := slog.New(slog.NewJSONHandler(os.Stderr, &slog.HandlerOptions{
-				Level: slog.LevelInfo,
-			}))
 
 			// Run checks, optionally fixing. In fix mode, loop until no
 			// new fixes are applied (or a cap of 5 iterations). This handles

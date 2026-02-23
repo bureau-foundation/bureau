@@ -7,7 +7,6 @@ import (
 	"bufio"
 	"context"
 	"encoding/json"
-	"fmt"
 	"log/slog"
 	"os"
 
@@ -61,7 +60,7 @@ Use --status to export only tickets in a particular state (e.g.
 		Output:         func() any { return &[]ticketEntry{} },
 		Annotations:    cli.ReadOnly(),
 		RequiredGrants: []string{"command/ticket/export"},
-		Run: func(_ context.Context, args []string, _ *slog.Logger) error {
+		Run: func(ctx context.Context, args []string, logger *slog.Logger) error {
 			if params.Room == "" {
 				return cli.Validation("--room is required")
 			}
@@ -71,7 +70,7 @@ Use --status to export only tickets in a particular state (e.g.
 				return err
 			}
 
-			ctx, cancel := callContext()
+			ctx, cancel := callContext(ctx)
 			defer cancel()
 
 			fields := map[string]any{"room": params.Room}
@@ -116,7 +115,7 @@ Use --status to export only tickets in a particular state (e.g.
 			}
 
 			if params.File != "" && params.File != "-" {
-				fmt.Fprintf(os.Stderr, "exported %d tickets from %s to %s\n", len(entries), params.Room, params.File)
+				logger.Info("exported tickets", "count", len(entries), "room", params.Room, "file", params.File)
 			}
 
 			return nil
@@ -197,7 +196,7 @@ invalid, none are imported.`,
 		Output:         func() any { return &importResult{} },
 		Annotations:    cli.Create(),
 		RequiredGrants: []string{"command/ticket/import"},
-		Run: func(_ context.Context, args []string, _ *slog.Logger) error {
+		Run: func(ctx context.Context, args []string, logger *slog.Logger) error {
 			if params.Room == "" {
 				return cli.Validation("--room is required")
 			}
@@ -259,8 +258,7 @@ invalid, none are imported.`,
 					}
 				}
 
-				fmt.Fprintf(os.Stderr, "converted %d beads entries (%s-* → %s-*)\n",
-					len(entries), sourcePrefix, targetPrefix)
+				logger.Info("converted beads entries", "count", len(entries), "source_prefix", sourcePrefix, "target_prefix", targetPrefix)
 			}
 
 			if params.ResetStatus {
@@ -288,7 +286,7 @@ invalid, none are imported.`,
 				return err
 			}
 
-			ctx, cancel := callContext()
+			ctx, cancel := callContext(ctx)
 			defer cancel()
 
 			var result importResult
@@ -299,7 +297,7 @@ invalid, none are imported.`,
 				return err
 			}
 
-			fmt.Fprintf(os.Stderr, "imported %d tickets into %s\n", result.Imported, result.Room)
+			logger.Info("imported tickets", "count", result.Imported, "room", result.Room)
 			return nil
 		},
 	}

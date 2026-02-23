@@ -55,7 +55,7 @@ pipeline execution tickets with their status and current progress.`,
 		},
 		Params: func() any { return &params },
 		Output: func() any { return &[]listRunEntry{} },
-		Run: func(_ context.Context, args []string, _ *slog.Logger) error {
+		Run: func(ctx context.Context, args []string, logger *slog.Logger) error {
 			if params.Room == "" {
 				return cli.Validation("--room is required")
 			}
@@ -70,7 +70,7 @@ pipeline execution tickets with their status and current progress.`,
 				return fmt.Errorf("connecting to ticket service: %w", err)
 			}
 
-			ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
+			ctx, cancel := context.WithTimeout(ctx, 30*time.Second)
 			defer cancel()
 
 			listArgs := map[string]any{
@@ -115,7 +115,7 @@ pipeline execution tickets with their status and current progress.`,
 			}
 
 			if len(results) == 0 {
-				fmt.Fprintln(os.Stderr, "No pipeline runs found")
+				logger.Info("no pipeline runs found", "room", params.Room)
 				return nil
 			}
 

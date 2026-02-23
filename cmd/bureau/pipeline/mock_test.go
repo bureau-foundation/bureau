@@ -6,6 +6,8 @@ package pipeline
 import (
 	"encoding/json"
 	"fmt"
+	"io"
+	"log/slog"
 	"net/http"
 	"net/http/httptest"
 	"net/url"
@@ -21,6 +23,12 @@ import (
 	pipelineschema "github.com/bureau-foundation/bureau/lib/schema/pipeline"
 	"github.com/bureau-foundation/bureau/messaging"
 )
+
+// testLogger returns a logger that discards all output, suitable for
+// passing to Run functions in tests where log output is irrelevant.
+func testLogger() *slog.Logger {
+	return slog.New(slog.NewTextHandler(io.Discard, nil))
+}
 
 // pipelineTestState provides a mock Matrix server for pipeline CLI tests.
 // It supports alias resolution, room state listing, individual state event
@@ -370,7 +378,7 @@ func (s *pipelineTestState) handleSync(writer http.ResponseWriter, request *http
 
 // newPipelineTestSession creates a mock Matrix session connected to the
 // test server. Returns the session and sets BUREAU_SESSION_FILE so that
-// cli.ConnectOperator() finds it.
+// cli.ConnectOperator(ctx) finds it.
 func newPipelineTestSession(t *testing.T, state *pipelineTestState) *messaging.DirectSession {
 	t.Helper()
 	server := httptest.NewServer(state.handler())
@@ -394,7 +402,7 @@ func newPipelineTestSession(t *testing.T, state *pipelineTestState) *messaging.D
 
 // setupTestOperatorSession writes a temporary operator session file
 // pointing at the mock server and sets BUREAU_SESSION_FILE so that
-// cli.ConnectOperator() finds it. Returns a cleanup function.
+// cli.ConnectOperator(ctx) finds it. Returns a cleanup function.
 func setupTestOperatorSession(t *testing.T, serverURL string) {
 	t.Helper()
 

@@ -5,9 +5,7 @@ package ticket
 
 import (
 	"context"
-	"fmt"
 	"log/slog"
-	"os"
 
 	"github.com/bureau-foundation/bureau/cmd/bureau/cli"
 )
@@ -48,7 +46,7 @@ Dispositions:
 		Output:         func() any { return &mutationResult{} },
 		Annotations:    cli.Idempotent(),
 		RequiredGrants: []string{"command/ticket/review"},
-		Run: func(_ context.Context, args []string, _ *slog.Logger) error {
+		Run: func(ctx context.Context, args []string, logger *slog.Logger) error {
 			if len(args) == 1 {
 				params.Ticket = args[0]
 			} else if len(args) > 1 {
@@ -69,7 +67,7 @@ Dispositions:
 				return err
 			}
 
-			ctx, cancel := callContext()
+			ctx, cancel := callContext(ctx)
 			defer cancel()
 
 			fields := map[string]any{
@@ -89,7 +87,7 @@ Dispositions:
 				return err
 			}
 
-			fmt.Fprintf(os.Stderr, "%s: disposition set to %s\n", result.ID, disposition)
+			logger.Info("disposition set", "ticket", result.ID, "disposition", disposition)
 			return nil
 		},
 	}

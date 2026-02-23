@@ -88,7 +88,7 @@ such as m.bureau.machine_key or m.bureau.service.`,
 		Output:         func() any { return &roomCreateResult{} },
 		Params:         func() any { return &params },
 		RequiredGrants: []string{"command/matrix/room/create"},
-		Run: func(_ context.Context, args []string, _ *slog.Logger) error {
+		Run: func(ctx context.Context, args []string, _ *slog.Logger) error {
 			// In CLI mode, alias comes as a positional argument.
 			// In JSON/MCP mode, it's populated from the JSON input.
 			if len(args) == 1 {
@@ -110,7 +110,7 @@ such as m.bureau.machine_key or m.bureau.service.`,
 				name = alias
 			}
 
-			ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
+			ctx, cancel := context.WithTimeout(ctx, 30*time.Second)
 			defer cancel()
 
 			sess, err := params.SessionConfig.Connect(ctx)
@@ -199,12 +199,12 @@ lists all joined rooms that are NOT spaces.`,
 		Output:         func() any { return &[]roomEntry{} },
 		Params:         func() any { return &params },
 		RequiredGrants: []string{"command/matrix/room/list"},
-		Run: func(_ context.Context, args []string, _ *slog.Logger) error {
+		Run: func(ctx context.Context, args []string, _ *slog.Logger) error {
 			if len(args) > 0 {
 				return cli.Validation("unexpected argument: %s", args[0])
 			}
 
-			ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
+			ctx, cancel := context.WithTimeout(ctx, 30*time.Second)
 			defer cancel()
 
 			sess, err := params.SessionConfig.Connect(ctx)
@@ -379,7 +379,7 @@ to clear the m.space.child event in the space.`,
 		Output:         func() any { return &roomDeleteResult{} },
 		Params:         func() any { return &params },
 		RequiredGrants: []string{"command/matrix/room/delete"},
-		Run: func(_ context.Context, args []string, _ *slog.Logger) error {
+		Run: func(ctx context.Context, args []string, _ *slog.Logger) error {
 			// In CLI mode, room comes as a positional argument.
 			// In JSON/MCP mode, it's populated from the JSON input.
 			if len(args) == 1 {
@@ -392,7 +392,7 @@ to clear the m.space.child event in the space.`,
 			}
 			target := params.Room
 
-			ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
+			ctx, cancel := context.WithTimeout(ctx, 30*time.Second)
 			defer cancel()
 
 			sess, err := params.SessionConfig.Connect(ctx)
@@ -452,7 +452,7 @@ Displays a table of user ID, display name, and membership state
 		Output:         func() any { return &[]messaging.RoomMember{} },
 		Params:         func() any { return &params },
 		RequiredGrants: []string{"command/matrix/room/members"},
-		Run: func(_ context.Context, args []string, _ *slog.Logger) error {
+		Run: func(ctx context.Context, args []string, _ *slog.Logger) error {
 			// In CLI mode, room comes as a positional argument.
 			// In JSON/MCP mode, it's populated from the JSON input.
 			if len(args) == 1 {
@@ -465,7 +465,7 @@ Displays a table of user ID, display name, and membership state
 			}
 			target := params.Room
 
-			ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
+			ctx, cancel := context.WithTimeout(ctx, 30*time.Second)
 			defer cancel()
 
 			sess, err := params.SessionConfig.Connect(ctx)

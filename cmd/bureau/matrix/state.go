@@ -77,7 +77,7 @@ or machine ID as the state key.`,
 		Annotations:    cli.ReadOnly(),
 		Params:         func() any { return &params },
 		RequiredGrants: []string{"command/matrix/state/get"},
-		Run: func(_ context.Context, args []string, _ *slog.Logger) error {
+		Run: func(ctx context.Context, args []string, _ *slog.Logger) error {
 			// In CLI mode, room and optional event type come as positional
 			// arguments. In JSON/MCP mode, they're populated from JSON input.
 			switch len(args) {
@@ -95,7 +95,7 @@ or machine ID as the state key.`,
 				return cli.Validation("room is required\n\nusage: bureau matrix state get [flags] <room> [<event-type>]")
 			}
 
-			ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
+			ctx, cancel := context.WithTimeout(ctx, 30*time.Second)
 			defer cancel()
 
 			matrixSession, err := params.SessionConfig.Connect(ctx)
@@ -177,7 +177,7 @@ specific state key.`,
 		Output:         func() any { return &stateSetResult{} },
 		Params:         func() any { return &params },
 		RequiredGrants: []string{"command/matrix/state/set"},
-		Run: func(_ context.Context, args []string, _ *slog.Logger) error {
+		Run: func(ctx context.Context, args []string, _ *slog.Logger) error {
 			// In CLI mode, room, event type, and optional body come as
 			// positional arguments. In JSON/MCP mode, they're populated
 			// from JSON input.
@@ -223,7 +223,7 @@ specific state key.`,
 				return cli.Validation("invalid JSON body: %w", err)
 			}
 
-			ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
+			ctx, cancel := context.WithTimeout(ctx, 30*time.Second)
 			defer cancel()
 
 			matrixSession, err := params.SessionConfig.Connect(ctx)

@@ -5,9 +5,7 @@ package ticket
 
 import (
 	"context"
-	"fmt"
 	"log/slog"
-	"os"
 
 	"github.com/bureau-foundation/bureau/cmd/bureau/cli"
 )
@@ -64,7 +62,7 @@ The gate is identified by its ID within the ticket.`,
 		Output:         func() any { return &mutationResult{} },
 		Annotations:    cli.Idempotent(),
 		RequiredGrants: []string{"command/ticket/gate/resolve"},
-		Run: func(_ context.Context, args []string, _ *slog.Logger) error {
+		Run: func(ctx context.Context, args []string, logger *slog.Logger) error {
 			if len(args) >= 1 {
 				params.Ticket = args[0]
 			}
@@ -86,7 +84,7 @@ The gate is identified by its ID within the ticket.`,
 				return err
 			}
 
-			ctx, cancel := callContext()
+			ctx, cancel := callContext(ctx)
 			defer cancel()
 
 			fields := map[string]any{
@@ -105,7 +103,7 @@ The gate is identified by its ID within the ticket.`,
 				return err
 			}
 
-			fmt.Fprintf(os.Stderr, "gate %q on %s resolved\n", params.Gate, result.ID)
+			logger.Info("gate resolved", "gate", params.Gate, "ticket", result.ID)
 			return nil
 		},
 	}
@@ -144,7 +142,7 @@ gate satisfaction.`,
 		Output:         func() any { return &mutationResult{} },
 		Annotations:    cli.Idempotent(),
 		RequiredGrants: []string{"command/ticket/gate/update"},
-		Run: func(_ context.Context, args []string, _ *slog.Logger) error {
+		Run: func(ctx context.Context, args []string, logger *slog.Logger) error {
 			if len(args) >= 1 {
 				params.Ticket = args[0]
 			}
@@ -169,7 +167,7 @@ gate satisfaction.`,
 				return err
 			}
 
-			ctx, cancel := callContext()
+			ctx, cancel := callContext(ctx)
 			defer cancel()
 
 			fields := map[string]any{
@@ -193,7 +191,7 @@ gate satisfaction.`,
 				return err
 			}
 
-			fmt.Fprintf(os.Stderr, "gate %q on %s updated to %s\n", params.Gate, result.ID, params.Status)
+			logger.Info("gate updated", "gate", params.Gate, "ticket", result.ID, "status", params.Status)
 			return nil
 		},
 	}

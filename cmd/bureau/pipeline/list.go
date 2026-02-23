@@ -59,7 +59,7 @@ It is resolved to a full Matrix alias using the --server-name flag.`,
 		Output:         func() any { return &[]pipelineEntry{} },
 		RequiredGrants: []string{"command/pipeline/list"},
 		Annotations:    cli.ReadOnly(),
-		Run: func(_ context.Context, args []string, _ *slog.Logger) error {
+		Run: func(ctx context.Context, args []string, logger *slog.Logger) error {
 			// In CLI mode, the room comes as a positional argument.
 			// In JSON/MCP mode, it's populated from the JSON input.
 			if len(args) == 1 {
@@ -78,7 +78,7 @@ It is resolved to a full Matrix alias using the --server-name flag.`,
 
 			roomAlias := ref.MustParseRoomAlias(schema.FullRoomAlias(params.Room, serverName))
 
-			ctx, cancel, session, err := cli.ConnectOperator()
+			ctx, cancel, session, err := cli.ConnectOperator(ctx)
 			if err != nil {
 				return err
 			}
@@ -124,7 +124,7 @@ It is resolved to a full Matrix alias using the --server-name flag.`,
 			}
 
 			if len(pipelines) == 0 {
-				fmt.Fprintf(os.Stderr, "no pipelines found in %s\n", roomAlias)
+				logger.Info("no pipelines found", "room", roomAlias)
 				return nil
 			}
 

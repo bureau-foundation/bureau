@@ -74,22 +74,22 @@ Each agent's status is enriched from agent service state events (best-effort):
 		Output:         func() any { return &agentListResult{} },
 		RequiredGrants: []string{"command/agent/list"},
 		Annotations:    cli.ReadOnly(),
-		Run: func(_ context.Context, args []string, _ *slog.Logger) error {
+		Run: func(ctx context.Context, args []string, logger *slog.Logger) error {
 			if len(args) > 0 {
 				return cli.Validation("unexpected argument: %s", args[0])
 			}
-			return runList(params)
+			return runList(ctx, logger, params)
 		},
 	}
 }
 
-func runList(params agentListParams) error {
+func runList(ctx context.Context, logger *slog.Logger, params agentListParams) error {
 	serverName, err := ref.ParseServerName(params.ServerName)
 	if err != nil {
 		return fmt.Errorf("invalid --server-name: %w", err)
 	}
 
-	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
+	ctx, cancel := context.WithTimeout(ctx, 30*time.Second)
 	defer cancel()
 
 	session, err := params.SessionConfig.Connect(ctx)
@@ -159,11 +159,11 @@ func runList(params agentListParams) error {
 	}
 
 	if params.Machine == "" && machineCount > 0 {
-		fmt.Fprintf(os.Stderr, "resolved %d agent(s) across %d machine(s)\n", len(entries), machineCount)
+		logger.Info("resolved agents", "agent_count", len(entries), "machine_count", machineCount)
 	}
 
 	if len(entries) == 0 {
-		fmt.Fprintln(os.Stderr, "no agents found")
+		logger.Info("no agents found")
 		return nil
 	}
 

@@ -51,7 +51,7 @@ check and terminates.`,
 		Params:      func() any { return &params },
 		Output:      func() any { return &cancelResult{} },
 		Annotations: cli.Create(),
-		Run: func(_ context.Context, args []string, _ *slog.Logger) error {
+		Run: func(ctx context.Context, args []string, _ *slog.Logger) error {
 			if len(args) == 1 {
 				params.TicketID = args[0]
 			} else if len(args) > 1 {
@@ -71,7 +71,7 @@ check and terminates.`,
 				return fmt.Errorf("connecting to ticket service: %w", err)
 			}
 
-			ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
+			ctx, cancel := context.WithTimeout(ctx, 30*time.Second)
 			defer cancel()
 
 			closeArgs := map[string]any{

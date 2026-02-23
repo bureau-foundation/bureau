@@ -76,7 +76,7 @@ if not specified.`,
 		Output:         func() any { return &spaceCreateResult{} },
 		Params:         func() any { return &params },
 		RequiredGrants: []string{"command/matrix/space/create"},
-		Run: func(_ context.Context, args []string, _ *slog.Logger) error {
+		Run: func(ctx context.Context, args []string, _ *slog.Logger) error {
 			if len(args) == 0 {
 				return cli.Validation("space alias is required\n\nUsage: bureau matrix space create <alias> [flags]")
 			}
@@ -90,7 +90,7 @@ if not specified.`,
 				name = alias
 			}
 
-			ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
+			ctx, cancel := context.WithTimeout(ctx, 30*time.Second)
 			defer cancel()
 
 			sess, err := params.SessionConfig.Connect(ctx)
@@ -160,12 +160,12 @@ table of room ID, alias, and name.`,
 		Output:         func() any { return &[]spaceEntry{} },
 		Params:         func() any { return &params },
 		RequiredGrants: []string{"command/matrix/space/list"},
-		Run: func(_ context.Context, args []string, _ *slog.Logger) error {
+		Run: func(ctx context.Context, args []string, _ *slog.Logger) error {
 			if len(args) > 0 {
 				return cli.Validation("unexpected argument: %s", args[0])
 			}
 
-			ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
+			ctx, cancel := context.WithTimeout(ctx, 30*time.Second)
 			defer cancel()
 
 			sess, err := params.SessionConfig.Connect(ctx)
@@ -242,7 +242,7 @@ reclaim the room.`,
 		Output:         func() any { return &spaceDeleteResult{} },
 		Params:         func() any { return &params },
 		RequiredGrants: []string{"command/matrix/space/delete"},
-		Run: func(_ context.Context, args []string, _ *slog.Logger) error {
+		Run: func(ctx context.Context, args []string, _ *slog.Logger) error {
 			if len(args) == 0 {
 				return cli.Validation("space alias or room ID is required\n\nUsage: bureau matrix space delete <alias-or-id> [flags]")
 			}
@@ -251,7 +251,7 @@ reclaim the room.`,
 			}
 			target := args[0]
 
-			ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
+			ctx, cancel := context.WithTimeout(ctx, 30*time.Second)
 			defer cancel()
 
 			sess, err := params.SessionConfig.Connect(ctx)
@@ -309,7 +309,7 @@ Displays a table of user ID, display name, and membership state
 		Output:         func() any { return &[]messaging.RoomMember{} },
 		Params:         func() any { return &params },
 		RequiredGrants: []string{"command/matrix/space/members"},
-		Run: func(_ context.Context, args []string, _ *slog.Logger) error {
+		Run: func(ctx context.Context, args []string, _ *slog.Logger) error {
 			if len(args) == 0 {
 				return cli.Validation("space alias or room ID is required\n\nUsage: bureau matrix space members <alias-or-id> [flags]")
 			}
@@ -318,7 +318,7 @@ Displays a table of user ID, display name, and membership state
 			}
 			target := args[0]
 
-			ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
+			ctx, cancel := context.WithTimeout(ctx, 30*time.Second)
 			defer cancel()
 
 			sess, err := params.SessionConfig.Connect(ctx)

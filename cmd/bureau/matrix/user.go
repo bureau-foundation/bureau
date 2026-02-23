@@ -110,7 +110,7 @@ and proceeds directly to ensuring room membership.`,
 		Output:         func() any { return &userCreateResult{} },
 		Params:         func() any { return &params },
 		RequiredGrants: []string{"command/matrix/user/create"},
-		Run: func(_ context.Context, args []string, _ *slog.Logger) error {
+		Run: func(ctx context.Context, args []string, logger *slog.Logger) error {
 			// In CLI mode, username comes as a positional argument.
 			// In JSON/MCP mode, it's populated from the JSON input.
 			if len(args) == 1 {
@@ -193,7 +193,7 @@ and proceeds directly to ensuring room membership.`,
 				defer passwordBuffer.Close()
 			}
 
-			ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
+			ctx, cancel := context.WithTimeout(ctx, 30*time.Second)
 			defer cancel()
 
 			client, err := messaging.NewClient(messaging.ClientConfig{
@@ -238,8 +238,7 @@ and proceeds directly to ensuring room membership.`,
 						}
 						return cli.Conflict("account %s already exists and login with derived password failed: %w", userID, loginErr)
 					}
-					fmt.Fprintf(os.Stderr, "Account %s already exists, logged in.\n", userID)
-					fmt.Fprintf(os.Stderr, "Ensuring room membership.\n")
+					logger.Info("account already exists, logged in", "user_id", userID)
 				} else {
 					return cli.Internal("register user %q: %w", username, registerErr)
 				}
@@ -251,7 +250,7 @@ and proceeds directly to ensuring room membership.`,
 			if params.Operator {
 				// Operator mode: admin invites, then the user's own session
 				// joins each room. Invite-only rooms require both steps.
-				if err := onboardOperator(ctx, client, credentials, userID, session); err != nil {
+				if err := onboardOperator(ctx, logger, client, credentials, userID, session); err != nil {
 					return err
 				}
 			}
@@ -277,7 +276,7 @@ and proceeds directly to ensuring room membership.`,
 // (from the credential file) handles invites; the user's own session
 // handles joins. Each step is idempotent: already-invited users skip
 // the invite, already-joined users skip the join.
-func onboardOperator(ctx context.Context, client *messaging.Client, credentials map[string]string, userID ref.UserID, userSession *messaging.DirectSession) error {
+func onboardOperator(ctx context.Context, logger *slog.Logger, client *messaging.Client, credentials map[string]string, userID ref.UserID, userSession *messaging.DirectSession) error {
 	adminUserIDString := credentials["MATRIX_ADMIN_USER"]
 	adminToken := credentials["MATRIX_ADMIN_TOKEN"]
 	if adminUserIDString == "" || adminToken == "" {
@@ -343,13 +342,13 @@ func onboardOperator(ctx context.Context, client *messaging.Client, credentials 
 		}
 
 		if alreadyMember {
-			fmt.Fprintf(os.Stderr, "  %-20s already a member\n", room.name)
+			logger.Info("already a member", "room", room.name)
 		} else {
-			fmt.Fprintf(os.Stderr, "  %-20s joined\n", room.name)
+			logger.Info("joined room", "room", room.name)
 		}
 	}
 
-	fmt.Fprintf(os.Stderr, "Operator %s is a member of all Bureau rooms.\n", userID)
+	logger.Info("operator onboarded to all Bureau rooms", "user_id", userID)
 	return nil
 }
 
@@ -452,12 +451,12 @@ authenticated user has joined.`,
 		Output:         func() any { return &[]userListEntry{} },
 		Params:         func() any { return &params },
 		RequiredGrants: []string{"command/matrix/user/list"},
-		Run: func(_ context.Context, args []string, _ *slog.Logger) error {
+		Run: func(ctx context.Context, args []string, _ *slog.Logger) error {
 			if len(args) > 0 {
 				return cli.Validation("unexpected argument: %s", args[0])
 			}
 
-			ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
+			ctx, cancel := context.WithTimeout(ctx, 30*time.Second)
 			defer cancel()
 
 			sess, err := params.SessionConfig.Connect(ctx)
@@ -600,7 +599,7 @@ func userInviteCommand() *cli.Command {
 		Output:         func() any { return &userInviteResult{} },
 		Params:         func() any { return &params },
 		RequiredGrants: []string{"command/matrix/user/invite"},
-		Run: func(_ context.Context, args []string, _ *slog.Logger) error {
+		Run: func(ctx context.Context, args []string, _ *slog.Logger) error {
 			// In CLI mode, user ID comes as a positional argument.
 			// In JSON/MCP mode, it's populated from the JSON input.
 			if len(args) == 1 {
@@ -617,7 +616,7 @@ func userInviteCommand() *cli.Command {
 				return cli.Validation("--room is required")
 			}
 
-			ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
+			ctx, cancel := context.WithTimeout(ctx, 30*time.Second)
 			defer cancel()
 
 			sess, err := params.SessionConfig.Connect(ctx)
@@ -692,7 +691,7 @@ alias or room ID. An optional --reason provides context for the kick.`,
 		Output:         func() any { return &userKickResult{} },
 		Params:         func() any { return &params },
 		RequiredGrants: []string{"command/matrix/user/kick"},
-		Run: func(_ context.Context, args []string, _ *slog.Logger) error {
+		Run: func(ctx context.Context, args []string, _ *slog.Logger) error {
 			// In CLI mode, user ID comes as a positional argument.
 			// In JSON/MCP mode, it's populated from the JSON input.
 			if len(args) == 1 {
@@ -709,7 +708,7 @@ alias or room ID. An optional --reason provides context for the kick.`,
 				return cli.Validation("--room is required")
 			}
 
-			ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
+			ctx, cancel := context.WithTimeout(ctx, 30*time.Second)
 			defer cancel()
 
 			sess, err := params.SessionConfig.Connect(ctx)
@@ -779,12 +778,12 @@ account is in use.`,
 		Output:         func() any { return &userWhoAmIResult{} },
 		Params:         func() any { return &params },
 		RequiredGrants: []string{"command/matrix/user/whoami"},
-		Run: func(_ context.Context, args []string, _ *slog.Logger) error {
+		Run: func(ctx context.Context, args []string, _ *slog.Logger) error {
 			if len(args) > 0 {
 				return cli.Validation("unexpected argument: %s", args[0])
 			}
 
-			ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
+			ctx, cancel := context.WithTimeout(ctx, 30*time.Second)
 			defer cancel()
 
 			sess, err := params.SessionConfig.Connect(ctx)

@@ -52,7 +52,7 @@ the number of assigned principals.`,
 		Output:         func() any { return &listMachinesResult{} },
 		Annotations:    cli.ReadOnly(),
 		RequiredGrants: []string{"command/fleet/list-machines"},
-		Run: func(_ context.Context, args []string, _ *slog.Logger) error {
+		Run: func(ctx context.Context, args []string, logger *slog.Logger) error {
 			if len(args) > 0 {
 				return cli.Validation("unexpected argument: %s", args[0])
 			}
@@ -62,7 +62,7 @@ the number of assigned principals.`,
 				return err
 			}
 
-			ctx, cancel := callContext()
+			ctx, cancel := callContext(ctx)
 			defer cancel()
 
 			var response machinesResponse
@@ -75,7 +75,7 @@ the number of assigned principals.`,
 			}
 
 			if len(response.Machines) == 0 {
-				fmt.Fprintln(os.Stderr, "No machines tracked.")
+				logger.Info("no machines tracked")
 				return nil
 			}
 
@@ -152,7 +152,7 @@ current resource usage, and all assigned principals.`,
 		Output:         func() any { return &showMachineResult{} },
 		Annotations:    cli.ReadOnly(),
 		RequiredGrants: []string{"command/fleet/show-machine"},
-		Run: func(_ context.Context, args []string, _ *slog.Logger) error {
+		Run: func(ctx context.Context, args []string, logger *slog.Logger) error {
 			if len(args) == 0 {
 				return cli.Validation("machine localpart required\n\nUsage: bureau fleet show-machine <localpart> [flags]")
 			}
@@ -163,7 +163,7 @@ current resource usage, and all assigned principals.`,
 				return err
 			}
 
-			ctx, cancel := callContext()
+			ctx, cancel := callContext(ctx)
 			defer cancel()
 
 			var response showMachineResponse

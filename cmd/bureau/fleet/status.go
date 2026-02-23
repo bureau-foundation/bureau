@@ -7,8 +7,6 @@ import (
 	"context"
 	"fmt"
 	"log/slog"
-	"os"
-	"text/tabwriter"
 	"time"
 
 	"github.com/bureau-foundation/bureau/cmd/bureau/cli"
@@ -66,11 +64,11 @@ Connects to the fleet controller's socket and calls the "info" and
 		Output:         func() any { return &statusResult{} },
 		Annotations:    cli.ReadOnly(),
 		RequiredGrants: []string{"command/fleet/status"},
-		Run: func(_ context.Context, args []string, _ *slog.Logger) error {
+		Run: func(ctx context.Context, args []string, logger *slog.Logger) error {
 			if len(args) > 0 {
 				return cli.Validation("unexpected argument: %s", args[0])
 			}
-			return runStatus(&params)
+			return runStatus(ctx, logger, &params)
 		},
 	}
 }
@@ -102,13 +100,13 @@ type machineEntry struct {
 	ConfigRoomID  string            `cbor:"config_room_id"`
 }
 
-func runStatus(params *statusParams) error {
+func runStatus(ctx context.Context, logger *slog.Logger, params *statusParams) error {
 	client, err := params.connect()
 	if err != nil {
 		return err
 	}
 
-	ctx, cancel := callContext()
+	ctx, cancel := callContext(ctx)
 	defer cancel()
 
 	// Fetch aggregate info.
@@ -148,33 +146,23 @@ func runStatus(params *statusParams) error {
 		return err
 	}
 
-	// Text output.
 	uptime := time.Duration(result.UptimeSeconds) * time.Second
-	fmt.Fprintf(os.Stderr, "Fleet Controller Status\n")
-	fmt.Fprintf(os.Stderr, "  Uptime:       %s\n", formatDuration(uptime))
-	fmt.Fprintf(os.Stderr, "  Machines:     %d\n", result.Machines)
-	fmt.Fprintf(os.Stderr, "  Services:     %d\n", result.Services)
-	fmt.Fprintf(os.Stderr, "  Definitions:  %d\n", result.Definitions)
-	fmt.Fprintf(os.Stderr, "  Config rooms: %d\n", result.ConfigRooms)
-
-	if len(machineList) > 0 {
-		fmt.Fprintf(os.Stderr, "\nMachines:\n")
-		writer := tabwriter.NewWriter(os.Stderr, 0, 4, 2, ' ', 0)
-		fmt.Fprintf(writer, "  MACHINE\tHOSTNAME\tCPU\tMEMORY\tASSIGNMENTS\n")
-		for _, machine := range machineList {
-			memoryDisplay := "-"
-			if machine.MemoryTotalMB > 0 {
-				memoryDisplay = fmt.Sprintf("%d/%d MB", machine.MemoryUsedMB, machine.MemoryTotalMB)
-			}
-			fmt.Fprintf(writer, "  %s\t%s\t%d%%\t%s\t%d\n",
-				machine.Localpart,
-				machine.Hostname,
-				machine.CPUPercent,
-				memoryDisplay,
-				machine.Assignments,
-			)
-		}
-		writer.Flush()
+	logger.Info("fleet controller status",
+		"uptime", formatDuration(uptime),
+		"machines", result.Machines,
+		"services", result.Services,
+		"definitions", result.Definitions,
+		"config_rooms", result.ConfigRooms,
+	)
+	for _, machine := range machineList {
+		logger.Info("machine",
+			"localpart", machine.Localpart,
+			"hostname", machine.Hostname,
+			"cpu_percent", machine.CPUPercent,
+			"memory_used_mb", machine.MemoryUsedMB,
+			"memory_total_mb", machine.MemoryTotalMB,
+			"assignments", machine.Assignments,
+		)
 	}
 
 	return nil
@@ -183,8 +171,8 @@ func runStatus(params *statusParams) error {
 // callContext returns a context with a reasonable timeout for fleet
 // service calls. Fleet operations involve in-memory index queries
 // or single Matrix writes.
-func callContext() (context.Context, context.CancelFunc) {
-	return context.WithTimeout(context.Background(), 30*time.Second)
+func callContext(parent context.Context) (context.Context, context.CancelFunc) {
+	return context.WithTimeout(parent, 30*time.Second)
 }
 
 // formatDuration formats a duration as a human-readable string

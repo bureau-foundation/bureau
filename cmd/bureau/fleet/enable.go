@@ -8,7 +8,6 @@ import (
 	"encoding/json"
 	"fmt"
 	"log/slog"
-	"os"
 	"time"
 
 	"github.com/bureau-foundation/bureau/cmd/bureau/cli"
@@ -72,7 +71,7 @@ the scope. Use "local" to auto-detect from the launcher's session file.`,
 		Output:         func() any { return &enableResult{} },
 		Annotations:    cli.Idempotent(),
 		RequiredGrants: []string{"command/fleet/enable"},
-		Run: func(_ context.Context, args []string, _ *slog.Logger) error {
+		Run: func(ctx context.Context, args []string, logger *slog.Logger) error {
 			if len(args) == 0 {
 				return cli.Validation("fleet localpart is required (e.g., bureau/fleet/prod)")
 			}
@@ -82,13 +81,13 @@ the scope. Use "local" to auto-detect from the launcher's session file.`,
 			if params.Host == "" {
 				return cli.Validation("--host is required (machine name within the fleet, e.g., workstation)")
 			}
-			return runEnable(args[0], &params)
+			return runEnable(ctx, logger, args[0], &params)
 		},
 	}
 }
 
-func runEnable(fleetLocalpart string, params *enableParams) error {
-	ctx, cancel := context.WithTimeout(context.Background(), 60*time.Second)
+func runEnable(ctx context.Context, logger *slog.Logger, fleetLocalpart string, params *enableParams) error {
+	ctx, cancel := context.WithTimeout(ctx, 60*time.Second)
 	defer cancel()
 
 	// Read credentials for registration token and admin session.
@@ -120,7 +119,6 @@ func runEnable(fleetLocalpart string, params *enableParams) error {
 	}
 
 	// Resolve the machine within the fleet.
-	logger := cli.NewCommandLogger().With("command", "fleet/enable", "fleet", fleet.Localpart())
 	machine, err := resolveHostMachine(fleet, params.Host, logger)
 	if err != nil {
 		return err
@@ -158,12 +156,12 @@ func runEnable(fleetLocalpart string, params *enableParams) error {
 		return emitErr
 	}
 
-	fmt.Fprintf(os.Stderr, "\nFleet controller enabled:\n")
-	fmt.Fprintf(os.Stderr, "  Service:  %s (%s)\n", service.Localpart(), service.UserID())
-	fmt.Fprintf(os.Stderr, "  Machine:  %s (%s)\n", machine.Localpart(), machine.UserID())
-	fmt.Fprintf(os.Stderr, "  Bindings: %d config room(s)\n", bindingCount)
-	fmt.Fprintf(os.Stderr, "\nThe daemon will start the fleet controller and register it in\n")
-	fmt.Fprintf(os.Stderr, "the service room.\n")
+	logger.Info("fleet controller enabled",
+		"service", service.Localpart(),
+		"service_user_id", service.UserID(),
+		"machine_user_id", machine.UserID(),
+		"bindings", bindingCount,
+	)
 
 	return nil
 }

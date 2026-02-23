@@ -53,7 +53,7 @@ different source.`,
 				Command:     "bureau environment list --override-input bureau=path:../bureau",
 			},
 		},
-		Run: func(_ context.Context, args []string, _ *slog.Logger) error {
+		Run: func(_ context.Context, args []string, logger *slog.Logger) error {
 			if len(args) > 0 {
 				return cli.Validation("unexpected argument: %s", args[0])
 			}
@@ -77,7 +77,7 @@ different source.`,
 			}
 
 			if len(profiles) == 0 {
-				fmt.Fprintf(os.Stderr, "No profiles found for %s on %s.\n", params.FlakeRef, currentSystem())
+				logger.Info("no profiles found", "flake", params.FlakeRef, "system", currentSystem())
 				return nil
 			}
 

@@ -80,7 +80,7 @@ variables, accessible in pipeline steps via ${NAME} substitution.`,
 		Output:         func() any { return &runResult{} },
 		RequiredGrants: []string{"command/pipeline/execute"},
 		Annotations:    cli.Create(),
-		Run: func(_ context.Context, args []string, _ *slog.Logger) error {
+		Run: func(ctx context.Context, args []string, logger *slog.Logger) error {
 			// In CLI mode, pipeline ref comes as a positional argument.
 			// In JSON/MCP mode, it's populated from the JSON input.
 			if len(args) == 1 {
@@ -140,7 +140,7 @@ variables, accessible in pipeline steps via ${NAME} substitution.`,
 			}
 
 			// Connect to Matrix.
-			ctx, cancel, session, err := cli.ConnectOperator()
+			ctx, cancel, session, err := cli.ConnectOperator(ctx)
 			if err != nil {
 				return err
 			}
@@ -180,8 +180,10 @@ variables, accessible in pipeline steps via ${NAME} substitution.`,
 				return err
 			}
 
-			fmt.Fprintf(os.Stderr, "Pipeline accepted on %s\n", params.Machine)
-			fmt.Fprintf(os.Stderr, "  pipeline:  %s\n", pipelineRefString)
+			logger.Info("pipeline accepted",
+				"machine", params.Machine,
+				"pipeline", pipelineRefString,
+			)
 
 			if !params.Wait || result.TicketID.IsZero() {
 				result.WriteAcceptedHint(os.Stderr)
@@ -190,7 +192,7 @@ variables, accessible in pipeline steps via ${NAME} substitution.`,
 
 			// Watch the ticket until the pipeline finishes. Use a 10-minute
 			// context — pipelines can run long (build steps, large git clones).
-			watchCtx, watchCancel := context.WithTimeout(context.Background(), 10*time.Minute)
+			watchCtx, watchCancel := context.WithTimeout(ctx, 10*time.Minute)
 			defer watchCancel()
 
 			final, err := command.WatchTicket(watchCtx, command.WatchTicketParams{
@@ -203,7 +205,7 @@ variables, accessible in pipeline steps via ${NAME} substitution.`,
 				return err
 			}
 
-			return emitWaitResult(pipelineWaitParams{JSONOutput: params.JSONOutput}, result.TicketID, *final)
+			return emitWaitResult(logger, pipelineWaitParams{JSONOutput: params.JSONOutput}, result.TicketID, *final)
 		},
 	}
 }

@@ -59,7 +59,7 @@ session file is read (no network access).`,
 		},
 		Params: func() any { return &params },
 		Output: func() any { return &whoamiOutput{} },
-		Run: func(_ context.Context, args []string, _ *slog.Logger) error {
+		Run: func(ctx context.Context, args []string, _ *slog.Logger) error {
 			if len(args) > 0 {
 				return Validation("unexpected argument: %s", args[0])
 			}
@@ -77,7 +77,7 @@ session file is read (no network access).`,
 			}
 
 			if params.Verify {
-				ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+				ctx, cancel := context.WithTimeout(ctx, 10*time.Second)
 				defer cancel()
 
 				client, err := messaging.NewClient(messaging.ClientConfig{

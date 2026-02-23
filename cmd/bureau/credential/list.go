@@ -61,7 +61,7 @@ Useful for auditing which principals have credentials on a machine.`,
 		Output:         func() any { return &[]credentialListEntry{} },
 		RequiredGrants: []string{"command/credential/list"},
 		Annotations:    cli.ReadOnly(),
-		Run: func(_ context.Context, args []string, _ *slog.Logger) error {
+		Run: func(ctx context.Context, args []string, _ *slog.Logger) error {
 			if len(args) > 0 {
 				return cli.Validation("unexpected argument: %s", args[0])
 			}
@@ -79,7 +79,7 @@ Useful for auditing which principals have credentials on a machine.`,
 				return cli.Validation("invalid machine name: %v", err)
 			}
 
-			ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
+			ctx, cancel := context.WithTimeout(ctx, 30*time.Second)
 			defer cancel()
 
 			session, err := params.SessionConfig.Connect(ctx)

@@ -80,7 +80,7 @@ Required fields: --room, --title, --type. Priority defaults to P2
 		Output:         func() any { return &createResult{} },
 		Annotations:    cli.Create(),
 		RequiredGrants: []string{"command/ticket/create"},
-		Run: func(_ context.Context, args []string, _ *slog.Logger) error {
+		Run: func(ctx context.Context, args []string, _ *slog.Logger) error {
 			if params.Room == "" {
 				return cli.Validation("--room is required")
 			}
@@ -102,7 +102,7 @@ Required fields: --room, --title, --type. Priority defaults to P2
 				return err
 			}
 
-			ctx, cancel := callContext()
+			ctx, cancel := callContext(ctx)
 			defer cancel()
 
 			fields := map[string]any{
@@ -213,7 +213,7 @@ in_progress returns a contention error with the current assignee.`,
 		Output:         func() any { return &mutationResult{} },
 		Annotations:    cli.Idempotent(),
 		RequiredGrants: []string{"command/ticket/update"},
-		Run: func(_ context.Context, args []string, _ *slog.Logger) error {
+		Run: func(ctx context.Context, args []string, logger *slog.Logger) error {
 			if len(args) == 1 {
 				params.Ticket = args[0]
 			} else if len(args) > 1 {
@@ -228,7 +228,7 @@ in_progress returns a contention error with the current assignee.`,
 				return err
 			}
 
-			ctx, cancel := callContext()
+			ctx, cancel := callContext(ctx)
 			defer cancel()
 
 			// Build the request with pointer semantics: only include
@@ -287,7 +287,7 @@ in_progress returns a contention error with the current assignee.`,
 				return err
 			}
 
-			fmt.Fprintf(os.Stderr, "%s updated (status=%s)\n", result.ID, result.Content.Status)
+			logger.Info("ticket updated", "ticket", result.ID, "status", result.Content.Status)
 			return nil
 		},
 	}
@@ -336,7 +336,7 @@ close a recurring ticket by stripping its recurring gates first.`,
 		Output:         func() any { return &mutationResult{} },
 		Annotations:    cli.Idempotent(),
 		RequiredGrants: []string{"command/ticket/close"},
-		Run: func(_ context.Context, args []string, _ *slog.Logger) error {
+		Run: func(ctx context.Context, args []string, logger *slog.Logger) error {
 			if len(args) == 1 {
 				params.Ticket = args[0]
 			} else if len(args) > 1 {
@@ -351,7 +351,7 @@ close a recurring ticket by stripping its recurring gates first.`,
 				return err
 			}
 
-			ctx, cancel := callContext()
+			ctx, cancel := callContext(ctx)
 			defer cancel()
 
 			fields := map[string]any{"ticket": params.Ticket}
@@ -374,7 +374,7 @@ close a recurring ticket by stripping its recurring gates first.`,
 				return err
 			}
 
-			fmt.Fprintf(os.Stderr, "%s closed\n", result.ID)
+			logger.Info("ticket closed", "ticket", result.ID)
 			return nil
 		},
 	}
@@ -402,7 +402,7 @@ close timestamp and reason.`,
 		Output:         func() any { return &mutationResult{} },
 		Annotations:    cli.Idempotent(),
 		RequiredGrants: []string{"command/ticket/reopen"},
-		Run: func(_ context.Context, args []string, _ *slog.Logger) error {
+		Run: func(ctx context.Context, args []string, logger *slog.Logger) error {
 			if len(args) == 1 {
 				params.Ticket = args[0]
 			} else if len(args) > 1 {
@@ -417,7 +417,7 @@ close timestamp and reason.`,
 				return err
 			}
 
-			ctx, cancel := callContext()
+			ctx, cancel := callContext(ctx)
 			defer cancel()
 
 			fields := map[string]any{"ticket": params.Ticket}
@@ -433,7 +433,7 @@ close timestamp and reason.`,
 				return err
 			}
 
-			fmt.Fprintf(os.Stderr, "%s reopened\n", result.ID)
+			logger.Info("ticket reopened", "ticket", result.ID)
 			return nil
 		},
 	}
@@ -487,7 +487,7 @@ created.`,
 		Output:         func() any { return &batchCreateResult{} },
 		Annotations:    cli.Create(),
 		RequiredGrants: []string{"command/ticket/batch"},
-		Run: func(_ context.Context, args []string, _ *slog.Logger) error {
+		Run: func(ctx context.Context, args []string, logger *slog.Logger) error {
 			if params.Room == "" {
 				return cli.Validation("--room is required")
 			}
@@ -515,7 +515,7 @@ created.`,
 			}
 
 			// Use a longer timeout for batch operations.
-			ctx, cancel := callContext()
+			ctx, cancel := callContext(ctx)
 			defer cancel()
 
 			fields := map[string]any{
@@ -532,7 +532,7 @@ created.`,
 				return err
 			}
 
-			fmt.Fprintf(os.Stderr, "created %d tickets in %s\n", len(result.Refs), result.Room)
+			logger.Info("batch created", "count", len(result.Refs), "room", result.Room)
 			for ref, ticketID := range result.Refs {
 				fmt.Printf("%s → %s\n", ref, ticketID)
 			}
@@ -579,7 +579,7 @@ remove a defer gate (un-defer), use: bureau ticket gate resolve ID defer`,
 		Output:         func() any { return &mutationResult{} },
 		Annotations:    cli.Idempotent(),
 		RequiredGrants: []string{"command/ticket/defer"},
-		Run: func(_ context.Context, args []string, _ *slog.Logger) error {
+		Run: func(ctx context.Context, args []string, logger *slog.Logger) error {
 			if len(args) == 1 {
 				params.Ticket = args[0]
 			} else if len(args) > 1 {
@@ -600,7 +600,7 @@ remove a defer gate (un-defer), use: bureau ticket gate resolve ID defer`,
 				return err
 			}
 
-			ctx, cancel := callContext()
+			ctx, cancel := callContext(ctx)
 			defer cancel()
 
 			fields := map[string]any{"ticket": params.Ticket}
@@ -626,11 +626,11 @@ remove a defer gate (un-defer), use: bureau ticket gate resolve ID defer`,
 			// Find the defer gate in the response to show the target.
 			for _, gate := range result.Content.Gates {
 				if gate.ID == "defer" {
-					fmt.Fprintf(os.Stderr, "%s deferred until %s\n", result.ID, gate.Target)
+					logger.Info("ticket deferred", "ticket", result.ID, "until", gate.Target)
 					return nil
 				}
 			}
-			fmt.Fprintf(os.Stderr, "%s deferred\n", result.ID)
+			logger.Info("ticket deferred", "ticket", result.ID)
 			return nil
 		},
 	}

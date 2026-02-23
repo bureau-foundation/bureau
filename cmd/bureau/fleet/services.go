@@ -66,7 +66,7 @@ replica count, current instance count, failover policy, and priority.`,
 		Output:         func() any { return &listServicesResult{} },
 		Annotations:    cli.ReadOnly(),
 		RequiredGrants: []string{"command/fleet/list-services"},
-		Run: func(_ context.Context, args []string, _ *slog.Logger) error {
+		Run: func(ctx context.Context, args []string, logger *slog.Logger) error {
 			if len(args) > 0 {
 				return cli.Validation("unexpected argument: %s", args[0])
 			}
@@ -76,7 +76,7 @@ replica count, current instance count, failover policy, and priority.`,
 				return err
 			}
 
-			ctx, cancel := callContext()
+			ctx, cancel := callContext(ctx)
 			defer cancel()
 
 			var response listServicesResponse
@@ -89,7 +89,7 @@ replica count, current instance count, failover policy, and priority.`,
 			}
 
 			if len(response.Services) == 0 {
-				fmt.Fprintln(os.Stderr, "No fleet-managed services.")
+				logger.Info("no fleet-managed services")
 				return nil
 			}
 
@@ -177,7 +177,7 @@ failover policy, and all current instances with their host machines.`,
 		Output:         func() any { return &showServiceResult{} },
 		Annotations:    cli.ReadOnly(),
 		RequiredGrants: []string{"command/fleet/show-service"},
-		Run: func(_ context.Context, args []string, _ *slog.Logger) error {
+		Run: func(ctx context.Context, args []string, logger *slog.Logger) error {
 			if len(args) == 0 {
 				return cli.Validation("service localpart required\n\nUsage: bureau fleet show-service <localpart> [flags]")
 			}
@@ -188,7 +188,7 @@ failover policy, and all current instances with their host machines.`,
 				return err
 			}
 
-			ctx, cancel := callContext()
+			ctx, cancel := callContext(ctx)
 			defer cancel()
 
 			var response showServiceResponse

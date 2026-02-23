@@ -8,7 +8,6 @@ import (
 	"encoding/json"
 	"fmt"
 	"log/slog"
-	"os"
 	"time"
 
 	"github.com/bureau-foundation/bureau/cmd/bureau/cli"
@@ -71,7 +70,7 @@ workstation's MachineConfig, and enables tickets in all rooms under
 		Output:         func() any { return &enableResult{} },
 		Annotations:    cli.Idempotent(),
 		RequiredGrants: []string{"command/ticket/enable"},
-		Run: func(_ context.Context, args []string, _ *slog.Logger) error {
+		Run: func(ctx context.Context, args []string, logger *slog.Logger) error {
 			if len(args) > 0 {
 				return cli.Validation("unexpected argument: %s", args[0])
 			}
@@ -81,7 +80,7 @@ workstation's MachineConfig, and enables tickets in all rooms under
 			if params.Host == "" {
 				return cli.Validation("--host is required")
 			}
-			return runEnable(&params)
+			return runEnable(ctx, logger, &params)
 		},
 	}
 }
@@ -96,7 +95,7 @@ type enableResult struct {
 	RoomsConfigured  []string `json:"rooms_configured"  desc:"room IDs configured for tickets"`
 }
 
-func runEnable(params *enableParams) error {
+func runEnable(ctx context.Context, logger *slog.Logger, params *enableParams) error {
 	// Resolve "local" to the actual machine localpart.
 	host := params.Host
 	if host == "local" {
@@ -105,7 +104,7 @@ func runEnable(params *enableParams) error {
 			return cli.Internal("resolving local machine identity: %w", err)
 		}
 		host = resolved
-		fmt.Fprintf(os.Stderr, "Resolved --host=local to %s\n", host)
+		logger.Info("resolved local machine", "host", host)
 	}
 
 	serverName, err := ref.ParseServerName(params.ServerName)
@@ -134,7 +133,7 @@ func runEnable(params *enableParams) error {
 	}
 	spaceAlias := namespace.SpaceAlias()
 
-	ctx, cancel := context.WithTimeout(context.Background(), 60*time.Second)
+	ctx, cancel := context.WithTimeout(ctx, 60*time.Second)
 	defer cancel()
 
 	// Read credentials for registration token and admin session.
@@ -154,7 +153,7 @@ func runEnable(params *enableParams) error {
 	defer adminSession.Close()
 
 	// Step 1: Register the ticket service Matrix account (idempotent).
-	if err := registerServiceAccount(ctx, credentials, servicePrincipal, serverName); err != nil {
+	if err := registerServiceAccount(ctx, logger, credentials, servicePrincipal, serverName); err != nil {
 		return cli.Internal("registering service account: %w", err)
 	}
 
@@ -169,29 +168,29 @@ func runEnable(params *enableParams) error {
 		return cli.Internal("listing space children: %w", err)
 	}
 
-	fmt.Fprintf(os.Stderr, "Space %s (%s): %d rooms\n", spaceAlias, spaceRoomID, len(childRoomIDs))
+	logger.Info("discovered space", "alias", spaceAlias, "room_id", spaceRoomID, "child_rooms", len(childRoomIDs))
 
 	// Step 3: Publish PrincipalAssignment to the machine config room.
-	if err := publishPrincipalAssignment(ctx, adminSession, machineRef, servicePrincipal, params.Space); err != nil {
+	if err := publishPrincipalAssignment(ctx, logger, adminSession, machineRef, servicePrincipal, params.Space); err != nil {
 		return cli.Internal("publishing principal assignment: %w", err)
 	}
 
 	// Step 4: Configure each room for ticket management.
 	configuredRooms := make([]string, 0, len(childRoomIDs))
 	for _, roomID := range childRoomIDs {
-		if err := ConfigureRoom(ctx, adminSession, roomID, serviceEntity, ConfigureRoomParams{Prefix: params.Prefix}); err != nil {
-			fmt.Fprintf(os.Stderr, "  WARNING: failed to configure room %s: %v\n", roomID, err)
+		if err := ConfigureRoom(ctx, logger, adminSession, roomID, serviceEntity, ConfigureRoomParams{Prefix: params.Prefix}); err != nil {
+			logger.Warn("failed to configure room", "room_id", roomID, "error", err)
 			continue
 		}
 		configuredRooms = append(configuredRooms, roomID.String())
-		fmt.Fprintf(os.Stderr, "  Configured room %s\n", roomID)
+		logger.Info("configured room", "room_id", roomID)
 	}
 
 	// Step 5: Invite the service to the space itself so the daemon's
 	// /sync delivers new room events to the service.
 	if err := adminSession.InviteUser(ctx, spaceRoomID, serviceUserID); err != nil {
 		if !messaging.IsMatrixError(err, "M_FORBIDDEN") {
-			fmt.Fprintf(os.Stderr, "  WARNING: failed to invite service to space: %v\n", err)
+			logger.Warn("failed to invite service to space", "error", err)
 		}
 	}
 
@@ -206,22 +205,21 @@ func runEnable(params *enableParams) error {
 		return err
 	}
 
-	fmt.Fprintf(os.Stderr, "\nTicket service enabled:\n")
-	fmt.Fprintf(os.Stderr, "  Service:  %s (%s)\n", servicePrincipal, serviceUserID)
-	fmt.Fprintf(os.Stderr, "  Machine:  %s\n", host)
-	fmt.Fprintf(os.Stderr, "  Space:    %s (%s)\n", spaceAlias, spaceRoomID)
-	fmt.Fprintf(os.Stderr, "  Rooms:    %d configured\n", len(configuredRooms))
-	fmt.Fprintf(os.Stderr, "\nNext steps:\n")
-	fmt.Fprintf(os.Stderr, "  1. Deploy the ticket service binary to %s\n", host)
-	fmt.Fprintf(os.Stderr, "  2. Configure it with Matrix session credentials (session.json)\n")
-	fmt.Fprintf(os.Stderr, "  3. Start the ticket service — it will self-register via #bureau/service\n")
+	logger.Info("ticket service enabled",
+		"service_principal", servicePrincipal,
+		"service_user_id", serviceUserID,
+		"machine", host,
+		"space_alias", spaceAlias,
+		"space_room_id", spaceRoomID,
+		"rooms_configured", len(configuredRooms),
+	)
 
 	return nil
 }
 
 // registerServiceAccount registers a Matrix account for the ticket service.
 // Idempotent: M_USER_IN_USE is silently ignored.
-func registerServiceAccount(ctx context.Context, credentials map[string]string, servicePrincipal string, serverName ref.ServerName) error {
+func registerServiceAccount(ctx context.Context, logger *slog.Logger, credentials map[string]string, servicePrincipal string, serverName ref.ServerName) error {
 	homeserverURL := credentials["MATRIX_HOMESERVER_URL"]
 	if homeserverURL == "" {
 		homeserverURL = "http://localhost:6167"
@@ -268,14 +266,14 @@ func registerServiceAccount(ctx context.Context, credentials map[string]string, 
 	})
 	if registerErr != nil {
 		if messaging.IsMatrixError(registerErr, messaging.ErrCodeUserInUse) {
-			fmt.Fprintf(os.Stderr, "Service account @%s:%s already exists.\n", servicePrincipal, serverName)
+			logger.Info("service account already exists", "principal", servicePrincipal, "server_name", serverName)
 			return nil
 		}
 		return cli.Internal("registering %s: %w", servicePrincipal, registerErr)
 	}
 	defer session.Close()
 
-	fmt.Fprintf(os.Stderr, "Registered service account %s\n", session.UserID())
+	logger.Info("registered service account", "user_id", session.UserID())
 	return nil
 }
 
@@ -310,7 +308,7 @@ func getSpaceChildren(ctx context.Context, session messaging.Session, spaceRoomI
 // rebuildAuthorizationIndex processes ALL principals regardless of
 // AutoStart, so the service appears in the authorization index for
 // grant resolution and service token minting.
-func publishPrincipalAssignment(ctx context.Context, session messaging.Session, machine ref.Machine, servicePrincipal, space string) error {
+func publishPrincipalAssignment(ctx context.Context, logger *slog.Logger, session messaging.Session, machine ref.Machine, servicePrincipal, space string) error {
 	configRoomAlias := machine.RoomAlias()
 	configRoomID, err := session.ResolveAlias(ctx, configRoomAlias)
 	if err != nil {
@@ -332,7 +330,7 @@ func publishPrincipalAssignment(ctx context.Context, session messaging.Session, 
 	// Check if the principal already exists.
 	for _, existing := range config.Principals {
 		if existing.Principal.Localpart() == machine.Fleet().Localpart()+"/"+servicePrincipal {
-			fmt.Fprintf(os.Stderr, "Principal %s already in MachineConfig, skipping.\n", servicePrincipal)
+			logger.Info("principal already in machine config", "principal", servicePrincipal)
 			return nil
 		}
 	}
@@ -358,7 +356,7 @@ func publishPrincipalAssignment(ctx context.Context, session messaging.Session, 
 		return cli.Internal("publishing machine config: %w", err)
 	}
 
-	fmt.Fprintf(os.Stderr, "Published PrincipalAssignment for %s to %s\n", servicePrincipal, machineLocalpart)
+	logger.Info("published principal assignment", "principal", servicePrincipal, "machine", machineLocalpart)
 	return nil
 }
 
@@ -379,7 +377,7 @@ type ConfigureRoomParams struct {
 //   - Invites the service principal
 //   - Configures power levels (service at PL 10, m.bureau.ticket at PL 10,
 //     m.bureau.ticket_config and m.bureau.room_service at PL 100)
-func ConfigureRoom(ctx context.Context, session messaging.Session, roomID ref.RoomID, serviceEntity ref.Entity, params ConfigureRoomParams) error {
+func ConfigureRoom(ctx context.Context, logger *slog.Logger, session messaging.Session, roomID ref.RoomID, serviceEntity ref.Entity, params ConfigureRoomParams) error {
 	// Publish ticket config (singleton, state_key="").
 	ticketConfig := ticketschema.TicketConfigContent{
 		Version:      ticketschema.TicketConfigVersion,

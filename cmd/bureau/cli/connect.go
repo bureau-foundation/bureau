@@ -14,17 +14,18 @@ import (
 
 // ConnectOperator loads the operator session from "bureau login" and
 // creates an authenticated Matrix session. Returns the session and a
-// context with a 30-second timeout. The caller must defer cancel().
+// context with a 30-second timeout derived from the provided parent.
+// The caller must defer cancel().
 //
 // Used by CLI commands that perform operator-level Matrix operations
 // (listing templates, fetching pipelines, pushing state events, etc.).
-func ConnectOperator() (context.Context, context.CancelFunc, messaging.Session, error) {
+func ConnectOperator(parent context.Context) (context.Context, context.CancelFunc, messaging.Session, error) {
 	operatorSession, err := LoadSession()
 	if err != nil {
 		return nil, nil, nil, err
 	}
 
-	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
+	ctx, cancel := context.WithTimeout(parent, 30*time.Second)
 
 	logger := NewClientLogger(slog.LevelWarn)
 

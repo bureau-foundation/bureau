@@ -78,19 +78,19 @@ modification time. Use --prefix to filter keys (e.g., --prefix "summary/").`,
 		Output:         func() any { return &contextListResult{} },
 		RequiredGrants: []string{"command/agent/context/list"},
 		Annotations:    cli.ReadOnly(),
-		Run: requireLocalpart("bureau agent context list <localpart> [--prefix <prefix>]", func(_ context.Context, localpart string, _ *slog.Logger) error {
-			return runContextList(localpart, params)
+		Run: requireLocalpart("bureau agent context list <localpart> [--prefix <prefix>]", func(ctx context.Context, localpart string, logger *slog.Logger) error {
+			return runContextList(ctx, localpart, logger, params)
 		}),
 	}
 }
 
-func runContextList(localpart string, params contextListParams) error {
+func runContextList(ctx context.Context, localpart string, logger *slog.Logger, params contextListParams) error {
 	serverName, err := ref.ParseServerName(params.ServerName)
 	if err != nil {
 		return fmt.Errorf("invalid --server-name: %w", err)
 	}
 
-	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
+	ctx, cancel := context.WithTimeout(ctx, 30*time.Second)
 	defer cancel()
 
 	session, err := params.SessionConfig.Connect(ctx)
@@ -123,7 +123,7 @@ func runContextList(localpart string, params contextListParams) error {
 	}
 
 	if machine.IsZero() && machineCount > 0 {
-		fmt.Fprintf(os.Stderr, "resolved %s → %s (scanned %d machines)\n", localpart, location.Machine.Localpart(), machineCount)
+		logger.Info("resolved agent location", "localpart", localpart, "machine", location.Machine.Localpart(), "machines_scanned", machineCount)
 	}
 
 	contextRaw, err := session.GetStateEvent(ctx, location.ConfigRoomID, agentschema.EventTypeAgentContext, localpart)
@@ -157,7 +157,7 @@ func runContextList(localpart string, params contextListParams) error {
 	}
 
 	if len(entries) == 0 {
-		fmt.Fprintln(os.Stderr, "no context entries found")
+		logger.Info("no context entries found", "localpart", localpart)
 		return nil
 	}
 
@@ -212,7 +212,7 @@ available.`,
 		Output:         func() any { return &agentschema.ContextEntry{} },
 		RequiredGrants: []string{"command/agent/context/show"},
 		Annotations:    cli.ReadOnly(),
-		Run: func(_ context.Context, args []string, _ *slog.Logger) error {
+		Run: func(ctx context.Context, args []string, logger *slog.Logger) error {
 			if len(args) < 2 {
 				return cli.Validation("agent localpart and context key are required\n\nUsage: bureau agent context show <localpart> <key> [--machine <machine>]")
 			}
@@ -224,12 +224,12 @@ available.`,
 			if err := principal.ValidateLocalpart(localpart); err != nil {
 				return cli.Validation("invalid agent localpart: %v", err)
 			}
-			return runContextShow(localpart, key, params)
+			return runContextShow(ctx, localpart, key, logger, params)
 		},
 	}
 }
 
-func runContextShow(localpart, key string, params contextShowParams) error {
+func runContextShow(ctx context.Context, localpart, key string, logger *slog.Logger, params contextShowParams) error {
 	serverName, err := ref.ParseServerName(params.ServerName)
 	if err != nil {
 		return fmt.Errorf("invalid --server-name: %w", err)
@@ -240,7 +240,7 @@ func runContextShow(localpart, key string, params contextShowParams) error {
 		return cli.Validation("invalid agent localpart: %v", err)
 	}
 
-	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
+	ctx, cancel := context.WithTimeout(ctx, 30*time.Second)
 	defer cancel()
 
 	session, err := params.SessionConfig.Connect(ctx)
@@ -273,7 +273,7 @@ func runContextShow(localpart, key string, params contextShowParams) error {
 	}
 
 	if machine.IsZero() && machineCount > 0 {
-		fmt.Fprintf(os.Stderr, "resolved %s → %s (scanned %d machines)\n", localpart, location.Machine.Localpart(), machineCount)
+		logger.Info("resolved agent location", "localpart", localpart, "machine", location.Machine.Localpart(), "machines_scanned", machineCount)
 	}
 
 	contextRaw, err := session.GetStateEvent(ctx, location.ConfigRoomID, agentschema.EventTypeAgentContext, localpart)

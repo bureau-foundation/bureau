@@ -68,13 +68,13 @@ available rooms.`,
 			flagSet.StringVar(&socketPath, "socket", observe.DefaultDaemonSocket, "daemon observe socket path")
 			return flagSet
 		},
-		Run: func(_ context.Context, args []string, _ *slog.Logger) error {
+		Run: func(ctx context.Context, args []string, logger *slog.Logger) error {
 			if len(args) > 0 {
 				return cli.Validation("unexpected argument: %s", args[0])
 			}
 
 			if serviceMode {
-				return runServiceViewer(socketPath, roomFlag)
+				return runServiceViewer(ctx, logger, socketPath, roomFlag)
 			}
 
 			if filePath == "" {
@@ -98,15 +98,11 @@ available rooms.`,
 // the operator, mints a service token for the ticket service, resolves
 // the room to subscribe to, and runs the TUI backed by a ServiceSource
 // with live updates.
-func runServiceViewer(daemonSocket string, roomFlag string) error {
+func runServiceViewer(ctx context.Context, logger *slog.Logger, daemonSocket string, roomFlag string) error {
 	operatorSession, err := cli.LoadSession()
 	if err != nil {
 		return err
 	}
-
-	logger := slog.New(slog.NewJSONHandler(os.Stderr, &slog.HandlerOptions{
-		Level: slog.LevelWarn,
-	}))
 
 	// Mint a service token for the ticket service via the daemon.
 	tokenResponse, err := observe.MintServiceToken(
@@ -129,7 +125,7 @@ func runServiceViewer(daemonSocket string, roomFlag string) error {
 	// Resolve which room to subscribe to. If --room was specified, use
 	// it directly. Otherwise, query the service for available rooms and
 	// let the user pick.
-	roomID, err := resolveViewerRoom(ticketSocketPath, tokenBytes, roomFlag)
+	roomID, err := resolveViewerRoom(ctx, logger, ticketSocketPath, tokenBytes, roomFlag)
 	if err != nil {
 		return err
 	}
@@ -166,14 +162,14 @@ type viewerRoomInfo struct {
 // is non-empty, it is used directly (as either a room ID or alias). If
 // empty, queries the ticket service for available rooms and presents a
 // selection prompt if there is more than one.
-func resolveViewerRoom(socketPath string, tokenBytes []byte, roomFlag string) (string, error) {
+func resolveViewerRoom(ctx context.Context, logger *slog.Logger, socketPath string, tokenBytes []byte, roomFlag string) (string, error) {
 	if roomFlag != "" {
 		return roomFlag, nil
 	}
 
 	// Query the ticket service for available rooms.
 	client := service.NewServiceClientFromToken(socketPath, tokenBytes)
-	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+	ctx, cancel := context.WithTimeout(ctx, 10*time.Second)
 	defer cancel()
 
 	var rooms []viewerRoomInfo
@@ -191,7 +187,7 @@ func resolveViewerRoom(socketPath string, tokenBytes []byte, roomFlag string) (s
 		if room.Alias != "" {
 			label = room.Alias
 		}
-		fmt.Fprintf(os.Stderr, "Connecting to %s\n", label)
+		logger.Info("connecting to room", "room", label)
 		return room.RoomID, nil
 	}
 

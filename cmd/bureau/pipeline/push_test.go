@@ -31,7 +31,7 @@ func TestPushPipeline(t *testing.T) {
 	if err := cmd.FlagSet().Parse([]string{"--server-name", "test.local"}); err != nil {
 		t.Fatalf("flag parse: %v", err)
 	}
-	if err := cmd.Run(context.Background(), []string{"bureau/pipeline:deploy", path}, nil); err != nil {
+	if err := cmd.Run(context.Background(), []string{"bureau/pipeline:deploy", path}, testLogger()); err != nil {
 		t.Fatalf("push: %v", err)
 	}
 
@@ -81,7 +81,7 @@ func TestPushPipelineDryRun(t *testing.T) {
 	if err := cmd.FlagSet().Parse([]string{"--server-name", "test.local", "--dry-run"}); err != nil {
 		t.Fatalf("flag parse: %v", err)
 	}
-	if err := cmd.Run(context.Background(), []string{"bureau/pipeline:test", path}, nil); err != nil {
+	if err := cmd.Run(context.Background(), []string{"bureau/pipeline:test", path}, testLogger()); err != nil {
 		t.Fatalf("push --dry-run: %v", err)
 	}
 
@@ -103,7 +103,7 @@ func TestPushPipelineValidationFails(t *testing.T) {
 }`)
 
 	cmd := pushCommand()
-	err := cmd.Run(context.Background(), []string{"bureau/pipeline:bad", path}, nil)
+	err := cmd.Run(context.Background(), []string{"bureau/pipeline:bad", path}, testLogger())
 	if err == nil {
 		t.Fatal("expected error for pipeline with no steps")
 	}
@@ -120,7 +120,7 @@ func TestPushPipelineBadRef(t *testing.T) {
 }`)
 
 	cmd := pushCommand()
-	err := cmd.Run(context.Background(), []string{"no-colon-here", path}, nil)
+	err := cmd.Run(context.Background(), []string{"no-colon-here", path}, testLogger())
 	if err == nil {
 		t.Fatal("expected error for bad pipeline reference")
 	}
@@ -133,7 +133,7 @@ func TestPushPipelineNonexistentFile(t *testing.T) {
 	t.Parallel()
 
 	cmd := pushCommand()
-	err := cmd.Run(context.Background(), []string{"bureau/pipeline:test", "/nonexistent/file.jsonc"}, nil)
+	err := cmd.Run(context.Background(), []string{"bureau/pipeline:test", "/nonexistent/file.jsonc"}, testLogger())
 	if err == nil {
 		t.Fatal("expected error for nonexistent file")
 	}
@@ -154,7 +154,7 @@ func TestPushPipelineRoomNotFound(t *testing.T) {
 	if err := cmd.FlagSet().Parse([]string{"--server-name", "test.local"}); err != nil {
 		t.Fatalf("flag parse: %v", err)
 	}
-	err := cmd.Run(context.Background(), []string{"bureau/pipeline:test", path}, nil)
+	err := cmd.Run(context.Background(), []string{"bureau/pipeline:test", path}, testLogger())
 	if err == nil {
 		t.Fatal("expected error for nonexistent room")
 	}
@@ -167,7 +167,7 @@ func TestPushPipelineNoArgs(t *testing.T) {
 	t.Parallel()
 
 	cmd := pushCommand()
-	err := cmd.Run(context.Background(), []string{}, nil)
+	err := cmd.Run(context.Background(), []string{}, testLogger())
 	if err == nil {
 		t.Fatal("expected error for no args")
 	}

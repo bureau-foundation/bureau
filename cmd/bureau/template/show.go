@@ -51,7 +51,7 @@ template overrides versus what it inherits.`,
 		Params:         func() any { return &params },
 		RequiredGrants: []string{"command/template/show"},
 		Annotations:    cli.ReadOnly(),
-		Run: func(_ context.Context, args []string, _ *slog.Logger) error {
+		Run: func(ctx context.Context, args []string, _ *slog.Logger) error {
 			// In CLI mode, template ref comes as a positional argument.
 			// In JSON/MCP mode, it's populated from the JSON input.
 			if len(args) == 1 {
@@ -65,7 +65,7 @@ template overrides versus what it inherits.`,
 
 			templateRefString := params.TemplateRef
 
-			ctx, cancel, session, err := cli.ConnectOperator()
+			ctx, cancel, session, err := cli.ConnectOperator(ctx)
 			if err != nil {
 				return err
 			}

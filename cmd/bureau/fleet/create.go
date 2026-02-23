@@ -7,7 +7,6 @@ import (
 	"context"
 	"fmt"
 	"log/slog"
-	"os"
 	"time"
 
 	"github.com/bureau-foundation/bureau/cmd/bureau/cli"
@@ -77,20 +76,20 @@ unchanged).`,
 		Output:         func() any { return &createResult{} },
 		Annotations:    cli.Idempotent(),
 		RequiredGrants: []string{"command/fleet/create"},
-		Run: func(_ context.Context, args []string, _ *slog.Logger) error {
+		Run: func(ctx context.Context, args []string, logger *slog.Logger) error {
 			if len(args) == 0 {
 				return cli.Validation("fleet localpart is required (e.g., bureau/fleet/prod)")
 			}
 			if len(args) > 1 {
 				return cli.Validation("expected exactly one argument (fleet localpart), got %d", len(args))
 			}
-			return runCreate(args[0], &params)
+			return runCreate(ctx, logger, args[0], &params)
 		},
 	}
 }
 
-func runCreate(fleetLocalpart string, params *createParams) error {
-	ctx, cancel := context.WithTimeout(context.Background(), 60*time.Second)
+func runCreate(ctx context.Context, logger *slog.Logger, fleetLocalpart string, params *createParams) error {
+	ctx, cancel := context.WithTimeout(ctx, 60*time.Second)
 	defer cancel()
 
 	session, err := params.SessionConfig.Connect(ctx)
@@ -111,8 +110,6 @@ func runCreate(fleetLocalpart string, params *createParams) error {
 	if err != nil {
 		return cli.Validation("%v", err)
 	}
-
-	logger := cli.NewCommandLogger().With("command", "fleet/create", "fleet", fleet.Localpart())
 
 	rooms, err := EnsureFleetRooms(ctx, session, fleet, logger)
 	if err != nil {
@@ -140,13 +137,13 @@ func runCreate(fleetLocalpart string, params *createParams) error {
 		return err
 	}
 
-	fmt.Fprintf(os.Stderr, "\nFleet created: %s\n", fleet.Localpart())
-	fmt.Fprintf(os.Stderr, "  Config:   %s (%s)\n", fleet.RoomAlias(), rooms.ConfigRoomID)
-	fmt.Fprintf(os.Stderr, "  Machine:  %s (%s)\n", fleet.MachineRoomAlias(), rooms.MachineRoomID)
-	fmt.Fprintf(os.Stderr, "  Service:  %s (%s)\n", fleet.ServiceRoomAlias(), rooms.ServiceRoomID)
-	if len(params.Invite) > 0 {
-		fmt.Fprintf(os.Stderr, "  Invited:  %v\n", params.Invite)
-	}
+	logger.Info("fleet created",
+		"fleet", fleet.Localpart(),
+		"config_room", rooms.ConfigRoomID,
+		"machine_room", rooms.MachineRoomID,
+		"service_room", rooms.ServiceRoomID,
+		"invited", params.Invite,
+	)
 
 	return nil
 }

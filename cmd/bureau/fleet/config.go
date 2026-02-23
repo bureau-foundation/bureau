@@ -81,14 +81,14 @@ controller's socket API does not expose a config-write action.`,
 		Output:         func() any { return &configResult{} },
 		Annotations:    cli.Idempotent(),
 		RequiredGrants: []string{"command/fleet/config"},
-		Run: func(_ context.Context, args []string, _ *slog.Logger) error {
+		Run: func(ctx context.Context, args []string, logger *slog.Logger) error {
 			if len(args) == 0 {
 				return cli.Validation("fleet localpart is required (e.g., bureau/fleet/prod)")
 			}
 			if len(args) > 1 {
 				return cli.Validation("expected exactly one argument (fleet localpart), got %d", len(args))
 			}
-			return runConfig(args[0], &params)
+			return runConfig(ctx, logger, args[0], &params)
 		},
 	}
 }
@@ -104,8 +104,8 @@ func hasConfigUpdates(params *configParams) bool {
 		params.RebalanceCooldownSeconds != 0
 }
 
-func runConfig(fleetLocalpart string, params *configParams) error {
-	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
+func runConfig(ctx context.Context, logger *slog.Logger, fleetLocalpart string, params *configParams) error {
+	ctx, cancel := context.WithTimeout(ctx, 30*time.Second)
 	defer cancel()
 
 	session, err := params.SessionConfig.Connect(ctx)
@@ -217,7 +217,7 @@ func runConfig(fleetLocalpart string, params *configParams) error {
 		return err
 	}
 
-	fmt.Fprintf(os.Stderr, "Updated fleet config for %s (key: %s)\n", fleet.Localpart(), stateKey)
+	logger.Info("updated fleet config", "fleet", fleet.Localpart(), "state_key", stateKey)
 	return nil
 }
 

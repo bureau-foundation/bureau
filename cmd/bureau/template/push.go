@@ -68,7 +68,7 @@ exist without actually publishing.`,
 		Output:         func() any { return &templatePushResult{} },
 		RequiredGrants: []string{"command/template/push"},
 		Annotations:    cli.Create(),
-		Run: func(_ context.Context, args []string, _ *slog.Logger) error {
+		Run: func(ctx context.Context, args []string, logger *slog.Logger) error {
 			if len(args) != 2 {
 				return cli.Validation("usage: bureau template push [flags] <template-ref> <file>")
 			}
@@ -91,13 +91,13 @@ exist without actually publishing.`,
 			issues := validateTemplateContent(content)
 			if len(issues) > 0 {
 				for _, issue := range issues {
-					fmt.Fprintf(os.Stderr, "  - %s\n", issue)
+					logger.Warn("validation issue", "issue", issue)
 				}
 				return cli.Validation("%s: %d validation issue(s) found", filePath, len(issues))
 			}
 
 			// Connect to Matrix for inheritance verification and publishing.
-			ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
+			ctx, cancel := context.WithTimeout(ctx, 30*time.Second)
 			defer cancel()
 
 			session, err := params.SessionConfig.Connect(ctx)
@@ -126,7 +126,7 @@ exist without actually publishing.`,
 					if _, err := libtmpl.Fetch(ctx, session, parentRef, serverName); err != nil {
 						return cli.NotFound("parent template %q not found in Matrix: %w", parentRefString, err)
 					}
-					fmt.Fprintf(os.Stderr, "parent template %q: found\n", parentRefString)
+					logger.Info("parent template found", "parent", parentRefString)
 				}
 
 				if done, err := params.EmitJSON(templatePushResult{

@@ -67,7 +67,7 @@ Bureau protocol events).`,
 		Output:         func() any { return &sendResult{} },
 		Params:         func() any { return &params },
 		RequiredGrants: []string{"command/matrix/send"},
-		Run: func(_ context.Context, args []string, _ *slog.Logger) error {
+		Run: func(ctx context.Context, args []string, _ *slog.Logger) error {
 			// In CLI mode, room and message come as positional arguments.
 			// In JSON/MCP mode, they're populated from the JSON input.
 			switch len(args) {
@@ -89,7 +89,7 @@ Bureau protocol events).`,
 			roomTarget := params.Room
 			messageBody := params.Message
 
-			ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
+			ctx, cancel := context.WithTimeout(ctx, 30*time.Second)
 			defer cancel()
 
 			matrixSession, err := params.SessionConfig.Connect(ctx)

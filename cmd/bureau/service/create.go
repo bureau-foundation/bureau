@@ -7,7 +7,6 @@ import (
 	"context"
 	"fmt"
 	"log/slog"
-	"os"
 	"time"
 
 	"github.com/bureau-foundation/bureau/cmd/bureau/cli"
@@ -84,7 +83,7 @@ token for creating the service's account.`,
 		Output:         func() any { return &serviceCreateResult{} },
 		RequiredGrants: []string{"command/service/create"},
 		Annotations:    cli.Create(),
-		Run: func(_ context.Context, args []string, _ *slog.Logger) error {
+		Run: func(ctx context.Context, args []string, logger *slog.Logger) error {
 			if len(args) < 1 {
 				return cli.Validation("template reference is required\n\nUsage: bureau service create <template-ref> --machine <machine> --name <name> --credential-file <path>")
 			}
@@ -109,13 +108,13 @@ token for creating the service's account.`,
 				return cli.Validation("invalid template reference: %v", err)
 			}
 
-			return runCreate(templateRef, params)
+			return runCreate(ctx, logger, templateRef, params)
 		},
 	}
 }
 
-func runCreate(templateRef schema.TemplateRef, params serviceCreateParams) error {
-	ctx, cancel := context.WithTimeout(context.Background(), 60*time.Second)
+func runCreate(ctx context.Context, logger *slog.Logger, templateRef schema.TemplateRef, params serviceCreateParams) error {
+	ctx, cancel := context.WithTimeout(ctx, 60*time.Second)
 	defer cancel()
 
 	// Connect for admin operations (room management, invites, config
@@ -181,8 +180,7 @@ func runCreate(templateRef schema.TemplateRef, params serviceCreateParams) error
 		return cli.Internal("resolve fleet machine room %q: %w", machineRoomAlias, err)
 	}
 
-	logger := cli.NewCommandLogger().With("command", "service/create", "name", params.Name, "template", templateRef.String())
-	logger.Info("creating service", "machine", params.Machine)
+	logger.Info("creating service", "name", params.Name, "machine", params.Machine, "template", templateRef.String())
 
 	principalEntity, err := ref.NewEntityFromAccountLocalpart(fleet, params.Name)
 	if err != nil {
@@ -215,12 +213,13 @@ func runCreate(templateRef schema.TemplateRef, params serviceCreateParams) error
 		return err
 	}
 
-	fmt.Fprintf(os.Stderr, "  Principal: %s\n", result.PrincipalUserID)
-	fmt.Fprintf(os.Stderr, "  Machine:   %s\n", result.Machine.Localpart())
-	fmt.Fprintf(os.Stderr, "  Template:  %s\n", result.TemplateRef.String())
-	fmt.Fprintf(os.Stderr, "  Config:    %s\n", result.ConfigRoomID)
-	fmt.Fprintf(os.Stderr, "  Event:     %s\n", result.ConfigEventID)
-	fmt.Fprintf(os.Stderr, "\nThe daemon will create the sandbox on its next reconciliation cycle.\n")
+	logger.Info("service created",
+		"principal", result.PrincipalUserID,
+		"machine", result.Machine.Localpart(),
+		"template", result.TemplateRef.String(),
+		"config_room", result.ConfigRoomID,
+		"config_event", result.ConfigEventID,
+	)
 
 	return nil
 }

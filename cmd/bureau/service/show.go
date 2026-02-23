@@ -55,13 +55,13 @@ is assigned. The scan count is reported for diagnostics.`,
 		Output:         func() any { return &serviceShowResult{} },
 		RequiredGrants: []string{"command/service/show"},
 		Annotations:    cli.ReadOnly(),
-		Run: requireLocalpart("bureau service show <localpart> [--machine <machine>]", func(_ context.Context, localpart string, _ *slog.Logger) error {
-			return runShow(localpart, params)
+		Run: requireLocalpart("bureau service show <localpart> [--machine <machine>]", func(ctx context.Context, localpart string, logger *slog.Logger) error {
+			return runShow(ctx, localpart, logger, params)
 		}),
 	}
 }
 
-func runShow(localpart string, params serviceShowParams) error {
+func runShow(ctx context.Context, localpart string, logger *slog.Logger, params serviceShowParams) error {
 	serverName, err := ref.ParseServerName(params.ServerName)
 	if err != nil {
 		return fmt.Errorf("invalid --server-name: %w", err)
@@ -72,7 +72,7 @@ func runShow(localpart string, params serviceShowParams) error {
 		return cli.Validation("invalid service localpart: %v", err)
 	}
 
-	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
+	ctx, cancel := context.WithTimeout(ctx, 30*time.Second)
 	defer cancel()
 
 	session, err := params.SessionConfig.Connect(ctx)
@@ -94,8 +94,6 @@ func runShow(localpart string, params serviceShowParams) error {
 			return cli.Validation("invalid fleet: %v", err)
 		}
 	}
-
-	logger := cli.NewCommandLogger().With("command", "service/show", "localpart", localpart)
 
 	location, machineCount, err := principal.Resolve(ctx, session, localpart, machine, fleet)
 	if err != nil {

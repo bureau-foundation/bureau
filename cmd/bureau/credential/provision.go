@@ -73,7 +73,7 @@ machine and an operator escrow key for recovery.`,
 		Output:         func() any { return &credentialProvisionResult{} },
 		RequiredGrants: []string{"command/credential/provision"},
 		Annotations:    cli.Create(),
-		Run: func(_ context.Context, args []string, _ *slog.Logger) error {
+		Run: func(ctx context.Context, args []string, logger *slog.Logger) error {
 			if len(args) > 0 {
 				return cli.Validation("unexpected argument: %s", args[0])
 			}
@@ -104,7 +104,7 @@ machine and an operator escrow key for recovery.`,
 				return err
 			}
 
-			ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
+			ctx, cancel := context.WithTimeout(ctx, 30*time.Second)
 			defer cancel()
 
 			session, err := params.SessionConfig.Connect(ctx)
@@ -132,11 +132,14 @@ machine and an operator escrow key for recovery.`,
 				return err
 			}
 
-			fmt.Fprintf(os.Stderr, "Provisioned credentials for %s on %s\n", params.Principal, params.MachineName)
-			fmt.Fprintf(os.Stderr, "  Keys: %s\n", strings.Join(result.Keys, ", "))
-			fmt.Fprintf(os.Stderr, "  Encrypted for: %s\n", strings.Join(result.EncryptedFor, ", "))
-			fmt.Fprintf(os.Stderr, "  Config room: %s\n", result.ConfigRoomID)
-			fmt.Fprintf(os.Stderr, "  Event: %s\n", result.EventID)
+			logger.Info("provisioned credentials",
+				"principal", params.Principal,
+				"machine", params.MachineName,
+				"keys", strings.Join(result.Keys, ", "),
+				"encrypted_for", strings.Join(result.EncryptedFor, ", "),
+				"config_room", result.ConfigRoomID,
+				"event_id", result.EventID,
+			)
 			return nil
 		},
 	}

@@ -59,7 +59,7 @@ time (oldest first).`,
 		Output:         func() any { return &[]ticketEntry{} },
 		Annotations:    cli.ReadOnly(),
 		RequiredGrants: []string{"command/ticket/list"},
-		Run: func(_ context.Context, args []string, _ *slog.Logger) error {
+		Run: func(ctx context.Context, args []string, logger *slog.Logger) error {
 			if params.Room == "" {
 				return cli.Validation("--room is required")
 			}
@@ -69,7 +69,7 @@ time (oldest first).`,
 				return err
 			}
 
-			ctx, cancel := callContext()
+			ctx, cancel := callContext(ctx)
 			defer cancel()
 
 			fields := map[string]any{"room": params.Room}
@@ -102,7 +102,7 @@ time (oldest first).`,
 			}
 
 			if len(entries) == 0 {
-				fmt.Fprintln(os.Stderr, "no tickets found")
+				logger.Info("no tickets found")
 				return nil
 			}
 
@@ -146,7 +146,7 @@ The ticket is resolved via --room or a room-qualified ticket reference (e.g., ir
 		Output:         func() any { return &showResult{} },
 		Annotations:    cli.ReadOnly(),
 		RequiredGrants: []string{"command/ticket/show"},
-		Run: func(_ context.Context, args []string, _ *slog.Logger) error {
+		Run: func(ctx context.Context, args []string, _ *slog.Logger) error {
 			if len(args) == 1 {
 				params.Ticket = args[0]
 			} else if len(args) > 1 {
@@ -161,7 +161,7 @@ The ticket is resolved via --room or a room-qualified ticket reference (e.g., ir
 				return err
 			}
 
-			ctx, cancel := callContext()
+			ctx, cancel := callContext(ctx)
 			defer cancel()
 
 			fields := map[string]any{"ticket": params.Ticket}
@@ -211,8 +211,8 @@ Sorted by priority (most urgent first), then creation time.`,
 		Output:         func() any { return &[]ticketEntry{} },
 		Annotations:    cli.ReadOnly(),
 		RequiredGrants: []string{"command/ticket/ready"},
-		Run: func(_ context.Context, args []string, _ *slog.Logger) error {
-			return roomScopedQuery(params.TicketConnection, params.Room, "ready", "ticket/ready", &params.JSONOutput)
+		Run: func(ctx context.Context, args []string, logger *slog.Logger) error {
+			return roomScopedQuery(ctx, logger, params.TicketConnection, params.Room, "ready", "ticket/ready", &params.JSONOutput)
 		},
 	}
 }
@@ -238,8 +238,8 @@ non-closed blocker or unsatisfied gate.`,
 		Output:         func() any { return &[]ticketEntry{} },
 		Annotations:    cli.ReadOnly(),
 		RequiredGrants: []string{"command/ticket/blocked"},
-		Run: func(_ context.Context, args []string, _ *slog.Logger) error {
-			return roomScopedQuery(params.TicketConnection, params.Room, "blocked", "ticket/blocked", &params.JSONOutput)
+		Run: func(ctx context.Context, args []string, logger *slog.Logger) error {
+			return roomScopedQuery(ctx, logger, params.TicketConnection, params.Room, "blocked", "ticket/blocked", &params.JSONOutput)
 		},
 	}
 }
@@ -268,7 +268,7 @@ This is the primary query for PM agents deciding what to assign next.`,
 		Output:         func() any { return &[]rankedEntry{} },
 		Annotations:    cli.ReadOnly(),
 		RequiredGrants: []string{"command/ticket/ranked"},
-		Run: func(_ context.Context, args []string, _ *slog.Logger) error {
+		Run: func(ctx context.Context, args []string, logger *slog.Logger) error {
 			if params.Room == "" {
 				return cli.Validation("--room is required")
 			}
@@ -278,7 +278,7 @@ This is the primary query for PM agents deciding what to assign next.`,
 				return err
 			}
 
-			ctx, cancel := callContext()
+			ctx, cancel := callContext(ctx)
 			defer cancel()
 
 			var entries []rankedEntry
@@ -291,7 +291,7 @@ This is the primary query for PM agents deciding what to assign next.`,
 			}
 
 			if len(entries) == 0 {
-				fmt.Fprintln(os.Stderr, "no ready tickets")
+				logger.Info("no ready tickets")
 				return nil
 			}
 
@@ -363,7 +363,7 @@ with all blockers closed and all gates satisfied).`,
 		Output:         func() any { return &[]ticketEntry{} },
 		Annotations:    cli.ReadOnly(),
 		RequiredGrants: []string{"command/ticket/grep"},
-		Run: func(_ context.Context, args []string, _ *slog.Logger) error {
+		Run: func(ctx context.Context, args []string, logger *slog.Logger) error {
 			if len(args) == 1 {
 				params.Pattern = args[0]
 			} else if len(args) > 1 {
@@ -378,7 +378,7 @@ with all blockers closed and all gates satisfied).`,
 				return err
 			}
 
-			ctx, cancel := callContext()
+			ctx, cancel := callContext(ctx)
 			defer cancel()
 
 			fields := map[string]any{"pattern": params.Pattern}
@@ -411,7 +411,7 @@ with all blockers closed and all gates satisfied).`,
 			}
 
 			if len(entries) == 0 {
-				fmt.Fprintln(os.Stderr, "no matches")
+				logger.Info("no matches")
 				return nil
 			}
 
@@ -475,7 +475,7 @@ rooms and includes the room ID in results.`,
 		Output:         func() any { return &[]searchEntry{} },
 		Annotations:    cli.ReadOnly(),
 		RequiredGrants: []string{"command/ticket/search"},
-		Run: func(_ context.Context, args []string, _ *slog.Logger) error {
+		Run: func(ctx context.Context, args []string, logger *slog.Logger) error {
 			if len(args) == 1 {
 				params.Query = args[0]
 			} else if len(args) > 1 {
@@ -490,7 +490,7 @@ rooms and includes the room ID in results.`,
 				return err
 			}
 
-			ctx, cancel := callContext()
+			ctx, cancel := callContext(ctx)
 			defer cancel()
 
 			fields := map[string]any{"query": params.Query}
@@ -526,7 +526,7 @@ rooms and includes the room ID in results.`,
 			}
 
 			if len(entries) == 0 {
-				fmt.Fprintln(os.Stderr, "no matches")
+				logger.Info("no matches")
 				return nil
 			}
 
@@ -568,7 +568,7 @@ for a room.`,
 		Output:         func() any { return &ticketindex.Stats{} },
 		Annotations:    cli.ReadOnly(),
 		RequiredGrants: []string{"command/ticket/stats"},
-		Run: func(_ context.Context, args []string, _ *slog.Logger) error {
+		Run: func(ctx context.Context, args []string, _ *slog.Logger) error {
 			if params.Room == "" {
 				return cli.Validation("--room is required")
 			}
@@ -578,7 +578,7 @@ for a room.`,
 				return err
 			}
 
-			ctx, cancel := callContext()
+			ctx, cancel := callContext(ctx)
 			defer cancel()
 
 			var stats ticketindex.Stats
@@ -646,13 +646,13 @@ total tickets, and per-room summaries. Requires authentication.`,
 		Output:         func() any { return &serviceInfo{} },
 		Annotations:    cli.ReadOnly(),
 		RequiredGrants: []string{"command/ticket/info"},
-		Run: func(_ context.Context, args []string, _ *slog.Logger) error {
+		Run: func(ctx context.Context, args []string, _ *slog.Logger) error {
 			client, err := params.connect()
 			if err != nil {
 				return err
 			}
 
-			ctx, cancel := callContext()
+			ctx, cancel := callContext(ctx)
 			defer cancel()
 
 			var info serviceInfo
@@ -712,7 +712,7 @@ becomes ready, including indirect (transitive) dependencies.`,
 		Output:         func() any { return &depsResult{} },
 		Annotations:    cli.ReadOnly(),
 		RequiredGrants: []string{"command/ticket/deps"},
-		Run: func(_ context.Context, args []string, _ *slog.Logger) error {
+		Run: func(ctx context.Context, args []string, logger *slog.Logger) error {
 			if len(args) == 1 {
 				params.Ticket = args[0]
 			} else if len(args) > 1 {
@@ -727,7 +727,7 @@ becomes ready, including indirect (transitive) dependencies.`,
 				return err
 			}
 
-			ctx, cancel := callContext()
+			ctx, cancel := callContext(ctx)
 			defer cancel()
 
 			fields := map[string]any{"ticket": params.Ticket}
@@ -744,7 +744,7 @@ becomes ready, including indirect (transitive) dependencies.`,
 			}
 
 			if len(result.Deps) == 0 {
-				fmt.Fprintf(os.Stderr, "%s has no dependencies\n", params.Ticket)
+				logger.Info("no dependencies", "ticket", params.Ticket)
 				return nil
 			}
 
@@ -779,7 +779,7 @@ showing how many are closed out of the total.`,
 		Output:         func() any { return &childrenResult{} },
 		Annotations:    cli.ReadOnly(),
 		RequiredGrants: []string{"command/ticket/children"},
-		Run: func(_ context.Context, args []string, _ *slog.Logger) error {
+		Run: func(ctx context.Context, args []string, _ *slog.Logger) error {
 			if len(args) == 1 {
 				params.Ticket = args[0]
 			} else if len(args) > 1 {
@@ -794,7 +794,7 @@ showing how many are closed out of the total.`,
 				return err
 			}
 
-			ctx, cancel := callContext()
+			ctx, cancel := callContext(ctx)
 			defer cancel()
 
 			fields := map[string]any{"ticket": params.Ticket}
@@ -845,7 +845,7 @@ depth (irreducible sequential steps).`,
 		Output:         func() any { return &epicHealthResult{} },
 		Annotations:    cli.ReadOnly(),
 		RequiredGrants: []string{"command/ticket/epic-health"},
-		Run: func(_ context.Context, args []string, _ *slog.Logger) error {
+		Run: func(ctx context.Context, args []string, _ *slog.Logger) error {
 			if len(args) == 1 {
 				params.Ticket = args[0]
 			} else if len(args) > 1 {
@@ -860,7 +860,7 @@ depth (irreducible sequential steps).`,
 				return err
 			}
 
-			ctx, cancel := callContext()
+			ctx, cancel := callContext(ctx)
 			defer cancel()
 
 			fields := map[string]any{"ticket": params.Ticket}
@@ -892,7 +892,7 @@ depth (irreducible sequential steps).`,
 // roomScopedQuery handles the common pattern for room-scoped queries
 // that return a list of ticket entries: check room, call service,
 // output as JSON or table.
-func roomScopedQuery(connection TicketConnection, room, action, grant string, jsonOutput *cli.JSONOutput) error {
+func roomScopedQuery(ctx context.Context, logger *slog.Logger, connection TicketConnection, room, action, grant string, jsonOutput *cli.JSONOutput) error {
 	if room == "" {
 		return cli.Validation("--room is required")
 	}
@@ -902,7 +902,7 @@ func roomScopedQuery(connection TicketConnection, room, action, grant string, js
 		return err
 	}
 
-	ctx, cancel := callContext()
+	ctx, cancel := callContext(ctx)
 	defer cancel()
 
 	var entries []ticketEntry
@@ -915,7 +915,7 @@ func roomScopedQuery(connection TicketConnection, room, action, grant string, js
 	}
 
 	if len(entries) == 0 {
-		fmt.Fprintf(os.Stderr, "no %s tickets\n", action)
+		logger.Info("no tickets found", "action", action)
 		return nil
 	}
 
@@ -1082,13 +1082,13 @@ recurring tickets.`,
 		Output:         func() any { return &[]upcomingGateResult{} },
 		Annotations:    cli.ReadOnly(),
 		RequiredGrants: []string{"command/ticket/upcoming"},
-		Run: func(_ context.Context, args []string, _ *slog.Logger) error {
+		Run: func(ctx context.Context, args []string, logger *slog.Logger) error {
 			client, err := params.connect()
 			if err != nil {
 				return err
 			}
 
-			ctx, cancel := callContext()
+			ctx, cancel := callContext(ctx)
 			defer cancel()
 
 			fields := map[string]any{}
@@ -1106,7 +1106,7 @@ recurring tickets.`,
 			}
 
 			if len(results) == 0 {
-				fmt.Fprintln(os.Stderr, "no upcoming timer gates")
+				logger.Info("no upcoming timer gates")
 				return nil
 			}
 

@@ -66,7 +66,7 @@ without actually publishing.`,
 		Output:         func() any { return &pushResult{} },
 		RequiredGrants: []string{"command/pipeline/push"},
 		Annotations:    cli.Create(),
-		Run: func(_ context.Context, args []string, _ *slog.Logger) error {
+		Run: func(ctx context.Context, args []string, logger *slog.Logger) error {
 			// In CLI mode, pipeline ref and file come as positional arguments.
 			// In JSON/MCP mode, they're populated from the JSON input.
 			switch len(args) {
@@ -103,7 +103,7 @@ without actually publishing.`,
 			issues := pipelinedef.Validate(content)
 			if len(issues) > 0 {
 				for _, issue := range issues {
-					fmt.Fprintf(os.Stderr, "  - %s\n", issue)
+					logger.Warn("validation issue", "issue", issue)
 				}
 				return cli.Validation("%s: %d validation issue(s) found", filePath, len(issues))
 			}
@@ -114,7 +114,7 @@ without actually publishing.`,
 			}
 
 			// Connect to Matrix for room verification and publishing.
-			ctx, cancel, session, err := cli.ConnectOperator()
+			ctx, cancel, session, err := cli.ConnectOperator(ctx)
 			if err != nil {
 				return err
 			}

@@ -42,7 +42,7 @@ Shows each machine's name, public key, and last status heartbeat
 		Output:         func() any { return &[]MachineEntry{} },
 		RequiredGrants: []string{"command/machine/list"},
 		Annotations:    cli.ReadOnly(),
-		Run: func(_ context.Context, args []string, _ *slog.Logger) error {
+		Run: func(ctx context.Context, args []string, logger *slog.Logger) error {
 			if len(args) == 0 {
 				return cli.Validation("fleet localpart is required (e.g., bureau/fleet/prod)")
 			}
@@ -50,7 +50,7 @@ Shows each machine's name, public key, and last status heartbeat
 				return cli.Validation("expected exactly one argument (fleet localpart), got %d", len(args))
 			}
 
-			ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
+			ctx, cancel := context.WithTimeout(ctx, 30*time.Second)
 			defer cancel()
 
 			matrixSession, err := params.SessionConfig.Connect(ctx)
@@ -59,7 +59,7 @@ Shows each machine's name, public key, and last status heartbeat
 			}
 			defer matrixSession.Close()
 
-			return runList(ctx, matrixSession, args[0], &params.JSONOutput)
+			return runList(ctx, matrixSession, args[0], &params.JSONOutput, logger)
 		},
 	}
 }
@@ -165,7 +165,7 @@ func ListMachines(ctx context.Context, session messaging.Session, fleet ref.Flee
 	return entries, nil
 }
 
-func runList(ctx context.Context, session messaging.Session, fleetLocalpart string, jsonOutput *cli.JSONOutput) error {
+func runList(ctx context.Context, session messaging.Session, fleetLocalpart string, jsonOutput *cli.JSONOutput, logger *slog.Logger) error {
 	server, err := ref.ServerFromUserID(session.UserID().String())
 	if err != nil {
 		return cli.Internal("cannot determine server name from session: %w", err)
@@ -181,7 +181,7 @@ func runList(ctx context.Context, session messaging.Session, fleetLocalpart stri
 	}
 
 	if len(entries) == 0 {
-		fmt.Fprintln(os.Stderr, "No machines found in the fleet.")
+		logger.Info("no machines found in the fleet", "fleet", fleetLocalpart)
 		return nil
 	}
 

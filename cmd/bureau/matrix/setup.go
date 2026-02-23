@@ -76,7 +76,7 @@ by "bureau fleet enable" and resolved via the fleet prefix.`,
 		Annotations:    cli.Create(),
 		Params:         func() any { return &params },
 		RequiredGrants: []string{"command/matrix/setup"},
-		Run: func(_ context.Context, args []string, _ *slog.Logger) error {
+		Run: func(ctx context.Context, args []string, logger *slog.Logger) error {
 			if len(args) > 0 {
 				return cli.Validation("unexpected argument: %s", args[0])
 			}
@@ -108,12 +108,7 @@ by "bureau fleet enable" and resolved via the fleet prefix.`,
 			}
 			defer registrationToken.Close()
 
-			logger := slog.New(slog.NewJSONHandler(os.Stderr, &slog.HandlerOptions{
-				Level: slog.LevelInfo,
-			}))
-			slog.SetDefault(logger)
-
-			ctx, stop := signal.NotifyContext(context.Background(), syscall.SIGINT, syscall.SIGTERM)
+			ctx, stop := signal.NotifyContext(ctx, syscall.SIGINT, syscall.SIGTERM)
 			defer stop()
 
 			ctx, cancel := context.WithTimeout(ctx, 2*time.Minute)

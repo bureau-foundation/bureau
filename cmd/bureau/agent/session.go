@@ -8,7 +8,6 @@ import (
 	"encoding/json"
 	"fmt"
 	"log/slog"
-	"os"
 	"time"
 
 	"github.com/bureau-foundation/bureau/cmd/bureau/cli"
@@ -47,13 +46,13 @@ This is a direct view of the m.bureau.agent_session state event.`,
 		Output:         func() any { return &agentschema.AgentSessionContent{} },
 		RequiredGrants: []string{"command/agent/session"},
 		Annotations:    cli.ReadOnly(),
-		Run: requireLocalpart("bureau agent session <localpart> [--machine <machine>]", func(_ context.Context, localpart string, _ *slog.Logger) error {
-			return runSession(localpart, params)
+		Run: requireLocalpart("bureau agent session <localpart> [--machine <machine>]", func(ctx context.Context, localpart string, logger *slog.Logger) error {
+			return runSession(ctx, localpart, logger, params)
 		}),
 	}
 }
 
-func runSession(localpart string, params agentSessionParams) error {
+func runSession(ctx context.Context, localpart string, logger *slog.Logger, params agentSessionParams) error {
 	serverName, err := ref.ParseServerName(params.ServerName)
 	if err != nil {
 		return fmt.Errorf("invalid --server-name: %w", err)
@@ -64,7 +63,7 @@ func runSession(localpart string, params agentSessionParams) error {
 		return cli.Validation("invalid agent localpart: %v", err)
 	}
 
-	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
+	ctx, cancel := context.WithTimeout(ctx, 30*time.Second)
 	defer cancel()
 
 	session, err := params.SessionConfig.Connect(ctx)
@@ -97,7 +96,7 @@ func runSession(localpart string, params agentSessionParams) error {
 	}
 
 	if machine.IsZero() && machineCount > 0 {
-		fmt.Fprintf(os.Stderr, "resolved %s → %s (scanned %d machines)\n", localpart, location.Machine.Localpart(), machineCount)
+		logger.Info("resolved agent location", "localpart", localpart, "machine", location.Machine.Localpart(), "machines_scanned", machineCount)
 	}
 
 	sessionRaw, err := session.GetStateEvent(ctx, location.ConfigRoomID, agentschema.EventTypeAgentSession, localpart)

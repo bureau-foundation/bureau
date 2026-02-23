@@ -63,7 +63,7 @@ the password) or prompted interactively if --password-file is "-" or omitted.`,
 			},
 		},
 		Params: func() any { return &params },
-		Run: func(_ context.Context, args []string, _ *slog.Logger) error {
+		Run: func(ctx context.Context, args []string, logger *slog.Logger) error {
 			if len(args) < 1 {
 				return Validation("username is required\n\nUsage: bureau login <username> [flags]")
 			}
@@ -80,7 +80,7 @@ the password) or prompted interactively if --password-file is "-" or omitted.`,
 			}
 			defer passwordBuffer.Close()
 
-			ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
+			ctx, cancel := context.WithTimeout(ctx, 30*time.Second)
 			defer cancel()
 
 			client, err := messaging.NewClient(messaging.ClientConfig{
@@ -112,9 +112,7 @@ the password) or prompted interactively if --password-file is "-" or omitted.`,
 				return Internal("save session: %w", err)
 			}
 
-			path := SessionFilePath()
-			fmt.Fprintf(os.Stderr, "Logged in as %s\n", userID)
-			fmt.Fprintf(os.Stderr, "Session saved to %s\n", path)
+			logger.Info("logged in", "user_id", userID, "session_file", SessionFilePath())
 			return nil
 		},
 	}

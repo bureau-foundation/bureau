@@ -74,7 +74,7 @@ depending on the homeserver — this is by design for emergency revocation.`,
 		Params:         func() any { return &params },
 		RequiredGrants: []string{"command/machine/revoke"},
 		Annotations:    cli.Destructive(),
-		Run: func(_ context.Context, args []string, _ *slog.Logger) error {
+		Run: func(ctx context.Context, args []string, logger *slog.Logger) error {
 			if len(args) < 2 {
 				return cli.Validation("fleet localpart and machine name are required\n\nUsage: bureau machine revoke <fleet-localpart> <machine-name> [flags]")
 			}
@@ -85,7 +85,7 @@ depending on the homeserver — this is by design for emergency revocation.`,
 				return cli.Validation("--credential-file is required")
 			}
 
-			ctx, cancel := context.WithTimeout(context.Background(), 60*time.Second)
+			ctx, cancel := context.WithTimeout(ctx, 60*time.Second)
 			defer cancel()
 
 			genericSession, err := params.SessionConfig.Connect(ctx)
@@ -113,8 +113,7 @@ depending on the homeserver — this is by design for emergency revocation.`,
 				return cli.Validation("invalid machine name: %v", err)
 			}
 
-			logger := cli.NewCommandLogger().With(
-				"command", "machine/revoke",
+			logger = logger.With(
 				"fleet", fleet.Localpart(),
 				"machine", machine.Localpart(),
 			)

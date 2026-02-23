@@ -40,7 +40,7 @@ environments.`,
 		Output:         func() any { return &[]statusEntry{} },
 		RequiredGrants: []string{"command/environment/status"},
 		Annotations:    cli.ReadOnly(),
-		Run: func(_ context.Context, args []string, _ *slog.Logger) error {
+		Run: func(_ context.Context, args []string, logger *slog.Logger) error {
 			if len(args) > 0 {
 				return cli.Validation("unexpected argument: %s", args[0])
 			}
@@ -67,9 +67,8 @@ environments.`,
 			}
 
 			if len(entries) == 0 {
-				fmt.Fprintln(os.Stderr, "No environment profiles deployed.")
-				fmt.Fprintln(os.Stderr, "")
-				fmt.Fprintln(os.Stderr, "Build one with: bureau environment build <profile>")
+				logger.Info("no environment profiles deployed",
+					"hint", "build one with: bureau environment build <profile>")
 				return nil
 			}
 

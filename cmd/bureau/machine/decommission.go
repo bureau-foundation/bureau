@@ -8,7 +8,6 @@ import (
 	"encoding/json"
 	"fmt"
 	"log/slog"
-	"os"
 	"time"
 
 	"github.com/bureau-foundation/bureau/cmd/bureau/cli"
@@ -63,7 +62,7 @@ failure explicitly.`,
 		Params:         func() any { return &params },
 		RequiredGrants: []string{"command/machine/decommission"},
 		Annotations:    cli.Destructive(),
-		Run: func(_ context.Context, args []string, _ *slog.Logger) error {
+		Run: func(ctx context.Context, args []string, logger *slog.Logger) error {
 			if len(args) < 2 {
 				return cli.Validation("fleet localpart and machine name are required\n\nUsage: bureau machine decommission <fleet-localpart> <machine-name> [flags]")
 			}
@@ -74,7 +73,7 @@ failure explicitly.`,
 				return cli.Validation("--credential-file is required")
 			}
 
-			ctx, cancel := context.WithTimeout(context.Background(), 60*time.Second)
+			ctx, cancel := context.WithTimeout(ctx, 60*time.Second)
 			defer cancel()
 
 			genericSession, err := params.SessionConfig.Connect(ctx)
@@ -101,8 +100,7 @@ failure explicitly.`,
 				return cli.Validation("invalid machine name: %v", err)
 			}
 
-			logger := cli.NewCommandLogger().With(
-				"command", "machine/decommission",
+			logger = logger.With(
 				"fleet", fleet.Localpart(),
 				"machine", machine.Localpart(),
 			)
@@ -113,9 +111,10 @@ failure explicitly.`,
 				return err
 			}
 
-			// User-facing re-provision hint stays as CLI display text.
-			fmt.Fprintf(os.Stderr, "To re-provision, run: bureau machine provision %s %s --credential-file <creds>\n",
-				fleet.Localpart(), machine.Name())
+			logger.Info("to re-provision, run: bureau machine provision <fleet> <machine> --credential-file <creds>",
+				"fleet", fleet.Localpart(),
+				"machine", machine.Name(),
+			)
 
 			return nil
 		},

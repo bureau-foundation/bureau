@@ -5,6 +5,7 @@ package integration_test
 
 import (
 	"encoding/json"
+	"log/slog"
 	"testing"
 
 	ticketcmd "github.com/bureau-foundation/bureau/cmd/bureau/ticket"
@@ -630,7 +631,7 @@ func deployTicketService(t *testing.T, admin *messaging.DirectSession, fleet *te
 func enableTicketsInRoom(t *testing.T, admin *messaging.DirectSession, roomID ref.RoomID, ticketService ticketServiceDeployment, prefix string, allowedTypes []string) {
 	t.Helper()
 
-	if err := ticketcmd.ConfigureRoom(t.Context(), admin, roomID, ticketService.Entity, ticketcmd.ConfigureRoomParams{
+	if err := ticketcmd.ConfigureRoom(t.Context(), slog.Default(), admin, roomID, ticketService.Entity, ticketcmd.ConfigureRoomParams{
 		Prefix:       prefix,
 		AllowedTypes: allowedTypes,
 	}); err != nil {
@@ -656,7 +657,7 @@ func createTicketProjectRoom(t *testing.T, admin *messaging.DirectSession, name 
 		t.Fatalf("create room %s: %v", name, err)
 	}
 
-	if err := ticketcmd.ConfigureRoom(ctx, admin, room.RoomID, ticketServiceEntity, ticketcmd.ConfigureRoomParams{
+	if err := ticketcmd.ConfigureRoom(ctx, slog.Default(), admin, room.RoomID, ticketServiceEntity, ticketcmd.ConfigureRoomParams{
 		Prefix: "tkt",
 	}); err != nil {
 		t.Fatalf("configure tickets in room %s: %v", name, err)

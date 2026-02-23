@@ -71,7 +71,7 @@ Press Ctrl-C to stop.`,
 		Annotations:    cli.ReadOnly(),
 		Params:         func() any { return &params },
 		RequiredGrants: []string{"command/matrix/watch"},
-		Run: func(_ context.Context, args []string, _ *slog.Logger) error {
+		Run: func(ctx context.Context, args []string, _ *slog.Logger) error {
 			if len(args) == 1 {
 				params.Room = args[0]
 			} else if len(args) > 1 {
@@ -84,7 +84,7 @@ Press Ctrl-C to stop.`,
 			// Use a signal-aware context for clean Ctrl-C shutdown. The
 			// 30-second timeout used by other commands is not appropriate
 			// here — watch runs indefinitely until interrupted.
-			ctx, stop := signal.NotifyContext(context.Background(), syscall.SIGINT, syscall.SIGTERM)
+			ctx, stop := signal.NotifyContext(ctx, syscall.SIGINT, syscall.SIGTERM)
 			defer stop()
 
 			session, err := params.SessionConfig.Connect(ctx)

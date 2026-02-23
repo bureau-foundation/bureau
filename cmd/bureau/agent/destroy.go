@@ -7,7 +7,6 @@ import (
 	"context"
 	"fmt"
 	"log/slog"
-	"os"
 	"time"
 
 	"github.com/bureau-foundation/bureau/cmd/bureau/cli"
@@ -65,19 +64,19 @@ state event trail remain intact for auditing.`,
 		Output:         func() any { return &agentDestroyResult{} },
 		RequiredGrants: []string{"command/agent/destroy"},
 		Annotations:    cli.Destructive(),
-		Run: requireLocalpart("bureau agent destroy <localpart> [--machine <machine>]", func(_ context.Context, localpart string, _ *slog.Logger) error {
-			return runDestroy(localpart, params)
+		Run: requireLocalpart("bureau agent destroy <localpart> [--machine <machine>]", func(ctx context.Context, localpart string, logger *slog.Logger) error {
+			return runDestroy(ctx, localpart, logger, params)
 		}),
 	}
 }
 
-func runDestroy(localpart string, params agentDestroyParams) error {
+func runDestroy(ctx context.Context, localpart string, logger *slog.Logger, params agentDestroyParams) error {
 	serverName, err := ref.ParseServerName(params.ServerName)
 	if err != nil {
 		return fmt.Errorf("invalid --server-name: %w", err)
 	}
 
-	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
+	ctx, cancel := context.WithTimeout(ctx, 30*time.Second)
 	defer cancel()
 
 	session, err := params.SessionConfig.Connect(ctx)
@@ -110,7 +109,7 @@ func runDestroy(localpart string, params agentDestroyParams) error {
 	}
 
 	if machine.IsZero() && machineCount > 0 {
-		fmt.Fprintf(os.Stderr, "resolved %s → %s (scanned %d machines)\n", localpart, location.Machine.Localpart(), machineCount)
+		logger.Info("resolved agent location", "localpart", localpart, "machine", location.Machine.Localpart(), "machines_scanned", machineCount)
 	}
 
 	destroyResult, err := principal.Destroy(ctx, session, location.ConfigRoomID, location.Machine, localpart)
@@ -125,7 +124,7 @@ func runDestroy(localpart string, params agentDestroyParams) error {
 			schema.EventTypeCredentials, localpart, struct{}{})
 		if err != nil {
 			// Non-fatal — the assignment is already removed.
-			fmt.Fprintf(os.Stderr, "warning: failed to purge credentials: %v\n", err)
+			logger.Warn("failed to purge credentials", "localpart", localpart, "error", err)
 		} else {
 			purged = true
 		}
@@ -141,12 +140,12 @@ func runDestroy(localpart string, params agentDestroyParams) error {
 		return err
 	}
 
-	fmt.Fprintf(os.Stderr, "Removed %s from %s\n", localpart, location.Machine.Localpart())
-	if purged {
-		fmt.Fprintf(os.Stderr, "  Credentials purged\n")
-	}
-	fmt.Fprintf(os.Stderr, "  Config event: %s\n", destroyResult.ConfigEventID)
-	fmt.Fprintf(os.Stderr, "\nThe daemon will tear down the sandbox on its next reconciliation cycle.\n")
+	logger.Info("agent assignment removed",
+		"localpart", localpart,
+		"machine", location.Machine.Localpart(),
+		"config_event", destroyResult.ConfigEventID,
+		"purged", purged,
+	)
 
 	return nil
 }

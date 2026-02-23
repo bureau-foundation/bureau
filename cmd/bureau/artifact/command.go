@@ -209,8 +209,7 @@ unrecognized extensions.`,
 		Output:         func() any { return &artifactstore.StoreResponse{} },
 		Annotations:    cli.Create(),
 		RequiredGrants: []string{"command/artifact/store"},
-		Run: func(_ context.Context, args []string, _ *slog.Logger) error {
-			ctx := context.Background()
+		Run: func(ctx context.Context, args []string, logger *slog.Logger) error {
 			client, err := params.connect()
 			if err != nil {
 				return err
@@ -281,13 +280,11 @@ unrecognized extensions.`,
 				return err
 			}
 
-			// Print push results to stderr so stdout remains
-			// just the ref (for composability with pipelines).
 			for _, result := range response.PushResults {
 				if result.OK {
-					fmt.Fprintf(os.Stderr, "pushed to %s\n", result.Target)
+					logger.Info("pushed artifact", "target", result.Target)
 				} else {
-					fmt.Fprintf(os.Stderr, "push to %s failed: %s\n", result.Target, result.Error)
+					logger.Warn("push failed", "target", result.Target, "error", result.Error)
 				}
 			}
 
@@ -328,12 +325,11 @@ The ref can be a full hash, short ref (art-<hex>), or tag name.`,
 		Params:         func() any { return &params },
 		Annotations:    cli.ReadOnly(),
 		RequiredGrants: []string{"command/artifact/fetch"},
-		Run: func(_ context.Context, args []string, _ *slog.Logger) error {
+		Run: func(ctx context.Context, args []string, _ *slog.Logger) error {
 			if len(args) == 0 {
 				return cli.Validation("ref argument required\n\nUsage: bureau artifact fetch <ref> [flags]")
 			}
 
-			ctx := context.Background()
 			client, err := params.connect()
 			if err != nil {
 				return err
@@ -397,12 +393,11 @@ storage details.`,
 		Output:         func() any { return &artifactstore.ArtifactMetadata{} },
 		Annotations:    cli.ReadOnly(),
 		RequiredGrants: []string{"command/artifact/show"},
-		Run: func(_ context.Context, args []string, _ *slog.Logger) error {
+		Run: func(ctx context.Context, args []string, _ *slog.Logger) error {
 			if len(args) == 0 {
 				return cli.Validation("ref argument required\n\nUsage: bureau artifact show <ref> [flags]")
 			}
 
-			ctx := context.Background()
 			client, err := params.connect()
 			if err != nil {
 				return err
@@ -468,12 +463,11 @@ func existsCommand() *cli.Command {
 		Output:         func() any { return &artifactstore.ExistsResponse{} },
 		Annotations:    cli.ReadOnly(),
 		RequiredGrants: []string{"command/artifact/exists"},
-		Run: func(_ context.Context, args []string, _ *slog.Logger) error {
+		Run: func(ctx context.Context, args []string, logger *slog.Logger) error {
 			if len(args) == 0 {
 				return cli.Validation("ref argument required\n\nUsage: bureau artifact exists <ref> [flags]")
 			}
 
-			ctx := context.Background()
 			client, err := params.connect()
 			if err != nil {
 				return err
@@ -493,7 +487,7 @@ func existsCommand() *cli.Command {
 				return nil
 			}
 
-			fmt.Fprintf(os.Stderr, "not found: %s\n", args[0])
+			logger.Info("artifact not found", "ref", args[0])
 			return &cli.ExitError{Code: 1}
 		},
 	}
@@ -546,8 +540,7 @@ are sorted by storage time (newest first).`,
 		Output:         func() any { return &artifactstore.ListResponse{} },
 		Annotations:    cli.ReadOnly(),
 		RequiredGrants: []string{"command/artifact/list"},
-		Run: func(_ context.Context, args []string, _ *slog.Logger) error {
-			ctx := context.Background()
+		Run: func(ctx context.Context, args []string, logger *slog.Logger) error {
 			client, err := params.connect()
 			if err != nil {
 				return err
@@ -589,8 +582,10 @@ are sorted by storage time (newest first).`,
 			writer.Flush()
 
 			if response.Total > len(response.Artifacts) {
-				fmt.Fprintf(os.Stderr, "\nShowing %d of %d artifacts.\n",
-					len(response.Artifacts), response.Total)
+				logger.Info("showing partial results",
+					"shown", len(response.Artifacts),
+					"total", response.Total,
+				)
 			}
 			return nil
 		},
@@ -637,12 +632,11 @@ specify the previous target hash for CAS updates.`,
 		Output:         func() any { return &artifactstore.TagResponse{} },
 		Annotations:    cli.Idempotent(),
 		RequiredGrants: []string{"command/artifact/tag"},
-		Run: func(_ context.Context, args []string, _ *slog.Logger) error {
+		Run: func(ctx context.Context, args []string, _ *slog.Logger) error {
 			if len(args) < 2 {
 				return cli.Validation("name and ref arguments required\n\nUsage: bureau artifact tag <name> <ref> [flags]")
 			}
 
-			ctx := context.Background()
 			client, err := params.connect()
 			if err != nil {
 				return err
@@ -684,12 +678,11 @@ always the full ref.`,
 		Output:         func() any { return &artifactstore.ResolveResponse{} },
 		Annotations:    cli.ReadOnly(),
 		RequiredGrants: []string{"command/artifact/resolve"},
-		Run: func(_ context.Context, args []string, _ *slog.Logger) error {
+		Run: func(ctx context.Context, args []string, _ *slog.Logger) error {
 			if len(args) == 0 {
 				return cli.Validation("ref argument required\n\nUsage: bureau artifact resolve <ref> [flags]")
 			}
 
-			ctx := context.Background()
 			client, err := params.connect()
 			if err != nil {
 				return err
@@ -740,8 +733,7 @@ func tagsCommand() *cli.Command {
 		Output:         func() any { return &artifactstore.TagsResponse{} },
 		Annotations:    cli.ReadOnly(),
 		RequiredGrants: []string{"command/artifact/tags"},
-		Run: func(_ context.Context, args []string, _ *slog.Logger) error {
-			ctx := context.Background()
+		Run: func(ctx context.Context, args []string, _ *slog.Logger) error {
 			client, err := params.connect()
 			if err != nil {
 				return err
@@ -788,12 +780,11 @@ func deleteTagCommand() *cli.Command {
 		Params:         func() any { return &params },
 		Annotations:    cli.Destructive(),
 		RequiredGrants: []string{"command/artifact/delete-tag"},
-		Run: func(_ context.Context, args []string, _ *slog.Logger) error {
+		Run: func(ctx context.Context, args []string, _ *slog.Logger) error {
 			if len(args) == 0 {
 				return cli.Validation("tag name required\n\nUsage: bureau artifact delete-tag <name> [flags]")
 			}
 
-			ctx := context.Background()
 			client, err := params.connect()
 			if err != nil {
 				return err
@@ -837,12 +828,11 @@ func pinToggleCommand(
 		Output:         func() any { return &artifactstore.PinResponse{} },
 		Annotations:    annotations,
 		RequiredGrants: []string{"command/artifact/" + name},
-		Run: func(_ context.Context, args []string, _ *slog.Logger) error {
+		Run: func(ctx context.Context, args []string, _ *slog.Logger) error {
 			if len(args) == 0 {
 				return cli.Validation("ref argument required\n\nUsage: %s", usage)
 			}
 
-			ctx := context.Background()
 			client, err := params.connect()
 			if err != nil {
 				return err
@@ -906,8 +896,7 @@ Use --dry-run to see what would be removed without actually deleting.`,
 		Output:         func() any { return &artifactstore.GCResponse{} },
 		Annotations:    cli.Destructive(),
 		RequiredGrants: []string{"command/artifact/gc"},
-		Run: func(_ context.Context, args []string, _ *slog.Logger) error {
-			ctx := context.Background()
+		Run: func(ctx context.Context, args []string, _ *slog.Logger) error {
 			client, err := params.connect()
 			if err != nil {
 				return err
@@ -957,8 +946,7 @@ authentication — it is a health check.`,
 		Output:         func() any { return &artifactstore.StatusResponse{} },
 		Annotations:    cli.ReadOnly(),
 		RequiredGrants: []string{"command/artifact/status"},
-		Run: func(_ context.Context, args []string, _ *slog.Logger) error {
-			ctx := context.Background()
+		Run: func(ctx context.Context, args []string, _ *slog.Logger) error {
 			// Status is unauthenticated — use token if available,
 			// but don't fail if the token file is missing.
 			client, err := params.connect()

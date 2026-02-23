@@ -10,7 +10,6 @@ import (
 	"encoding/json"
 	"fmt"
 	"log/slog"
-	"os"
 	"strings"
 	"time"
 
@@ -97,7 +96,7 @@ accidental or intentional spoofing of active machines.`,
 		Params:         func() any { return &params },
 		RequiredGrants: []string{"command/machine/provision"},
 		Annotations:    cli.Create(),
-		Run: func(_ context.Context, args []string, _ *slog.Logger) error {
+		Run: func(ctx context.Context, args []string, logger *slog.Logger) error {
 			if len(args) < 2 {
 				return cli.Validation("fleet localpart and machine name are required\n\nUsage: bureau machine provision <fleet-localpart> <machine-name> [flags]")
 			}
@@ -108,7 +107,7 @@ accidental or intentional spoofing of active machines.`,
 				return cli.Validation("--credential-file is required")
 			}
 
-			ctx, cancel := context.WithTimeout(context.Background(), 60*time.Second)
+			ctx, cancel := context.WithTimeout(ctx, 60*time.Second)
 			defer cancel()
 
 			// Connect for admin operations (room management, invites,
@@ -172,8 +171,7 @@ accidental or intentional spoofing of active machines.`,
 				return cli.Validation("invalid machine name: %v", err)
 			}
 
-			logger := cli.NewCommandLogger().With(
-				"command", "machine/provision",
+			logger = logger.With(
 				"fleet", fleet.Localpart(),
 				"machine", machine.Localpart(),
 			)
@@ -187,23 +185,19 @@ accidental or intentional spoofing of active machines.`,
 				return err
 			}
 
-			// User-facing output: bootstrap config and next-step instructions.
-			// These stay as fmt.Fprintf because they are CLI display text,
-			// not operational logging.
 			if params.OutputPath != "" {
 				if err := bootstrap.WriteConfig(params.OutputPath, result.Config); err != nil {
 					return cli.Internal("write bootstrap config: %w", err)
 				}
-				fmt.Fprintf(os.Stderr, "\nBootstrap config written to %s\n", params.OutputPath)
+				logger.Info("bootstrap config written", "path", params.OutputPath)
 			} else {
 				if err := bootstrap.WriteToStdout(result.Config); err != nil {
 					return cli.Internal("write bootstrap config to stdout: %w", err)
 				}
 			}
 
-			fmt.Fprintf(os.Stderr, "\nTransfer the bootstrap config to the new machine and run:\n")
-			fmt.Fprintf(os.Stderr, "  bureau-launcher --bootstrap-file <config> --first-boot-only\n")
-			fmt.Fprintf(os.Stderr, "\nThe one-time password will be rotated on first boot.\n")
+			logger.Info("transfer the bootstrap config to the new machine and run: bureau-launcher --bootstrap-file <config> --first-boot-only")
+			logger.Info("the one-time password will be rotated on first boot")
 
 			return nil
 		},

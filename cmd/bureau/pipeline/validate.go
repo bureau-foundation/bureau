@@ -55,7 +55,7 @@ before validation.`,
 		Output:         func() any { return &validationResult{} },
 		RequiredGrants: []string{"command/pipeline/validate"},
 		Annotations:    cli.ReadOnly(),
-		Run: func(_ context.Context, args []string, _ *slog.Logger) error {
+		Run: func(_ context.Context, args []string, logger *slog.Logger) error {
 			if len(args) != 1 {
 				return cli.Validation("usage: bureau pipeline validate <file>")
 			}
@@ -78,7 +78,7 @@ before validation.`,
 
 			if len(issues) > 0 {
 				for _, issue := range issues {
-					fmt.Fprintf(os.Stderr, "  - %s\n", issue)
+					logger.Warn("validation issue", "issue", issue)
 				}
 				return cli.Validation("%s: %d validation issue(s) found", path, len(issues))
 			}

@@ -8,7 +8,6 @@ import (
 	"encoding/json"
 	"fmt"
 	"log/slog"
-	"os"
 	"strconv"
 	"strings"
 	"time"
@@ -124,7 +123,7 @@ All worktrees in a project share a single bare git object store at
 		Output:         func() any { return &CreateResult{} },
 		RequiredGrants: []string{"command/workspace/create"},
 		Annotations:    cli.Create(),
-		Run: func(_ context.Context, args []string, _ *slog.Logger) error {
+		Run: func(ctx context.Context, args []string, logger *slog.Logger) error {
 			// In CLI mode, alias comes as a positional argument.
 			// In JSON/MCP mode, it's populated from the JSON input.
 			if len(args) == 1 {
@@ -145,20 +144,18 @@ All worktrees in a project share a single bare git object store at
 				return cli.Validation("--agent-count must be non-negative, got %d", params.AgentCount)
 			}
 
-			return runCreate(params.Alias, &params.SessionConfig, params.Machine, params.Template, params.Param, params.ServerName, params.AgentCount, &params.JSONOutput)
+			return runCreate(ctx, logger, params.Alias, &params.SessionConfig, params.Machine, params.Template, params.Param, params.ServerName, params.AgentCount, &params.JSONOutput)
 		},
 	}
 }
 
 // runCreate is the CLI wrapper: resolves "local" machine, parses raw
 // params, connects a session, calls Create, and formats the output.
-func runCreate(alias string, sessionConfig *cli.SessionConfig, machineName, templateRef string, rawParams []string, serverNameString string, agentCount int, jsonOutput *cli.JSONOutput) error {
+func runCreate(ctx context.Context, logger *slog.Logger, alias string, sessionConfig *cli.SessionConfig, machineName, templateRef string, rawParams []string, serverNameString string, agentCount int, jsonOutput *cli.JSONOutput) error {
 	serverName, err := ref.ParseServerName(serverNameString)
 	if err != nil {
 		return fmt.Errorf("invalid --server-name: %w", err)
 	}
-
-	logger := cli.NewCommandLogger().With("command", "workspace/create", "alias", alias)
 
 	// Resolve "local" to the actual machine localpart from the launcher's
 	// session file.
@@ -183,7 +180,7 @@ func runCreate(alias string, sessionConfig *cli.SessionConfig, machineName, temp
 		return err
 	}
 
-	ctx, cancel := context.WithTimeout(context.Background(), 60*time.Second)
+	ctx, cancel := context.WithTimeout(ctx, 60*time.Second)
 	defer cancel()
 
 	session, err := sessionConfig.Connect(ctx)
@@ -207,20 +204,15 @@ func runCreate(alias string, sessionConfig *cli.SessionConfig, machineName, temp
 		return emitError
 	}
 
-	fmt.Fprintf(os.Stderr, "Workspace created:\n")
-	fmt.Fprintf(os.Stderr, "  Room:     %s (%s)\n", result.RoomAlias, result.RoomID)
-	fmt.Fprintf(os.Stderr, "  Project:  %s\n", result.Project)
-	if result.Repository != "" {
-		fmt.Fprintf(os.Stderr, "  Repo:     %s (branch: %s)\n", result.Repository, result.Branch)
-	}
-	fmt.Fprintf(os.Stderr, "  Machine:  %s\n", result.Machine)
-	fmt.Fprintf(os.Stderr, "  Principals:\n")
-	for _, name := range result.Principals {
-		fmt.Fprintf(os.Stderr, "    %s\n", name)
-	}
-	fmt.Fprintf(os.Stderr, "\nNext steps:\n")
-	fmt.Fprintf(os.Stderr, "  1. Provision credentials: bureau-credentials provision --principal <localpart> --machine %s ...\n", machineName)
-	fmt.Fprintf(os.Stderr, "  2. Observe setup: bureau observe %s/setup\n", alias)
+	logger.Info("workspace created",
+		"room_alias", result.RoomAlias,
+		"room_id", result.RoomID,
+		"project", result.Project,
+		"repository", result.Repository,
+		"branch", result.Branch,
+		"machine", result.Machine,
+		"principals", result.Principals,
+	)
 
 	return nil
 }

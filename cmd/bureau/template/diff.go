@@ -61,7 +61,7 @@ content, not the resolved inheritance chain — use "bureau template show
 		Output:         func() any { return &diffResult{} },
 		RequiredGrants: []string{"command/template/diff"},
 		Annotations:    cli.ReadOnly(),
-		Run: func(_ context.Context, args []string, _ *slog.Logger) error {
+		Run: func(ctx context.Context, args []string, _ *slog.Logger) error {
 			// In CLI mode, template ref and file come as positional arguments.
 			// In JSON/MCP mode, they're populated from the JSON input.
 			switch len(args) {
@@ -96,7 +96,7 @@ content, not the resolved inheritance chain — use "bureau template show
 			}
 
 			// Fetch the Matrix version.
-			ctx, cancel, session, err := cli.ConnectOperator()
+			ctx, cancel, session, err := cli.ConnectOperator(ctx)
 			if err != nil {
 				return err
 			}

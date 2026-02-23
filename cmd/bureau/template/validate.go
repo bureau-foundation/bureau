@@ -53,7 +53,7 @@ Use "bureau template show --raw" to export a template for editing.`,
 		Output:         func() any { return &templateValidationResult{} },
 		RequiredGrants: []string{"command/template/validate"},
 		Annotations:    cli.ReadOnly(),
-		Run: func(_ context.Context, args []string, _ *slog.Logger) error {
+		Run: func(_ context.Context, args []string, logger *slog.Logger) error {
 			if len(args) != 1 {
 				return cli.Validation("usage: bureau template validate <file>")
 			}
@@ -76,7 +76,7 @@ Use "bureau template show --raw" to export a template for editing.`,
 
 			if len(issues) > 0 {
 				for _, issue := range issues {
-					fmt.Fprintf(os.Stderr, "  - %s\n", issue)
+					logger.Warn("validation issue", "issue", issue)
 				}
 				return cli.Validation("%s: %d validation issue(s) found", path, len(issues))
 			}

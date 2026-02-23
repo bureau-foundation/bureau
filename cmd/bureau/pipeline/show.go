@@ -47,7 +47,7 @@ see is what the executor runs.`,
 		Params:         func() any { return &params },
 		RequiredGrants: []string{"command/pipeline/show"},
 		Annotations:    cli.ReadOnly(),
-		Run: func(_ context.Context, args []string, _ *slog.Logger) error {
+		Run: func(ctx context.Context, args []string, _ *slog.Logger) error {
 			// In CLI mode, pipeline ref comes as a positional argument.
 			// In JSON/MCP mode, it's populated from the JSON input.
 			if len(args) == 1 {
@@ -69,7 +69,7 @@ see is what the executor runs.`,
 				return fmt.Errorf("invalid --server-name: %w", err)
 			}
 
-			ctx, cancel, session, err := cli.ConnectOperator()
+			ctx, cancel, session, err := cli.ConnectOperator(ctx)
 			if err != nil {
 				return err
 			}

@@ -133,7 +133,7 @@ Use "bureau matrix room leave" separately to remove the room.`,
 		Params:         func() any { return &params },
 		RequiredGrants: []string{"command/workspace/destroy"},
 		Annotations:    cli.Destructive(),
-		Run: func(_ context.Context, args []string, _ *slog.Logger) error {
+		Run: func(ctx context.Context, args []string, logger *slog.Logger) error {
 			if len(args) == 0 {
 				return cli.Validation("workspace alias is required\n\nUsage: bureau workspace destroy <alias> [flags]")
 			}
@@ -149,7 +149,7 @@ Use "bureau matrix room leave" separately to remove the room.`,
 				return fmt.Errorf("invalid --server-name: %w", err)
 			}
 
-			ctx, cancel := context.WithTimeout(context.Background(), 60*time.Second)
+			ctx, cancel := context.WithTimeout(ctx, 60*time.Second)
 			defer cancel()
 
 			session, err := params.SessionConfig.Connect(ctx)
@@ -167,9 +167,7 @@ Use "bureau matrix room leave" separately to remove the room.`,
 				return err
 			}
 
-			fmt.Fprintf(os.Stderr, "Workspace %s transitioning to teardown (mode=%s)\n", args[0], params.Mode)
-			fmt.Fprintf(os.Stderr, "  Agents gated on \"active\" will stop on next reconcile cycle.\n")
-			fmt.Fprintf(os.Stderr, "  Teardown principal will start and run the deinit pipeline.\n")
+			logger.Info("workspace transitioning to teardown", "alias", args[0], "mode", params.Mode)
 			return nil
 		},
 	}
@@ -248,8 +246,8 @@ access to the workspace filesystem.`,
 		Output:         func() any { return &[]workspaceInfo{} },
 		RequiredGrants: []string{"command/workspace/list"},
 		Annotations:    cli.ReadOnly(),
-		Run: func(_ context.Context, args []string, _ *slog.Logger) error {
-			return runList(args, &params.JSONOutput)
+		Run: func(ctx context.Context, args []string, logger *slog.Logger) error {
+			return runList(ctx, args, logger, &params.JSONOutput)
 		},
 	}
 }
@@ -263,14 +261,14 @@ type workspaceInfo struct {
 	Status     string `json:"status"               desc:"workspace lifecycle status"`
 }
 
-func runList(args []string, jsonOutput *cli.JSONOutput) error {
+func runList(ctx context.Context, args []string, logger *slog.Logger, jsonOutput *cli.JSONOutput) error {
 	// Use a 60-second timeout — this scans all joined rooms, issuing
 	// one GetRoomState call per room. For a fleet with many rooms this
 	// can take a while.
-	ctx, cancel := context.WithTimeout(context.Background(), 60*time.Second)
+	ctx, cancel := context.WithTimeout(ctx, 60*time.Second)
 	defer cancel()
 
-	_, operatorCancel, session, err := cli.ConnectOperator()
+	_, operatorCancel, session, err := cli.ConnectOperator(ctx)
 	if err != nil {
 		return err
 	}
@@ -397,7 +395,7 @@ type workspaceAliasParams struct {
 
 // aliasRunFunc is the signature for workspace commands that operate on
 // a single alias with the standard server-name and json flags.
-type aliasRunFunc func(alias string, serverName ref.ServerName, jsonOutput *cli.JSONOutput) error
+type aliasRunFunc func(ctx context.Context, logger *slog.Logger, alias string, serverName ref.ServerName, jsonOutput *cli.JSONOutput) error
 
 // aliasCommand constructs a workspace subcommand that takes a single
 // positional alias argument and the standard workspaceAliasParams flags.
@@ -411,7 +409,7 @@ func aliasCommand(name, summary, description, usage, grant string, annotations *
 		RequiredGrants: []string{grant},
 		Annotations:    annotations,
 		Params:         func() any { return &params },
-		Run: func(_ context.Context, args []string, _ *slog.Logger) error {
+		Run: func(ctx context.Context, args []string, logger *slog.Logger) error {
 			if len(args) == 0 {
 				return cli.Validation("workspace alias is required\n\nUsage: %s", usage)
 			}
@@ -422,7 +420,7 @@ func aliasCommand(name, summary, description, usage, grant string, annotations *
 			if err != nil {
 				return fmt.Errorf("invalid --server-name: %w", err)
 			}
-			return run(args[0], serverName, &params.JSONOutput)
+			return run(ctx, logger, args[0], serverName, &params.JSONOutput)
 		},
 	}
 }
@@ -442,8 +440,8 @@ it and replies via Matrix.`,
 		runStatus)
 }
 
-func runStatus(alias string, serverName ref.ServerName, jsonOutput *cli.JSONOutput) error {
-	ctx, cancel, session, err := cli.ConnectOperator()
+func runStatus(ctx context.Context, logger *slog.Logger, alias string, serverName ref.ServerName, jsonOutput *cli.JSONOutput) error {
+	ctx, cancel, session, err := cli.ConnectOperator(ctx)
 	if err != nil {
 		return err
 	}
@@ -504,8 +502,8 @@ each worktree, .shared/ (virtualenvs, build caches), and .cache/
 		runDu)
 }
 
-func runDu(alias string, serverName ref.ServerName, jsonOutput *cli.JSONOutput) error {
-	ctx, cancel, session, err := cli.ConnectOperator()
+func runDu(ctx context.Context, logger *slog.Logger, alias string, serverName ref.ServerName, jsonOutput *cli.JSONOutput) error {
+	ctx, cancel, session, err := cli.ConnectOperator(ctx)
 	if err != nil {
 		return err
 	}
@@ -617,7 +615,7 @@ step progress. Use --no-wait to return immediately after acceptance.`,
 		Output:         func() any { return &worktreeAddResult{} },
 		RequiredGrants: []string{"command/workspace/worktree/add"},
 		Annotations:    cli.Create(),
-		Run: func(_ context.Context, args []string, _ *slog.Logger) error {
+		Run: func(ctx context.Context, args []string, logger *slog.Logger) error {
 			if len(args) == 0 {
 				return cli.Validation("worktree alias is required\n\nUsage: bureau workspace worktree add <alias>")
 			}
@@ -628,17 +626,17 @@ step progress. Use --no-wait to return immediately after acceptance.`,
 			if err != nil {
 				return fmt.Errorf("invalid --server-name: %w", err)
 			}
-			return runWorktreeAdd(args[0], params.Branch, params.Wait, serverName, &params.JSONOutput)
+			return runWorktreeAdd(ctx, logger, args[0], params.Branch, params.Wait, serverName, &params.JSONOutput)
 		},
 	}
 }
 
-func runWorktreeAdd(alias, branch string, wait bool, serverName ref.ServerName, jsonOutput *cli.JSONOutput) error {
+func runWorktreeAdd(ctx context.Context, logger *slog.Logger, alias, branch string, wait bool, serverName ref.ServerName, jsonOutput *cli.JSONOutput) error {
 	if err := principal.ValidateLocalpart(alias); err != nil {
 		return cli.Validation("invalid worktree alias: %w", err)
 	}
 
-	ctx, cancel, session, err := cli.ConnectOperator()
+	ctx, cancel, session, err := cli.ConnectOperator(ctx)
 	if err != nil {
 		return err
 	}
@@ -695,9 +693,9 @@ func runWorktreeAdd(alias, branch string, wait bool, serverName ref.ServerName, 
 	// can take a while for large repos.
 	conclusion := ""
 	if wait && !result.TicketID.IsZero() {
-		fmt.Fprintf(os.Stderr, "Worktree add accepted for %s, waiting for pipeline...\n", alias)
+		logger.Info("worktree add accepted, waiting for pipeline", "alias", alias)
 
-		watchCtx, watchCancel := context.WithTimeout(context.Background(), 5*time.Minute)
+		watchCtx, watchCancel := context.WithTimeout(ctx, 5*time.Minute)
 		defer watchCancel()
 
 		final, watchError := command.WatchTicket(watchCtx, command.WatchTicketParams{
@@ -728,16 +726,9 @@ func runWorktreeAdd(alias, branch string, wait bool, serverName ref.ServerName, 
 	}
 
 	if conclusion != "" {
-		// Waited for completion — print the outcome.
-		fmt.Fprintf(os.Stderr, "Worktree %s %s\n", alias, conclusion)
+		logger.Info("worktree add completed", "alias", alias, "conclusion", conclusion)
 	} else {
-		// Fire-and-forget — print acceptance info with follow-up hint.
-		fmt.Fprintf(os.Stderr, "Worktree add accepted for %s\n", alias)
-		fmt.Fprintf(os.Stderr, "  workspace: %s\n", workspaceAlias)
-		fmt.Fprintf(os.Stderr, "  subpath:   %s\n", worktreeSubpath)
-		if branch != "" {
-			fmt.Fprintf(os.Stderr, "  branch:    %s\n", branch)
-		}
+		logger.Info("worktree add accepted", "alias", alias, "workspace", workspaceAlias, "subpath", worktreeSubpath, "branch", branch)
 		result.WriteAcceptedHint(os.Stderr)
 	}
 
@@ -785,7 +776,7 @@ to return immediately after acceptance.`,
 		Output:         func() any { return &worktreeRemoveResult{} },
 		RequiredGrants: []string{"command/workspace/worktree/remove"},
 		Annotations:    cli.Destructive(),
-		Run: func(_ context.Context, args []string, _ *slog.Logger) error {
+		Run: func(ctx context.Context, args []string, logger *slog.Logger) error {
 			if len(args) == 0 {
 				return cli.Validation("worktree alias is required\n\nUsage: bureau workspace worktree remove <alias>")
 			}
@@ -799,17 +790,17 @@ to return immediately after acceptance.`,
 			if err != nil {
 				return fmt.Errorf("invalid --server-name: %w", err)
 			}
-			return runWorktreeRemove(args[0], params.Mode, params.Wait, serverName, &params.JSONOutput)
+			return runWorktreeRemove(ctx, logger, args[0], params.Mode, params.Wait, serverName, &params.JSONOutput)
 		},
 	}
 }
 
-func runWorktreeRemove(alias, mode string, wait bool, serverName ref.ServerName, jsonOutput *cli.JSONOutput) error {
+func runWorktreeRemove(ctx context.Context, logger *slog.Logger, alias, mode string, wait bool, serverName ref.ServerName, jsonOutput *cli.JSONOutput) error {
 	if err := principal.ValidateLocalpart(alias); err != nil {
 		return cli.Validation("invalid worktree alias: %w", err)
 	}
 
-	ctx, cancel, session, err := cli.ConnectOperator()
+	ctx, cancel, session, err := cli.ConnectOperator(ctx)
 	if err != nil {
 		return err
 	}
@@ -857,9 +848,9 @@ func runWorktreeRemove(alias, mode string, wait bool, serverName ref.ServerName,
 	// the pipeline until it completes.
 	conclusion := ""
 	if wait && !result.TicketID.IsZero() {
-		fmt.Fprintf(os.Stderr, "Worktree remove accepted for %s, waiting for pipeline...\n", alias)
+		logger.Info("worktree remove accepted, waiting for pipeline", "alias", alias)
 
-		watchCtx, watchCancel := context.WithTimeout(context.Background(), 5*time.Minute)
+		watchCtx, watchCancel := context.WithTimeout(ctx, 5*time.Minute)
 		defer watchCancel()
 
 		final, watchError := command.WatchTicket(watchCtx, command.WatchTicketParams{
@@ -890,11 +881,9 @@ func runWorktreeRemove(alias, mode string, wait bool, serverName ref.ServerName,
 	}
 
 	if conclusion != "" {
-		fmt.Fprintf(os.Stderr, "Worktree %s removed (%s)\n", alias, conclusion)
+		logger.Info("worktree removed", "alias", alias, "conclusion", conclusion)
 	} else {
-		fmt.Fprintf(os.Stderr, "Worktree remove accepted for %s (mode=%s)\n", alias, mode)
-		fmt.Fprintf(os.Stderr, "  workspace: %s\n", workspaceAlias)
-		fmt.Fprintf(os.Stderr, "  subpath:   %s\n", worktreeSubpath)
+		logger.Info("worktree remove accepted", "alias", alias, "mode", mode, "workspace", workspaceAlias, "subpath", worktreeSubpath)
 		result.WriteAcceptedHint(os.Stderr)
 	}
 
@@ -920,8 +909,8 @@ timeout is extended to 5 minutes.`,
 		runFetch)
 }
 
-func runFetch(alias string, serverName ref.ServerName, jsonOutput *cli.JSONOutput) error {
-	ctx, cancel, session, err := cli.ConnectOperator()
+func runFetch(ctx context.Context, logger *slog.Logger, alias string, serverName ref.ServerName, jsonOutput *cli.JSONOutput) error {
+	ctx, cancel, session, err := cli.ConnectOperator(ctx)
 	if err != nil {
 		return err
 	}
@@ -933,14 +922,14 @@ func runFetch(alias string, serverName ref.ServerName, jsonOutput *cli.JSONOutpu
 		return err
 	}
 
-	fmt.Fprintf(os.Stderr, "Fetching %s (this may take a while for large repos)...\n", alias)
+	logger.Info("fetching workspace", "alias", alias)
 
 	// Fetch can take minutes for large repos. ConnectOperator gives
 	// a 30s context which is too short for waiting on the result, so
 	// create a longer context for the command execution. The /sync
 	// long-poll uses 30s server-side holds internally, so even a
 	// 5-minute wait makes at most ~10 HTTP round-trips.
-	fetchCtx, fetchCancel := context.WithTimeout(context.Background(), 5*time.Minute)
+	fetchCtx, fetchCancel := context.WithTimeout(ctx, 5*time.Minute)
 	defer fetchCancel()
 
 	result, err := command.Execute(fetchCtx, command.SendParams{
@@ -969,7 +958,7 @@ func runFetch(alias string, serverName ref.ServerName, jsonOutput *cli.JSONOutpu
 	if output != "" {
 		fmt.Println(output)
 	}
-	fmt.Fprintf(os.Stderr, "Fetch complete (%dms)\n", result.DurationMS)
+	logger.Info("fetch complete", "alias", alias, "duration_ms", result.DurationMS)
 	return nil
 }
 
@@ -984,8 +973,8 @@ raw git worktree list output including paths and branch information.`,
 		runWorktreeList)
 }
 
-func runWorktreeList(alias string, serverName ref.ServerName, jsonOutput *cli.JSONOutput) error {
-	ctx, cancel, session, err := cli.ConnectOperator()
+func runWorktreeList(ctx context.Context, logger *slog.Logger, alias string, serverName ref.ServerName, jsonOutput *cli.JSONOutput) error {
+	ctx, cancel, session, err := cli.ConnectOperator(ctx)
 	if err != nil {
 		return err
 	}

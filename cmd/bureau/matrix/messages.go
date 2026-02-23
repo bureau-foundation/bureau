@@ -74,7 +74,7 @@ main room timeline.`,
 		Output:         func() any { return &messagesResult{} },
 		Params:         func() any { return &params },
 		RequiredGrants: []string{"command/matrix/messages"},
-		Run: func(_ context.Context, args []string, _ *slog.Logger) error {
+		Run: func(ctx context.Context, args []string, _ *slog.Logger) error {
 			if len(args) == 1 {
 				params.Room = args[0]
 			} else if len(args) > 1 {
@@ -89,7 +89,7 @@ main room timeline.`,
 				return err
 			}
 
-			ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
+			ctx, cancel := context.WithTimeout(ctx, 30*time.Second)
 			defer cancel()
 
 			session, err := params.SessionConfig.Connect(ctx)

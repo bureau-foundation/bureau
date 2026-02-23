@@ -79,6 +79,7 @@ admin to add an observe allowance for your identity on the target.`,
 			if len(args) == 0 {
 				return cli.Validation("target argument required\n\nUsage: bureau observe <target> [flags]")
 			}
+
 			if len(args) > 1 {
 				return cli.Validation("unexpected argument: %s", args[1])
 			}
@@ -199,7 +200,7 @@ display their role identity.`,
 			flagSet.BoolVar(&detach, "detach", false, "create the session without attaching")
 			return flagSet
 		},
-		Run: func(_ context.Context, args []string, _ *slog.Logger) error {
+		Run: func(_ context.Context, args []string, logger *slog.Logger) error {
 			channel := ""
 			if len(args) > 0 {
 				channel = args[0]
@@ -298,7 +299,7 @@ display their role identity.`,
 				return cli.Internal("create dashboard: %w", err)
 			}
 
-			fmt.Fprintf(os.Stderr, "dashboard session created: %s\n", sessionName)
+			logger.Info("dashboard session created", "session", sessionName)
 
 			if detach {
 				return nil

@@ -8,7 +8,6 @@ import (
 	"encoding/json"
 	"fmt"
 	"log/slog"
-	"os"
 	"time"
 
 	"github.com/bureau-foundation/bureau/cmd/bureau/cli"
@@ -47,13 +46,13 @@ of the m.bureau.agent_metrics state event.`,
 		Output:         func() any { return &agentschema.AgentMetricsContent{} },
 		RequiredGrants: []string{"command/agent/metrics"},
 		Annotations:    cli.ReadOnly(),
-		Run: requireLocalpart("bureau agent metrics <localpart> [--machine <machine>]", func(_ context.Context, localpart string, _ *slog.Logger) error {
-			return runMetrics(localpart, params)
+		Run: requireLocalpart("bureau agent metrics <localpart> [--machine <machine>]", func(ctx context.Context, localpart string, logger *slog.Logger) error {
+			return runMetrics(ctx, localpart, logger, params)
 		}),
 	}
 }
 
-func runMetrics(localpart string, params agentMetricsParams) error {
+func runMetrics(ctx context.Context, localpart string, logger *slog.Logger, params agentMetricsParams) error {
 	serverName, err := ref.ParseServerName(params.ServerName)
 	if err != nil {
 		return fmt.Errorf("invalid --server-name: %w", err)
@@ -64,7 +63,7 @@ func runMetrics(localpart string, params agentMetricsParams) error {
 		return cli.Validation("invalid agent localpart: %v", err)
 	}
 
-	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
+	ctx, cancel := context.WithTimeout(ctx, 30*time.Second)
 	defer cancel()
 
 	session, err := params.SessionConfig.Connect(ctx)
@@ -97,7 +96,7 @@ func runMetrics(localpart string, params agentMetricsParams) error {
 	}
 
 	if machine.IsZero() && machineCount > 0 {
-		fmt.Fprintf(os.Stderr, "resolved %s → %s (scanned %d machines)\n", localpart, location.Machine.Localpart(), machineCount)
+		logger.Info("resolved agent location", "localpart", localpart, "machine", location.Machine.Localpart(), "machines_scanned", machineCount)
 	}
 
 	metricsRaw, err := session.GetStateEvent(ctx, location.ConfigRoomID, agentschema.EventTypeAgentMetrics, localpart)

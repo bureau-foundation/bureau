@@ -61,7 +61,7 @@ With a file argument, also classifies each change:
 		Output:         func() any { return &[]impactResult{} },
 		RequiredGrants: []string{"command/template/impact"},
 		Annotations:    cli.ReadOnly(),
-		Run: func(_ context.Context, args []string, _ *slog.Logger) error {
+		Run: func(ctx context.Context, args []string, logger *slog.Logger) error {
 			if len(args) < 1 || len(args) > 2 {
 				return cli.Validation("usage: bureau template impact [flags] <template-ref> [file]")
 			}
@@ -81,7 +81,7 @@ With a file argument, also classifies each change:
 				}
 			}
 
-			ctx, cancel, session, err := cli.ConnectOperator()
+			ctx, cancel, session, err := cli.ConnectOperator(ctx)
 			if err != nil {
 				return err
 			}
@@ -96,6 +96,7 @@ With a file argument, also classifies each change:
 				session:    session,
 				serverName: serverName,
 				ctx:        ctx,
+				logger:     logger,
 				cache:      make(map[string]*schema.TemplateContent),
 			}
 
@@ -106,7 +107,7 @@ With a file argument, also classifies each change:
 			}
 
 			if len(machineConfigs) == 0 {
-				fmt.Fprintln(os.Stderr, "no machine configs found (is the operator joined to machine config rooms?)")
+				logger.Warn("no machine configs found (is the operator joined to machine config rooms?)")
 				return nil
 			}
 
@@ -124,7 +125,7 @@ With a file argument, also classifies each change:
 				}
 			}
 
-			return printImpactResults(affected, targetRefCanonical, proposedContent != nil, &params.JSONOutput)
+			return printImpactResults(logger, affected, targetRefCanonical, proposedContent != nil, &params.JSONOutput)
 		},
 	}
 }
@@ -145,6 +146,7 @@ type impactAnalyzer struct {
 	session    messaging.Session
 	serverName ref.ServerName
 	ctx        context.Context
+	logger     *slog.Logger
 	cache      map[string]*schema.TemplateContent
 }
 
@@ -225,8 +227,11 @@ func (a *impactAnalyzer) findAffected(targetRef string, configs []machineConfig)
 			if err != nil {
 				// Log but don't fail — one broken template shouldn't
 				// prevent analyzing the rest.
-				fmt.Fprintf(os.Stderr, "warning: cannot walk inheritance for %q on %s: %v\n",
-					assignment.Template, mc.machine, err)
+				a.logger.Warn("cannot walk inheritance",
+					"template", assignment.Template,
+					"machine", mc.machine,
+					"error", err,
+				)
 				continue
 			}
 
@@ -521,13 +526,13 @@ func classifyTemplateChange(current, proposed *schema.TemplateContent) (string, 
 }
 
 // printImpactResults formats and prints the impact analysis.
-func printImpactResults(results []*impactResult, targetRef string, hasFile bool, jsonOutput *cli.JSONOutput) error {
+func printImpactResults(logger *slog.Logger, results []*impactResult, targetRef string, hasFile bool, jsonOutput *cli.JSONOutput) error {
 	if done, err := jsonOutput.EmitJSON(results); done {
 		return err
 	}
 
 	if len(results) == 0 {
-		fmt.Fprintf(os.Stderr, "no principals reference %s\n", targetRef)
+		logger.Info("no principals reference template", "template", targetRef)
 		return nil
 	}
 

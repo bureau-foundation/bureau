@@ -30,7 +30,7 @@ func TestValidateValidPipeline(t *testing.T) {
 	}
 
 	cmd := validateCommand()
-	if err := cmd.Run(context.Background(), []string{path}, nil); err != nil {
+	if err := cmd.Run(context.Background(), []string{path}, testLogger()); err != nil {
 		t.Fatalf("expected no error, got: %v", err)
 	}
 }
@@ -59,7 +59,7 @@ func TestValidateJSONCWithComments(t *testing.T) {
 	}
 
 	cmd := validateCommand()
-	if err := cmd.Run(context.Background(), []string{path}, nil); err != nil {
+	if err := cmd.Run(context.Background(), []string{path}, testLogger()); err != nil {
 		t.Fatalf("expected no error for JSONC with comments, got: %v", err)
 	}
 }
@@ -68,7 +68,7 @@ func TestValidateNoArgs(t *testing.T) {
 	t.Parallel()
 
 	cmd := validateCommand()
-	err := cmd.Run(context.Background(), []string{}, nil)
+	err := cmd.Run(context.Background(), []string{}, testLogger())
 	if err == nil {
 		t.Fatal("expected error for no args")
 	}
@@ -81,7 +81,7 @@ func TestValidateNonexistentFile(t *testing.T) {
 	t.Parallel()
 
 	cmd := validateCommand()
-	err := cmd.Run(context.Background(), []string{"/nonexistent/pipeline.json"}, nil)
+	err := cmd.Run(context.Background(), []string{"/nonexistent/pipeline.json"}, testLogger())
 	if err == nil {
 		t.Fatal("expected error for nonexistent file")
 	}
@@ -97,7 +97,7 @@ func TestValidateInvalidJSON(t *testing.T) {
 	}
 
 	cmd := validateCommand()
-	err := cmd.Run(context.Background(), []string{path}, nil)
+	err := cmd.Run(context.Background(), []string{path}, testLogger())
 	if err == nil {
 		t.Fatal("expected error for invalid JSON")
 	}
@@ -114,7 +114,7 @@ func TestValidateWithIssues(t *testing.T) {
 	}
 
 	cmd := validateCommand()
-	err := cmd.Run(context.Background(), []string{path}, nil)
+	err := cmd.Run(context.Background(), []string{path}, testLogger())
 	if err == nil {
 		t.Fatal("expected error for pipeline with no steps")
 	}

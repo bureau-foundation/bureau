@@ -7,7 +7,6 @@ import (
 	"context"
 	"fmt"
 	"log/slog"
-	"os"
 	"time"
 
 	"github.com/bureau-foundation/bureau/cmd/bureau/cli"
@@ -65,21 +64,19 @@ state event trail remain intact for auditing.`,
 		Output:         func() any { return &serviceDestroyResult{} },
 		RequiredGrants: []string{"command/service/destroy"},
 		Annotations:    cli.Destructive(),
-		Run: requireLocalpart("bureau service destroy <localpart> [--machine <machine>]", func(_ context.Context, localpart string, _ *slog.Logger) error {
-			return runDestroy(localpart, params)
+		Run: requireLocalpart("bureau service destroy <localpart> [--machine <machine>]", func(ctx context.Context, localpart string, logger *slog.Logger) error {
+			return runDestroy(ctx, localpart, logger, params)
 		}),
 	}
 }
 
-func runDestroy(localpart string, params serviceDestroyParams) error {
+func runDestroy(ctx context.Context, localpart string, logger *slog.Logger, params serviceDestroyParams) error {
 	serverName, err := ref.ParseServerName(params.ServerName)
 	if err != nil {
 		return fmt.Errorf("invalid --server-name: %w", err)
 	}
 
-	logger := cli.NewCommandLogger().With("command", "service/destroy", "localpart", localpart)
-
-	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
+	ctx, cancel := context.WithTimeout(ctx, 30*time.Second)
 	defer cancel()
 
 	session, err := params.SessionConfig.Connect(ctx)
@@ -139,12 +136,12 @@ func runDestroy(localpart string, params serviceDestroyParams) error {
 		return err
 	}
 
-	fmt.Fprintf(os.Stderr, "Removed %s from %s\n", localpart, location.Machine.Localpart())
-	if purged {
-		fmt.Fprintf(os.Stderr, "  Credentials purged\n")
-	}
-	fmt.Fprintf(os.Stderr, "  Config event: %s\n", destroyResult.ConfigEventID)
-	fmt.Fprintf(os.Stderr, "\nThe daemon will tear down the sandbox on its next reconciliation cycle.\n")
+	logger.Info("service assignment removed",
+		"localpart", localpart,
+		"machine", location.Machine.Localpart(),
+		"config_event", destroyResult.ConfigEventID,
+		"purged", purged,
+	)
 
 	return nil
 }

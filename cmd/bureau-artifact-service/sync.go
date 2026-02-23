@@ -15,23 +15,19 @@ import (
 )
 
 // syncFilter restricts the /sync response to event types the artifact
-// service cares about:
+// service processes:
 //   - m.bureau.artifact_scope: per-room artifact configuration (which
 //     service principal manages artifacts for the room, tag patterns)
-//   - m.bureau.room_service: room service bindings (used by the daemon
-//     for service discovery, tracked here for awareness)
 const syncFilter = `{
 	"room": {
 		"state": {
 			"types": [
-				"m.bureau.artifact_scope",
-				"m.bureau.room_service"
+				"m.bureau.artifact_scope"
 			]
 		},
 		"timeline": {
 			"types": [
-				"m.bureau.artifact_scope",
-				"m.bureau.room_service"
+				"m.bureau.artifact_scope"
 			],
 			"limit": 100
 		},

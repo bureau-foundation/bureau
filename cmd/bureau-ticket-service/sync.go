@@ -35,7 +35,6 @@ func buildSyncFilter() string {
 	stateEventTypes := []ref.EventType{
 		schema.EventTypeTicket,
 		schema.EventTypeTicketConfig,
-		schema.EventTypeRoomService,
 		schema.EventTypePipelineResult,
 		schema.MatrixEventTypeTombstone,
 	}

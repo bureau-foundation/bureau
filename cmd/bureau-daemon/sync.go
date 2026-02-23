@@ -64,13 +64,18 @@ import (
 // uses evaluateStartCondition with direct GetStateEvent calls to check
 // whether conditions are met — the sync filter just ensures the room
 // appears in the response so the daemon knows to re-check.
+//
+// Matrix protocol event types (m.room.member, m.room.power_levels) are
+// included for room-level authorization: membership changes determine
+// which room authorization policies apply to which principals, and power
+// level changes affect PowerLevelGrants eligibility. Both trigger
+// reconcile so the authorization index is rebuilt with current data.
 func buildSyncFilter(excludeRooms []ref.RoomID) string {
 	stateEventTypes := []ref.EventType{
 		schema.EventTypeMachineConfig,
 		schema.EventTypeCredentials,
 		schema.EventTypeMachineStatus,
 		schema.EventTypeService,
-		schema.EventTypeLayout,
 		schema.EventTypeProject,
 		schema.EventTypeWorkspace,
 		schema.EventTypeWorktree,
@@ -79,7 +84,8 @@ func buildSyncFilter(excludeRooms []ref.RoomID) string {
 		schema.EventTypeTemporalGrant,
 		schema.EventTypeFleetService,
 		schema.EventTypeHALease,
-		schema.MatrixEventTypeRoomMember, // detect fleet controllers joining fleet room
+		schema.MatrixEventTypeRoomMember,
+		schema.MatrixEventTypePowerLevels,
 	}
 
 	timelineEventTypes := make([]ref.EventType, len(stateEventTypes)+1)

@@ -59,9 +59,9 @@ func TestPayloadDeliveryAndHotReload(t *testing.T) {
 
 	pushMachineConfig(t, admin, machine, deploymentConfig{
 		Principals: []principalSpec{{
-			Account:  agent,
-			Template: templateRef,
-			Payload:  initialPayload,
+			Localpart: agent.Localpart,
+			Template:  templateRef,
+			Payload:   initialPayload,
 		}},
 	})
 
@@ -97,9 +97,9 @@ func TestPayloadDeliveryAndHotReload(t *testing.T) {
 
 	pushMachineConfig(t, admin, machine, deploymentConfig{
 		Principals: []principalSpec{{
-			Account:  agent,
-			Template: templateRef,
-			Payload:  updatedPayload,
+			Localpart: agent.Localpart,
+			Template:  templateRef,
+			Payload:   updatedPayload,
 		}},
 	})
 
@@ -189,8 +189,8 @@ func TestPayloadHotReloadFromEmpty(t *testing.T) {
 
 	pushMachineConfig(t, admin, machine, deploymentConfig{
 		Principals: []principalSpec{{
-			Account:  agent,
-			Template: templateRef,
+			Localpart: agent.Localpart,
+			Template:  templateRef,
 			// No Payload — this is the key difference from TestPayloadDeliveryAndHotReload.
 		}},
 	})
@@ -224,9 +224,9 @@ func TestPayloadHotReloadFromEmpty(t *testing.T) {
 
 	pushMachineConfig(t, admin, machine, deploymentConfig{
 		Principals: []principalSpec{{
-			Account:  agent,
-			Template: templateRef,
-			Payload:  addedPayload,
+			Localpart: agent.Localpart,
+			Template:  templateRef,
+			Payload:   addedPayload,
 		}},
 	})
 

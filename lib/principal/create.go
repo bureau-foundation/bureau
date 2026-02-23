@@ -95,6 +95,16 @@ type CreateParams struct {
 
 	// Labels are free-form key-value metadata for organizational purposes.
 	Labels map[string]string
+
+	// MatrixPolicy controls which self-service Matrix operations this
+	// principal's proxy allows (join, invite, create room). When nil,
+	// the daemon uses default-deny.
+	MatrixPolicy *schema.MatrixPolicy
+
+	// ServiceVisibility is a list of glob patterns that control which
+	// services this principal can discover via GET /v1/services. An
+	// empty or nil list means the principal cannot see any services.
+	ServiceVisibility []string
 }
 
 // CreateResult holds the result of a successful principal creation.
@@ -142,31 +152,121 @@ type CreateResult struct {
 // Re-provisioning an existing principal requires explicit credential rotation
 // via bureau credential provision.
 func Create(ctx context.Context, client *messaging.Client, session messaging.Session, registrationToken *secret.Buffer, provision ProvisionFunc, params CreateParams) (*CreateResult, error) {
+	results, err := CreateMultiple(ctx, client, session, registrationToken, provision, []CreateParams{params})
+	if err != nil {
+		return nil, err
+	}
+	return results[0], nil
+}
+
+// CreateMultiple performs the full deployment sequence for multiple principals
+// on the same machine: registers Matrix accounts, provisions encrypted
+// credentials, invites principals to the config room, and publishes a single
+// atomic MachineConfig with all assignments.
+//
+// This is more efficient than calling Create in a loop because the
+// MachineConfig is read, modified with all principals, and written back in
+// one operation — instead of N separate read-modify-write cycles.
+//
+// All principals must target the same machine (same Machine and MachineRoomID
+// values in all CreateParams entries). Returns one CreateResult per input
+// param in the same order.
+func CreateMultiple(ctx context.Context, client *messaging.Client, session messaging.Session, registrationToken *secret.Buffer, provision ProvisionFunc, params []CreateParams) ([]*CreateResult, error) {
+	if len(params) == 0 {
+		return nil, fmt.Errorf("at least one CreateParams is required")
+	}
+
+	// Validate that all params target the same machine.
+	machine := params[0].Machine
+	machineRoomID := params[0].MachineRoomID
+	for i, p := range params {
+		if p.Machine != machine {
+			return nil, fmt.Errorf("params[%d]: machine %s differs from params[0] machine %s — all principals must target the same machine", i, p.Machine, machine)
+		}
+		if p.MachineRoomID != machineRoomID {
+			return nil, fmt.Errorf("params[%d]: machine room ID differs from params[0] — all principals must target the same machine", i)
+		}
+	}
+
+	// Phase 1: Register accounts and provision credentials for each principal.
+	type registeredPrincipal struct {
+		principalUserID ref.UserID
+		accessToken     string
+		configRoomID    ref.RoomID
+	}
+	registered := make([]registeredPrincipal, len(params))
+
+	for i, p := range params {
+		rp, err := registerAndProvision(ctx, client, session, registrationToken, provision, p)
+		if err != nil {
+			return nil, fmt.Errorf("params[%d] (%s): %w", i, p.Principal.UserID(), err)
+		}
+		registered[i] = rp
+	}
+
+	// Phase 2: Atomic MachineConfig write — read existing config, add all
+	// principals, write back in a single state event.
+	configRoomID := registered[0].configRoomID
+	configEventID, err := assignPrincipals(ctx, session, configRoomID, params)
+	if err != nil {
+		return nil, err
+	}
+
+	// Build results.
+	results := make([]*CreateResult, len(params))
+	for i, p := range params {
+		results[i] = &CreateResult{
+			PrincipalUserID: registered[i].principalUserID,
+			Machine:         p.Machine,
+			TemplateRef:     p.TemplateRef,
+			ConfigRoomID:    configRoomID,
+			ConfigEventID:   configEventID,
+			AccessToken:     registered[i].accessToken,
+		}
+	}
+
+	return results, nil
+}
+
+// registerAndProvision handles account registration, credential provisioning,
+// and config room membership for a single principal. This is the per-principal
+// work that CreateMultiple performs before the atomic MachineConfig write.
+func registerAndProvision(ctx context.Context, client *messaging.Client, session messaging.Session, registrationToken *secret.Buffer, provision ProvisionFunc, params CreateParams) (struct {
+	principalUserID ref.UserID
+	accessToken     string
+	configRoomID    ref.RoomID
+}, error) {
+	type result = struct {
+		principalUserID ref.UserID
+		accessToken     string
+		configRoomID    ref.RoomID
+	}
+	var zero result
 	if params.Machine.IsZero() {
-		return nil, fmt.Errorf("machine is required")
+		return zero, fmt.Errorf("machine is required")
 	}
 	if params.Principal.IsZero() {
-		return nil, fmt.Errorf("principal is required")
+		return zero, fmt.Errorf("principal is required")
 	}
 	if params.TemplateRef == (schema.TemplateRef{}) {
-		return nil, fmt.Errorf("template reference is required")
+		return zero, fmt.Errorf("template reference is required")
 	}
 	if params.HomeserverURL == "" {
-		return nil, fmt.Errorf("homeserver URL is required")
+		return zero, fmt.Errorf("homeserver URL is required")
 	}
 	if params.MachineRoomID.IsZero() {
-		return nil, fmt.Errorf("machine room ID is required for credential provisioning")
+		return zero, fmt.Errorf("machine room ID is required for credential provisioning")
 	}
 
 	if params.ValidateTemplate == nil {
-		return nil, fmt.Errorf("ValidateTemplate callback is required")
+		return zero, fmt.Errorf("ValidateTemplate callback is required")
 	}
 
 	serverName := params.Machine.Server()
 
 	// Verify the template exists in Matrix before creating any accounts or state.
 	if err := params.ValidateTemplate(ctx, params.TemplateRef, serverName); err != nil {
-		return nil, fmt.Errorf("template %q not found: %w", params.TemplateRef, err)
+		return zero, fmt.Errorf("template %q not found: %w", params.TemplateRef, err)
 	}
 
 	// Register the principal's Matrix account. Generate a random password —
@@ -174,13 +274,13 @@ func Create(ctx context.Context, client *messaging.Client, session messaging.Ses
 	// the encrypted credential bundle.
 	passwordBytes := make([]byte, 32)
 	if _, err := rand.Read(passwordBytes); err != nil {
-		return nil, fmt.Errorf("generate random password: %w", err)
+		return zero, fmt.Errorf("generate random password: %w", err)
 	}
 	hexPassword := []byte(hex.EncodeToString(passwordBytes))
 	secret.Zero(passwordBytes)
 	password, err := secret.NewFromBytes(hexPassword)
 	if err != nil {
-		return nil, fmt.Errorf("protecting password: %w", err)
+		return zero, fmt.Errorf("protecting password: %w", err)
 	}
 	defer password.Close()
 
@@ -190,7 +290,7 @@ func Create(ctx context.Context, client *messaging.Client, session messaging.Ses
 		RegistrationToken: registrationToken,
 	})
 	if err != nil {
-		return nil, fmt.Errorf("register principal account %q: %w", params.Principal.UserID(), err)
+		return zero, fmt.Errorf("register principal account %q: %w", params.Principal.UserID(), err)
 	}
 	defer principalSession.Close()
 
@@ -205,7 +305,7 @@ func Create(ctx context.Context, client *messaging.Client, session messaging.Ses
 	}
 	for key, value := range params.ExtraCredentials {
 		if _, reserved := credentials[key]; reserved {
-			return nil, fmt.Errorf("extra credential key %q conflicts with auto-provisioned Matrix credentials", key)
+			return zero, fmt.Errorf("extra credential key %q conflicts with auto-provisioned Matrix credentials", key)
 		}
 		credentials[key] = value
 	}
@@ -213,7 +313,7 @@ func Create(ctx context.Context, client *messaging.Client, session messaging.Ses
 	// Provision encrypted credentials to the machine's config room.
 	configRoomID, err := provision(ctx, session, params.Machine, params.Principal, params.MachineRoomID, credentials)
 	if err != nil {
-		return nil, fmt.Errorf("provision credentials: %w", err)
+		return zero, fmt.Errorf("provision credentials: %w", err)
 	}
 
 	// Invite the principal to the config room and join on its behalf. The
@@ -224,37 +324,26 @@ func Create(ctx context.Context, client *messaging.Client, session messaging.Ses
 	// invite acceptance.
 	if err := session.InviteUser(ctx, configRoomID, principalUserID); err != nil {
 		if !messaging.IsMatrixError(err, messaging.ErrCodeForbidden) {
-			return nil, fmt.Errorf("invite principal to config room: %w", err)
+			return zero, fmt.Errorf("invite principal to config room: %w", err)
 		}
 		// Already invited — not an error.
 	}
 	if _, err := principalSession.JoinRoom(ctx, configRoomID); err != nil {
-		return nil, fmt.Errorf("principal join config room: %w", err)
+		return zero, fmt.Errorf("principal join config room: %w", err)
 	}
 
-	// Read-modify-write the MachineConfig to add this principal's
-	// assignment. If the principal is already assigned (re-deploy),
-	// update the existing entry.
-	configEventID, err := assignPrincipal(ctx, session, configRoomID, params)
-	if err != nil {
-		return nil, err
-	}
-
-	return &CreateResult{
-		PrincipalUserID: principalUserID,
-		Machine:         params.Machine,
-		TemplateRef:     params.TemplateRef,
-		ConfigRoomID:    configRoomID,
-		ConfigEventID:   configEventID,
-		AccessToken:     principalToken,
+	return result{
+		principalUserID: principalUserID,
+		accessToken:     principalToken,
+		configRoomID:    configRoomID,
 	}, nil
 }
 
-// assignPrincipal reads the current MachineConfig, merges the new
-// PrincipalAssignment, and publishes the updated config. If the principal
-// is already assigned, its entry is updated in place.
-func assignPrincipal(ctx context.Context, session messaging.Session, configRoomID ref.RoomID, params CreateParams) (ref.EventID, error) {
-	machineLocalpart := params.Machine.Localpart()
+// assignPrincipals reads the current MachineConfig, merges all new
+// PrincipalAssignments, and publishes the updated config in a single state
+// event. If any principal is already assigned, its entry is updated in place.
+func assignPrincipals(ctx context.Context, session messaging.Session, configRoomID ref.RoomID, params []CreateParams) (ref.EventID, error) {
+	machineLocalpart := params[0].Machine.Localpart()
 
 	var config schema.MachineConfig
 	existingContent, err := session.GetStateEvent(ctx, configRoomID, schema.EventTypeMachineConfig, machineLocalpart)
@@ -266,28 +355,32 @@ func assignPrincipal(ctx context.Context, session messaging.Session, configRoomI
 		return ref.EventID{}, fmt.Errorf("read machine config for %s: %w", machineLocalpart, err)
 	}
 
-	assignment := schema.PrincipalAssignment{
-		Principal:                 params.Principal,
-		Template:                  params.TemplateRef.String(),
-		AutoStart:                 params.AutoStart,
-		StartCondition:            params.StartCondition,
-		Labels:                    params.Labels,
-		Authorization:             params.Authorization,
-		ExtraEnvironmentVariables: params.ExtraEnvironmentVariables,
-		Payload:                   params.Payload,
-	}
-
-	// Check if the principal is already assigned; update in place if so.
-	found := false
-	for i, existing := range config.Principals {
-		if existing.Principal.UserID() == params.Principal.UserID() {
-			config.Principals[i] = assignment
-			found = true
-			break
+	for _, p := range params {
+		assignment := schema.PrincipalAssignment{
+			Principal:                 p.Principal,
+			Template:                  p.TemplateRef.String(),
+			AutoStart:                 p.AutoStart,
+			StartCondition:            p.StartCondition,
+			Labels:                    p.Labels,
+			MatrixPolicy:              p.MatrixPolicy,
+			ServiceVisibility:         p.ServiceVisibility,
+			Authorization:             p.Authorization,
+			ExtraEnvironmentVariables: p.ExtraEnvironmentVariables,
+			Payload:                   p.Payload,
 		}
-	}
-	if !found {
-		config.Principals = append(config.Principals, assignment)
+
+		// Check if the principal is already assigned; update in place if so.
+		found := false
+		for i, existing := range config.Principals {
+			if existing.Principal.UserID() == p.Principal.UserID() {
+				config.Principals[i] = assignment
+				found = true
+				break
+			}
+		}
+		if !found {
+			config.Principals = append(config.Principals, assignment)
+		}
 	}
 
 	eventID, err := session.SendStateEvent(ctx, configRoomID, schema.EventTypeMachineConfig, machineLocalpart, config)

@@ -106,12 +106,12 @@ func TestWorkspaceStartConditionLifecycle(t *testing.T) {
 	pushMachineConfig(t, admin, machine, deploymentConfig{
 		Principals: []principalSpec{
 			{
-				Account: setupAccount,
-				Labels:  map[string]string{"role": "setup"},
+				Localpart: setupAccount.Localpart,
+				Labels:    map[string]string{"role": "setup"},
 			},
 			{
-				Account: agentAccount,
-				Labels:  map[string]string{"role": "agent"},
+				Localpart: agentAccount.Localpart,
+				Labels:    map[string]string{"role": "agent"},
 				StartCondition: &schema.StartCondition{
 					EventType:    schema.EventTypeWorkspace,
 					StateKey:     "",
@@ -120,8 +120,8 @@ func TestWorkspaceStartConditionLifecycle(t *testing.T) {
 				},
 			},
 			{
-				Account: teardownAccount,
-				Labels:  map[string]string{"role": "teardown"},
+				Localpart: teardownAccount.Localpart,
+				Labels:    map[string]string{"role": "teardown"},
 				StartCondition: &schema.StartCondition{
 					EventType:    schema.EventTypeWorkspace,
 					StateKey:     "",

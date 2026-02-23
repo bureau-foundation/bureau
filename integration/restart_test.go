@@ -47,22 +47,21 @@ func TestDaemonRestartRecovery(t *testing.T) {
 	daemon1 := startMachineDaemonManual(t, admin, machine, options)
 
 	// --- Deploy a principal ---
-	account := registerFleetPrincipal(t, fleet, principalLocalpart, "pass-restart-agent")
-	proxySockets := deployPrincipals(t, admin, machine, deploymentConfig{
+	deployment := deployPrincipals(t, admin, machine, deploymentConfig{
 		Principals: []principalSpec{{
-			Account:      account,
+			Localpart:    principalLocalpart,
 			MatrixPolicy: &schema.MatrixPolicy{AllowJoin: true},
 		}},
 	})
 
-	proxySocket := proxySockets[principalLocalpart]
+	proxySocket := deployment.ProxySockets[principalLocalpart]
 	t.Log("principal deployed, proxy socket exists")
 
 	// Verify the proxy works before daemon restart.
 	proxyClient := proxyHTTPClient(proxySocket)
 	initialWhoami := proxyWhoami(t, proxyClient)
-	if initialWhoami != account.UserID.String() {
-		t.Fatalf("initial whoami = %q, want %q", initialWhoami, account.UserID)
+	if initialWhoami != deployment.Accounts[principalLocalpart].UserID.String() {
+		t.Fatalf("initial whoami = %q, want %q", initialWhoami, deployment.Accounts[principalLocalpart].UserID)
 	}
 
 	// Verify initial heartbeat reports 1 running sandbox. The daemon
@@ -92,8 +91,8 @@ func TestDaemonRestartRecovery(t *testing.T) {
 
 	// Verify the proxy is still functional (not just the socket file).
 	midWhoami := proxyWhoami(t, proxyClient)
-	if midWhoami != account.UserID.String() {
-		t.Fatalf("proxy whoami after daemon kill = %q, want %q", midWhoami, account.UserID)
+	if midWhoami != deployment.Accounts[principalLocalpart].UserID.String() {
+		t.Fatalf("proxy whoami after daemon kill = %q, want %q", midWhoami, deployment.Accounts[principalLocalpart].UserID)
 	}
 
 	// --- Phase 4: Clear the heartbeat, start a new daemon ---
@@ -135,8 +134,8 @@ func TestDaemonRestartRecovery(t *testing.T) {
 
 	// Verify the proxy is still functional after daemon restart.
 	finalWhoami := proxyWhoami(t, proxyClient)
-	if finalWhoami != account.UserID.String() {
-		t.Fatalf("proxy whoami after daemon restart = %q, want %q", finalWhoami, account.UserID)
+	if finalWhoami != deployment.Accounts[principalLocalpart].UserID.String() {
+		t.Fatalf("proxy whoami after daemon restart = %q, want %q", finalWhoami, deployment.Accounts[principalLocalpart].UserID)
 	}
 	t.Log("proxy survived daemon restart, identity preserved")
 

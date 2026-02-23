@@ -123,10 +123,12 @@ type principalAccount struct {
 	Token     string
 }
 
-// principalSpec describes a principal to deploy on a machine.
+// principalSpec describes a principal to deploy on a machine. Localpart is
+// the account-level name (e.g., "agent/mock-test"); the fleet-scoped
+// localpart is constructed internally from the machine's fleet reference.
 type principalSpec struct {
-	Account           principalAccount
-	Template          string                      // optional: template ref (e.g., "bureau/template:name")
+	Localpart         string                      // required: account localpart
+	Template          string                      // optional: template ref (e.g., "bureau/template:name"); defaults to "bureau/template:test-agent"
 	Payload           map[string]any              // optional: per-instance payload merged over template defaults
 	MatrixPolicy      *schema.MatrixPolicy        // optional per-principal policy
 	ServiceVisibility []string                    // optional: glob patterns for service discovery
@@ -140,6 +142,14 @@ type principalSpec struct {
 type deploymentConfig struct {
 	Principals    []principalSpec
 	DefaultPolicy *schema.AuthorizationPolicy // optional machine-level authorization policy
+}
+
+// deploymentResult holds the results of deploying principals. ProxySockets
+// maps localpart to the proxy's Unix socket path. Accounts maps localpart
+// to the principalAccount (UserID, Token) created during deployment.
+type deploymentResult struct {
+	ProxySockets map[string]string
+	Accounts     map[string]principalAccount
 }
 
 // newTestMachine creates the directory structure for a machine. Does not
@@ -645,9 +655,9 @@ func pushMachineConfig(t *testing.T, admin *messaging.DirectSession, machine *te
 
 	assignments := make([]schema.PrincipalAssignment, len(config.Principals))
 	for i, spec := range config.Principals {
-		entity, err := ref.NewEntityFromAccountLocalpart(machine.Ref.Fleet(), spec.Account.Localpart)
+		entity, err := ref.NewEntityFromAccountLocalpart(machine.Ref.Fleet(), spec.Localpart)
 		if err != nil {
-			t.Fatalf("build principal entity for %s: %v", spec.Account.Localpart, err)
+			t.Fatalf("build principal entity for %s: %v", spec.Localpart, err)
 		}
 		assignments[i] = schema.PrincipalAssignment{
 			Principal:         entity,
@@ -674,12 +684,15 @@ func pushMachineConfig(t *testing.T, admin *messaging.DirectSession, machine *te
 	}
 }
 
-// deployPrincipals encrypts credentials for each principal, pushes
-// Credentials and MachineConfig state events to the machine's config room,
-// and waits for all proxy sockets to appear. Returns a map from localpart
-// to proxy socket path. This is a convenience wrapper around pushCredentials
-// and pushMachineConfig for the common case of deploying from scratch.
-func deployPrincipals(t *testing.T, admin *messaging.DirectSession, machine *testMachine, config deploymentConfig) map[string]string {
+// deployPrincipals registers Matrix accounts, provisions encrypted
+// credentials, publishes a MachineConfig, and waits for all proxy sockets
+// to appear. Uses the production principal.CreateMultiple path for account
+// registration, credential provisioning, and atomic MachineConfig writes.
+//
+// If any spec has an empty Template, the default test-agent template is
+// auto-published. If DefaultPolicy is set, it is written as a pre-step
+// so that assignPrincipals preserves it during the read-modify-write.
+func deployPrincipals(t *testing.T, admin *messaging.DirectSession, machine *testMachine, config deploymentConfig) deploymentResult {
 	t.Helper()
 
 	if len(config.Principals) == 0 {
@@ -692,20 +705,101 @@ func deployPrincipals(t *testing.T, admin *messaging.DirectSession, machine *tes
 		t.Fatal("machine.MachineRoomID is required")
 	}
 
+	// Auto-publish the default test template if any spec omits Template.
+	defaultTemplateRef := ""
 	for _, spec := range config.Principals {
-		pushCredentials(t, admin, machine, spec.Account)
+		if spec.Template == "" {
+			if defaultTemplateRef == "" {
+				defaultTemplateRef = publishTestAgentTemplate(t, admin, machine, "test-agent")
+			}
+			break
+		}
 	}
 
-	pushMachineConfig(t, admin, machine, config)
+	// If DefaultPolicy is set, publish it as a pre-step. The production
+	// assignPrincipals function does a read-modify-write, so DefaultPolicy
+	// is preserved when principals are added.
+	if config.DefaultPolicy != nil {
+		_, err := admin.SendStateEvent(t.Context(), machine.ConfigRoomID,
+			schema.EventTypeMachineConfig, machine.Name, schema.MachineConfig{
+				DefaultPolicy: config.DefaultPolicy,
+			})
+		if err != nil {
+			t.Fatalf("set default policy: %v", err)
+		}
+	}
+
+	client, err := messaging.NewClient(messaging.ClientConfig{
+		HomeserverURL: testHomeserverURL,
+	})
+	if err != nil {
+		t.Fatalf("create client for principal registration: %v", err)
+	}
+
+	registrationToken, err := secret.NewFromString(testRegistrationToken)
+	if err != nil {
+		t.Fatalf("create registration token buffer: %v", err)
+	}
+	defer registrationToken.Close()
+
+	params := make([]principal.CreateParams, len(config.Principals))
+	for i, spec := range config.Principals {
+		entity, entityErr := ref.NewEntityFromAccountLocalpart(machine.Ref.Fleet(), spec.Localpart)
+		if entityErr != nil {
+			t.Fatalf("build principal entity for %s: %v", spec.Localpart, entityErr)
+		}
+
+		templateRefString := spec.Template
+		if templateRefString == "" {
+			templateRefString = defaultTemplateRef
+		}
+		templateRef, parseErr := schema.ParseTemplateRef(templateRefString)
+		if parseErr != nil {
+			t.Fatalf("parse template ref %q: %v", templateRefString, parseErr)
+		}
+
+		params[i] = principal.CreateParams{
+			Machine:     machine.Ref,
+			Principal:   entity,
+			TemplateRef: templateRef,
+			ValidateTemplate: func(ctx context.Context, tr schema.TemplateRef, serverName ref.ServerName) error {
+				_, fetchErr := templatedef.Fetch(ctx, admin, tr, serverName)
+				return fetchErr
+			},
+			HomeserverURL:     testHomeserverURL,
+			AutoStart:         true,
+			MachineRoomID:     machine.MachineRoomID,
+			Payload:           spec.Payload,
+			MatrixPolicy:      spec.MatrixPolicy,
+			ServiceVisibility: spec.ServiceVisibility,
+			Authorization:     spec.Authorization,
+			Labels:            spec.Labels,
+			StartCondition:    spec.StartCondition,
+		}
+	}
+
+	results, err := principal.CreateMultiple(t.Context(), client, admin, registrationToken, credential.AsProvisionFunc(), params)
+	if err != nil {
+		t.Fatalf("create principals: %v", err)
+	}
 
 	proxySockets := make(map[string]string, len(config.Principals))
-	for _, spec := range config.Principals {
-		socketPath := machine.PrincipalProxySocketPath(t, spec.Account.Localpart)
+	accounts := make(map[string]principalAccount, len(config.Principals))
+	for i, spec := range config.Principals {
+		socketPath := machine.PrincipalProxySocketPath(t, spec.Localpart)
 		waitForFile(t, socketPath)
-		proxySockets[spec.Account.Localpart] = socketPath
+		proxySockets[spec.Localpart] = socketPath
+		accounts[spec.Localpart] = principalAccount{
+			Localpart: spec.Localpart,
+			UserID:    results[i].PrincipalUserID,
+			Token:     results[i].AccessToken,
+		}
 	}
 
-	return proxySockets
+	return deploymentResult{
+		ProxySockets: proxySockets,
+		Accounts:     accounts,
+	}
 }
 
 // agentOptions configures deployAgent and agentTemplateContent. Binary and

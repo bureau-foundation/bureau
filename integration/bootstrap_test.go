@@ -242,7 +242,7 @@ func TestBootstrapScript(t *testing.T) {
 		}
 		pushCredentials(t, admin, containerMachine, principalAccount)
 		pushMachineConfig(t, admin, containerMachine, deploymentConfig{
-			Principals: []principalSpec{{Account: principalAccount}},
+			Principals: []principalSpec{{Localpart: principalAccount.Localpart}},
 		})
 
 		// Wait for the proxy socket inside the container. The socket

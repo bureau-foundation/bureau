@@ -90,8 +90,8 @@ func TestSandboxExitOutputCapture(t *testing.T) {
 	// sandbox, and the command will print an error and exit 42.
 	pushMachineConfig(t, admin, machine, deploymentConfig{
 		Principals: []principalSpec{{
-			Account:  agent,
-			Template: "bureau/template:failing-agent",
+			Localpart: agent.Localpart,
+			Template:  "bureau/template:failing-agent",
 		}},
 	})
 

@@ -352,35 +352,32 @@ func TestTwoMachineFleet(t *testing.T) {
 	}
 
 	// --- Register principals, provision credentials, and wait for proxies ---
-	principalAAccount := registerFleetPrincipal(t, twoMachineFleet, principalALocalpart, "pass-fleet-a")
-	principalBAccount := registerFleetPrincipal(t, twoMachineFleet, principalBLocalpart, "pass-fleet-b")
-
-	socketsA := deployPrincipals(t, admin, machineA, deploymentConfig{
+	deploymentA := deployPrincipals(t, admin, machineA, deploymentConfig{
 		Principals: []principalSpec{{
-			Account:      principalAAccount,
+			Localpart:    principalALocalpart,
 			MatrixPolicy: &schema.MatrixPolicy{AllowJoin: true},
 		}},
 	})
-	socketsB := deployPrincipals(t, admin, machineB, deploymentConfig{
+	deploymentB := deployPrincipals(t, admin, machineB, deploymentConfig{
 		Principals: []principalSpec{{
-			Account:      principalBAccount,
+			Localpart:    principalBLocalpart,
 			MatrixPolicy: &schema.MatrixPolicy{AllowJoin: true},
 		}},
 	})
 	t.Log("both proxies spawned")
 
 	// Verify proxy identities.
-	proxySocketA := socketsA[principalALocalpart]
-	proxySocketB := socketsB[principalBLocalpart]
+	proxySocketA := deploymentA.ProxySockets[principalALocalpart]
+	proxySocketB := deploymentB.ProxySockets[principalBLocalpart]
 	clientA := proxyHTTPClient(proxySocketA)
 	clientB := proxyHTTPClient(proxySocketB)
 	whoamiA := proxyWhoami(t, clientA)
 	whoamiB := proxyWhoami(t, clientB)
-	if whoamiA != principalAAccount.UserID.String() {
-		t.Errorf("proxy A whoami = %q, want %q", whoamiA, principalAAccount.UserID)
+	if whoamiA != deploymentA.Accounts[principalALocalpart].UserID.String() {
+		t.Errorf("proxy A whoami = %q, want %q", whoamiA, deploymentA.Accounts[principalALocalpart].UserID)
 	}
-	if whoamiB != principalBAccount.UserID.String() {
-		t.Errorf("proxy B whoami = %q, want %q", whoamiB, principalBAccount.UserID)
+	if whoamiB != deploymentB.Accounts[principalBLocalpart].UserID.String() {
+		t.Errorf("proxy B whoami = %q, want %q", whoamiB, deploymentB.Accounts[principalBLocalpart].UserID)
 	}
 
 	// --- Create a shared room and exchange messages ---
@@ -388,7 +385,7 @@ func TestTwoMachineFleet(t *testing.T) {
 	sharedRoom, err := admin.CreateRoom(ctx, messaging.CreateRoomRequest{
 		Name:       "Fleet Test Room",
 		Preset:     "private_chat",
-		Invite:     []string{principalAAccount.UserID.String(), principalBAccount.UserID.String()},
+		Invite:     []string{deploymentA.Accounts[principalALocalpart].UserID.String(), deploymentB.Accounts[principalBLocalpart].UserID.String()},
 		Visibility: "private",
 	})
 	if err != nil {
@@ -412,10 +409,10 @@ func TestTwoMachineFleet(t *testing.T) {
 	// meaning the homeserver has persisted the events. A subsequent /sync
 	// sees them immediately.
 	eventsB := proxySyncRoomTimeline(t, clientB, sharedRoom.RoomID)
-	assertMessagePresent(t, eventsB, principalAAccount.UserID, messageFromA)
+	assertMessagePresent(t, eventsB, deploymentA.Accounts[principalALocalpart].UserID, messageFromA)
 
 	eventsA := proxySyncRoomTimeline(t, clientA, sharedRoom.RoomID)
-	assertMessagePresent(t, eventsA, principalBAccount.UserID, messageFromB)
+	assertMessagePresent(t, eventsA, deploymentB.Accounts[principalBLocalpart].UserID, messageFromB)
 
 	t.Log("cross-machine message exchange verified")
 

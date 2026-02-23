@@ -32,18 +32,18 @@ func TestTwoAgentMessaging(t *testing.T) {
 		Fleet:          fleet,
 	})
 
-	alice := registerFleetPrincipal(t, fleet, "test/alice", "alice-test-password")
-	bob := registerFleetPrincipal(t, fleet, "test/bob", "bob-test-password")
-
-	proxySockets := deployPrincipals(t, admin, machine, deploymentConfig{
+	deployment := deployPrincipals(t, admin, machine, deploymentConfig{
 		Principals: []principalSpec{
-			{Account: alice, MatrixPolicy: &schema.MatrixPolicy{AllowJoin: true}},
-			{Account: bob, MatrixPolicy: &schema.MatrixPolicy{AllowJoin: true}},
+			{Localpart: "test/alice", MatrixPolicy: &schema.MatrixPolicy{AllowJoin: true}},
+			{Localpart: "test/bob", MatrixPolicy: &schema.MatrixPolicy{AllowJoin: true}},
 		},
 	})
 
-	aliceHTTP := proxyHTTPClient(proxySockets[alice.Localpart])
-	bobHTTP := proxyHTTPClient(proxySockets[bob.Localpart])
+	alice := deployment.Accounts["test/alice"]
+	bob := deployment.Accounts["test/bob"]
+
+	aliceHTTP := proxyHTTPClient(deployment.ProxySockets["test/alice"])
+	bobHTTP := proxyHTTPClient(deployment.ProxySockets["test/bob"])
 
 	// --- Sub-test: verify proxy credential isolation ---
 	t.Run("ProxyIdentity", func(t *testing.T) {

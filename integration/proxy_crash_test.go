@@ -41,22 +41,21 @@ func TestProxyCrashRecovery(t *testing.T) {
 	})
 
 	// --- Deploy a principal ---
-	account := registerFleetPrincipal(t, fleet, principalLocalpart, "pass-proxy-crash-agent")
-	proxySockets := deployPrincipals(t, admin, machine, deploymentConfig{
+	deployment := deployPrincipals(t, admin, machine, deploymentConfig{
 		Principals: []principalSpec{{
-			Account:      account,
+			Localpart:    principalLocalpart,
 			MatrixPolicy: &schema.MatrixPolicy{AllowJoin: true},
 		}},
 	})
 
-	proxySocket := proxySockets[principalLocalpart]
+	proxySocket := deployment.ProxySockets[principalLocalpart]
 	t.Log("principal deployed, proxy socket exists")
 
 	// Verify the proxy works before the crash.
 	proxyClient := proxyHTTPClient(proxySocket)
 	initialWhoami := proxyWhoami(t, proxyClient)
-	if initialWhoami != account.UserID.String() {
-		t.Fatalf("initial whoami = %q, want %q", initialWhoami, account.UserID)
+	if initialWhoami != deployment.Accounts[principalLocalpart].UserID.String() {
+		t.Fatalf("initial whoami = %q, want %q", initialWhoami, deployment.Accounts[principalLocalpart].UserID)
 	}
 	t.Log("proxy serving correctly")
 
@@ -92,8 +91,8 @@ func TestProxyCrashRecovery(t *testing.T) {
 	// because the old transport has a broken connection to the dead proxy.
 	newProxyClient := proxyHTTPClient(proxySocket)
 	recoveredWhoami := proxyWhoami(t, newProxyClient)
-	if recoveredWhoami != account.UserID.String() {
-		t.Fatalf("recovered whoami = %q, want %q", recoveredWhoami, account.UserID)
+	if recoveredWhoami != deployment.Accounts[principalLocalpart].UserID.String() {
+		t.Fatalf("recovered whoami = %q, want %q", recoveredWhoami, deployment.Accounts[principalLocalpart].UserID)
 	}
 	t.Log("new proxy serves correct identity")
 

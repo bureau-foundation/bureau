@@ -52,9 +52,8 @@ func TestServiceDiscovery(t *testing.T) {
 	// --- Phase 1: Deploy all principals ---
 
 	// Deploy a principal that represents the service on the provider.
-	serviceAgent := registerFleetPrincipal(t, fleet, "service/stt/test", "svc-discovery-password")
 	deployPrincipals(t, admin, provider, deploymentConfig{
-		Principals: []principalSpec{{Account: serviceAgent}},
+		Principals: []principalSpec{{Localpart: "service/stt/test"}},
 	})
 
 	// Deploy consumer principals BEFORE publishing the service event.
@@ -67,24 +66,21 @@ func TestServiceDiscovery(t *testing.T) {
 	// the proxies exist, making WaitForMessage an unreliable signal.
 	// Deploying consumers first guarantees they're in d.running when
 	// the service event is processed.
-	consumerWide := registerFleetPrincipal(t, fleet, "test/svc-wide", "svc-wide-password")
-	consumerNarrow := registerFleetPrincipal(t, fleet, "test/svc-narrow", "svc-narrow-password")
-
-	consumerSockets := deployPrincipals(t, admin, consumer, deploymentConfig{
+	consumerDeployment := deployPrincipals(t, admin, consumer, deploymentConfig{
 		Principals: []principalSpec{
 			{
-				Account:           consumerWide,
+				Localpart:         "test/svc-wide",
 				ServiceVisibility: []string{"service/stt/*", "service/embedding/*"},
 			},
 			{
-				Account:           consumerNarrow,
+				Localpart:         "test/svc-narrow",
 				ServiceVisibility: []string{"service/embedding/*"},
 			},
 		},
 	})
 
-	wideClient := proxyHTTPClient(consumerSockets[consumerWide.Localpart])
-	narrowClient := proxyHTTPClient(consumerSockets[consumerNarrow.Localpart])
+	wideClient := proxyHTTPClient(consumerDeployment.ProxySockets["test/svc-wide"])
+	narrowClient := proxyHTTPClient(consumerDeployment.ProxySockets["test/svc-narrow"])
 
 	// --- Phase 2: Register a service and verify propagation ---
 
@@ -98,7 +94,7 @@ func TestServiceDiscovery(t *testing.T) {
 	// fleet-scoped localparts. registerPrincipal creates bare-localpart
 	// Matrix accounts; the fleet-scoped entity is the canonical identity
 	// the daemon uses for routing and directory entries.
-	serviceEntity, err := ref.NewEntityFromAccountLocalpart(fleet.Ref, serviceAgent.Localpart)
+	serviceEntity, err := ref.NewEntityFromAccountLocalpart(fleet.Ref, "service/stt/test")
 	if err != nil {
 		t.Fatalf("construct service entity ref: %v", err)
 	}
@@ -234,15 +230,11 @@ func TestServiceDiscovery(t *testing.T) {
 		partialWatch := watchRoom(t, admin, consumer.ConfigRoomID)
 
 		// Register a second service that the narrow consumer CAN see.
-		embeddingAgent := registerFleetPrincipal(t, fleet, "service/embedding/test", "embedding-password")
 		deployPrincipals(t, admin, provider, deploymentConfig{
-			Principals: []principalSpec{
-				{Account: serviceAgent},
-				{Account: embeddingAgent},
-			},
+			Principals: []principalSpec{{Localpart: "service/embedding/test"}},
 		})
 
-		embeddingEntity, entityErr := ref.NewEntityFromAccountLocalpart(fleet.Ref, embeddingAgent.Localpart)
+		embeddingEntity, entityErr := ref.NewEntityFromAccountLocalpart(fleet.Ref, "service/embedding/test")
 		if entityErr != nil {
 			t.Fatalf("construct embedding entity ref: %v", entityErr)
 		}

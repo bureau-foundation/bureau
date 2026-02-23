@@ -128,16 +128,15 @@ func TestPrincipalAssignment(t *testing.T) {
 		ProxyBinary:    resolvedBinary(t, "PROXY_BINARY"),
 	})
 
-	agent := registerFleetPrincipal(t, fleet, "test/agent", "test-principal-password")
-	proxySockets := deployPrincipals(t, admin, machine, deploymentConfig{
-		Principals: []principalSpec{{Account: agent}},
+	deployment := deployPrincipals(t, admin, machine, deploymentConfig{
+		Principals: []principalSpec{{Localpart: "test/agent"}},
 	})
 
 	// Verify the proxy serves the principal's identity.
-	proxyClient := proxyHTTPClient(proxySockets[agent.Localpart])
+	proxyClient := proxyHTTPClient(deployment.ProxySockets["test/agent"])
 	whoamiUserID := proxyWhoami(t, proxyClient)
-	if whoamiUserID != agent.UserID.String() {
-		t.Errorf("whoami user_id = %q, want %q", whoamiUserID, agent.UserID)
+	if whoamiUserID != deployment.Accounts["test/agent"].UserID.String() {
+		t.Errorf("whoami user_id = %q, want %q", whoamiUserID, deployment.Accounts["test/agent"].UserID)
 	}
 
 	// Verify MachineStatus reflects the running sandbox. The daemon publishes
@@ -169,9 +168,8 @@ func TestOperatorFlow(t *testing.T) {
 		ObserveRelayBinary: resolvedBinary(t, "OBSERVE_RELAY_BINARY"),
 	})
 
-	observed := registerFleetPrincipal(t, fleet, "test/observed", "test-observe-password")
 	deployPrincipals(t, admin, machine, deploymentConfig{
-		Principals: []principalSpec{{Account: observed}},
+		Principals: []principalSpec{{Localpart: "test/observed"}},
 		DefaultPolicy: &schema.AuthorizationPolicy{
 			Allowances: []schema.Allowance{
 				{Actions: []string{"observe"}, Actors: []string{"**:**"}},
@@ -209,7 +207,7 @@ func TestOperatorFlow(t *testing.T) {
 		// Verify the running principal appears in the list.
 		var foundPrincipal bool
 		for _, entry := range response.Principals {
-			if entry.Localpart == observed.Localpart {
+			if entry.Localpart == "test/observed" {
 				foundPrincipal = true
 				if !entry.Local {
 					t.Error("expected principal to be local")
@@ -225,7 +223,7 @@ func TestOperatorFlow(t *testing.T) {
 		}
 		if !foundPrincipal {
 			t.Errorf("principal %q not found in list response (got %d principals)",
-				observed.Localpart, len(response.Principals))
+				"test/observed", len(response.Principals))
 		}
 
 		// Verify the local machine appears.
@@ -281,20 +279,20 @@ func TestOperatorFlow(t *testing.T) {
 
 		var foundPrincipal bool
 		for _, entry := range listResponse.Principals {
-			if entry.Localpart == observed.Localpart {
+			if entry.Localpart == "test/observed" {
 				foundPrincipal = true
 				break
 			}
 		}
 		if !foundPrincipal {
-			t.Errorf("CLI: principal %q not found in list output", observed.Localpart)
+			t.Errorf("CLI: principal %q not found in list output", "test/observed")
 		}
 	})
 
 	// --- Sub-test: observe handshake via Go library ---
 	t.Run("ObserveHandshake", func(t *testing.T) {
 		session, err := observe.Connect(machine.ObserveSocket, observe.ObserveRequest{
-			Principal: observed.Localpart,
+			Principal: "test/observed",
 			Mode:      "readwrite",
 			Observer:  adminUserID,
 			Token:     adminToken,
@@ -304,9 +302,9 @@ func TestOperatorFlow(t *testing.T) {
 		}
 		defer session.Close()
 
-		if session.Metadata.Principal != observed.Localpart {
+		if session.Metadata.Principal != "test/observed" {
 			t.Errorf("metadata principal = %q, want %q",
-				session.Metadata.Principal, observed.Localpart)
+				session.Metadata.Principal, "test/observed")
 		}
 		if session.Metadata.Machine != machine.Name {
 			t.Errorf("metadata machine = %q, want %q",
@@ -317,7 +315,7 @@ func TestOperatorFlow(t *testing.T) {
 	// --- Sub-test: observe denied without authentication ---
 	t.Run("ObserveDeniedUnauthorized", func(t *testing.T) {
 		_, err := observe.Connect(machine.ObserveSocket, observe.ObserveRequest{
-			Principal: observed.Localpart,
+			Principal: "test/observed",
 			Mode:      "readwrite",
 			Observer:  "@nobody:" + testServerName,
 			Token:     "invalid-token-that-should-be-rejected",
@@ -358,12 +356,14 @@ func TestCredentialRotation(t *testing.T) {
 	// Register and deploy the principal with its initial token.
 	password := "rotate-test-password"
 	agent := registerFleetPrincipal(t, fleet, "test/rotate", password)
-	proxySockets := deployPrincipals(t, admin, machine, deploymentConfig{
-		Principals: []principalSpec{{Account: agent}},
+	pushCredentials(t, admin, machine, agent)
+	pushMachineConfig(t, admin, machine, deploymentConfig{
+		Principals: []principalSpec{{Localpart: agent.Localpart}},
 	})
 
 	// Verify the proxy serves the correct identity with the original token.
-	proxySocket := proxySockets[agent.Localpart]
+	proxySocket := machine.PrincipalProxySocketPath(t, agent.Localpart)
+	waitForFile(t, proxySocket)
 	proxyClient := proxyHTTPClient(proxySocket)
 	if whoami := proxyWhoami(t, proxyClient); whoami != agent.UserID.String() {
 		t.Fatalf("initial whoami = %q, want %q", whoami, agent.UserID)
@@ -450,9 +450,8 @@ func TestCrossMachineObservation(t *testing.T) {
 
 	// Deploy a principal on the provider with observation allowances
 	// that let the admin observe in readwrite mode.
-	observed := registerFleetPrincipal(t, fleet, "test/xm-obs", "xm-observe-password")
 	deployPrincipals(t, admin, provider, deploymentConfig{
-		Principals: []principalSpec{{Account: observed}},
+		Principals: []principalSpec{{Localpart: "test/xm-obs"}},
 		DefaultPolicy: &schema.AuthorizationPolicy{
 			Allowances: []schema.Allowance{
 				{Actions: []string{"observe"}, Actors: []string{"**:**"}},
@@ -471,12 +470,12 @@ func TestCrossMachineObservation(t *testing.T) {
 	// daemon can discover the principal on the provider machine. In
 	// production, services are registered by the daemon or admin; here
 	// we simulate that by pushing the state event directly.
-	observedEntity, err := ref.NewEntityFromAccountLocalpart(fleet.Ref, observed.Localpart)
+	observedEntity, err := ref.NewEntityFromAccountLocalpart(fleet.Ref, "test/xm-obs")
 	if err != nil {
 		t.Fatalf("construct observed principal entity ref: %v", err)
 	}
 	_, err = admin.SendStateEvent(ctx, fleet.ServiceRoomID, schema.EventTypeService,
-		observed.Localpart, schema.Service{
+		"test/xm-obs", schema.Service{
 			Principal:   observedEntity,
 			Machine:     provider.Ref,
 			Protocol:    "bureau-observe",
@@ -513,7 +512,7 @@ func TestCrossMachineObservation(t *testing.T) {
 			}
 
 			for _, entry := range response.Principals {
-				if entry.Localpart == observed.Localpart && entry.Observable {
+				if entry.Localpart == "test/xm-obs" && entry.Observable {
 					t.Logf("remote principal %q discovered (machine=%s, observable=%v)",
 						entry.Localpart, entry.Machine, entry.Observable)
 					goto discovered
@@ -539,7 +538,7 @@ func TestCrossMachineObservation(t *testing.T) {
 
 		// Verify the principal is remote and observable.
 		for _, entry := range response.Principals {
-			if entry.Localpart == observed.Localpart {
+			if entry.Localpart == "test/xm-obs" {
 				if entry.Local {
 					t.Error("expected principal to be remote, not local")
 				}
@@ -579,7 +578,7 @@ func TestCrossMachineObservation(t *testing.T) {
 		// the provider forks a relay, and the observation stream flows
 		// back through the data channel to the operator.
 		session, err := observe.Connect(consumer.ObserveSocket, observe.ObserveRequest{
-			Principal: observed.Localpart,
+			Principal: "test/xm-obs",
 			Mode:      "readwrite",
 			Observer:  adminUserID,
 			Token:     adminToken,
@@ -591,9 +590,9 @@ func TestCrossMachineObservation(t *testing.T) {
 
 		// The metadata comes from the relay on the provider machine,
 		// bridged through the WebRTC data channel and the consumer daemon.
-		if session.Metadata.Principal != observed.Localpart {
+		if session.Metadata.Principal != "test/xm-obs" {
 			t.Errorf("metadata principal = %q, want %q",
-				session.Metadata.Principal, observed.Localpart)
+				session.Metadata.Principal, "test/xm-obs")
 		}
 		if session.Metadata.Machine != provider.Name {
 			t.Errorf("metadata machine = %q, want %q (should be the provider)",
@@ -642,7 +641,7 @@ func TestConfigReconciliation(t *testing.T) {
 	// --- Phase 1: deploy alpha ---
 	t.Run("AddFirstPrincipal", func(t *testing.T) {
 		pushMachineConfig(t, admin, machine, deploymentConfig{
-			Principals: []principalSpec{{Account: alpha}},
+			Principals: []principalSpec{{Localpart: alpha.Localpart}},
 		})
 		waitForFile(t, alphaSocket)
 
@@ -661,8 +660,8 @@ func TestConfigReconciliation(t *testing.T) {
 	t.Run("AddSecondPrincipal", func(t *testing.T) {
 		pushMachineConfig(t, admin, machine, deploymentConfig{
 			Principals: []principalSpec{
-				{Account: alpha},
-				{Account: beta},
+				{Localpart: alpha.Localpart},
+				{Localpart: beta.Localpart},
 			},
 		})
 		waitForFile(t, betaSocket)
@@ -683,7 +682,7 @@ func TestConfigReconciliation(t *testing.T) {
 	// --- Phase 3: remove alpha, keep beta ---
 	t.Run("RemoveFirstPrincipal", func(t *testing.T) {
 		pushMachineConfig(t, admin, machine, deploymentConfig{
-			Principals: []principalSpec{{Account: beta}},
+			Principals: []principalSpec{{Localpart: beta.Localpart}},
 		})
 
 		// Alpha's proxy should be torn down: launcher sends SIGTERM, proxy

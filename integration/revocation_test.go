@@ -125,19 +125,18 @@ func TestMachineRevocation_DaemonSelfDestruct(t *testing.T) {
 	})
 
 	// Deploy a principal and verify the proxy is functional.
-	account := registerFleetPrincipal(t, fleet, principalLocalpart, "password-revoke-destruct")
-	proxySockets := deployPrincipals(t, admin, machine, deploymentConfig{
+	deployment := deployPrincipals(t, admin, machine, deploymentConfig{
 		Principals: []principalSpec{{
-			Account:      account,
+			Localpart:    principalLocalpart,
 			MatrixPolicy: &schema.MatrixPolicy{AllowJoin: true},
 		}},
 	})
 
-	proxySocket := proxySockets[principalLocalpart]
+	proxySocket := deployment.ProxySockets[principalLocalpart]
 	proxyClient := proxyHTTPClient(proxySocket)
 	whoami := proxyWhoami(t, proxyClient)
-	if whoami != account.UserID.String() {
-		t.Fatalf("proxy whoami = %q, want %q", whoami, account.UserID)
+	if whoami != deployment.Accounts[principalLocalpart].UserID.String() {
+		t.Fatalf("proxy whoami = %q, want %q", whoami, deployment.Accounts[principalLocalpart].UserID)
 	}
 
 	// Invalidate the machine's Matrix access tokens. The daemon's next
@@ -207,16 +206,14 @@ func TestMachineRevocation_CLIRevoke(t *testing.T) {
 	})
 
 	// Deploy two principals.
-	accountA := registerFleetPrincipal(t, fleet, principalALocalpart, "password-revoke-a")
-	accountB := registerFleetPrincipal(t, fleet, principalBLocalpart, "password-revoke-b")
-	proxySockets := deployPrincipals(t, admin, machine, deploymentConfig{
+	deployment := deployPrincipals(t, admin, machine, deploymentConfig{
 		Principals: []principalSpec{
 			{
-				Account:      accountA,
+				Localpart:    principalALocalpart,
 				MatrixPolicy: &schema.MatrixPolicy{AllowJoin: true},
 			},
 			{
-				Account:      accountB,
+				Localpart:    principalBLocalpart,
 				MatrixPolicy: &schema.MatrixPolicy{AllowJoin: true},
 			},
 		},
@@ -224,7 +221,7 @@ func TestMachineRevocation_CLIRevoke(t *testing.T) {
 
 	// Verify both proxies are functional.
 	for _, localpart := range []string{principalALocalpart, principalBLocalpart} {
-		client := proxyHTTPClient(proxySockets[localpart])
+		client := proxyHTTPClient(deployment.ProxySockets[localpart])
 		proxyWhoami(t, client)
 	}
 	t.Log("both principals deployed and proxies functional")
@@ -246,8 +243,8 @@ func TestMachineRevocation_CLIRevoke(t *testing.T) {
 	// Synapse admin API support, this happens via emergency shutdown
 	// (auth failure → self-destruct). On Continuwuity, this happens
 	// via normal reconciliation (credential tombstones → remove pass).
-	waitForFileGone(t, proxySockets[principalALocalpart])
-	waitForFileGone(t, proxySockets[principalBLocalpart])
+	waitForFileGone(t, deployment.ProxySockets[principalALocalpart])
+	waitForFileGone(t, deployment.ProxySockets[principalBLocalpart])
 	t.Log("both proxy sockets removed — principals destroyed")
 
 	// Verify the credential revocation event was published.

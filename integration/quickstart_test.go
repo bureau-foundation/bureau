@@ -70,8 +70,8 @@ func TestQuickstartTestAgent(t *testing.T) {
 
 	pushMachineConfig(t, admin, machine, deploymentConfig{
 		Principals: []principalSpec{{
-			Account:  agent,
-			Template: templateRef,
+			Localpart: agent.Localpart,
+			Template:  templateRef,
 		}},
 	})
 

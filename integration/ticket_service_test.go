@@ -248,8 +248,8 @@ func TestTicketLifecycleAgent(t *testing.T) {
 
 		pushMachineConfig(t, admin, machine, deploymentConfig{
 			Principals: []principalSpec{{
-				Account:  account,
-				Template: templateRef,
+				Localpart: account.Localpart,
+				Template:  templateRef,
 				Payload: map[string]any{
 					"WORKSPACE_ROOM_ID": roomAlphaID,
 				},

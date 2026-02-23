@@ -59,15 +59,14 @@ func TestMatrixPolicyHotReload(t *testing.T) {
 	})
 
 	// Deploy a proxy-only principal with no MatrixPolicy (default-deny).
-	agent := registerFleetPrincipal(t, fleet, "agent/policy-hr", "policy-hr-password")
-	proxySockets := deployPrincipals(t, admin, machine, deploymentConfig{
-		Principals: []principalSpec{{Account: agent}},
+	deployment := deployPrincipals(t, admin, machine, deploymentConfig{
+		Principals: []principalSpec{{Localpart: "agent/policy-hr"}},
 	})
-	proxyClient := proxyHTTPClient(proxySockets[agent.Localpart])
+	proxyClient := proxyHTTPClient(deployment.ProxySockets["agent/policy-hr"])
 
 	// Sanity check: proxy is operational.
-	if userID := proxyWhoami(t, proxyClient); userID != agent.UserID.String() {
-		t.Fatalf("proxy whoami = %q, want %q", userID, agent.UserID)
+	if userID := proxyWhoami(t, proxyClient); userID != deployment.Accounts["agent/policy-hr"].UserID.String() {
+		t.Fatalf("proxy whoami = %q, want %q", userID, deployment.Accounts["agent/policy-hr"].UserID)
 	}
 
 	// Create a single watch for all phases. The watch starts after the
@@ -87,7 +86,7 @@ func TestMatrixPolicyHotReload(t *testing.T) {
 	if err != nil {
 		t.Fatalf("create room A: %v", err)
 	}
-	if err := admin.InviteUser(ctx, roomA.RoomID, agent.UserID); err != nil {
+	if err := admin.InviteUser(ctx, roomA.RoomID, deployment.Accounts["agent/policy-hr"].UserID); err != nil {
 		t.Fatalf("invite agent to room A: %v", err)
 	}
 
@@ -102,7 +101,7 @@ func TestMatrixPolicyHotReload(t *testing.T) {
 
 	pushMachineConfig(t, admin, machine, deploymentConfig{
 		Principals: []principalSpec{{
-			Account:      agent,
+			Localpart:    "agent/policy-hr",
 			MatrixPolicy: &schema.MatrixPolicy{AllowJoin: true},
 		}},
 	})
@@ -135,12 +134,12 @@ func TestMatrixPolicyHotReload(t *testing.T) {
 	if err != nil {
 		t.Fatalf("create room B: %v", err)
 	}
-	if err := admin.InviteUser(ctx, roomB.RoomID, agent.UserID); err != nil {
+	if err := admin.InviteUser(ctx, roomB.RoomID, deployment.Accounts["agent/policy-hr"].UserID); err != nil {
 		t.Fatalf("invite agent to room B: %v", err)
 	}
 
 	pushMachineConfig(t, admin, machine, deploymentConfig{
-		Principals: []principalSpec{{Account: agent}},
+		Principals: []principalSpec{{Localpart: "agent/policy-hr"}},
 	})
 
 	// Wait for the daemon's grants revert confirmation. Default-deny
@@ -208,14 +207,13 @@ func TestServiceVisibilityHotReload(t *testing.T) {
 	// pushes to all running proxies. If the proxy doesn't exist when
 	// the service event is processed, the push is a no-op and the
 	// message becomes a false synchronization signal.
-	agent := registerFleetPrincipal(t, fleet, "agent/vis-hr", "vis-hr-password")
-	proxySockets := deployPrincipals(t, admin, machine, deploymentConfig{
+	deployment := deployPrincipals(t, admin, machine, deploymentConfig{
 		Principals: []principalSpec{{
-			Account:           agent,
+			Localpart:         "agent/vis-hr",
 			ServiceVisibility: []string{"service/vis-hr/*"},
 		}},
 	})
-	proxyClient := proxyHTTPClient(proxySockets[agent.Localpart])
+	proxyClient := proxyHTTPClient(deployment.ProxySockets["agent/vis-hr"])
 
 	// Create a single watch for the entire test: service directory
 	// waiting, Phase 2 grants, and Phase 3 grants all use the same
@@ -271,7 +269,7 @@ func TestServiceVisibilityHotReload(t *testing.T) {
 
 	pushMachineConfig(t, admin, machine, deploymentConfig{
 		Principals: []principalSpec{{
-			Account:           agent,
+			Localpart:         "agent/vis-hr",
 			ServiceVisibility: []string{"service/unrelated/*"},
 		}},
 	})
@@ -296,7 +294,7 @@ func TestServiceVisibilityHotReload(t *testing.T) {
 
 	pushMachineConfig(t, admin, machine, deploymentConfig{
 		Principals: []principalSpec{{
-			Account:           agent,
+			Localpart:         "agent/vis-hr",
 			ServiceVisibility: []string{"service/vis-hr/*"},
 		}},
 	})

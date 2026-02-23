@@ -111,6 +111,30 @@ func TestClientSideValidation(t *testing.T) {
 		{"DeleteContext empty key", func() error {
 			return client.DeleteContext(ctx, "")
 		}},
+		{"CheckpointContext empty commit_type", func() error {
+			_, err := client.CheckpointContext(ctx, CheckpointContextRequest{
+				ArtifactRef: "ref", Format: "bureau-agent-v1", Checkpoint: "turn_boundary",
+			})
+			return err
+		}},
+		{"CheckpointContext empty artifact_ref", func() error {
+			_, err := client.CheckpointContext(ctx, CheckpointContextRequest{
+				CommitType: "delta", Format: "bureau-agent-v1", Checkpoint: "turn_boundary",
+			})
+			return err
+		}},
+		{"CheckpointContext empty format", func() error {
+			_, err := client.CheckpointContext(ctx, CheckpointContextRequest{
+				CommitType: "delta", ArtifactRef: "ref", Checkpoint: "turn_boundary",
+			})
+			return err
+		}},
+		{"CheckpointContext empty checkpoint", func() error {
+			_, err := client.CheckpointContext(ctx, CheckpointContextRequest{
+				CommitType: "delta", ArtifactRef: "ref", Format: "bureau-agent-v1",
+			})
+			return err
+		}},
 	}
 
 	for _, test := range tests {

@@ -18,11 +18,20 @@ import (
 	"github.com/bureau-foundation/bureau/cmd/bureau/commands"
 	"github.com/bureau-foundation/bureau/cmd/bureau/mcp"
 	"github.com/bureau-foundation/bureau/lib/agentdriver"
+	"github.com/bureau-foundation/bureau/lib/artifactstore"
 	"github.com/bureau-foundation/bureau/lib/llm"
 	llmcontext "github.com/bureau-foundation/bureau/lib/llm/context"
 	"github.com/bureau-foundation/bureau/lib/proxyclient"
 	"github.com/bureau-foundation/bureau/lib/ref"
 	"github.com/bureau-foundation/bureau/lib/toolserver"
+)
+
+// Standard sandbox paths for the artifact service socket and token.
+// These are bind-mounted into the sandbox by the daemon when the agent
+// template declares RequiredServices: ["artifact"].
+const (
+	artifactServiceSocketPath = "/run/bureau/service/artifact.sock"
+	artifactServiceTokenPath  = "/run/bureau/service/token/artifact.token"
 )
 
 // nativeDriver implements agentdriver.Driver for the Bureau-native agent.
@@ -149,6 +158,42 @@ func (driver *nativeDriver) Start(ctx context.Context, config agentdriver.Driver
 		"message_budget", messageBudget,
 	)
 
+	// Auto-detect artifact and agent service sockets for context
+	// checkpointing. Both must be present for checkpointing to
+	// function — the artifact client stores delta bytes and the agent
+	// service client records commit metadata. If either is missing,
+	// checkpointing is disabled (the loop logs once and operates
+	// without persistence).
+	// Declare as interface types so a nil variable stays truly nil
+	// when assigned to the interface fields in agentLoopConfig.
+	// Using concrete types (e.g., *artifactstore.Client) would create
+	// non-nil interfaces wrapping nil pointers, bypassing the nil
+	// check in newCheckpointTracker.
+	var checkpointArtifactClient artifactStorer
+	if _, statErr := os.Stat(artifactServiceSocketPath); statErr == nil {
+		client, clientErr := artifactstore.NewClient(artifactServiceSocketPath, artifactServiceTokenPath)
+		if clientErr != nil {
+			return nil, nil, fmt.Errorf("creating artifact client: %w", clientErr)
+		}
+		checkpointArtifactClient = client
+		driver.logger.Info("artifact client initialized for checkpointing")
+	}
+
+	var checkpointAgentServiceClient contextCheckpointer
+	if _, statErr := os.Stat(agentdriver.DefaultAgentServiceSocketPath); statErr == nil {
+		client, clientErr := agentdriver.NewAgentServiceClient(
+			agentdriver.DefaultAgentServiceSocketPath,
+			agentdriver.DefaultAgentServiceTokenPath,
+		)
+		if clientErr != nil {
+			return nil, nil, fmt.Errorf("creating agent service client: %w", clientErr)
+		}
+		checkpointAgentServiceClient = client
+		driver.logger.Info("agent service client initialized for checkpointing")
+	}
+
+	agentTemplate := os.Getenv("BUREAU_AGENT_TEMPLATE")
+
 	// Create pipes for communication between the agent loop and
 	// the lifecycle manager. The loop writes structured JSON events
 	// to stdoutWriter; ParseOutput reads from stdoutReader. The
@@ -172,16 +217,20 @@ func (driver *nativeDriver) Start(ctx context.Context, config agentdriver.Driver
 		defer stdoutWriter.Close()
 
 		loopErr := runAgentLoop(loopCtx, &agentLoopConfig{
-			provider:       provider,
-			providerType:   selectedProviderType,
-			tools:          mcpServer,
-			contextManager: contextManager,
-			model:          model,
-			systemPrompt:   systemPrompt,
-			maxTokens:      maxTokens,
-			stdin:          stdinReader,
-			stdout:         stdoutWriter,
-			logger:         driver.logger,
+			provider:           provider,
+			providerType:       selectedProviderType,
+			tools:              mcpServer,
+			contextManager:     contextManager,
+			model:              model,
+			systemPrompt:       systemPrompt,
+			maxTokens:          maxTokens,
+			artifactClient:     checkpointArtifactClient,
+			agentServiceClient: checkpointAgentServiceClient,
+			sessionID:          config.SessionID,
+			template:           agentTemplate,
+			stdin:              stdinReader,
+			stdout:             stdoutWriter,
+			logger:             driver.logger,
 		}, config.Prompt)
 
 		process.mutex.Lock()

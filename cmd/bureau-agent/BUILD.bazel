@@ -6,6 +6,7 @@ load("@rules_go//go:def.bzl", "go_binary", "go_library", "go_test")
 go_library(
     name = "bureau-agent_lib",
     srcs = [
+        "checkpoint.go",
         "driver.go",
         "loop.go",
         "main.go",
@@ -16,10 +17,13 @@ go_library(
         "//cmd/bureau/commands",
         "//cmd/bureau/mcp",
         "//lib/agentdriver",
+        "//lib/artifactstore",
+        "//lib/codec",
         "//lib/llm",
         "//lib/llm/context",
         "//lib/proxyclient",
         "//lib/ref",
+        "//lib/schema/agent",
         "//lib/toolserver",
     ],
 )
@@ -33,6 +37,7 @@ go_binary(
 go_test(
     name = "bureau-agent_test",
     srcs = [
+        "checkpoint_test.go",
         "driver_test.go",
         "loop_test.go",
     ],
@@ -41,8 +46,11 @@ go_test(
         "//cmd/bureau/cli",
         "//cmd/bureau/mcp",
         "//lib/agentdriver",
+        "//lib/artifactstore",
+        "//lib/codec",
         "//lib/llm",
         "//lib/llm/context",
         "//lib/schema",
+        "//lib/schema/agent",
     ],
 )

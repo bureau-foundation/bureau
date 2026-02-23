@@ -13,6 +13,7 @@ import (
 
 	"github.com/bureau-foundation/bureau/lib/llm"
 	llmcontext "github.com/bureau-foundation/bureau/lib/llm/context"
+	"github.com/bureau-foundation/bureau/lib/schema/agent"
 	"github.com/bureau-foundation/bureau/lib/toolserver"
 )
 
@@ -83,6 +84,23 @@ type agentLoopConfig struct {
 	// enables tool search. Set by the tool search strategy selection.
 	extraHeaders map[string]string
 
+	// artifactClient stores delta artifacts in the CAS for context
+	// checkpointing. Nil when the artifact service is not available
+	// in the sandbox (checkpointing disabled).
+	artifactClient artifactStorer
+
+	// agentServiceClient calls checkpoint-context to record commit
+	// metadata. Nil when the agent service socket is not available.
+	agentServiceClient contextCheckpointer
+
+	// sessionID is the session identifier included in checkpoint
+	// metadata.
+	sessionID string
+
+	// template is the agent template identifier included in
+	// checkpoint metadata.
+	template string
+
 	// stdin is the read end of the message injection pipe. The lifecycle
 	// manager's message pump writes incoming Matrix messages here.
 	stdin io.Reader
@@ -105,6 +123,23 @@ func runAgentLoop(ctx context.Context, config *agentLoopConfig, initialPrompt st
 	encoder.SetEscapeHTML(false)
 	scanner := bufio.NewScanner(config.stdin)
 
+	// Initialize the checkpoint tracker. If the artifact or agent
+	// service clients are nil, the tracker is a no-op.
+	tracker := newCheckpointTracker(
+		config.artifactClient,
+		config.agentServiceClient,
+		config.sessionID,
+		config.template,
+		config.logger,
+	)
+
+	// Final checkpoint at session end. Uses context.Background()
+	// because the loop's ctx may already be cancelled, but the
+	// sandbox is still alive at this point.
+	defer func() {
+		tracker.checkpointDelta(context.Background(), agent.CheckpointSessionEnd)
+	}()
+
 	// Build tool definitions from the MCP server's authorized tool catalog,
 	// then select a tool search strategy if the catalog is large enough
 	// to benefit from on-demand discovery.
@@ -123,7 +158,9 @@ func runAgentLoop(ctx context.Context, config *agentLoopConfig, initialPrompt st
 	// happens after the test (or production caller) has had a chance to
 	// register any required services on the proxy.
 	if initialPrompt != "" {
-		config.contextManager.Append(llm.UserMessage(initialPrompt))
+		message := llm.UserMessage(initialPrompt)
+		config.contextManager.Append(message)
+		tracker.appendMessage(message)
 	} else {
 		config.logger.Info("no initial prompt, waiting for first message")
 		if !waitForMessage(ctx, scanner) {
@@ -133,7 +170,9 @@ func runAgentLoop(ctx context.Context, config *agentLoopConfig, initialPrompt st
 		firstMessage := scanner.Text()
 		config.logger.Info("first message received", "length", len(firstMessage))
 		encoder.Encode(loopEvent{Type: "prompt", Content: firstMessage, Source: "injected"})
-		config.contextManager.Append(llm.UserMessage(firstMessage))
+		message := llm.UserMessage(firstMessage)
+		config.contextManager.Append(message)
+		tracker.appendMessage(message)
 	}
 
 	// totalAppended tracks total messages added to the context manager.
@@ -154,6 +193,7 @@ func runAgentLoop(ctx context.Context, config *agentLoopConfig, initialPrompt st
 		// The manager may truncate older turn groups to fit within
 		// the token budget.
 		messages, contextErr := config.contextManager.Messages(ctx)
+		truncated := contextErr != nil || int64(len(messages)) < totalAppended
 		if contextErr != nil {
 			config.logger.Warn("context budget exceeded after truncation",
 				"error", contextErr,
@@ -165,7 +205,7 @@ func runAgentLoop(ctx context.Context, config *agentLoopConfig, initialPrompt st
 				Subtype: "context_truncated",
 				Message: contextErr.Error(),
 			})
-		} else if int64(len(messages)) < totalAppended {
+		} else if truncated {
 			config.logger.Info("context truncated to fit budget",
 				"appended", totalAppended,
 				"windowed", len(messages),
@@ -177,6 +217,14 @@ func runAgentLoop(ctx context.Context, config *agentLoopConfig, initialPrompt st
 				Message: fmt.Sprintf("evicted %d messages to fit context budget (%d appended, %d sent)",
 					totalAppended-int64(len(messages)), totalAppended, len(messages)),
 			})
+		}
+
+		// When truncation occurs, create a pre-compaction delta
+		// (everything since the last checkpoint) followed by a
+		// compaction commit (the surviving messages). The compaction
+		// commit acts as the chain prefix during materialization.
+		if truncated {
+			tracker.checkpointCompaction(ctx, messages)
 		}
 
 		config.logger.Info("starting turn", "turn", totalTurns, "messages", len(messages))
@@ -203,10 +251,12 @@ func runAgentLoop(ctx context.Context, config *agentLoopConfig, initialPrompt st
 		})
 
 		// Append the assistant's response to the conversation.
-		config.contextManager.Append(llm.Message{
+		assistantMessage := llm.Message{
 			Role:    llm.RoleAssistant,
 			Content: response.Content,
-		})
+		}
+		config.contextManager.Append(assistantMessage)
+		tracker.appendMessage(assistantMessage)
 		totalAppended++
 
 		// Check whether the response contains tool calls.
@@ -216,6 +266,11 @@ func runAgentLoop(ctx context.Context, config *agentLoopConfig, initialPrompt st
 			text := response.TextContent()
 			config.logger.Info("text response", "length", len(text), "stop_reason", response.StopReason)
 			encoder.Encode(loopEvent{Type: "response", Content: text})
+
+			// Turn boundary: the assistant has finished responding.
+			// Checkpoint the conversation before blocking for the
+			// next message.
+			tracker.checkpointDelta(ctx, agent.CheckpointTurnBoundary)
 
 			// Wait for the next injected message from Matrix.
 			if !waitForMessage(ctx, scanner) {
@@ -227,7 +282,9 @@ func runAgentLoop(ctx context.Context, config *agentLoopConfig, initialPrompt st
 			config.logger.Info("message injected", "length", len(injectedMessage))
 			encoder.Encode(loopEvent{Type: "prompt", Content: injectedMessage, Source: "injected"})
 
-			config.contextManager.Append(llm.UserMessage(injectedMessage))
+			message := llm.UserMessage(injectedMessage)
+			config.contextManager.Append(message)
+			tracker.appendMessage(message)
 			totalAppended++
 			continue
 		}
@@ -238,7 +295,9 @@ func runAgentLoop(ctx context.Context, config *agentLoopConfig, initialPrompt st
 
 		// Append tool results as a user message and loop back for
 		// the LLM to process them.
-		config.contextManager.Append(llm.ToolResultMessage(results...))
+		toolResultMessage := llm.ToolResultMessage(results...)
+		config.contextManager.Append(toolResultMessage)
+		tracker.appendMessage(toolResultMessage)
 		totalAppended++
 	}
 }

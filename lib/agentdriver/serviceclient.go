@@ -236,6 +236,121 @@ func (c *AgentServiceClient) DeleteContext(ctx context.Context, key string) erro
 	}, nil)
 }
 
+// --- Context commit actions ---
+
+// CheckpointContextRequest holds the parameters for creating a context
+// commit. The caller must have already stored the delta artifact in
+// the artifact service before calling this — the agent service only
+// records the artifact ref and metadata (write-through ordering).
+//
+// Server-side fields (Principal, Machine, CreatedAt) are derived from
+// the service token and clock. The caller does not supply these.
+type CheckpointContextRequest struct {
+	// Parent is the ctx-* ID of the parent commit. Empty for root
+	// commits (start of a new conversation).
+	Parent string
+
+	// CommitType describes the artifact's role: "delta" (new entries
+	// since parent), "compaction" (summary replacing prefix chain),
+	// or "snapshot" (full materialized context). Required.
+	CommitType string
+
+	// ArtifactRef is the BLAKE3 content-addressed ref of the delta
+	// artifact. Required.
+	ArtifactRef string
+
+	// Format is the serialization format of the artifact (e.g.,
+	// "bureau-agent-v1", "claude-code-v1"). Required.
+	Format string
+
+	// Template is the agent template identifier. Optional.
+	Template string
+
+	// SessionID identifies the session that produced this commit.
+	SessionID string
+
+	// Checkpoint describes what triggered the commit: "turn_boundary",
+	// "tool_call", "compaction", "session_end", "explicit". Required.
+	Checkpoint string
+
+	// TicketID is the ticket being worked when this commit was created.
+	TicketID string
+
+	// ThreadID is the Matrix event ID of the thread this commit is
+	// part of.
+	ThreadID string
+
+	// Summary is an optional human-readable description.
+	Summary string
+
+	// MessageCount is the number of messages in the delta artifact.
+	MessageCount int
+
+	// TokenCount is the approximate token count of the delta content.
+	TokenCount int64
+}
+
+// CheckpointContextResponse is the response from a checkpoint-context
+// call. Contains the deterministic ctx-* identifier for the new commit.
+type CheckpointContextResponse struct {
+	ID string `cbor:"id"`
+}
+
+// CheckpointContext creates a new context commit in the agent's
+// understanding chain. Returns the deterministic ctx-* identifier
+// for the new commit.
+func (c *AgentServiceClient) CheckpointContext(ctx context.Context, request CheckpointContextRequest) (*CheckpointContextResponse, error) {
+	if request.CommitType == "" {
+		return nil, fmt.Errorf("commit_type is required")
+	}
+	if request.ArtifactRef == "" {
+		return nil, fmt.Errorf("artifact_ref is required")
+	}
+	if request.Format == "" {
+		return nil, fmt.Errorf("format is required")
+	}
+	if request.Checkpoint == "" {
+		return nil, fmt.Errorf("checkpoint is required")
+	}
+
+	fields := map[string]any{
+		"commit_type":  request.CommitType,
+		"artifact_ref": request.ArtifactRef,
+		"format":       request.Format,
+		"checkpoint":   request.Checkpoint,
+	}
+	if request.Parent != "" {
+		fields["parent"] = request.Parent
+	}
+	if request.Template != "" {
+		fields["template"] = request.Template
+	}
+	if request.SessionID != "" {
+		fields["session_id"] = request.SessionID
+	}
+	if request.TicketID != "" {
+		fields["ticket_id"] = request.TicketID
+	}
+	if request.ThreadID != "" {
+		fields["thread_id"] = request.ThreadID
+	}
+	if request.Summary != "" {
+		fields["summary"] = request.Summary
+	}
+	if request.MessageCount != 0 {
+		fields["message_count"] = request.MessageCount
+	}
+	if request.TokenCount != 0 {
+		fields["token_count"] = request.TokenCount
+	}
+
+	var response CheckpointContextResponse
+	if err := c.client.Call(ctx, "checkpoint-context", fields, &response); err != nil {
+		return nil, err
+	}
+	return &response, nil
+}
+
 // --- Metrics actions ---
 
 // GetMetrics returns the aggregated metrics for a principal. If

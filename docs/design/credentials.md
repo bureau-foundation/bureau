@@ -832,3 +832,10 @@ co-sign) could mitigate this but adds operational friction.
   machines need credentials, terminated machines need cleanup).
 - [information-architecture.md](information-architecture.md) defines
   the Matrix room structure where credential state events are stored.
+- [stewardship.md](stewardship.md) — credential rotation stewardship
+  ensures affected project leads approve before shared credentials
+  are rotated. Stewardship declarations for `credential/**` resources
+  auto-configure review gates on rotation tickets. The per-principal
+  signing hardening described in stewardship.md extends the proxy
+  credential architecture to provide cryptographic attribution of
+  review dispositions.

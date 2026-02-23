@@ -903,3 +903,12 @@ Matrix availability.
 - **[agent-layering.md](agent-layering.md)** — interrupt authority,
   MCP tool filtering, and session access use the framework. Agent
   wrappers check authorization for incoming messages.
+
+- **[stewardship.md](stewardship.md)** — stewardship complements
+  authorization: grants determine what a principal *can* do,
+  stewardship determines whose *involvement is required* before the
+  action proceeds. Both must be satisfied. Temporal grants connect to
+  stewardship through the access escalation pattern: the ticket
+  service provides evidence of stewardship-gate approval, and a
+  separate authorization service validates policy bounds before minting
+  the temporal grant.

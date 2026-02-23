@@ -373,6 +373,18 @@ accept ticket operations from the ticket service. Tickets are state
 events, so querying "all open tickets in this room" is a state
 read, not a timeline scan.
 
+### Stewardship
+
+| Event type | State key | Room | Purpose |
+|---|---|---|---|
+| `m.bureau.stewardship` | resource identifier (e.g., `fleet/gpu`, `workspace/lib/schema`) | any room with tickets enabled | resource ownership: patterns, tiers, escalation, gate/notify types |
+
+Stewardship declarations map resources to responsible principals with
+tiered escalation policy. The ticket service maintains an in-memory
+stewardship index alongside its ticket index and auto-configures review
+gates when tickets affect stewarded resources. See
+[stewardship.md](stewardship.md) for the full governance model.
+
 ### Artifacts
 
 Artifact metadata and tags do NOT live in Matrix. The artifact service

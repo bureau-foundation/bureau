@@ -935,3 +935,11 @@ demand drops.
   needs a `fleet/assign` grant with targets matching the lower-priority
   controller's machines. Temporal grants can scope this to specific
   preemption windows.
+
+- **[stewardship.md](stewardship.md)** — fleet resource stewardship
+  governs scaling, rebalancing, and machine provisioning decisions.
+  Stewardship declarations for `fleet/**` resources ensure project
+  leads approve resource reallocation before the sysadmin executes.
+  The fleet controller creates tickets for capacity changes;
+  stewardship policies on those tickets auto-configure review gates
+  with tiered escalation.

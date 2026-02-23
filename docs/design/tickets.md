@@ -1215,3 +1215,9 @@ bureau ticket export --jsonl tickets.jsonl --room ROOM
   state events the service can write; Bureau grants control which
   principals can perform ticket operations. Service identity tokens
   authenticate callers on every socket request.
+- [stewardship.md](stewardship.md) — stewardship extends review gates
+  with threshold semantics and tiered escalation. The `affects` field
+  on tickets connects work items to stewardship declarations. The
+  ticket service maintains a stewardship index alongside its ticket
+  index, auto-configures review gates from matched stewardship
+  policies, and posts digest notifications for informational tickets.

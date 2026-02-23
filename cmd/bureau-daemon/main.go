@@ -279,6 +279,13 @@ func run() error {
 		"pipeline_room", pipelineRoomID,
 	)
 
+	// Build the sync filter after room resolution. The system, template,
+	// and pipeline rooms are excluded via "not_rooms" because the daemon
+	// only reads their state on-demand (token signing keys, template
+	// definitions, pipeline definitions) and never needs reactive /sync
+	// delivery from them.
+	syncFilter := buildSyncFilter([]ref.RoomID{systemRoomID, templateRoomID, pipelineRoomID})
+
 	// Check the watchdog from a previous exec() attempt. This detects
 	// whether a prior daemon self-update succeeded (we're the new binary)
 	// or failed (we're the old binary restarted after a crash).
@@ -310,8 +317,7 @@ func run() error {
 		machineRoomID:          machineRoomID,
 		serviceRoomID:          serviceRoomID,
 		fleetRoomID:            fleetRoomID,
-		templateRoomID:         templateRoomID,
-		pipelineRoomID:         pipelineRoomID,
+		syncFilter:             syncFilter,
 		runDir:                 runDir,
 		fleetRunDir:            fleet.RunDir(runDir),
 		launcherSocket:         principal.LauncherSocketPath(runDir),
@@ -441,7 +447,7 @@ func run() error {
 	// Start the incremental sync loop, status heartbeat loop, and
 	// token refresh loop.
 	go service.RunSyncLoop(ctx, daemon.session, service.SyncConfig{
-		Filter:      syncFilter,
+		Filter:      daemon.syncFilter,
 		OnSyncError: daemon.syncErrorHandler,
 	}, sinceToken, daemon.processSyncResponse, daemon.clock, daemon.logger)
 	go daemon.statusLoop(ctx)
@@ -518,8 +524,7 @@ type Daemon struct {
 	machineRoomID  ref.RoomID
 	serviceRoomID  ref.RoomID
 	fleetRoomID    ref.RoomID // fleet room for HA leases, service definitions, and alerts
-	templateRoomID ref.RoomID // namespace template room (read-only, no reconcile)
-	pipelineRoomID ref.RoomID // namespace pipeline room (read-only, no reconcile)
+	syncFilter     string     // inline Matrix /sync filter JSON (room- and type-scoped)
 	runDir         string     // base runtime directory (e.g., /run/bureau)
 	fleetRunDir    string     // fleet-scoped runtime directory (e.g., /run/bureau/fleet/prod)
 	launcherSocket string

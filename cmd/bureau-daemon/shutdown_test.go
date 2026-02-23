@@ -220,7 +220,7 @@ func TestSyncLoop_AuthFailureTriggersShutdown(t *testing.T) {
 	go func() {
 		defer close(syncDone)
 		service.RunSyncLoop(context.Background(), session, service.SyncConfig{
-			Filter:      syncFilter,
+			Filter:      daemon.syncFilter,
 			OnSyncError: daemon.syncErrorHandler,
 		}, "batch_0", daemon.processSyncResponse, clock.Real(), daemon.logger)
 	}()

@@ -3,31 +3,32 @@
 
 package main
 
-// The sync loop replaces the timer-based polling loop with an event-driven
-// Matrix /sync long-poll. Instead of fetching all state every 30 seconds,
-// the daemon waits for the homeserver to push state changes as they happen.
+// The sync loop is an event-driven Matrix /sync long-poll. The daemon
+// waits for the homeserver to push state changes as they happen rather
+// than polling periodically.
 //
-// Four categories of rooms are monitored:
+// Five categories of rooms are monitored reactively:
 //   - Config room: m.bureau.machine_config, m.bureau.credentials → reconcile
 //   - Machines room: m.bureau.machine_status → peer address updates
 //   - Services room: m.bureau.service → service directory updates
+//   - Fleet room: m.bureau.fleet_service, m.bureau.ha_lease → HA evaluation
 //   - Workspace rooms: m.bureau.workspace, m.bureau.project → reconcile
 //     (joined dynamically when the daemon accepts invites)
 //
+// Three rooms the daemon is joined to are excluded from the sync filter
+// via the Matrix "not_rooms" field because they are only read on-demand:
+//   - System room: token signing keys (read via GetStateEvent in transport auth)
+//   - Template room: template definitions (read during reconciliation)
+//   - Pipeline room: pipeline definitions (read by executor, not daemon)
+//
 // The sync loop is purely a notification mechanism: when state changes are
 // detected in a room, the existing handler (reconcile, syncPeerAddresses,
-// syncServiceDirectory) is called to re-read the current state. This avoids
-// coupling the sync response format to the handler logic — handlers continue
-// to work exactly as they did under polling.
+// syncServiceDirectory, HA evaluate) is called to re-read the current state.
+// This avoids coupling the sync response format to the handler logic.
 //
 // Invites are accepted automatically. The daemon is invited to workspace rooms
 // by "bureau workspace create" and must join to read workspace state events
 // (needed for StartCondition evaluation on deferred principals).
-//
-// Benefits over polling:
-//   - Latency: changes detected within milliseconds (vs up to 30 seconds)
-//   - Efficiency: no periodic HTTP calls when nothing changes
-//   - Correctness: no race window where changes are missed between polls
 
 import (
 	"context"
@@ -40,9 +41,18 @@ import (
 	"github.com/bureau-foundation/bureau/messaging"
 )
 
-// syncFilter restricts the /sync response to event types the daemon cares
-// about. This avoids downloading presence, account data, typing notifications,
-// and other event types that the daemon doesn't use.
+// buildSyncFilter constructs the Matrix /sync filter JSON from typed
+// schema constants. Using constants instead of raw strings ensures that
+// event type renames are caught at compile time.
+//
+// The filter restricts two dimensions:
+//   - Event types: only the state and timeline event types the daemon
+//     processes (machine config, credentials, service, workspace, etc.).
+//   - Rooms: excludes rooms the daemon is joined to but only reads
+//     on-demand (template, pipeline, system). This is done via the
+//     Matrix "not_rooms" filter field rather than a "rooms" allowlist
+//     so that invites for dynamically-joined workspace rooms remain
+//     visible without requiring filter updates.
 //
 // The timeline section includes both state event types and m.room.message.
 // State events can appear as timeline events with a non-nil state_key on
@@ -54,12 +64,7 @@ import (
 // uses evaluateStartCondition with direct GetStateEvent calls to check
 // whether conditions are met — the sync filter just ensures the room
 // appears in the response so the daemon knows to re-check.
-var syncFilter = buildSyncFilter()
-
-// buildSyncFilter constructs the Matrix /sync filter JSON from typed
-// schema constants. Using constants instead of raw strings ensures that
-// event type renames are caught at compile time.
-func buildSyncFilter() string {
+func buildSyncFilter(excludeRooms []ref.RoomID) string {
 	stateEventTypes := []ref.EventType{
 		schema.EventTypeMachineConfig,
 		schema.EventTypeCredentials,
@@ -83,22 +88,36 @@ func buildSyncFilter() string {
 
 	emptyTypes := []ref.EventType{}
 
-	filter := map[string]any{
-		"room": map[string]any{
-			"state": map[string]any{
-				"types": stateEventTypes,
-			},
-			"timeline": map[string]any{
-				"types": timelineEventTypes,
-				"limit": 50,
-			},
-			"ephemeral": map[string]any{
-				"types": emptyTypes,
-			},
-			"account_data": map[string]any{
-				"types": emptyTypes,
-			},
+	// Build the room exclusion list, skipping zero-value room IDs
+	// (template and pipeline rooms may fail alias resolution at startup).
+	var notRooms []string
+	for _, roomID := range excludeRooms {
+		if !roomID.IsZero() {
+			notRooms = append(notRooms, roomID.String())
+		}
+	}
+
+	roomFilter := map[string]any{
+		"state": map[string]any{
+			"types": stateEventTypes,
 		},
+		"timeline": map[string]any{
+			"types": timelineEventTypes,
+			"limit": 50,
+		},
+		"ephemeral": map[string]any{
+			"types": emptyTypes,
+		},
+		"account_data": map[string]any{
+			"types": emptyTypes,
+		},
+	}
+	if len(notRooms) > 0 {
+		roomFilter["not_rooms"] = notRooms
+	}
+
+	filter := map[string]any{
+		"room": roomFilter,
 		"presence": map[string]any{
 			"types": emptyTypes,
 		},
@@ -125,7 +144,7 @@ func (d *Daemon) initialSync(ctx context.Context) (string, error) {
 	// The initial /sync (no since token) returns immediately with the full
 	// state snapshot. We don't set a long-poll timeout here.
 	response, err := d.session.Sync(ctx, messaging.SyncOptions{
-		Filter: syncFilter,
+		Filter: d.syncFilter,
 	})
 	if err != nil {
 		return "", fmt.Errorf("initial sync: %w", err)
@@ -262,21 +281,6 @@ func (d *Daemon) processSyncResponse(ctx context.Context, response *messaging.Sy
 			needsServiceSync = true
 		case d.fleetRoomID:
 			needsHAEval = true
-		case d.systemRoomID:
-			// The system room carries token signing keys and operational
-			// messages. State changes here don't require reconciliation.
-			continue
-		case d.templateRoomID:
-			// The template room is namespace-scoped (shared across all
-			// machines). The daemon reads templates on-demand during
-			// reconciliation. Member events from other machines joining
-			// the template room must not trigger reconciliation.
-			continue
-		case d.pipelineRoomID:
-			// The pipeline room is namespace-scoped (shared across all
-			// machines). Pipeline definitions are read by the executor,
-			// not the daemon's reconcile loop.
-			continue
 		default:
 			// Non-core rooms (workspace rooms joined via invite) with
 			// state changes trigger reconcile so deferred principals

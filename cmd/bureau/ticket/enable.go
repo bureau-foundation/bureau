@@ -417,28 +417,19 @@ func configureTicketPowerLevels(ctx context.Context, session messaging.Session, 
 		return cli.Internal("reading power levels: %w", err)
 	}
 
-	var powerLevels map[string]any
+	var powerLevels schema.PowerLevels
 	if err := json.Unmarshal(content, &powerLevels); err != nil {
 		return cli.Internal("parsing power levels: %w", err)
 	}
 
-	// Ensure the users map exists and set the service principal to PL 10.
-	users, _ := powerLevels["users"].(map[string]any)
-	if users == nil {
-		users = make(map[string]any)
-		powerLevels["users"] = users
-	}
-	users[serviceUserID.String()] = 10
+	// Service principal needs PL 10 to write ticket events.
+	powerLevels.SetUserLevel(serviceUserID, 10)
 
-	// Ensure the events map exists and set ticket event type PLs.
-	events, _ := powerLevels["events"].(map[string]any)
-	if events == nil {
-		events = make(map[string]any)
-		powerLevels["events"] = events
-	}
-	events[string(schema.EventTypeTicket)] = 10
-	events[string(schema.EventTypeTicketConfig)] = 100
-	events[string(schema.EventTypeRoomService)] = 100
+	// Ticket events are writable at PL 10; config and service binding
+	// require admin (PL 100).
+	powerLevels.SetEventLevel(schema.EventTypeTicket, 10)
+	powerLevels.SetEventLevel(schema.EventTypeTicketConfig, 100)
+	powerLevels.SetEventLevel(schema.EventTypeRoomService, 100)
 
 	// Write back the updated power levels.
 	_, err = session.SendStateEvent(ctx, roomID, schema.MatrixEventTypePowerLevels, "", powerLevels)

@@ -192,17 +192,12 @@ func grantFleetControllerConfigAccess(t *testing.T, admin *messaging.DirectSessi
 		t.Fatalf("read config room power levels: %v", err)
 	}
 
-	var powerLevels map[string]any
+	var powerLevels schema.PowerLevels
 	if err := json.Unmarshal(powerLevelJSON, &powerLevels); err != nil {
 		t.Fatalf("unmarshal config room power levels: %v", err)
 	}
 
-	users, _ := powerLevels["users"].(map[string]any)
-	if users == nil {
-		users = make(map[string]any)
-		powerLevels["users"] = users
-	}
-	users[fc.UserID.String()] = 50
+	powerLevels.SetUserLevel(fc.UserID, schema.PowerLevelOperator)
 
 	if _, err := admin.SendStateEvent(ctx, machine.ConfigRoomID,
 		schema.MatrixEventTypePowerLevels, "", powerLevels); err != nil {

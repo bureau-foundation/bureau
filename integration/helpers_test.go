@@ -656,24 +656,19 @@ func grantPowerLevel(t *testing.T, admin *messaging.DirectSession, roomID ref.Ro
 	t.Helper()
 	ctx := t.Context()
 
-	powerLevelJSON, err := admin.GetStateEvent(ctx, roomID, "m.room.power_levels", "")
+	powerLevelJSON, err := admin.GetStateEvent(ctx, roomID, schema.MatrixEventTypePowerLevels, "")
 	if err != nil {
 		t.Fatalf("get power levels for %s: %v", roomID, err)
 	}
 
-	var powerLevels map[string]any
+	var powerLevels schema.PowerLevels
 	if err := json.Unmarshal(powerLevelJSON, &powerLevels); err != nil {
 		t.Fatalf("unmarshal power levels for %s: %v", roomID, err)
 	}
 
-	users, ok := powerLevels["users"].(map[string]any)
-	if !ok {
-		users = make(map[string]any)
-		powerLevels["users"] = users
-	}
-	users[userID.String()] = level
+	powerLevels.SetUserLevel(userID, level)
 
-	if _, err := admin.SendStateEvent(ctx, roomID, "m.room.power_levels", "", powerLevels); err != nil {
+	if _, err := admin.SendStateEvent(ctx, roomID, schema.MatrixEventTypePowerLevels, "", powerLevels); err != nil {
 		t.Fatalf("set power level %d for %s in %s: %v", level, userID, roomID, err)
 	}
 }

@@ -18,6 +18,7 @@ go_library(
         "events_template.go",
         "match.go",
         "pipeline_ref.go",
+        "power_levels.go",
         "rooms.go",
         "sandbox_spec.go",
         "template_ref.go",

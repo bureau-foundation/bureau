@@ -5,15 +5,17 @@ package fleet
 
 import (
 	"context"
-	"encoding/json"
 	"fmt"
 	"log/slog"
 	"time"
 
 	"github.com/bureau-foundation/bureau/cmd/bureau/cli"
+	"github.com/bureau-foundation/bureau/lib/credential"
+	"github.com/bureau-foundation/bureau/lib/principal"
 	"github.com/bureau-foundation/bureau/lib/ref"
 	"github.com/bureau-foundation/bureau/lib/schema"
 	"github.com/bureau-foundation/bureau/lib/secret"
+	"github.com/bureau-foundation/bureau/lib/templatedef"
 	"github.com/bureau-foundation/bureau/messaging"
 )
 
@@ -26,8 +28,11 @@ type enableParams struct {
 
 // enableResult is the JSON output of the fleet enable command.
 type enableResult struct {
-	Service ref.Service `json:"service" desc:"fleet controller service reference"`
-	Machine ref.Machine `json:"machine" desc:"machine hosting the fleet controller"`
+	Service       ref.Service `json:"service"         desc:"fleet controller service reference"`
+	Machine       ref.Machine `json:"machine"         desc:"machine hosting the fleet controller"`
+	ConfigRoomID  ref.RoomID  `json:"config_room_id"  desc:"config room where the assignment was published"`
+	ConfigEventID ref.EventID `json:"config_event_id" desc:"event ID of the MachineConfig state event"`
+	BindingCount  int         `json:"binding_count"   desc:"number of machine config rooms updated with fleet bindings"`
 }
 
 func enableCommand() *cli.Command {
@@ -43,10 +48,17 @@ The argument is a fleet localpart in the form "namespace/fleet/name"
 connected session's identity.
 
 This operator command:
+  - Validates the fleet-controller template exists in Matrix
   - Registers a Matrix account for the fleet controller service
+  - Provisions encrypted credentials to the target machine
   - Publishes a PrincipalAssignment to the target machine's config room
   - Publishes fleet service bindings to all machine config rooms in the
     fleet, making the controller discoverable via RequiredServices
+
+The fleet controller uses the "fleet-controller" template (published
+by "bureau matrix setup"). The daemon manages the fleet controller's
+sandbox lifecycle — starting it automatically when the assignment is
+published and restarting it on crash.
 
 The fleet controller service is always named "fleet" within its fleet:
 if the fleet is bureau/fleet/prod, the service account is
@@ -69,8 +81,8 @@ the scope. Use "local" to auto-detect from the launcher's session file.`,
 		},
 		Params:         func() any { return &params },
 		Output:         func() any { return &enableResult{} },
-		Annotations:    cli.Idempotent(),
 		RequiredGrants: []string{"command/fleet/enable"},
+		Annotations:    cli.Create(),
 		Run: func(ctx context.Context, args []string, logger *slog.Logger) error {
 			if len(args) == 0 {
 				return cli.Validation("fleet localpart is required (e.g., bureau/fleet/prod)")
@@ -99,12 +111,38 @@ func runEnable(ctx context.Context, logger *slog.Logger, fleetLocalpart string, 
 		return cli.Internal("reading credentials: %w", err)
 	}
 
-	// Connect as admin for state event publishing.
+	registrationToken := credentials["MATRIX_REGISTRATION_TOKEN"]
+	if registrationToken == "" {
+		return cli.Validation("credential file missing MATRIX_REGISTRATION_TOKEN")
+	}
+
+	registrationTokenBuffer, err := secret.NewFromString(registrationToken)
+	if err != nil {
+		return cli.Internal("protecting registration token: %w", err)
+	}
+	defer registrationTokenBuffer.Close()
+
+	// Connect as admin for state event publishing and credential
+	// provisioning.
 	adminSession, err := params.SessionConfig.Connect(ctx)
 	if err != nil {
 		return cli.Internal("connecting admin session: %w", err)
 	}
 	defer adminSession.Close()
+
+	// Account registration (client.Register) is unauthenticated and
+	// needs a Client, not a Session.
+	homeserverURL, err := params.SessionConfig.ResolveHomeserverURL()
+	if err != nil {
+		return err
+	}
+
+	client, err := messaging.NewClient(messaging.ClientConfig{
+		HomeserverURL: homeserverURL,
+	})
+	if err != nil {
+		return cli.Internal("creating matrix client: %w", err)
+	}
 
 	// Derive server name from the connected session's identity.
 	server, err := ref.ServerFromUserID(adminSession.UserID().String())
@@ -125,31 +163,82 @@ func runEnable(ctx context.Context, logger *slog.Logger, fleetLocalpart string, 
 	}
 	logger = logger.With("machine", machine.Localpart())
 
-	// The fleet controller service is always named "fleet" within its fleet.
-	service, err := ref.NewService(fleet, "fleet")
+	// The fleet controller service is always named "fleet" within its
+	// fleet.
+	serviceRef, err := ref.NewService(fleet, "fleet")
 	if err != nil {
 		return cli.Internal("constructing fleet controller service ref: %w", err)
 	}
 
-	// Step 1: Register the fleet controller Matrix account (idempotent).
-	if err := registerServiceAccount(ctx, credentials, service, logger); err != nil {
-		return cli.Internal("registering service account: %w", err)
+	// Resolve the fleet machine room for credential provisioning.
+	machineRoomAlias := fleet.MachineRoomAlias()
+	machineRoomID, err := adminSession.ResolveAlias(ctx, machineRoomAlias)
+	if err != nil {
+		return cli.Internal("resolve fleet machine room %q: %w", machineRoomAlias, err)
 	}
 
-	// Step 2: Publish PrincipalAssignment to the machine config room.
-	if err := publishFleetAssignment(ctx, adminSession, machine, service, logger); err != nil {
-		return cli.Internal("publishing principal assignment: %w", err)
+	// The fleet-controller template is published by "bureau matrix
+	// setup". It inherits from service-base which provides the proxy
+	// bootstrap environment variables.
+	templateRef := schema.TemplateRef{
+		Room:     "bureau/template",
+		Template: "fleet-controller",
 	}
 
-	// Step 3: Publish fleet service binding to all machine config rooms.
-	bindingCount, err := publishFleetBindings(ctx, adminSession, fleet, service, logger)
+	// Deploy the fleet controller through the standard principal
+	// deployment path: register account, provision encrypted
+	// credentials, invite to config room, publish MachineConfig
+	// assignment. The daemon detects the assignment via /sync and
+	// creates the fleet controller's sandbox with AutoStart:true.
+	createResult, err := principal.Create(ctx, client, adminSession, registrationTokenBuffer, credential.AsProvisionFunc(), principal.CreateParams{
+		Machine:     machine,
+		Principal:   serviceRef.Entity(),
+		TemplateRef: templateRef,
+		ValidateTemplate: func(ctx context.Context, templateReference schema.TemplateRef, serverName ref.ServerName) error {
+			_, err := templatedef.Fetch(ctx, adminSession, templateReference, serverName)
+			return err
+		},
+		HomeserverURL: homeserverURL,
+		AutoStart:     true,
+		MachineRoomID: machineRoomID,
+		Labels: map[string]string{
+			"role":    "service",
+			"service": "fleet",
+		},
+	})
+	if err != nil {
+		if messaging.IsMatrixError(err, messaging.ErrCodeUserInUse) {
+			// The fleet controller account already exists. This is
+			// expected when re-running fleet enable to update
+			// bindings after adding machines to the fleet.
+			logger.Info("fleet controller already deployed", "user_id", serviceRef.UserID().String())
+		} else {
+			return cli.Internal("deploying fleet controller: %w", err)
+		}
+	} else {
+		logger.Info("fleet controller deployed",
+			"user_id", createResult.PrincipalUserID,
+			"config_room", createResult.ConfigRoomID,
+			"config_event", createResult.ConfigEventID,
+		)
+	}
+
+	// Publish fleet service bindings to all machine config rooms. This
+	// binds the "fleet" service role to the fleet controller so agents
+	// with required_services: ["fleet"] can discover it.
+	bindingCount, err := publishFleetBindings(ctx, adminSession, fleet, serviceRef, logger)
 	if err != nil {
 		return cli.Internal("publishing fleet bindings: %w", err)
 	}
 
 	result := enableResult{
-		Service: service,
-		Machine: machine,
+		Service:      serviceRef,
+		Machine:      machine,
+		BindingCount: bindingCount,
+	}
+	if createResult != nil {
+		result.ConfigRoomID = createResult.ConfigRoomID
+		result.ConfigEventID = createResult.ConfigEventID
 	}
 
 	if done, emitErr := params.EmitJSON(result); done {
@@ -157,9 +246,10 @@ func runEnable(ctx context.Context, logger *slog.Logger, fleetLocalpart string, 
 	}
 
 	logger.Info("fleet controller enabled",
-		"service", service.Localpart(),
-		"service_user_id", service.UserID(),
+		"service", serviceRef.Localpart(),
+		"service_user_id", serviceRef.UserID(),
 		"machine_user_id", machine.UserID(),
+		"template", templateRef,
 		"bindings", bindingCount,
 	)
 
@@ -218,64 +308,6 @@ func extractMachineName(localpart string) (string, error) {
 	return entityName, nil
 }
 
-// registerServiceAccount registers a Matrix account for a service.
-// Idempotent: M_USER_IN_USE is silently ignored.
-func registerServiceAccount(ctx context.Context, credentials map[string]string, service ref.Service, logger *slog.Logger) error {
-	homeserverURL := credentials["MATRIX_HOMESERVER_URL"]
-	if homeserverURL == "" {
-		homeserverURL = "http://localhost:6167"
-	}
-
-	registrationToken := credentials["MATRIX_REGISTRATION_TOKEN"]
-	if registrationToken == "" {
-		return cli.Validation("credential file missing MATRIX_REGISTRATION_TOKEN")
-	}
-
-	client, err := messaging.NewClient(messaging.ClientConfig{
-		HomeserverURL: homeserverURL,
-	})
-	if err != nil {
-		return cli.Internal("creating matrix client: %w", err)
-	}
-
-	// Derive password from registration token (same deterministic
-	// derivation as bureau matrix user create for agent accounts).
-	tokenBuffer, err := secret.NewFromString(registrationToken)
-	if err != nil {
-		return cli.Internal("protecting registration token: %w", err)
-	}
-	defer tokenBuffer.Close()
-
-	passwordBuffer, err := cli.DeriveAdminPassword(tokenBuffer)
-	if err != nil {
-		return cli.Internal("deriving password: %w", err)
-	}
-	defer passwordBuffer.Close()
-
-	registrationTokenBuffer, err := secret.NewFromString(registrationToken)
-	if err != nil {
-		return cli.Internal("protecting registration token: %w", err)
-	}
-	defer registrationTokenBuffer.Close()
-
-	session, registerErr := client.Register(ctx, messaging.RegisterRequest{
-		Username:          service.Localpart(),
-		Password:          passwordBuffer,
-		RegistrationToken: registrationTokenBuffer,
-	})
-	if registerErr != nil {
-		if messaging.IsMatrixError(registerErr, messaging.ErrCodeUserInUse) {
-			logger.Info("service account already exists", "user_id", service.UserID().String())
-			return nil
-		}
-		return cli.Internal("registering %s: %w", service.UserID(), registerErr)
-	}
-	defer session.Close()
-
-	logger.Info("registered service account", "user_id", session.UserID().String())
-	return nil
-}
-
 // publishFleetBindings publishes an m.bureau.room_service state event with
 // state key "fleet" in every active machine's config room. This binds the
 // "fleet" service role to the fleet controller so agents with
@@ -284,7 +316,7 @@ func registerServiceAccount(ctx context.Context, credentials map[string]string, 
 // Active machines are discovered from m.bureau.machine_key state events in
 // the fleet's machine room. Machines with empty key content (decommissioned)
 // are skipped. Returns the number of config rooms successfully updated.
-func publishFleetBindings(ctx context.Context, session messaging.Session, fleet ref.Fleet, service ref.Service, logger *slog.Logger) (int, error) {
+func publishFleetBindings(ctx context.Context, session messaging.Session, fleet ref.Fleet, serviceRef ref.Service, logger *slog.Logger) (int, error) {
 	machineRoomID, err := session.ResolveAlias(ctx, fleet.MachineRoomAlias())
 	if err != nil {
 		return 0, cli.NotFound("resolving fleet machine room %s: %w", fleet.MachineRoomAlias(), err)
@@ -295,7 +327,7 @@ func publishFleetBindings(ctx context.Context, session messaging.Session, fleet 
 		return 0, cli.Internal("reading machine room state: %w", err)
 	}
 
-	binding := schema.RoomServiceContent{Principal: service.Entity()}
+	binding := schema.RoomServiceContent{Principal: serviceRef.Entity()}
 	count := 0
 
 	for _, event := range events {
@@ -338,56 +370,4 @@ func publishFleetBindings(ctx context.Context, session messaging.Session, fleet 
 	}
 
 	return count, nil
-}
-
-// publishFleetAssignment adds the fleet controller to the machine's
-// MachineConfig via read-modify-write. AutoStart is false because the
-// fleet controller binary is externally managed.
-func publishFleetAssignment(ctx context.Context, session messaging.Session, machine ref.Machine, service ref.Service, logger *slog.Logger) error {
-	configRoomID, err := session.ResolveAlias(ctx, machine.RoomAlias())
-	if err != nil {
-		return cli.NotFound("resolving config room %s: %w (has the machine been registered?)", machine.RoomAlias(), err)
-	}
-
-	// Read existing MachineConfig.
-	var config schema.MachineConfig
-	existingContent, err := session.GetStateEvent(ctx, configRoomID, schema.EventTypeMachineConfig, machine.Localpart())
-	if err == nil {
-		if unmarshalErr := json.Unmarshal(existingContent, &config); unmarshalErr != nil {
-			return cli.Internal("parsing existing machine config: %w", unmarshalErr)
-		}
-	} else if !messaging.IsMatrixError(err, messaging.ErrCodeNotFound) {
-		return cli.Internal("reading machine config: %w", err)
-	}
-
-	// Check if the principal already exists.
-	for _, existing := range config.Principals {
-		if existing.Principal.Localpart() == service.Localpart() {
-			logger.Info("principal already in MachineConfig, skipping", "principal", service.Localpart())
-			return nil
-		}
-	}
-
-	// Convert the Service ref to a generic Entity for the PrincipalAssignment.
-	principalEntity, err := ref.ParseEntityLocalpart(service.Localpart(), service.Server())
-	if err != nil {
-		return cli.Internal("converting service ref to entity: %w", err)
-	}
-
-	config.Principals = append(config.Principals, schema.PrincipalAssignment{
-		Principal: principalEntity,
-		AutoStart: false,
-		Labels: map[string]string{
-			"role":    "service",
-			"service": "fleet",
-		},
-	})
-
-	_, err = session.SendStateEvent(ctx, configRoomID, schema.EventTypeMachineConfig, machine.Localpart(), config)
-	if err != nil {
-		return cli.Internal("publishing machine config: %w", err)
-	}
-
-	logger.Info("published PrincipalAssignment", "service", service.Localpart(), "machine", machine.Localpart())
-	return nil
 }

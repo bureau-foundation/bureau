@@ -114,7 +114,7 @@ func runCreate(fleetLocalpart string, params *createParams) error {
 
 	logger := cli.NewCommandLogger().With("command", "fleet/create", "fleet", fleet.Localpart())
 
-	rooms, err := ensureFleetRooms(ctx, session, fleet, logger)
+	rooms, err := EnsureFleetRooms(ctx, session, fleet, logger)
 	if err != nil {
 		return err
 	}
@@ -124,7 +124,7 @@ func runCreate(fleetLocalpart string, params *createParams) error {
 		if err != nil {
 			return cli.Validation("invalid invite user ID %q: %w", userIDString, err)
 		}
-		if err := inviteToFleetRooms(ctx, session, rooms, parsedUserID, logger); err != nil {
+		if err := InviteToFleetRooms(ctx, session, rooms, parsedUserID, logger); err != nil {
 			return err
 		}
 	}
@@ -151,26 +151,26 @@ func runCreate(fleetLocalpart string, params *createParams) error {
 	return nil
 }
 
-// fleetRooms holds the Matrix room IDs for the three rooms that define a fleet.
-type fleetRooms struct {
+// FleetRooms holds the Matrix room IDs for the three rooms that define a fleet.
+type FleetRooms struct {
 	ConfigRoomID  ref.RoomID
 	MachineRoomID ref.RoomID
 	ServiceRoomID ref.RoomID
 }
 
-// ensureFleetRooms creates the three fleet rooms (config, machine, service)
+// EnsureFleetRooms creates the three fleet rooms (config, machine, service)
 // if they don't exist and adds them as children of the namespace space. All
 // identity information comes from the fleet ref — no string decomposition
 // at the call site.
-func ensureFleetRooms(ctx context.Context, session messaging.Session, fleet ref.Fleet, logger *slog.Logger) (fleetRooms, error) {
+func EnsureFleetRooms(ctx context.Context, session messaging.Session, fleet ref.Fleet, logger *slog.Logger) (FleetRooms, error) {
 	// Resolve the namespace space that will parent these rooms.
 	spaceAlias := fleet.Namespace().SpaceAlias()
 	spaceRoomID, err := session.ResolveAlias(ctx, spaceAlias)
 	if err != nil {
 		if messaging.IsMatrixError(err, messaging.ErrCodeNotFound) {
-			return fleetRooms{}, cli.NotFound("namespace space %s not found (run 'bureau matrix setup' first)", spaceAlias)
+			return FleetRooms{}, cli.NotFound("namespace space %s not found (run 'bureau matrix setup' first)", spaceAlias)
 		}
-		return fleetRooms{}, cli.Internal("resolving namespace space %s: %w", spaceAlias, err)
+		return FleetRooms{}, cli.Internal("resolving namespace space %s: %w", spaceAlias, err)
 	}
 
 	adminUserID := session.UserID()
@@ -189,7 +189,7 @@ func ensureFleetRooms(ctx context.Context, session messaging.Session, fleet ref.
 			PowerLevelContentOverride: schema.FleetRoomPowerLevels(adminUserID),
 		}, logger)
 	if err != nil {
-		return fleetRooms{}, err
+		return FleetRooms{}, err
 	}
 
 	// Machine presence room: keys, hardware info, heartbeats, WebRTC signaling.
@@ -203,7 +203,7 @@ func ensureFleetRooms(ctx context.Context, session messaging.Session, fleet ref.
 			PowerLevelContentOverride: schema.MachineRoomPowerLevels(adminUserID),
 		}, logger)
 	if err != nil {
-		return fleetRooms{}, err
+		return FleetRooms{}, err
 	}
 
 	// Service directory room: service registrations and discovery.
@@ -217,19 +217,19 @@ func ensureFleetRooms(ctx context.Context, session messaging.Session, fleet ref.
 			PowerLevelContentOverride: schema.ServiceRoomPowerLevels(adminUserID),
 		}, logger)
 	if err != nil {
-		return fleetRooms{}, err
+		return FleetRooms{}, err
 	}
 
-	return fleetRooms{
+	return FleetRooms{
 		ConfigRoomID:  configRoomID,
 		MachineRoomID: machineRoomID,
 		ServiceRoomID: serviceRoomID,
 	}, nil
 }
 
-// inviteToFleetRooms invites a user to all three fleet rooms. Silently
+// InviteToFleetRooms invites a user to all three fleet rooms. Silently
 // skips rooms the user has already joined.
-func inviteToFleetRooms(ctx context.Context, session messaging.Session, rooms fleetRooms, userID ref.UserID, logger *slog.Logger) error {
+func InviteToFleetRooms(ctx context.Context, session messaging.Session, rooms FleetRooms, userID ref.UserID, logger *slog.Logger) error {
 	for _, roomID := range []ref.RoomID{rooms.ConfigRoomID, rooms.MachineRoomID, rooms.ServiceRoomID} {
 		if err := session.InviteUser(ctx, roomID, userID); err != nil {
 			if messaging.IsMatrixError(err, messaging.ErrCodeForbidden) {

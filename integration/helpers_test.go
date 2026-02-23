@@ -36,6 +36,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/bureau-foundation/bureau/cmd/bureau/fleet"
 	"github.com/bureau-foundation/bureau/cmd/bureau/machine"
 	"github.com/bureau-foundation/bureau/cmd/bureau/workspace"
 	"github.com/bureau-foundation/bureau/lib/bootstrap"
@@ -854,8 +855,9 @@ type testFleet struct {
 }
 
 // createTestFleet creates the three fleet-scoped rooms (config, machine,
-// service) with proper aliases so daemons and fleet controllers can
-// resolve them. The fleet prefix is derived from the test name.
+// service) using the production fleet.EnsureFleetRooms path. This
+// ensures test fleets are created identically to production: proper
+// aliases, power levels, names/topics, and space-child linking.
 func createTestFleet(t *testing.T, admin *messaging.DirectSession) *testFleet {
 	t.Helper()
 	ctx := t.Context()
@@ -865,9 +867,8 @@ func createTestFleet(t *testing.T, admin *messaging.DirectSession) *testFleet {
 	// because Matrix localparts only allow a-z, and ref.ParseFleet
 	// validates this constraint.
 	fleetName := strings.ToLower(t.Name())
-	namespace := "bureau"
 
-	namespaceRef, err := ref.NewNamespace(testServer, namespace)
+	namespaceRef, err := ref.NewNamespace(testServer, "bureau")
 	if err != nil {
 		t.Fatalf("create namespace ref: %v", err)
 	}
@@ -875,47 +876,19 @@ func createTestFleet(t *testing.T, admin *messaging.DirectSession) *testFleet {
 	if err != nil {
 		t.Fatalf("create fleet ref: %v", err)
 	}
-	prefix := fleetRef.Localpart()
 
-	// Create the three fleet-scoped rooms with aliases. The daemon and
-	// fleet controller resolve these aliases at startup.
-	fleetAlias := fleetRef.Localpart()
-	machineAlias := fleetRef.MachineRoomAliasLocalpart()
-	serviceAlias := fleetRef.ServiceRoomAliasLocalpart()
-
-	fleetRoom, err := admin.CreateRoom(ctx, messaging.CreateRoomRequest{
-		Preset:                    "private_chat",
-		Alias:                     fleetAlias,
-		PowerLevelContentOverride: schema.FleetRoomPowerLevels(admin.UserID()),
-	})
+	logger := slog.New(slog.NewJSONHandler(os.Stderr, nil)).With("test", t.Name())
+	rooms, err := fleet.EnsureFleetRooms(ctx, admin, fleetRef, logger)
 	if err != nil {
-		t.Fatalf("create fleet room: %v", err)
-	}
-
-	machineRoom, err := admin.CreateRoom(ctx, messaging.CreateRoomRequest{
-		Preset:                    "private_chat",
-		Alias:                     machineAlias,
-		PowerLevelContentOverride: schema.MachineRoomPowerLevels(admin.UserID()),
-	})
-	if err != nil {
-		t.Fatalf("create fleet machine room: %v", err)
-	}
-
-	serviceRoom, err := admin.CreateRoom(ctx, messaging.CreateRoomRequest{
-		Preset:                    "private_chat",
-		Alias:                     serviceAlias,
-		PowerLevelContentOverride: schema.ServiceRoomPowerLevels(admin.UserID()),
-	})
-	if err != nil {
-		t.Fatalf("create fleet service room: %v", err)
+		t.Fatalf("ensure fleet rooms: %v", err)
 	}
 
 	return &testFleet{
 		Ref:           fleetRef,
-		Prefix:        prefix,
-		FleetRoomID:   fleetRoom.RoomID,
-		MachineRoomID: machineRoom.RoomID,
-		ServiceRoomID: serviceRoom.RoomID,
+		Prefix:        fleetRef.Localpart(),
+		FleetRoomID:   rooms.ConfigRoomID,
+		MachineRoomID: rooms.MachineRoomID,
+		ServiceRoomID: rooms.ServiceRoomID,
 	}
 }
 

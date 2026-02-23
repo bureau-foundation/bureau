@@ -40,6 +40,7 @@ import (
 	"github.com/bureau-foundation/bureau/cmd/bureau/machine"
 	"github.com/bureau-foundation/bureau/cmd/bureau/workspace"
 	"github.com/bureau-foundation/bureau/lib/bootstrap"
+	"github.com/bureau-foundation/bureau/lib/pipelinedef"
 	"github.com/bureau-foundation/bureau/lib/ref"
 	"github.com/bureau-foundation/bureau/lib/schema"
 	"github.com/bureau-foundation/bureau/lib/schema/pipeline"
@@ -903,16 +904,17 @@ func resolvePipelineRoom(t *testing.T, _ *messaging.DirectSession) ref.RoomID {
 	return globalPipelineRoomID
 }
 
-// publishPipelineDefinition resolves the pipeline room and publishes a
-// pipeline definition as a state event. This is the test equivalent of
-// "bureau pipeline push" — it uses the same state event type and content
-// schema.
+// publishPipelineDefinition publishes a pipeline definition using the
+// production pipelinedef.Push path. The pipeline name is automatically
+// scoped to the "bureau/pipeline" room (the standard test namespace).
 func publishPipelineDefinition(t *testing.T, admin *messaging.DirectSession, name string, content pipeline.PipelineContent) {
 	t.Helper()
-	pipelineRoomID := resolvePipelineRoom(t, admin)
-	if _, err := admin.SendStateEvent(t.Context(), pipelineRoomID,
-		schema.EventTypePipeline, name, content); err != nil {
-		t.Fatalf("publish pipeline %s: %v", name, err)
+	pipelineRef, err := schema.ParsePipelineRef("bureau/pipeline:" + name)
+	if err != nil {
+		t.Fatalf("parse pipeline ref %q: %v", name, err)
+	}
+	if _, err := pipelinedef.Push(t.Context(), admin, pipelineRef, content, testServer); err != nil {
+		t.Fatalf("push pipeline %s: %v", name, err)
 	}
 }
 

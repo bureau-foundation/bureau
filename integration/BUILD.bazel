@@ -88,6 +88,7 @@ go_test(
         "//lib/command",
         "//lib/credential",
         "//lib/ipc",
+        "//lib/pipelinedef",
         "//lib/principal",
         "//lib/ref",
         "//lib/schema",

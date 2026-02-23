@@ -118,14 +118,14 @@ without actually publishing.`,
 			}
 			defer cancel()
 
-			// Verify the target room exists.
-			roomAlias := pipelineRef.RoomAlias(serverName)
-			roomID, err := session.ResolveAlias(ctx, roomAlias)
-			if err != nil {
-				return cli.NotFound("resolving target room %q: %w", roomAlias, err)
-			}
-
 			if params.DryRun {
+				// Dry-run: verify target room exists without publishing.
+				roomAlias := pipelineRef.RoomAlias(serverName)
+				roomID, err := session.ResolveAlias(ctx, roomAlias)
+				if err != nil {
+					return cli.NotFound("resolving target room %q: %w", roomAlias, err)
+				}
+
 				if done, err := params.EmitJSON(pushResult{
 					Ref:          pipelineRef.String(),
 					File:         filePath,
@@ -142,8 +142,7 @@ without actually publishing.`,
 				return nil
 			}
 
-			// Publish the pipeline as a state event.
-			eventID, err := session.SendStateEvent(ctx, roomID, schema.EventTypePipeline, pipelineRef.Pipeline, content)
+			result, err := pipelinedef.Push(ctx, session, pipelineRef, *content, serverName)
 			if err != nil {
 				return cli.Internal("publishing pipeline: %w", err)
 			}
@@ -151,16 +150,16 @@ without actually publishing.`,
 			if done, err := params.EmitJSON(pushResult{
 				Ref:          pipelineRef.String(),
 				File:         filePath,
-				RoomAlias:    roomAlias,
-				RoomID:       roomID,
+				RoomAlias:    result.RoomAlias,
+				RoomID:       result.RoomID,
 				PipelineName: pipelineRef.Pipeline,
-				EventID:      eventID,
+				EventID:      result.EventID,
 				DryRun:       false,
 			}); done {
 				return err
 			}
 
-			fmt.Fprintf(os.Stdout, "published %s to %s (event: %s)\n", pipelineRef.String(), roomAlias, eventID)
+			fmt.Fprintf(os.Stdout, "published %s to %s (event: %s)\n", pipelineRef.String(), result.RoomAlias, result.EventID)
 			return nil
 		},
 	}

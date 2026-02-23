@@ -7,7 +7,6 @@ import (
 	"encoding/json"
 	"os"
 	"path/filepath"
-	"slices"
 	"testing"
 
 	"github.com/bureau-foundation/bureau/lib/ref"
@@ -59,23 +58,6 @@ func TestAgentServiceSessionTracking(t *testing.T) {
 
 	// --- Agent service setup ---
 
-	agentServiceLocalpart := "service/agent/session-test"
-	agentServiceAccount := registerFleetPrincipal(t, fleet, agentServiceLocalpart, "agent-svc-password")
-
-	agentServiceStateDir := t.TempDir()
-	writeServiceSession(t, agentServiceStateDir, agentServiceAccount)
-
-	systemRoomID := resolveSystemRoom(t, admin)
-	inviteToRooms(t, admin, agentServiceAccount.UserID, systemRoomID, fleet.ServiceRoomID)
-
-	// Start agent service and wait for daemon discovery.
-	serviceWatch := watchRoom(t, admin, machine.ConfigRoomID)
-
-	agentServiceSocketPath := machine.PrincipalSocketPath(t, agentServiceLocalpart)
-	if err := os.MkdirAll(filepath.Dir(agentServiceSocketPath), 0755); err != nil {
-		t.Fatalf("create socket parent directory: %v", err)
-	}
-
 	// The agent service requires artifact access for context
 	// materialization. Provide a valid token file and socket path so
 	// the artifact client initializes. The client reads the token at
@@ -88,43 +70,22 @@ func TestAgentServiceSessionTracking(t *testing.T) {
 	}
 	artifactSocketPath := filepath.Join(tempSocketDir(t), "artifact.sock")
 
-	agentServiceBinary := testutil.DataBinary(t, "AGENT_SERVICE_BINARY")
-	startProcessWithEnv(t, "agent-service",
-		[]string{
+	agentSvc := deployService(t, admin, fleet, machine, serviceDeployOptions{
+		Binary:    testutil.DataBinary(t, "AGENT_SERVICE_BINARY"),
+		Name:      "agent-service",
+		Localpart: "service/agent/session-test",
+		ExtraEnv: []string{
 			"BUREAU_ARTIFACT_SOCKET=" + artifactSocketPath,
 			"BUREAU_ARTIFACT_TOKEN=" + artifactTokenFile,
 		},
-		agentServiceBinary,
-		"--homeserver", testHomeserverURL,
-		"--machine-name", machine.Name,
-		"--principal-name", agentServiceLocalpart,
-		"--server-name", testServerName,
-		"--run-dir", machine.RunDir,
-		"--state-dir", agentServiceStateDir,
-		"--fleet", fleet.Prefix,
-	)
-	waitForFile(t, agentServiceSocketPath)
-
-	// The service binary registers with a fleet-scoped localpart
-	// (fleet.Prefix + "/" + principalName), so the daemon's directory
-	// update message uses the fleet-scoped name.
-	fleetScopedServiceLocalpart := fleet.Prefix + "/" + agentServiceLocalpart
-	waitForNotification[schema.ServiceDirectoryUpdatedMessage](
-		t, &serviceWatch, schema.MsgTypeServiceDirectoryUpdated, machine.UserID,
-		func(message schema.ServiceDirectoryUpdatedMessage) bool {
-			return slices.Contains(message.Added, fleetScopedServiceLocalpart)
-		}, "service directory update adding "+fleetScopedServiceLocalpart)
+	})
 
 	// Publish room service binding so the daemon maps "agent" role to
 	// this service. Must be published before deploying any principal
 	// with RequiredServices: ["agent"].
-	agentServiceEntity, err := ref.NewEntityFromAccountLocalpart(fleet.Ref, agentServiceLocalpart)
-	if err != nil {
-		t.Fatalf("construct agent service entity ref: %v", err)
-	}
 	if _, err := admin.SendStateEvent(ctx, machine.ConfigRoomID,
 		schema.EventTypeRoomService, "agent",
-		schema.RoomServiceContent{Principal: agentServiceEntity}); err != nil {
+		schema.RoomServiceContent{Principal: agentSvc.Entity}); err != nil {
 		t.Fatalf("publish agent service binding in config room: %v", err)
 	}
 

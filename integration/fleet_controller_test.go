@@ -6,8 +6,6 @@ package integration_test
 import (
 	"encoding/json"
 	"errors"
-	"os"
-	"path/filepath"
 	"strings"
 	"testing"
 
@@ -118,88 +116,34 @@ type fleetController struct {
 	StateDir      string
 }
 
-// startFleetController starts a fleet controller binary as an externally-
-// managed service (same pattern as the ticket service). It registers the
-// Matrix account, writes session credentials, invites the service principal
-// to the required rooms (fleet, machine, service, system), and starts the
-// binary. Returns after the socket file appears on disk.
+// startFleetController deploys a fleet controller using the production
+// principal.Create() path and waits for daemon discovery. The fleet
+// controller runs as a machine-level service (outside the sandbox) and
+// needs access to fleet-scoped rooms plus elevated power in the config
+// room for MachineConfig writes.
 func startFleetController(t *testing.T, admin *messaging.DirectSession, machine *testMachine, controllerName string, fleet *testFleet) *fleetController {
 	t.Helper()
 
-	ctx := t.Context()
+	svc := deployService(t, admin, fleet, machine, serviceDeployOptions{
+		Binary:     resolvedBinary(t, "FLEET_CONTROLLER_BINARY"),
+		Name:       "fleet-controller",
+		Localpart:  controllerName,
+		ExtraRooms: []ref.RoomID{fleet.FleetRoomID, fleet.MachineRoomID},
+	})
 
-	account := registerFleetPrincipal(t, fleet, controllerName, "fleet-controller-password")
-
-	// Write session.json for the fleet controller.
-	stateDir := t.TempDir()
-	sessionData := service.SessionData{
-		HomeserverURL: testHomeserverURL,
-		UserID:        account.UserID.String(),
-		AccessToken:   account.Token,
-	}
-	sessionJSON, err := json.Marshal(sessionData)
-	if err != nil {
-		t.Fatalf("marshal fleet controller session: %v", err)
-	}
-	if err := os.WriteFile(filepath.Join(stateDir, "session.json"), sessionJSON, 0600); err != nil {
-		t.Fatalf("write fleet controller session.json: %v", err)
-	}
-
-	// Invite fleet controller to the system room (global) and fleet-scoped rooms.
-	systemRoomID, err := admin.ResolveAlias(ctx, testNamespace.SystemRoomAlias())
-	if err != nil {
-		t.Fatalf("resolve system room: %v", err)
-	}
-
-	for _, invite := range []struct {
-		roomID ref.RoomID
-		name   string
-	}{
-		{systemRoomID, "system"},
-		{fleet.FleetRoomID, "fleet"},
-		{fleet.MachineRoomID, "fleet machine"},
-		{fleet.ServiceRoomID, "fleet service"},
-	} {
-		if err := admin.InviteUser(ctx, invite.roomID, account.UserID); err != nil {
-			if !messaging.IsMatrixError(err, "M_FORBIDDEN") {
-				t.Fatalf("invite fleet controller to %s room: %v", invite.name, err)
-			}
-		}
-	}
-
-	// The fleet controller needs access to each machine's config room
-	// to read/write MachineConfig for place/unplace. The admin grants
-	// this explicitly: invite + PL 50.
-	grantFleetControllerConfigAccess(t, admin, &fleetController{
+	controller := &fleetController{
 		PrincipalName: controllerName,
-		UserID:        account.UserID,
-	}, machine)
-
-	// Start the fleet controller binary.
-	socketPath := machine.PrincipalSocketPath(t, controllerName)
-	if err := os.MkdirAll(filepath.Dir(socketPath), 0755); err != nil {
-		t.Fatalf("create fleet controller socket directory: %v", err)
+		UserID:        svc.Account.UserID,
+		SocketPath:    svc.SocketPath,
+		StateDir:      svc.StateDir,
 	}
 
-	fleetBinary := resolvedBinary(t, "FLEET_CONTROLLER_BINARY")
-	startProcess(t, "fleet-controller", fleetBinary,
-		"--homeserver", testHomeserverURL,
-		"--machine-name", machine.Name,
-		"--principal-name", controllerName,
-		"--server-name", testServerName,
-		"--fleet", fleet.Prefix,
-		"--run-dir", machine.RunDir,
-		"--state-dir", stateDir,
-	)
+	// Grant PL 50 in the config room for MachineConfig read/write.
+	// principal.Create() handles basic membership; this grants the
+	// elevated power level needed for fleet controller operations.
+	grantFleetControllerConfigAccess(t, admin, controller, machine)
 
-	waitForFile(t, socketPath)
-
-	return &fleetController{
-		PrincipalName: controllerName,
-		UserID:        account.UserID,
-		SocketPath:    socketPath,
-		StateDir:      stateDir,
-	}
+	return controller
 }
 
 // fleetClient creates a service.ServiceClient for the fleet controller.

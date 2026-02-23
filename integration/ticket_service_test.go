@@ -5,15 +5,11 @@ package integration_test
 
 import (
 	"encoding/json"
-	"os"
-	"path/filepath"
-	"slices"
 	"testing"
 
 	"github.com/bureau-foundation/bureau/lib/ref"
 	"github.com/bureau-foundation/bureau/lib/schema"
 	"github.com/bureau-foundation/bureau/lib/schema/ticket"
-	"github.com/bureau-foundation/bureau/lib/service"
 	"github.com/bureau-foundation/bureau/lib/templatedef"
 	"github.com/bureau-foundation/bureau/lib/testutil"
 	"github.com/bureau-foundation/bureau/messaging"
@@ -49,51 +45,16 @@ func TestTicketServiceAgent(t *testing.T) {
 
 	// --- Ticket service setup ---
 
-	ticketServiceLocalpart := "service/ticket/agent-test"
-	ticketServiceAccount := registerFleetPrincipal(t, fleet, ticketServiceLocalpart, "ticket-svc-password")
-
-	ticketStateDir := t.TempDir()
-	writeServiceSession(t, ticketStateDir, ticketServiceAccount)
-
-	systemRoomID := resolveSystemRoom(t, admin)
-	inviteToRooms(t, admin, ticketServiceAccount.UserID, systemRoomID, fleet.ServiceRoomID)
+	ticketSvc := deployService(t, admin, fleet, machine, serviceDeployOptions{
+		Binary:    resolvedBinary(t, "TICKET_SERVICE_BINARY"),
+		Name:      "ticket-service",
+		Localpart: "service/ticket/agent-test",
+	})
+	ticketServiceEntity := ticketSvc.Entity
 
 	// Create a project room with ticket config and service binding.
-	ticketServiceEntity, err := ref.NewEntityFromAccountLocalpart(fleet.Ref, ticketServiceLocalpart)
-	if err != nil {
-		t.Fatalf("construct ticket service entity ref: %v", err)
-	}
 	projectRoomID := createTicketProjectRoom(t, admin, "ticket-agent-project",
 		ticketServiceEntity, machine.UserID.String())
-
-	// Start ticket service and wait for daemon discovery.
-	serviceWatch := watchRoom(t, admin, machine.ConfigRoomID)
-
-	ticketSocketPath := machine.PrincipalSocketPath(t, ticketServiceLocalpart)
-	if err := os.MkdirAll(filepath.Dir(ticketSocketPath), 0755); err != nil {
-		t.Fatalf("create socket parent directory: %v", err)
-	}
-
-	ticketBinary := resolvedBinary(t, "TICKET_SERVICE_BINARY")
-	startProcess(t, "ticket-service", ticketBinary,
-		"--homeserver", testHomeserverURL,
-		"--machine-name", machine.Name,
-		"--principal-name", ticketServiceLocalpart,
-		"--server-name", testServerName,
-		"--run-dir", machine.RunDir,
-		"--state-dir", ticketStateDir,
-		"--fleet", fleet.Prefix,
-	)
-	waitForFile(t, ticketSocketPath)
-
-	// The service binary registers with a fleet-scoped localpart, so the
-	// daemon's directory update message uses the fleet-scoped name.
-	fleetScopedServiceName := ticketServiceEntity.Localpart()
-	waitForNotification[schema.ServiceDirectoryUpdatedMessage](
-		t, &serviceWatch, schema.MsgTypeServiceDirectoryUpdated, machine.UserID,
-		func(message schema.ServiceDirectoryUpdatedMessage) bool {
-			return slices.Contains(message.Added, fleetScopedServiceName)
-		}, "service directory update adding "+fleetScopedServiceName)
 
 	// --- Deploy agent with bureau-agent + mock LLM ---
 
@@ -197,51 +158,18 @@ func TestTicketLifecycleAgent(t *testing.T) {
 
 	// --- Ticket service setup ---
 
-	ticketServiceLocalpart := "service/ticket/lifecycle"
-	ticketServiceAccount := registerFleetPrincipal(t, fleet, ticketServiceLocalpart, "ticket-lifecycle-pw")
-
-	ticketStateDir := t.TempDir()
-	writeServiceSession(t, ticketStateDir, ticketServiceAccount)
-
-	systemRoomID := resolveSystemRoom(t, admin)
-	inviteToRooms(t, admin, ticketServiceAccount.UserID, systemRoomID, fleet.ServiceRoomID)
+	ticketSvc := deployService(t, admin, fleet, machine, serviceDeployOptions{
+		Binary:    resolvedBinary(t, "TICKET_SERVICE_BINARY"),
+		Name:      "ticket-lifecycle",
+		Localpart: "service/ticket/lifecycle",
+	})
+	ticketServiceEntity := ticketSvc.Entity
 
 	// Two project rooms for cross-room filing.
-	ticketServiceEntity, err := ref.NewEntityFromAccountLocalpart(fleet.Ref, ticketServiceLocalpart)
-	if err != nil {
-		t.Fatalf("construct ticket service entity ref: %v", err)
-	}
 	roomAlphaID := createTicketProjectRoom(t, admin, "lifecycle-alpha",
 		ticketServiceEntity, machine.UserID.String())
 	roomBetaID := createTicketProjectRoom(t, admin, "lifecycle-beta",
 		ticketServiceEntity, machine.UserID.String())
-
-	// Start ticket service and wait for daemon discovery.
-	serviceWatch := watchRoom(t, admin, machine.ConfigRoomID)
-
-	ticketSocketPath := machine.PrincipalSocketPath(t, ticketServiceLocalpart)
-	if err := os.MkdirAll(filepath.Dir(ticketSocketPath), 0755); err != nil {
-		t.Fatalf("create socket parent directory: %v", err)
-	}
-
-	ticketBinary := resolvedBinary(t, "TICKET_SERVICE_BINARY")
-	startProcess(t, "ticket-lifecycle", ticketBinary,
-		"--homeserver", testHomeserverURL,
-		"--machine-name", machine.Name,
-		"--principal-name", ticketServiceLocalpart,
-		"--server-name", testServerName,
-		"--run-dir", machine.RunDir,
-		"--state-dir", ticketStateDir,
-		"--fleet", fleet.Prefix,
-	)
-	waitForFile(t, ticketSocketPath)
-
-	fleetScopedServiceName := ticketServiceEntity.Localpart()
-	waitForNotification[schema.ServiceDirectoryUpdatedMessage](
-		t, &serviceWatch, schema.MsgTypeServiceDirectoryUpdated, machine.UserID,
-		func(message schema.ServiceDirectoryUpdatedMessage) bool {
-			return slices.Contains(message.Added, fleetScopedServiceName)
-		}, "service directory update adding "+fleetScopedServiceName)
 
 	// --- Agent accounts and template ---
 	//
@@ -678,57 +606,20 @@ type ticketServiceDeployment struct {
 	Entity ref.Entity // fleet-scoped entity ref for room service bindings
 }
 
-// deployTicketService registers a ticket service principal, starts the
-// service binary, and waits for the daemon to discover it via the
-// service directory. The service persists for the lifetime of the test.
-//
-// The suffix distinguishes multiple ticket services within the same
-// fleet (each test needs a unique localpart to avoid registration
-// collisions across parallel tests sharing the same homeserver).
+// deployTicketService deploys a ticket service using the production
+// principal.Create() path. The suffix distinguishes multiple ticket
+// services within the same fleet (each test needs a unique localpart
+// to avoid registration collisions across parallel tests sharing the
+// same homeserver).
 func deployTicketService(t *testing.T, admin *messaging.DirectSession, fleet *testFleet, machine *testMachine, suffix string) ticketServiceDeployment {
 	t.Helper()
 
-	localpart := "service/ticket/" + suffix
-	account := registerFleetPrincipal(t, fleet, localpart, "ticket-svc-"+suffix)
-
-	stateDir := t.TempDir()
-	writeServiceSession(t, stateDir, account)
-
-	systemRoomID := resolveSystemRoom(t, admin)
-	inviteToRooms(t, admin, account.UserID, systemRoomID, fleet.ServiceRoomID)
-
-	entity, err := ref.NewEntityFromAccountLocalpart(fleet.Ref, localpart)
-	if err != nil {
-		t.Fatalf("construct ticket service entity ref: %v", err)
-	}
-
-	serviceWatch := watchRoom(t, admin, machine.ConfigRoomID)
-
-	socketPath := machine.PrincipalSocketPath(t, localpart)
-	if err := os.MkdirAll(filepath.Dir(socketPath), 0755); err != nil {
-		t.Fatalf("create ticket service socket parent directory: %v", err)
-	}
-
-	ticketBinary := resolvedBinary(t, "TICKET_SERVICE_BINARY")
-	startProcess(t, "ticket-"+suffix, ticketBinary,
-		"--homeserver", testHomeserverURL,
-		"--machine-name", machine.Name,
-		"--principal-name", localpart,
-		"--server-name", testServerName,
-		"--run-dir", machine.RunDir,
-		"--state-dir", stateDir,
-		"--fleet", fleet.Prefix,
-	)
-	waitForFile(t, socketPath)
-
-	fleetScopedName := entity.Localpart()
-	waitForNotification[schema.ServiceDirectoryUpdatedMessage](
-		t, &serviceWatch, schema.MsgTypeServiceDirectoryUpdated, machine.UserID,
-		func(message schema.ServiceDirectoryUpdatedMessage) bool {
-			return slices.Contains(message.Added, fleetScopedName)
-		}, "service directory update adding "+fleetScopedName)
-
-	return ticketServiceDeployment{Entity: entity}
+	svc := deployService(t, admin, fleet, machine, serviceDeployOptions{
+		Binary:    resolvedBinary(t, "TICKET_SERVICE_BINARY"),
+		Name:      "ticket-" + suffix,
+		Localpart: "service/ticket/" + suffix,
+	})
+	return ticketServiceDeployment{Entity: svc.Entity}
 }
 
 // enableTicketsInRoom publishes ticket config and a room service binding
@@ -764,54 +655,6 @@ func enableTicketsInRoom(t *testing.T, admin *messaging.DirectSession, roomID re
 	if err := admin.InviteUser(ctx, roomID, ticketService.Entity.UserID()); err != nil {
 		if !messaging.IsMatrixError(err, "M_FORBIDDEN") {
 			t.Fatalf("invite ticket service to room %s: %v", roomID, err)
-		}
-	}
-}
-
-// --- Shared helpers for ticket tests ---
-
-// writeServiceSession writes a session.json file for a Bureau service
-// to the given state directory. The service loads its Matrix credentials
-// from this file via service.LoadSession.
-func writeServiceSession(t *testing.T, stateDir string, account principalAccount) {
-	t.Helper()
-
-	sessionData := service.SessionData{
-		HomeserverURL: testHomeserverURL,
-		UserID:        account.UserID.String(),
-		AccessToken:   account.Token,
-	}
-	sessionJSON, err := json.Marshal(sessionData)
-	if err != nil {
-		t.Fatalf("marshal session data: %v", err)
-	}
-	if err := os.WriteFile(filepath.Join(stateDir, "session.json"), sessionJSON, 0600); err != nil {
-		t.Fatalf("write session.json: %v", err)
-	}
-}
-
-// resolveSystemRoom resolves the #bureau/system room ID.
-func resolveSystemRoom(t *testing.T, admin *messaging.DirectSession) ref.RoomID {
-	t.Helper()
-
-	systemRoomID, err := admin.ResolveAlias(t.Context(), testNamespace.SystemRoomAlias())
-	if err != nil {
-		t.Fatalf("resolve system room: %v", err)
-	}
-	return systemRoomID
-}
-
-// inviteToRooms invites a user to one or more rooms, ignoring M_FORBIDDEN
-// (already joined).
-func inviteToRooms(t *testing.T, admin *messaging.DirectSession, userID ref.UserID, roomIDs ...ref.RoomID) {
-	t.Helper()
-
-	ctx := t.Context()
-	for _, roomID := range roomIDs {
-		if err := admin.InviteUser(ctx, roomID, userID); err != nil {
-			if !messaging.IsMatrixError(err, "M_FORBIDDEN") {
-				t.Fatalf("invite %s to %s: %v", userID, roomID, err)
-			}
 		}
 	}
 }

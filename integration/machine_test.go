@@ -11,6 +11,7 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"slices"
 	"strings"
 	"testing"
 
@@ -19,6 +20,7 @@ import (
 	"github.com/bureau-foundation/bureau/lib/ref"
 	"github.com/bureau-foundation/bureau/lib/schema"
 	"github.com/bureau-foundation/bureau/lib/secret"
+	"github.com/bureau-foundation/bureau/lib/service"
 	"github.com/bureau-foundation/bureau/lib/servicetoken"
 	"github.com/bureau-foundation/bureau/lib/templatedef"
 	"github.com/bureau-foundation/bureau/messaging"
@@ -896,6 +898,235 @@ func deployAgent(t *testing.T, admin *messaging.DirectSession, machine *testMach
 		TemplateRef:     templateRef,
 		ProxySocketPath: proxySocketPath,
 		AdminSocketPath: machine.PrincipalAdminSocketPath(t, options.Localpart),
+	}
+}
+
+// --- Service deployment ---
+
+// serviceDeployOptions holds options for deploying a Bureau service binary
+// via deployService. Parallel to agentOptions for deployAgent.
+type serviceDeployOptions struct {
+	// Binary is the service binary path. Required.
+	Binary string
+
+	// Name is the human-readable name for process logs. Required.
+	Name string
+
+	// Localpart is the service principal localpart (e.g., "service/ticket/test").
+	// Must be unique across the test suite (tests run in parallel and share
+	// one homeserver). Required.
+	Localpart string
+
+	// ExtraEnv adds environment variables for the service binary (KEY=VALUE).
+	ExtraEnv []string
+
+	// ExtraArgs adds CLI arguments beyond the standard service flags.
+	ExtraArgs []string
+
+	// ExtraRooms lists additional rooms to invite the service to, beyond
+	// the system room and fleet service room.
+	ExtraRooms []ref.RoomID
+}
+
+// serviceDeployResult holds the result of deployService: entity reference,
+// account details, socket path, and state directory.
+type serviceDeployResult struct {
+	Entity     ref.Entity
+	Account    principalAccount
+	SocketPath string
+	StateDir   string
+}
+
+// serviceTemplateContent builds a minimal schema.TemplateContent for a
+// service binary. The daemon doesn't use this template (services deploy
+// with AutoStart: false), but principal.Create() validates that the
+// template exists in Matrix before registration.
+func serviceTemplateContent(binary string) schema.TemplateContent {
+	return schema.TemplateContent{
+		Description: "Service template",
+		Command:     []string{binary},
+	}
+}
+
+// deployService deploys a Bureau service binary using the production
+// principal.Create() path for account setup, then starts the binary as a
+// machine-level process (outside any sandbox).
+//
+// The deployment sequence:
+//   - Pushes a service template to Matrix via templatedef.Push
+//   - Calls principal.Create(AutoStart: false) to register the Matrix
+//     account, provision encrypted credentials, join the config room,
+//     and publish a MachineConfig assignment the daemon ignores
+//   - Writes session.json via service.SaveSession for service.Bootstrap
+//   - Invites the service to the system room, fleet service room, and
+//     any ExtraRooms
+//   - Creates the socket parent directory and starts the binary
+//   - Waits for the socket file and daemon service directory update
+//
+// This parallels deployAgent but for services that run outside sandboxes.
+// Services use service.Bootstrap() with session.json instead of proxy-based
+// credentials.
+func deployService(
+	t *testing.T,
+	admin *messaging.DirectSession,
+	fleet *testFleet,
+	machine *testMachine,
+	options serviceDeployOptions,
+) serviceDeployResult {
+	t.Helper()
+
+	if options.Binary == "" {
+		t.Fatal("serviceDeployOptions.Binary is required")
+	}
+	if options.Name == "" {
+		t.Fatal("serviceDeployOptions.Name is required")
+	}
+	if options.Localpart == "" {
+		t.Fatal("serviceDeployOptions.Localpart is required")
+	}
+
+	ctx := t.Context()
+
+	// Derive template name from localpart.
+	templateName := strings.ReplaceAll(options.Localpart, "/", "-")
+
+	// Push a service template. principal.Create() validates the template
+	// exists before registration.
+	grantTemplateAccess(t, admin, machine)
+
+	templateRef, err := schema.ParseTemplateRef("bureau/template:" + templateName)
+	if err != nil {
+		t.Fatalf("parse service template ref for %q: %v", templateName, err)
+	}
+	_, err = templatedef.Push(ctx, admin, templateRef,
+		serviceTemplateContent(options.Binary), testServer)
+	if err != nil {
+		t.Fatalf("push service template %q: %v", templateName, err)
+	}
+
+	// Set up the room watch BEFORE principal.Create() publishes the
+	// MachineConfig, so we don't miss the daemon's service directory
+	// update notification.
+	serviceWatch := watchRoom(t, admin, machine.ConfigRoomID)
+
+	// Create the principal via the production path. AutoStart is false
+	// because services run as machine-level processes, not in sandboxes.
+	// The daemon skips AutoStart=false principals during reconciliation.
+	client, err := messaging.NewClient(messaging.ClientConfig{
+		HomeserverURL: testHomeserverURL,
+	})
+	if err != nil {
+		t.Fatalf("create client for service deployment: %v", err)
+	}
+	registrationTokenBuffer, err := secret.NewFromString(testRegistrationToken)
+	if err != nil {
+		t.Fatalf("create registration token buffer: %v", err)
+	}
+	defer registrationTokenBuffer.Close()
+
+	principalEntity, err := ref.NewEntityFromAccountLocalpart(fleet.Ref, options.Localpart)
+	if err != nil {
+		t.Fatalf("build service entity for %s: %v", options.Localpart, err)
+	}
+	result, err := principal.Create(ctx, client, admin, registrationTokenBuffer, credential.AsProvisionFunc(), principal.CreateParams{
+		Machine:     machine.Ref,
+		Principal:   principalEntity,
+		TemplateRef: templateRef,
+		ValidateTemplate: func(ctx context.Context, ref schema.TemplateRef, serverName ref.ServerName) error {
+			_, err := templatedef.Fetch(ctx, admin, ref, serverName)
+			return err
+		},
+		HomeserverURL: testHomeserverURL,
+		AutoStart:     false,
+		MachineRoomID: machine.MachineRoomID,
+	})
+	if err != nil {
+		t.Fatalf("create service %q: %v", options.Localpart, err)
+	}
+
+	// Write session.json from the returned access token. Services read
+	// credentials from this file via service.Bootstrap → service.LoadSession.
+	stateDir := t.TempDir()
+	principalSession, err := client.SessionFromToken(result.PrincipalUserID, result.AccessToken)
+	if err != nil {
+		t.Fatalf("create session for %s: %v", options.Localpart, err)
+	}
+	if err := service.SaveSession(stateDir, testHomeserverURL, principalSession); err != nil {
+		principalSession.Close()
+		t.Fatalf("save session.json for %s: %v", options.Localpart, err)
+	}
+	principalSession.Close()
+
+	// Invite the service to rooms needed by service.Bootstrap().
+	// principal.Create() already handled the config room.
+	systemRoomID := resolveSystemRoom(t, admin)
+	inviteRooms := append([]ref.RoomID{systemRoomID, fleet.ServiceRoomID}, options.ExtraRooms...)
+	inviteToRooms(t, admin, result.PrincipalUserID, inviteRooms...)
+
+	// Start the service binary with standard service flags.
+	socketPath := machine.PrincipalSocketPath(t, options.Localpart)
+	if err := os.MkdirAll(filepath.Dir(socketPath), 0755); err != nil {
+		t.Fatalf("create service socket directory: %v", err)
+	}
+
+	args := []string{
+		"--homeserver", testHomeserverURL,
+		"--machine-name", machine.Name,
+		"--principal-name", options.Localpart,
+		"--server-name", testServerName,
+		"--run-dir", machine.RunDir,
+		"--state-dir", stateDir,
+		"--fleet", fleet.Prefix,
+	}
+	args = append(args, options.ExtraArgs...)
+	startProcessWithEnv(t, options.Name, options.ExtraEnv, options.Binary, args...)
+	waitForFile(t, socketPath)
+
+	// Wait for daemon to discover the service via /sync and update the
+	// service directory. The daemon posts ServiceDirectoryUpdatedMessage
+	// to the config room after pushing the new directory to all proxies.
+	fleetScopedLocalpart := principalEntity.Localpart()
+	waitForNotification[schema.ServiceDirectoryUpdatedMessage](
+		t, &serviceWatch, schema.MsgTypeServiceDirectoryUpdated, machine.UserID,
+		func(message schema.ServiceDirectoryUpdatedMessage) bool {
+			return slices.Contains(message.Added, fleetScopedLocalpart)
+		}, "service directory update adding "+fleetScopedLocalpart)
+
+	return serviceDeployResult{
+		Entity: principalEntity,
+		Account: principalAccount{
+			Localpart: options.Localpart,
+			UserID:    result.PrincipalUserID,
+			Token:     result.AccessToken,
+		},
+		SocketPath: socketPath,
+		StateDir:   stateDir,
+	}
+}
+
+// resolveSystemRoom resolves the #bureau/system room ID.
+func resolveSystemRoom(t *testing.T, admin *messaging.DirectSession) ref.RoomID {
+	t.Helper()
+
+	systemRoomID, err := admin.ResolveAlias(t.Context(), testNamespace.SystemRoomAlias())
+	if err != nil {
+		t.Fatalf("resolve system room: %v", err)
+	}
+	return systemRoomID
+}
+
+// inviteToRooms invites a user to one or more rooms, ignoring M_FORBIDDEN
+// (already joined).
+func inviteToRooms(t *testing.T, admin *messaging.DirectSession, userID ref.UserID, roomIDs ...ref.RoomID) {
+	t.Helper()
+
+	ctx := t.Context()
+	for _, roomID := range roomIDs {
+		if err := admin.InviteUser(ctx, roomID, userID); err != nil {
+			if !messaging.IsMatrixError(err, "M_FORBIDDEN") {
+				t.Fatalf("invite %s to %s: %v", userID, roomID, err)
+			}
+		}
 	}
 }
 

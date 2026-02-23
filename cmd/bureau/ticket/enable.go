@@ -11,10 +11,13 @@ import (
 	"time"
 
 	"github.com/bureau-foundation/bureau/cmd/bureau/cli"
+	"github.com/bureau-foundation/bureau/lib/credential"
+	"github.com/bureau-foundation/bureau/lib/principal"
 	"github.com/bureau-foundation/bureau/lib/ref"
 	"github.com/bureau-foundation/bureau/lib/schema"
 	ticketschema "github.com/bureau-foundation/bureau/lib/schema/ticket"
 	"github.com/bureau-foundation/bureau/lib/secret"
+	"github.com/bureau-foundation/bureau/lib/templatedef"
 	"github.com/bureau-foundation/bureau/messaging"
 )
 
@@ -41,12 +44,21 @@ One ticket service instance manages tickets across all rooms within a space,
 isolated from ticket services in other spaces.
 
 The command:
+  - Validates the ticket-service template exists in Matrix
   - Registers a Matrix account for the ticket service
+  - Provisions encrypted credentials to the target machine
   - Publishes a PrincipalAssignment to the machine's config room
   - For each existing room in the space: publishes m.bureau.ticket_config,
     sets the m.bureau.room_service binding (role=ticket), invites the
     service, and configures power levels
-  - The daemon handles inviting the service to rooms created after enable
+
+The ticket service uses the "ticket-service" template (published by
+"bureau matrix setup"). The daemon manages the service's sandbox
+lifecycle — starting it automatically when the assignment is published.
+
+Re-running ticket enable on a space is safe: if the service is already
+deployed, it skips deployment and re-configures rooms (useful when new
+rooms have been added to the space).
 
 Example:
 
@@ -87,12 +99,14 @@ workstation's MachineConfig, and enables tickets in all rooms under
 
 // enableResult is the JSON output of the enable command.
 type enableResult struct {
-	ServicePrincipal string   `json:"service_principal" desc:"service principal localpart"`
-	ServiceUserID    string   `json:"service_user_id"   desc:"service Matrix user ID"`
-	Machine          string   `json:"machine"           desc:"machine hosting the service"`
-	SpaceAlias       string   `json:"space_alias"       desc:"Matrix space alias"`
-	SpaceRoomID      string   `json:"space_room_id"     desc:"Matrix space room ID"`
-	RoomsConfigured  []string `json:"rooms_configured"  desc:"room IDs configured for tickets"`
+	ServicePrincipal string      `json:"service_principal" desc:"service principal localpart"`
+	ServiceUserID    string      `json:"service_user_id"   desc:"service Matrix user ID"`
+	Machine          string      `json:"machine"           desc:"machine hosting the service"`
+	ConfigRoomID     ref.RoomID  `json:"config_room_id"    desc:"config room where the assignment was published"`
+	ConfigEventID    ref.EventID `json:"config_event_id"   desc:"event ID of the MachineConfig state event"`
+	SpaceAlias       string      `json:"space_alias"       desc:"Matrix space alias"`
+	SpaceRoomID      string      `json:"space_room_id"     desc:"Matrix space room ID"`
+	RoomsConfigured  []string    `json:"rooms_configured"  desc:"room IDs configured for tickets"`
 }
 
 func runEnable(ctx context.Context, logger *slog.Logger, params *enableParams) error {
@@ -112,15 +126,19 @@ func runEnable(ctx context.Context, logger *slog.Logger, params *enableParams) e
 		return fmt.Errorf("invalid --server-name: %w", err)
 	}
 
-	// Parse and validate the machine localpart as a typed ref.
+	// Parse and validate the machine localpart as a typed ref. The
+	// fleet is derived from the machine ref since every machine belongs
+	// to exactly one fleet.
 	machineRef, err := ref.ParseMachine(host, serverName)
 	if err != nil {
 		return cli.Validation("invalid host: %w", err)
 	}
+	fleet := machineRef.Fleet()
 
-	// Derive the service principal localpart from the space name.
+	// Derive the service principal from the space name, scoped to the
+	// machine's fleet.
 	servicePrincipal := "service/ticket/" + params.Space
-	serviceEntity, err := ref.ParseEntityLocalpart(servicePrincipal, serverName)
+	serviceEntity, err := ref.NewEntityFromAccountLocalpart(fleet, servicePrincipal)
 	if err != nil {
 		return cli.Internal("invalid service principal %q: %w", servicePrincipal, err)
 	}
@@ -145,19 +163,95 @@ func runEnable(ctx context.Context, logger *slog.Logger, params *enableParams) e
 		return cli.Internal("reading credentials: %w", err)
 	}
 
-	// Connect as admin for state event publishing and room management.
+	registrationToken := credentials["MATRIX_REGISTRATION_TOKEN"]
+	if registrationToken == "" {
+		return cli.Validation("credential file missing MATRIX_REGISTRATION_TOKEN")
+	}
+
+	registrationTokenBuffer, err := secret.NewFromString(registrationToken)
+	if err != nil {
+		return cli.Internal("protecting registration token: %w", err)
+	}
+	defer registrationTokenBuffer.Close()
+
+	// Connect as admin for state event publishing, credential
+	// provisioning, and room management.
 	adminSession, err := params.SessionConfig.Connect(ctx)
 	if err != nil {
 		return cli.Internal("connecting admin session: %w", err)
 	}
 	defer adminSession.Close()
 
-	// Step 1: Register the ticket service Matrix account (idempotent).
-	if err := registerServiceAccount(ctx, logger, credentials, servicePrincipal, serverName); err != nil {
-		return cli.Internal("registering service account: %w", err)
+	// Account registration (client.Register) is unauthenticated and
+	// needs a Client, not a Session.
+	homeserverURL, err := params.SessionConfig.ResolveHomeserverURL()
+	if err != nil {
+		return err
 	}
 
-	// Step 2: Resolve the space and discover child rooms.
+	client, err := messaging.NewClient(messaging.ClientConfig{
+		HomeserverURL: homeserverURL,
+	})
+	if err != nil {
+		return cli.Internal("creating matrix client: %w", err)
+	}
+
+	// Resolve the fleet machine room for credential provisioning.
+	machineRoomAlias := fleet.MachineRoomAlias()
+	machineRoomID, err := adminSession.ResolveAlias(ctx, machineRoomAlias)
+	if err != nil {
+		return cli.Internal("resolve fleet machine room %q: %w", machineRoomAlias, err)
+	}
+
+	// The ticket-service template is published by "bureau matrix
+	// setup". It inherits from service-base which provides the proxy
+	// bootstrap environment variables.
+	templateRef := schema.TemplateRef{
+		Room:     "bureau/template",
+		Template: "ticket-service",
+	}
+
+	// Deploy the ticket service through the standard principal
+	// deployment path: register account, provision encrypted
+	// credentials, invite to config room, publish MachineConfig
+	// assignment. The daemon detects the assignment via /sync and
+	// creates the ticket service's sandbox with AutoStart:true.
+	var createResult *principal.CreateResult
+	createResult, err = principal.Create(ctx, client, adminSession, registrationTokenBuffer, credential.AsProvisionFunc(), principal.CreateParams{
+		Machine:     machineRef,
+		Principal:   serviceEntity,
+		TemplateRef: templateRef,
+		ValidateTemplate: func(ctx context.Context, templateReference schema.TemplateRef, sn ref.ServerName) error {
+			_, err := templatedef.Fetch(ctx, adminSession, templateReference, sn)
+			return err
+		},
+		HomeserverURL: homeserverURL,
+		AutoStart:     true,
+		MachineRoomID: machineRoomID,
+		Labels: map[string]string{
+			"role":    "service",
+			"service": "ticket",
+			"space":   params.Space,
+		},
+	})
+	if err != nil {
+		if messaging.IsMatrixError(err, messaging.ErrCodeUserInUse) {
+			// The ticket service account already exists. This is
+			// expected when re-running ticket enable to configure
+			// new rooms added to the space.
+			logger.Info("ticket service already deployed", "user_id", serviceUserID.String())
+		} else {
+			return cli.Internal("deploying ticket service: %w", err)
+		}
+	} else {
+		logger.Info("ticket service deployed",
+			"user_id", createResult.PrincipalUserID,
+			"config_room", createResult.ConfigRoomID,
+			"config_event", createResult.ConfigEventID,
+		)
+	}
+
+	// Resolve the space and discover child rooms.
 	spaceRoomID, err := adminSession.ResolveAlias(ctx, spaceAlias)
 	if err != nil {
 		return cli.NotFound("resolving space %s: %w (has 'bureau matrix space create %s' been run?)", spaceAlias, err, params.Space)
@@ -170,12 +264,7 @@ func runEnable(ctx context.Context, logger *slog.Logger, params *enableParams) e
 
 	logger.Info("discovered space", "alias", spaceAlias, "room_id", spaceRoomID, "child_rooms", len(childRoomIDs))
 
-	// Step 3: Publish PrincipalAssignment to the machine config room.
-	if err := publishPrincipalAssignment(ctx, logger, adminSession, machineRef, servicePrincipal, params.Space); err != nil {
-		return cli.Internal("publishing principal assignment: %w", err)
-	}
-
-	// Step 4: Configure each room for ticket management.
+	// Configure each room for ticket management.
 	configuredRooms := make([]string, 0, len(childRoomIDs))
 	for _, roomID := range childRoomIDs {
 		if err := ConfigureRoom(ctx, logger, adminSession, roomID, serviceEntity, ConfigureRoomParams{Prefix: params.Prefix}); err != nil {
@@ -186,94 +275,41 @@ func runEnable(ctx context.Context, logger *slog.Logger, params *enableParams) e
 		logger.Info("configured room", "room_id", roomID)
 	}
 
-	// Step 5: Invite the service to the space itself so the daemon's
-	// /sync delivers new room events to the service.
+	// Invite the service to the space itself so the daemon's /sync
+	// delivers new room events to the service.
 	if err := adminSession.InviteUser(ctx, spaceRoomID, serviceUserID); err != nil {
 		if !messaging.IsMatrixError(err, "M_FORBIDDEN") {
 			logger.Warn("failed to invite service to space", "error", err)
 		}
 	}
 
-	if done, err := params.EmitJSON(enableResult{
-		ServicePrincipal: servicePrincipal,
+	result := enableResult{
+		ServicePrincipal: serviceEntity.Localpart(),
 		ServiceUserID:    serviceUserID.String(),
 		Machine:          host,
 		SpaceAlias:       spaceAlias.String(),
 		SpaceRoomID:      spaceRoomID.String(),
 		RoomsConfigured:  configuredRooms,
-	}); done {
+	}
+	if createResult != nil {
+		result.ConfigRoomID = createResult.ConfigRoomID
+		result.ConfigEventID = createResult.ConfigEventID
+	}
+
+	if done, err := params.EmitJSON(result); done {
 		return err
 	}
 
 	logger.Info("ticket service enabled",
-		"service_principal", servicePrincipal,
+		"service_principal", serviceEntity.Localpart(),
 		"service_user_id", serviceUserID,
 		"machine", host,
+		"template", templateRef,
 		"space_alias", spaceAlias,
 		"space_room_id", spaceRoomID,
 		"rooms_configured", len(configuredRooms),
 	)
 
-	return nil
-}
-
-// registerServiceAccount registers a Matrix account for the ticket service.
-// Idempotent: M_USER_IN_USE is silently ignored.
-func registerServiceAccount(ctx context.Context, logger *slog.Logger, credentials map[string]string, servicePrincipal string, serverName ref.ServerName) error {
-	homeserverURL := credentials["MATRIX_HOMESERVER_URL"]
-	if homeserverURL == "" {
-		homeserverURL = "http://localhost:6167"
-	}
-
-	registrationToken := credentials["MATRIX_REGISTRATION_TOKEN"]
-	if registrationToken == "" {
-		return cli.Validation("credential file missing MATRIX_REGISTRATION_TOKEN")
-	}
-
-	client, err := messaging.NewClient(messaging.ClientConfig{
-		HomeserverURL: homeserverURL,
-	})
-	if err != nil {
-		return cli.Internal("creating matrix client: %w", err)
-	}
-
-	// Derive password from registration token (same as bureau matrix user create
-	// for agent accounts — deterministic, no interactive login needed).
-	tokenBuffer, err := secret.NewFromString(registrationToken)
-	if err != nil {
-		return cli.Internal("protecting registration token: %w", err)
-	}
-	defer tokenBuffer.Close()
-
-	passwordBuffer, err := cli.DeriveAdminPassword(tokenBuffer)
-	if err != nil {
-		return cli.Internal("deriving password: %w", err)
-	}
-	defer passwordBuffer.Close()
-
-	registrationTokenBuffer, err := secret.NewFromString(registrationToken)
-	if err != nil {
-		return cli.Internal("protecting registration token: %w", err)
-	}
-	defer registrationTokenBuffer.Close()
-
-	// The Matrix username is the full localpart with slashes, which becomes
-	// the user ID @service/ticket/<space>:<server>.
-	session, registerErr := client.Register(ctx, messaging.RegisterRequest{
-		Username:          servicePrincipal,
-		Password:          passwordBuffer,
-		RegistrationToken: registrationTokenBuffer,
-	})
-	if registerErr != nil {
-		if messaging.IsMatrixError(registerErr, messaging.ErrCodeUserInUse) {
-			logger.Info("service account already exists", "principal", servicePrincipal, "server_name", serverName)
-			return nil
-		}
-		return cli.Internal("registering %s: %w", servicePrincipal, registerErr)
-	}
-	defer session.Close()
-
-	logger.Info("registered service account", "user_id", session.UserID())
 	return nil
 }
 
@@ -297,70 +333,6 @@ func getSpaceChildren(ctx context.Context, session messaging.Session, spaceRoomI
 	return children, nil
 }
 
-// publishPrincipalAssignment adds the ticket service to the machine's
-// MachineConfig via read-modify-write. AutoStart is false because the
-// ticket service binary is externally managed — it runs its own Matrix
-// session and binds its CBOR socket directly to the fleet-scoped socket path. If
-// AutoStart were true, the daemon would create a proxy at the same
-// socket path, conflicting with the service binary.
-//
-// The PrincipalAssignment still serves a purpose with AutoStart=false:
-// rebuildAuthorizationIndex processes ALL principals regardless of
-// AutoStart, so the service appears in the authorization index for
-// grant resolution and service token minting.
-func publishPrincipalAssignment(ctx context.Context, logger *slog.Logger, session messaging.Session, machine ref.Machine, servicePrincipal, space string) error {
-	configRoomAlias := machine.RoomAlias()
-	configRoomID, err := session.ResolveAlias(ctx, configRoomAlias)
-	if err != nil {
-		return cli.NotFound("resolving config room %s: %w (has the machine been registered?)", configRoomAlias, err)
-	}
-
-	// Read existing MachineConfig.
-	machineLocalpart := machine.Localpart()
-	var config schema.MachineConfig
-	existingContent, err := session.GetStateEvent(ctx, configRoomID, schema.EventTypeMachineConfig, machineLocalpart)
-	if err == nil {
-		if unmarshalErr := json.Unmarshal(existingContent, &config); unmarshalErr != nil {
-			return cli.Internal("parsing existing machine config: %w", unmarshalErr)
-		}
-	} else if !messaging.IsMatrixError(err, messaging.ErrCodeNotFound) {
-		return cli.Internal("reading machine config: %w", err)
-	}
-
-	// Check if the principal already exists.
-	for _, existing := range config.Principals {
-		if existing.Principal.Localpart() == machine.Fleet().Localpart()+"/"+servicePrincipal {
-			logger.Info("principal already in machine config", "principal", servicePrincipal)
-			return nil
-		}
-	}
-
-	// Convert the bare account localpart to a fleet-scoped entity.
-	principalEntity, err := ref.NewEntityFromAccountLocalpart(machine.Fleet(), servicePrincipal)
-	if err != nil {
-		return cli.Internal("constructing principal entity for %s: %w", servicePrincipal, err)
-	}
-
-	config.Principals = append(config.Principals, schema.PrincipalAssignment{
-		Principal: principalEntity,
-		AutoStart: false,
-		Labels: map[string]string{
-			"role":    "service",
-			"service": "ticket",
-			"space":   space,
-		},
-	})
-
-	_, err = session.SendStateEvent(ctx, configRoomID, schema.EventTypeMachineConfig, machineLocalpart, config)
-	if err != nil {
-		return cli.Internal("publishing machine config: %w", err)
-	}
-
-	logger.Info("published principal assignment", "principal", servicePrincipal, "machine", machineLocalpart)
-	return nil
-}
-
-// configureRoom sets up ticket management in a single room:
 // ConfigureRoomParams holds parameters for ConfigureRoom.
 type ConfigureRoomParams struct {
 	// Prefix is the ticket ID prefix for this room (e.g., "tkt", "pip").

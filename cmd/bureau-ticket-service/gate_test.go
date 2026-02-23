@@ -19,6 +19,21 @@ import (
 	"github.com/bureau-foundation/bureau/messaging"
 )
 
+// testTicket returns a minimal valid TicketContent for use in unit
+// tests. Defaults to type "task", status "open", priority 2.
+func testTicket(title string) ticket.TicketContent {
+	return ticket.TicketContent{
+		Version:   1,
+		Title:     title,
+		Status:    "open",
+		Priority:  2,
+		Type:      "task",
+		CreatedBy: ref.MustParseUserID("@test:bureau.local"),
+		CreatedAt: "2026-02-12T10:00:00Z",
+		UpdatedAt: "2026-02-12T10:00:00Z",
+	}
+}
+
 // --- matchGateEvent unit tests ---
 
 func TestMatchPipelineGateMatches(t *testing.T) {
@@ -39,7 +54,7 @@ func TestMatchPipelineGateMatches(t *testing.T) {
 		},
 	}
 
-	if !matchGateEvent(gate, event) {
+	if !matchGateEvent(gate, event, nil, "") {
 		t.Fatal("pipeline gate should match on matching pipeline_ref and conclusion")
 	}
 }
@@ -62,7 +77,7 @@ func TestMatchPipelineGateWrongRef(t *testing.T) {
 		},
 	}
 
-	if matchGateEvent(gate, event) {
+	if matchGateEvent(gate, event, nil, "") {
 		t.Fatal("pipeline gate should not match on different pipeline_ref")
 	}
 }
@@ -85,7 +100,7 @@ func TestMatchPipelineGateWrongConclusion(t *testing.T) {
 		},
 	}
 
-	if matchGateEvent(gate, event) {
+	if matchGateEvent(gate, event, nil, "") {
 		t.Fatal("pipeline gate should not match on wrong conclusion")
 	}
 }
@@ -108,7 +123,7 @@ func TestMatchPipelineGateAnyConclusionMatches(t *testing.T) {
 		},
 	}
 
-	if !matchGateEvent(gate, event) {
+	if !matchGateEvent(gate, event, nil, "") {
 		t.Fatal("pipeline gate with empty conclusion should match any completed result")
 	}
 }
@@ -130,7 +145,7 @@ func TestMatchPipelineGateWrongEventType(t *testing.T) {
 		},
 	}
 
-	if matchGateEvent(gate, event) {
+	if matchGateEvent(gate, event, nil, "") {
 		t.Fatal("pipeline gate should not match on wrong event type")
 	}
 }
@@ -153,7 +168,7 @@ func TestMatchTicketGateClosedMatches(t *testing.T) {
 		},
 	}
 
-	if !matchGateEvent(gate, event) {
+	if !matchGateEvent(gate, event, nil, "") {
 		t.Fatal("ticket gate should match when watched ticket reaches closed")
 	}
 }
@@ -174,7 +189,7 @@ func TestMatchTicketGateNotClosedDoesNotMatch(t *testing.T) {
 		},
 	}
 
-	if matchGateEvent(gate, event) {
+	if matchGateEvent(gate, event, nil, "") {
 		t.Fatal("ticket gate should not match when ticket is not closed")
 	}
 }
@@ -195,7 +210,7 @@ func TestMatchTicketGateWrongTicketID(t *testing.T) {
 		},
 	}
 
-	if matchGateEvent(gate, event) {
+	if matchGateEvent(gate, event, nil, "") {
 		t.Fatal("ticket gate should not match for a different ticket ID")
 	}
 }
@@ -219,7 +234,7 @@ func TestMatchStateEventGateBasicMatch(t *testing.T) {
 		},
 	}
 
-	if !matchGateEvent(gate, event) {
+	if !matchGateEvent(gate, event, nil, "") {
 		t.Fatal("state_event gate should match on event_type + state_key")
 	}
 }
@@ -238,7 +253,7 @@ func TestMatchStateEventGateWrongEventType(t *testing.T) {
 		Content:  map[string]any{},
 	}
 
-	if matchGateEvent(gate, event) {
+	if matchGateEvent(gate, event, nil, "") {
 		t.Fatal("state_event gate should not match on wrong event type")
 	}
 }
@@ -258,7 +273,7 @@ func TestMatchStateEventGateWrongStateKey(t *testing.T) {
 		Content:  map[string]any{},
 	}
 
-	if matchGateEvent(gate, event) {
+	if matchGateEvent(gate, event, nil, "") {
 		t.Fatal("state_event gate should not match on wrong state key")
 	}
 }
@@ -278,7 +293,7 @@ func TestMatchStateEventGateNoStateKeyMatchesAny(t *testing.T) {
 		Content:  map[string]any{},
 	}
 
-	if !matchGateEvent(gate, event) {
+	if !matchGateEvent(gate, event, nil, "") {
 		t.Fatal("state_event gate with no state_key should match any state key")
 	}
 }
@@ -302,7 +317,7 @@ func TestMatchStateEventGateWithContentMatch(t *testing.T) {
 		},
 	}
 
-	if !matchGateEvent(gate, event) {
+	if !matchGateEvent(gate, event, nil, "") {
 		t.Fatal("state_event gate should match when content_match criteria are satisfied")
 	}
 }
@@ -326,7 +341,7 @@ func TestMatchStateEventGateContentMatchFails(t *testing.T) {
 		},
 	}
 
-	if matchGateEvent(gate, event) {
+	if matchGateEvent(gate, event, nil, "") {
 		t.Fatal("state_event gate should not match when content_match criteria fail")
 	}
 }
@@ -350,7 +365,7 @@ func TestMatchStateEventGateWithNumericContentMatch(t *testing.T) {
 		},
 	}
 
-	if !matchGateEvent(gate, event) {
+	if !matchGateEvent(gate, event, nil, "") {
 		t.Fatal("state_event gate should match on numeric content_match")
 	}
 }
@@ -370,7 +385,7 @@ func TestMatchStateEventGateSkipsCrossRoom(t *testing.T) {
 		Content:  map[string]any{},
 	}
 
-	if matchGateEvent(gate, event) {
+	if matchGateEvent(gate, event, nil, "") {
 		t.Fatal("state_event gate with RoomAlias should be skipped (cross-room not yet supported)")
 	}
 }
@@ -3442,193 +3457,208 @@ func TestFormatDuration(t *testing.T) {
 }
 
 // --- matchReviewGate unit tests ---
+//
+// Review gates evaluate against index state (typed TicketContent) rather
+// than raw event content. The event is just a trigger; the index
+// provides the review field and review_finding children.
 
-func TestMatchReviewGateAllApproved(t *testing.T) {
-	gate := &ticket.TicketGate{
+// reviewGateIndex creates an index with a ticket containing the given
+// review field and gate, plus optional review_finding children.
+func reviewGateIndex(ticketReview *ticket.TicketReview, children []ticket.TicketContent) (*ticketindex.Index, *ticket.TicketGate) {
+	idx := ticketindex.NewIndex()
+	gate := ticket.TicketGate{
 		ID:     "review-approval",
 		Type:   "review",
 		Status: "pending",
 	}
+	parent := testTicket("Review parent")
+	parent.Status = "review"
+	parent.Review = ticketReview
+	parent.Gates = []ticket.TicketGate{gate}
+	idx.Put("tkt-review", parent)
 
-	event := messaging.Event{
-		Type:     schema.EventTypeTicket,
-		StateKey: stringPtr("tkt-review"),
-		Content: map[string]any{
-			"status": "review",
-			"review": map[string]any{
-				"reviewers": []any{
-					map[string]any{"user_id": "@alice:bureau.local", "disposition": "approved"},
-					map[string]any{"user_id": "@bob:bureau.local", "disposition": "approved"},
-				},
-			},
-		},
+	for i, child := range children {
+		childID := fmt.Sprintf("tkt-finding-%d", i+1)
+		child.Parent = "tkt-review"
+		idx.Put(childID, child)
 	}
 
-	if !matchGateEvent(gate, event) {
+	return idx, &gate
+}
+
+func TestMatchReviewGateAllApproved(t *testing.T) {
+	index, _ := reviewGateIndex(&ticket.TicketReview{
+		Reviewers: []ticket.ReviewerEntry{
+			{UserID: ref.MustParseUserID("@alice:bureau.local"), Disposition: "approved"},
+			{UserID: ref.MustParseUserID("@bob:bureau.local"), Disposition: "approved"},
+		},
+	}, nil)
+
+	if !matchReviewGate(index, "tkt-review") {
 		t.Fatal("review gate should match when all reviewers approved")
 	}
 }
 
 func TestMatchReviewGatePendingReviewer(t *testing.T) {
-	gate := &ticket.TicketGate{
-		ID:     "review-approval",
-		Type:   "review",
-		Status: "pending",
-	}
-
-	event := messaging.Event{
-		Type:     schema.EventTypeTicket,
-		StateKey: stringPtr("tkt-review"),
-		Content: map[string]any{
-			"status": "review",
-			"review": map[string]any{
-				"reviewers": []any{
-					map[string]any{"user_id": "@alice:bureau.local", "disposition": "approved"},
-					map[string]any{"user_id": "@bob:bureau.local", "disposition": "pending"},
-				},
-			},
+	index, _ := reviewGateIndex(&ticket.TicketReview{
+		Reviewers: []ticket.ReviewerEntry{
+			{UserID: ref.MustParseUserID("@alice:bureau.local"), Disposition: "approved"},
+			{UserID: ref.MustParseUserID("@bob:bureau.local"), Disposition: "pending"},
 		},
-	}
+	}, nil)
 
-	if matchGateEvent(gate, event) {
+	if matchReviewGate(index, "tkt-review") {
 		t.Fatal("review gate should not match when a reviewer is still pending")
 	}
 }
 
 func TestMatchReviewGateChangesRequested(t *testing.T) {
-	gate := &ticket.TicketGate{
-		ID:     "review-approval",
-		Type:   "review",
-		Status: "pending",
-	}
-
-	event := messaging.Event{
-		Type:     schema.EventTypeTicket,
-		StateKey: stringPtr("tkt-review"),
-		Content: map[string]any{
-			"status": "review",
-			"review": map[string]any{
-				"reviewers": []any{
-					map[string]any{"user_id": "@alice:bureau.local", "disposition": "approved"},
-					map[string]any{"user_id": "@bob:bureau.local", "disposition": "changes_requested"},
-				},
-			},
+	index, _ := reviewGateIndex(&ticket.TicketReview{
+		Reviewers: []ticket.ReviewerEntry{
+			{UserID: ref.MustParseUserID("@alice:bureau.local"), Disposition: "approved"},
+			{UserID: ref.MustParseUserID("@bob:bureau.local"), Disposition: "changes_requested"},
 		},
-	}
+	}, nil)
 
-	if matchGateEvent(gate, event) {
+	if matchReviewGate(index, "tkt-review") {
 		t.Fatal("review gate should not match when a reviewer requested changes")
 	}
 }
 
 func TestMatchReviewGateNoReview(t *testing.T) {
-	gate := &ticket.TicketGate{
-		ID:     "review-approval",
-		Type:   "review",
-		Status: "pending",
-	}
+	index, _ := reviewGateIndex(nil, nil)
 
-	event := messaging.Event{
-		Type:     schema.EventTypeTicket,
-		StateKey: stringPtr("tkt-review"),
-		Content: map[string]any{
-			"status": "open",
-		},
-	}
-
-	if matchGateEvent(gate, event) {
+	if matchReviewGate(index, "tkt-review") {
 		t.Fatal("review gate should not match when review field is absent")
 	}
 }
 
 func TestMatchReviewGateEmptyReviewers(t *testing.T) {
-	gate := &ticket.TicketGate{
-		ID:     "review-approval",
-		Type:   "review",
-		Status: "pending",
-	}
+	index, _ := reviewGateIndex(&ticket.TicketReview{
+		Reviewers: []ticket.ReviewerEntry{},
+	}, nil)
 
-	event := messaging.Event{
-		Type:     schema.EventTypeTicket,
-		StateKey: stringPtr("tkt-review"),
-		Content: map[string]any{
-			"status": "review",
-			"review": map[string]any{
-				"reviewers": []any{},
-			},
-		},
-	}
-
-	if matchGateEvent(gate, event) {
+	if matchReviewGate(index, "tkt-review") {
 		t.Fatal("review gate should not match when reviewers list is empty")
 	}
 }
 
-func TestMatchReviewGateWrongEventType(t *testing.T) {
-	gate := &ticket.TicketGate{
-		ID:     "review-approval",
-		Type:   "review",
-		Status: "pending",
-	}
+func TestMatchReviewGateTicketNotInIndex(t *testing.T) {
+	index := ticketindex.NewIndex()
 
-	event := messaging.Event{
-		Type:     schema.EventTypePipelineResult,
-		StateKey: stringPtr("tkt-review"),
-		Content:  map[string]any{},
-	}
-
-	if matchGateEvent(gate, event) {
-		t.Fatal("review gate should not match non-ticket events")
+	if matchReviewGate(index, "tkt-nonexistent") {
+		t.Fatal("review gate should not match when ticket is not in index")
 	}
 }
 
 func TestMatchReviewGateSingleReviewerApproved(t *testing.T) {
-	gate := &ticket.TicketGate{
-		ID:     "review-approval",
-		Type:   "review",
-		Status: "pending",
-	}
-
-	event := messaging.Event{
-		Type:     schema.EventTypeTicket,
-		StateKey: stringPtr("tkt-review"),
-		Content: map[string]any{
-			"status": "review",
-			"review": map[string]any{
-				"reviewers": []any{
-					map[string]any{"user_id": "@alice:bureau.local", "disposition": "approved"},
-				},
-			},
+	index, _ := reviewGateIndex(&ticket.TicketReview{
+		Reviewers: []ticket.ReviewerEntry{
+			{UserID: ref.MustParseUserID("@alice:bureau.local"), Disposition: "approved"},
 		},
-	}
+	}, nil)
 
-	if !matchGateEvent(gate, event) {
+	if !matchReviewGate(index, "tkt-review") {
 		t.Fatal("review gate should match with single approved reviewer")
 	}
 }
 
 func TestMatchReviewGateCommented(t *testing.T) {
-	gate := &ticket.TicketGate{
-		ID:     "review-approval",
-		Type:   "review",
-		Status: "pending",
-	}
-
-	event := messaging.Event{
-		Type:     schema.EventTypeTicket,
-		StateKey: stringPtr("tkt-review"),
-		Content: map[string]any{
-			"status": "review",
-			"review": map[string]any{
-				"reviewers": []any{
-					map[string]any{"user_id": "@alice:bureau.local", "disposition": "approved"},
-					map[string]any{"user_id": "@bob:bureau.local", "disposition": "commented"},
-				},
-			},
+	index, _ := reviewGateIndex(&ticket.TicketReview{
+		Reviewers: []ticket.ReviewerEntry{
+			{UserID: ref.MustParseUserID("@alice:bureau.local"), Disposition: "approved"},
+			{UserID: ref.MustParseUserID("@bob:bureau.local"), Disposition: "commented"},
 		},
-	}
+	}, nil)
 
-	if matchGateEvent(gate, event) {
+	if matchReviewGate(index, "tkt-review") {
 		t.Fatal("review gate should not match when a reviewer only commented")
+	}
+}
+
+// --- matchReviewGate with review_finding children ---
+
+func TestMatchReviewGateAllApprovedWithClosedFindings(t *testing.T) {
+	finding1 := testTicket("Fix typo")
+	finding1.Type = "review_finding"
+	finding1.Status = "closed"
+
+	finding2 := testTicket("Handle error")
+	finding2.Type = "review_finding"
+	finding2.Status = "closed"
+
+	index, _ := reviewGateIndex(&ticket.TicketReview{
+		Reviewers: []ticket.ReviewerEntry{
+			{UserID: ref.MustParseUserID("@alice:bureau.local"), Disposition: "approved"},
+		},
+	}, []ticket.TicketContent{finding1, finding2})
+
+	if !matchReviewGate(index, "tkt-review") {
+		t.Fatal("review gate should match when all reviewers approved and all findings closed")
+	}
+}
+
+func TestMatchReviewGateAllApprovedWithOpenFinding(t *testing.T) {
+	finding1 := testTicket("Fix typo")
+	finding1.Type = "review_finding"
+	finding1.Status = "closed"
+
+	finding2 := testTicket("Handle error")
+	finding2.Type = "review_finding"
+	finding2.Status = "open"
+
+	index, _ := reviewGateIndex(&ticket.TicketReview{
+		Reviewers: []ticket.ReviewerEntry{
+			{UserID: ref.MustParseUserID("@alice:bureau.local"), Disposition: "approved"},
+		},
+	}, []ticket.TicketContent{finding1, finding2})
+
+	if matchReviewGate(index, "tkt-review") {
+		t.Fatal("review gate should not match when a review_finding child is still open")
+	}
+}
+
+func TestMatchReviewGatePendingReviewerWithClosedFindings(t *testing.T) {
+	finding := testTicket("Fix typo")
+	finding.Type = "review_finding"
+	finding.Status = "closed"
+
+	index, _ := reviewGateIndex(&ticket.TicketReview{
+		Reviewers: []ticket.ReviewerEntry{
+			{UserID: ref.MustParseUserID("@alice:bureau.local"), Disposition: "pending"},
+		},
+	}, []ticket.TicketContent{finding})
+
+	if matchReviewGate(index, "tkt-review") {
+		t.Fatal("review gate should not match when reviewer is pending even if all findings are closed")
+	}
+}
+
+func TestMatchReviewGateNoFindingsNoChange(t *testing.T) {
+	index, _ := reviewGateIndex(&ticket.TicketReview{
+		Reviewers: []ticket.ReviewerEntry{
+			{UserID: ref.MustParseUserID("@alice:bureau.local"), Disposition: "approved"},
+		},
+	}, nil)
+
+	if !matchReviewGate(index, "tkt-review") {
+		t.Fatal("review gate should match with approved reviewers and no findings (backwards compatible)")
+	}
+}
+
+func TestMatchReviewGateNonFindingChildrenIgnored(t *testing.T) {
+	// Non-review_finding children should not affect the review gate.
+	subtask := testTicket("Subtask")
+	subtask.Type = "task"
+	subtask.Status = "open"
+
+	index, _ := reviewGateIndex(&ticket.TicketReview{
+		Reviewers: []ticket.ReviewerEntry{
+			{UserID: ref.MustParseUserID("@alice:bureau.local"), Disposition: "approved"},
+		},
+	}, []ticket.TicketContent{subtask})
+
+	if !matchReviewGate(index, "tkt-review") {
+		t.Fatal("review gate should ignore non-review_finding children")
 	}
 }

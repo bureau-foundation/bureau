@@ -63,9 +63,12 @@ A ticket carries:
   status semantics.
 - **Priority** — 0 (critical) through 4 (backlog).
 - **Type** — `task`, `bug`, `feature`, `epic`, `chore`, `docs`,
-  `question`, `pipeline`. Types with dedicated semantics carry
-  type-specific content (see
+  `question`, `pipeline`, `review_finding`. Types with dedicated
+  semantics carry type-specific content (see
   [Type-Specific Content](#type-specific-content)).
+  A `review_finding` is an actionable review comment — always a child
+  of the ticket under review. Closing all review_finding children of a
+  ticket contributes to satisfying that ticket's review gate.
 - **Labels** — free-form tags for filtering and grouping.
 - **Assignee** — single Matrix user ID. Bureau agents are principals
   with unique identities; one agent works one ticket. Multiple people
@@ -174,12 +177,16 @@ the whole ticket is the natural operation.
   the gate's target. Supports one-shot delays, absolute target times,
   and recurring schedules. See [Scheduling and Recurrence](#scheduling-and-recurrence).
 
-- **`review`** — watches the ticket's own review field. Satisfied when
-  every reviewer in the `TicketReview.Reviewers` list has disposition
-  `"approved"`. Any pending, changes_requested, or commented reviewer
-  blocks satisfaction. No type-specific fields — the gate implicitly
-  watches the ticket it is attached to. Use for making review
-  completion a blocking readiness condition. See [Review](#review).
+- **`review`** — watches the ticket's own review field and any
+  `review_finding` children. Satisfied when every reviewer in
+  `TicketReview.Reviewers` has disposition `"approved"` AND all
+  children of type `review_finding` have status `"closed"`. Any
+  pending, changes_requested, or commented reviewer blocks
+  satisfaction; any open review_finding blocks satisfaction. No
+  type-specific fields — the gate implicitly watches the ticket it is
+  attached to. Use for making review completion (including resolution
+  of all actionable findings) a blocking readiness condition. See
+  [Review](#review).
 
 **Evaluation flow:** The ticket service's /sync loop delivers state
 event updates. The service checks all pending gates across all tickets
@@ -489,10 +496,13 @@ binary conditions: a gate is pending or satisfied, evaluated
 automatically or resolved manually. Review is structured multi-reviewer
 feedback with individual dispositions and iterative cycles.
 
-A "review" gate type can bridge the two by watching for all-approved
-dispositions, making review completion a prerequisite for downstream
-work. But gates and review remain orthogonal — a ticket can have both
-gates and reviewers, and their satisfaction is evaluated independently.
+A "review" gate type bridges the two. It is satisfied when all
+reviewers have disposition "approved" AND all `review_finding` children
+of the ticket are status "closed". This makes review completion —
+including resolution of all actionable findings — a prerequisite for
+downstream work. Gates and review remain orthogonal: a ticket can
+have both gates and reviewers, and their satisfaction is evaluated
+independently.
 
 ### Notes
 

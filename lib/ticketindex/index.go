@@ -258,7 +258,14 @@ func (idx *Index) Len() int {
 // faithfully stores whatever it receives, since the data has already
 // been persisted as a Matrix state event.
 func (idx *Index) Put(ticketID string, content ticket.TicketContent) {
+	// Capture the old parent before removal so we can refresh the
+	// old parent's review gate watches if this ticket is a
+	// review_finding that changed parents.
+	var oldParent string
+	var oldType string
 	if old, exists := idx.tickets[ticketID]; exists {
+		oldParent = old.Parent
+		oldType = old.Type
 		idx.updateIndexes(ticketID, &old, removeFromStringIndex, removeFromIntIndex)
 		idx.removeGateWatches(ticketID, &old)
 	}
@@ -298,6 +305,17 @@ func (idx *Index) Put(ticketID string, content ticket.TicketContent) {
 	idx.tickets[ticketID] = content
 	idx.updateIndexes(ticketID, &content, addToStringIndex, addToIntIndex)
 	idx.addGateWatches(ticketID, &content)
+
+	// When a review_finding child is added, removed, or reparented,
+	// refresh the affected parent(s)' review gate watches so they
+	// include or exclude this child's state key.
+	if content.Type == "review_finding" && content.Parent != "" {
+		idx.refreshReviewGateWatches(content.Parent)
+	}
+	if oldType == "review_finding" && oldParent != "" && oldParent != content.Parent {
+		idx.refreshReviewGateWatches(oldParent)
+	}
+
 	idx.searchDirty = true
 }
 
@@ -311,6 +329,13 @@ func (idx *Index) Remove(ticketID string) {
 	idx.updateIndexes(ticketID, &old, removeFromStringIndex, removeFromIntIndex)
 	idx.removeGateWatches(ticketID, &old)
 	delete(idx.tickets, ticketID)
+
+	// If the removed ticket was a review_finding, refresh the
+	// parent's review gate watches so they stop watching this child.
+	if old.Type == "review_finding" && old.Parent != "" {
+		idx.refreshReviewGateWatches(old.Parent)
+	}
+
 	idx.searchDirty = true
 }
 
@@ -498,8 +523,9 @@ func (idx *Index) WatchedGates(eventType ref.EventType, stateKey string) []GateW
 // for gate types that are not event-driven (human, timer) or that are
 // handled by a separate evaluation path (cross-room state_event gates).
 // The ticketID parameter is the ID of the ticket that owns this gate,
-// needed by review gates which watch their own ticket's state event.
-func watchKeysForGate(gate *ticket.TicketGate, ticketID string) []gateWatchKey {
+// needed by review gates which watch their own ticket's state event
+// and any review_finding children.
+func (idx *Index) watchKeysForGate(gate *ticket.TicketGate, ticketID string) []gateWatchKey {
 	switch gate.Type {
 	case "pipeline":
 		// Pipeline gates watch for pipeline_result events with any
@@ -517,11 +543,20 @@ func watchKeysForGate(gate *ticket.TicketGate, ticketID string) []gateWatchKey {
 		return []gateWatchKey{{eventType: schema.EventTypeTicket, stateKey: gate.TicketID}}
 
 	case "review":
-		// Review gates watch their own ticket's state event. When a
-		// reviewer sets their disposition, the ticket is written to
-		// Matrix, and the gate evaluator checks whether all reviewers
-		// have approved.
-		return []gateWatchKey{{eventType: schema.EventTypeTicket, stateKey: ticketID}}
+		// Review gates watch their own ticket's state event (for
+		// reviewer disposition changes) and all review_finding
+		// children (for finding closure). The gate is satisfied
+		// when all reviewers have approved AND all review_finding
+		// children are closed.
+		keys := []gateWatchKey{{eventType: schema.EventTypeTicket, stateKey: ticketID}}
+		if childIDs, exists := idx.children[ticketID]; exists {
+			for childID := range childIDs {
+				if child, exists := idx.tickets[childID]; exists && child.Type == "review_finding" {
+					keys = append(keys, gateWatchKey{eventType: schema.EventTypeTicket, stateKey: childID})
+				}
+			}
+		}
+		return keys
 
 	case "state_event":
 		// Cross-room gates (RoomAlias set) are evaluated separately
@@ -550,7 +585,7 @@ func (idx *Index) addGateWatches(ticketID string, content *ticket.TicketContent)
 		if content.Gates[i].Status != "pending" {
 			continue
 		}
-		for _, key := range watchKeysForGate(&content.Gates[i], ticketID) {
+		for _, key := range idx.watchKeysForGate(&content.Gates[i], ticketID) {
 			watch := GateWatch{TicketID: ticketID, GateIndex: i}
 			set, exists := idx.gateWatch[key]
 			if !exists {
@@ -574,7 +609,7 @@ func (idx *Index) addGateWatches(ticketID string, content *ticket.TicketContent)
 // gates that were never in the watch map.
 func (idx *Index) removeGateWatches(ticketID string, content *ticket.TicketContent) {
 	for i := range content.Gates {
-		for _, key := range watchKeysForGate(&content.Gates[i], ticketID) {
+		for _, key := range idx.watchKeysForGate(&content.Gates[i], ticketID) {
 			watch := GateWatch{TicketID: ticketID, GateIndex: i}
 			set, exists := idx.gateWatch[key]
 			if !exists {
@@ -586,6 +621,45 @@ func (idx *Index) removeGateWatches(ticketID string, content *ticket.TicketConte
 			}
 		}
 	}
+}
+
+// refreshReviewGateWatches re-computes the watch map entries for all
+// review gates on the given ticket. Called when the ticket's set of
+// review_finding children changes (child added, removed, or
+// reparented) so that the review gate's watch keys stay in sync with
+// the current children.
+//
+// This removes all existing watch entries for the ticket by scanning
+// the gateWatch map rather than computing old watch keys. The scan is
+// necessary because the children map may have already been updated by
+// the time this runs, making old child-derived watch keys
+// inaccessible via watchKeysForGate.
+func (idx *Index) refreshReviewGateWatches(ticketID string) {
+	content, exists := idx.tickets[ticketID]
+	if !exists {
+		return
+	}
+	hasReviewGate := false
+	for i := range content.Gates {
+		if content.Gates[i].Type == "review" {
+			hasReviewGate = true
+			break
+		}
+	}
+	if !hasReviewGate {
+		return
+	}
+	for key, set := range idx.gateWatch {
+		for watch := range set {
+			if watch.TicketID == ticketID {
+				delete(set, watch)
+			}
+		}
+		if len(set) == 0 {
+			delete(idx.gateWatch, key)
+		}
+	}
+	idx.addGateWatches(ticketID, &content)
 }
 
 // Stats returns aggregate counts across all tickets in the index.

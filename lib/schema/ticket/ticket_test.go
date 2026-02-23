@@ -580,6 +580,19 @@ func TestTicketContentValidate(t *testing.T) {
 			wantErr: "pipeline content must be nil when type is \"task\"",
 		},
 		{
+			name: "type_review_finding_with_parent",
+			modify: func(tc *TicketContent) {
+				tc.Type = "review_finding"
+				tc.Parent = "tkt-parent"
+			},
+			wantErr: "",
+		},
+		{
+			name:    "type_review_finding_missing_parent",
+			modify:  func(tc *TicketContent) { tc.Type = "review_finding" },
+			wantErr: "parent is required for review_finding type",
+		},
+		{
 			name:    "created_by_empty",
 			modify:  func(tc *TicketContent) { tc.CreatedBy = ref.UserID{} },
 			wantErr: "created_by is required",
@@ -1681,7 +1694,7 @@ func TestPrefixForType(t *testing.T) {
 }
 
 func TestIsValidType(t *testing.T) {
-	validTypes := []string{"task", "bug", "feature", "epic", "chore", "docs", "question", "pipeline"}
+	validTypes := []string{"task", "bug", "feature", "epic", "chore", "docs", "question", "pipeline", "review_finding"}
 	for _, typeName := range validTypes {
 		if !IsValidType(typeName) {
 			t.Errorf("IsValidType(%q) = false, want true", typeName)

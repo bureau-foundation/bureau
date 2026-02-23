@@ -1134,6 +1134,145 @@ func TestWatchedGatesReviewGate(t *testing.T) {
 	}
 }
 
+func TestWatchedGatesReviewGateWithChildren(t *testing.T) {
+	idx := NewIndex()
+
+	// Parent ticket with a review gate.
+	parent := makeTicket("Review parent")
+	parent.Gates = []ticket.TicketGate{
+		{ID: "review-approval", Type: "review", Status: "pending"},
+	}
+	idx.Put("tkt-parent", parent)
+
+	// Add a review_finding child.
+	finding := makeTicket("Fix typo")
+	finding.Type = "review_finding"
+	finding.Parent = "tkt-parent"
+	idx.Put("tkt-finding-1", finding)
+
+	// The review gate should now watch both the parent and the child.
+	parentWatches := idx.WatchedGates(schema.EventTypeTicket, "tkt-parent")
+	if len(parentWatches) != 1 {
+		t.Fatalf("WatchedGates for parent = %d, want 1", len(parentWatches))
+	}
+
+	childWatches := idx.WatchedGates(schema.EventTypeTicket, "tkt-finding-1")
+	if len(childWatches) != 1 {
+		t.Fatalf("WatchedGates for finding child = %d, want 1", len(childWatches))
+	}
+	if childWatches[0].TicketID != "tkt-parent" || childWatches[0].GateIndex != 0 {
+		t.Errorf("child watch = %+v, want {tkt-parent, 0}", childWatches[0])
+	}
+
+	// A non-review_finding child should NOT be watched.
+	task := makeTicket("Subtask")
+	task.Type = "task"
+	task.Parent = "tkt-parent"
+	idx.Put("tkt-task-child", task)
+
+	taskWatches := idx.WatchedGates(schema.EventTypeTicket, "tkt-task-child")
+	if len(taskWatches) != 0 {
+		t.Errorf("WatchedGates for non-finding child = %d, want 0", len(taskWatches))
+	}
+}
+
+func TestRefreshReviewGateWatchesOnChildAdd(t *testing.T) {
+	idx := NewIndex()
+
+	// Parent with a review gate, initially no children.
+	parent := makeTicket("Review parent")
+	parent.Gates = []ticket.TicketGate{
+		{ID: "review-approval", Type: "review", Status: "pending"},
+	}
+	idx.Put("tkt-parent", parent)
+
+	// Before adding child: only parent watched.
+	watches := idx.WatchedGates(schema.EventTypeTicket, "tkt-finding-1")
+	if len(watches) != 0 {
+		t.Fatalf("WatchedGates for future child = %d before add, want 0", len(watches))
+	}
+
+	// Add a review_finding child — Put triggers watch refresh.
+	finding := makeTicket("Finding")
+	finding.Type = "review_finding"
+	finding.Parent = "tkt-parent"
+	idx.Put("tkt-finding-1", finding)
+
+	// Now the child should be watched.
+	watches = idx.WatchedGates(schema.EventTypeTicket, "tkt-finding-1")
+	if len(watches) != 1 {
+		t.Fatalf("WatchedGates for child after add = %d, want 1", len(watches))
+	}
+}
+
+func TestRefreshReviewGateWatchesOnChildRemove(t *testing.T) {
+	idx := NewIndex()
+
+	// Parent with review gate + one finding child.
+	parent := makeTicket("Review parent")
+	parent.Gates = []ticket.TicketGate{
+		{ID: "review-approval", Type: "review", Status: "pending"},
+	}
+	idx.Put("tkt-parent", parent)
+
+	finding := makeTicket("Finding")
+	finding.Type = "review_finding"
+	finding.Parent = "tkt-parent"
+	idx.Put("tkt-finding-1", finding)
+
+	// Verify the child is watched.
+	watches := idx.WatchedGates(schema.EventTypeTicket, "tkt-finding-1")
+	if len(watches) != 1 {
+		t.Fatalf("WatchedGates for child = %d, want 1", len(watches))
+	}
+
+	// Reparent the finding to a different ticket.
+	finding.Parent = "tkt-other"
+	idx.Put("tkt-finding-1", finding)
+
+	// The old parent should no longer watch this child.
+	watches = idx.WatchedGates(schema.EventTypeTicket, "tkt-finding-1")
+	if len(watches) != 0 {
+		t.Errorf("WatchedGates for reparented child = %d, want 0", len(watches))
+	}
+
+	// The old parent should still watch itself.
+	watches = idx.WatchedGates(schema.EventTypeTicket, "tkt-parent")
+	if len(watches) != 1 {
+		t.Errorf("WatchedGates for parent itself after reparent = %d, want 1", len(watches))
+	}
+}
+
+func TestRefreshReviewGateWatchesOnChildDelete(t *testing.T) {
+	idx := NewIndex()
+
+	// Parent with review gate + one finding child.
+	parent := makeTicket("Review parent")
+	parent.Gates = []ticket.TicketGate{
+		{ID: "review-approval", Type: "review", Status: "pending"},
+	}
+	idx.Put("tkt-parent", parent)
+
+	finding := makeTicket("Finding")
+	finding.Type = "review_finding"
+	finding.Parent = "tkt-parent"
+	idx.Put("tkt-finding-1", finding)
+
+	// Remove the finding — should refresh parent watches.
+	idx.Remove("tkt-finding-1")
+
+	watches := idx.WatchedGates(schema.EventTypeTicket, "tkt-finding-1")
+	if len(watches) != 0 {
+		t.Errorf("WatchedGates for removed child = %d, want 0", len(watches))
+	}
+
+	// Parent still watches itself.
+	watches = idx.WatchedGates(schema.EventTypeTicket, "tkt-parent")
+	if len(watches) != 1 {
+		t.Errorf("WatchedGates for parent after child removal = %d, want 1", len(watches))
+	}
+}
+
 func TestWatchedGatesStateEventGateExactKey(t *testing.T) {
 	idx := NewIndex()
 

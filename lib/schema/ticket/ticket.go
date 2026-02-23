@@ -207,12 +207,15 @@ func (t *TicketContent) Validate() error {
 		return fmt.Errorf("ticket content: priority must be 0-4, got %d", t.Priority)
 	}
 	switch t.Type {
-	case "task", "bug", "feature", "epic", "chore", "docs", "question", "pipeline":
+	case "task", "bug", "feature", "epic", "chore", "docs", "question", "pipeline", "review_finding":
 		// Valid.
 	case "":
 		return errors.New("ticket content: type is required")
 	default:
 		return fmt.Errorf("ticket content: unknown type %q", t.Type)
+	}
+	if t.Type == "review_finding" && t.Parent == "" {
+		return errors.New("ticket content: parent is required for review_finding type")
 	}
 	if t.Type == "pipeline" {
 		if t.Pipeline == nil {
@@ -468,8 +471,10 @@ func (g *TicketGate) Validate() error {
 		}
 	case "review":
 		// Review gates have no type-specific fields. They implicitly
-		// watch the ticket they are attached to and are satisfied when
-		// all reviewers have disposition "approved".
+		// watch the ticket they are attached to (and any
+		// review_finding children) and are satisfied when all
+		// reviewers have disposition "approved" and all
+		// review_finding children are status "closed".
 	case "timer":
 		if err := g.validateTimer(); err != nil {
 			return err
@@ -846,14 +851,15 @@ func (p *PipelineExecutionContent) Validate() error {
 // validTicketTypes is the set of recognized ticket types. Used for
 // validation in both TicketContent and TicketConfigContent.AllowedTypes.
 var validTicketTypes = map[string]bool{
-	"task":     true,
-	"bug":      true,
-	"feature":  true,
-	"epic":     true,
-	"chore":    true,
-	"docs":     true,
-	"question": true,
-	"pipeline": true,
+	"task":           true,
+	"bug":            true,
+	"feature":        true,
+	"epic":           true,
+	"chore":          true,
+	"docs":           true,
+	"question":       true,
+	"pipeline":       true,
+	"review_finding": true,
 }
 
 // IsValidType reports whether the given string is a recognized ticket type.

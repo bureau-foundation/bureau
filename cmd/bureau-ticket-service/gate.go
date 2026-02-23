@@ -83,7 +83,7 @@ func (ts *TicketService) evaluateGatesForEvent(ctx context.Context, roomID ref.R
 		// The watch map narrows candidates by (eventType, stateKey)
 		// but content-level criteria (pipeline_ref, conclusion,
 		// content_match) still need full match verification.
-		if !matchGateEvent(gate, event) {
+		if !matchGateEvent(gate, event, state.index, watch.TicketID) {
 			continue
 		}
 
@@ -120,14 +120,19 @@ func (ts *TicketService) evaluateGatesForEvent(ctx context.Context, roomID ref.R
 // matchGateEvent checks whether a state event satisfies a gate's
 // condition. Dispatches to type-specific matchers. The gate must be
 // pending and not a human or timer type (caller checks this).
-func matchGateEvent(gate *ticket.TicketGate, event messaging.Event) bool {
+//
+// The index and ticketID parameters provide aggregate state for gate
+// types that need to evaluate conditions across multiple tickets
+// (review gates check both reviewer dispositions and review_finding
+// children). Other gate types use only the event.
+func matchGateEvent(gate *ticket.TicketGate, event messaging.Event, index *ticketindex.Index, ticketID string) bool {
 	switch gate.Type {
 	case "pipeline":
 		return matchPipelineGate(gate, event)
 	case "ticket":
 		return matchTicketGate(gate, event)
 	case "review":
-		return matchReviewGate(gate, event)
+		return matchReviewGate(index, ticketID)
 	case "state_event":
 		return matchStateEventGate(gate, event)
 	default:
@@ -175,42 +180,35 @@ func matchTicketGate(gate *ticket.TicketGate, event messaging.Event) bool {
 	return status == "closed"
 }
 
-// matchReviewGate checks whether a ticket state event indicates that
-// all reviewers have approved. The review gate watches its own ticket's
-// state event and is satisfied when every reviewer in the review field
-// has disposition "approved".
-func matchReviewGate(gate *ticket.TicketGate, event messaging.Event) bool {
-	if event.Type != schema.EventTypeTicket {
-		return false
-	}
-
-	// The event content is a map[string]any from the raw Matrix JSON.
-	// Extract the review field and check reviewer dispositions.
-	reviewRaw, exists := event.Content["review"]
+// matchReviewGate checks whether a review gate's conditions are met by
+// evaluating the ticket's current state in the index. The gate is
+// satisfied when both conditions hold:
+//
+//   - All reviewers have disposition "approved" (at least one reviewer
+//     is required — a review with no reviewers cannot be complete).
+//   - All review_finding children are status "closed" (zero findings
+//     is acceptable — no findings means nothing blocking).
+//
+// The triggering event is not inspected; all evaluation is index-based
+// so that both reviewer disposition changes (parent ticket event) and
+// finding status changes (child ticket event) use the same logic.
+func matchReviewGate(index *ticketindex.Index, ticketID string) bool {
+	content, exists := index.Get(ticketID)
 	if !exists {
 		return false
 	}
-	reviewMap, ok := reviewRaw.(map[string]any)
-	if !ok {
-		return false
-	}
 
-	reviewersRaw, exists := reviewMap["reviewers"]
-	if !exists {
+	if content.Review == nil || len(content.Review.Reviewers) == 0 {
 		return false
 	}
-	reviewersList, ok := reviewersRaw.([]any)
-	if !ok || len(reviewersList) == 0 {
-		return false
-	}
-
-	for _, entryRaw := range reviewersList {
-		entry, ok := entryRaw.(map[string]any)
-		if !ok {
+	for _, reviewer := range content.Review.Reviewers {
+		if reviewer.Disposition != "approved" {
 			return false
 		}
-		disposition, _ := entry["disposition"].(string)
-		if disposition != "approved" {
+	}
+
+	for _, child := range index.Children(ticketID) {
+		if child.Content.Type == "review_finding" && child.Content.Status != "closed" {
 			return false
 		}
 	}

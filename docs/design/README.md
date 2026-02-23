@@ -67,6 +67,9 @@ a Matrix account and a unix socket API.
 - **[telemetry.md](telemetry.md)** — Fleet-wide observability: trace
   collection, metric aggregation, log correlation, Prometheus
   integration.
+- **[logging.md](logging.md)** — Raw output capture: PTY interposition,
+  CAS-backed log chunks, log-\* mutable indices, pipeline ticket
+  attachment, rotation, CLI tail/export.
 
 - **[agent-context.md](agent-context.md)** — Agent understanding as a
   first-class artifact: context commits, delta chains, forking,

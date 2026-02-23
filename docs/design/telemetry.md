@@ -638,3 +638,8 @@ Relays discover the telemetry service from the fleet service directory.
 - [authorization.md](authorization.md) — telemetry query access is
   governed by service token grants (`telemetry/traces`,
   `telemetry/metrics`, `telemetry/logs`, `telemetry/top`).
+- [logging.md](logging.md) — raw output capture rides on the telemetry
+  pipeline as a new signal type (output deltas). The relay and service
+  gain output delta handling alongside structured telemetry. The logging
+  document covers the capture mechanism, log-\* entity model, pipeline
+  integration, and rotation.

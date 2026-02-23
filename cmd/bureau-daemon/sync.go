@@ -321,8 +321,16 @@ func (d *Daemon) processSyncResponse(ctx context.Context, response *messaging.Sy
 			d.logger.Error("service directory sync failed", "error", err)
 		} else {
 			consumers := d.runningConsumers()
+			d.logger.Info("service directory synced",
+				"added", len(added),
+				"removed", len(removed),
+				"updated", len(updated),
+				"consumers", len(consumers),
+			)
 			d.reconcileServices(ctx, consumers, added, removed, updated)
+			d.logger.Info("service routes reconciled")
 			d.pushServiceDirectory(ctx, consumers)
+			d.logger.Info("service directory pushed to consumers")
 			d.discoverSharedCache(ctx)
 			d.discoverPushTargets(ctx)
 
@@ -331,9 +339,18 @@ func (d *Daemon) processSyncResponse(ctx context.Context, response *messaging.Sy
 			// service events without matching unrelated changes from
 			// other machines or tests sharing the global service room.
 			if changeCount := len(added) + len(removed) + len(updated); changeCount > 0 {
+				d.logger.Info("posting service directory update notification",
+					"change_count", changeCount,
+					"added", added,
+					"removed", removed,
+					"updated", updated,
+					"config_room", d.configRoomID,
+				)
 				if _, err := d.sendEventRetry(ctx, d.configRoomID, schema.MatrixEventTypeMessage,
 					schema.NewServiceDirectoryUpdatedMessage(added, removed, updated)); err != nil {
 					d.logger.Error("failed to post service directory update", "error", err)
+				} else {
+					d.logger.Info("service directory update notification posted")
 				}
 			}
 

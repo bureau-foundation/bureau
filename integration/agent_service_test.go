@@ -64,19 +64,26 @@ func TestAgentServiceSessionTracking(t *testing.T) {
 	// startup but only connects to the socket on demand — this test
 	// exercises session tracking, not materialization, so no artifact
 	// requests are made.
+	//
+	// The token file is bind-mounted read-only into the sandbox.
+	// BUREAU_ARTIFACT_SOCKET points to a nonexistent sandbox-internal
+	// path — acceptable because no artifact operations run in this test.
 	artifactTokenFile := filepath.Join(t.TempDir(), "artifact.token")
 	if err := os.WriteFile(artifactTokenFile, []byte("test-artifact-token"), 0600); err != nil {
 		t.Fatalf("write artifact token file: %v", err)
 	}
-	artifactSocketPath := filepath.Join(tempSocketDir(t), "artifact.sock")
+	const sandboxArtifactToken = "/run/bureau/artifact-token"
 
 	agentSvc := deployService(t, admin, fleet, machine, serviceDeployOptions{
 		Binary:    testutil.DataBinary(t, "AGENT_SERVICE_BINARY"),
 		Name:      "agent-service",
 		Localpart: "service/agent/session-test",
-		ExtraEnv: []string{
-			"BUREAU_ARTIFACT_SOCKET=" + artifactSocketPath,
-			"BUREAU_ARTIFACT_TOKEN=" + artifactTokenFile,
+		ExtraMounts: []schema.TemplateMount{
+			{Source: artifactTokenFile, Dest: sandboxArtifactToken, Mode: "ro"},
+		},
+		ExtraEnvironmentVariables: map[string]string{
+			"BUREAU_ARTIFACT_SOCKET": "/tmp/no-artifact.sock",
+			"BUREAU_ARTIFACT_TOKEN":  sandboxArtifactToken,
 		},
 	})
 

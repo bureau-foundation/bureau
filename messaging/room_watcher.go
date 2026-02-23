@@ -150,20 +150,19 @@ const retryTimeout = 1000
 // connections on error if the Session supports it.
 func (w *RoomWatcher) WaitForEvent(ctx context.Context, predicate func(Event) bool) (Event, error) {
 	var syncRetries int
-	for {
-		// Scan pending events from previous sync responses before
-		// issuing a new /sync. This is critical for correctness: when
-		// a sync response contains multiple matching events (e.g., two
-		// command_result messages in the same batch), the first
-		// WaitForEvent call consumes one and the second call must find
-		// the other here without needing another round-trip.
-		for i, event := range w.pending {
-			if predicate(event) {
-				w.pending = append(w.pending[:i], w.pending[i+1:]...)
-				return event, nil
-			}
-		}
 
+	// Scan any events already pending from previous WaitForEvent calls
+	// before entering the sync loop. This handles the case where a prior
+	// sync delivered multiple matching events — the first WaitForEvent
+	// consumed one, and this call must find the other.
+	for i, event := range w.pending {
+		if predicate(event) {
+			w.pending = append(w.pending[:i], w.pending[i+1:]...)
+			return event, nil
+		}
+	}
+
+	for {
 		// On retry after a sync error, use a short server-side
 		// timeout (1s) so the HTTP round-trip itself provides
 		// backoff. On first attempt or after success, use the
@@ -204,19 +203,40 @@ func (w *RoomWatcher) WaitForEvent(ctx context.Context, predicate func(Event) bo
 		syncRetries = 0
 		w.nextBatch = response.NextBatch
 
-		if joined, ok := response.Rooms.Join[w.roomID]; ok {
-			stateCount := len(joined.State.Events)
-			timelineCount := len(joined.Timeline.Events)
-			if stateCount > 0 || timelineCount > 0 {
-				slog.Debug("room watcher received events",
-					"room_id", w.roomID,
-					"state_events", stateCount,
-					"timeline_events", timelineCount,
-					"pending_before", len(w.pending),
-				)
+		joined, ok := response.Rooms.Join[w.roomID]
+		if !ok {
+			// The server returned events for other rooms but not the
+			// watched room. This happens frequently when the user is
+			// in many active rooms: /sync returns as soon as ANY room
+			// has activity, but the filter only includes this room's
+			// data. No new events to scan — continue polling.
+			continue
+		}
+
+		stateCount := len(joined.State.Events)
+		timelineCount := len(joined.Timeline.Events)
+		if stateCount == 0 && timelineCount == 0 {
+			continue
+		}
+
+		slog.Info("room watcher received events",
+			"room_id", w.roomID,
+			"state_events", stateCount,
+			"timeline_events", timelineCount,
+			"pending_before", len(w.pending),
+		)
+
+		// Append new events to pending and scan the entire buffer.
+		// State events come before timeline events to match the
+		// delivery order from the Matrix server.
+		w.pending = append(w.pending, joined.State.Events...)
+		w.pending = append(w.pending, joined.Timeline.Events...)
+
+		for i, event := range w.pending {
+			if predicate(event) {
+				w.pending = append(w.pending[:i], w.pending[i+1:]...)
+				return event, nil
 			}
-			w.pending = append(w.pending, joined.State.Events...)
-			w.pending = append(w.pending, joined.Timeline.Events...)
 		}
 	}
 }

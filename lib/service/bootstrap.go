@@ -435,16 +435,24 @@ func BootstrapViaProxy(ctx context.Context, config ProxyBootstrapConfig) (*Boots
 	session := proxyclient.NewProxySession(proxy, userID)
 	logger.Info("proxy session established", "user_id", userID, "proxy_socket", proxySocket)
 
-	// Resolve and join fleet-scoped rooms.
-	serviceRoomID, err := ResolveFleetServiceRoom(ctx, session, fleet)
+	// Resolve fleet-scoped rooms by alias. Room membership is already
+	// handled by the proxy's acceptPendingInvites — the daemon invited
+	// this service to both rooms before creating the sandbox
+	// (reconcile.go ensurePrincipalRoomAccess). We only need room IDs
+	// here, not JoinRoom. The proxy's ResolveAlias endpoint is ungated
+	// (no grant required), whereas JoinRoom requires a matrix/join
+	// grant that services don't have.
+	serviceRoomAlias := fleet.ServiceRoomAlias()
+	serviceRoomID, err := session.ResolveAlias(ctx, serviceRoomAlias)
 	if err != nil {
-		return nil, nil, fmt.Errorf("resolving fleet service room: %w", err)
+		return nil, nil, fmt.Errorf("resolving fleet service room %q: %w", serviceRoomAlias, err)
 	}
 
 	namespace := fleet.Namespace()
-	systemRoomID, err := ResolveSystemRoom(ctx, session, namespace)
+	systemRoomAlias := namespace.SystemRoomAlias()
+	systemRoomID, err := session.ResolveAlias(ctx, systemRoomAlias)
 	if err != nil {
-		return nil, nil, fmt.Errorf("resolving system room: %w", err)
+		return nil, nil, fmt.Errorf("resolving system room %q: %w", systemRoomAlias, err)
 	}
 	logger.Info("global rooms ready",
 		"service_room", serviceRoomID,

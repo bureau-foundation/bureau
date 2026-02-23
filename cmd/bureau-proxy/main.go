@@ -434,9 +434,11 @@ func acceptPendingInvites(credentials proxy.CredentialSource, logger *slog.Logge
 	}
 
 	if len(response.Rooms.Invite) == 0 {
+		logger.Info("no pending room invites")
 		return
 	}
 
+	logger.Info("accepting pending room invites", "count", len(response.Rooms.Invite))
 	for roomID := range response.Rooms.Invite {
 		if _, err := session.JoinRoom(ctx, roomID); err != nil {
 			logger.Warn("failed to accept room invite",

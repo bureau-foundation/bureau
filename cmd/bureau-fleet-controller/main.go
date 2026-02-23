@@ -67,15 +67,21 @@ func run() error {
 	}
 	defer cleanup()
 
-	// Resolve fleet-specific rooms beyond the standard service and system rooms.
-	fleetRoomID, err := service.ResolveRoom(ctx, boot.Session, boot.Fleet.RoomAlias())
+	// Resolve fleet-specific rooms beyond the standard service and system
+	// rooms. Room membership is handled by the proxy's acceptPendingInvites
+	// at startup — the daemon invited this service to the fleet room and
+	// machine room before creating the sandbox (via ExtraRooms in the
+	// MachineConfig). ResolveAlias is ungated (no proxy grant required).
+	fleetRoomAlias := boot.Fleet.RoomAlias()
+	fleetRoomID, err := boot.Session.ResolveAlias(ctx, fleetRoomAlias)
 	if err != nil {
-		return fmt.Errorf("resolving fleet room: %w", err)
+		return fmt.Errorf("resolving fleet room %q: %w", fleetRoomAlias, err)
 	}
 
-	machineRoomID, err := service.ResolveRoom(ctx, boot.Session, boot.Fleet.MachineRoomAlias())
+	machineRoomAlias := boot.Fleet.MachineRoomAlias()
+	machineRoomID, err := boot.Session.ResolveAlias(ctx, machineRoomAlias)
 	if err != nil {
-		return fmt.Errorf("resolving fleet machine room: %w", err)
+		return fmt.Errorf("resolving fleet machine room %q: %w", machineRoomAlias, err)
 	}
 
 	boot.Logger.Info("fleet rooms ready",

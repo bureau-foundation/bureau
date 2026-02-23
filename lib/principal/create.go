@@ -332,6 +332,38 @@ func registerAndProvision(ctx context.Context, client *messaging.Client, session
 		return zero, fmt.Errorf("principal join config room: %w", err)
 	}
 
+	// Services need membership in the system room (token signing key
+	// lookup) and fleet service room (service registration and
+	// deregistration). Invite here using the admin session — these
+	// rooms have admin-only invite power levels (PL 100), so neither
+	// the daemon (PL 0 machine user) nor the service itself can
+	// invite. The proxy's acceptPendingInvites joins at sandbox startup.
+	if params.Principal.EntityType() == "service" {
+		fleetRef := params.Principal.Fleet()
+
+		systemRoomAlias := fleetRef.Namespace().SystemRoomAlias()
+		systemRoomID, err := session.ResolveAlias(ctx, systemRoomAlias)
+		if err != nil {
+			return zero, fmt.Errorf("resolve system room %q for service invitation: %w", systemRoomAlias, err)
+		}
+		if err := session.InviteUser(ctx, systemRoomID, principalUserID); err != nil {
+			if !messaging.IsMatrixError(err, messaging.ErrCodeForbidden) {
+				return zero, fmt.Errorf("invite service to system room: %w", err)
+			}
+		}
+
+		serviceRoomAlias := fleetRef.ServiceRoomAlias()
+		serviceRoomID, err := session.ResolveAlias(ctx, serviceRoomAlias)
+		if err != nil {
+			return zero, fmt.Errorf("resolve fleet service room %q for service invitation: %w", serviceRoomAlias, err)
+		}
+		if err := session.InviteUser(ctx, serviceRoomID, principalUserID); err != nil {
+			if !messaging.IsMatrixError(err, messaging.ErrCodeForbidden) {
+				return zero, fmt.Errorf("invite service to fleet service room: %w", err)
+			}
+		}
+	}
+
 	return result{
 		principalUserID: principalUserID,
 		accessToken:     principalToken,

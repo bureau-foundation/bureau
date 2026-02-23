@@ -113,7 +113,6 @@ type fleetController struct {
 	PrincipalName string
 	UserID        ref.UserID
 	SocketPath    string
-	StateDir      string
 }
 
 // startFleetController deploys a fleet controller using the production
@@ -129,13 +128,15 @@ func startFleetController(t *testing.T, admin *messaging.DirectSession, machine 
 		Name:       "fleet-controller",
 		Localpart:  controllerName,
 		ExtraRooms: []ref.RoomID{fleet.FleetRoomID, fleet.MachineRoomID},
+		MatrixPolicy: &schema.MatrixPolicy{
+			AllowJoin: true,
+		},
 	})
 
 	controller := &fleetController{
 		PrincipalName: controllerName,
 		UserID:        svc.Account.UserID,
 		SocketPath:    svc.SocketPath,
-		StateDir:      svc.StateDir,
 	}
 
 	// Grant PL 50 in the config room for MachineConfig read/write.

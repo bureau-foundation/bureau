@@ -47,11 +47,7 @@ func TestTicketServiceAgent(t *testing.T) {
 
 	// --- Ticket service setup ---
 
-	ticketSvc := deployService(t, admin, fleet, machine, serviceDeployOptions{
-		Binary:    resolvedBinary(t, "TICKET_SERVICE_BINARY"),
-		Name:      "ticket-service",
-		Localpart: "service/ticket/agent-test",
-	})
+	ticketSvc := deployTicketService(t, admin, fleet, machine, "agent-test")
 	ticketServiceEntity := ticketSvc.Entity
 
 	// Create a project room with ticket config and service binding.
@@ -160,11 +156,7 @@ func TestTicketLifecycleAgent(t *testing.T) {
 
 	// --- Ticket service setup ---
 
-	ticketSvc := deployService(t, admin, fleet, machine, serviceDeployOptions{
-		Binary:    resolvedBinary(t, "TICKET_SERVICE_BINARY"),
-		Name:      "ticket-lifecycle",
-		Localpart: "service/ticket/lifecycle",
-	})
+	ticketSvc := deployTicketService(t, admin, fleet, machine, "lifecycle")
 	ticketServiceEntity := ticketSvc.Entity
 
 	// Two project rooms for cross-room filing.
@@ -621,6 +613,9 @@ func deployTicketService(t *testing.T, admin *messaging.DirectSession, fleet *te
 		Binary:    resolvedBinary(t, "TICKET_SERVICE_BINARY"),
 		Name:      "ticket-" + suffix,
 		Localpart: "service/ticket/" + suffix,
+		MatrixPolicy: &schema.MatrixPolicy{
+			AllowJoin: true,
+		},
 	})
 	return ticketServiceDeployment{Entity: svc.Entity}
 }

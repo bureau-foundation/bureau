@@ -75,17 +75,13 @@ func (agentService *AgentService) initialSync(ctx context.Context) (string, erro
 		return "", err
 	}
 
-	// Accept pending invites from before service startup.
+	// Accept pending invites from before service startup. In the
+	// sandbox path, principal.Create and daemon reconciliation handle
+	// all room invitations, and the proxy's acceptPendingInvites joins
+	// them before the binary runs. This handles any invites that
+	// arrived between proxy startup and initial sync.
 	if len(response.Rooms.Invite) > 0 {
-		acceptedRooms := service.AcceptInvites(ctx, agentService.session, response.Rooms.Invite, agentService.logger)
-		for _, roomID := range acceptedRooms {
-			if roomID == agentService.configRoomID {
-				agentService.mutex.Lock()
-				agentService.configRoomJoined = true
-				agentService.mutex.Unlock()
-				agentService.logger.Info("joined config room via invite during initial sync", "config_room", roomID)
-			}
-		}
+		service.AcceptInvites(ctx, agentService.session, response.Rooms.Invite, agentService.logger)
 	}
 
 	agentService.mutex.Lock()
@@ -100,7 +96,6 @@ func (agentService *AgentService) initialSync(ctx context.Context) (string, erro
 	agentService.logger.Info("initial sync complete",
 		"since_token", sinceToken,
 		"config_room", agentService.configRoomID,
-		"config_room_joined", agentService.configRoomJoined,
 	)
 
 	return sinceToken, nil
@@ -108,20 +103,11 @@ func (agentService *AgentService) initialSync(ctx context.Context) (string, erro
 
 // handleSync processes incremental /sync responses.
 func (agentService *AgentService) handleSync(ctx context.Context, response *messaging.SyncResponse) {
-	// Accept pending invites. The daemon invites the service to config
-	// rooms when resolving room service bindings during principal
-	// deployment. The service may also be invited to additional rooms
-	// by operators.
+	// Accept pending invites from the incremental sync. The daemon may
+	// invite the service to additional rooms during operation (e.g.,
+	// config rooms for new room service bindings).
 	if len(response.Rooms.Invite) > 0 {
-		acceptedRooms := service.AcceptInvites(ctx, agentService.session, response.Rooms.Invite, agentService.logger)
-		for _, roomID := range acceptedRooms {
-			if roomID == agentService.configRoomID {
-				agentService.mutex.Lock()
-				agentService.configRoomJoined = true
-				agentService.mutex.Unlock()
-				agentService.logger.Info("joined config room via invite", "config_room", roomID)
-			}
-		}
+		service.AcceptInvites(ctx, agentService.session, response.Rooms.Invite, agentService.logger)
 	}
 
 	agentService.mutex.Lock()

@@ -92,6 +92,55 @@ func TestIdentityError(t *testing.T) {
 	}
 }
 
+func TestResponseErrorWrapsMatrixError(t *testing.T) {
+	t.Parallel()
+
+	body := []byte(`{"errcode":"M_NOT_FOUND","error":"State event not found in room"}`)
+	err := responseError("get state m.bureau.test/key in !room:test", 404, body)
+
+	if !messaging.IsMatrixError(err, messaging.ErrCodeNotFound) {
+		t.Errorf("IsMatrixError(err, M_NOT_FOUND) = false, want true; error: %v", err)
+	}
+	if messaging.IsMatrixError(err, messaging.ErrCodeForbidden) {
+		t.Error("IsMatrixError(err, M_FORBIDDEN) should be false for M_NOT_FOUND error")
+	}
+}
+
+func TestResponseErrorPlainTextFallback(t *testing.T) {
+	t.Parallel()
+
+	body := []byte("Internal Server Error")
+	err := responseError("sync", 500, body)
+
+	if messaging.IsMatrixError(err, messaging.ErrCodeUnknown) {
+		t.Error("plain text body should not produce a MatrixError")
+	}
+	expected := "sync: HTTP 500: Internal Server Error"
+	if err.Error() != expected {
+		t.Errorf("error = %q, want %q", err.Error(), expected)
+	}
+}
+
+func TestGetStateReturnsMatrixError(t *testing.T) {
+	t.Parallel()
+
+	mux := http.NewServeMux()
+	mux.HandleFunc("GET /v1/matrix/state", func(writer http.ResponseWriter, request *http.Request) {
+		writer.Header().Set("Content-Type", "application/json")
+		writer.WriteHeader(http.StatusNotFound)
+		fmt.Fprint(writer, `{"errcode":"M_NOT_FOUND","error":"State event not found"}`)
+	})
+
+	client := testServer(t, mux)
+	_, err := client.GetState(context.Background(), ref.MustParseRoomID("!room:test"), "m.bureau.test", "key")
+	if err == nil {
+		t.Fatal("expected error for 404 response")
+	}
+	if !messaging.IsMatrixError(err, messaging.ErrCodeNotFound) {
+		t.Errorf("IsMatrixError(err, M_NOT_FOUND) = false, want true; error: %v", err)
+	}
+}
+
 func TestGrants(t *testing.T) {
 	t.Parallel()
 

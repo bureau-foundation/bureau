@@ -16,6 +16,7 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"io"
 	"net"
 	"net/http"
 	"net/url"
@@ -87,7 +88,7 @@ func (client *Client) Identity(ctx context.Context) (*IdentityResponse, error) {
 	defer response.Body.Close()
 
 	if response.StatusCode != http.StatusOK {
-		return nil, fmt.Errorf("identity: HTTP %d: %s", response.StatusCode, netutil.ErrorBody(response.Body))
+		return nil, responseErrorFromReader("identity", response.StatusCode, response.Body)
 	}
 
 	var result IdentityResponse
@@ -106,7 +107,7 @@ func (client *Client) Grants(ctx context.Context) ([]schema.Grant, error) {
 	defer response.Body.Close()
 
 	if response.StatusCode != http.StatusOK {
-		return nil, fmt.Errorf("grants: HTTP %d: %s", response.StatusCode, netutil.ErrorBody(response.Body))
+		return nil, responseErrorFromReader("grants", response.StatusCode, response.Body)
 	}
 
 	var result []schema.Grant
@@ -136,7 +137,7 @@ func (client *Client) Services(ctx context.Context) ([]ServiceEntry, error) {
 	defer response.Body.Close()
 
 	if response.StatusCode != http.StatusOK {
-		return nil, fmt.Errorf("services: HTTP %d: %s", response.StatusCode, netutil.ErrorBody(response.Body))
+		return nil, responseErrorFromReader("services", response.StatusCode, response.Body)
 	}
 
 	var result []ServiceEntry
@@ -155,7 +156,7 @@ func (client *Client) Whoami(ctx context.Context) (ref.UserID, error) {
 	defer response.Body.Close()
 
 	if response.StatusCode != http.StatusOK {
-		return ref.UserID{}, fmt.Errorf("whoami: HTTP %d: %s", response.StatusCode, netutil.ErrorBody(response.Body))
+		return ref.UserID{}, responseErrorFromReader("whoami", response.StatusCode, response.Body)
 	}
 
 	var result struct {
@@ -207,7 +208,7 @@ func (client *Client) ResolveAlias(ctx context.Context, alias ref.RoomAlias) (re
 	defer response.Body.Close()
 
 	if response.StatusCode != http.StatusOK {
-		return ref.RoomID{}, fmt.Errorf("resolve alias %s: HTTP %d: %s", alias, response.StatusCode, netutil.ErrorBody(response.Body))
+		return ref.RoomID{}, responseErrorFromReader(fmt.Sprintf("resolve alias %s", alias), response.StatusCode, response.Body)
 	}
 
 	var result struct {
@@ -246,7 +247,7 @@ func (client *Client) GetState(ctx context.Context, roomID ref.RoomID, eventType
 	}
 
 	if response.StatusCode != http.StatusOK {
-		return nil, fmt.Errorf("get state %s/%s in %s: HTTP %d: %s", eventType, stateKey, roomID, response.StatusCode, body)
+		return nil, responseError(fmt.Sprintf("get state %s/%s in %s", eventType, stateKey, roomID), response.StatusCode, body)
 	}
 
 	return json.RawMessage(body), nil
@@ -270,7 +271,7 @@ func (client *Client) PutState(ctx context.Context, request PutStateRequest) (re
 
 	body, _ := netutil.ReadResponse(response.Body)
 	if response.StatusCode != http.StatusOK {
-		return ref.EventID{}, fmt.Errorf("put state %s/%s in %s: HTTP %d: %s", request.EventType, request.StateKey, request.Room, response.StatusCode, body)
+		return ref.EventID{}, responseError(fmt.Sprintf("put state %s/%s in %s", request.EventType, request.StateKey, request.Room), response.StatusCode, body)
 	}
 
 	var result struct {
@@ -300,7 +301,7 @@ func (client *Client) SendMessage(ctx context.Context, roomID ref.RoomID, conten
 
 	body, _ := netutil.ReadResponse(response.Body)
 	if response.StatusCode != http.StatusOK {
-		return ref.EventID{}, fmt.Errorf("send message to %s: HTTP %d: %s", roomID, response.StatusCode, body)
+		return ref.EventID{}, responseError(fmt.Sprintf("send message to %s", roomID), response.StatusCode, body)
 	}
 
 	var result struct {
@@ -329,7 +330,7 @@ func (client *Client) JoinedRooms(ctx context.Context) ([]ref.RoomID, error) {
 	defer response.Body.Close()
 
 	if response.StatusCode != http.StatusOK {
-		return nil, fmt.Errorf("joined rooms: HTTP %d: %s", response.StatusCode, netutil.ErrorBody(response.Body))
+		return nil, responseErrorFromReader("joined rooms", response.StatusCode, response.Body)
 	}
 
 	var result struct {
@@ -357,7 +358,7 @@ func (client *Client) GetRoomState(ctx context.Context, roomID ref.RoomID) ([]me
 	defer response.Body.Close()
 
 	if response.StatusCode != http.StatusOK {
-		return nil, fmt.Errorf("get room state for %s: HTTP %d: %s", roomID, response.StatusCode, netutil.ErrorBody(response.Body))
+		return nil, responseErrorFromReader(fmt.Sprintf("get room state for %s", roomID), response.StatusCode, response.Body)
 	}
 
 	var events []messaging.Event
@@ -376,7 +377,7 @@ func (client *Client) GetRoomMembers(ctx context.Context, roomID ref.RoomID) ([]
 	defer response.Body.Close()
 
 	if response.StatusCode != http.StatusOK {
-		return nil, fmt.Errorf("get room members for %s: HTTP %d: %s", roomID, response.StatusCode, netutil.ErrorBody(response.Body))
+		return nil, responseErrorFromReader(fmt.Sprintf("get room members for %s", roomID), response.StatusCode, response.Body)
 	}
 
 	// The proxy forwards the homeserver's /members response, which contains
@@ -425,7 +426,7 @@ func (client *Client) RoomMessages(ctx context.Context, roomID ref.RoomID, optio
 	defer response.Body.Close()
 
 	if response.StatusCode != http.StatusOK {
-		return nil, fmt.Errorf("room messages for %s: HTTP %d: %s", roomID, response.StatusCode, netutil.ErrorBody(response.Body))
+		return nil, responseErrorFromReader(fmt.Sprintf("room messages for %s", roomID), response.StatusCode, response.Body)
 	}
 
 	var result messaging.RoomMessagesResponse
@@ -455,7 +456,7 @@ func (client *Client) ThreadMessages(ctx context.Context, roomID ref.RoomID, thr
 	defer response.Body.Close()
 
 	if response.StatusCode != http.StatusOK {
-		return nil, fmt.Errorf("thread messages for %s in %s: HTTP %d: %s", threadRootID, roomID, response.StatusCode, netutil.ErrorBody(response.Body))
+		return nil, responseErrorFromReader(fmt.Sprintf("thread messages for %s in %s", threadRootID, roomID), response.StatusCode, response.Body)
 	}
 
 	var result messaging.ThreadMessagesResponse
@@ -474,7 +475,7 @@ func (client *Client) GetDisplayName(ctx context.Context, userID ref.UserID) (st
 	defer response.Body.Close()
 
 	if response.StatusCode != http.StatusOK {
-		return "", fmt.Errorf("get display name for %s: HTTP %d: %s", userID, response.StatusCode, netutil.ErrorBody(response.Body))
+		return "", responseErrorFromReader(fmt.Sprintf("get display name for %s", userID), response.StatusCode, response.Body)
 	}
 
 	var result messaging.DisplayNameResponse
@@ -494,7 +495,7 @@ func (client *Client) CreateRoom(ctx context.Context, request messaging.CreateRo
 
 	body, _ := netutil.ReadResponse(response.Body)
 	if response.StatusCode != http.StatusOK {
-		return nil, fmt.Errorf("create room: HTTP %d: %s", response.StatusCode, body)
+		return nil, responseError("create room", response.StatusCode, body)
 	}
 
 	var result messaging.CreateRoomResponse
@@ -516,7 +517,7 @@ func (client *Client) JoinRoom(ctx context.Context, roomID ref.RoomID) (ref.Room
 
 	body, _ := netutil.ReadResponse(response.Body)
 	if response.StatusCode != http.StatusOK {
-		return ref.RoomID{}, fmt.Errorf("join room %s: HTTP %d: %s", roomID, response.StatusCode, body)
+		return ref.RoomID{}, responseError(fmt.Sprintf("join room %s", roomID), response.StatusCode, body)
 	}
 
 	var result struct {
@@ -544,7 +545,7 @@ func (client *Client) InviteUser(ctx context.Context, roomID ref.RoomID, userID 
 	defer response.Body.Close()
 
 	if response.StatusCode != http.StatusOK {
-		return fmt.Errorf("invite %s to %s: HTTP %d: %s", userID, roomID, response.StatusCode, netutil.ErrorBody(response.Body))
+		return responseErrorFromReader(fmt.Sprintf("invite %s to %s", userID, roomID), response.StatusCode, response.Body)
 	}
 	return nil
 }
@@ -563,7 +564,7 @@ func (client *Client) SendEvent(ctx context.Context, roomID ref.RoomID, eventTyp
 
 	body, _ := netutil.ReadResponse(response.Body)
 	if response.StatusCode != http.StatusOK {
-		return ref.EventID{}, fmt.Errorf("send event %s to %s: HTTP %d: %s", eventType, roomID, response.StatusCode, body)
+		return ref.EventID{}, responseError(fmt.Sprintf("send event %s to %s", eventType, roomID), response.StatusCode, body)
 	}
 
 	var result struct {
@@ -603,7 +604,7 @@ func (client *Client) Sync(ctx context.Context, options messaging.SyncOptions) (
 	defer response.Body.Close()
 
 	if response.StatusCode != http.StatusOK {
-		return nil, fmt.Errorf("sync: HTTP %d: %s", response.StatusCode, netutil.ErrorBody(response.Body))
+		return nil, responseErrorFromReader("sync", response.StatusCode, response.Body)
 	}
 
 	var result messaging.SyncResponse
@@ -611,6 +612,32 @@ func (client *Client) Sync(ctx context.Context, options messaging.SyncOptions) (
 		return nil, fmt.Errorf("sync: %w", err)
 	}
 	return &result, nil
+}
+
+// responseError creates an error from a non-200 HTTP response. If the
+// body is a Matrix-format JSON error ({"errcode":"...", "error":"..."}),
+// the returned error wraps a *messaging.MatrixError so that callers can
+// use messaging.IsMatrixError to check for specific error codes. This
+// is critical for proxy-mediated sessions: the proxy passes through
+// Matrix homeserver error responses verbatim, and downstream code
+// (service binaries, the agent service) relies on IsMatrixError to
+// distinguish recoverable conditions (M_NOT_FOUND for missing state
+// events) from hard failures.
+func responseError(description string, statusCode int, body []byte) error {
+	var matrixErr messaging.MatrixError
+	if json.Unmarshal(body, &matrixErr) == nil && matrixErr.Code != "" {
+		matrixErr.StatusCode = statusCode
+		return fmt.Errorf("%s: %w", description, &matrixErr)
+	}
+	return fmt.Errorf("%s: HTTP %d: %s", description, statusCode, body)
+}
+
+// responseErrorFromReader creates an error from a non-200 HTTP response,
+// reading the body from a reader. Convenience wrapper for methods that
+// haven't pre-read the response body.
+func responseErrorFromReader(description string, statusCode int, body io.Reader) error {
+	data, _ := netutil.ReadResponse(body)
+	return responseError(description, statusCode, data)
 }
 
 // get makes a GET request to the proxy.

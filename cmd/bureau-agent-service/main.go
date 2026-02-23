@@ -86,34 +86,19 @@ func run() error {
 	boot.Logger.Info("artifact client initialized", "socket", artifactSocket)
 
 	// Resolve the machine config room. Agent state events live here as
-	// state events keyed by principal localpart. The service may not be
-	// invited yet — the daemon invites services when it resolves room
-	// service bindings during principal deployment. If the join fails,
-	// the service continues startup and accepts the invite via the sync
-	// loop when it arrives.
+	// state events keyed by principal localpart. Room membership is
+	// handled by principal.Create (which invites to the config room)
+	// and the proxy's acceptPendingInvites (which joins at startup).
 	configRoomAlias := boot.Machine.RoomAlias()
 	configRoomID, err := boot.Session.ResolveAlias(ctx, configRoomAlias)
 	if err != nil {
 		return fmt.Errorf("resolving config room alias %q: %w", configRoomAlias, err)
-	}
-	configRoomJoined := false
-	if _, err := boot.Session.JoinRoom(ctx, configRoomID); err != nil {
-		if messaging.IsMatrixError(err, messaging.ErrCodeForbidden) {
-			boot.Logger.Info("config room not yet accessible, will join when invited",
-				"config_room", configRoomID,
-			)
-		} else {
-			return fmt.Errorf("joining config room %s: %w", configRoomID, err)
-		}
-	} else {
-		configRoomJoined = true
 	}
 
 	boot.Logger.Info("rooms ready",
 		"service_room", boot.ServiceRoomID,
 		"system_room", boot.SystemRoomID,
 		"config_room", configRoomID,
-		"config_room_joined", configRoomJoined,
 	)
 
 	agentService := &AgentService{
@@ -124,7 +109,6 @@ func run() error {
 		machineName:        boot.MachineName,
 		serverName:         boot.ServerName,
 		configRoomID:       configRoomID,
-		configRoomJoined:   configRoomJoined,
 		startedAt:          boot.Clock.Now(),
 		commitIndex:        make(map[string]agent.ContextCommitContent),
 		principalTimelines: make(map[string][]timelineEntry),
@@ -182,12 +166,11 @@ type AgentService struct {
 	artifactClient *artifactstore.Client
 	clock          clock.Clock
 
-	principalName    string
-	machineName      string
-	serverName       ref.ServerName
-	configRoomID     ref.RoomID
-	configRoomJoined bool
-	startedAt        time.Time
+	principalName string
+	machineName   string
+	serverName    ref.ServerName
+	configRoomID  ref.RoomID
+	startedAt     time.Time
 
 	// commitIndex maps ctx-* commit IDs to their deserialized content.
 	// Populated from Matrix state events during sync and updated

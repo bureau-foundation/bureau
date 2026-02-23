@@ -20,7 +20,6 @@ import (
 	"github.com/bureau-foundation/bureau/lib/ref"
 	"github.com/bureau-foundation/bureau/lib/schema"
 	"github.com/bureau-foundation/bureau/lib/secret"
-	"github.com/bureau-foundation/bureau/lib/service"
 	"github.com/bureau-foundation/bureau/lib/servicetoken"
 	"github.com/bureau-foundation/bureau/lib/templatedef"
 	"github.com/bureau-foundation/bureau/messaging"
@@ -49,6 +48,13 @@ type testMachine struct {
 	PublicKey     string     // age public key from the machine_key state event
 	ConfigRoomID  ref.RoomID // per-machine config room
 	MachineRoomID ref.RoomID // fleet-scoped machine room (daemon status heartbeats)
+
+	// deployedServices tracks service principals deployed via deployService.
+	// pushMachineConfig automatically includes these so that subsequent
+	// config pushes (e.g., deploying an agent) don't remove running services.
+	// Services use AutoStart=true: the daemon manages their lifecycle through
+	// the MachineConfig, so they must remain in every config update.
+	deployedServices []principalSpec
 }
 
 // PrincipalProxySocketPath returns the proxy socket path for a principal on
@@ -127,14 +133,15 @@ type principalAccount struct {
 // the account-level name (e.g., "agent/mock-test"); the fleet-scoped
 // localpart is constructed internally from the machine's fleet reference.
 type principalSpec struct {
-	Localpart         string                      // required: account localpart
-	Template          string                      // optional: template ref (e.g., "bureau/template:name"); defaults to "bureau/template:test-agent"
-	Payload           map[string]any              // optional: per-instance payload merged over template defaults
-	MatrixPolicy      *schema.MatrixPolicy        // optional per-principal policy
-	ServiceVisibility []string                    // optional: glob patterns for service discovery
-	Authorization     *schema.AuthorizationPolicy // optional: full authorization policy (overrides shorthand fields)
-	Labels            map[string]string           // optional: key-value labels for the principal assignment
-	StartCondition    *schema.StartCondition      // optional: condition that must be true before the principal starts
+	Localpart                 string                      // required: account localpart
+	Template                  string                      // optional: template ref (e.g., "bureau/template:name"); defaults to "bureau/template:test-agent"
+	Payload                   map[string]any              // optional: per-instance payload merged over template defaults
+	MatrixPolicy              *schema.MatrixPolicy        // optional per-principal policy
+	ServiceVisibility         []string                    // optional: glob patterns for service discovery
+	Authorization             *schema.AuthorizationPolicy // optional: full authorization policy (overrides shorthand fields)
+	Labels                    map[string]string           // optional: key-value labels for the principal assignment
+	StartCondition            *schema.StartCondition      // optional: condition that must be true before the principal starts
+	ExtraEnvironmentVariables map[string]string           // optional: extra env vars merged into the PrincipalAssignment
 }
 
 // deploymentConfig describes what principals to deploy on a machine and
@@ -653,22 +660,29 @@ func pushMachineConfig(t *testing.T, admin *messaging.DirectSession, machine *te
 		t.Fatal("machine.Name is required")
 	}
 
-	assignments := make([]schema.PrincipalAssignment, len(config.Principals))
-	for i, spec := range config.Principals {
+	// Combine explicitly requested principals with any services previously
+	// deployed via deployService. Services use AutoStart=true and must
+	// remain in every MachineConfig update, otherwise the daemon destroys
+	// their sandboxes when it reconciles the new config.
+	allSpecs := slices.Concat(config.Principals, machine.deployedServices)
+
+	assignments := make([]schema.PrincipalAssignment, len(allSpecs))
+	for i, spec := range allSpecs {
 		entity, err := ref.NewEntityFromAccountLocalpart(machine.Ref.Fleet(), spec.Localpart)
 		if err != nil {
 			t.Fatalf("build principal entity for %s: %v", spec.Localpart, err)
 		}
 		assignments[i] = schema.PrincipalAssignment{
-			Principal:         entity,
-			Template:          spec.Template,
-			AutoStart:         true,
-			Payload:           spec.Payload,
-			MatrixPolicy:      spec.MatrixPolicy,
-			ServiceVisibility: spec.ServiceVisibility,
-			Authorization:     spec.Authorization,
-			Labels:            spec.Labels,
-			StartCondition:    spec.StartCondition,
+			Principal:                 entity,
+			Template:                  spec.Template,
+			AutoStart:                 true,
+			Payload:                   spec.Payload,
+			MatrixPolicy:              spec.MatrixPolicy,
+			ServiceVisibility:         spec.ServiceVisibility,
+			Authorization:             spec.Authorization,
+			Labels:                    spec.Labels,
+			StartCondition:            spec.StartCondition,
+			ExtraEnvironmentVariables: spec.ExtraEnvironmentVariables,
 		}
 	}
 
@@ -1023,56 +1037,91 @@ type serviceDeployOptions struct {
 	// one homeserver). Required.
 	Localpart string
 
-	// ExtraEnv adds environment variables for the service binary (KEY=VALUE).
-	ExtraEnv []string
+	// RequiredServices lists service roles this service depends on. The
+	// daemon resolves each role's socket via m.bureau.room_service state
+	// events and bind-mounts it into the sandbox at
+	// /run/bureau/service/<role>.sock.
+	RequiredServices []string
 
-	// ExtraArgs adds CLI arguments beyond the standard service flags.
-	ExtraArgs []string
+	// ExtraMounts adds filesystem bind mounts to the service template.
+	// Use this for test-specific files that must be visible inside the
+	// sandbox (e.g., dummy token files for services that require
+	// artifact access but don't exercise the artifact path).
+	ExtraMounts []schema.TemplateMount
+
+	// ExtraEnvironmentVariables are merged into the MachineConfig
+	// PrincipalAssignment, which the daemon passes to the sandbox.
+	ExtraEnvironmentVariables map[string]string
 
 	// ExtraRooms lists additional rooms to invite the service to, beyond
-	// the system room and fleet service room.
+	// the system room and fleet service room (which principal.Create handles).
 	ExtraRooms []ref.RoomID
+
+	// MatrixPolicy controls which self-service Matrix operations this
+	// service's proxy allows (join, invite, create room). When nil,
+	// the proxy uses default-deny.
+	MatrixPolicy *schema.MatrixPolicy
 }
 
 // serviceDeployResult holds the result of deployService: entity reference,
-// account details, socket path, and state directory.
+// account details, and the canonical service socket path.
 type serviceDeployResult struct {
 	Entity     ref.Entity
 	Account    principalAccount
 	SocketPath string
-	StateDir   string
 }
 
-// serviceTemplateContent builds a minimal schema.TemplateContent for a
-// service binary. The daemon doesn't use this template (services deploy
-// with AutoStart: false), but principal.Create() validates that the
-// template exists in Matrix before registration.
-func serviceTemplateContent(binary string) schema.TemplateContent {
+// serviceTemplateContent builds a sandbox-ready schema.TemplateContent for
+// a service binary. Services run in daemon-managed sandboxes (AutoStart:
+// true) and bootstrap via BootstrapViaProxy, which reads BUREAU_PROXY_SOCKET,
+// BUREAU_MACHINE_NAME, and BUREAU_SERVER_NAME from the template environment.
+// The launcher injects BUREAU_PRINCIPAL_NAME, BUREAU_FLEET, and
+// BUREAU_SERVICE_SOCKET for service entities.
+func serviceTemplateContent(binary string, requiredServices []string, extraMounts []schema.TemplateMount) schema.TemplateContent {
+	filesystem := []schema.TemplateMount{
+		{Source: binary, Dest: binary, Mode: "ro"},
+		{Dest: "/tmp", Type: "tmpfs"},
+	}
+	filesystem = append(filesystem, extraMounts...)
+
 	return schema.TemplateContent{
-		Description: "Service template",
-		Command:     []string{binary},
+		Description:      "Service template",
+		Command:          []string{binary},
+		RequiredServices: requiredServices,
+		Namespaces:       &schema.TemplateNamespaces{PID: true},
+		Security: &schema.TemplateSecurity{
+			NewSession:    true,
+			DieWithParent: true,
+			NoNewPrivs:    true,
+		},
+		Filesystem: filesystem,
+		CreateDirs: []string{"/tmp", "/var/tmp", "/run/bureau"},
+		EnvironmentVariables: map[string]string{
+			"HOME":                "/workspace",
+			"TERM":                "xterm-256color",
+			"BUREAU_PROXY_SOCKET": "${PROXY_SOCKET}",
+			"BUREAU_MACHINE_NAME": "${MACHINE_NAME}",
+			"BUREAU_SERVER_NAME":  "${SERVER_NAME}",
+		},
 	}
 }
 
 // deployService deploys a Bureau service binary using the production
-// principal.Create() path for account setup, then starts the binary
-// directly (outside any sandbox) using the flag-based bootstrap path.
+// principal.Create() path with AutoStart: true. The daemon creates a
+// sandbox, the proxy injects credentials, and the service bootstraps
+// via BootstrapViaProxy.
 //
 // The deployment sequence:
-//   - Pushes a service template to Matrix via templatedef.Push
-//   - Calls principal.Create(AutoStart: false) to register the Matrix
-//     account, provision encrypted credentials, join the config room,
-//     and publish a MachineConfig assignment
-//   - Writes session.json via service.SaveSession for service.Bootstrap
-//   - Invites the service to the system room, fleet service room, and
-//     any ExtraRooms
-//   - Creates the socket parent directory and starts the binary
-//   - Waits for the socket file and daemon service directory update
-//
-// AutoStart is false so the daemon does not create a sandbox for the
-// service. The daemon still processes the principal for authorization
-// index building. The service binary is started directly with CLI flags
-// and uses service.Bootstrap() with session.json for its Matrix session.
+//   - Pushes a sandbox-ready service template to Matrix
+//   - Calls principal.Create(AutoStart: true) to register the account,
+//     provision credentials, join the config room, and publish a
+//     MachineConfig assignment
+//   - Invites the service to any ExtraRooms (system room and fleet
+//     service room are handled by daemon reconciliation)
+//   - Waits for the proxy socket (daemon created the sandbox)
+//   - Waits for the daemon's service directory update notification
+//     (service registered via BootstrapViaProxy and daemon propagated
+//     the directory to all proxies)
 func deployService(
 	t *testing.T,
 	admin *messaging.DirectSession,
@@ -1097,8 +1146,8 @@ func deployService(
 	// Derive template name from localpart.
 	templateName := strings.ReplaceAll(options.Localpart, "/", "-")
 
-	// Push a service template. principal.Create() validates the template
-	// exists before registration.
+	// Push a sandbox-ready service template. The daemon uses this to
+	// build the sandbox spec (command, mounts, env vars, security).
 	grantTemplateAccess(t, admin, machine)
 
 	templateRef, err := schema.ParseTemplateRef("bureau/template:" + templateName)
@@ -1106,7 +1155,7 @@ func deployService(
 		t.Fatalf("parse service template ref for %q: %v", templateName, err)
 	}
 	_, err = templatedef.Push(ctx, admin, templateRef,
-		serviceTemplateContent(options.Binary), testServer)
+		serviceTemplateContent(options.Binary, options.RequiredServices, options.ExtraMounts), testServer)
 	if err != nil {
 		t.Fatalf("push service template %q: %v", templateName, err)
 	}
@@ -1116,10 +1165,9 @@ func deployService(
 	// update notification.
 	serviceWatch := watchRoom(t, admin, machine.ConfigRoomID)
 
-	// Create the principal via the production path. AutoStart is false
-	// so the daemon does not create a sandbox — the test starts the
-	// binary directly. The daemon still processes the principal for
-	// authorization index building and service directory routing.
+	// Create the principal via the production path. AutoStart is true:
+	// the daemon creates a sandbox, the proxy injects credentials, and
+	// the service bootstraps via BootstrapViaProxy.
 	client, err := messaging.NewClient(messaging.ClientConfig{
 		HomeserverURL: testHomeserverURL,
 	})
@@ -1144,61 +1192,67 @@ func deployService(
 			_, err := templatedef.Fetch(ctx, admin, ref, serverName)
 			return err
 		},
-		HomeserverURL: testHomeserverURL,
-		AutoStart:     false,
-		MachineRoomID: machine.MachineRoomID,
+		HomeserverURL:             testHomeserverURL,
+		AutoStart:                 true,
+		MachineRoomID:             machine.MachineRoomID,
+		ExtraEnvironmentVariables: options.ExtraEnvironmentVariables,
+		MatrixPolicy:              options.MatrixPolicy,
 	})
 	if err != nil {
 		t.Fatalf("create service %q: %v", options.Localpart, err)
 	}
 
-	// Write session.json from the returned access token. Services read
-	// credentials from this file via service.Bootstrap → service.LoadSession.
-	stateDir := t.TempDir()
-	principalSession, err := client.SessionFromToken(result.PrincipalUserID, result.AccessToken)
-	if err != nil {
-		t.Fatalf("create session for %s: %v", options.Localpart, err)
-	}
-	if err := service.SaveSession(stateDir, testHomeserverURL, principalSession); err != nil {
-		principalSession.Close()
-		t.Fatalf("save session.json for %s: %v", options.Localpart, err)
-	}
-	principalSession.Close()
-
-	// Invite the service to rooms needed by service.Bootstrap().
-	// principal.Create() already handled the config room.
-	systemRoomID := resolveSystemRoom(t, admin)
-	inviteRooms := append([]ref.RoomID{systemRoomID, fleet.ServiceRoomID}, options.ExtraRooms...)
-	inviteToRooms(t, admin, result.PrincipalUserID, inviteRooms...)
-
-	// Start the service binary with standard service flags.
-	socketPath := machine.PrincipalServiceSocketPath(t, options.Localpart)
-	if err := os.MkdirAll(filepath.Dir(socketPath), 0755); err != nil {
-		t.Fatalf("create service socket directory: %v", err)
+	// Invite the service to any extra rooms the caller specified.
+	// System room and fleet service room invitations are handled by
+	// daemon reconciliation (ensurePrincipalRoomAccess for service
+	// entity types). These invitations happen between principal.Create
+	// returning and the daemon processing the MachineConfig: the
+	// daemon picks up the config on its next /sync cycle, so there
+	// is always a window for the invitations.
+	if len(options.ExtraRooms) > 0 {
+		inviteToRooms(t, admin, result.PrincipalUserID, options.ExtraRooms...)
 	}
 
-	args := []string{
-		"--homeserver", testHomeserverURL,
-		"--machine-name", machine.Name,
-		"--principal-name", options.Localpart,
-		"--server-name", testServerName,
-		"--run-dir", machine.RunDir,
-		"--state-dir", stateDir,
-		"--fleet", fleet.Prefix,
-	}
-	args = append(args, options.ExtraArgs...)
-	startProcessWithEnv(t, options.Name, options.ExtraEnv, options.Binary, args...)
-	waitForFile(t, socketPath)
+	// Wait for the proxy socket — indicates the daemon created the
+	// sandbox and the proxy is ready.
+	proxySocketPath := machine.PrincipalProxySocketPath(t, options.Localpart)
+	waitForFile(t, proxySocketPath)
 
-	// Wait for daemon to discover the service via /sync and update the
-	// service directory. The daemon posts ServiceDirectoryUpdatedMessage
-	// to the config room after pushing the new directory to all proxies.
+	// Wait for daemon to discover the service registration (posted by
+	// BootstrapViaProxy to the fleet service room) via /sync and
+	// propagate the service directory to all proxies.
 	fleetScopedLocalpart := principalEntity.Localpart()
 	waitForNotification[schema.ServiceDirectoryUpdatedMessage](
 		t, &serviceWatch, schema.MsgTypeServiceDirectoryUpdated, machine.UserID,
 		func(message schema.ServiceDirectoryUpdatedMessage) bool {
 			return slices.Contains(message.Added, fleetScopedLocalpart)
 		}, "service directory update adding "+fleetScopedLocalpart)
+
+	// The service socket is behind a symlink created by the launcher
+	// (ServiceSocketPath → configDir/listen/service.sock). The symlink
+	// itself is created during sandbox setup, but the target doesn't
+	// exist until the service binary creates its CBOR socket. Because
+	// BootstrapViaProxy registers the service BEFORE the binary creates
+	// the socket, the ServiceDirectoryUpdatedMessage can arrive before
+	// the socket target exists. Resolve the symlink and wait for the
+	// target file to appear.
+	socketPath := machine.PrincipalServiceSocketPath(t, options.Localpart)
+	socketTarget, err := os.Readlink(socketPath)
+	if err != nil {
+		t.Fatalf("readlink service socket %s: %v", socketPath, err)
+	}
+	waitForFile(t, socketTarget)
+
+	// Record the service in the machine's deployed services list so that
+	// subsequent pushMachineConfig calls (e.g., deploying an agent) include
+	// this service in the MachineConfig. Without this, the daemon would see
+	// the service missing from the new config and destroy its sandbox.
+	machine.deployedServices = append(machine.deployedServices, principalSpec{
+		Localpart:                 options.Localpart,
+		Template:                  "bureau/template:" + templateName,
+		MatrixPolicy:              options.MatrixPolicy,
+		ExtraEnvironmentVariables: options.ExtraEnvironmentVariables,
+	})
 
 	return serviceDeployResult{
 		Entity: principalEntity,
@@ -1208,7 +1262,6 @@ func deployService(
 			Token:     result.AccessToken,
 		},
 		SocketPath: socketPath,
-		StateDir:   stateDir,
 	}
 }
 

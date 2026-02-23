@@ -1273,7 +1273,8 @@ func appendAllowanceDenialsWithSource(destination []schema.AllowanceDenial, entr
 // creation. M_FORBIDDEN typically means the user is already a member.
 func (d *Daemon) ensurePrincipalRoomAccess(ctx context.Context, principalEntity ref.Entity, roomID ref.RoomID) {
 	if err := d.session.InviteUser(ctx, roomID, principalEntity.UserID()); err != nil {
-		// M_FORBIDDEN typically means the user is already a member.
+		// M_FORBIDDEN means the user is already a member or already
+		// invited — expected for the config room after principal.Create.
 		if !messaging.IsMatrixError(err, "M_FORBIDDEN") {
 			d.logger.Warn("failed to invite principal to room",
 				"principal", principalEntity,
@@ -1281,6 +1282,11 @@ func (d *Daemon) ensurePrincipalRoomAccess(ctx context.Context, principalEntity 
 				"error", err,
 			)
 		}
+	} else {
+		d.logger.Info("invited principal to room",
+			"principal", principalEntity,
+			"room_id", roomID,
+		)
 	}
 }
 

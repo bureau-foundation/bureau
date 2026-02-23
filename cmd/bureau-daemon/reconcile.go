@@ -654,6 +654,7 @@ func (d *Daemon) reconcile(ctx context.Context) error {
 
 		d.clearStartFailure(principal)
 		d.running[principal] = true
+		d.notifyStatusChange()
 		d.lastCredentials[principal] = credentials.Ciphertext
 		d.lastObserveAllowances[principal] = d.authorizationIndex.Allowances(principal.UserID())
 		d.lastSpecs[principal] = sandboxSpec
@@ -1778,6 +1779,7 @@ func (d *Daemon) destroyPrincipal(ctx context.Context, principal ref.Entity) err
 
 	d.revokeAndCleanupTokens(ctx, principal)
 	delete(d.running, principal)
+	d.notifyStatusChange()
 	delete(d.pipelineExecutors, principal)
 	d.removePipelineTicketByPrincipal(principal)
 	delete(d.exitWatchers, principal)
@@ -1840,6 +1842,7 @@ func (d *Daemon) watchSandboxExit(ctx context.Context, principal ref.Entity) {
 		d.stopLayoutWatcher(principal)
 		d.revokeAndCleanupTokens(ctx, principal)
 		delete(d.running, principal)
+		d.notifyStatusChange()
 		delete(d.pipelineExecutors, principal)
 		d.removePipelineTicketByPrincipal(principal)
 		delete(d.exitWatchers, principal)
@@ -1991,6 +1994,7 @@ func (d *Daemon) adoptPreExistingSandboxes(ctx context.Context) error {
 			continue
 		}
 		d.running[entity] = true
+		d.notifyStatusChange()
 		d.logger.Info("adopted pre-existing sandbox",
 			"principal", entity,
 			"proxy_pid", entry.ProxyPID,

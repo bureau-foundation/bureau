@@ -370,6 +370,7 @@ func (d *Daemon) startPipelineExecutor(
 
 	// Track the executor in standard daemon lifecycle maps.
 	d.running[pipelineEntity] = true
+	d.notifyStatusChange()
 	d.pipelineExecutors[pipelineEntity] = true
 	d.pipelineTickets[ticketStateKey] = pipelineEntity
 	d.lastSpecs[pipelineEntity] = spec
@@ -426,6 +427,7 @@ func (d *Daemon) watchPipelineSandboxExit(ctx context.Context, principal ref.Ent
 	d.reconcileMu.Lock()
 	if d.running[principal] {
 		delete(d.running, principal)
+		d.notifyStatusChange()
 		delete(d.pipelineExecutors, principal)
 		d.removePipelineTicketByPrincipal(principal)
 		delete(d.exitWatchers, principal)

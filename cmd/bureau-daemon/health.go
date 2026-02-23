@@ -326,6 +326,7 @@ func (d *Daemon) rollbackPrincipal(ctx context.Context, principal ref.Entity) {
 	}
 
 	d.running[principal] = true
+	d.notifyStatusChange()
 	d.lastSpecs[principal] = previousSpec
 	d.lastGrants[principal] = grants
 	d.lastActivityAt = d.clock.Now()

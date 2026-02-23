@@ -332,6 +332,7 @@ func run() error {
 		failedExecPaths:       make(map[string]bool),
 		startFailures:         make(map[ref.Entity]*startFailure),
 		running:               make(map[ref.Entity]bool),
+		statusNotify:          make(chan struct{}, 1),
 		pipelineExecutors:     make(map[ref.Entity]bool),
 		pipelineTickets:       make(map[string]ref.Entity),
 		exitWatchers:          make(map[ref.Entity]context.CancelFunc),
@@ -587,6 +588,12 @@ type Daemon struct {
 	// running tracks which principals we've asked the launcher to create.
 	// Keys are ref.Entity values from PrincipalAssignment.Principal.
 	running map[ref.Entity]bool
+
+	// statusNotify is signaled (non-blocking) whenever the running set
+	// changes. The statusLoop selects on this channel alongside the
+	// periodic ticker, so MachineStatus is published immediately when
+	// sandbox state changes rather than waiting for the next heartbeat.
+	statusNotify chan struct{}
 
 	// ephemeralCounter is an atomic counter used to generate short,
 	// unique localparts for ephemeral principals (pipeline executors,
@@ -1018,7 +1025,9 @@ func (d *Daemon) notifyReconcile() {
 	}
 }
 
-// statusLoop periodically publishes MachineStatus heartbeats.
+// statusLoop publishes MachineStatus heartbeats. It publishes immediately
+// on startup, whenever the running set changes (via notifyStatusChange),
+// and periodically at statusInterval for ongoing monitoring.
 func (d *Daemon) statusLoop(ctx context.Context) {
 	// Publish initial status immediately.
 	d.publishStatus(ctx)
@@ -1032,7 +1041,25 @@ func (d *Daemon) statusLoop(ctx context.Context) {
 			return
 		case <-ticker.C:
 			d.publishStatus(ctx)
+		case <-d.statusNotify:
+			d.publishStatus(ctx)
+			// Drain any queued notification so the next tick starts clean.
+			select {
+			case <-d.statusNotify:
+			default:
+			}
 		}
+	}
+}
+
+// notifyStatusChange signals that the running set has changed and a
+// MachineStatus heartbeat should be published immediately. Non-blocking:
+// if a notification is already pending, the signal is coalesced.
+// Must be called after any mutation to d.running.
+func (d *Daemon) notifyStatusChange() {
+	select {
+	case d.statusNotify <- struct{}{}:
+	default:
 	}
 }
 

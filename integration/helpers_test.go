@@ -138,6 +138,14 @@ func TestMain(m *testing.M) {
 		os.Exit(1)
 	}
 
+	// Build the Nix integration-test-env derivation. This provides a
+	// shell and coreutils for sandbox commands (pipeline steps, workspace
+	// scripts). Building here with retry logic prevents transient Nix
+	// fetch failures from skipping all 7 Nix-dependent tests. If Nix is
+	// unavailable or the build fails after retries, findRunnerEnv will
+	// skip individual tests gracefully.
+	buildRunnerEnv()
+
 	// Credential file goes in a temp directory so parallel runs don't
 	// collide on the same file path.
 	credentialDirectory, err := os.MkdirTemp("", "bureau-it-creds-")
@@ -1125,47 +1133,48 @@ func findAcceptedEvent(t *testing.T, events []messaging.Event) map[string]any {
 
 // --- Pipeline Test Helpers ---
 
-// runnerEnvOnce caches the result of the single nix build invocation so
-// parallel tests don't each spawn their own nix build process. Under
-// --runs_per_test=10 with 4 pipeline-using tests per process, the
-// uncached version created 40 concurrent nix build calls that contended
-// on the Nix daemon's store lock.
+// buildRunnerEnv results are set once in TestMain and read by findRunnerEnv.
 var (
-	runnerEnvOnce       sync.Once
 	runnerEnvPath       string
 	runnerEnvSkipReason string // non-empty means skip (Nix unavailable or build failed)
 	runnerEnvFatalMsg   string // non-empty means fatal (broken Nix derivation)
 )
 
-// findRunnerEnv builds the Nix integration-test-env and returns the store
-// path. The integration-test-env provides a shell and coreutils needed by
-// sandbox commands (pipeline steps, workspace scripts) inside bwrap sandboxes.
-// Production environments come from the environment repo; this derivation
-// provides them for integration tests without pulling in the full repo.
-// Skips the test if Nix is not installed or the build fails.
-func findRunnerEnv(t *testing.T) string {
-	t.Helper()
+// buildRunnerEnv builds the Nix integration-test-env derivation and stores
+// the result for findRunnerEnv to read. Called once from TestMain, before
+// any tests start.
+//
+// Nix's flake evaluation fetches input tarballs from GitHub. These fetches
+// can fail transiently (truncated archive, network interruption, rate
+// limiting), so we retry the build up to 3 times. The previous sync.Once
+// approach had no retry path — a single transient fetch failure poisoned
+// the entire test run, skipping all 7 Nix-dependent tests.
+func buildRunnerEnv() {
+	nixBinary := "/nix/var/nix/profiles/default/bin/nix"
+	if _, err := os.Stat(nixBinary); err != nil {
+		runnerEnvSkipReason = "nix not available: integration tests requiring sandbox environments need Nix"
+		return
+	}
 
-	runnerEnvOnce.Do(func() {
-		// The nix binary is at a well-known path, not necessarily in PATH
-		// when running under Bazel.
-		nixBinary := "/nix/var/nix/profiles/default/bin/nix"
-		if _, err := os.Stat(nixBinary); err != nil {
-			runnerEnvSkipReason = "nix not available: integration tests requiring sandbox environments need Nix"
-			return
-		}
+	const maxAttempts = 3
 
+	var lastError error
+	for attempt := 1; attempt <= maxAttempts; attempt++ {
 		cmd := exec.Command(nixBinary, "build", ".#integration-test-env",
 			"--print-out-paths", "--no-link")
 		cmd.Dir = workspaceRoot
 		output, err := cmd.Output()
 		if err != nil {
-			if exitError, ok := err.(*exec.ExitError); ok {
-				runnerEnvSkipReason = fmt.Sprintf("nix build .#integration-test-env failed: %v\nstderr: %s", err, exitError.Stderr)
-			} else {
-				runnerEnvSkipReason = fmt.Sprintf("nix build .#integration-test-env failed: %v", err)
+			lastError = err
+			if attempt < maxAttempts {
+				if exitError, ok := err.(*exec.ExitError); ok {
+					fmt.Fprintf(os.Stderr, "nix build attempt %d/%d failed: %v\nstderr: %s\n", attempt, maxAttempts, err, exitError.Stderr)
+				} else {
+					fmt.Fprintf(os.Stderr, "nix build attempt %d/%d failed: %v\n", attempt, maxAttempts, err)
+				}
+				time.Sleep(2 * time.Second) //nolint:realclock // retry delay for external nix build command, no injectable clock
 			}
-			return
+			continue
 		}
 
 		storePath := strings.TrimSpace(string(output))
@@ -1174,9 +1183,9 @@ func findRunnerEnv(t *testing.T) string {
 			return
 		}
 
-		// Verify the store path has the expected bin directory with a shell.
-		// These are fatal (not skip) because a successfully-built derivation
-		// missing its binaries indicates a broken flake output.
+		// Verify the store path has the expected bin directory with a
+		// shell. These are fatal (not skip) because a successfully-built
+		// derivation missing its binaries indicates a broken flake output.
 		binDirectory := filepath.Join(storePath, "bin")
 		if _, err := os.Stat(binDirectory); err != nil {
 			runnerEnvFatalMsg = fmt.Sprintf("integration-test-env bin directory missing at %s: %v", binDirectory, err)
@@ -1188,7 +1197,23 @@ func findRunnerEnv(t *testing.T) string {
 		}
 
 		runnerEnvPath = storePath
-	})
+		return
+	}
+
+	// All attempts exhausted.
+	if exitError, ok := lastError.(*exec.ExitError); ok {
+		runnerEnvSkipReason = fmt.Sprintf("nix build .#integration-test-env failed after %d attempts: %v\nstderr: %s", maxAttempts, lastError, exitError.Stderr)
+	} else {
+		runnerEnvSkipReason = fmt.Sprintf("nix build .#integration-test-env failed after %d attempts: %v", maxAttempts, lastError)
+	}
+}
+
+// findRunnerEnv returns the Nix integration-test-env store path, or skips
+// the test if Nix is unavailable or the build failed. The environment
+// is built once in TestMain by buildRunnerEnv; this function only reads
+// the cached result.
+func findRunnerEnv(t *testing.T) string {
+	t.Helper()
 
 	if runnerEnvFatalMsg != "" {
 		t.Fatal(runnerEnvFatalMsg)

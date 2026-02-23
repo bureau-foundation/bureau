@@ -251,6 +251,14 @@ func (renderer DetailRenderer) RenderBody(source Source, entry ticketindex.Entry
 		}
 	}
 
+	// Review: reviewer dispositions and scope.
+	if entry.Content.Review != nil && len(entry.Content.Review.Reviewers) > 0 {
+		reviewSection := renderer.renderReview(entry.Content)
+		if reviewSection != "" {
+			addSection(reviewSection, nil)
+		}
+	}
+
 	// Children (for epics).
 	children := source.Children(entry.ID)
 	if len(children) > 0 {
@@ -928,6 +936,86 @@ func (renderer DetailRenderer) renderPipelineSchedule(content ticket.TicketConte
 	}
 
 	return headerStyle.Render("Schedule") + "\n" + strings.Join(lines, "\n")
+}
+
+// renderReview renders the review section: reviewer list with
+// color-coded dispositions, and scope details when present.
+func (renderer DetailRenderer) renderReview(content ticket.TicketContent) string {
+	review := content.Review
+	if review == nil {
+		return ""
+	}
+
+	headerStyle := lipgloss.NewStyle().
+		Bold(true).
+		Foreground(renderer.theme.NormalText)
+	labelStyle := lipgloss.NewStyle().
+		Foreground(renderer.theme.FaintText)
+
+	var lines []string
+
+	// Reviewer entries with disposition indicators.
+	for _, entry := range review.Reviewers {
+		dot, dotColor := dispositionIndicator(entry.Disposition)
+		dotStyle := lipgloss.NewStyle().Foreground(dotColor(renderer.theme))
+		userStyle := lipgloss.NewStyle().Foreground(renderer.theme.NormalText)
+		dispStyle := lipgloss.NewStyle().Foreground(dotColor(renderer.theme))
+
+		line := dotStyle.Render(dot) + " " + userStyle.Render(entry.UserID.String()) +
+			" " + dispStyle.Render(entry.Disposition)
+		if entry.UpdatedAt != "" {
+			line += " " + labelStyle.Render(shortenTimestamp(entry.UpdatedAt))
+		}
+		lines = append(lines, line)
+	}
+
+	// Scope details.
+	if review.Scope != nil {
+		scope := review.Scope
+		if scope.Description != "" {
+			lines = append(lines, labelStyle.Render("scope: ")+
+				lipgloss.NewStyle().Foreground(renderer.theme.NormalText).Render(scope.Description))
+		}
+		if scope.Base != "" || scope.Head != "" {
+			rangeText := scope.Base + ".." + scope.Head
+			lines = append(lines, labelStyle.Render("range: ")+
+				lipgloss.NewStyle().Foreground(renderer.theme.NormalText).Render(rangeText))
+		}
+		if scope.Worktree != "" {
+			lines = append(lines, labelStyle.Render("worktree: ")+
+				lipgloss.NewStyle().Foreground(renderer.theme.NormalText).Render(scope.Worktree))
+		}
+		if len(scope.Files) > 0 {
+			filesText := strings.Join(scope.Files, ", ")
+			if lipgloss.Width(filesText) > renderer.width-7 {
+				filesText = truncateString(filesText, renderer.width-8) + "…"
+			}
+			lines = append(lines, labelStyle.Render("files: ")+
+				lipgloss.NewStyle().Foreground(renderer.theme.NormalText).Render(filesText))
+		}
+		if scope.ArtifactRef != "" {
+			lines = append(lines, labelStyle.Render("artifact: ")+
+				lipgloss.NewStyle().Foreground(renderer.theme.NormalText).Render(scope.ArtifactRef))
+		}
+	}
+
+	return headerStyle.Render("Review") + "\n" + strings.Join(lines, "\n")
+}
+
+// dispositionIndicator returns a dot character and a color function
+// for a review disposition value. Green for approved, red for
+// changes_requested, blue for commented, yellow for pending.
+func dispositionIndicator(disposition string) (string, func(Theme) lipgloss.Color) {
+	switch disposition {
+	case "approved":
+		return "●", func(theme Theme) lipgloss.Color { return theme.StatusOpen }
+	case "changes_requested":
+		return "●", func(theme Theme) lipgloss.Color { return theme.StatusBlocked }
+	case "commented":
+		return "●", func(theme Theme) lipgloss.Color { return theme.LinkForeground }
+	default: // "pending"
+		return "○", func(theme Theme) lipgloss.Color { return theme.StatusInProgress }
+	}
 }
 
 // conclusionStyle returns a lipgloss style for rendering a pipeline

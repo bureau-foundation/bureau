@@ -19,7 +19,7 @@ const (
 	// TicketContentVersion is the current schema version for
 	// TicketContent events. Increment when adding fields that
 	// existing code must not silently drop during read-modify-write.
-	TicketContentVersion = 2
+	TicketContentVersion = 3
 
 	// TicketConfigVersion is the current schema version for
 	// TicketConfigContent events.
@@ -59,18 +59,25 @@ type TicketContent struct {
 	Body string `json:"body,omitempty"`
 
 	// Status is the lifecycle state: "open", "in_progress",
-	// "blocked", "closed". The ticket service computes derived
-	// readiness from status + dependency graph + gate satisfaction,
-	// but "blocked" is also a valid explicit status for agents to
-	// signal blockage on things not tracked as ticket dependencies.
+	// "review", "blocked", "closed". The ticket service computes
+	// derived readiness from status + dependency graph + gate
+	// satisfaction, but "blocked" is also a valid explicit status
+	// for agents to signal blockage on things not tracked as ticket
+	// dependencies.
 	//
 	// Contention detection: the ticket service rejects transitions
-	// to "in_progress" when the ticket is already "in_progress",
-	// returning a conflict error with the current assignee. This
-	// forces agents to claim work atomically (open → in_progress)
-	// before beginning any planning or implementation. Assignee
-	// must be set in the same mutation that transitions to
-	// "in_progress".
+	// to "in_progress" when the ticket is already "in_progress"
+	// (and "review" when already "review"), returning a conflict
+	// error with the current assignee. This forces agents to claim
+	// work atomically (open → in_progress) before beginning any
+	// planning or implementation. Assignee must be set in the same
+	// mutation that transitions to "in_progress".
+	//
+	// Review: tickets in "review" are waiting for reviewer feedback.
+	// The ticket must have a non-nil Review field with at least one
+	// reviewer to enter this status. The assignee (author) is
+	// preserved from in_progress → review and review → in_progress
+	// transitions. See TicketReview for the review model.
 	Status string `json:"status"`
 
 	// Priority is 0-4: 0=critical, 1=high, 2=medium, 3=low,
@@ -154,6 +161,12 @@ type TicketContent struct {
 	// from an external system (GitHub, beads JSONL, etc.).
 	Origin *TicketOrigin `json:"origin,omitempty"`
 
+	// Review carries reviewer tracking for tickets in (or entering)
+	// the "review" status. Must be non-nil with at least one reviewer
+	// when status is "review". May be pre-populated on tickets in
+	// other statuses to set up reviewers before requesting review.
+	Review *TicketReview `json:"review,omitempty"`
+
 	// Pipeline carries type-specific content for pipeline
 	// execution tickets (Type == "pipeline"). Must be set when
 	// Type is "pipeline" and must be nil for all other types.
@@ -183,7 +196,7 @@ func (t *TicketContent) Validate() error {
 		return errors.New("ticket content: title is required")
 	}
 	switch t.Status {
-	case "open", "in_progress", "blocked", "closed":
+	case "open", "in_progress", "review", "blocked", "closed":
 		// Valid.
 	case "":
 		return errors.New("ticket content: status is required")
@@ -210,6 +223,14 @@ func (t *TicketContent) Validate() error {
 		}
 	} else if t.Pipeline != nil {
 		return fmt.Errorf("ticket content: pipeline content must be nil when type is %q", t.Type)
+	}
+	if t.Status == "review" && (t.Review == nil || len(t.Review.Reviewers) == 0) {
+		return errors.New("ticket content: review with at least one reviewer is required when status is \"review\"")
+	}
+	if t.Review != nil {
+		if err := t.Review.Validate(); err != nil {
+			return fmt.Errorf("ticket content: review: %w", err)
+		}
 	}
 	if t.CreatedBy.IsZero() {
 		return errors.New("ticket content: created_by is required")
@@ -606,6 +627,123 @@ func (a *TicketAttachment) Validate() error {
 		return errors.New("attachment: mxc:// refs are not supported, use the artifact service")
 	}
 	return nil
+}
+
+// TicketReview tracks reviewer feedback on a ticket. When a ticket
+// enters the "review" status, the Review field carries the list of
+// reviewers and an optional scope describing what to review.
+//
+// Review is for structured multi-reviewer feedback: N people examine
+// work and provide individual dispositions. This is distinct from
+// gates, which are binary coordination conditions (one approval,
+// one pipeline pass). A review gate type (planned) bridges the two
+// by watching for all-approved dispositions.
+//
+// The ticket service does not automatically transition status based
+// on dispositions. The author reads all feedback and decides when to
+// iterate (review → in_progress) or ship (review → closed). This
+// preserves author agency and supports workflows where a post-review
+// step follows approval.
+type TicketReview struct {
+	// Reviewers is the list of principals providing feedback. Each
+	// reviewer tracks their own disposition independently. Must be
+	// non-empty when the ticket is in "review" status.
+	Reviewers []ReviewerEntry `json:"reviewers"`
+
+	// Scope describes what the reviewers should examine. Optional —
+	// the scope might be implicit in the ticket body. Use whichever
+	// fields apply: Base/Head/Worktree for code review, ArtifactRef
+	// for document review, Description for freeform requests.
+	Scope *ReviewScope `json:"scope,omitempty"`
+}
+
+// Validate checks that the review has at least one reviewer and all
+// entries are well-formed.
+func (r *TicketReview) Validate() error {
+	if len(r.Reviewers) == 0 {
+		return errors.New("at least one reviewer is required")
+	}
+	for i := range r.Reviewers {
+		if err := r.Reviewers[i].Validate(); err != nil {
+			return fmt.Errorf("reviewers[%d]: %w", i, err)
+		}
+	}
+	return nil
+}
+
+// ReviewerEntry tracks a single reviewer's feedback on a ticket.
+type ReviewerEntry struct {
+	// UserID is the Matrix user ID of the reviewer
+	// (e.g., "@iree/amdgpu/engineer:bureau.local").
+	UserID ref.UserID `json:"user_id"`
+
+	// Disposition is the reviewer's current assessment: "pending"
+	// (not yet reviewed), "approved" (looks good), "changes_requested"
+	// (must fix before proceeding), or "commented" (feedback provided,
+	// no blocking opinion).
+	Disposition string `json:"disposition"`
+
+	// UpdatedAt is the ISO 8601 timestamp of the last disposition
+	// change. Empty when disposition is "pending" (initial state).
+	UpdatedAt string `json:"updated_at,omitempty"`
+}
+
+// validDispositions is the set of recognized reviewer dispositions.
+var validDispositions = map[string]bool{
+	"pending":           true,
+	"approved":          true,
+	"changes_requested": true,
+	"commented":         true,
+}
+
+// IsValidDisposition reports whether the given string is a recognized
+// reviewer disposition.
+func IsValidDisposition(disposition string) bool {
+	return validDispositions[disposition]
+}
+
+// Validate checks that the reviewer entry has a valid user ID and
+// disposition.
+func (r *ReviewerEntry) Validate() error {
+	if r.UserID.IsZero() {
+		return errors.New("user_id is required")
+	}
+	if !IsValidDisposition(r.Disposition) {
+		return fmt.Errorf("unknown disposition %q", r.Disposition)
+	}
+	return nil
+}
+
+// ReviewScope describes what reviewers should examine. All fields are
+// optional — callers use whichever apply to their use case. Code review
+// uses Base/Head/Worktree/Files. Document review uses ArtifactRef. PM
+// review requests use Description. The scope might also be implicit in
+// the ticket body, in which case ReviewScope can be nil entirely.
+type ReviewScope struct {
+	// Base is the starting point for diff-based review: a commit
+	// hash, branch name, or tag. Used with Head to define a commit
+	// range.
+	Base string `json:"base,omitempty"`
+
+	// Head is the end point for diff-based review.
+	Head string `json:"head,omitempty"`
+
+	// Worktree is the worktree path containing the changes under
+	// review (e.g., "feature/auth-refactor"). Enables reviewers to
+	// check out the code.
+	Worktree string `json:"worktree,omitempty"`
+
+	// Files lists specific files to focus on. When empty and
+	// Base/Head are set, the reviewer examines the entire diff.
+	Files []string `json:"files,omitempty"`
+
+	// ArtifactRef is a reference to a stored artifact (document,
+	// configuration, rendered output) to review.
+	ArtifactRef string `json:"artifact_ref,omitempty"`
+
+	// Description provides freeform context about what to review
+	// when the scope isn't captured by the structured fields.
+	Description string `json:"description,omitempty"`
 }
 
 // TicketOrigin records the provenance of an imported ticket.

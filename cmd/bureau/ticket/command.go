@@ -57,6 +57,9 @@ the ticket across all rooms.`,
 			exportCommand(),
 			importCommand(),
 
+			// Review.
+			reviewCommand(),
+
 			// Subcommand groups.
 			gateCommand(),
 			depCommand(),

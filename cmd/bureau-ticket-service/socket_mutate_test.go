@@ -246,11 +246,12 @@ func TestHandleUpdateInProgressRequiresAssignee(t *testing.T) {
 	requireServiceError(t, err)
 }
 
-func TestHandleUpdateAssigneeRequiresInProgress(t *testing.T) {
+func TestHandleUpdateAssigneeRequiresActiveStatus(t *testing.T) {
 	env := testMutationServer(t, mutationRooms())
 	defer env.cleanup()
 
-	// Trying to set assignee on an open ticket without changing status.
+	// Trying to set assignee on an open ticket without changing status
+	// to in_progress or review.
 	err := env.client.Call(context.Background(), "update", map[string]any{
 		"ticket":   "tkt-open",
 		"assignee": "@bureau/fleet/prod/agent/tester:bureau.local",
@@ -1641,6 +1642,420 @@ func TestHandleBatchCreateAllowedTypesEnforced(t *testing.T) {
 	}, nil)
 	serviceErr := requireServiceError(t, err)
 	if !strings.Contains(serviceErr.Message, "not allowed") {
+		t.Errorf("unexpected error: %s", serviceErr.Message)
+	}
+}
+
+// --- Review status transition tests ---
+
+// TestHandleUpdateInProgressToReview verifies that an in_progress ticket
+// can transition to review when reviewers are provided, and that the
+// assignee (author) is preserved.
+func TestHandleUpdateInProgressToReview(t *testing.T) {
+	env := testMutationServer(t, mutationRooms())
+	defer env.cleanup()
+
+	var result mutationResponse
+	err := env.client.Call(context.Background(), "update", map[string]any{
+		"ticket": "tkt-inprog",
+		"room":   "!room:bureau.local",
+		"status": "review",
+		"review": map[string]any{
+			"reviewers": []map[string]any{
+				{"user_id": "@agent/reviewer:bureau.local", "disposition": "pending"},
+			},
+		},
+	}, &result)
+	if err != nil {
+		t.Fatalf("Call: %v", err)
+	}
+
+	if result.Content.Status != "review" {
+		t.Errorf("status: got %q, want review", result.Content.Status)
+	}
+	// Assignee persists from in_progress to review.
+	if result.Content.Assignee != ref.MustParseUserID("@agent/worker:bureau.local") {
+		t.Errorf("assignee should be preserved, got %q", result.Content.Assignee)
+	}
+	if result.Content.Review == nil || len(result.Content.Review.Reviewers) != 1 {
+		t.Fatal("review should have 1 reviewer")
+	}
+}
+
+// TestHandleUpdateReviewToInProgress verifies that a ticket in review
+// can go back to in_progress (author iterating), with assignee preserved.
+func TestHandleUpdateReviewToInProgress(t *testing.T) {
+	env := testMutationServer(t, mutationRooms())
+	defer env.cleanup()
+
+	var result mutationResponse
+	err := env.client.Call(context.Background(), "update", map[string]any{
+		"ticket": "tkt-review",
+		"room":   "!room:bureau.local",
+		"status": "in_progress",
+	}, &result)
+	if err != nil {
+		t.Fatalf("Call: %v", err)
+	}
+
+	if result.Content.Status != "in_progress" {
+		t.Errorf("status: got %q, want in_progress", result.Content.Status)
+	}
+	// Assignee persists from review to in_progress.
+	if result.Content.Assignee != ref.MustParseUserID("@agent/worker:bureau.local") {
+		t.Errorf("assignee should be preserved, got %q", result.Content.Assignee)
+	}
+}
+
+// TestHandleUpdateReviewToOpen verifies that a ticket in review can be
+// released back to the pool, clearing the assignee.
+func TestHandleUpdateReviewToOpen(t *testing.T) {
+	env := testMutationServer(t, mutationRooms())
+	defer env.cleanup()
+
+	var result mutationResponse
+	err := env.client.Call(context.Background(), "update", map[string]any{
+		"ticket": "tkt-review",
+		"room":   "!room:bureau.local",
+		"status": "open",
+	}, &result)
+	if err != nil {
+		t.Fatalf("Call: %v", err)
+	}
+
+	if result.Content.Status != "open" {
+		t.Errorf("status: got %q, want open", result.Content.Status)
+	}
+	if !result.Content.Assignee.IsZero() {
+		t.Errorf("assignee should be cleared on review → open, got %q", result.Content.Assignee)
+	}
+}
+
+// TestHandleUpdateReviewToClosed verifies that a reviewed ticket can
+// be closed directly (approved and done).
+func TestHandleUpdateReviewToClosed(t *testing.T) {
+	env := testMutationServer(t, mutationRooms())
+	defer env.cleanup()
+
+	var result mutationResponse
+	err := env.client.Call(context.Background(), "update", map[string]any{
+		"ticket": "tkt-review",
+		"room":   "!room:bureau.local",
+		"status": "closed",
+	}, &result)
+	if err != nil {
+		t.Fatalf("Call: %v", err)
+	}
+
+	if result.Content.Status != "closed" {
+		t.Errorf("status: got %q, want closed", result.Content.Status)
+	}
+	if result.Content.ClosedAt == "" {
+		t.Error("closed_at should be set")
+	}
+	if !result.Content.Assignee.IsZero() {
+		t.Errorf("assignee should be cleared on review → closed, got %q", result.Content.Assignee)
+	}
+}
+
+// TestHandleUpdateReviewToBlocked verifies that a ticket in review can
+// be blocked by an external dependency.
+func TestHandleUpdateReviewToBlocked(t *testing.T) {
+	env := testMutationServer(t, mutationRooms())
+	defer env.cleanup()
+
+	var result mutationResponse
+	err := env.client.Call(context.Background(), "update", map[string]any{
+		"ticket": "tkt-review",
+		"room":   "!room:bureau.local",
+		"status": "blocked",
+	}, &result)
+	if err != nil {
+		t.Fatalf("Call: %v", err)
+	}
+
+	if result.Content.Status != "blocked" {
+		t.Errorf("status: got %q, want blocked", result.Content.Status)
+	}
+}
+
+// TestHandleUpdateReviewContention verifies that review → review is
+// rejected as contention (same as in_progress → in_progress).
+func TestHandleUpdateReviewContention(t *testing.T) {
+	env := testMutationServer(t, mutationRooms())
+	defer env.cleanup()
+
+	err := env.client.Call(context.Background(), "update", map[string]any{
+		"ticket": "tkt-review",
+		"room":   "!room:bureau.local",
+		"status": "review",
+	}, nil)
+	serviceErr := requireServiceError(t, err)
+	if !strings.Contains(serviceErr.Message, "already in review") {
+		t.Errorf("unexpected error: %s", serviceErr.Message)
+	}
+}
+
+// TestHandleUpdateOpenToReview verifies the direct open → review
+// transition (PM use case: no prior assignee).
+func TestHandleUpdateOpenToReview(t *testing.T) {
+	env := testMutationServer(t, mutationRooms())
+	defer env.cleanup()
+
+	var result mutationResponse
+	err := env.client.Call(context.Background(), "update", map[string]any{
+		"ticket": "tkt-open",
+		"room":   "!room:bureau.local",
+		"status": "review",
+		"review": map[string]any{
+			"reviewers": []map[string]any{
+				{"user_id": "@agent/reviewer:bureau.local", "disposition": "pending"},
+			},
+		},
+	}, &result)
+	if err != nil {
+		t.Fatalf("Call: %v", err)
+	}
+
+	if result.Content.Status != "review" {
+		t.Errorf("status: got %q, want review", result.Content.Status)
+	}
+	// Open → review: no assignee required or preserved.
+	if !result.Content.Assignee.IsZero() {
+		t.Errorf("assignee should be empty for open → review, got %q", result.Content.Assignee)
+	}
+}
+
+// TestHandleUpdateBlockedToReview verifies that a blocked ticket can
+// resume directly into review.
+func TestHandleUpdateBlockedToReview(t *testing.T) {
+	env := testMutationServer(t, mutationRooms())
+	defer env.cleanup()
+
+	var result mutationResponse
+	err := env.client.Call(context.Background(), "update", map[string]any{
+		"ticket": "tkt-blocked",
+		"room":   "!room:bureau.local",
+		"status": "review",
+		"review": map[string]any{
+			"reviewers": []map[string]any{
+				{"user_id": "@agent/reviewer:bureau.local", "disposition": "pending"},
+			},
+		},
+	}, &result)
+	if err != nil {
+		t.Fatalf("Call: %v", err)
+	}
+
+	if result.Content.Status != "review" {
+		t.Errorf("status: got %q, want review", result.Content.Status)
+	}
+}
+
+// TestHandleUpdateClosedToReviewRejected verifies that closed → review
+// is not allowed (must reopen first via closed → open).
+func TestHandleUpdateClosedToReviewRejected(t *testing.T) {
+	env := testMutationServer(t, mutationRooms())
+	defer env.cleanup()
+
+	err := env.client.Call(context.Background(), "update", map[string]any{
+		"ticket": "tkt-closed",
+		"room":   "!room:bureau.local",
+		"status": "review",
+		"review": map[string]any{
+			"reviewers": []map[string]any{
+				{"user_id": "@agent/reviewer:bureau.local", "disposition": "pending"},
+			},
+		},
+	}, nil)
+	serviceErr := requireServiceError(t, err)
+	if !strings.Contains(serviceErr.Message, "invalid status transition") {
+		t.Errorf("unexpected error: %s", serviceErr.Message)
+	}
+}
+
+// TestHandleUpdateReviewRequiresReviewers verifies that entering review
+// status without reviewers is rejected.
+func TestHandleUpdateReviewRequiresReviewers(t *testing.T) {
+	env := testMutationServer(t, mutationRooms())
+	defer env.cleanup()
+
+	// No review field at all.
+	err := env.client.Call(context.Background(), "update", map[string]any{
+		"ticket": "tkt-inprog",
+		"room":   "!room:bureau.local",
+		"status": "review",
+	}, nil)
+	serviceErr := requireServiceError(t, err)
+	if !strings.Contains(serviceErr.Message, "reviewers are required") {
+		t.Errorf("unexpected error: %s", serviceErr.Message)
+	}
+}
+
+// TestHandleUpdateReviewAssigneeOnReview verifies that an assignee can
+// be set on a review ticket (author set explicitly).
+func TestHandleUpdateReviewAssigneeOnReview(t *testing.T) {
+	env := testMutationServer(t, mutationRooms())
+	defer env.cleanup()
+
+	// First transition open → review with an assignee.
+	var result mutationResponse
+	err := env.client.Call(context.Background(), "update", map[string]any{
+		"ticket":   "tkt-open",
+		"room":     "!room:bureau.local",
+		"status":   "review",
+		"assignee": "@agent/author:bureau.local",
+		"review": map[string]any{
+			"reviewers": []map[string]any{
+				{"user_id": "@agent/reviewer:bureau.local", "disposition": "pending"},
+			},
+		},
+	}, &result)
+	if err != nil {
+		t.Fatalf("Call: %v", err)
+	}
+
+	if result.Content.Status != "review" {
+		t.Errorf("status: got %q, want review", result.Content.Status)
+	}
+	if result.Content.Assignee != ref.MustParseUserID("@agent/author:bureau.local") {
+		t.Errorf("assignee: got %q, want @agent/author:bureau.local", result.Content.Assignee)
+	}
+}
+
+// --- Set-disposition tests ---
+
+// TestHandleSetDisposition verifies the basic set-disposition flow:
+// caller is in the reviewer list, ticket is in review, disposition is
+// updated.
+func TestHandleSetDisposition(t *testing.T) {
+	env := testMutationServer(t, mutationRooms())
+	defer env.cleanup()
+
+	// The test token's subject is @bureau/fleet/prod/agent/tester:bureau.local,
+	// which is in tkt-review's reviewer list.
+	var result mutationResponse
+	err := env.client.Call(context.Background(), "set-disposition", map[string]any{
+		"ticket":      "tkt-review",
+		"room":        "!room:bureau.local",
+		"disposition": "approved",
+	}, &result)
+	if err != nil {
+		t.Fatalf("Call: %v", err)
+	}
+
+	if result.Content.Review == nil {
+		t.Fatal("review should not be nil")
+	}
+	// Find the tester's entry.
+	testerID := ref.MustParseUserID("@bureau/fleet/prod/agent/tester:bureau.local")
+	found := false
+	for _, reviewer := range result.Content.Review.Reviewers {
+		if reviewer.UserID == testerID {
+			found = true
+			if reviewer.Disposition != "approved" {
+				t.Errorf("disposition: got %q, want approved", reviewer.Disposition)
+			}
+			if reviewer.UpdatedAt == "" {
+				t.Error("updated_at should be set after set-disposition")
+			}
+		}
+	}
+	if !found {
+		t.Error("tester reviewer entry not found in result")
+	}
+}
+
+// TestHandleSetDispositionNotInReview verifies that set-disposition
+// is rejected when the ticket is not in review status.
+func TestHandleSetDispositionNotInReview(t *testing.T) {
+	env := testMutationServer(t, mutationRooms())
+	defer env.cleanup()
+
+	err := env.client.Call(context.Background(), "set-disposition", map[string]any{
+		"ticket":      "tkt-inprog",
+		"room":        "!room:bureau.local",
+		"disposition": "approved",
+	}, nil)
+	serviceErr := requireServiceError(t, err)
+	if !strings.Contains(serviceErr.Message, "not in review status") {
+		t.Errorf("unexpected error: %s", serviceErr.Message)
+	}
+}
+
+// TestHandleSetDispositionNotReviewer verifies that set-disposition is
+// rejected when the caller is not in the reviewer list.
+func TestHandleSetDispositionNotReviewer(t *testing.T) {
+	// The test token's subject is @bureau/fleet/prod/agent/tester:bureau.local.
+	// Create a review ticket where the tester is NOT a reviewer.
+	room := newTrackedRoom(map[string]ticket.TicketContent{
+		"tkt-review-other": {
+			Version:  ticket.TicketContentVersion,
+			Title:    "review without tester",
+			Status:   "review",
+			Priority: 2,
+			Type:     "task",
+			Review: &ticket.TicketReview{
+				Reviewers: []ticket.ReviewerEntry{
+					{
+						UserID:      ref.MustParseUserID("@agent/other-reviewer:bureau.local"),
+						Disposition: "pending",
+					},
+				},
+			},
+			CreatedBy: ref.MustParseUserID("@agent/creator:bureau.local"),
+			CreatedAt: "2026-01-01T00:00:00Z",
+			UpdatedAt: "2026-01-01T00:00:00Z",
+		},
+	})
+	rooms := map[ref.RoomID]*roomState{
+		testRoomID("!room:bureau.local"): room,
+	}
+
+	env := testMutationServer(t, rooms)
+	defer env.cleanup()
+
+	err := env.client.Call(context.Background(), "set-disposition", map[string]any{
+		"ticket":      "tkt-review-other",
+		"room":        "!room:bureau.local",
+		"disposition": "approved",
+	}, nil)
+	serviceErr := requireServiceError(t, err)
+	if !strings.Contains(serviceErr.Message, "not in the reviewer list") {
+		t.Errorf("unexpected error: %s", serviceErr.Message)
+	}
+}
+
+// TestHandleSetDispositionPendingRejected verifies that setting
+// disposition to "pending" is rejected (it's the initial state).
+func TestHandleSetDispositionPendingRejected(t *testing.T) {
+	env := testMutationServer(t, mutationRooms())
+	defer env.cleanup()
+
+	err := env.client.Call(context.Background(), "set-disposition", map[string]any{
+		"ticket":      "tkt-review",
+		"room":        "!room:bureau.local",
+		"disposition": "pending",
+	}, nil)
+	serviceErr := requireServiceError(t, err)
+	if !strings.Contains(serviceErr.Message, "cannot set disposition to pending") {
+		t.Errorf("unexpected error: %s", serviceErr.Message)
+	}
+}
+
+// TestHandleSetDispositionInvalidDisposition verifies that an invalid
+// disposition value is rejected.
+func TestHandleSetDispositionInvalidDisposition(t *testing.T) {
+	env := testMutationServer(t, mutationRooms())
+	defer env.cleanup()
+
+	err := env.client.Call(context.Background(), "set-disposition", map[string]any{
+		"ticket":      "tkt-review",
+		"room":        "!room:bureau.local",
+		"disposition": "lgtm",
+	}, nil)
+	serviceErr := requireServiceError(t, err)
+	if !strings.Contains(serviceErr.Message, "invalid disposition") {
 		t.Errorf("unexpected error: %s", serviceErr.Message)
 	}
 }

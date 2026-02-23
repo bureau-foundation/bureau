@@ -55,11 +55,12 @@ timeline, providing a complete audit trail of every field change.
 A ticket carries:
 
 - **Title** and **body** (markdown) — the work description.
-- **Status** — lifecycle state: `open`, `in_progress`, `blocked`,
-  `closed`. The ticket service computes derived readiness from status,
-  dependency graph, and gate satisfaction, but `blocked` is also a valid
-  explicit status for agents to signal blockage not tracked as ticket
-  dependencies.
+- **Status** — lifecycle state: `open`, `in_progress`, `review`,
+  `blocked`, `closed`. The ticket service computes derived readiness
+  from status, dependency graph, and gate satisfaction, but `blocked`
+  is also a valid explicit status for agents to signal blockage not
+  tracked as ticket dependencies. See [Review](#review) for the review
+  status semantics.
 - **Priority** — 0 (critical) through 4 (backlog).
 - **Type** — `task`, `bug`, `feature`, `epic`, `chore`, `docs`,
   `question`, `pipeline`. Types with dedicated semantics carry
@@ -77,6 +78,7 @@ A ticket carries:
   ready. The ticket service computes the transitive closure for
   dependency queries and detects cycles on mutation.
 - **Gates** — async coordination conditions. See [Gates](#gates).
+- **Review** — reviewer list and review scope. See [Review](#review).
 - **Notes** — embedded annotations. See [Notes](#notes).
 - **Attachments** — artifact references. See [Attachments](#attachments).
 - **Deadline** — optional target completion time (RFC 3339 UTC). The
@@ -386,6 +388,105 @@ deadline per-occurrence (though this requires the re-arm logic to also
 manage the deadline, which is a refinement beyond the initial
 implementation).
 
+### Review
+
+Review is a ticket lifecycle status that signals "the author's work is
+done; reviewers should examine it." Three use cases share the same
+schema and service mechanics:
+
+- **Code review.** A developer works in a worktree, transitions the
+  ticket to `review` when ready. Reviewers examine the diff and set
+  dispositions. The author iterates if changes are requested.
+- **Document review.** A PM creates a ticket with a document or
+  question, transitions to `review`. Engineers provide feedback via
+  notes and set dispositions.
+- **Agent review.** An operator asks an agent to examine a config or
+  artifact. The agent reviews the scope, posts findings, and approves.
+
+#### Schema
+
+A ticket in review carries a `TicketReview` struct:
+
+- **`reviewers`** — list of `ReviewerEntry` objects, each with a
+  `user_id`, `disposition`, and optional `updated_at`. Disposition
+  values: `"pending"` (initial), `"approved"`, `"changes_requested"`,
+  `"commented"`. The reviewers list must be non-empty when the ticket
+  is in review status.
+- **`scope`** — optional `ReviewScope` describing what to review.
+  Fields are use-case-dependent:
+  - `base`, `head` — commit range for code review (git SHA or ref).
+  - `worktree` — worktree path containing the changes.
+  - `files` — specific files to focus on (empty means entire diff).
+  - `artifact_ref` — stored artifact reference for document review.
+  - `description` — freeform context for unstructured review requests.
+
+  Callers populate whichever fields apply. No field is required — the
+  scope might be "just read the ticket body."
+
+The `Review` field lives on `TicketContent` and is present at schema
+version 3. The `CanModify` guard prevents older code from silently
+dropping the review field during read-modify-write.
+
+#### Status Transitions
+
+| From | To | Allowed | Notes |
+|------|-----|---------|-------|
+| open | review | yes | Direct review request |
+| in_progress | review | yes | Author requests review |
+| review | in_progress | yes | Author iterates after feedback |
+| review | open | yes | Drop review, release to pool |
+| review | closed | yes | Approved and done |
+| review | blocked | yes | External blocker during review |
+| review | review | rejected | Same contention rule as in_progress |
+| blocked | review | yes | Resume directly into review |
+| closed | review | no | Must reopen first (closed → open only) |
+
+#### Assignee Semantics
+
+The assignee is the work author — the person who did the work and who
+will iterate if changes are requested.
+
+- `in_progress → review` preserves the assignee.
+- `review → in_progress` preserves the assignee (going back to fix).
+- `review → open` clears the assignee (releasing the ticket).
+- `review → closed` clears the assignee.
+- Review does not require an assignee: `open → review` is valid
+  without one (the PM use case where the creator is the requester, not
+  the worker).
+
+#### Dispositions
+
+The `set-disposition` action on the ticket service requires a distinct
+`ticket/review` grant. This separates review authority from edit
+authority: not everyone who can edit a ticket should set review
+dispositions, and not every reviewer should edit the ticket.
+
+The service validates that the caller is in the reviewers list, that
+the ticket is in review status, and that the disposition is one of the
+three active values (approved, changes_requested, commented). Setting
+disposition to "pending" is rejected — that is the initial state, not
+something a reviewer actively chooses.
+
+#### No Automatic Transitions
+
+The ticket stays in "review" regardless of individual dispositions.
+The author reads all feedback and decides when to go back to
+in_progress (iterate) or close (ship). Automatic transitions would
+take agency from the author and break cases where the author wants to
+read all reviews before acting or where a post-review step follows.
+
+#### Relationship to Gates
+
+Gates and review serve different coordination patterns. Gates are
+binary conditions: a gate is pending or satisfied, evaluated
+automatically or resolved manually. Review is structured multi-reviewer
+feedback with individual dispositions and iterative cycles.
+
+A "review" gate type can bridge the two by watching for all-approved
+dispositions, making review completion a prerequisite for downstream
+work. But gates and review remain orthogonal — a ticket can have both
+gates and reviewers, and their satisfaction is evaluated independently.
+
 ### Notes
 
 Notes are short annotations that travel with the ticket: warnings,
@@ -644,12 +745,29 @@ Specific transition rules:
 - `in_progress -> open`: allowed (unclaim, clears assignee)
 - `in_progress -> closed`: allowed (agent finished)
 - `in_progress -> blocked`: allowed (agent hit a blocker)
+- `in_progress -> review`: allowed (author requests review, preserves
+  assignee, requires reviewers)
+- `review -> in_progress`: allowed (author iterates, preserves
+  assignee)
+- `review -> review`: **rejected with conflict error** (same
+  contention rule as in_progress)
+- `review -> open`: allowed (drop review, clears assignee)
+- `review -> closed`: allowed (approved and done)
+- `review -> blocked`: allowed (external blocker)
+- `open -> review`: allowed (direct review request, no assignee
+  required, requires reviewers)
+- `blocked -> review`: allowed (resume into review)
+- `closed -> review`: rejected (must reopen first)
 - `closed -> open`: allowed (reopen)
 - `open -> closed`: allowed (duplicate, wontfix)
 
+See [Review](#review) for the full review lifecycle semantics.
+
 Assignee and `in_progress` status must be set atomically in the same
 mutation. The service rejects `in_progress` without an assignee and
-rejects setting an assignee on a ticket that is not `in_progress`.
+rejects setting an assignee on a ticket that is not `in_progress` or
+`review`. Review may have an assignee (preserved from in_progress) but
+does not require one.
 
 ### Service API
 
@@ -693,6 +811,11 @@ Over the Unix socket, CBOR request-response (see
 - `add-gate` — append a gate
 - `remove-gate` — remove a gate by ID
 - `resolve-gate` — manually satisfy a gate (for `human` type)
+
+**Review:**
+- `set-disposition` — set a reviewer's disposition on a ticket in
+  review status. Requires `ticket/review` grant. The caller must be in
+  the ticket's reviewer list.
 
 **Attachments:**
 - `attach` — add an artifact reference
@@ -747,7 +870,7 @@ bureau ticket list     [--status S] [--priority N] [--label L] [--assignee A]
 bureau ticket show     ID
 bureau ticket update   ID [--status S] [--priority N] [--assign A]
                        [--label-add L] [--label-remove L] [--parent ID]
-                       [--deadline TIME]
+                       [--deadline TIME] [--reviewer USER-ID]
 bureau ticket close    ID [--reason "..."] [--end-recurrence]
 bureau ticket reopen   ID
 bureau ticket ready    [--room ROOM]
@@ -755,6 +878,7 @@ bureau ticket blocked  [--room ROOM]
 bureau ticket children ID
 bureau ticket grep     PATTERN [--room ROOM]
 bureau ticket upcoming [--room ROOM]
+bureau ticket review   ID --approve | --request-changes | --comment
 
 bureau ticket defer      ID --until TIME | --for DUR
 bureau ticket dep add    ID DEPENDS-ON-ID
@@ -800,6 +924,16 @@ schedule.
 `bureau ticket close --end-recurrence` removes any recurring timer
 gates from the ticket before closing. Without this flag, closing a
 ticket with a recurring gate performs auto-rearm.
+
+`--reviewer` on `update` populates the ticket's review field with
+the specified reviewer user IDs (each with disposition "pending"). When
+combined with `--status review`, this is the common one-step pattern
+for requesting review. The flag is repeatable for multiple reviewers.
+
+`bureau ticket review` sets the caller's disposition on a ticket in
+review status. Exactly one of `--approve`, `--request-changes`, or
+`--comment` must be specified. The caller must be in the ticket's
+reviewer list.
 
 ---
 

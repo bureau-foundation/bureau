@@ -2634,6 +2634,8 @@ func statusIconString(status string) string {
 	switch status {
 	case "in_progress":
 		return "●"
+	case "review":
+		return "◎"
 	case "blocked":
 		return "◐"
 	case "closed":

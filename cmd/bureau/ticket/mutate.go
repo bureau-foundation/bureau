@@ -157,17 +157,18 @@ Required fields: --room, --title, --type. Priority defaults to P2
 type updateParams struct {
 	TicketConnection
 	cli.JSONOutput
-	Room     string   `json:"room"     flag:"room,r"     desc:"room ID or alias localpart (or use room-qualified ticket ref)"`
-	Ticket   string   `json:"ticket"   desc:"ticket ID" required:"true"`
-	Title    string   `json:"title"    flag:"title"      desc:"new title"`
-	Body     string   `json:"body"     flag:"body"       desc:"new body"`
-	Status   string   `json:"status"   flag:"status,s"   desc:"new status (open, in_progress, blocked, closed)"`
-	Priority int      `json:"priority" flag:"priority,p"  desc:"new priority (0-4, -1 to skip)" default:"-1"`
-	Type     string   `json:"type"     flag:"type,t"     desc:"new type"`
-	Labels   []string `json:"labels"   flag:"label,l"    desc:"replace labels (repeatable)"`
-	Assignee string   `json:"assignee" flag:"assignee"   desc:"assign to Matrix user ID (requires in_progress status)"`
-	Parent   string   `json:"parent"   flag:"parent"     desc:"set parent ticket ID"`
-	Deadline string   `json:"deadline" flag:"deadline"   desc:"target completion time (RFC 3339 UTC, empty string to clear)"`
+	Room      string   `json:"room"     flag:"room,r"     desc:"room ID or alias localpart (or use room-qualified ticket ref)"`
+	Ticket    string   `json:"ticket"   desc:"ticket ID" required:"true"`
+	Title     string   `json:"title"    flag:"title"      desc:"new title"`
+	Body      string   `json:"body"     flag:"body"       desc:"new body"`
+	Status    string   `json:"status"   flag:"status,s"   desc:"new status (open, in_progress, review, blocked, closed)"`
+	Priority  int      `json:"priority" flag:"priority,p"  desc:"new priority (0-4, -1 to skip)" default:"-1"`
+	Type      string   `json:"type"     flag:"type,t"     desc:"new type"`
+	Labels    []string `json:"labels"   flag:"label,l"    desc:"replace labels (repeatable)"`
+	Assignee  string   `json:"assignee" flag:"assignee"   desc:"assign to Matrix user ID (requires in_progress or review status)"`
+	Parent    string   `json:"parent"   flag:"parent"     desc:"set parent ticket ID"`
+	Deadline  string   `json:"deadline" flag:"deadline"   desc:"target completion time (RFC 3339 UTC, empty string to clear)"`
+	Reviewers []string `json:"reviewers" flag:"reviewer"  desc:"reviewer Matrix user IDs (repeatable, sets review.reviewers)"`
 }
 
 func updateCommand() *cli.Command {
@@ -180,14 +181,18 @@ func updateCommand() *cli.Command {
 omitted fields are left as-is.
 
 Status transitions are validated: for example, transitioning to
-"in_progress" requires --assignee. Attempting to claim a ticket that
-is already in_progress returns a contention error with the current
-assignee.`,
+"in_progress" requires --assignee. Transitioning to "review" requires
+--reviewer (at least one). Attempting to claim a ticket that is already
+in_progress returns a contention error with the current assignee.`,
 		Usage: "bureau ticket update <ticket-id> [flags]",
 		Examples: []cli.Example{
 			{
 				Description: "Claim a ticket (must be open)",
 				Command:     "bureau ticket update tkt-a3f9 --status in_progress --assignee '@me:bureau.local'",
+			},
+			{
+				Description: "Request review from two people",
+				Command:     "bureau ticket update tkt-a3f9 --status review --reviewer '@reviewer1:bureau.local' --reviewer '@reviewer2:bureau.local'",
 			},
 			{
 				Description: "Change priority",
@@ -257,6 +262,18 @@ assignee.`,
 			}
 			if params.Deadline != "" {
 				fields["deadline"] = params.Deadline
+			}
+			if len(params.Reviewers) > 0 {
+				reviewers := make([]map[string]any, len(params.Reviewers))
+				for i, userID := range params.Reviewers {
+					reviewers[i] = map[string]any{
+						"user_id":     userID,
+						"disposition": "pending",
+					}
+				}
+				fields["review"] = map[string]any{
+					"reviewers": reviewers,
+				}
 			}
 
 			var result mutationResult

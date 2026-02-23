@@ -248,7 +248,7 @@ func TestTicketContentOmitsEmptyOptionals(t *testing.T) {
 	optionalFields := []string{
 		"body", "labels", "parent", "blocked_by",
 		"gates", "notes", "attachments", "closed_at", "close_reason",
-		"context_id", "origin", "pipeline", "extra",
+		"context_id", "origin", "review", "pipeline", "extra",
 	}
 	// Assignee is ref.UserID which implements TextMarshaler — Go's
 	// encoding/json emits "" for the zero value even with omitempty.
@@ -414,6 +414,67 @@ func TestTicketContentValidate(t *testing.T) {
 			name:    "status_closed",
 			modify:  func(tc *TicketContent) { tc.Status = "closed" },
 			wantErr: "",
+		},
+		{
+			name: "status_review_with_valid_review",
+			modify: func(tc *TicketContent) {
+				tc.Status = "review"
+				tc.Review = &TicketReview{
+					Reviewers: []ReviewerEntry{
+						{UserID: ref.MustParseUserID("@reviewer:bureau.local"), Disposition: "pending"},
+					},
+				}
+			},
+			wantErr: "",
+		},
+		{
+			name:    "review_status_without_review",
+			modify:  func(tc *TicketContent) { tc.Status = "review" },
+			wantErr: "review with at least one reviewer is required when status is \"review\"",
+		},
+		{
+			name: "review_status_with_empty_reviewers",
+			modify: func(tc *TicketContent) {
+				tc.Status = "review"
+				tc.Review = &TicketReview{Reviewers: []ReviewerEntry{}}
+			},
+			wantErr: "review with at least one reviewer is required when status is \"review\"",
+		},
+		{
+			name: "review_on_non_review_status",
+			modify: func(tc *TicketContent) {
+				tc.Status = "open"
+				tc.Review = &TicketReview{
+					Reviewers: []ReviewerEntry{
+						{UserID: ref.MustParseUserID("@reviewer:bureau.local"), Disposition: "pending"},
+					},
+				}
+			},
+			wantErr: "",
+		},
+		{
+			name: "review_with_invalid_reviewer",
+			modify: func(tc *TicketContent) {
+				tc.Status = "review"
+				tc.Review = &TicketReview{
+					Reviewers: []ReviewerEntry{
+						{UserID: ref.UserID{}, Disposition: "pending"},
+					},
+				}
+			},
+			wantErr: "review: reviewers[0]: user_id is required",
+		},
+		{
+			name: "review_with_invalid_disposition",
+			modify: func(tc *TicketContent) {
+				tc.Status = "review"
+				tc.Review = &TicketReview{
+					Reviewers: []ReviewerEntry{
+						{UserID: ref.MustParseUserID("@reviewer:bureau.local"), Disposition: "rejected"},
+					},
+				}
+			},
+			wantErr: `review: reviewers[0]: unknown disposition "rejected"`,
 		},
 		{
 			name:    "priority_negative",
@@ -1972,5 +2033,429 @@ func TestValidateCronExpression(t *testing.T) {
 				}
 			}
 		})
+	}
+}
+
+func TestTicketReviewRoundTrip(t *testing.T) {
+	original := TicketReview{
+		Reviewers: []ReviewerEntry{
+			{
+				UserID:      ref.MustParseUserID("@iree/amdgpu/engineer:bureau.local"),
+				Disposition: "approved",
+				UpdatedAt:   "2026-02-20T14:30:00Z",
+			},
+			{
+				UserID:      ref.MustParseUserID("@iree/amdgpu/pm:bureau.local"),
+				Disposition: "pending",
+			},
+		},
+		Scope: &ReviewScope{
+			Base:     "abc123",
+			Head:     "def456",
+			Worktree: "feature/auth-refactor",
+			Files:    []string{"lib/auth/token.go", "lib/auth/token_test.go"},
+		},
+	}
+
+	data, err := json.Marshal(original)
+	if err != nil {
+		t.Fatalf("Marshal: %v", err)
+	}
+
+	var raw map[string]any
+	if err := json.Unmarshal(data, &raw); err != nil {
+		t.Fatalf("Unmarshal to map: %v", err)
+	}
+
+	// Verify reviewers wire format.
+	reviewers, ok := raw["reviewers"].([]any)
+	if !ok {
+		t.Fatalf("reviewers is not an array: %T", raw["reviewers"])
+	}
+	if len(reviewers) != 2 {
+		t.Fatalf("reviewers count = %d, want 2", len(reviewers))
+	}
+	firstReviewer := reviewers[0].(map[string]any)
+	assertField(t, firstReviewer, "user_id", "@iree/amdgpu/engineer:bureau.local")
+	assertField(t, firstReviewer, "disposition", "approved")
+	assertField(t, firstReviewer, "updated_at", "2026-02-20T14:30:00Z")
+
+	secondReviewer := reviewers[1].(map[string]any)
+	assertField(t, secondReviewer, "user_id", "@iree/amdgpu/pm:bureau.local")
+	assertField(t, secondReviewer, "disposition", "pending")
+	if _, exists := secondReviewer["updated_at"]; exists {
+		t.Error("updated_at should be omitted for pending reviewer")
+	}
+
+	// Verify scope wire format.
+	scope, ok := raw["scope"].(map[string]any)
+	if !ok {
+		t.Fatalf("scope is not an object: %T", raw["scope"])
+	}
+	assertField(t, scope, "base", "abc123")
+	assertField(t, scope, "head", "def456")
+	assertField(t, scope, "worktree", "feature/auth-refactor")
+	files, ok := scope["files"].([]any)
+	if !ok {
+		t.Fatalf("scope.files is not an array: %T", scope["files"])
+	}
+	if len(files) != 2 || files[0] != "lib/auth/token.go" {
+		t.Errorf("scope.files = %v, want [lib/auth/token.go lib/auth/token_test.go]", files)
+	}
+
+	// Round-trip.
+	var decoded TicketReview
+	if err := json.Unmarshal(data, &decoded); err != nil {
+		t.Fatalf("Unmarshal: %v", err)
+	}
+	if !reflect.DeepEqual(decoded, original) {
+		t.Errorf("round-trip mismatch:\n  got:  %+v\n  want: %+v", decoded, original)
+	}
+}
+
+func TestTicketReviewOmitsEmptyScope(t *testing.T) {
+	review := TicketReview{
+		Reviewers: []ReviewerEntry{
+			{UserID: ref.MustParseUserID("@a:b.c"), Disposition: "pending"},
+		},
+	}
+
+	data, err := json.Marshal(review)
+	if err != nil {
+		t.Fatalf("Marshal: %v", err)
+	}
+
+	var raw map[string]any
+	if err := json.Unmarshal(data, &raw); err != nil {
+		t.Fatalf("Unmarshal to map: %v", err)
+	}
+
+	if _, exists := raw["scope"]; exists {
+		t.Error("scope should be omitted when nil")
+	}
+}
+
+func TestTicketReviewValidate(t *testing.T) {
+	tests := []struct {
+		name    string
+		review  TicketReview
+		wantErr string
+	}{
+		{
+			name: "valid_single_reviewer",
+			review: TicketReview{
+				Reviewers: []ReviewerEntry{
+					{UserID: ref.MustParseUserID("@a:b.c"), Disposition: "pending"},
+				},
+			},
+			wantErr: "",
+		},
+		{
+			name: "valid_multiple_reviewers",
+			review: TicketReview{
+				Reviewers: []ReviewerEntry{
+					{UserID: ref.MustParseUserID("@a:b.c"), Disposition: "approved"},
+					{UserID: ref.MustParseUserID("@b:b.c"), Disposition: "changes_requested"},
+					{UserID: ref.MustParseUserID("@c:b.c"), Disposition: "commented"},
+				},
+			},
+			wantErr: "",
+		},
+		{
+			name: "valid_with_scope",
+			review: TicketReview{
+				Reviewers: []ReviewerEntry{
+					{UserID: ref.MustParseUserID("@a:b.c"), Disposition: "pending"},
+				},
+				Scope: &ReviewScope{
+					Base: "abc123",
+					Head: "def456",
+				},
+			},
+			wantErr: "",
+		},
+		{
+			name:    "empty_reviewers",
+			review:  TicketReview{Reviewers: []ReviewerEntry{}},
+			wantErr: "at least one reviewer is required",
+		},
+		{
+			name:    "nil_reviewers",
+			review:  TicketReview{},
+			wantErr: "at least one reviewer is required",
+		},
+		{
+			name: "invalid_reviewer_user_id",
+			review: TicketReview{
+				Reviewers: []ReviewerEntry{
+					{UserID: ref.UserID{}, Disposition: "pending"},
+				},
+			},
+			wantErr: "reviewers[0]: user_id is required",
+		},
+		{
+			name: "invalid_reviewer_disposition",
+			review: TicketReview{
+				Reviewers: []ReviewerEntry{
+					{UserID: ref.MustParseUserID("@a:b.c"), Disposition: "rejected"},
+				},
+			},
+			wantErr: `reviewers[0]: unknown disposition "rejected"`,
+		},
+	}
+
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			err := test.review.Validate()
+			if test.wantErr == "" {
+				if err != nil {
+					t.Errorf("Validate() = %v, want nil", err)
+				}
+			} else {
+				if err == nil {
+					t.Fatalf("Validate() = nil, want error containing %q", test.wantErr)
+				}
+				if !strings.Contains(err.Error(), test.wantErr) {
+					t.Errorf("Validate() = %q, want error containing %q", err, test.wantErr)
+				}
+			}
+		})
+	}
+}
+
+func TestReviewerEntryValidate(t *testing.T) {
+	tests := []struct {
+		name    string
+		entry   ReviewerEntry
+		wantErr string
+	}{
+		{
+			name:    "valid_pending",
+			entry:   ReviewerEntry{UserID: ref.MustParseUserID("@a:b.c"), Disposition: "pending"},
+			wantErr: "",
+		},
+		{
+			name:    "valid_approved",
+			entry:   ReviewerEntry{UserID: ref.MustParseUserID("@a:b.c"), Disposition: "approved"},
+			wantErr: "",
+		},
+		{
+			name:    "valid_changes_requested",
+			entry:   ReviewerEntry{UserID: ref.MustParseUserID("@a:b.c"), Disposition: "changes_requested"},
+			wantErr: "",
+		},
+		{
+			name:    "valid_commented",
+			entry:   ReviewerEntry{UserID: ref.MustParseUserID("@a:b.c"), Disposition: "commented"},
+			wantErr: "",
+		},
+		{
+			name:    "missing_user_id",
+			entry:   ReviewerEntry{UserID: ref.UserID{}, Disposition: "pending"},
+			wantErr: "user_id is required",
+		},
+		{
+			name:    "empty_disposition",
+			entry:   ReviewerEntry{UserID: ref.MustParseUserID("@a:b.c"), Disposition: ""},
+			wantErr: `unknown disposition ""`,
+		},
+		{
+			name:    "invalid_disposition",
+			entry:   ReviewerEntry{UserID: ref.MustParseUserID("@a:b.c"), Disposition: "lgtm"},
+			wantErr: `unknown disposition "lgtm"`,
+		},
+	}
+
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			err := test.entry.Validate()
+			if test.wantErr == "" {
+				if err != nil {
+					t.Errorf("Validate() = %v, want nil", err)
+				}
+			} else {
+				if err == nil {
+					t.Fatalf("Validate() = nil, want error containing %q", test.wantErr)
+				}
+				if !strings.Contains(err.Error(), test.wantErr) {
+					t.Errorf("Validate() = %q, want error containing %q", err, test.wantErr)
+				}
+			}
+		})
+	}
+}
+
+func TestIsValidDisposition(t *testing.T) {
+	valid := []string{"pending", "approved", "changes_requested", "commented"}
+	for _, disposition := range valid {
+		if !IsValidDisposition(disposition) {
+			t.Errorf("IsValidDisposition(%q) = false, want true", disposition)
+		}
+	}
+
+	invalid := []string{"", "rejected", "lgtm", "wontfix"}
+	for _, disposition := range invalid {
+		if IsValidDisposition(disposition) {
+			t.Errorf("IsValidDisposition(%q) = true, want false", disposition)
+		}
+	}
+}
+
+func TestReviewScopeRoundTrip(t *testing.T) {
+	tests := []struct {
+		name   string
+		scope  ReviewScope
+		checks map[string]any
+	}{
+		{
+			name: "code_review_scope",
+			scope: ReviewScope{
+				Base:     "abc123",
+				Head:     "def456",
+				Worktree: "feature/auth-refactor",
+				Files:    []string{"lib/auth/token.go"},
+			},
+			checks: map[string]any{
+				"base":     "abc123",
+				"head":     "def456",
+				"worktree": "feature/auth-refactor",
+			},
+		},
+		{
+			name: "artifact_review_scope",
+			scope: ReviewScope{
+				ArtifactRef: "art-a3f9b2c1e7d4",
+			},
+			checks: map[string]any{
+				"artifact_ref": "art-a3f9b2c1e7d4",
+			},
+		},
+		{
+			name: "freeform_review_scope",
+			scope: ReviewScope{
+				Description: "Please review the deployment plan for production rollout.",
+			},
+			checks: map[string]any{
+				"description": "Please review the deployment plan for production rollout.",
+			},
+		},
+	}
+
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			data, err := json.Marshal(test.scope)
+			if err != nil {
+				t.Fatalf("Marshal: %v", err)
+			}
+
+			var raw map[string]any
+			if err := json.Unmarshal(data, &raw); err != nil {
+				t.Fatalf("Unmarshal to map: %v", err)
+			}
+			for key, want := range test.checks {
+				assertField(t, raw, key, want)
+			}
+
+			var decoded ReviewScope
+			if err := json.Unmarshal(data, &decoded); err != nil {
+				t.Fatalf("Unmarshal: %v", err)
+			}
+			if !reflect.DeepEqual(decoded, test.scope) {
+				t.Errorf("round-trip mismatch:\n  got:  %+v\n  want: %+v", decoded, test.scope)
+			}
+		})
+	}
+}
+
+func TestReviewScopeOmitsEmptyOptionals(t *testing.T) {
+	// An empty scope should omit all fields.
+	scope := ReviewScope{}
+
+	data, err := json.Marshal(scope)
+	if err != nil {
+		t.Fatalf("Marshal: %v", err)
+	}
+
+	var raw map[string]any
+	if err := json.Unmarshal(data, &raw); err != nil {
+		t.Fatalf("Unmarshal to map: %v", err)
+	}
+
+	optionalFields := []string{"base", "head", "worktree", "files", "artifact_ref", "description"}
+	for _, field := range optionalFields {
+		if _, exists := raw[field]; exists {
+			t.Errorf("%s should be omitted when empty, but is present", field)
+		}
+	}
+}
+
+func TestReviewTicketRoundTrip(t *testing.T) {
+	// A complete ticket in review status with review content.
+	original := validTicketContent()
+	original.Status = "review"
+	original.Assignee = ref.MustParseUserID("@iree/amdgpu/engineer:bureau.local")
+	original.Review = &TicketReview{
+		Reviewers: []ReviewerEntry{
+			{
+				UserID:      ref.MustParseUserID("@iree/amdgpu/pm:bureau.local"),
+				Disposition: "approved",
+				UpdatedAt:   "2026-02-20T15:00:00Z",
+			},
+			{
+				UserID:      ref.MustParseUserID("@iree/amdgpu/lead:bureau.local"),
+				Disposition: "changes_requested",
+				UpdatedAt:   "2026-02-20T15:30:00Z",
+			},
+		},
+		Scope: &ReviewScope{
+			Base:     "main",
+			Head:     "feature/auth",
+			Worktree: "feature/auth-refactor",
+		},
+	}
+
+	data, err := json.Marshal(original)
+	if err != nil {
+		t.Fatalf("Marshal: %v", err)
+	}
+
+	var raw map[string]any
+	if err := json.Unmarshal(data, &raw); err != nil {
+		t.Fatalf("Unmarshal to map: %v", err)
+	}
+
+	assertField(t, raw, "status", "review")
+	review, ok := raw["review"].(map[string]any)
+	if !ok {
+		t.Fatalf("review is not an object: %T", raw["review"])
+	}
+	reviewers, ok := review["reviewers"].([]any)
+	if !ok {
+		t.Fatalf("review.reviewers is not an array: %T", review["reviewers"])
+	}
+	if len(reviewers) != 2 {
+		t.Fatalf("reviewers count = %d, want 2", len(reviewers))
+	}
+
+	var decoded TicketContent
+	if err := json.Unmarshal(data, &decoded); err != nil {
+		t.Fatalf("Unmarshal: %v", err)
+	}
+	if decoded.Review == nil {
+		t.Fatal("Review should not be nil after round-trip")
+	}
+	if len(decoded.Review.Reviewers) != 2 {
+		t.Errorf("Review.Reviewers count = %d, want 2", len(decoded.Review.Reviewers))
+	}
+	if decoded.Review.Scope == nil {
+		t.Fatal("Review.Scope should not be nil after round-trip")
+	}
+	if decoded.Review.Scope.Worktree != "feature/auth-refactor" {
+		t.Errorf("Review.Scope.Worktree = %q, want %q",
+			decoded.Review.Scope.Worktree, "feature/auth-refactor")
+	}
+
+	if err := decoded.Validate(); err != nil {
+		t.Errorf("Validate() = %v, want nil", err)
 	}
 }

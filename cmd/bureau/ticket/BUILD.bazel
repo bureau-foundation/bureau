@@ -15,6 +15,7 @@ go_library(
         "mutate.go",
         "query.go",
         "response.go",
+        "review.go",
         "transfer.go",
         "viewer.go",
     ],

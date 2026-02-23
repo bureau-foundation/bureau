@@ -166,19 +166,30 @@ func (ts *TicketService) synthesizeDeferGate(until, forDuration string) (ticket.
 //
 // Allowed transitions:
 //   - open -> in_progress (caller must also provide assignee)
+//   - open -> review (direct review request, e.g. PM use case)
 //   - open -> closed (wontfix, duplicate)
 //   - in_progress -> open (unclaim)
+//   - in_progress -> review (author requests review)
 //   - in_progress -> closed (done)
 //   - in_progress -> blocked (agent hit blocker)
 //   - in_progress -> in_progress: REJECTED (contention)
+//   - review -> in_progress (author iterates after feedback)
+//   - review -> open (drop review, release to pool)
+//   - review -> closed (approved and done)
+//   - review -> blocked (external blocker during review)
+//   - review -> review: REJECTED (contention)
 //   - blocked -> open (release back)
 //   - blocked -> in_progress (resume, caller must provide assignee)
+//   - blocked -> review (resume directly into review)
 //   - blocked -> closed (cancelled while blocked)
 //   - closed -> open (reopen)
 func validateStatusTransition(currentStatus, proposedStatus string, currentAssignee ref.UserID) error {
 	if currentStatus == proposedStatus {
-		if currentStatus == "in_progress" {
+		switch currentStatus {
+		case "in_progress":
 			return fmt.Errorf("ticket is already in_progress (assigned to %s)", currentAssignee)
+		case "review":
+			return fmt.Errorf("ticket is already in review (assigned to %s)", currentAssignee)
 		}
 		return nil
 	}
@@ -186,21 +197,28 @@ func validateStatusTransition(currentStatus, proposedStatus string, currentAssig
 	switch currentStatus {
 	case "open":
 		switch proposedStatus {
-		case "in_progress", "closed":
+		case "in_progress", "review", "closed":
 			return nil
 		default:
 			return fmt.Errorf("invalid status transition: %s → %s", currentStatus, proposedStatus)
 		}
 	case "in_progress":
 		switch proposedStatus {
-		case "open", "closed", "blocked":
+		case "open", "review", "closed", "blocked":
+			return nil
+		default:
+			return fmt.Errorf("invalid status transition: %s → %s", currentStatus, proposedStatus)
+		}
+	case "review":
+		switch proposedStatus {
+		case "in_progress", "open", "closed", "blocked":
 			return nil
 		default:
 			return fmt.Errorf("invalid status transition: %s → %s", currentStatus, proposedStatus)
 		}
 	case "blocked":
 		switch proposedStatus {
-		case "open", "in_progress", "closed":
+		case "open", "in_progress", "review", "closed":
 			return nil
 		default:
 			return fmt.Errorf("invalid status transition: %s → %s", currentStatus, proposedStatus)
@@ -284,6 +302,12 @@ type updateRequest struct {
 	Parent    *string   `cbor:"parent,omitempty"`
 	BlockedBy *[]string `cbor:"blocked_by,omitempty"`
 	Deadline  *string   `cbor:"deadline,omitempty"`
+
+	// Review replaces the ticket's review content. When provided,
+	// the entire TicketReview is replaced. Use this to set up
+	// reviewers and scope before transitioning to "review" status,
+	// or in the same mutation as the status transition.
+	Review *ticket.TicketReview `cbor:"review,omitempty"`
 
 	// Pipeline replaces the ticket's pipeline execution content.
 	// Only valid for pipeline-type tickets. When provided, the
@@ -392,6 +416,16 @@ type deferRequest struct {
 	Ticket string `cbor:"ticket"`
 	Until  string `cbor:"until,omitempty"`
 	For    string `cbor:"for,omitempty"`
+}
+
+// setDispositionRequest is the input for the "set-disposition" action.
+// Updates the calling reviewer's disposition on a ticket in review
+// status. The caller (token.Subject) must be in the ticket's reviewer
+// list.
+type setDispositionRequest struct {
+	Room        string `cbor:"room,omitempty"`
+	Ticket      string `cbor:"ticket"`
+	Disposition string `cbor:"disposition"`
 }
 
 // --- Mutation response types ---
@@ -606,6 +640,9 @@ func (ts *TicketService) handleUpdate(ctx context.Context, token *servicetoken.T
 	if request.Deadline != nil {
 		content.Deadline = *request.Deadline
 	}
+	if request.Review != nil {
+		content.Review = request.Review
+	}
 	if request.Pipeline != nil {
 		content.Pipeline = request.Pipeline
 	}
@@ -654,9 +691,27 @@ func (ts *TicketService) handleUpdate(ctx context.Context, token *servicetoken.T
 			}
 		}
 
+		// Enforce review field when entering "review" status.
+		// Review must be present (either from this request or
+		// pre-populated) with at least one reviewer. The full
+		// validation in Validate() catches this too, but a
+		// specific error message here is more helpful.
+		if proposedStatus == "review" && content.Status != "review" {
+			if content.Review == nil || len(content.Review.Reviewers) == 0 {
+				return nil, errors.New("reviewers are required when entering review status")
+			}
+		}
+
 		if proposedStatus != content.Status {
-			// Auto-clear assignee when leaving in_progress.
-			if content.Status == "in_progress" && proposedStatus != "in_progress" {
+			// Auto-clear assignee when leaving in_progress or
+			// review for a non-active status. Assignee persists
+			// across in_progress ↔ review transitions (the author
+			// stays the same). Cleared when going to open, closed,
+			// or blocked.
+			if content.Status == "in_progress" && proposedStatus != "in_progress" && proposedStatus != "review" {
+				proposedAssignee = ref.UserID{}
+			}
+			if content.Status == "review" && proposedStatus != "in_progress" && proposedStatus != "review" {
 				proposedAssignee = ref.UserID{}
 			}
 
@@ -671,13 +726,15 @@ func (ts *TicketService) handleUpdate(ctx context.Context, token *servicetoken.T
 		}
 	}
 
-	// Enforce assignee/in_progress atomicity: in_progress requires
-	// an assignee, and an assignee requires in_progress.
+	// Enforce assignee/status coupling: in_progress requires an
+	// assignee. Review MAY have an assignee (preserved from
+	// in_progress, or set explicitly) but does not require one.
+	// An assignee is only valid on in_progress or review tickets.
 	if proposedStatus == "in_progress" && proposedAssignee.IsZero() {
 		return nil, errors.New("assignee is required when status is in_progress")
 	}
-	if !proposedAssignee.IsZero() && proposedStatus != "in_progress" {
-		return nil, fmt.Errorf("assignee can only be set when status is in_progress (status is %q)", proposedStatus)
+	if !proposedAssignee.IsZero() && proposedStatus != "in_progress" && proposedStatus != "review" {
+		return nil, fmt.Errorf("assignee can only be set when status is in_progress or review (status is %q)", proposedStatus)
 	}
 
 	content.Status = proposedStatus
@@ -1262,6 +1319,87 @@ func (ts *TicketService) handleUpdateGate(ctx context.Context, token *servicetok
 			gate.SatisfiedBy = request.SatisfiedBy
 		}
 	}
+	content.UpdatedAt = now
+
+	if err := content.Validate(); err != nil {
+		return nil, fmt.Errorf("invalid ticket: %w", err)
+	}
+
+	if err := ts.putWithEcho(ctx, roomID, state, ticketID, content); err != nil {
+		return nil, fmt.Errorf("writing ticket to Matrix: %w", err)
+	}
+
+	return mutationResponse{
+		ID:      ticketID,
+		Room:    roomID.String(),
+		Content: content,
+	}, nil
+}
+
+// handleSetDisposition updates the calling reviewer's disposition on a
+// ticket in review status. The caller must be in the ticket's reviewer
+// list. This is a dedicated action (not part of "update") because review
+// disposition is a distinct permission: not everyone who can edit a
+// ticket should be able to set review dispositions, and not every
+// reviewer should be able to edit the ticket.
+func (ts *TicketService) handleSetDisposition(ctx context.Context, token *servicetoken.Token, raw []byte) (any, error) {
+	if err := requireGrant(token, "ticket/review"); err != nil {
+		return nil, err
+	}
+
+	var request setDispositionRequest
+	if err := codec.Unmarshal(raw, &request); err != nil {
+		return nil, fmt.Errorf("decoding request: %w", err)
+	}
+
+	if request.Ticket == "" {
+		return nil, errors.New("missing required field: ticket")
+	}
+	if request.Disposition == "" {
+		return nil, errors.New("missing required field: disposition")
+	}
+	if !ticket.IsValidDisposition(request.Disposition) {
+		return nil, fmt.Errorf("invalid disposition %q: must be approved, changes_requested, or commented", request.Disposition)
+	}
+	// "pending" is valid in the schema but not as a set-disposition
+	// action — you can't "un-review" by setting pending. That's the
+	// initial state before any reviewer acts.
+	if request.Disposition == "pending" {
+		return nil, errors.New("cannot set disposition to pending: pending is the initial state before review")
+	}
+
+	roomID, state, ticketID, content, err := ts.resolveTicket(request.Room, request.Ticket)
+	if err != nil {
+		return nil, err
+	}
+
+	if err := content.CanModify(); err != nil {
+		return nil, err
+	}
+
+	if content.Status != "review" {
+		return nil, fmt.Errorf("ticket is not in review status (status is %q)", content.Status)
+	}
+	if content.Review == nil {
+		return nil, errors.New("ticket has no review data")
+	}
+
+	// Find the caller in the reviewer list.
+	callerID := token.Subject
+	reviewerIndex := -1
+	for i := range content.Review.Reviewers {
+		if content.Review.Reviewers[i].UserID == callerID {
+			reviewerIndex = i
+			break
+		}
+	}
+	if reviewerIndex < 0 {
+		return nil, fmt.Errorf("caller %s is not in the reviewer list", callerID)
+	}
+
+	now := ts.clock.Now().UTC().Format(time.RFC3339)
+	content.Review.Reviewers[reviewerIndex].Disposition = request.Disposition
+	content.Review.Reviewers[reviewerIndex].UpdatedAt = now
 	content.UpdatedAt = now
 
 	if err := content.Validate(); err != nil {

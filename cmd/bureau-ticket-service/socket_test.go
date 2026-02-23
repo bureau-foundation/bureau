@@ -560,6 +560,39 @@ func mutationRooms() map[ref.RoomID]*roomState {
 			CreatedAt: "2026-01-01T00:00:00Z",
 			UpdatedAt: "2026-01-01T00:00:00Z",
 		},
+		"tkt-review": {
+			Version:  ticket.TicketContentVersion,
+			Title:    "ticket in review",
+			Status:   "review",
+			Priority: 2,
+			Type:     "task",
+			Assignee: ref.MustParseUserID("@agent/worker:bureau.local"),
+			Review: &ticket.TicketReview{
+				Reviewers: []ticket.ReviewerEntry{
+					{
+						UserID:      ref.MustParseUserID("@bureau/fleet/prod/agent/tester:bureau.local"),
+						Disposition: "pending",
+					},
+					{
+						UserID:      ref.MustParseUserID("@agent/reviewer:bureau.local"),
+						Disposition: "pending",
+					},
+				},
+			},
+			CreatedBy: ref.MustParseUserID("@agent/creator:bureau.local"),
+			CreatedAt: "2026-01-01T00:00:00Z",
+			UpdatedAt: "2026-01-03T00:00:00Z",
+		},
+		"tkt-blocked": {
+			Version:   1,
+			Title:     "blocked ticket",
+			Status:    "blocked",
+			Priority:  2,
+			Type:      "task",
+			CreatedBy: ref.MustParseUserID("@agent/creator:bureau.local"),
+			CreatedAt: "2026-01-01T00:00:00Z",
+			UpdatedAt: "2026-01-02T00:00:00Z",
+		},
 	})
 
 	return map[ref.RoomID]*roomState{

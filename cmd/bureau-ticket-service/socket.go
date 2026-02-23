@@ -83,6 +83,7 @@ func (ts *TicketService) registerActions(server *service.SocketServer) {
 	server.HandleAuth("add-note", ts.withWriteLock(ts.handleAddNote))
 	server.HandleAuth("resolve-gate", ts.withWriteLock(ts.handleResolveGate))
 	server.HandleAuth("update-gate", ts.withWriteLock(ts.handleUpdateGate))
+	server.HandleAuth("set-disposition", ts.withWriteLock(ts.handleSetDisposition))
 	server.HandleAuth("defer", ts.withWriteLock(ts.handleDefer))
 
 	// Stream actions — long-lived authenticated connections. The

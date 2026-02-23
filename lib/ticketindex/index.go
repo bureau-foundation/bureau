@@ -322,14 +322,15 @@ func (idx *Index) Get(ticketID string) (ticket.TicketContent, bool) {
 }
 
 // Ready returns all actionable tickets: those available to be picked
-// up (status "open", all blockers closed, all gates satisfied) and
-// those already being worked on (status "in_progress"). Results are
-// sorted by priority (ascending, 0=critical first) then by creation
-// time (oldest first).
+// up (status "open", all blockers closed, all gates satisfied), those
+// already being worked on (status "in_progress"), and those waiting
+// for reviewer feedback (status "review"). Results are sorted by
+// priority (ascending, 0=critical first) then by creation time
+// (oldest first).
 func (idx *Index) Ready() []Entry {
 	var result []Entry
 	for id, content := range idx.tickets {
-		if idx.isReady(&content) || content.Status == "in_progress" {
+		if idx.isReady(&content) || content.Status == "in_progress" || content.Status == "review" {
 			result = append(result, Entry{ID: id, Content: content})
 		}
 	}

@@ -64,6 +64,21 @@ func (driver *claudeDriver) Start(ctx context.Context, config agentdriver.Driver
 	command.Stderr = os.Stderr
 	command.Env = append(os.Environ(), config.ExtraEnv...)
 
+	// Disable Claude Code's phone-home behavior. Even though
+	// --unshare-net blocks outbound connections, explicit disable
+	// avoids startup delays from connection timeouts and documents
+	// the intent.
+	command.Env = append(command.Env,
+		// Master switch: disables all non-essential network traffic
+		// (telemetry, update checks, surveys).
+		"CLAUDE_CODE_DISABLE_NONESSENTIAL_TRAFFIC=1",
+		// Individual controls, belt-and-suspenders with the master
+		// switch in case the master switch implementation changes.
+		"DISABLE_TELEMETRY=1",
+		"DISABLE_ERROR_REPORTING=1",
+		"CLAUDE_CODE_DISABLE_FEEDBACK_SURVEY=1",
+	)
+
 	stdin, err := command.StdinPipe()
 	if err != nil {
 		return nil, nil, fmt.Errorf("creating stdin pipe: %w", err)
@@ -92,11 +107,16 @@ func (driver *claudeDriver) Start(ctx context.Context, config agentdriver.Driver
 // emits structured events. Each line is a JSON object with a "type" field.
 //
 // Claude Code stream-json event types:
-//   - {"type":"system","subtype":"init",...} → EventTypeSystem
+//   - {"type":"system","subtype":"init",...} → EventTypeSystem (with full Metadata)
+//   - {"type":"system","subtype":"compact_boundary",...} → EventTypeSystem (with Metadata)
 //   - {"type":"assistant","subtype":"text",...} → EventTypeResponse
+//   - {"type":"assistant","subtype":"thinking",...} → EventTypeThinking
 //   - {"type":"assistant","subtype":"tool_use",...} → EventTypeToolCall
+//   - {"type":"assistant","subtype":"server_tool_use",...} → EventTypeToolCall (ServerTool=true)
 //   - {"type":"tool","subtype":"result",...} → EventTypeToolResult
-//   - {"type":"result","subtype":"success",...} → EventTypeMetric
+//   - {"type":"user",...} → EventTypePrompt (Source="user")
+//   - {"type":"result","subtype":"success",...} → EventTypeMetric (Status="success")
+//   - {"type":"result","subtype":"error_*",...} → EventTypeMetric (Status=subtype)
 //   - Unknown types → EventTypeOutput (raw JSON preserved)
 func (driver *claudeDriver) ParseOutput(ctx context.Context, stdout io.Reader, events chan<- agentdriver.Event) error {
 	scanner := bufio.NewScanner(stdout)
@@ -160,8 +180,9 @@ func parseStreamJSONLine(line []byte) (agentdriver.Event, error) {
 			Timestamp: now,
 			Type:      agentdriver.EventTypeSystem,
 			System: &agentdriver.SystemEvent{
-				Subtype: envelope.Subtype,
-				Message: extractStringField(line, "message"),
+				Subtype:  envelope.Subtype,
+				Message:  extractStringField(line, "message"),
+				Metadata: json.RawMessage(append([]byte(nil), line...)),
 			},
 		}, nil
 
@@ -171,8 +192,11 @@ func parseStreamJSONLine(line []byte) (agentdriver.Event, error) {
 	case "tool":
 		return parseToolEvent(now, envelope.Subtype, line)
 
+	case "user":
+		return parseUserEvent(now, line)
+
 	case "result":
-		return parseResultEvent(now, line)
+		return parseResultEvent(now, envelope.Subtype, line)
 
 	default:
 		// Unknown event type — preserve as raw output.
@@ -196,22 +220,26 @@ func parseAssistantEvent(timestamp time.Time, subtype string, line []byte) (agen
 			},
 		}, nil
 
-	case "tool_use":
-		var toolUse struct {
-			ID    string          `json:"tool_use_id"`
-			Name  string          `json:"name"`
-			Input json.RawMessage `json:"input"`
+	case "thinking":
+		var thinking struct {
+			Thinking  string `json:"thinking"`
+			Signature string `json:"signature"`
 		}
-		json.Unmarshal(line, &toolUse)
+		json.Unmarshal(line, &thinking)
 		return agentdriver.Event{
 			Timestamp: timestamp,
-			Type:      agentdriver.EventTypeToolCall,
-			ToolCall: &agentdriver.ToolCallEvent{
-				ID:    toolUse.ID,
-				Name:  toolUse.Name,
-				Input: toolUse.Input,
+			Type:      agentdriver.EventTypeThinking,
+			Thinking: &agentdriver.ThinkingEvent{
+				Content:   thinking.Thinking,
+				Signature: thinking.Signature,
 			},
 		}, nil
+
+	case "tool_use":
+		return parseToolUseEvent(timestamp, line, false)
+
+	case "server_tool_use":
+		return parseToolUseEvent(timestamp, line, true)
 
 	default:
 		return agentdriver.Event{
@@ -220,6 +248,36 @@ func parseAssistantEvent(timestamp time.Time, subtype string, line []byte) (agen
 			Output:    &agentdriver.OutputEvent{Raw: json.RawMessage(append([]byte(nil), line...))},
 		}, nil
 	}
+}
+
+// parseToolUseEvent extracts tool call fields from either tool_use or
+// server_tool_use events. server_tool_use events use "id" instead of
+// "tool_use_id" for the identifier field.
+func parseToolUseEvent(timestamp time.Time, line []byte, serverTool bool) (agentdriver.Event, error) {
+	var toolUse struct {
+		ToolUseID string          `json:"tool_use_id"`
+		ID        string          `json:"id"`
+		Name      string          `json:"name"`
+		Input     json.RawMessage `json:"input"`
+	}
+	json.Unmarshal(line, &toolUse)
+
+	// server_tool_use events use "id" rather than "tool_use_id".
+	identifier := toolUse.ToolUseID
+	if identifier == "" {
+		identifier = toolUse.ID
+	}
+
+	return agentdriver.Event{
+		Timestamp: timestamp,
+		Type:      agentdriver.EventTypeToolCall,
+		ToolCall: &agentdriver.ToolCallEvent{
+			ID:         identifier,
+			Name:       toolUse.Name,
+			Input:      toolUse.Input,
+			ServerTool: serverTool,
+		},
+	}, nil
 }
 
 // parseToolEvent handles {"type":"tool",...} events.
@@ -251,8 +309,27 @@ func parseToolEvent(timestamp time.Time, subtype string, line []byte) (agentdriv
 	}
 }
 
-// parseResultEvent handles {"type":"result",...} events, extracting metrics.
-func parseResultEvent(timestamp time.Time, line []byte) (agentdriver.Event, error) {
+// parseUserEvent handles {"type":"user",...} events — human input injected
+// via stdin. The content may be a string or an array of content blocks.
+func parseUserEvent(timestamp time.Time, line []byte) (agentdriver.Event, error) {
+	content := extractStringField(line, "content")
+	if content == "" {
+		// Array content format: extract text from content blocks.
+		content = extractUserContent(line)
+	}
+	return agentdriver.Event{
+		Timestamp: timestamp,
+		Type:      agentdriver.EventTypePrompt,
+		Prompt: &agentdriver.PromptEvent{
+			Content: content,
+			Source:  "user",
+		},
+	}, nil
+}
+
+// parseResultEvent handles {"type":"result",...} events, extracting metrics
+// and session outcome status.
+func parseResultEvent(timestamp time.Time, subtype string, line []byte) (agentdriver.Event, error) {
 	var result struct {
 		CostUSD          float64 `json:"cost_usd"`
 		InputTokens      int64   `json:"input_tokens"`
@@ -280,8 +357,45 @@ func parseResultEvent(timestamp time.Time, line []byte) (agentdriver.Event, erro
 			CostUSD:         result.CostUSD,
 			DurationSeconds: durationSeconds,
 			TurnCount:       result.TurnCount,
+			Status:          subtype,
 		},
 	}, nil
+}
+
+// extractUserContent extracts text from a user event's content block array.
+// User events in stream-json may have content as a string (handled by
+// extractStringField) or as an array of content blocks. This function
+// handles the array case, concatenating all text blocks.
+func extractUserContent(data []byte) string {
+	var parsed struct {
+		Content json.RawMessage `json:"content"`
+	}
+	if json.Unmarshal(data, &parsed) != nil {
+		return ""
+	}
+	if len(parsed.Content) == 0 {
+		return ""
+	}
+
+	// Try parsing as array of content blocks.
+	var blocks []struct {
+		Type string `json:"type"`
+		Text string `json:"text"`
+	}
+	if json.Unmarshal(parsed.Content, &blocks) != nil {
+		return ""
+	}
+
+	var text string
+	for _, block := range blocks {
+		if block.Type == "text" && block.Text != "" {
+			if text != "" {
+				text += "\n"
+			}
+			text += block.Text
+		}
+	}
+	return text
 }
 
 // extractStringField extracts a string field from a JSON object without

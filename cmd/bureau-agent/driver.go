@@ -26,12 +26,11 @@ import (
 	"github.com/bureau-foundation/bureau/lib/toolserver"
 )
 
-// Standard sandbox paths for the artifact service socket and token.
-// These are bind-mounted into the sandbox by the daemon when the agent
-// template declares RequiredServices: ["artifact"].
+// Artifact service socket paths, aliased from the shared defaults in
+// lib/agentdriver for local use in the native driver's checkpoint setup.
 const (
-	artifactServiceSocketPath = "/run/bureau/service/artifact.sock"
-	artifactServiceTokenPath  = "/run/bureau/service/token/artifact.token"
+	artifactServiceSocketPath = agentdriver.DefaultArtifactServiceSocketPath
+	artifactServiceTokenPath  = agentdriver.DefaultArtifactServiceTokenPath
 )
 
 // nativeDriver implements agentdriver.Driver for the Bureau-native agent.

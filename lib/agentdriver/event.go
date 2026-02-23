@@ -35,6 +35,11 @@ const (
 
 	// EventTypeSystem is a system-level event (init, shutdown, config).
 	EventTypeSystem EventType = "system"
+
+	// EventTypeThinking is a reasoning/thinking block from the agent.
+	// Contains the agent's chain-of-thought reasoning and an optional
+	// cryptographic signature for verification.
+	EventTypeThinking EventType = "thinking"
 )
 
 // Event is a structured session log entry. Each event has a timestamp, type,
@@ -69,6 +74,9 @@ type Event struct {
 
 	// System is set for EventTypeSystem events.
 	System *SystemEvent `json:"system,omitempty"`
+
+	// Thinking is set for EventTypeThinking events.
+	Thinking *ThinkingEvent `json:"thinking,omitempty"`
 }
 
 // PromptEvent records a prompt sent to the agent.
@@ -91,6 +99,10 @@ type ToolCallEvent struct {
 
 	// Input is the tool input, preserved as raw JSON.
 	Input json.RawMessage `json:"input,omitempty"`
+
+	// ServerTool distinguishes built-in server tools (web search,
+	// file search) from MCP/user-defined tools.
+	ServerTool bool `json:"server_tool,omitempty"`
 }
 
 // ToolResultEvent records the result of a tool invocation.
@@ -133,6 +145,12 @@ type MetricEvent struct {
 
 	// TurnCount is the number of agent turns (API round-trips).
 	TurnCount int64 `json:"turn_count,omitempty"`
+
+	// Status is the session outcome. Values: "success",
+	// "error_max_turns", "error_during_execution",
+	// "error_max_budget_usd". Empty for agents that don't report
+	// session outcome status.
+	Status string `json:"status,omitempty"`
 }
 
 // OutputEvent records raw output that doesn't map to a structured event type.
@@ -149,9 +167,27 @@ type ErrorEvent struct {
 
 // SystemEvent records system-level events.
 type SystemEvent struct {
-	// Subtype further classifies the system event (e.g., "init", "shutdown").
+	// Subtype further classifies the system event (e.g., "init", "shutdown",
+	// "compact_boundary", "context_truncated").
 	Subtype string `json:"subtype"`
 
 	// Message is an optional human-readable description.
 	Message string `json:"message,omitempty"`
+
+	// Metadata captures the full structured payload of the system event
+	// as raw JSON. For compact_boundary events this contains
+	// {"trigger":"auto","pre_tokens":128000}; for init events it contains
+	// session_id, tools, model, etc. Consumers unmarshal on demand.
+	Metadata json.RawMessage `json:"metadata,omitempty"`
+}
+
+// ThinkingEvent records a reasoning/thinking block from the agent.
+type ThinkingEvent struct {
+	// Content is the agent's chain-of-thought reasoning text.
+	Content string `json:"content"`
+
+	// Signature is a cryptographic signature for the thinking block,
+	// used for verification by the LLM provider. Present when the
+	// provider includes signatures in thinking output.
+	Signature string `json:"signature,omitempty"`
 }

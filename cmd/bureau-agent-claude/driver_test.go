@@ -42,7 +42,7 @@ func TestParseOutputEventTypes(t *testing.T) {
 		t.Fatalf("got %d events, want 6", len(collected))
 	}
 
-	// Event 0: system init.
+	// Event 0: system init with metadata.
 	if collected[0].Type != agentdriver.EventTypeSystem {
 		t.Errorf("event[0].Type = %q, want system", collected[0].Type)
 	}
@@ -51,6 +51,11 @@ func TestParseOutputEventTypes(t *testing.T) {
 	}
 	if collected[0].System.Message != "Claude Code starting" {
 		t.Errorf("event[0].System.Message = %q, want 'Claude Code starting'", collected[0].System.Message)
+	}
+	if collected[0].System.Metadata == nil {
+		t.Error("event[0].System.Metadata should not be nil")
+	} else if !strings.Contains(string(collected[0].System.Metadata), "abc123") {
+		t.Errorf("event[0].System.Metadata should contain session_id, got %s", collected[0].System.Metadata)
 	}
 
 	// Event 1: assistant text.
@@ -113,6 +118,9 @@ func TestParseOutputEventTypes(t *testing.T) {
 	// duration_ms = 4500 → 4.5 seconds
 	if collected[5].Metric.DurationSeconds < 4.4 || collected[5].Metric.DurationSeconds > 4.6 {
 		t.Errorf("event[5].Metric.DurationSeconds = %f, want ~4.5", collected[5].Metric.DurationSeconds)
+	}
+	if collected[5].Metric.Status != "success" {
+		t.Errorf("event[5].Metric.Status = %q, want success", collected[5].Metric.Status)
 	}
 }
 
@@ -234,6 +242,194 @@ func TestParseOutputToolError(t *testing.T) {
 	if collected[0].ToolResult.Output != "permission denied" {
 		t.Errorf("tool result output = %q, want 'permission denied'", collected[0].ToolResult.Output)
 	}
+}
+
+func TestParseOutputThinking(t *testing.T) {
+	t.Parallel()
+
+	line := `{"type":"assistant","subtype":"thinking","thinking":"Let me analyze the code structure...","signature":"sig-abc123"}`
+	events := parseEvents(t, line+"\n")
+
+	if len(events) != 1 {
+		t.Fatalf("got %d events, want 1", len(events))
+	}
+	if events[0].Type != agentdriver.EventTypeThinking {
+		t.Errorf("Type = %q, want thinking", events[0].Type)
+	}
+	if events[0].Thinking == nil {
+		t.Fatal("Thinking should not be nil")
+	}
+	if events[0].Thinking.Content != "Let me analyze the code structure..." {
+		t.Errorf("Thinking.Content = %q", events[0].Thinking.Content)
+	}
+	if events[0].Thinking.Signature != "sig-abc123" {
+		t.Errorf("Thinking.Signature = %q, want sig-abc123", events[0].Thinking.Signature)
+	}
+}
+
+func TestParseOutputCompactBoundary(t *testing.T) {
+	t.Parallel()
+
+	line := `{"type":"system","subtype":"compact_boundary","compact_metadata":{"trigger":"auto","pre_tokens":128000}}`
+	events := parseEvents(t, line+"\n")
+
+	if len(events) != 1 {
+		t.Fatalf("got %d events, want 1", len(events))
+	}
+	if events[0].Type != agentdriver.EventTypeSystem {
+		t.Errorf("Type = %q, want system", events[0].Type)
+	}
+	if events[0].System.Subtype != "compact_boundary" {
+		t.Errorf("System.Subtype = %q, want compact_boundary", events[0].System.Subtype)
+	}
+	if events[0].System.Metadata == nil {
+		t.Fatal("System.Metadata should not be nil")
+	}
+	// Verify the metadata contains the compact_metadata payload.
+	metadata := string(events[0].System.Metadata)
+	if !strings.Contains(metadata, `"trigger":"auto"`) {
+		t.Errorf("Metadata should contain trigger, got %s", metadata)
+	}
+	if !strings.Contains(metadata, `"pre_tokens":128000`) {
+		t.Errorf("Metadata should contain pre_tokens, got %s", metadata)
+	}
+}
+
+func TestParseOutputServerToolUse(t *testing.T) {
+	t.Parallel()
+
+	// server_tool_use uses "id" instead of "tool_use_id".
+	line := `{"type":"assistant","subtype":"server_tool_use","id":"stu-1","name":"web_search","input":{"query":"golang context"}}`
+	events := parseEvents(t, line+"\n")
+
+	if len(events) != 1 {
+		t.Fatalf("got %d events, want 1", len(events))
+	}
+	if events[0].Type != agentdriver.EventTypeToolCall {
+		t.Errorf("Type = %q, want tool_call", events[0].Type)
+	}
+	if events[0].ToolCall == nil {
+		t.Fatal("ToolCall should not be nil")
+	}
+	if events[0].ToolCall.ID != "stu-1" {
+		t.Errorf("ToolCall.ID = %q, want stu-1", events[0].ToolCall.ID)
+	}
+	if events[0].ToolCall.Name != "web_search" {
+		t.Errorf("ToolCall.Name = %q, want web_search", events[0].ToolCall.Name)
+	}
+	if !events[0].ToolCall.ServerTool {
+		t.Error("ToolCall.ServerTool should be true for server_tool_use")
+	}
+}
+
+func TestParseOutputUserInput(t *testing.T) {
+	t.Parallel()
+
+	// String content format.
+	line := `{"type":"user","content":"Please fix the bug in auth.go"}`
+	events := parseEvents(t, line+"\n")
+
+	if len(events) != 1 {
+		t.Fatalf("got %d events, want 1", len(events))
+	}
+	if events[0].Type != agentdriver.EventTypePrompt {
+		t.Errorf("Type = %q, want prompt", events[0].Type)
+	}
+	if events[0].Prompt == nil {
+		t.Fatal("Prompt should not be nil")
+	}
+	if events[0].Prompt.Content != "Please fix the bug in auth.go" {
+		t.Errorf("Prompt.Content = %q", events[0].Prompt.Content)
+	}
+	if events[0].Prompt.Source != "user" {
+		t.Errorf("Prompt.Source = %q, want user", events[0].Prompt.Source)
+	}
+}
+
+func TestParseOutputUserInputArrayContent(t *testing.T) {
+	t.Parallel()
+
+	// Array content block format.
+	line := `{"type":"user","content":[{"type":"text","text":"Hello from content blocks"}]}`
+	events := parseEvents(t, line+"\n")
+
+	if len(events) != 1 {
+		t.Fatalf("got %d events, want 1", len(events))
+	}
+	if events[0].Type != agentdriver.EventTypePrompt {
+		t.Errorf("Type = %q, want prompt", events[0].Type)
+	}
+	if events[0].Prompt.Content != "Hello from content blocks" {
+		t.Errorf("Prompt.Content = %q, want 'Hello from content blocks'", events[0].Prompt.Content)
+	}
+}
+
+func TestParseOutputResultError(t *testing.T) {
+	t.Parallel()
+
+	line := `{"type":"result","subtype":"error_max_turns","cost_usd":0.05,"input_tokens":50000,"output_tokens":5000,"num_turns":25}`
+	events := parseEvents(t, line+"\n")
+
+	if len(events) != 1 {
+		t.Fatalf("got %d events, want 1", len(events))
+	}
+	if events[0].Type != agentdriver.EventTypeMetric {
+		t.Errorf("Type = %q, want metric", events[0].Type)
+	}
+	if events[0].Metric.Status != "error_max_turns" {
+		t.Errorf("Metric.Status = %q, want error_max_turns", events[0].Metric.Status)
+	}
+	if events[0].Metric.InputTokens != 50000 {
+		t.Errorf("Metric.InputTokens = %d, want 50000", events[0].Metric.InputTokens)
+	}
+	if events[0].Metric.TurnCount != 25 {
+		t.Errorf("Metric.TurnCount = %d, want 25", events[0].Metric.TurnCount)
+	}
+}
+
+func TestParseOutputSystemMetadata(t *testing.T) {
+	t.Parallel()
+
+	line := `{"type":"system","subtype":"init","session_id":"sess-xyz","tools":["Read","Edit"],"model":"claude-sonnet-4-5","message":"starting"}`
+	events := parseEvents(t, line+"\n")
+
+	if len(events) != 1 {
+		t.Fatalf("got %d events, want 1", len(events))
+	}
+	if events[0].System.Subtype != "init" {
+		t.Errorf("System.Subtype = %q, want init", events[0].System.Subtype)
+	}
+	if events[0].System.Message != "starting" {
+		t.Errorf("System.Message = %q, want starting", events[0].System.Message)
+	}
+	metadata := string(events[0].System.Metadata)
+	if !strings.Contains(metadata, "sess-xyz") {
+		t.Errorf("Metadata should contain session_id, got %s", metadata)
+	}
+	if !strings.Contains(metadata, "claude-sonnet-4-5") {
+		t.Errorf("Metadata should contain model, got %s", metadata)
+	}
+}
+
+// parseEvents is a test helper that feeds input through ParseOutput
+// and collects the resulting events.
+func parseEvents(t *testing.T, input string) []agentdriver.Event {
+	t.Helper()
+	driver := &claudeDriver{}
+	events := make(chan agentdriver.Event, 64)
+	reader := strings.NewReader(input)
+
+	err := driver.ParseOutput(context.Background(), reader, events)
+	if err != nil {
+		t.Fatalf("ParseOutput: %v", err)
+	}
+	close(events)
+
+	var collected []agentdriver.Event
+	for event := range events {
+		collected = append(collected, event)
+	}
+	return collected
 }
 
 func TestExtractStringField(t *testing.T) {

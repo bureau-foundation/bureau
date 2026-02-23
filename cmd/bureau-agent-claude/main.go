@@ -22,6 +22,7 @@ import (
 func main() {
 	config := agentdriver.RunConfigFromEnvironment()
 	config.SessionLogPath = "/run/bureau/session.jsonl"
+	config.CheckpointFormat = "events-v1"
 
 	if err := agentdriver.Run(context.Background(), &claudeDriver{}, config); err != nil {
 		fmt.Fprintf(os.Stderr, "bureau-agent-claude: %v\n", err)

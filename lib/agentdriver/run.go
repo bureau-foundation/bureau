@@ -16,9 +16,19 @@ import (
 	"syscall"
 	"time"
 
+	"github.com/bureau-foundation/bureau/lib/artifactstore"
 	"github.com/bureau-foundation/bureau/lib/proxyclient"
 	"github.com/bureau-foundation/bureau/lib/ref"
+	"github.com/bureau-foundation/bureau/lib/schema/agent"
 	"github.com/bureau-foundation/bureau/messaging"
+)
+
+// Default sandbox paths for the artifact service socket and token.
+// These are bind-mounted into the sandbox by the daemon when the agent
+// template declares RequiredServices: ["artifact"].
+const (
+	DefaultArtifactServiceSocketPath = "/run/bureau/service/artifact.sock"
+	DefaultArtifactServiceTokenPath  = "/run/bureau/service/token/artifact.token"
 )
 
 // RunConfig holds the configuration for the agent lifecycle.
@@ -49,6 +59,27 @@ type RunConfig struct {
 	// AgentServiceTokenPath is the path to the agent service token.
 	// Required when AgentServiceSocketPath is set.
 	AgentServiceTokenPath string
+
+	// ArtifactServiceSocketPath is the path to the artifact service
+	// Unix socket. Required when CheckpointFormat is set.
+	ArtifactServiceSocketPath string
+
+	// ArtifactServiceTokenPath is the path to the artifact service
+	// authentication token. Required when ArtifactServiceSocketPath
+	// is set.
+	ArtifactServiceTokenPath string
+
+	// CheckpointFormat enables event-level checkpointing in the
+	// event pump. When non-empty, the event pump checkpoints
+	// []Event as CBOR deltas using this format identifier (e.g.,
+	// "events-v1"). Both ArtifactServiceSocketPath and
+	// AgentServiceSocketPath must be set. When empty, no event
+	// checkpointing occurs.
+	CheckpointFormat string
+
+	// AgentTemplate is the agent template identifier included in
+	// checkpoint metadata. Read from BUREAU_AGENT_TEMPLATE.
+	AgentTemplate string
 
 	// SelfHealStaleSessions controls whether Run() automatically
 	// ends a stale active session (e.g., from a crashed sandbox) at
@@ -85,6 +116,14 @@ func RunConfigFromEnvironment() RunConfig {
 		config.AgentServiceSocketPath = DefaultAgentServiceSocketPath
 		config.AgentServiceTokenPath = DefaultAgentServiceTokenPath
 	}
+
+	// Auto-detect artifact service at the standard sandbox path.
+	if _, err := os.Stat(DefaultArtifactServiceSocketPath); err == nil {
+		config.ArtifactServiceSocketPath = DefaultArtifactServiceSocketPath
+		config.ArtifactServiceTokenPath = DefaultArtifactServiceTokenPath
+	}
+
+	config.AgentTemplate = os.Getenv("BUREAU_AGENT_TEMPLATE")
 
 	return config
 }
@@ -124,6 +163,27 @@ func Run(ctx context.Context, driver Driver, config RunConfig) error {
 	}
 	if config.ServerName == "" {
 		return fmt.Errorf("BUREAU_SERVER_NAME is required")
+	}
+
+	// Validate event checkpoint infrastructure. When CheckpointFormat
+	// is set, both service sockets are required — fail at startup,
+	// not at runtime when data is silently lost.
+	if config.CheckpointFormat != "" {
+		if config.ArtifactServiceSocketPath == "" {
+			return fmt.Errorf(
+				"CheckpointFormat %q requires artifact service socket "+
+					"(ArtifactServiceSocketPath is empty)", config.CheckpointFormat)
+		}
+		if config.ArtifactServiceTokenPath == "" {
+			return fmt.Errorf(
+				"CheckpointFormat %q requires artifact service token "+
+					"(ArtifactServiceTokenPath is empty)", config.CheckpointFormat)
+		}
+		if config.AgentServiceSocketPath == "" {
+			return fmt.Errorf(
+				"CheckpointFormat %q requires agent service socket "+
+					"(AgentServiceSocketPath is empty)", config.CheckpointFormat)
+		}
 	}
 
 	serverName, err := ref.ParseServerName(config.ServerName)
@@ -227,6 +287,34 @@ func Run(ctx context.Context, driver Driver, config RunConfig) error {
 		logger.Info("agent service session started", "session_id", sessionID)
 	}
 
+	// Create event checkpoint tracker when checkpointing is enabled.
+	// The tracker is created after the agent service client so it can
+	// reuse it for commit metadata, and after session start so the
+	// sessionID is available.
+	var tracker *eventCheckpointTracker
+	if config.CheckpointFormat != "" {
+		artifactClient, artifactError := artifactstore.NewClient(
+			config.ArtifactServiceSocketPath,
+			config.ArtifactServiceTokenPath,
+		)
+		if artifactError != nil {
+			return fmt.Errorf("creating artifact client for event checkpointing: %w", artifactError)
+		}
+
+		tracker = newEventCheckpointTracker(
+			artifactClient,
+			agentServiceClient,
+			config.CheckpointFormat,
+			sessionID,
+			config.AgentTemplate,
+			logger,
+		)
+		logger.Info("event checkpoint tracker initialized",
+			"format", config.CheckpointFormat,
+			"template", config.AgentTemplate,
+		)
+	}
+
 	// Determine initial prompt. If no prompt is configured in the
 	// payload, pass empty to the driver — the agent loop waits for
 	// a Matrix message instead of making a wasted LLM call.
@@ -268,13 +356,27 @@ func Run(ctx context.Context, driver Driver, config RunConfig) error {
 	eventsDone := make(chan struct{})
 	events := make(chan Event, 64)
 
-	// Consumer goroutine: drains the events channel into the session log.
+	// Consumer goroutine: drains the events channel into the session
+	// log and, when enabled, into the event checkpoint tracker.
 	go func() {
 		defer close(eventsDone)
 		for event := range events {
 			if sessionLog != nil {
 				if writeError := sessionLog.Write(event); writeError != nil {
 					logger.Warn("writing session log event", "error", writeError)
+				}
+			}
+			if tracker != nil {
+				tracker.appendEvent(event)
+				switch {
+				case event.Type == EventTypeResponse:
+					tracker.checkpointDelta(ctx, agent.CheckpointTurnBoundary)
+				case event.Type == EventTypeSystem &&
+					event.System != nil &&
+					event.System.Subtype == "compact_boundary":
+					tracker.checkpointDelta(ctx, agent.CheckpointCompaction)
+				case event.Type == EventTypeMetric:
+					tracker.checkpointDelta(ctx, agent.CheckpointSessionEnd)
 				}
 			}
 		}
@@ -338,6 +440,15 @@ func Run(ctx context.Context, driver Driver, config RunConfig) error {
 
 	// Wait for event pump to drain.
 	<-eventsDone
+
+	// Final safety checkpoint: catch any events appended after the
+	// last trigger-driven checkpoint (e.g., the metric event itself
+	// is checkpointed inline, but this catches edge cases where the
+	// pump drains without a final trigger). Uses context.Background()
+	// because the main context may be cancelled during shutdown.
+	if tracker != nil {
+		tracker.checkpointDelta(context.Background(), agent.CheckpointSessionEnd)
+	}
 
 	// Compute session summary. The summary is used both for the
 	// completion message and for reporting metrics to the agent service.

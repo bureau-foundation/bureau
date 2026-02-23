@@ -294,8 +294,9 @@ func runProvision(args []string) error {
 		return fmt.Errorf("config room %s does not exist — provision the machine first: %w", configRoomAlias, err)
 	}
 
-	// Parse principal into typed ref for the user ID.
-	principalEntity, err := ref.ParseEntityLocalpart(principalName, parsedServerName)
+	// Parse principal into typed ref for the user ID. Use the fleet
+	// from the machine ref to construct the fleet-scoped entity.
+	principalEntity, err := ref.NewEntityFromAccountLocalpart(fleet, principalName)
 	if err != nil {
 		return fmt.Errorf("invalid principal name: %w", err)
 	}
@@ -358,7 +359,8 @@ func runAssign(args []string) error {
 	if err != nil {
 		return fmt.Errorf("invalid machine name: %w", err)
 	}
-	principalEntity, err := ref.ParseEntityLocalpart(principalName, parsedServerName)
+	fleet := machineRef.Fleet()
+	principalEntity, err := ref.NewEntityFromAccountLocalpart(fleet, principalName)
 	if err != nil {
 		return fmt.Errorf("invalid principal name: %w", err)
 	}

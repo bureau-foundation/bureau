@@ -182,7 +182,7 @@ func runCreate(ctx context.Context, logger *slog.Logger, templateRef schema.Temp
 
 	logger.Info("creating agent", "name", params.Name, "machine", params.Machine, "template", templateRef.String())
 
-	principalEntity, err := ref.ParseEntityLocalpart(params.Name, serverName)
+	principalEntity, err := ref.NewEntityFromAccountLocalpart(fleet, params.Name)
 	if err != nil {
 		return cli.Validation("invalid agent name: %v", err)
 	}

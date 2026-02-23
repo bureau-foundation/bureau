@@ -93,7 +93,8 @@ machine and an operator escrow key for recovery.`,
 			if err != nil {
 				return cli.Validation("invalid machine name: %v", err)
 			}
-			principalEntity, err := ref.ParseEntityLocalpart(params.Principal, serverName)
+			fleet := machine.Fleet()
+			principalEntity, err := ref.NewEntityFromAccountLocalpart(fleet, params.Principal)
 			if err != nil {
 				return cli.Validation("invalid principal name: %v", err)
 			}

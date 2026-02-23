@@ -82,6 +82,7 @@ go_test(
     deps = [
         "//cmd/bureau/fleet",
         "//cmd/bureau/machine",
+        "//cmd/bureau/ticket",
         "//cmd/bureau/workspace",
         "//lib/bootstrap",
         "//lib/codec",

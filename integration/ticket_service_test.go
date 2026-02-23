@@ -7,6 +7,7 @@ import (
 	"encoding/json"
 	"testing"
 
+	ticketcmd "github.com/bureau-foundation/bureau/cmd/bureau/ticket"
 	"github.com/bureau-foundation/bureau/lib/ref"
 	"github.com/bureau-foundation/bureau/lib/schema"
 	"github.com/bureau-foundation/bureau/lib/schema/ticket"
@@ -622,87 +623,42 @@ func deployTicketService(t *testing.T, admin *messaging.DirectSession, fleet *te
 	return ticketServiceDeployment{Entity: svc.Entity}
 }
 
-// enableTicketsInRoom publishes ticket config and a room service binding
-// to an existing room, enabling pip- ticket creation in that room. The
-// ticket service must already be deployed and the admin must have
-// sufficient power level to publish state events.
-//
-// The prefix controls the ticket ID prefix (e.g., "pip" for pipeline
-// tickets, "tkt" for general tickets). The allowedTypes restricts which
-// ticket types can be created in this room (e.g., ["pipeline"]).
+// enableTicketsInRoom configures an existing room for ticket management
+// using the production ticket.ConfigureRoom path. Publishes ticket config,
+// room service binding, invites the service, and configures power levels.
 func enableTicketsInRoom(t *testing.T, admin *messaging.DirectSession, roomID ref.RoomID, ticketService ticketServiceDeployment, prefix string, allowedTypes []string) {
 	t.Helper()
 
-	ctx := t.Context()
-
-	ticketConfig := ticket.TicketConfigContent{
-		Version:      ticket.TicketConfigVersion,
+	if err := ticketcmd.ConfigureRoom(t.Context(), admin, roomID, ticketService.Entity, ticketcmd.ConfigureRoomParams{
 		Prefix:       prefix,
 		AllowedTypes: allowedTypes,
-	}
-	if _, err := admin.SendStateEvent(ctx, roomID, schema.EventTypeTicketConfig, "", ticketConfig); err != nil {
-		t.Fatalf("publish ticket config in room %s: %v", roomID, err)
-	}
-
-	if _, err := admin.SendStateEvent(ctx, roomID, schema.EventTypeRoomService, "ticket",
-		schema.RoomServiceContent{
-			Principal: ticketService.Entity,
-		}); err != nil {
-		t.Fatalf("publish ticket room service binding in room %s: %v", roomID, err)
-	}
-
-	// Invite the ticket service to the room so it can sync state events.
-	if err := admin.InviteUser(ctx, roomID, ticketService.Entity.UserID()); err != nil {
-		if !messaging.IsMatrixError(err, "M_FORBIDDEN") {
-			t.Fatalf("invite ticket service to room %s: %v", roomID, err)
-		}
+	}); err != nil {
+		t.Fatalf("configure tickets in room %s: %v", roomID, err)
 	}
 }
 
 // createTicketProjectRoom creates a project room with ticket config,
 // room service binding, and appropriate power levels. Invites the ticket
 // service account and any additional users (machine accounts, etc.)
-// so they can participate.
+// so they can participate. Uses ticket.ConfigureRoom for the full
+// production setup path.
 func createTicketProjectRoom(t *testing.T, admin *messaging.DirectSession, name string, ticketServiceEntity ref.Entity, additionalInvites ...string) ref.RoomID {
 	t.Helper()
 
 	ctx := t.Context()
-	adminUserID := admin.UserID().String()
-	ticketServiceUserID := ticketServiceEntity.UserID().String()
 
-	invitees := append([]string{ticketServiceUserID}, additionalInvites...)
 	room, err := admin.CreateRoom(ctx, messaging.CreateRoomRequest{
 		Name:   name,
-		Invite: invitees,
-		PowerLevelContentOverride: map[string]any{
-			"users": map[string]any{
-				adminUserID:         100,
-				ticketServiceUserID: 10,
-			},
-			"events": map[string]any{
-				string(schema.EventTypeTicket):       10,
-				string(schema.EventTypeTicketConfig): 100,
-				string(schema.EventTypeRoomService):  100,
-			},
-		},
+		Invite: additionalInvites,
 	})
 	if err != nil {
 		t.Fatalf("create room %s: %v", name, err)
 	}
 
-	if _, err := admin.SendStateEvent(ctx, room.RoomID, schema.EventTypeTicketConfig, "",
-		ticket.TicketConfigContent{
-			Version: ticket.TicketConfigVersion,
-			Prefix:  "tkt",
-		}); err != nil {
-		t.Fatalf("publish ticket config for %s: %v", name, err)
-	}
-
-	if _, err := admin.SendStateEvent(ctx, room.RoomID, schema.EventTypeRoomService, "ticket",
-		schema.RoomServiceContent{
-			Principal: ticketServiceEntity,
-		}); err != nil {
-		t.Fatalf("publish room service binding for %s: %v", name, err)
+	if err := ticketcmd.ConfigureRoom(ctx, admin, room.RoomID, ticketServiceEntity, ticketcmd.ConfigureRoomParams{
+		Prefix: "tkt",
+	}); err != nil {
+		t.Fatalf("configure tickets in room %s: %v", name, err)
 	}
 
 	return room.RoomID

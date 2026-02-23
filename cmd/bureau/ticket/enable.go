@@ -178,7 +178,7 @@ func runEnable(params *enableParams) error {
 	// Step 4: Configure each room for ticket management.
 	configuredRooms := make([]string, 0, len(childRoomIDs))
 	for _, roomID := range childRoomIDs {
-		if err := configureRoom(ctx, adminSession, roomID, serviceEntity, params.Prefix); err != nil {
+		if err := ConfigureRoom(ctx, adminSession, roomID, serviceEntity, ConfigureRoomParams{Prefix: params.Prefix}); err != nil {
 			fmt.Fprintf(os.Stderr, "  WARNING: failed to configure room %s: %v\n", roomID, err)
 			continue
 		}
@@ -362,16 +362,28 @@ func publishPrincipalAssignment(ctx context.Context, session messaging.Session, 
 }
 
 // configureRoom sets up ticket management in a single room:
+// ConfigureRoomParams holds parameters for ConfigureRoom.
+type ConfigureRoomParams struct {
+	// Prefix is the ticket ID prefix for this room (e.g., "tkt", "pip").
+	Prefix string
+
+	// AllowedTypes restricts which ticket types can be created in this room.
+	// An empty slice allows all types.
+	AllowedTypes []string
+}
+
+// ConfigureRoom enables ticket management in an existing room:
 //   - Publishes m.bureau.ticket_config (enables ticket management)
 //   - Publishes m.bureau.room_service with state_key "ticket" (binds the service)
 //   - Invites the service principal
 //   - Configures power levels (service at PL 10, m.bureau.ticket at PL 10,
 //     m.bureau.ticket_config and m.bureau.room_service at PL 100)
-func configureRoom(ctx context.Context, session messaging.Session, roomID ref.RoomID, serviceEntity ref.Entity, prefix string) error {
+func ConfigureRoom(ctx context.Context, session messaging.Session, roomID ref.RoomID, serviceEntity ref.Entity, params ConfigureRoomParams) error {
 	// Publish ticket config (singleton, state_key="").
 	ticketConfig := ticketschema.TicketConfigContent{
-		Version: ticketschema.TicketConfigVersion,
-		Prefix:  prefix,
+		Version:      ticketschema.TicketConfigVersion,
+		Prefix:       params.Prefix,
+		AllowedTypes: params.AllowedTypes,
 	}
 	_, err := session.SendStateEvent(ctx, roomID, schema.EventTypeTicketConfig, "", ticketConfig)
 	if err != nil {

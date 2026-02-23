@@ -6,6 +6,8 @@ package main
 import (
 	"context"
 	"encoding/json"
+	"slices"
+	"sort"
 
 	"github.com/bureau-foundation/bureau/lib/ref"
 	"github.com/bureau-foundation/bureau/lib/schema/agent"
@@ -149,9 +151,35 @@ func (agentService *AgentService) processStateEvents(events []messaging.Event) {
 				"sender", event.Sender,
 			)
 		case agent.EventTypeAgentContextCommit:
-			agentService.logger.Debug("observed context commit event",
-				"state_key", event.StateKey,
-				"sender", event.Sender,
+			if event.StateKey == nil {
+				continue
+			}
+			commitID := *event.StateKey
+
+			// Re-marshal map[string]any content to JSON so we can
+			// unmarshal into the typed struct.
+			contentJSON, err := json.Marshal(event.Content)
+			if err != nil {
+				agentService.logger.Warn("failed to marshal context commit event content",
+					"state_key", commitID,
+					"error", err,
+				)
+				continue
+			}
+			var content agent.ContextCommitContent
+			if err := json.Unmarshal(contentJSON, &content); err != nil {
+				agentService.logger.Warn("failed to unmarshal context commit event",
+					"state_key", commitID,
+					"error", err,
+				)
+				continue
+			}
+
+			agentService.indexCommit(commitID, content)
+			agentService.logger.Debug("indexed context commit event",
+				"state_key", commitID,
+				"principal", content.Principal.Localpart(),
+				"created_at", content.CreatedAt,
 			)
 		case agent.EventTypeAgentMetrics:
 			agentService.logger.Debug("observed agent metrics event",
@@ -160,4 +188,40 @@ func (agentService *AgentService) processStateEvents(events []messaging.Event) {
 			)
 		}
 	}
+}
+
+// indexCommit adds or updates a context commit in the in-memory index.
+// If the commit is new (not previously indexed), it is also inserted
+// into the appropriate principal's checkpoint timeline. If the commit
+// already exists, only the content is updated (Summary may change via
+// update-context-metadata) — the timeline is not modified since
+// CreatedAt and Principal are immutable.
+//
+// Must be called under the write lock.
+func (agentService *AgentService) indexCommit(commitID string, content agent.ContextCommitContent) {
+	if _, exists := agentService.commitIndex[commitID]; exists {
+		agentService.commitIndex[commitID] = content
+		return
+	}
+
+	agentService.commitIndex[commitID] = content
+
+	if content.Principal.IsZero() {
+		return
+	}
+	principalLocal := content.Principal.Localpart()
+
+	entry := timelineEntry{
+		CreatedAt: content.CreatedAt,
+		CommitID:  commitID,
+	}
+
+	// Insert in sorted order by CreatedAt. ISO 8601 timestamps with
+	// consistent formatting sort lexicographically for UTC.
+	timeline := agentService.principalTimelines[principalLocal]
+	insertPosition := sort.Search(len(timeline), func(i int) bool {
+		return timeline[i].CreatedAt > entry.CreatedAt
+	})
+	timeline = slices.Insert(timeline, insertPosition, entry)
+	agentService.principalTimelines[principalLocal] = timeline
 }

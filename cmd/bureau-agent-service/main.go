@@ -17,6 +17,7 @@ import (
 	"github.com/bureau-foundation/bureau/lib/artifactstore"
 	"github.com/bureau-foundation/bureau/lib/clock"
 	"github.com/bureau-foundation/bureau/lib/ref"
+	"github.com/bureau-foundation/bureau/lib/schema/agent"
 	"github.com/bureau-foundation/bureau/lib/service"
 	"github.com/bureau-foundation/bureau/lib/version"
 	"github.com/bureau-foundation/bureau/messaging"
@@ -116,16 +117,18 @@ func run() error {
 	)
 
 	agentService := &AgentService{
-		session:          boot.Session,
-		artifactClient:   artifactClient,
-		clock:            boot.Clock,
-		principalName:    boot.PrincipalName,
-		machineName:      boot.MachineName,
-		serverName:       boot.ServerName,
-		configRoomID:     configRoomID,
-		configRoomJoined: configRoomJoined,
-		startedAt:        boot.Clock.Now(),
-		logger:           boot.Logger,
+		session:            boot.Session,
+		artifactClient:     artifactClient,
+		clock:              boot.Clock,
+		principalName:      boot.PrincipalName,
+		machineName:        boot.MachineName,
+		serverName:         boot.ServerName,
+		configRoomID:       configRoomID,
+		configRoomJoined:   configRoomJoined,
+		startedAt:          boot.Clock.Now(),
+		commitIndex:        make(map[string]agent.ContextCommitContent),
+		principalTimelines: make(map[string][]timelineEntry),
+		logger:             boot.Logger,
 	}
 
 	// Perform initial /sync to populate agent state from config room.
@@ -186,5 +189,26 @@ type AgentService struct {
 	configRoomJoined bool
 	startedAt        time.Time
 
+	// commitIndex maps ctx-* commit IDs to their deserialized content.
+	// Populated from Matrix state events during sync and updated
+	// inline by checkpoint-context and update-context-metadata
+	// handlers. Used by show-context, history-context, and
+	// resolve-context to avoid per-request Matrix API calls.
+	commitIndex map[string]agent.ContextCommitContent
+
+	// principalTimelines maps principal localparts to their
+	// checkpoint timelines, sorted by CreatedAt ascending. Used by
+	// resolve-context to find the nearest checkpoint at or before a
+	// given timestamp. Updated during sync and by checkpoint-context.
+	principalTimelines map[string][]timelineEntry
+
 	logger *slog.Logger
+}
+
+// timelineEntry maps a timestamp to a context commit ID in a
+// principal's checkpoint timeline. Entries are sorted by CreatedAt
+// ascending within each principal's timeline slice.
+type timelineEntry struct {
+	CreatedAt string // ISO 8601 timestamp
+	CommitID  string
 }

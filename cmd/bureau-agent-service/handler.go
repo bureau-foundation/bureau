@@ -7,6 +7,7 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"sort"
 	"strings"
 
 	"github.com/bureau-foundation/bureau/lib/codec"
@@ -35,6 +36,10 @@ func (agentService *AgentService) registerActions(server *service.SocketServer) 
 	// Authenticated context commit actions.
 	server.HandleAuth("checkpoint-context", agentService.withWriteLock(agentService.handleCheckpointContext))
 	server.HandleAuth("materialize-context", agentService.withReadLock(agentService.handleMaterializeContext))
+	server.HandleAuth("show-context-commit", agentService.withReadLock(agentService.handleShowContextCommit))
+	server.HandleAuth("history-context", agentService.withReadLock(agentService.handleHistoryContext))
+	server.HandleAuth("update-context-metadata", agentService.withWriteLock(agentService.handleUpdateContextMetadata))
+	server.HandleAuth("resolve-context", agentService.withReadLock(agentService.handleResolveContext))
 
 	// Authenticated metrics actions.
 	server.HandleAuth("get-metrics", agentService.withReadLock(agentService.handleGetMetrics))
@@ -660,6 +665,11 @@ func (agentService *AgentService) handleCheckpointContext(ctx context.Context, t
 		return nil, fmt.Errorf("writing context commit state: %w", err)
 	}
 
+	// Update the in-memory index so show-context-commit and
+	// resolve-context see the commit immediately without waiting
+	// for the sync loop to process the resulting state event.
+	agentService.indexCommit(commitID, content)
+
 	agentService.logger.Info("context commit created",
 		"principal", token.Subject.Localpart(),
 		"commit_id", commitID,
@@ -790,9 +800,10 @@ func (agentService *AgentService) readSessionState(ctx context.Context, principa
 		agent.EventTypeAgentSession, principalLocal,
 	)
 	if err != nil {
-		// Matrix returns 404 for missing state events. Treat this as
-		// "no session state" rather than an error.
-		return nil, nil
+		if messaging.IsMatrixError(err, messaging.ErrCodeNotFound) {
+			return nil, nil
+		}
+		return nil, fmt.Errorf("reading session state for %s: %w", principalLocal, err)
 	}
 
 	var content agent.AgentSessionContent
@@ -811,7 +822,10 @@ func (agentService *AgentService) readContextState(ctx context.Context, principa
 		agent.EventTypeAgentContext, principalLocal,
 	)
 	if err != nil {
-		return nil, nil
+		if messaging.IsMatrixError(err, messaging.ErrCodeNotFound) {
+			return nil, nil
+		}
+		return nil, fmt.Errorf("reading context state for %s: %w", principalLocal, err)
 	}
 
 	var content agent.AgentContextContent
@@ -830,7 +844,10 @@ func (agentService *AgentService) readMetricsState(ctx context.Context, principa
 		agent.EventTypeAgentMetrics, principalLocal,
 	)
 	if err != nil {
-		return nil, nil
+		if messaging.IsMatrixError(err, messaging.ErrCodeNotFound) {
+			return nil, nil
+		}
+		return nil, fmt.Errorf("reading metrics state for %s: %w", principalLocal, err)
 	}
 
 	var content agent.AgentMetricsContent
@@ -864,4 +881,254 @@ func (agentService *AgentService) readContextCommit(ctx context.Context, commitI
 	}
 
 	return &content, nil
+}
+
+// getCommit reads a context commit by its ctx-* ID, checking the
+// in-memory index first and falling back to the Matrix API for commits
+// not yet seen by the sync loop.
+func (agentService *AgentService) getCommit(ctx context.Context, commitID string) (*agent.ContextCommitContent, error) {
+	if content, exists := agentService.commitIndex[commitID]; exists {
+		return &content, nil
+	}
+	return agentService.readContextCommit(ctx, commitID)
+}
+
+// --- Show context commit handler ---
+
+// showContextCommitRequest is the wire format for the
+// "show-context-commit" action.
+type showContextCommitRequest struct {
+	Action   string `cbor:"action"`
+	CommitID string `cbor:"commit_id"`
+}
+
+// showContextCommitResponse is the wire format for the
+// "show-context-commit" response.
+type showContextCommitResponse struct {
+	ID     string                      `cbor:"id"`
+	Commit *agent.ContextCommitContent `cbor:"commit"`
+}
+
+func (agentService *AgentService) handleShowContextCommit(ctx context.Context, token *servicetoken.Token, raw []byte) (any, error) {
+	var request showContextCommitRequest
+	if err := codec.Unmarshal(raw, &request); err != nil {
+		return nil, fmt.Errorf("invalid request: %w", err)
+	}
+
+	if request.CommitID == "" {
+		return nil, fmt.Errorf("commit_id is required")
+	}
+
+	content, err := agentService.getCommit(ctx, request.CommitID)
+	if err != nil {
+		return nil, err
+	}
+
+	// Authorize: the caller must be the commit's principal or hold
+	// an agent/read grant for that principal.
+	if err := authorizeRead(token, content.Principal.Localpart()); err != nil {
+		return nil, err
+	}
+
+	return showContextCommitResponse{ID: request.CommitID, Commit: content}, nil
+}
+
+// --- History context handler ---
+
+// historyContextRequest is the wire format for the "history-context"
+// action. Walks the parent chain from a commit back toward the root,
+// returning metadata for each commit in the chain.
+type historyContextRequest struct {
+	Action   string `cbor:"action"`
+	CommitID string `cbor:"commit_id"`
+	Depth    int    `cbor:"depth,omitempty"`
+}
+
+// historyContextEntry pairs a commit ID with its deserialized content,
+// used in the history-context response.
+type historyContextEntry struct {
+	ID      string                     `cbor:"id"`
+	Content agent.ContextCommitContent `cbor:"content"`
+}
+
+// historyContextResponse is the wire format for the "history-context"
+// response. Commits are ordered from the requested tip commit back
+// toward root.
+type historyContextResponse struct {
+	Commits []historyContextEntry `cbor:"commits"`
+}
+
+func (agentService *AgentService) handleHistoryContext(ctx context.Context, token *servicetoken.Token, raw []byte) (any, error) {
+	var request historyContextRequest
+	if err := codec.Unmarshal(raw, &request); err != nil {
+		return nil, fmt.Errorf("invalid request: %w", err)
+	}
+
+	if request.CommitID == "" {
+		return nil, fmt.Errorf("commit_id is required")
+	}
+
+	// Read the tip commit first to authorize.
+	tipContent, err := agentService.getCommit(ctx, request.CommitID)
+	if err != nil {
+		return nil, err
+	}
+
+	if err := authorizeRead(token, tipContent.Principal.Localpart()); err != nil {
+		return nil, err
+	}
+
+	// Walk the parent chain from tip toward root.
+	var commits []historyContextEntry
+	currentID := request.CommitID
+	currentContent := tipContent
+
+	for {
+		commits = append(commits, historyContextEntry{
+			ID:      currentID,
+			Content: *currentContent,
+		})
+
+		if request.Depth > 0 && len(commits) >= request.Depth {
+			break
+		}
+
+		if currentContent.Parent == "" {
+			break
+		}
+
+		if len(commits) >= maxChainDepth {
+			return nil, fmt.Errorf(
+				"chain depth exceeded %d commits from %q: possible cycle or corrupt chain",
+				maxChainDepth, request.CommitID,
+			)
+		}
+
+		nextContent, err := agentService.getCommit(ctx, currentContent.Parent)
+		if err != nil {
+			return nil, fmt.Errorf("reading parent commit %q: %w", currentContent.Parent, err)
+		}
+		currentID = currentContent.Parent
+		currentContent = nextContent
+	}
+
+	return historyContextResponse{Commits: commits}, nil
+}
+
+// --- Update context metadata handler ---
+
+// updateContextMetadataRequest is the wire format for the
+// "update-context-metadata" action. Updates mutable metadata fields
+// on an existing context commit. The delta artifact is immutable;
+// only metadata (currently just summary) can be changed after creation.
+type updateContextMetadataRequest struct {
+	Action   string `cbor:"action"`
+	CommitID string `cbor:"commit_id"`
+	Summary  string `cbor:"summary"`
+}
+
+func (agentService *AgentService) handleUpdateContextMetadata(ctx context.Context, token *servicetoken.Token, raw []byte) (any, error) {
+	var request updateContextMetadataRequest
+	if err := codec.Unmarshal(raw, &request); err != nil {
+		return nil, fmt.Errorf("invalid request: %w", err)
+	}
+
+	if request.CommitID == "" {
+		return nil, fmt.Errorf("commit_id is required")
+	}
+
+	content, err := agentService.getCommit(ctx, request.CommitID)
+	if err != nil {
+		return nil, err
+	}
+
+	// Authorize write: the caller must be the commit's principal or
+	// hold an agent/write grant (e.g., batch summarization service).
+	principalLocal := content.Principal.Localpart()
+	if principalLocal != token.Subject.Localpart() {
+		if !servicetoken.GrantsAllow(token.Grants, "agent/write", principalLocal) {
+			return nil, fmt.Errorf("access denied: no agent/write grant for %s", principalLocal)
+		}
+	}
+
+	if err := content.CanModify(); err != nil {
+		return nil, err
+	}
+
+	content.Summary = request.Summary
+
+	if _, err := agentService.session.SendStateEvent(
+		ctx, agentService.configRoomID,
+		agent.EventTypeAgentContextCommit, request.CommitID, content,
+	); err != nil {
+		return nil, fmt.Errorf("writing context commit state: %w", err)
+	}
+
+	// Update the in-memory index.
+	agentService.commitIndex[request.CommitID] = *content
+
+	agentService.logger.Info("context commit metadata updated",
+		"commit_id", request.CommitID,
+		"summary_length", len(request.Summary),
+	)
+
+	return nil, nil
+}
+
+// --- Resolve context handler ---
+
+// resolveContextRequest is the wire format for the "resolve-context"
+// action. Finds the nearest context commit at or before the given
+// timestamp for a principal.
+type resolveContextRequest struct {
+	Action         string `cbor:"action"`
+	PrincipalLocal string `cbor:"principal_local,omitempty"`
+	Timestamp      string `cbor:"timestamp"`
+}
+
+// resolveContextResponse is the wire format for the "resolve-context"
+// response. CommitID is empty if no commit exists at or before the
+// requested timestamp.
+type resolveContextResponse struct {
+	CommitID string `cbor:"commit_id,omitempty"`
+}
+
+func (agentService *AgentService) handleResolveContext(_ context.Context, token *servicetoken.Token, raw []byte) (any, error) {
+	var request resolveContextRequest
+	if err := codec.Unmarshal(raw, &request); err != nil {
+		return nil, fmt.Errorf("invalid request: %w", err)
+	}
+
+	if request.Timestamp == "" {
+		return nil, fmt.Errorf("timestamp is required")
+	}
+
+	principalLocal := request.PrincipalLocal
+	if principalLocal == "" {
+		principalLocal = token.Subject.Localpart()
+	}
+
+	if err := authorizeRead(token, principalLocal); err != nil {
+		return nil, err
+	}
+
+	timeline := agentService.principalTimelines[principalLocal]
+	if len(timeline) == 0 {
+		return resolveContextResponse{}, nil
+	}
+
+	// Binary search: find the rightmost entry where CreatedAt <=
+	// timestamp. sort.Search finds the first index where the
+	// predicate is true — here, the first index where CreatedAt >
+	// timestamp. The entry we want is one before that.
+	position := sort.Search(len(timeline), func(i int) bool {
+		return timeline[i].CreatedAt > request.Timestamp
+	})
+
+	if position == 0 {
+		// All entries are after the requested timestamp.
+		return resolveContextResponse{}, nil
+	}
+
+	return resolveContextResponse{CommitID: timeline[position-1].CommitID}, nil
 }

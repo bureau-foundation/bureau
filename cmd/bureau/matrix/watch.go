@@ -7,6 +7,7 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"log/slog"
 	"os"
 	"os/signal"
 	"syscall"
@@ -70,7 +71,7 @@ Press Ctrl-C to stop.`,
 		Annotations:    cli.ReadOnly(),
 		Params:         func() any { return &params },
 		RequiredGrants: []string{"command/matrix/watch"},
-		Run: func(args []string) error {
+		Run: func(_ context.Context, args []string, _ *slog.Logger) error {
 			if len(args) == 1 {
 				params.Room = args[0]
 			} else if len(args) > 1 {

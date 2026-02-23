@@ -124,7 +124,7 @@ All worktrees in a project share a single bare git object store at
 		Output:         func() any { return &CreateResult{} },
 		RequiredGrants: []string{"command/workspace/create"},
 		Annotations:    cli.Create(),
-		Run: func(args []string) error {
+		Run: func(_ context.Context, args []string, _ *slog.Logger) error {
 			// In CLI mode, alias comes as a positional argument.
 			// In JSON/MCP mode, it's populated from the JSON input.
 			if len(args) == 1 {

@@ -7,6 +7,7 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"log/slog"
 	"os"
 	"sort"
 	"strings"
@@ -77,7 +78,7 @@ modification time. Use --prefix to filter keys (e.g., --prefix "summary/").`,
 		Output:         func() any { return &contextListResult{} },
 		RequiredGrants: []string{"command/agent/context/list"},
 		Annotations:    cli.ReadOnly(),
-		Run: requireLocalpart("bureau agent context list <localpart> [--prefix <prefix>]", func(localpart string) error {
+		Run: requireLocalpart("bureau agent context list <localpart> [--prefix <prefix>]", func(_ context.Context, localpart string, _ *slog.Logger) error {
 			return runContextList(localpart, params)
 		}),
 	}
@@ -211,7 +212,7 @@ available.`,
 		Output:         func() any { return &agentschema.ContextEntry{} },
 		RequiredGrants: []string{"command/agent/context/show"},
 		Annotations:    cli.ReadOnly(),
-		Run: func(args []string) error {
+		Run: func(_ context.Context, args []string, _ *slog.Logger) error {
 			if len(args) < 2 {
 				return cli.Validation("agent localpart and context key are required\n\nUsage: bureau agent context show <localpart> <key> [--machine <machine>]")
 			}

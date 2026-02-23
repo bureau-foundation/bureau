@@ -6,6 +6,7 @@ package cli
 import (
 	"context"
 	"fmt"
+	"log/slog"
 	"os"
 	"time"
 
@@ -62,7 +63,7 @@ the password) or prompted interactively if --password-file is "-" or omitted.`,
 			},
 		},
 		Params: func() any { return &params },
-		Run: func(args []string) error {
+		Run: func(_ context.Context, args []string, _ *slog.Logger) error {
 			if len(args) < 1 {
 				return Validation("username is required\n\nUsage: bureau login <username> [flags]")
 			}

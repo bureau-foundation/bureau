@@ -6,6 +6,7 @@ package service
 import (
 	"context"
 	"fmt"
+	"log/slog"
 	"os"
 	"time"
 
@@ -64,7 +65,7 @@ state event trail remain intact for auditing.`,
 		Output:         func() any { return &serviceDestroyResult{} },
 		RequiredGrants: []string{"command/service/destroy"},
 		Annotations:    cli.Destructive(),
-		Run: requireLocalpart("bureau service destroy <localpart> [--machine <machine>]", func(localpart string) error {
+		Run: requireLocalpart("bureau service destroy <localpart> [--machine <machine>]", func(_ context.Context, localpart string, _ *slog.Logger) error {
 			return runDestroy(localpart, params)
 		}),
 	}

@@ -6,6 +6,7 @@ package pipeline
 import (
 	"context"
 	"fmt"
+	"log/slog"
 	"os"
 	"time"
 
@@ -54,7 +55,7 @@ sandboxes and returns immediately without /sync overhead.`,
 		},
 		Params: func() any { return &params },
 		Output: func() any { return &statusResult{} },
-		Run: func(args []string) error {
+		Run: func(_ context.Context, args []string, _ *slog.Logger) error {
 			if len(args) == 1 {
 				params.TicketID = args[0]
 			} else if len(args) > 1 {

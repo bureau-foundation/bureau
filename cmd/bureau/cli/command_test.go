@@ -5,6 +5,8 @@ package cli
 
 import (
 	"bytes"
+	"context"
+	"log/slog"
 	"strings"
 	"testing"
 
@@ -19,14 +21,14 @@ func TestCommand_Execute_DispatchesToSubcommand(t *testing.T) {
 		Subcommands: []*Command{
 			{
 				Name: "version",
-				Run: func(args []string) error {
+				Run: func(_ context.Context, args []string, _ *slog.Logger) error {
 					called = "version"
 					return nil
 				},
 			},
 			{
 				Name: "matrix",
-				Run: func(args []string) error {
+				Run: func(_ context.Context, args []string, _ *slog.Logger) error {
 					called = "matrix"
 					return nil
 				},
@@ -54,7 +56,7 @@ func TestCommand_Execute_NestedSubcommands(t *testing.T) {
 				Subcommands: []*Command{
 					{
 						Name: "setup",
-						Run: func(args []string) error {
+						Run: func(_ context.Context, args []string, _ *slog.Logger) error {
 							called = "matrix setup"
 							receivedArgs = args
 							return nil
@@ -87,7 +89,7 @@ func TestCommand_Execute_FlagParsing(t *testing.T) {
 			flagSet.StringVar(&socketPath, "socket", "/default.sock", "socket path")
 			return flagSet
 		},
-		Run: func(args []string) error {
+		Run: func(_ context.Context, args []string, _ *slog.Logger) error {
 			if len(args) > 0 {
 				target = args[0]
 			}
@@ -115,7 +117,7 @@ func TestCommand_Execute_UnknownFlagSuggestion(t *testing.T) {
 			flagSet.String("socket", "/default.sock", "socket path")
 			return flagSet
 		},
-		Run: func(args []string) error { return nil },
+		Run: func(_ context.Context, _ []string, _ *slog.Logger) error { return nil },
 	}
 
 	err := command.Execute([]string{"--readnoly"})
@@ -144,7 +146,7 @@ func TestCommand_Execute_UnknownFlagNoSuggestion(t *testing.T) {
 			flagSet.Bool("readonly", false, "read-only mode")
 			return flagSet
 		},
-		Run: func(args []string) error { return nil },
+		Run: func(_ context.Context, _ []string, _ *slog.Logger) error { return nil },
 	}
 
 	err := command.Execute([]string{"--zzzzzzzzz"})

@@ -4,7 +4,9 @@
 package pipeline
 
 import (
+	"context"
 	"fmt"
+	"log/slog"
 	"os"
 
 	"github.com/bureau-foundation/bureau/cmd/bureau/cli"
@@ -53,7 +55,7 @@ before validation.`,
 		Output:         func() any { return &validationResult{} },
 		RequiredGrants: []string{"command/pipeline/validate"},
 		Annotations:    cli.ReadOnly(),
-		Run: func(args []string) error {
+		Run: func(_ context.Context, args []string, _ *slog.Logger) error {
 			if len(args) != 1 {
 				return cli.Validation("usage: bureau pipeline validate <file>")
 			}

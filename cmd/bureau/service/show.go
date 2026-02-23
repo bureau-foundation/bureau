@@ -6,6 +6,7 @@ package service
 import (
 	"context"
 	"fmt"
+	"log/slog"
 	"time"
 
 	"github.com/bureau-foundation/bureau/cmd/bureau/cli"
@@ -54,7 +55,7 @@ is assigned. The scan count is reported for diagnostics.`,
 		Output:         func() any { return &serviceShowResult{} },
 		RequiredGrants: []string{"command/service/show"},
 		Annotations:    cli.ReadOnly(),
-		Run: requireLocalpart("bureau service show <localpart> [--machine <machine>]", func(localpart string) error {
+		Run: requireLocalpart("bureau service show <localpart> [--machine <machine>]", func(_ context.Context, localpart string, _ *slog.Logger) error {
 			return runShow(localpart, params)
 		}),
 	}

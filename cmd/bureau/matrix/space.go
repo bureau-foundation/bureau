@@ -6,6 +6,7 @@ package matrix
 import (
 	"context"
 	"fmt"
+	"log/slog"
 	"os"
 	"text/tabwriter"
 	"time"
@@ -75,7 +76,7 @@ if not specified.`,
 		Output:         func() any { return &spaceCreateResult{} },
 		Params:         func() any { return &params },
 		RequiredGrants: []string{"command/matrix/space/create"},
-		Run: func(args []string) error {
+		Run: func(_ context.Context, args []string, _ *slog.Logger) error {
 			if len(args) == 0 {
 				return cli.Validation("space alias is required\n\nUsage: bureau matrix space create <alias> [flags]")
 			}
@@ -159,7 +160,7 @@ table of room ID, alias, and name.`,
 		Output:         func() any { return &[]spaceEntry{} },
 		Params:         func() any { return &params },
 		RequiredGrants: []string{"command/matrix/space/list"},
-		Run: func(args []string) error {
+		Run: func(_ context.Context, args []string, _ *slog.Logger) error {
 			if len(args) > 0 {
 				return cli.Validation("unexpected argument: %s", args[0])
 			}
@@ -241,7 +242,7 @@ reclaim the room.`,
 		Output:         func() any { return &spaceDeleteResult{} },
 		Params:         func() any { return &params },
 		RequiredGrants: []string{"command/matrix/space/delete"},
-		Run: func(args []string) error {
+		Run: func(_ context.Context, args []string, _ *slog.Logger) error {
 			if len(args) == 0 {
 				return cli.Validation("space alias or room ID is required\n\nUsage: bureau matrix space delete <alias-or-id> [flags]")
 			}
@@ -308,7 +309,7 @@ Displays a table of user ID, display name, and membership state
 		Output:         func() any { return &[]messaging.RoomMember{} },
 		Params:         func() any { return &params },
 		RequiredGrants: []string{"command/matrix/space/members"},
-		Run: func(args []string) error {
+		Run: func(_ context.Context, args []string, _ *slog.Logger) error {
 			if len(args) == 0 {
 				return cli.Validation("space alias or room ID is required\n\nUsage: bureau matrix space members <alias-or-id> [flags]")
 			}

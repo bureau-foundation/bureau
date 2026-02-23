@@ -5,9 +5,11 @@ package cbor
 
 import (
 	"bytes"
+	"context"
 	"errors"
 	"fmt"
 	"io"
+	"log/slog"
 	"os"
 
 	"github.com/bureau-foundation/bureau/cmd/bureau/cli"
@@ -54,7 +56,7 @@ With -s, validates each item in a CBOR sequence independently.`,
 		Params:         func() any { return &params },
 		Annotations:    cli.ReadOnly(),
 		RequiredGrants: []string{"command/cbor/validate"},
-		Run: func(args []string) error {
+		Run: func(_ context.Context, args []string, _ *slog.Logger) error {
 			data, remainingArgs, err := readInput(args, params.HexInput)
 			if err != nil {
 				return err

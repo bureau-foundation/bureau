@@ -4,7 +4,9 @@
 package fleet
 
 import (
+	"context"
 	"fmt"
+	"log/slog"
 	"os"
 	"text/tabwriter"
 
@@ -62,7 +64,7 @@ eligibility).`,
 		Output:         func() any { return &placeResult{} },
 		Annotations:    cli.Create(),
 		RequiredGrants: []string{"command/fleet/place"},
-		Run: func(args []string) error {
+		Run: func(_ context.Context, args []string, _ *slog.Logger) error {
 			if len(args) == 0 {
 				return cli.Validation("service localpart required\n\nUsage: bureau fleet place <service> [flags]")
 			}
@@ -149,7 +151,7 @@ daemon to tear down the service's sandbox.`,
 		Output:         func() any { return &unplaceResult{} },
 		Annotations:    cli.Destructive(),
 		RequiredGrants: []string{"command/fleet/unplace"},
-		Run: func(args []string) error {
+		Run: func(_ context.Context, args []string, _ *slog.Logger) error {
 			if len(args) == 0 {
 				return cli.Validation("service localpart required\n\nUsage: bureau fleet unplace <service> --machine <machine> [flags]")
 			}
@@ -247,7 +249,7 @@ placement. Use this to preview what "place" would choose.`,
 		Output:         func() any { return &planResult{} },
 		Annotations:    cli.ReadOnly(),
 		RequiredGrants: []string{"command/fleet/plan"},
-		Run: func(args []string) error {
+		Run: func(_ context.Context, args []string, _ *slog.Logger) error {
 			if len(args) == 0 {
 				return cli.Validation("service localpart required\n\nUsage: bureau fleet plan <service> [flags]")
 			}

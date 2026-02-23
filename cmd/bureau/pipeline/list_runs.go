@@ -6,6 +6,7 @@ package pipeline
 import (
 	"context"
 	"fmt"
+	"log/slog"
 	"os"
 	"time"
 
@@ -54,7 +55,7 @@ pipeline execution tickets with their status and current progress.`,
 		},
 		Params: func() any { return &params },
 		Output: func() any { return &[]listRunEntry{} },
-		Run: func(args []string) error {
+		Run: func(_ context.Context, args []string, _ *slog.Logger) error {
 			if params.Room == "" {
 				return cli.Validation("--room is required")
 			}

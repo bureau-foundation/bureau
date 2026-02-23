@@ -14,6 +14,10 @@
 package commands
 
 import (
+	"context"
+	"fmt"
+	"log/slog"
+
 	agentcmd "github.com/bureau-foundation/bureau/cmd/bureau/agent"
 	artifactcmd "github.com/bureau-foundation/bureau/cmd/bureau/artifact"
 	authcmd "github.com/bureau-foundation/bureau/cmd/bureau/auth"
@@ -33,8 +37,6 @@ import (
 	ticketcmd "github.com/bureau-foundation/bureau/cmd/bureau/ticket"
 	workspacecmd "github.com/bureau-foundation/bureau/cmd/bureau/workspace"
 	"github.com/bureau-foundation/bureau/lib/version"
-
-	"fmt"
 )
 
 // Root builds and returns the complete Bureau CLI command tree.
@@ -71,7 +73,7 @@ observation, and structured messaging via Matrix.`,
 			{
 				Name:    "version",
 				Summary: "Print version information",
-				Run: func(args []string) error {
+				Run: func(_ context.Context, args []string, _ *slog.Logger) error {
 					fmt.Printf("bureau %s\n", version.Full())
 					return nil
 				},

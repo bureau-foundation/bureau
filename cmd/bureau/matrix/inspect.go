@@ -6,6 +6,7 @@ package matrix
 import (
 	"context"
 	"fmt"
+	"log/slog"
 	"os"
 	"sort"
 	"strings"
@@ -125,7 +126,7 @@ or prefix (e.g., --type 'm.bureau.*').`,
 		Output:         func() any { return &inspectResult{} },
 		Params:         func() any { return &params },
 		RequiredGrants: []string{"command/matrix/inspect"},
-		Run: func(args []string) error {
+		Run: func(_ context.Context, args []string, _ *slog.Logger) error {
 			if len(args) == 1 {
 				params.Room = args[0]
 			} else if len(args) > 1 {

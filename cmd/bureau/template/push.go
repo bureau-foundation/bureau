@@ -6,6 +6,7 @@ package template
 import (
 	"context"
 	"fmt"
+	"log/slog"
 	"os"
 	"time"
 
@@ -67,7 +68,7 @@ exist without actually publishing.`,
 		Output:         func() any { return &templatePushResult{} },
 		RequiredGrants: []string{"command/template/push"},
 		Annotations:    cli.Create(),
-		Run: func(args []string) error {
+		Run: func(_ context.Context, args []string, _ *slog.Logger) error {
 			if len(args) != 2 {
 				return cli.Validation("usage: bureau template push [flags] <template-ref> <file>")
 			}

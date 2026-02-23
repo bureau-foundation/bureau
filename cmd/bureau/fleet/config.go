@@ -7,6 +7,7 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"log/slog"
 	"os"
 	"text/tabwriter"
 	"time"
@@ -80,7 +81,7 @@ controller's socket API does not expose a config-write action.`,
 		Output:         func() any { return &configResult{} },
 		Annotations:    cli.Idempotent(),
 		RequiredGrants: []string{"command/fleet/config"},
-		Run: func(args []string) error {
+		Run: func(_ context.Context, args []string, _ *slog.Logger) error {
 			if len(args) == 0 {
 				return cli.Validation("fleet localpart is required (e.g., bureau/fleet/prod)")
 			}

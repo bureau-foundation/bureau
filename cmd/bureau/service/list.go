@@ -6,6 +6,7 @@ package service
 import (
 	"context"
 	"fmt"
+	"log/slog"
 	"os"
 	"text/tabwriter"
 	"time"
@@ -61,7 +62,7 @@ lists every assigned principal. The scan count is reported for diagnostics.`,
 		Output:         func() any { return &serviceListResult{} },
 		RequiredGrants: []string{"command/service/list"},
 		Annotations:    cli.ReadOnly(),
-		Run: func(args []string) error {
+		Run: func(_ context.Context, args []string, _ *slog.Logger) error {
 			if len(args) > 0 {
 				return cli.Validation("unexpected argument: %s", args[0])
 			}

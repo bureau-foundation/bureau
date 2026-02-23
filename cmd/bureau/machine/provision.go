@@ -97,7 +97,7 @@ accidental or intentional spoofing of active machines.`,
 		Params:         func() any { return &params },
 		RequiredGrants: []string{"command/machine/provision"},
 		Annotations:    cli.Create(),
-		Run: func(args []string) error {
+		Run: func(_ context.Context, args []string, _ *slog.Logger) error {
 			if len(args) < 2 {
 				return cli.Validation("fleet localpart and machine name are required\n\nUsage: bureau machine provision <fleet-localpart> <machine-name> [flags]")
 			}

@@ -4,8 +4,10 @@
 package cbor
 
 import (
+	"context"
 	"fmt"
 	"io"
+	"log/slog"
 	"os"
 
 	"github.com/bureau-foundation/bureau/cmd/bureau/cli"
@@ -56,7 +58,7 @@ Examples of diagnostic notation:
 		Params:         func() any { return &params },
 		Annotations:    cli.ReadOnly(),
 		RequiredGrants: []string{"command/cbor/diag"},
-		Run: func(args []string) error {
+		Run: func(_ context.Context, args []string, _ *slog.Logger) error {
 			data, remainingArgs, err := readInput(args, params.HexInput)
 			if err != nil {
 				return err

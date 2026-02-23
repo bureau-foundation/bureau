@@ -8,6 +8,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"io"
+	"log/slog"
 	"os"
 	"strings"
 	"time"
@@ -72,7 +73,7 @@ machine and an operator escrow key for recovery.`,
 		Output:         func() any { return &credentialProvisionResult{} },
 		RequiredGrants: []string{"command/credential/provision"},
 		Annotations:    cli.Create(),
-		Run: func(args []string) error {
+		Run: func(_ context.Context, args []string, _ *slog.Logger) error {
 			if len(args) > 0 {
 				return cli.Validation("unexpected argument: %s", args[0])
 			}

@@ -72,7 +72,7 @@ the scope. Use "local" to auto-detect from the launcher's session file.`,
 		Output:         func() any { return &enableResult{} },
 		Annotations:    cli.Idempotent(),
 		RequiredGrants: []string{"command/fleet/enable"},
-		Run: func(args []string) error {
+		Run: func(_ context.Context, args []string, _ *slog.Logger) error {
 			if len(args) == 0 {
 				return cli.Validation("fleet localpart is required (e.g., bureau/fleet/prod)")
 			}

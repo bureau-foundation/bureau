@@ -4,8 +4,10 @@
 package observe
 
 import (
+	"context"
 	"encoding/json"
 	"fmt"
+	"log/slog"
 	"os"
 	"os/exec"
 	"os/signal"
@@ -73,7 +75,7 @@ admin to add an observe allowance for your identity on the target.`,
 			flagSet.StringVar(&socketPath, "socket", observe.DefaultDaemonSocket, "daemon observation socket path")
 			return flagSet
 		},
-		Run: func(args []string) error {
+		Run: func(_ context.Context, args []string, _ *slog.Logger) error {
 			if len(args) == 0 {
 				return cli.Validation("target argument required\n\nUsage: bureau observe <target> [flags]")
 			}
@@ -197,7 +199,7 @@ display their role identity.`,
 			flagSet.BoolVar(&detach, "detach", false, "create the session without attaching")
 			return flagSet
 		},
-		Run: func(args []string) error {
+		Run: func(_ context.Context, args []string, _ *slog.Logger) error {
 			channel := ""
 			if len(args) > 0 {
 				channel = args[0]
@@ -413,7 +415,7 @@ Machine statuses:
 		Output:         func() any { return &observe.ListResponse{} },
 		Annotations:    cli.ReadOnly(),
 		RequiredGrants: []string{"command/observe/list"},
-		Run: func(args []string) error {
+		Run: func(_ context.Context, args []string, _ *slog.Logger) error {
 			if len(args) > 0 {
 				return cli.Validation("unexpected argument: %s", args[0])
 			}

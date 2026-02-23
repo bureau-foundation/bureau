@@ -40,7 +40,7 @@ import (
 //	        session.AddFlags(fs)
 //	        return fs
 //	    },
-//	    Run: func(args []string) error {
+//	    Run: func(_ context.Context, args []string, _ *slog.Logger) error {
 //	        sess, err := session.Connect(ctx)
 //	        ...
 //	    },

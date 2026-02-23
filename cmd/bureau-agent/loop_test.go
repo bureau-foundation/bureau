@@ -752,7 +752,7 @@ func testEchoCommandTree() *cli.Command {
 				Annotations:    cli.ReadOnly(),
 				Params:         func() any { return &params },
 				RequiredGrants: []string{"command/test/echo"},
-				Run: func(args []string) error {
+				Run: func(_ context.Context, args []string, _ *slog.Logger) error {
 					fmt.Println(params.Message)
 					return nil
 				},

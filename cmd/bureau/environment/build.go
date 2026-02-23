@@ -4,7 +4,9 @@
 package environment
 
 import (
+	"context"
 	"fmt"
+	"log/slog"
 	"os"
 	"path/filepath"
 
@@ -69,7 +71,7 @@ with symlinks into /nix/store for all packages in the profile.`,
 				Command:     "bureau environment build workstation --flake path:./environment",
 			},
 		},
-		Run: func(args []string) error {
+		Run: func(_ context.Context, args []string, _ *slog.Logger) error {
 			// In CLI mode, profile comes as a positional argument.
 			// In JSON/MCP mode, it's populated from the JSON input.
 			if len(args) == 1 {

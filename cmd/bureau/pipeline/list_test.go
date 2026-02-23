@@ -4,6 +4,7 @@
 package pipeline
 
 import (
+	"context"
 	"strings"
 	"testing"
 
@@ -38,7 +39,7 @@ func TestListPipelines(t *testing.T) {
 	if err := cmd.FlagSet().Parse([]string{"--server-name", "test.local"}); err != nil {
 		t.Fatalf("flag parse: %v", err)
 	}
-	if err := cmd.Run([]string{"bureau/pipeline"}); err != nil {
+	if err := cmd.Run(context.Background(), []string{"bureau/pipeline"}, nil); err != nil {
 		t.Fatalf("list: %v", err)
 	}
 }
@@ -60,7 +61,7 @@ func TestListPipelinesJSON(t *testing.T) {
 	if err := cmd.FlagSet().Parse([]string{"--server-name", "test.local", "--json"}); err != nil {
 		t.Fatalf("flag parse: %v", err)
 	}
-	if err := cmd.Run([]string{"bureau/pipeline"}); err != nil {
+	if err := cmd.Run(context.Background(), []string{"bureau/pipeline"}, nil); err != nil {
 		t.Fatalf("list --json: %v", err)
 	}
 }
@@ -77,7 +78,7 @@ func TestListPipelinesEmptyRoom(t *testing.T) {
 		t.Fatalf("flag parse: %v", err)
 	}
 	// No pipelines — command should still succeed (prints "no pipelines found").
-	if err := cmd.Run([]string{"bureau/pipeline"}); err != nil {
+	if err := cmd.Run(context.Background(), []string{"bureau/pipeline"}, nil); err != nil {
 		t.Fatalf("list empty room: %v", err)
 	}
 }
@@ -91,7 +92,7 @@ func TestListPipelinesRoomNotFound(t *testing.T) {
 	if err := cmd.FlagSet().Parse([]string{"--server-name", "test.local"}); err != nil {
 		t.Fatalf("flag parse: %v", err)
 	}
-	err := cmd.Run([]string{"nonexistent/room"})
+	err := cmd.Run(context.Background(), []string{"nonexistent/room"}, nil)
 	if err == nil {
 		t.Fatal("expected error for nonexistent room")
 	}
@@ -104,7 +105,7 @@ func TestListPipelinesNoArgs(t *testing.T) {
 	t.Parallel()
 
 	cmd := listCommand()
-	err := cmd.Run([]string{})
+	err := cmd.Run(context.Background(), []string{}, nil)
 	if err == nil {
 		t.Fatal("expected error for no args")
 	}

@@ -4,8 +4,10 @@
 package template
 
 import (
+	"context"
 	"encoding/json"
 	"fmt"
+	"log/slog"
 	"os"
 
 	"github.com/tidwall/jsonc"
@@ -51,7 +53,7 @@ Use "bureau template show --raw" to export a template for editing.`,
 		Output:         func() any { return &templateValidationResult{} },
 		RequiredGrants: []string{"command/template/validate"},
 		Annotations:    cli.ReadOnly(),
-		Run: func(args []string) error {
+		Run: func(_ context.Context, args []string, _ *slog.Logger) error {
 			if len(args) != 1 {
 				return cli.Validation("usage: bureau template validate <file>")
 			}

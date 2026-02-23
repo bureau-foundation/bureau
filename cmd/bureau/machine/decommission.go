@@ -63,7 +63,7 @@ failure explicitly.`,
 		Params:         func() any { return &params },
 		RequiredGrants: []string{"command/machine/decommission"},
 		Annotations:    cli.Destructive(),
-		Run: func(args []string) error {
+		Run: func(_ context.Context, args []string, _ *slog.Logger) error {
 			if len(args) < 2 {
 				return cli.Validation("fleet localpart and machine name are required\n\nUsage: bureau machine decommission <fleet-localpart> <machine-name> [flags]")
 			}

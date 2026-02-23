@@ -4,7 +4,9 @@
 package template
 
 import (
+	"context"
 	"fmt"
+	"log/slog"
 
 	"github.com/bureau-foundation/bureau/cmd/bureau/cli"
 	"github.com/bureau-foundation/bureau/lib/ref"
@@ -49,7 +51,7 @@ template overrides versus what it inherits.`,
 		Params:         func() any { return &params },
 		RequiredGrants: []string{"command/template/show"},
 		Annotations:    cli.ReadOnly(),
-		Run: func(args []string) error {
+		Run: func(_ context.Context, args []string, _ *slog.Logger) error {
 			// In CLI mode, template ref comes as a positional argument.
 			// In JSON/MCP mode, it's populated from the JSON input.
 			if len(args) == 1 {

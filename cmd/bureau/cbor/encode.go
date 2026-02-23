@@ -5,9 +5,11 @@ package cbor
 
 import (
 	"bytes"
+	"context"
 	"encoding/json"
 	"fmt"
 	"io"
+	"log/slog"
 	"os"
 
 	"github.com/bureau-foundation/bureau/cmd/bureau/cli"
@@ -51,7 +53,7 @@ The output is binary. Pipe to "bureau cbor diag" or "xxd" to inspect.`,
 				Command:     "echo '{\"count\":42}' | bureau cbor encode | bureau cbor decode",
 			},
 		},
-		Run: func(args []string) error {
+		Run: func(_ context.Context, args []string, _ *slog.Logger) error {
 			data, remainingArgs, err := readInput(args, false)
 			if err != nil {
 				return err

@@ -4,7 +4,9 @@
 package auth
 
 import (
+	"context"
 	"fmt"
+	"log/slog"
 	"strings"
 
 	"github.com/bureau-foundation/bureau/cmd/bureau/cli"
@@ -57,7 +59,7 @@ denials) is checked. For cross-principal actions, both sides must agree.`,
 		Output:         func() any { return &observe.AuthorizationResponse{} },
 		Annotations:    cli.ReadOnly(),
 		RequiredGrants: []string{"command/auth/check"},
-		Run: func(args []string) error {
+		Run: func(_ context.Context, args []string, _ *slog.Logger) error {
 			if params.Actor == "" {
 				return cli.Validation("--actor is required")
 			}

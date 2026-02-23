@@ -4,8 +4,10 @@
 package main
 
 import (
+	"context"
 	"encoding/json"
 	"fmt"
+	"log/slog"
 	"testing"
 
 	"github.com/bureau-foundation/bureau/cmd/bureau/cli"
@@ -294,7 +296,7 @@ func testCommandTree() *mcp.Server {
 				Summary:     "Echo a message",
 				Description: "Returns the input message unchanged.",
 				Params:      func() any { return &params },
-				Run: func(args []string) error {
+				Run: func(_ context.Context, args []string, _ *slog.Logger) error {
 					fmt.Println(params.Message)
 					return nil
 				},

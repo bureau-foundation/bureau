@@ -4,7 +4,9 @@
 package environment
 
 import (
+	"context"
 	"fmt"
+	"log/slog"
 	"os"
 	"sort"
 	"text/tabwriter"
@@ -51,7 +53,7 @@ different source.`,
 				Command:     "bureau environment list --override-input bureau=path:../bureau",
 			},
 		},
-		Run: func(args []string) error {
+		Run: func(_ context.Context, args []string, _ *slog.Logger) error {
 			if len(args) > 0 {
 				return cli.Validation("unexpected argument: %s", args[0])
 			}

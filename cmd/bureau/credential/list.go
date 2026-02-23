@@ -6,6 +6,7 @@ package credential
 import (
 	"context"
 	"fmt"
+	"log/slog"
 	"os"
 	"strings"
 	"text/tabwriter"
@@ -60,7 +61,7 @@ Useful for auditing which principals have credentials on a machine.`,
 		Output:         func() any { return &[]credentialListEntry{} },
 		RequiredGrants: []string{"command/credential/list"},
 		Annotations:    cli.ReadOnly(),
-		Run: func(args []string) error {
+		Run: func(_ context.Context, args []string, _ *slog.Logger) error {
 			if len(args) > 0 {
 				return cli.Validation("unexpected argument: %s", args[0])
 			}

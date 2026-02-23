@@ -4,8 +4,10 @@
 package ticket
 
 import (
+	"context"
 	"encoding/json"
 	"fmt"
+	"log/slog"
 	"os"
 
 	"github.com/bureau-foundation/bureau/cmd/bureau/cli"
@@ -78,7 +80,7 @@ Required fields: --room, --title, --type. Priority defaults to P2
 		Output:         func() any { return &createResult{} },
 		Annotations:    cli.Create(),
 		RequiredGrants: []string{"command/ticket/create"},
-		Run: func(args []string) error {
+		Run: func(_ context.Context, args []string, _ *slog.Logger) error {
 			if params.Room == "" {
 				return cli.Validation("--room is required")
 			}
@@ -211,7 +213,7 @@ in_progress returns a contention error with the current assignee.`,
 		Output:         func() any { return &mutationResult{} },
 		Annotations:    cli.Idempotent(),
 		RequiredGrants: []string{"command/ticket/update"},
-		Run: func(args []string) error {
+		Run: func(_ context.Context, args []string, _ *slog.Logger) error {
 			if len(args) == 1 {
 				params.Ticket = args[0]
 			} else if len(args) > 1 {
@@ -334,7 +336,7 @@ close a recurring ticket by stripping its recurring gates first.`,
 		Output:         func() any { return &mutationResult{} },
 		Annotations:    cli.Idempotent(),
 		RequiredGrants: []string{"command/ticket/close"},
-		Run: func(args []string) error {
+		Run: func(_ context.Context, args []string, _ *slog.Logger) error {
 			if len(args) == 1 {
 				params.Ticket = args[0]
 			} else if len(args) > 1 {
@@ -400,7 +402,7 @@ close timestamp and reason.`,
 		Output:         func() any { return &mutationResult{} },
 		Annotations:    cli.Idempotent(),
 		RequiredGrants: []string{"command/ticket/reopen"},
-		Run: func(args []string) error {
+		Run: func(_ context.Context, args []string, _ *slog.Logger) error {
 			if len(args) == 1 {
 				params.Ticket = args[0]
 			} else if len(args) > 1 {
@@ -485,7 +487,7 @@ created.`,
 		Output:         func() any { return &batchCreateResult{} },
 		Annotations:    cli.Create(),
 		RequiredGrants: []string{"command/ticket/batch"},
-		Run: func(args []string) error {
+		Run: func(_ context.Context, args []string, _ *slog.Logger) error {
 			if params.Room == "" {
 				return cli.Validation("--room is required")
 			}
@@ -577,7 +579,7 @@ remove a defer gate (un-defer), use: bureau ticket gate resolve ID defer`,
 		Output:         func() any { return &mutationResult{} },
 		Annotations:    cli.Idempotent(),
 		RequiredGrants: []string{"command/ticket/defer"},
-		Run: func(args []string) error {
+		Run: func(_ context.Context, args []string, _ *slog.Logger) error {
 			if len(args) == 1 {
 				params.Ticket = args[0]
 			} else if len(args) > 1 {

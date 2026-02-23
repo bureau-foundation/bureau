@@ -6,6 +6,7 @@ package fleet
 import (
 	"context"
 	"fmt"
+	"log/slog"
 	"os"
 	"text/tabwriter"
 	"time"
@@ -65,7 +66,7 @@ Connects to the fleet controller's socket and calls the "info" and
 		Output:         func() any { return &statusResult{} },
 		Annotations:    cli.ReadOnly(),
 		RequiredGrants: []string{"command/fleet/status"},
-		Run: func(args []string) error {
+		Run: func(_ context.Context, args []string, _ *slog.Logger) error {
 			if len(args) > 0 {
 				return cli.Validation("unexpected argument: %s", args[0])
 			}

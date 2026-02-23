@@ -207,7 +207,7 @@
         # CGO_ENABLED=0, static linking). The daemon compares binary content
         # hashes to decide what needs restarting, not store paths or build
         # provenance.
-        vendorHash = "sha256-KP00v+Ly4akdZ68iwka4ktX2bEQK13ZTLumRYFPWxA0=";
+        vendorHash = "sha256-WPuiybEo4mwtxpcGUjexsnGOVeBGZ88CDkq6V6wgR5A=";
 
         # Override the Go version used by buildGoModule. The `go` parameter
         # is a callPackage injection — passing it as a build attribute does

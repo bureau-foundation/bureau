@@ -10,6 +10,7 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"log/slog"
 	"os"
 	"reflect"
 	"strings"
@@ -34,6 +35,12 @@ type Server struct {
 	initialized bool
 	progressive bool
 
+	// logger is the structured logger for tool execution. Created
+	// with MCP-specific context (caller=mcp) and scoped per-tool
+	// during executeTool. Passed through to Run functions so commands
+	// produce structured logs regardless of invocation path.
+	logger *slog.Logger
+
 	// searchIndex provides BM25-ranked search over all discovered
 	// tools (not just authorized ones — authorization is checked at
 	// query time). Used by the bureau_tools_list meta-tool's query
@@ -43,6 +50,16 @@ type Server struct {
 
 // ServerOption configures optional server behavior.
 type ServerOption func(*Server)
+
+// WithLogger sets the structured logger for the MCP server. The
+// logger is scoped per-tool during execution and passed to Run
+// functions. When not set, defaults to cli.NewCommandLogger with
+// "caller"="mcp" context.
+func WithLogger(logger *slog.Logger) ServerOption {
+	return func(s *Server) {
+		s.logger = logger
+	}
+}
 
 // WithProgressiveDisclosure enables meta-tool mode. Instead of
 // exposing all discovered tools directly in tools/list, the server
@@ -89,8 +106,11 @@ func NewServer(root *cli.Command, grants []schema.Grant, options ...ServerOption
 	for _, option := range options {
 		option(s)
 	}
+	if s.logger == nil {
+		s.logger = cli.NewCommandLogger().With("caller", "mcp")
+	}
 
-	discoverTools(root, nil, &s.tools)
+	discoverTools(root, nil, &s.tools, s.logger)
 
 	s.toolsByName = make(map[string]*tool, len(s.tools))
 	for i := range s.tools {
@@ -420,7 +440,8 @@ func (s *Server) executeTool(t *tool, arguments json.RawMessage) (string, error)
 	// is for human terminals; MCP tool output should be structured.
 	enableJSONOutput(params)
 
-	return captureRun(t.command.Run)
+	toolLogger := s.logger.With("tool", t.name)
+	return captureRun(context.Background(), t.command.Run, toolLogger)
 }
 
 // enableJSONOutput forces JSON output mode on params structs that
@@ -435,7 +456,7 @@ func enableJSONOutput(params any) {
 // captureRun executes a Run function while capturing its stdout. A
 // goroutine reads from the pipe concurrently to prevent deadlock
 // when the command produces more output than the OS pipe buffer.
-func captureRun(run func([]string) error) (string, error) {
+func captureRun(ctx context.Context, run func(context.Context, []string, *slog.Logger) error, logger *slog.Logger) (string, error) {
 	reader, writer, err := os.Pipe()
 	if err != nil {
 		return "", cli.Internal("creating output pipe: %w", err)
@@ -454,7 +475,7 @@ func captureRun(run func([]string) error) (string, error) {
 		done <- capturedOutput{data, readErr}
 	}()
 
-	runErr := run(nil)
+	runErr := run(ctx, nil, logger)
 
 	// Restore stdout before closing the pipe so that any
 	// subsequent writes go to the real output destination.
@@ -601,7 +622,7 @@ func toolDeferrable(t *tool) bool {
 
 // discoverTools walks the command tree recursively, collecting leaf
 // commands that have both Params and Run as MCP tools.
-func discoverTools(command *cli.Command, path []string, tools *[]tool) {
+func discoverTools(command *cli.Command, path []string, tools *[]tool, logger *slog.Logger) {
 	// Build the current path with a fresh slice to avoid aliasing
 	// across recursive calls that share the same path prefix.
 	current := make([]string, len(path)+1)
@@ -613,15 +634,13 @@ func discoverTools(command *cli.Command, path []string, tools *[]tool) {
 
 		inputSchema, err := cli.ParamsSchema(command.Params())
 		if err != nil {
-			fmt.Fprintf(os.Stderr, "mcp: skipping %s: input schema error: %v\n",
-				toolName, err)
+			logger.Warn("skipping tool: input schema error", "tool", toolName, "error", err)
 		} else {
 			var outputSchema *cli.Schema
 			if command.Output != nil {
 				outSchema, outErr := cli.OutputSchema(command.Output())
 				if outErr != nil {
-					fmt.Fprintf(os.Stderr, "mcp: %s: output schema error: %v\n",
-						toolName, outErr)
+					logger.Warn("output schema error", "tool", toolName, "error", outErr)
 				} else {
 					outputSchema = outSchema
 				}
@@ -640,7 +659,7 @@ func discoverTools(command *cli.Command, path []string, tools *[]tool) {
 	}
 
 	for _, sub := range command.Subcommands {
-		discoverTools(sub, current, tools)
+		discoverTools(sub, current, tools, logger)
 	}
 }
 

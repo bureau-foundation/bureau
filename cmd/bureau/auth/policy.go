@@ -9,7 +9,9 @@ package auth
 // target side (who can act on the principal).
 
 import (
+	"context"
 	"fmt"
+	"log/slog"
 
 	"github.com/bureau-foundation/bureau/cmd/bureau/cli"
 	"github.com/bureau-foundation/bureau/observe"
@@ -55,7 +57,7 @@ func newPolicyCommand(spec policyCommandSpec) *cli.Command {
 		Output:         spec.output,
 		Annotations:    cli.ReadOnly(),
 		RequiredGrants: []string{spec.grant},
-		Run: func(args []string) error {
+		Run: func(_ context.Context, args []string, _ *slog.Logger) error {
 			principal, err := resolvePrincipal(params.Principal, args)
 			if err != nil {
 				return err

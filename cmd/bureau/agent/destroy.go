@@ -6,6 +6,7 @@ package agent
 import (
 	"context"
 	"fmt"
+	"log/slog"
 	"os"
 	"time"
 
@@ -64,7 +65,7 @@ state event trail remain intact for auditing.`,
 		Output:         func() any { return &agentDestroyResult{} },
 		RequiredGrants: []string{"command/agent/destroy"},
 		Annotations:    cli.Destructive(),
-		Run: requireLocalpart("bureau agent destroy <localpart> [--machine <machine>]", func(localpart string) error {
+		Run: requireLocalpart("bureau agent destroy <localpart> [--machine <machine>]", func(_ context.Context, localpart string, _ *slog.Logger) error {
 			return runDestroy(localpart, params)
 		}),
 	}

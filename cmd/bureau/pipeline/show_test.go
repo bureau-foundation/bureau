@@ -4,6 +4,7 @@
 package pipeline
 
 import (
+	"context"
 	"strings"
 	"testing"
 
@@ -33,7 +34,7 @@ func TestShowPipeline(t *testing.T) {
 		t.Fatalf("flag parse: %v", err)
 	}
 	// The command prints JSON to stdout; we verify it doesn't error.
-	if err := cmd.Run([]string{"bureau/pipeline:dev-workspace-init"}); err != nil {
+	if err := cmd.Run(context.Background(), []string{"bureau/pipeline:dev-workspace-init"}, nil); err != nil {
 		t.Fatalf("show: %v", err)
 	}
 }
@@ -52,7 +53,7 @@ func TestShowPipelineNotFound(t *testing.T) {
 	if err := cmd.FlagSet().Parse([]string{"--server-name", "test.local"}); err != nil {
 		t.Fatalf("flag parse: %v", err)
 	}
-	err := cmd.Run([]string{"bureau/pipeline:nonexistent"})
+	err := cmd.Run(context.Background(), []string{"bureau/pipeline:nonexistent"}, nil)
 	if err == nil {
 		t.Fatal("expected error for nonexistent pipeline")
 	}
@@ -65,7 +66,7 @@ func TestShowPipelineBadRef(t *testing.T) {
 	t.Parallel()
 
 	cmd := showCommand()
-	err := cmd.Run([]string{"no-colon-here"})
+	err := cmd.Run(context.Background(), []string{"no-colon-here"}, nil)
 	if err == nil {
 		t.Fatal("expected error for bad pipeline reference")
 	}
@@ -78,7 +79,7 @@ func TestShowPipelineNoArgs(t *testing.T) {
 	t.Parallel()
 
 	cmd := showCommand()
-	err := cmd.Run([]string{})
+	err := cmd.Run(context.Background(), []string{}, nil)
 	if err == nil {
 		t.Fatal("expected error for no args")
 	}

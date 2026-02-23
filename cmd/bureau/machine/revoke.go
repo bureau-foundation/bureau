@@ -74,7 +74,7 @@ depending on the homeserver — this is by design for emergency revocation.`,
 		Params:         func() any { return &params },
 		RequiredGrants: []string{"command/machine/revoke"},
 		Annotations:    cli.Destructive(),
-		Run: func(args []string) error {
+		Run: func(_ context.Context, args []string, _ *slog.Logger) error {
 			if len(args) < 2 {
 				return cli.Validation("fleet localpart and machine name are required\n\nUsage: bureau machine revoke <fleet-localpart> <machine-name> [flags]")
 			}

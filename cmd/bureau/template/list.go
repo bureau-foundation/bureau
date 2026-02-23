@@ -4,7 +4,9 @@
 package template
 
 import (
+	"context"
 	"fmt"
+	"log/slog"
 	"os"
 	"strings"
 	"text/tabwriter"
@@ -58,7 +60,7 @@ It is resolved to a full Matrix alias using the --server-name flag.`,
 		Output:         func() any { return &[]templateEntry{} },
 		RequiredGrants: []string{"command/template/list"},
 		Annotations:    cli.ReadOnly(),
-		Run: func(args []string) error {
+		Run: func(_ context.Context, args []string, _ *slog.Logger) error {
 			// In CLI mode, the room comes as a positional argument.
 			// In JSON/MCP mode, it's populated from the JSON input.
 			if len(args) == 1 {

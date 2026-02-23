@@ -6,6 +6,7 @@ package cli
 import (
 	"context"
 	"fmt"
+	"log/slog"
 	"os"
 	"time"
 
@@ -58,7 +59,7 @@ session file is read (no network access).`,
 		},
 		Params: func() any { return &params },
 		Output: func() any { return &whoamiOutput{} },
-		Run: func(args []string) error {
+		Run: func(_ context.Context, args []string, _ *slog.Logger) error {
 			if len(args) > 0 {
 				return Validation("unexpected argument: %s", args[0])
 			}

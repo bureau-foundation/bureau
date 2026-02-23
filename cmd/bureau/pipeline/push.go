@@ -4,7 +4,9 @@
 package pipeline
 
 import (
+	"context"
 	"fmt"
+	"log/slog"
 	"os"
 
 	"github.com/bureau-foundation/bureau/cmd/bureau/cli"
@@ -64,7 +66,7 @@ without actually publishing.`,
 		Output:         func() any { return &pushResult{} },
 		RequiredGrants: []string{"command/pipeline/push"},
 		Annotations:    cli.Create(),
-		Run: func(args []string) error {
+		Run: func(_ context.Context, args []string, _ *slog.Logger) error {
 			// In CLI mode, pipeline ref and file come as positional arguments.
 			// In JSON/MCP mode, they're populated from the JSON input.
 			switch len(args) {

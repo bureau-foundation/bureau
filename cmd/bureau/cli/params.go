@@ -33,7 +33,7 @@ type FlagBinder interface {
 //	    Flags: func() *pflag.FlagSet {
 //	        return cli.FlagsFromParams("mycommand", &params)
 //	    },
-//	    Run: func(args []string) error {
+//	    Run: func(_ context.Context, args []string, _ *slog.Logger) error {
 //	        // params fields are populated after flag parsing
 //	    },
 //	}

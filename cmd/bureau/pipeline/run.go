@@ -6,6 +6,7 @@ package pipeline
 import (
 	"context"
 	"fmt"
+	"log/slog"
 	"os"
 	"strings"
 	"time"
@@ -79,7 +80,7 @@ variables, accessible in pipeline steps via ${NAME} substitution.`,
 		Output:         func() any { return &runResult{} },
 		RequiredGrants: []string{"command/pipeline/execute"},
 		Annotations:    cli.Create(),
-		Run: func(args []string) error {
+		Run: func(_ context.Context, args []string, _ *slog.Logger) error {
 			// In CLI mode, pipeline ref comes as a positional argument.
 			// In JSON/MCP mode, it's populated from the JSON input.
 			if len(args) == 1 {

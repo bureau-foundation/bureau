@@ -7,6 +7,7 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"log/slog"
 	"os"
 	"text/tabwriter"
 	"time"
@@ -41,7 +42,7 @@ Shows each machine's name, public key, and last status heartbeat
 		Output:         func() any { return &[]MachineEntry{} },
 		RequiredGrants: []string{"command/machine/list"},
 		Annotations:    cli.ReadOnly(),
-		Run: func(args []string) error {
+		Run: func(_ context.Context, args []string, _ *slog.Logger) error {
 			if len(args) == 0 {
 				return cli.Validation("fleet localpart is required (e.g., bureau/fleet/prod)")
 			}

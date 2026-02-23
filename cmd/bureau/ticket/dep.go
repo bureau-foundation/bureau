@@ -4,7 +4,9 @@
 package ticket
 
 import (
+	"context"
 	"fmt"
+	"log/slog"
 	"os"
 	"slices"
 
@@ -62,7 +64,7 @@ cycle.`,
 		Output:         func() any { return &mutationResult{} },
 		Annotations:    cli.Idempotent(),
 		RequiredGrants: []string{"command/ticket/dep/add"},
-		Run: func(args []string) error {
+		Run: func(_ context.Context, args []string, _ *slog.Logger) error {
 			if len(args) >= 1 {
 				params.Ticket = args[0]
 			}
@@ -156,7 +158,7 @@ func depRemoveCommand() *cli.Command {
 		Output:         func() any { return &mutationResult{} },
 		Annotations:    cli.Idempotent(),
 		RequiredGrants: []string{"command/ticket/dep/remove"},
-		Run: func(args []string) error {
+		Run: func(_ context.Context, args []string, _ *slog.Logger) error {
 			if len(args) >= 1 {
 				params.Ticket = args[0]
 			}

@@ -7,6 +7,7 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"log/slog"
 	"os"
 	"reflect"
 	"strings"
@@ -60,7 +61,7 @@ With a file argument, also classifies each change:
 		Output:         func() any { return &[]impactResult{} },
 		RequiredGrants: []string{"command/template/impact"},
 		Annotations:    cli.ReadOnly(),
-		Run: func(args []string) error {
+		Run: func(_ context.Context, args []string, _ *slog.Logger) error {
 			if len(args) < 1 || len(args) > 2 {
 				return cli.Validation("usage: bureau template impact [flags] <template-ref> [file]")
 			}

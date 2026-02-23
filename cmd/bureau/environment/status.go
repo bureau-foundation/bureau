@@ -4,7 +4,9 @@
 package environment
 
 import (
+	"context"
 	"fmt"
+	"log/slog"
 	"os"
 	"path/filepath"
 	"sort"
@@ -38,7 +40,7 @@ environments.`,
 		Output:         func() any { return &[]statusEntry{} },
 		RequiredGrants: []string{"command/environment/status"},
 		Annotations:    cli.ReadOnly(),
-		Run: func(args []string) error {
+		Run: func(_ context.Context, args []string, _ *slog.Logger) error {
 			if len(args) > 0 {
 				return cli.Validation("unexpected argument: %s", args[0])
 			}

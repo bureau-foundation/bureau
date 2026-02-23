@@ -4,7 +4,9 @@
 package fleet
 
 import (
+	"context"
 	"fmt"
+	"log/slog"
 	"os"
 	"strings"
 	"text/tabwriter"
@@ -50,7 +52,7 @@ the number of assigned principals.`,
 		Output:         func() any { return &listMachinesResult{} },
 		Annotations:    cli.ReadOnly(),
 		RequiredGrants: []string{"command/fleet/list-machines"},
-		Run: func(args []string) error {
+		Run: func(_ context.Context, args []string, _ *slog.Logger) error {
 			if len(args) > 0 {
 				return cli.Validation("unexpected argument: %s", args[0])
 			}
@@ -150,7 +152,7 @@ current resource usage, and all assigned principals.`,
 		Output:         func() any { return &showMachineResult{} },
 		Annotations:    cli.ReadOnly(),
 		RequiredGrants: []string{"command/fleet/show-machine"},
-		Run: func(args []string) error {
+		Run: func(_ context.Context, args []string, _ *slog.Logger) error {
 			if len(args) == 0 {
 				return cli.Validation("machine localpart required\n\nUsage: bureau fleet show-machine <localpart> [flags]")
 			}

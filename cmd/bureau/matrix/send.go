@@ -6,6 +6,7 @@ package matrix
 import (
 	"context"
 	"fmt"
+	"log/slog"
 	"os"
 	"strings"
 	"time"
@@ -66,7 +67,7 @@ Bureau protocol events).`,
 		Output:         func() any { return &sendResult{} },
 		Params:         func() any { return &params },
 		RequiredGrants: []string{"command/matrix/send"},
-		Run: func(args []string) error {
+		Run: func(_ context.Context, args []string, _ *slog.Logger) error {
 			// In CLI mode, room and message come as positional arguments.
 			// In JSON/MCP mode, they're populated from the JSON input.
 			switch len(args) {

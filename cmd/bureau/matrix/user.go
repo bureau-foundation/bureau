@@ -6,6 +6,7 @@ package matrix
 import (
 	"context"
 	"fmt"
+	"log/slog"
 	"os"
 	"text/tabwriter"
 	"time"
@@ -109,7 +110,7 @@ and proceeds directly to ensuring room membership.`,
 		Output:         func() any { return &userCreateResult{} },
 		Params:         func() any { return &params },
 		RequiredGrants: []string{"command/matrix/user/create"},
-		Run: func(args []string) error {
+		Run: func(_ context.Context, args []string, _ *slog.Logger) error {
 			// In CLI mode, username comes as a positional argument.
 			// In JSON/MCP mode, it's populated from the JSON input.
 			if len(args) == 1 {
@@ -451,7 +452,7 @@ authenticated user has joined.`,
 		Output:         func() any { return &[]userListEntry{} },
 		Params:         func() any { return &params },
 		RequiredGrants: []string{"command/matrix/user/list"},
-		Run: func(args []string) error {
+		Run: func(_ context.Context, args []string, _ *slog.Logger) error {
 			if len(args) > 0 {
 				return cli.Validation("unexpected argument: %s", args[0])
 			}
@@ -599,7 +600,7 @@ func userInviteCommand() *cli.Command {
 		Output:         func() any { return &userInviteResult{} },
 		Params:         func() any { return &params },
 		RequiredGrants: []string{"command/matrix/user/invite"},
-		Run: func(args []string) error {
+		Run: func(_ context.Context, args []string, _ *slog.Logger) error {
 			// In CLI mode, user ID comes as a positional argument.
 			// In JSON/MCP mode, it's populated from the JSON input.
 			if len(args) == 1 {
@@ -691,7 +692,7 @@ alias or room ID. An optional --reason provides context for the kick.`,
 		Output:         func() any { return &userKickResult{} },
 		Params:         func() any { return &params },
 		RequiredGrants: []string{"command/matrix/user/kick"},
-		Run: func(args []string) error {
+		Run: func(_ context.Context, args []string, _ *slog.Logger) error {
 			// In CLI mode, user ID comes as a positional argument.
 			// In JSON/MCP mode, it's populated from the JSON input.
 			if len(args) == 1 {
@@ -778,7 +779,7 @@ account is in use.`,
 		Output:         func() any { return &userWhoAmIResult{} },
 		Params:         func() any { return &params },
 		RequiredGrants: []string{"command/matrix/user/whoami"},
-		Run: func(args []string) error {
+		Run: func(_ context.Context, args []string, _ *slog.Logger) error {
 			if len(args) > 0 {
 				return cli.Validation("unexpected argument: %s", args[0])
 			}

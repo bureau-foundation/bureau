@@ -4,6 +4,7 @@
 package pipeline
 
 import (
+	"context"
 	"encoding/json"
 	"strings"
 	"testing"
@@ -36,7 +37,7 @@ func TestRunPipeline(t *testing.T) {
 	}); err != nil {
 		t.Fatalf("flag parse: %v", err)
 	}
-	if err := cmd.Run([]string{"bureau/pipeline:dev-workspace-init"}); err != nil {
+	if err := cmd.Run(context.Background(), []string{"bureau/pipeline:dev-workspace-init"}, nil); err != nil {
 		t.Fatalf("run: %v", err)
 	}
 
@@ -92,7 +93,7 @@ func TestRunMissingMachine(t *testing.T) {
 	}); err != nil {
 		t.Fatalf("flag parse: %v", err)
 	}
-	err := cmd.Run([]string{"bureau/pipeline:test"})
+	err := cmd.Run(context.Background(), []string{"bureau/pipeline:test"}, nil)
 	if err == nil {
 		t.Fatal("expected error for missing --machine")
 	}
@@ -110,7 +111,7 @@ func TestRunMissingRoom(t *testing.T) {
 	}); err != nil {
 		t.Fatalf("flag parse: %v", err)
 	}
-	err := cmd.Run([]string{"bureau/pipeline:test"})
+	err := cmd.Run(context.Background(), []string{"bureau/pipeline:test"}, nil)
 	if err == nil {
 		t.Fatal("expected error for missing --room")
 	}
@@ -129,7 +130,7 @@ func TestRunBadPipelineRef(t *testing.T) {
 	}); err != nil {
 		t.Fatalf("flag parse: %v", err)
 	}
-	err := cmd.Run([]string{"no-colon-here"})
+	err := cmd.Run(context.Background(), []string{"no-colon-here"}, nil)
 	if err == nil {
 		t.Fatal("expected error for bad pipeline reference")
 	}
@@ -154,7 +155,7 @@ func TestRunBadParamFormat(t *testing.T) {
 	}); err != nil {
 		t.Fatalf("flag parse: %v", err)
 	}
-	err := cmd.Run([]string{"bureau/pipeline:test"})
+	err := cmd.Run(context.Background(), []string{"bureau/pipeline:test"}, nil)
 	if err == nil {
 		t.Fatal("expected error for bad param format")
 	}
@@ -179,7 +180,7 @@ func TestRunEmptyParamKey(t *testing.T) {
 	}); err != nil {
 		t.Fatalf("flag parse: %v", err)
 	}
-	err := cmd.Run([]string{"bureau/pipeline:test"})
+	err := cmd.Run(context.Background(), []string{"bureau/pipeline:test"}, nil)
 	if err == nil {
 		t.Fatal("expected error for empty param key")
 	}
@@ -198,7 +199,7 @@ func TestRunInvalidMachineName(t *testing.T) {
 	}); err != nil {
 		t.Fatalf("flag parse: %v", err)
 	}
-	err := cmd.Run([]string{"bureau/pipeline:test"})
+	err := cmd.Run(context.Background(), []string{"bureau/pipeline:test"}, nil)
 	if err == nil {
 		t.Fatal("expected error for invalid machine name")
 	}
@@ -217,7 +218,7 @@ func TestRunInvalidRoomID(t *testing.T) {
 	}); err != nil {
 		t.Fatalf("flag parse: %v", err)
 	}
-	err := cmd.Run([]string{"bureau/pipeline:test"})
+	err := cmd.Run(context.Background(), []string{"bureau/pipeline:test"}, nil)
 	if err == nil {
 		t.Fatal("expected error for invalid room ID")
 	}
@@ -239,7 +240,7 @@ func TestRunConfigRoomNotFound(t *testing.T) {
 	}); err != nil {
 		t.Fatalf("flag parse: %v", err)
 	}
-	err := cmd.Run([]string{"bureau/pipeline:test"})
+	err := cmd.Run(context.Background(), []string{"bureau/pipeline:test"}, nil)
 	if err == nil {
 		t.Fatal("expected error for nonexistent config room")
 	}
@@ -258,7 +259,7 @@ func TestRunNoArgs(t *testing.T) {
 	}); err != nil {
 		t.Fatalf("flag parse: %v", err)
 	}
-	err := cmd.Run([]string{})
+	err := cmd.Run(context.Background(), []string{}, nil)
 	if err == nil {
 		t.Fatal("expected error for no args")
 	}

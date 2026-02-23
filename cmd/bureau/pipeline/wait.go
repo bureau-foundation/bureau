@@ -4,7 +4,9 @@
 package pipeline
 
 import (
+	"context"
 	"fmt"
+	"log/slog"
 	"os"
 
 	"github.com/bureau-foundation/bureau/cmd/bureau/cli"
@@ -57,7 +59,7 @@ Exit code 0 for conclusion "success", 1 otherwise.`,
 		},
 		Params: func() any { return &params },
 		Output: func() any { return &waitResult{} },
-		Run: func(args []string) error {
+		Run: func(_ context.Context, args []string, _ *slog.Logger) error {
 			if len(args) == 1 {
 				params.TicketID = args[0]
 			} else if len(args) > 1 {

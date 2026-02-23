@@ -15,6 +15,7 @@ import (
 	"context"
 	"fmt"
 	"io"
+	"log/slog"
 	"os"
 	"strings"
 	"text/tabwriter"
@@ -208,7 +209,7 @@ unrecognized extensions.`,
 		Output:         func() any { return &artifactstore.StoreResponse{} },
 		Annotations:    cli.Create(),
 		RequiredGrants: []string{"command/artifact/store"},
-		Run: func(args []string) error {
+		Run: func(_ context.Context, args []string, _ *slog.Logger) error {
 			ctx := context.Background()
 			client, err := params.connect()
 			if err != nil {
@@ -327,7 +328,7 @@ The ref can be a full hash, short ref (art-<hex>), or tag name.`,
 		Params:         func() any { return &params },
 		Annotations:    cli.ReadOnly(),
 		RequiredGrants: []string{"command/artifact/fetch"},
-		Run: func(args []string) error {
+		Run: func(_ context.Context, args []string, _ *slog.Logger) error {
 			if len(args) == 0 {
 				return cli.Validation("ref argument required\n\nUsage: bureau artifact fetch <ref> [flags]")
 			}
@@ -396,7 +397,7 @@ storage details.`,
 		Output:         func() any { return &artifactstore.ArtifactMetadata{} },
 		Annotations:    cli.ReadOnly(),
 		RequiredGrants: []string{"command/artifact/show"},
-		Run: func(args []string) error {
+		Run: func(_ context.Context, args []string, _ *slog.Logger) error {
 			if len(args) == 0 {
 				return cli.Validation("ref argument required\n\nUsage: bureau artifact show <ref> [flags]")
 			}
@@ -467,7 +468,7 @@ func existsCommand() *cli.Command {
 		Output:         func() any { return &artifactstore.ExistsResponse{} },
 		Annotations:    cli.ReadOnly(),
 		RequiredGrants: []string{"command/artifact/exists"},
-		Run: func(args []string) error {
+		Run: func(_ context.Context, args []string, _ *slog.Logger) error {
 			if len(args) == 0 {
 				return cli.Validation("ref argument required\n\nUsage: bureau artifact exists <ref> [flags]")
 			}
@@ -545,7 +546,7 @@ are sorted by storage time (newest first).`,
 		Output:         func() any { return &artifactstore.ListResponse{} },
 		Annotations:    cli.ReadOnly(),
 		RequiredGrants: []string{"command/artifact/list"},
-		Run: func(args []string) error {
+		Run: func(_ context.Context, args []string, _ *slog.Logger) error {
 			ctx := context.Background()
 			client, err := params.connect()
 			if err != nil {
@@ -636,7 +637,7 @@ specify the previous target hash for CAS updates.`,
 		Output:         func() any { return &artifactstore.TagResponse{} },
 		Annotations:    cli.Idempotent(),
 		RequiredGrants: []string{"command/artifact/tag"},
-		Run: func(args []string) error {
+		Run: func(_ context.Context, args []string, _ *slog.Logger) error {
 			if len(args) < 2 {
 				return cli.Validation("name and ref arguments required\n\nUsage: bureau artifact tag <name> <ref> [flags]")
 			}
@@ -683,7 +684,7 @@ always the full ref.`,
 		Output:         func() any { return &artifactstore.ResolveResponse{} },
 		Annotations:    cli.ReadOnly(),
 		RequiredGrants: []string{"command/artifact/resolve"},
-		Run: func(args []string) error {
+		Run: func(_ context.Context, args []string, _ *slog.Logger) error {
 			if len(args) == 0 {
 				return cli.Validation("ref argument required\n\nUsage: bureau artifact resolve <ref> [flags]")
 			}
@@ -739,7 +740,7 @@ func tagsCommand() *cli.Command {
 		Output:         func() any { return &artifactstore.TagsResponse{} },
 		Annotations:    cli.ReadOnly(),
 		RequiredGrants: []string{"command/artifact/tags"},
-		Run: func(args []string) error {
+		Run: func(_ context.Context, args []string, _ *slog.Logger) error {
 			ctx := context.Background()
 			client, err := params.connect()
 			if err != nil {
@@ -787,7 +788,7 @@ func deleteTagCommand() *cli.Command {
 		Params:         func() any { return &params },
 		Annotations:    cli.Destructive(),
 		RequiredGrants: []string{"command/artifact/delete-tag"},
-		Run: func(args []string) error {
+		Run: func(_ context.Context, args []string, _ *slog.Logger) error {
 			if len(args) == 0 {
 				return cli.Validation("tag name required\n\nUsage: bureau artifact delete-tag <name> [flags]")
 			}
@@ -836,7 +837,7 @@ func pinToggleCommand(
 		Output:         func() any { return &artifactstore.PinResponse{} },
 		Annotations:    annotations,
 		RequiredGrants: []string{"command/artifact/" + name},
-		Run: func(args []string) error {
+		Run: func(_ context.Context, args []string, _ *slog.Logger) error {
 			if len(args) == 0 {
 				return cli.Validation("ref argument required\n\nUsage: %s", usage)
 			}
@@ -905,7 +906,7 @@ Use --dry-run to see what would be removed without actually deleting.`,
 		Output:         func() any { return &artifactstore.GCResponse{} },
 		Annotations:    cli.Destructive(),
 		RequiredGrants: []string{"command/artifact/gc"},
-		Run: func(args []string) error {
+		Run: func(_ context.Context, args []string, _ *slog.Logger) error {
 			ctx := context.Background()
 			client, err := params.connect()
 			if err != nil {
@@ -956,7 +957,7 @@ authentication — it is a health check.`,
 		Output:         func() any { return &artifactstore.StatusResponse{} },
 		Annotations:    cli.ReadOnly(),
 		RequiredGrants: []string{"command/artifact/status"},
-		Run: func(args []string) error {
+		Run: func(_ context.Context, args []string, _ *slog.Logger) error {
 			ctx := context.Background()
 			// Status is unauthenticated — use token if available,
 			// but don't fail if the token file is missing.

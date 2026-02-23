@@ -4,7 +4,9 @@
 package ticket
 
 import (
+	"context"
 	"fmt"
+	"log/slog"
 	"os"
 
 	"github.com/bureau-foundation/bureau/cmd/bureau/cli"
@@ -62,7 +64,7 @@ The gate is identified by its ID within the ticket.`,
 		Output:         func() any { return &mutationResult{} },
 		Annotations:    cli.Idempotent(),
 		RequiredGrants: []string{"command/ticket/gate/resolve"},
-		Run: func(args []string) error {
+		Run: func(_ context.Context, args []string, _ *slog.Logger) error {
 			if len(args) >= 1 {
 				params.Ticket = args[0]
 			}
@@ -142,7 +144,7 @@ gate satisfaction.`,
 		Output:         func() any { return &mutationResult{} },
 		Annotations:    cli.Idempotent(),
 		RequiredGrants: []string{"command/ticket/gate/update"},
-		Run: func(args []string) error {
+		Run: func(_ context.Context, args []string, _ *slog.Logger) error {
 			if len(args) >= 1 {
 				params.Ticket = args[0]
 			}

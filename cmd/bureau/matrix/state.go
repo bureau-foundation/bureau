@@ -8,6 +8,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"io"
+	"log/slog"
 	"os"
 	"time"
 
@@ -76,7 +77,7 @@ or machine ID as the state key.`,
 		Annotations:    cli.ReadOnly(),
 		Params:         func() any { return &params },
 		RequiredGrants: []string{"command/matrix/state/get"},
-		Run: func(args []string) error {
+		Run: func(_ context.Context, args []string, _ *slog.Logger) error {
 			// In CLI mode, room and optional event type come as positional
 			// arguments. In JSON/MCP mode, they're populated from JSON input.
 			switch len(args) {
@@ -176,7 +177,7 @@ specific state key.`,
 		Output:         func() any { return &stateSetResult{} },
 		Params:         func() any { return &params },
 		RequiredGrants: []string{"command/matrix/state/set"},
-		Run: func(args []string) error {
+		Run: func(_ context.Context, args []string, _ *slog.Logger) error {
 			// In CLI mode, room, event type, and optional body come as
 			// positional arguments. In JSON/MCP mode, they're populated
 			// from JSON input.

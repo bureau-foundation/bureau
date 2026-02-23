@@ -7,6 +7,7 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"log/slog"
 	"os"
 	"text/tabwriter"
 	"time"
@@ -132,7 +133,7 @@ Use "bureau matrix room leave" separately to remove the room.`,
 		Params:         func() any { return &params },
 		RequiredGrants: []string{"command/workspace/destroy"},
 		Annotations:    cli.Destructive(),
-		Run: func(args []string) error {
+		Run: func(_ context.Context, args []string, _ *slog.Logger) error {
 			if len(args) == 0 {
 				return cli.Validation("workspace alias is required\n\nUsage: bureau workspace destroy <alias> [flags]")
 			}
@@ -247,7 +248,7 @@ access to the workspace filesystem.`,
 		Output:         func() any { return &[]workspaceInfo{} },
 		RequiredGrants: []string{"command/workspace/list"},
 		Annotations:    cli.ReadOnly(),
-		Run: func(args []string) error {
+		Run: func(_ context.Context, args []string, _ *slog.Logger) error {
 			return runList(args, &params.JSONOutput)
 		},
 	}
@@ -410,7 +411,7 @@ func aliasCommand(name, summary, description, usage, grant string, annotations *
 		RequiredGrants: []string{grant},
 		Annotations:    annotations,
 		Params:         func() any { return &params },
-		Run: func(args []string) error {
+		Run: func(_ context.Context, args []string, _ *slog.Logger) error {
 			if len(args) == 0 {
 				return cli.Validation("workspace alias is required\n\nUsage: %s", usage)
 			}
@@ -616,7 +617,7 @@ step progress. Use --no-wait to return immediately after acceptance.`,
 		Output:         func() any { return &worktreeAddResult{} },
 		RequiredGrants: []string{"command/workspace/worktree/add"},
 		Annotations:    cli.Create(),
-		Run: func(args []string) error {
+		Run: func(_ context.Context, args []string, _ *slog.Logger) error {
 			if len(args) == 0 {
 				return cli.Validation("worktree alias is required\n\nUsage: bureau workspace worktree add <alias>")
 			}
@@ -784,7 +785,7 @@ to return immediately after acceptance.`,
 		Output:         func() any { return &worktreeRemoveResult{} },
 		RequiredGrants: []string{"command/workspace/worktree/remove"},
 		Annotations:    cli.Destructive(),
-		Run: func(args []string) error {
+		Run: func(_ context.Context, args []string, _ *slog.Logger) error {
 			if len(args) == 0 {
 				return cli.Validation("worktree alias is required\n\nUsage: bureau workspace worktree remove <alias>")
 			}

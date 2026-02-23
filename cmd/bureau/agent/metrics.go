@@ -7,6 +7,7 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"log/slog"
 	"os"
 	"time"
 
@@ -46,7 +47,7 @@ of the m.bureau.agent_metrics state event.`,
 		Output:         func() any { return &agentschema.AgentMetricsContent{} },
 		RequiredGrants: []string{"command/agent/metrics"},
 		Annotations:    cli.ReadOnly(),
-		Run: requireLocalpart("bureau agent metrics <localpart> [--machine <machine>]", func(localpart string) error {
+		Run: requireLocalpart("bureau agent metrics <localpart> [--machine <machine>]", func(_ context.Context, localpart string, _ *slog.Logger) error {
 			return runMetrics(localpart, params)
 		}),
 	}

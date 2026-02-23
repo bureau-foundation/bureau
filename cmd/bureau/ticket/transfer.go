@@ -5,8 +5,10 @@ package ticket
 
 import (
 	"bufio"
+	"context"
 	"encoding/json"
 	"fmt"
+	"log/slog"
 	"os"
 
 	"github.com/bureau-foundation/bureau/cmd/bureau/cli"
@@ -59,7 +61,7 @@ Use --status to export only tickets in a particular state (e.g.
 		Output:         func() any { return &[]ticketEntry{} },
 		Annotations:    cli.ReadOnly(),
 		RequiredGrants: []string{"command/ticket/export"},
-		Run: func(args []string) error {
+		Run: func(_ context.Context, args []string, _ *slog.Logger) error {
 			if params.Room == "" {
 				return cli.Validation("--room is required")
 			}
@@ -195,7 +197,7 @@ invalid, none are imported.`,
 		Output:         func() any { return &importResult{} },
 		Annotations:    cli.Create(),
 		RequiredGrants: []string{"command/ticket/import"},
-		Run: func(args []string) error {
+		Run: func(_ context.Context, args []string, _ *slog.Logger) error {
 			if params.Room == "" {
 				return cli.Validation("--room is required")
 			}

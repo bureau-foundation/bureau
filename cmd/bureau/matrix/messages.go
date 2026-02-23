@@ -6,6 +6,7 @@ package matrix
 import (
 	"context"
 	"fmt"
+	"log/slog"
 	"os"
 	"text/tabwriter"
 	"time"
@@ -73,7 +74,7 @@ main room timeline.`,
 		Output:         func() any { return &messagesResult{} },
 		Params:         func() any { return &params },
 		RequiredGrants: []string{"command/matrix/messages"},
-		Run: func(args []string) error {
+		Run: func(_ context.Context, args []string, _ *slog.Logger) error {
 			if len(args) == 1 {
 				params.Room = args[0]
 			} else if len(args) > 1 {

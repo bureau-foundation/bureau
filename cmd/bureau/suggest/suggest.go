@@ -7,7 +7,9 @@
 package suggest
 
 import (
+	"context"
 	"fmt"
+	"log/slog"
 	"os"
 	"strings"
 	"text/tabwriter"
@@ -44,7 +46,7 @@ they do, not just by name similarity.`,
 				Command:     "bureau suggest pipeline",
 			},
 		},
-		Run: func(args []string) error {
+		Run: func(_ context.Context, args []string, _ *slog.Logger) error {
 			if len(args) == 0 {
 				return cli.Validation("query required\n\nUsage: bureau suggest <query...>")
 			}

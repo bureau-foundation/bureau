@@ -7,6 +7,7 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"log/slog"
 	"os"
 	"time"
 
@@ -70,7 +71,7 @@ workstation's MachineConfig, and enables tickets in all rooms under
 		Output:         func() any { return &enableResult{} },
 		Annotations:    cli.Idempotent(),
 		RequiredGrants: []string{"command/ticket/enable"},
-		Run: func(args []string) error {
+		Run: func(_ context.Context, args []string, _ *slog.Logger) error {
 			if len(args) > 0 {
 				return cli.Validation("unexpected argument: %s", args[0])
 			}

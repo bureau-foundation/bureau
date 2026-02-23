@@ -6,6 +6,7 @@ package service
 import (
 	"context"
 	"fmt"
+	"log/slog"
 	"os"
 	"time"
 
@@ -83,7 +84,7 @@ token for creating the service's account.`,
 		Output:         func() any { return &serviceCreateResult{} },
 		RequiredGrants: []string{"command/service/create"},
 		Annotations:    cli.Create(),
-		Run: func(args []string) error {
+		Run: func(_ context.Context, args []string, _ *slog.Logger) error {
 			if len(args) < 1 {
 				return cli.Validation("template reference is required\n\nUsage: bureau service create <template-ref> --machine <machine> --name <name> --credential-file <path>")
 			}

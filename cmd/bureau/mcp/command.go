@@ -4,6 +4,9 @@
 package mcp
 
 import (
+	"context"
+	"log/slog"
+
 	"github.com/bureau-foundation/bureau/cmd/bureau/cli"
 )
 
@@ -71,7 +74,7 @@ This command is intended to be launched by MCP-capable clients
 			},
 		},
 		Params: func() any { return &params },
-		Run: func(args []string) error {
+		Run: func(_ context.Context, args []string, _ *slog.Logger) error {
 			grants, err := fetchGrants()
 			if err != nil {
 				return err

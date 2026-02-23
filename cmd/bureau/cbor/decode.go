@@ -5,10 +5,12 @@ package cbor
 
 import (
 	"bytes"
+	"context"
 	"encoding/json"
 	"errors"
 	"fmt"
 	"io"
+	"log/slog"
 	"os"
 
 	"github.com/bureau-foundation/bureau/cmd/bureau/cli"
@@ -80,7 +82,7 @@ protocol documentation) rather than raw binary.`,
 		Params:         func() any { return &params },
 		Annotations:    cli.ReadOnly(),
 		RequiredGrants: []string{"command/cbor/decode"},
-		Run: func(args []string) error {
+		Run: func(_ context.Context, args []string, _ *slog.Logger) error {
 			data, remainingArgs, err := readInput(args, params.HexInput)
 			if err != nil {
 				return err

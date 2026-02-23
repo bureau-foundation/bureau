@@ -76,7 +76,7 @@ by "bureau fleet enable" and resolved via the fleet prefix.`,
 		Annotations:    cli.Create(),
 		Params:         func() any { return &params },
 		RequiredGrants: []string{"command/matrix/setup"},
-		Run: func(args []string) error {
+		Run: func(_ context.Context, args []string, _ *slog.Logger) error {
 			if len(args) > 0 {
 				return cli.Validation("unexpected argument: %s", args[0])
 			}

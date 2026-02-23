@@ -4,6 +4,8 @@
 package cli
 
 import (
+	"context"
+	"log/slog"
 	"strings"
 	"testing"
 )
@@ -162,11 +164,11 @@ func TestWalkLeafCommands_IncludesFallThroughCommands(t *testing.T) {
 	// A command with both Run and Subcommands should be visited.
 	root := &Command{
 		Name: "root",
-		Run:  func(args []string) error { return nil },
+		Run:  func(_ context.Context, _ []string, _ *slog.Logger) error { return nil },
 		Subcommands: []*Command{
 			{
 				Name: "child",
-				Run:  func(args []string) error { return nil },
+				Run:  func(_ context.Context, _ []string, _ *slog.Logger) error { return nil },
 			},
 		},
 	}
@@ -261,7 +263,7 @@ func semanticTestTree() *Command {
 				Name:        "echo",
 				Summary:     "Echo a message",
 				Description: "Returns the input message unchanged. Useful for testing.",
-				Run:         func(args []string) error { return nil },
+				Run:         func(_ context.Context, _ []string, _ *slog.Logger) error { return nil },
 			},
 			{
 				Name:    "nested",
@@ -271,14 +273,14 @@ func semanticTestTree() *Command {
 						Name:        "list",
 						Summary:     "List items in a collection",
 						Description: "Enumerates all items with optional filtering.",
-						Run:         func(args []string) error { return nil },
+						Run:         func(_ context.Context, _ []string, _ *slog.Logger) error { return nil },
 					},
 					{
 						Name:        "create",
 						Summary:     "Create a new item",
 						Description: "Creates a new item in the collection.",
 						Params:      func() any { return &params },
-						Run:         func(args []string) error { return nil },
+						Run:         func(_ context.Context, _ []string, _ *slog.Logger) error { return nil },
 					},
 				},
 			},

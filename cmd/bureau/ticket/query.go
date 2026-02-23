@@ -4,7 +4,9 @@
 package ticket
 
 import (
+	"context"
 	"fmt"
+	"log/slog"
 	"os"
 	"strings"
 	"text/tabwriter"
@@ -57,7 +59,7 @@ time (oldest first).`,
 		Output:         func() any { return &[]ticketEntry{} },
 		Annotations:    cli.ReadOnly(),
 		RequiredGrants: []string{"command/ticket/list"},
-		Run: func(args []string) error {
+		Run: func(_ context.Context, args []string, _ *slog.Logger) error {
 			if params.Room == "" {
 				return cli.Validation("--room is required")
 			}
@@ -144,7 +146,7 @@ The ticket is resolved via --room or a room-qualified ticket reference (e.g., ir
 		Output:         func() any { return &showResult{} },
 		Annotations:    cli.ReadOnly(),
 		RequiredGrants: []string{"command/ticket/show"},
-		Run: func(args []string) error {
+		Run: func(_ context.Context, args []string, _ *slog.Logger) error {
 			if len(args) == 1 {
 				params.Ticket = args[0]
 			} else if len(args) > 1 {
@@ -209,7 +211,7 @@ Sorted by priority (most urgent first), then creation time.`,
 		Output:         func() any { return &[]ticketEntry{} },
 		Annotations:    cli.ReadOnly(),
 		RequiredGrants: []string{"command/ticket/ready"},
-		Run: func(args []string) error {
+		Run: func(_ context.Context, args []string, _ *slog.Logger) error {
 			return roomScopedQuery(params.TicketConnection, params.Room, "ready", "ticket/ready", &params.JSONOutput)
 		},
 	}
@@ -236,7 +238,7 @@ non-closed blocker or unsatisfied gate.`,
 		Output:         func() any { return &[]ticketEntry{} },
 		Annotations:    cli.ReadOnly(),
 		RequiredGrants: []string{"command/ticket/blocked"},
-		Run: func(args []string) error {
+		Run: func(_ context.Context, args []string, _ *slog.Logger) error {
 			return roomScopedQuery(params.TicketConnection, params.Room, "blocked", "ticket/blocked", &params.JSONOutput)
 		},
 	}
@@ -266,7 +268,7 @@ This is the primary query for PM agents deciding what to assign next.`,
 		Output:         func() any { return &[]rankedEntry{} },
 		Annotations:    cli.ReadOnly(),
 		RequiredGrants: []string{"command/ticket/ranked"},
-		Run: func(args []string) error {
+		Run: func(_ context.Context, args []string, _ *slog.Logger) error {
 			if params.Room == "" {
 				return cli.Validation("--room is required")
 			}
@@ -361,7 +363,7 @@ with all blockers closed and all gates satisfied).`,
 		Output:         func() any { return &[]ticketEntry{} },
 		Annotations:    cli.ReadOnly(),
 		RequiredGrants: []string{"command/ticket/grep"},
-		Run: func(args []string) error {
+		Run: func(_ context.Context, args []string, _ *slog.Logger) error {
 			if len(args) == 1 {
 				params.Pattern = args[0]
 			} else if len(args) > 1 {
@@ -473,7 +475,7 @@ rooms and includes the room ID in results.`,
 		Output:         func() any { return &[]searchEntry{} },
 		Annotations:    cli.ReadOnly(),
 		RequiredGrants: []string{"command/ticket/search"},
-		Run: func(args []string) error {
+		Run: func(_ context.Context, args []string, _ *slog.Logger) error {
 			if len(args) == 1 {
 				params.Query = args[0]
 			} else if len(args) > 1 {
@@ -566,7 +568,7 @@ for a room.`,
 		Output:         func() any { return &ticketindex.Stats{} },
 		Annotations:    cli.ReadOnly(),
 		RequiredGrants: []string{"command/ticket/stats"},
-		Run: func(args []string) error {
+		Run: func(_ context.Context, args []string, _ *slog.Logger) error {
 			if params.Room == "" {
 				return cli.Validation("--room is required")
 			}
@@ -644,7 +646,7 @@ total tickets, and per-room summaries. Requires authentication.`,
 		Output:         func() any { return &serviceInfo{} },
 		Annotations:    cli.ReadOnly(),
 		RequiredGrants: []string{"command/ticket/info"},
-		Run: func(args []string) error {
+		Run: func(_ context.Context, args []string, _ *slog.Logger) error {
 			client, err := params.connect()
 			if err != nil {
 				return err
@@ -710,7 +712,7 @@ becomes ready, including indirect (transitive) dependencies.`,
 		Output:         func() any { return &depsResult{} },
 		Annotations:    cli.ReadOnly(),
 		RequiredGrants: []string{"command/ticket/deps"},
-		Run: func(args []string) error {
+		Run: func(_ context.Context, args []string, _ *slog.Logger) error {
 			if len(args) == 1 {
 				params.Ticket = args[0]
 			} else if len(args) > 1 {
@@ -777,7 +779,7 @@ showing how many are closed out of the total.`,
 		Output:         func() any { return &childrenResult{} },
 		Annotations:    cli.ReadOnly(),
 		RequiredGrants: []string{"command/ticket/children"},
-		Run: func(args []string) error {
+		Run: func(_ context.Context, args []string, _ *slog.Logger) error {
 			if len(args) == 1 {
 				params.Ticket = args[0]
 			} else if len(args) > 1 {
@@ -843,7 +845,7 @@ depth (irreducible sequential steps).`,
 		Output:         func() any { return &epicHealthResult{} },
 		Annotations:    cli.ReadOnly(),
 		RequiredGrants: []string{"command/ticket/epic-health"},
-		Run: func(args []string) error {
+		Run: func(_ context.Context, args []string, _ *slog.Logger) error {
 			if len(args) == 1 {
 				params.Ticket = args[0]
 			} else if len(args) > 1 {
@@ -1080,7 +1082,7 @@ recurring tickets.`,
 		Output:         func() any { return &[]upcomingGateResult{} },
 		Annotations:    cli.ReadOnly(),
 		RequiredGrants: []string{"command/ticket/upcoming"},
-		Run: func(args []string) error {
+		Run: func(_ context.Context, args []string, _ *slog.Logger) error {
 			client, err := params.connect()
 			if err != nil {
 				return err

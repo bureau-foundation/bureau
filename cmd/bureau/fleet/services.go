@@ -4,7 +4,9 @@
 package fleet
 
 import (
+	"context"
 	"fmt"
+	"log/slog"
 	"os"
 	"text/tabwriter"
 
@@ -64,7 +66,7 @@ replica count, current instance count, failover policy, and priority.`,
 		Output:         func() any { return &listServicesResult{} },
 		Annotations:    cli.ReadOnly(),
 		RequiredGrants: []string{"command/fleet/list-services"},
-		Run: func(args []string) error {
+		Run: func(_ context.Context, args []string, _ *slog.Logger) error {
 			if len(args) > 0 {
 				return cli.Validation("unexpected argument: %s", args[0])
 			}
@@ -175,7 +177,7 @@ failover policy, and all current instances with their host machines.`,
 		Output:         func() any { return &showServiceResult{} },
 		Annotations:    cli.ReadOnly(),
 		RequiredGrants: []string{"command/fleet/show-service"},
-		Run: func(args []string) error {
+		Run: func(_ context.Context, args []string, _ *slog.Logger) error {
 			if len(args) == 0 {
 				return cli.Validation("service localpart required\n\nUsage: bureau fleet show-service <localpart> [flags]")
 			}

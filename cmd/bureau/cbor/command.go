@@ -4,6 +4,8 @@
 package cbor
 
 import (
+	"context"
+	"log/slog"
 	"os"
 
 	"github.com/bureau-foundation/bureau/cmd/bureau/cli"
@@ -57,7 +59,7 @@ Whitespace in the hex input is ignored.`,
 		Params:         func() any { return &params },
 		Annotations:    cli.Idempotent(),
 		RequiredGrants: []string{"command/cbor"},
-		Run: func(args []string) error {
+		Run: func(_ context.Context, args []string, _ *slog.Logger) error {
 			data, remainingArgs, err := readInput(args, params.HexInput)
 			if err != nil {
 				return err

@@ -68,7 +68,7 @@ available rooms.`,
 			flagSet.StringVar(&socketPath, "socket", observe.DefaultDaemonSocket, "daemon observe socket path")
 			return flagSet
 		},
-		Run: func(args []string) error {
+		Run: func(_ context.Context, args []string, _ *slog.Logger) error {
 			if len(args) > 0 {
 				return cli.Validation("unexpected argument: %s", args[0])
 			}

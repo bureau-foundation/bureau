@@ -4,10 +4,14 @@
 package cli
 
 import (
+	"context"
 	"fmt"
 	"io"
+	"log/slog"
 	"os"
+	"os/signal"
 	"strings"
+	"syscall"
 	"text/tabwriter"
 
 	"github.com/spf13/pflag"
@@ -48,12 +52,12 @@ type Command struct {
 	//
 	// The returned pointer must be the same value that Run reads from,
 	// so that populating the struct via json.Unmarshal before calling
-	// Run(nil) passes the parameters through:
+	// Run passes the parameters through:
 	//
 	//     var params listParams
 	//     return &Command{
 	//         Params: func() any { return &params },
-	//         Run: func(args []string) error { /* reads params */ },
+	//         Run: func(ctx context.Context, args []string, logger *slog.Logger) error { /* reads params */ },
 	//     }
 	//
 	// If nil, the command is not exposed as an MCP tool and no flags
@@ -114,7 +118,15 @@ type Command struct {
 	// Run executes the command with the remaining args (after flag parsing).
 	// Exactly one of Run or Subcommands should be set. If both are set,
 	// Run is used when no subcommand matches.
-	Run func(args []string) error
+	//
+	// The context carries signal cancellation from the CLI dispatch layer
+	// (SIGINT, SIGTERM) or MCP request lifetime. Commands should derive
+	// child contexts for timeouts rather than creating context.Background().
+	//
+	// The logger is scoped to the command path (e.g., "command"="bureau agent show")
+	// from CLI dispatch or "tool"="bureau_agent_show" from MCP dispatch.
+	// Commands should pass it to helpers and use it for operational logging.
+	Run func(ctx context.Context, args []string, logger *slog.Logger) error
 
 	// parent is set during dispatch to build the full command path for help.
 	parent *Command
@@ -239,7 +251,10 @@ func (c *Command) Execute(args []string) error {
 	}
 
 	if c.Run != nil {
-		return c.Run(args)
+		ctx, stop := signal.NotifyContext(context.Background(), syscall.SIGINT, syscall.SIGTERM)
+		defer stop()
+		logger := NewCommandLogger().With("command", c.fullName())
+		return c.Run(ctx, args, logger)
 	}
 
 	// No Run, no subcommands matched — show help.

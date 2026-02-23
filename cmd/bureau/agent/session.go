@@ -7,6 +7,7 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"log/slog"
 	"os"
 	"time"
 
@@ -46,7 +47,7 @@ This is a direct view of the m.bureau.agent_session state event.`,
 		Output:         func() any { return &agentschema.AgentSessionContent{} },
 		RequiredGrants: []string{"command/agent/session"},
 		Annotations:    cli.ReadOnly(),
-		Run: requireLocalpart("bureau agent session <localpart> [--machine <machine>]", func(localpart string) error {
+		Run: requireLocalpart("bureau agent session <localpart> [--machine <machine>]", func(_ context.Context, localpart string, _ *slog.Logger) error {
 			return runSession(localpart, params)
 		}),
 	}

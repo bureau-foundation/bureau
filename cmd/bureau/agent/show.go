@@ -6,6 +6,7 @@ package agent
 import (
 	"context"
 	"fmt"
+	"log/slog"
 	"os"
 	"time"
 
@@ -61,7 +62,7 @@ plus agent service state (session lifecycle, aggregated metrics).`,
 		Output:         func() any { return &agentShowResult{} },
 		RequiredGrants: []string{"command/agent/show"},
 		Annotations:    cli.ReadOnly(),
-		Run: requireLocalpart("bureau agent show <localpart> [--machine <machine>]", func(localpart string) error {
+		Run: requireLocalpart("bureau agent show <localpart> [--machine <machine>]", func(_ context.Context, localpart string, _ *slog.Logger) error {
 			return runShow(localpart, params)
 		}),
 	}

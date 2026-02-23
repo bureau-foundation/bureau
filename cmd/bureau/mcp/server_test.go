@@ -6,8 +6,10 @@ package mcp
 import (
 	"bufio"
 	"bytes"
+	"context"
 	"encoding/json"
 	"fmt"
+	"log/slog"
 	"strings"
 	"testing"
 
@@ -82,7 +84,7 @@ func testCommandTree() *cli.Command {
 				Annotations:    cli.ReadOnly(),
 				Params:         func() any { return &echoP },
 				RequiredGrants: []string{"command/test/echo"},
-				Run: func(args []string) error {
+				Run: func(_ context.Context, _ []string, _ *slog.Logger) error {
 					fmt.Println(echoP.Message)
 					return nil
 				},
@@ -93,7 +95,7 @@ func testCommandTree() *cli.Command {
 				Annotations:    cli.Create(),
 				Params:         func() any { return &failP },
 				RequiredGrants: []string{"command/test/fail"},
-				Run: func(args []string) error {
+				Run: func(_ context.Context, _ []string, _ *slog.Logger) error {
 					fmt.Print("partial")
 					return cli.Internal("intentional failure: %s", failP.Reason)
 				},
@@ -111,7 +113,7 @@ func testCommandTree() *cli.Command {
 						Command:     "bureau test format --value hello",
 					},
 				},
-				Run: func(args []string) error {
+				Run: func(_ context.Context, _ []string, _ *slog.Logger) error {
 					if done, err := formatP.EmitJSON(formatOutput{Value: formatP.Value}); done {
 						return err
 					}
@@ -126,7 +128,7 @@ func testCommandTree() *cli.Command {
 				Params:         func() any { return &listP },
 				Output:         func() any { return &[]listItem{} },
 				RequiredGrants: []string{"command/test/list"},
-				Run: func(args []string) error {
+				Run: func(_ context.Context, _ []string, _ *slog.Logger) error {
 					items := []listItem{
 						{Name: "alpha"},
 						{Name: "beta"},
@@ -143,7 +145,7 @@ func testCommandTree() *cli.Command {
 			{
 				Name:    "noparams",
 				Summary: "Not discoverable as MCP tool",
-				Run:     func(args []string) error { return nil },
+				Run:     func(_ context.Context, _ []string, _ *slog.Logger) error { return nil },
 			},
 		},
 	}
@@ -925,7 +927,7 @@ func TestServer_GrantFiltering_DefaultDenyNoRequiredGrants(t *testing.T) {
 				Name:    "ungated",
 				Summary: "No required grants declared",
 				Params:  func() any { return &params },
-				Run:     func(args []string) error { return nil },
+				Run:     func(_ context.Context, _ []string, _ *slog.Logger) error { return nil },
 			},
 		},
 	}

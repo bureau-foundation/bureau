@@ -247,11 +247,10 @@ func TestWorkspaceCLILifecycle(t *testing.T) {
 	ctx := t.Context()
 
 	// --- Ticket service ---
-	// The pipeline executor operates on pip- tickets. Deploy the ticket
-	// service before workspace creation so the CLI can discover it via
-	// the service directory and invite it to the workspace room.
-	// "workspace create" publishes ticket config and invites the ticket
-	// service before publishing MachineConfig.
+	// workspace.Create requires a deployed ticket service — it calls
+	// ticket.ConfigureRoom (config, room_service binding, power levels)
+	// and service.EnsureServiceInRoom (waits for join) before publishing
+	// MachineConfig. Deploy the ticket service first.
 	deployTicketService(t, admin, fleet, machine, "ws-cli")
 
 	// --- Resolve pipeline room for principal invitations ---

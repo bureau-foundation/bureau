@@ -13,10 +13,10 @@ import (
 	"time"
 
 	"github.com/bureau-foundation/bureau/cmd/bureau/cli"
+	"github.com/bureau-foundation/bureau/cmd/bureau/ticket"
 	"github.com/bureau-foundation/bureau/lib/principal"
 	"github.com/bureau-foundation/bureau/lib/ref"
 	"github.com/bureau-foundation/bureau/lib/schema"
-	"github.com/bureau-foundation/bureau/lib/schema/ticket"
 	"github.com/bureau-foundation/bureau/lib/schema/workspace"
 	"github.com/bureau-foundation/bureau/lib/service"
 	"github.com/bureau-foundation/bureau/messaging"
@@ -312,35 +312,29 @@ func Create(ctx context.Context, session messaging.Session, params CreateParams,
 	}
 
 	// Enable ticket management in the workspace room. Workspace rooms
-	// support both pipeline tickets (pip-* IDs for setup/teardown tracking)
-	// and general work tickets (tkt-* IDs for task/bug/feature tracking).
-	// Pipeline tickets get their type-specific "pip" prefix via
-	// PrefixForType; all other types use the room's configured prefix.
-	// AllowedTypes is left empty to allow all ticket types.
-	_, err = session.SendStateEvent(ctx, workspaceRoomID, schema.EventTypeTicketConfig, "", ticket.TicketConfigContent{
-		Version: ticket.TicketConfigVersion,
-		Prefix:  "tkt",
-	})
-	if err != nil {
-		return nil, cli.Internal("publishing ticket config: %w", err)
-	}
-
-	// Ensure the ticket service is in the workspace room before
-	// publishing MachineConfig. The daemon creates pip- tickets during
-	// reconciliation — if the ticket service hasn't joined by then,
-	// ticket creation fails and enters backoff. EnsureServiceInRoom
-	// invites the service and blocks (via /sync long-poll) until it
-	// joins, eliminating the race.
-	ticketService, found, queryErr := service.QueryFirst(ctx, session, machineRef.Fleet(),
+	// need a ticket service for pipeline tickets (pip-* IDs for
+	// setup/teardown tracking) and work tickets (tkt-* IDs for
+	// task/bug/feature tracking). ConfigureRoom publishes ticket_config,
+	// the room_service binding (so the daemon can resolve the ticket
+	// socket for RequiredServices), power levels, and service invitation.
+	// EnsureServiceInRoom then waits for the service to join — the daemon
+	// creates pip- tickets during reconciliation, and if the ticket
+	// service hasn't joined by then, ticket creation fails.
+	ticketService, found, err := service.QueryFirst(ctx, session, machineRef.Fleet(),
 		service.And(service.OnMachine(machineRef), service.HasCapability("dependency-graph")))
-	if queryErr != nil {
-		logger.Warn("failed to query service directory", "error", queryErr)
-	} else if found {
-		if ensureErr := service.EnsureServiceInRoom(ctx, session, workspaceRoomID, ticketService.Principal.UserID()); ensureErr != nil {
-			logger.Warn("ticket service failed to join workspace room", "error", ensureErr)
-		}
-	} else {
-		logger.Warn("no ticket service found, pipeline execution will fail until one is deployed", "machine", machineRef.Localpart())
+	if err != nil {
+		return nil, cli.Internal("querying ticket service: %w", err)
+	}
+	if !found {
+		return nil, cli.NotFound("no ticket service deployed on %s — run 'bureau ticket enable' first", machineRef.Localpart())
+	}
+	if err := ticket.ConfigureRoom(ctx, logger, session, workspaceRoomID, ticketService.Principal, ticket.ConfigureRoomParams{
+		Prefix: "tkt",
+	}); err != nil {
+		return nil, cli.Internal("configuring ticket management: %w", err)
+	}
+	if err := service.EnsureServiceInRoom(ctx, session, workspaceRoomID, ticketService.Principal.UserID()); err != nil {
+		return nil, cli.Internal("ticket service failed to join workspace room: %w", err)
 	}
 
 	// Build principal assignments (setup + agents + teardown).

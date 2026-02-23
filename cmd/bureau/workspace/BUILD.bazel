@@ -15,11 +15,11 @@ go_library(
     visibility = ["//visibility:public"],
     deps = [
         "//cmd/bureau/cli",
+        "//cmd/bureau/ticket",
         "//lib/command",
         "//lib/principal",
         "//lib/ref",
         "//lib/schema",
-        "//lib/schema/ticket",
         "//lib/schema/workspace",
         "//lib/service",
         "//messaging",

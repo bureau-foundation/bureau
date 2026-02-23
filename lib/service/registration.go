@@ -69,28 +69,3 @@ func Deregister(ctx context.Context, session messaging.Session, serviceRoomID re
 	}
 	return nil
 }
-
-// ResolveRoom resolves a room alias, validates the returned room ID,
-// and joins the room. This is the common pattern for services
-// discovering fleet-scoped and global rooms at startup. The alias
-// parameter is typically produced by a ref method (e.g.,
-// fleet.ServiceRoomAlias(), namespace.SystemRoomAlias()).
-func ResolveRoom(ctx context.Context, session messaging.Session, alias ref.RoomAlias) (ref.RoomID, error) {
-	roomID, err := session.ResolveAlias(ctx, alias)
-	if err != nil {
-		return ref.RoomID{}, fmt.Errorf("resolving room alias %q: %w", alias, err)
-	}
-
-	if _, err := session.JoinRoom(ctx, roomID); err != nil {
-		return ref.RoomID{}, fmt.Errorf("joining room %s: %w", roomID, err)
-	}
-
-	return roomID, nil
-}
-
-// ResolveFleetServiceRoom resolves the fleet-scoped service room alias
-// and joins it. This is called once at startup to establish the
-// service's connection to the fleet's service directory.
-func ResolveFleetServiceRoom(ctx context.Context, session messaging.Session, fleet ref.Fleet) (ref.RoomID, error) {
-	return ResolveRoom(ctx, session, fleet.ServiceRoomAlias())
-}

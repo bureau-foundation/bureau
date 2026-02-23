@@ -30,11 +30,11 @@ func main() {
 }
 
 func run() error {
-	var flags service.CommonFlags
-	service.RegisterCommonFlags(&flags)
+	var showVersion bool
+	flag.BoolVar(&showVersion, "version", false, "print version information and exit")
 	flag.Parse()
 
-	if flags.ShowVersion {
+	if showVersion {
 		fmt.Printf("bureau-fleet-controller %s\n", version.Info())
 		return nil
 	}
@@ -42,26 +42,11 @@ func run() error {
 	ctx, stop := signal.NotifyContext(context.Background(), syscall.SIGINT, syscall.SIGTERM)
 	defer stop()
 
-	var (
-		boot    *service.BootstrapResult
-		cleanup func()
-		err     error
-	)
-
-	if os.Getenv("BUREAU_PROXY_SOCKET") != "" {
-		boot, cleanup, err = service.BootstrapViaProxy(ctx, service.ProxyBootstrapConfig{
-			Audience:     "fleet",
-			Description:  "Fleet controller for service placement and machine lifecycle",
-			Capabilities: []string{"placement", "scaling", "failover"},
-		})
-	} else {
-		boot, cleanup, err = service.Bootstrap(ctx, service.BootstrapConfig{
-			Flags:        flags,
-			Audience:     "fleet",
-			Description:  "Fleet controller for service placement and machine lifecycle",
-			Capabilities: []string{"placement", "scaling", "failover"},
-		})
-	}
+	boot, cleanup, err := service.BootstrapViaProxy(ctx, service.ProxyBootstrapConfig{
+		Audience:     "fleet",
+		Description:  "Fleet controller for service placement and machine lifecycle",
+		Capabilities: []string{"placement", "scaling", "failover"},
+	})
 	if err != nil {
 		return err
 	}

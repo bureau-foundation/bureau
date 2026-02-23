@@ -15,13 +15,6 @@ import (
 	"github.com/bureau-foundation/bureau/messaging"
 )
 
-// ResolveSystemRoom resolves the namespace's system room alias and joins
-// it. Called once at startup by services that need to fetch state from
-// the system room (e.g., token signing keys).
-func ResolveSystemRoom(ctx context.Context, session messaging.Session, namespace ref.Namespace) (ref.RoomID, error) {
-	return ResolveRoom(ctx, session, namespace.SystemRoomAlias())
-}
-
 // LoadTokenSigningKey fetches the daemon's Ed25519 token signing
 // public key from the system room. The daemon publishes the key as an
 // m.bureau.token_signing_key state event with the machine's full user ID

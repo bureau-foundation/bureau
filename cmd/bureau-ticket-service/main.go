@@ -29,11 +29,11 @@ func main() {
 }
 
 func run() error {
-	var flags service.CommonFlags
-	service.RegisterCommonFlags(&flags)
+	var showVersion bool
+	flag.BoolVar(&showVersion, "version", false, "print version information and exit")
 	flag.Parse()
 
-	if flags.ShowVersion {
+	if showVersion {
 		fmt.Printf("bureau-ticket-service %s\n", version.Info())
 		return nil
 	}
@@ -43,24 +43,11 @@ func run() error {
 
 	capabilities := []string{"dependency-graph", "gate-evaluation"}
 
-	var boot *service.BootstrapResult
-	var cleanup func()
-	var err error
-
-	if os.Getenv("BUREAU_PROXY_SOCKET") != "" {
-		boot, cleanup, err = service.BootstrapViaProxy(ctx, service.ProxyBootstrapConfig{
-			Audience:     "ticket",
-			Description:  "Ticket tracking and coordination service",
-			Capabilities: capabilities,
-		})
-	} else {
-		boot, cleanup, err = service.Bootstrap(ctx, service.BootstrapConfig{
-			Flags:        flags,
-			Audience:     "ticket",
-			Description:  "Ticket tracking and coordination service",
-			Capabilities: capabilities,
-		})
-	}
+	boot, cleanup, err := service.BootstrapViaProxy(ctx, service.ProxyBootstrapConfig{
+		Audience:     "ticket",
+		Description:  "Ticket tracking and coordination service",
+		Capabilities: capabilities,
+	})
 	if err != nil {
 		return err
 	}

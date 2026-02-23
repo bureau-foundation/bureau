@@ -9,8 +9,9 @@
 // socket bind-mounts (not through the proxy). This package extracts
 // the common scaffolding that every service needs:
 //
-//   - Session loading: read session.json from the state directory,
-//     create an authenticated Matrix client and session.
+//   - Proxy bootstrap: create a ProxySession from environment variables
+//     injected by the launcher, resolve fleet-scoped rooms, load the
+//     daemon's token signing key, and register in the service directory.
 //   - Service registration: publish and clear m.bureau.service state
 //     events in #bureau/service.
 //   - Signing key discovery: fetch the daemon's Ed25519 token signing
@@ -22,18 +23,22 @@
 //   - Socket client: CBOR client for making authenticated requests to
 //     service sockets. Handles token inclusion, connection lifecycle,
 //     and response decoding.
+//   - Session persistence: [LoadSession] and [SaveSession] for the
+//     launcher and daemon's machine-level Matrix sessions (not used
+//     by service bootstrap).
 //
-// [Bootstrap] orchestrates the common startup sequence: flag validation,
-// identity ref construction, Matrix session loading, room resolution,
-// signing key discovery, auth configuration, and service registration.
-// Services call Bootstrap from their main() to eliminate ~130 lines of
-// repeated boilerplate, then add service-specific logic (initial sync,
-// socket server, sync loop) using the [BootstrapResult] fields.
+// [BootstrapViaProxy] orchestrates the common startup sequence: env var
+// validation, identity ref construction, proxy session creation, room
+// resolution, signing key discovery, auth configuration, and service
+// registration. Services call BootstrapViaProxy from their main() to
+// eliminate repeated boilerplate, then add service-specific logic
+// (initial sync, socket server, sync loop) using the [BootstrapResult]
+// fields.
 //
-// Services that need pre-Bootstrap work (e.g., reading secrets from
+// Services that need pre-bootstrap work (e.g., reading secrets from
 // stdin) create their logger via [NewLogger], perform the work, then
-// pass the logger to [BootstrapConfig]. Services without such needs
-// let Bootstrap create the logger automatically.
+// pass the logger to [ProxyBootstrapConfig]. Services without such
+// needs let BootstrapViaProxy create the logger automatically.
 //
 // # Authentication
 //
@@ -54,8 +59,7 @@
 // Ed25519 public key and a local [servicetoken.Blacklist] for emergency
 // revocation. No daemon round-trip is required per request.
 // [LoadTokenSigningKey] fetches the public key from #bureau/system
-// where the daemon publishes it at startup. [ResolveSystemRoom]
-// resolves the system room alias and joins it.
+// where the daemon publishes it at startup.
 //
 // # Revocation
 //

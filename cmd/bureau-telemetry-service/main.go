@@ -28,11 +28,11 @@ func main() {
 }
 
 func run() error {
-	var flags service.CommonFlags
-	service.RegisterCommonFlags(&flags)
+	var showVersion bool
+	flag.BoolVar(&showVersion, "version", false, "print version information and exit")
 	flag.Parse()
 
-	if flags.ShowVersion {
+	if showVersion {
 		fmt.Printf("bureau-telemetry-service %s\n", version.Info())
 		return nil
 	}
@@ -40,24 +40,10 @@ func run() error {
 	ctx, stop := signal.NotifyContext(context.Background(), syscall.SIGINT, syscall.SIGTERM)
 	defer stop()
 
-	var (
-		boot    *service.BootstrapResult
-		cleanup func()
-		err     error
-	)
-
-	if os.Getenv("BUREAU_PROXY_SOCKET") != "" {
-		boot, cleanup, err = service.BootstrapViaProxy(ctx, service.ProxyBootstrapConfig{
-			Audience:    "telemetry",
-			Description: "Telemetry aggregation and query service",
-		})
-	} else {
-		boot, cleanup, err = service.Bootstrap(ctx, service.BootstrapConfig{
-			Flags:       flags,
-			Audience:    "telemetry",
-			Description: "Telemetry aggregation and query service",
-		})
-	}
+	boot, cleanup, err := service.BootstrapViaProxy(ctx, service.ProxyBootstrapConfig{
+		Audience:    "telemetry",
+		Description: "Telemetry aggregation and query service",
+	})
 	if err != nil {
 		return err
 	}

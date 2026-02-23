@@ -27,14 +27,10 @@ func main() {
 }
 
 func run() error {
-	var flags service.CommonFlags
-	service.RegisterCommonFlags(&flags)
+	var showVersion bool
+	flag.BoolVar(&showVersion, "version", false, "print version information and exit")
 
-	// Relay-specific flags.
-	telemetryServiceSocket := flag.String("telemetry-service-socket", "",
-		"socket path of the telemetry service (required)")
-	telemetryTokenPath := flag.String("telemetry-token-path", "",
-		"path to the service token for authenticating to the telemetry service (required)")
+	// Relay-specific tuning flags, passed via the template Command field.
 	bufferMaxBytes := flag.Int("buffer-max-bytes", 64*1024*1024,
 		"maximum byte size of the outgoing batch buffer")
 	flushInterval := flag.Duration("flush-interval", 5*time.Second,
@@ -44,24 +40,26 @@ func run() error {
 
 	flag.Parse()
 
-	if flags.ShowVersion {
+	if showVersion {
 		fmt.Printf("bureau-telemetry-relay %s\n", version.Info())
 		return nil
 	}
 
-	// Validate relay-specific flags.
-	if *telemetryServiceSocket == "" {
-		return fmt.Errorf("--telemetry-service-socket is required")
+	// The telemetry service socket and token paths are set by the
+	// daemon via RequiredServices resolution and template env vars.
+	telemetryServiceSocket := os.Getenv("BUREAU_TELEMETRY_SERVICE_SOCKET")
+	if telemetryServiceSocket == "" {
+		return fmt.Errorf("BUREAU_TELEMETRY_SERVICE_SOCKET is required")
 	}
-	if *telemetryTokenPath == "" {
-		return fmt.Errorf("--telemetry-token-path is required")
+	telemetryTokenPath := os.Getenv("BUREAU_TELEMETRY_TOKEN_PATH")
+	if telemetryTokenPath == "" {
+		return fmt.Errorf("BUREAU_TELEMETRY_TOKEN_PATH is required")
 	}
 
 	ctx, stop := signal.NotifyContext(context.Background(), syscall.SIGINT, syscall.SIGTERM)
 	defer stop()
 
-	boot, cleanup, err := service.Bootstrap(ctx, service.BootstrapConfig{
-		Flags:        flags,
+	boot, cleanup, err := service.BootstrapViaProxy(ctx, service.ProxyBootstrapConfig{
 		Audience:     "telemetry",
 		Description:  "Per-machine telemetry relay",
 		Capabilities: []string{"ingest"},
@@ -74,7 +72,7 @@ func run() error {
 	// Create the outgoing shipper that maintains a persistent
 	// streaming connection to the telemetry service's "ingest"
 	// action.
-	shipper, err := newStreamShipper(*telemetryServiceSocket, *telemetryTokenPath)
+	shipper, err := newStreamShipper(telemetryServiceSocket, telemetryTokenPath)
 	if err != nil {
 		return fmt.Errorf("creating shipper: %w", err)
 	}
@@ -113,7 +111,7 @@ func run() error {
 	boot.Logger.Info("telemetry relay running",
 		"principal", boot.PrincipalName,
 		"socket", boot.SocketPath,
-		"telemetry_service", *telemetryServiceSocket,
+		"telemetry_service", telemetryServiceSocket,
 		"flush_interval", *flushInterval,
 		"flush_threshold", *flushThresholdBytes,
 		"buffer_max", *bufferMaxBytes,

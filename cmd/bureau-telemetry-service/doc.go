@@ -7,17 +7,16 @@
 // service tokens, and logs ingestion statistics. A local Unix socket
 // serves both the streaming ingestion and CBOR query actions.
 //
-// The service uses [service.Bootstrap] with audience "telemetry" and
-// registers in the fleet service directory so relays can discover it
-// via the daemon's cross-machine service routing.
+// The service uses [service.BootstrapViaProxy] with audience "telemetry"
+// and registers in the fleet service directory so relays can discover
+// it via the daemon's cross-machine service routing.
 //
 // # Startup
 //
-// The service reads its Matrix session from --state-dir/session.json
-// (written by the launcher during first-boot registration). It joins
-// the fleet service room for discovery, registers itself, and starts
-// the Unix socket server with the "ingest" stream handler and the
-// "status" query handler.
+// The service runs inside a daemon-managed sandbox with a proxy that
+// injects Matrix credentials. It resolves the fleet service room for
+// discovery, registers itself, and starts the Unix socket server with
+// the "ingest" stream handler and the "status" query handler.
 //
 // # Ingestion Protocol
 //

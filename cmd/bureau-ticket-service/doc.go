@@ -7,16 +7,15 @@
 // conditions via the Matrix /sync loop, and serves queries and
 // mutations over a Unix socket using the CBOR protocol.
 //
-// The service is Bureau's first standalone service principal. It
-// establishes patterns that future services (artifact, fleet
-// controller, RAG) will follow: Matrix session from a state directory,
+// The service establishes patterns that other services (artifact,
+// fleet controller, telemetry) follow: sandbox bootstrap via proxy,
 // service registration in #bureau/service, independent /sync loop
 // filtered to relevant event types, and a direct Unix socket API.
 //
 // # Startup
 //
-// The service reads its Matrix session from --state-dir/session.json
-// (written by the launcher during first-boot registration). It joins
+// The service runs inside a daemon-managed sandbox and bootstraps via
+// the per-principal proxy ([service.BootstrapViaProxy]). It resolves
 // #bureau/service for discovery, performs an initial /sync to build
 // its ticket index from current state, and starts listening on its
 // principal socket path.

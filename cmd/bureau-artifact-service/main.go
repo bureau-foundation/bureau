@@ -34,8 +34,8 @@ func main() {
 }
 
 func run() error {
-	var flags service.CommonFlags
-	service.RegisterCommonFlags(&flags)
+	var showVersion bool
+	flag.BoolVar(&showVersion, "version", false, "print version information and exit")
 
 	// Service-specific flags.
 	var (
@@ -54,7 +54,7 @@ func run() error {
 	flag.BoolVar(&encryptionKeyStdin, "encryption-key-stdin", false, "read 32-byte artifact encryption key from stdin")
 	flag.Parse()
 
-	if flags.ShowVersion {
+	if showVersion {
 		fmt.Printf("bureau-artifact-service %s\n", version.Info())
 		return nil
 	}
@@ -93,30 +93,14 @@ func run() error {
 	ctx, stop := signal.NotifyContext(context.Background(), syscall.SIGINT, syscall.SIGTERM)
 	defer stop()
 
-	var (
-		boot    *service.BootstrapResult
-		cleanup func()
-		bootErr error
-	)
-
-	if os.Getenv("BUREAU_PROXY_SOCKET") != "" {
-		boot, cleanup, bootErr = service.BootstrapViaProxy(ctx, service.ProxyBootstrapConfig{
-			Audience:     "artifact",
-			Description:  "Content-addressable artifact storage service",
-			Capabilities: []string{"content-addressed-store"},
-			Logger:       logger,
-		})
-	} else {
-		boot, cleanup, bootErr = service.Bootstrap(ctx, service.BootstrapConfig{
-			Flags:        flags,
-			Audience:     "artifact",
-			Description:  "Content-addressable artifact storage service",
-			Capabilities: []string{"content-addressed-store"},
-			Logger:       logger,
-		})
-	}
-	if bootErr != nil {
-		return bootErr
+	boot, cleanup, err := service.BootstrapViaProxy(ctx, service.ProxyBootstrapConfig{
+		Audience:     "artifact",
+		Description:  "Content-addressable artifact storage service",
+		Capabilities: []string{"content-addressed-store"},
+		Logger:       logger,
+	})
+	if err != nil {
+		return err
 	}
 	defer cleanup()
 

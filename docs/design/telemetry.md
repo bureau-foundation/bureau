@@ -142,7 +142,7 @@ Responsibilities:
   in Prometheus exposition format. A single scrape target returns data
   for all machines, differentiated by labels.
 
-The telemetry service uses `lib/service.Bootstrap()` with
+The telemetry service uses `lib/service.BootstrapViaProxy()` with
 audience `"telemetry"`, registers in the fleet service directory, and
 follows the standard service lifecycle (Matrix sync for configuration
 events, CBOR socket for queries, graceful shutdown with deregistration).
@@ -537,8 +537,9 @@ free:
   request total, both labeled by action.
 - **lib/service.RunSyncLoop** — span per sync cycle. Histogram for sync
   duration. Counter for sync errors.
-- **lib/service.Bootstrap** — span covering the full bootstrap sequence
-  (session load, validation, registration).
+- **lib/service.BootstrapViaProxy** — span covering the full bootstrap
+  sequence (env var validation, proxy session, room resolution,
+  registration).
 
 ### Per-Binary Instrumentation
 

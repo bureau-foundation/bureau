@@ -13,8 +13,8 @@
 //
 // # Startup
 //
-// The service reads its Matrix session from --state-dir/session.json
-// (written by the launcher during first-boot registration). It joins
+// The service runs inside a daemon-managed sandbox and bootstraps via
+// the per-principal proxy ([service.BootstrapViaProxy]). It resolves
 // #bureau/service for discovery, #bureau/fleet for fleet definitions,
 // and #bureau/machine for machine status. It performs an initial /sync
 // to build its fleet model from current state, and starts listening on

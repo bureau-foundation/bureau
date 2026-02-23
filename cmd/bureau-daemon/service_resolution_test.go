@@ -141,7 +141,7 @@ func TestReconcile_ServiceMountsResolved(t *testing.T) {
 	if capturedMounts[0].Role != "ticket" {
 		t.Errorf("mount role = %q, want %q", capturedMounts[0].Role, "ticket")
 	}
-	expectedSocket := ticketEntity.SocketPath(daemon.fleetRunDir)
+	expectedSocket := ticketEntity.ServiceSocketPath(daemon.fleetRunDir)
 	if capturedMounts[0].SocketPath != expectedSocket {
 		t.Errorf("mount socket = %q, want %q", capturedMounts[0].SocketPath, expectedSocket)
 	}
@@ -348,7 +348,7 @@ func TestReconcile_ServiceMountsWorkspaceRoom(t *testing.T) {
 	}
 
 	// Workspace room binding should win over config room binding.
-	expectedSocket := wsTicketEntity.SocketPath(daemon.fleetRunDir)
+	expectedSocket := wsTicketEntity.ServiceSocketPath(daemon.fleetRunDir)
 	if capturedMounts[0].SocketPath != expectedSocket {
 		t.Errorf("mount socket = %q, want %q (workspace binding should win)",
 			capturedMounts[0].SocketPath, expectedSocket)
@@ -478,12 +478,12 @@ func TestReconcile_ServiceMountsMultipleServices(t *testing.T) {
 		mountsByRole[mount.Role] = mount.SocketPath
 	}
 
-	ticketSocket := ticketEntity.SocketPath(daemon.fleetRunDir)
+	ticketSocket := ticketEntity.ServiceSocketPath(daemon.fleetRunDir)
 	if mountsByRole["ticket"] != ticketSocket {
 		t.Errorf("ticket socket = %q, want %q", mountsByRole["ticket"], ticketSocket)
 	}
 
-	ragSocket := ragEntity.SocketPath(daemon.fleetRunDir)
+	ragSocket := ragEntity.ServiceSocketPath(daemon.fleetRunDir)
 	if mountsByRole["rag"] != ragSocket {
 		t.Errorf("rag socket = %q, want %q", mountsByRole["rag"], ragSocket)
 	}

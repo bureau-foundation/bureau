@@ -23,6 +23,7 @@ go_library(
         "//lib/clock",
         "//lib/codec",
         "//lib/principal",
+        "//lib/proxyclient",
         "//lib/ref",
         "//lib/schema",
         "//lib/secret",

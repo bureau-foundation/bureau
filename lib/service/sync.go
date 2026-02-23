@@ -69,7 +69,7 @@ type SyncHandler func(ctx context.Context, response *messaging.SyncResponse)
 //
 // Unlike incremental sync, this returns immediately — the homeserver
 // sends the current state without waiting for new events.
-func InitialSync(ctx context.Context, session *messaging.DirectSession, filter string) (string, *messaging.SyncResponse, error) {
+func InitialSync(ctx context.Context, session messaging.Session, filter string) (string, *messaging.SyncResponse, error) {
 	response, err := session.Sync(ctx, messaging.SyncOptions{
 		Filter: filter,
 	})
@@ -95,7 +95,7 @@ func InitialSync(ctx context.Context, session *messaging.DirectSession, filter s
 // loop. This separation lets services build their initial state
 // (indexes, caches) synchronously before entering the event-driven
 // incremental phase.
-func RunSyncLoop(ctx context.Context, session *messaging.DirectSession, config SyncConfig, sinceToken string, handler SyncHandler, clk clock.Clock, logger *slog.Logger) {
+func RunSyncLoop(ctx context.Context, session messaging.Session, config SyncConfig, sinceToken string, handler SyncHandler, clk clock.Clock, logger *slog.Logger) {
 	timeout := config.Timeout
 	if timeout == 0 {
 		timeout = 30000
@@ -153,7 +153,7 @@ func RunSyncLoop(ctx context.Context, session *messaging.DirectSession, config S
 // Returns the room IDs that were successfully joined. Services should
 // call this during initial sync processing and on each incremental
 // sync that contains invites.
-func AcceptInvites(ctx context.Context, session *messaging.DirectSession, invites map[ref.RoomID]messaging.InvitedRoom, logger *slog.Logger) []ref.RoomID {
+func AcceptInvites(ctx context.Context, session messaging.Session, invites map[ref.RoomID]messaging.InvitedRoom, logger *slog.Logger) []ref.RoomID {
 	var accepted []ref.RoomID
 	for roomID := range invites {
 		logger.Info("accepting room invite", "room_id", roomID)

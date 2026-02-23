@@ -210,7 +210,7 @@ func (d *Daemon) reconcileServices(ctx context.Context, consumers []ref.Entity, 
 		serviceName := principal.ProxyServiceName(localpart)
 
 		if service.Machine == d.machine {
-			providerSocket := service.Principal.SocketPath(d.fleetRunDir)
+			providerSocket := service.Principal.ServiceSocketPath(d.fleetRunDir)
 
 			d.logger.Info("local service registered, configuring proxy routes",
 				"service", localpart,
@@ -266,7 +266,7 @@ func (d *Daemon) reconcileServices(ctx context.Context, consumers []ref.Entity, 
 		serviceName := principal.ProxyServiceName(localpart)
 
 		if service.Machine == d.machine {
-			providerSocket := service.Principal.SocketPath(d.fleetRunDir)
+			providerSocket := service.Principal.ServiceSocketPath(d.fleetRunDir)
 
 			d.logger.Info("local service updated, reconfiguring proxy routes",
 				"service", localpart,
@@ -718,7 +718,7 @@ func (d *Daemon) discoverSharedCache(ctx context.Context) {
 		// Local shared cache: derive socket path directly. Stop any
 		// existing tunnel from a previous remote cache.
 		d.stopTunnel("upstream")
-		socketPath := binding.Principal.SocketPath(d.fleetRunDir)
+		socketPath := binding.Principal.ServiceSocketPath(d.fleetRunDir)
 		d.logger.Info("discovered local shared cache",
 			"principal", binding.Principal,
 			"socket", socketPath,

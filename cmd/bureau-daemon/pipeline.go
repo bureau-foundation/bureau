@@ -246,7 +246,7 @@ func (d *Daemon) startPipelineExecutor(
 	// Validate that the admin socket path fits within the Unix sun_path
 	// limit. This catches misconfiguration early rather than surfacing as
 	// a cryptic "bind: invalid argument" inside the launcher.
-	adminSocketPath := pipelineEntity.AdminSocketPath(d.fleetRunDir)
+	adminSocketPath := pipelineEntity.ProxyAdminSocketPath(d.fleetRunDir)
 	if length := len(adminSocketPath); length > maxUnixSocketPathLength {
 		d.logger.Error("admin socket path exceeds Unix limit",
 			"localpart", localpart,
@@ -458,7 +458,7 @@ func (d *Daemon) findLocalArtifactSocket() string {
 		}
 		for _, capability := range service.Capabilities {
 			if capability == "content-addressed-store" {
-				return service.Principal.SocketPath(d.fleetRunDir)
+				return service.Principal.ServiceSocketPath(d.fleetRunDir)
 			}
 		}
 	}
@@ -476,7 +476,7 @@ func (d *Daemon) findLocalTicketSocket() string {
 		}
 		for _, capability := range svc.Capabilities {
 			if capability == "dependency-graph" {
-				return svc.Principal.SocketPath(d.fleetRunDir)
+				return svc.Principal.ServiceSocketPath(d.fleetRunDir)
 			}
 		}
 	}

@@ -42,12 +42,26 @@ func run() error {
 	ctx, stop := signal.NotifyContext(context.Background(), syscall.SIGINT, syscall.SIGTERM)
 	defer stop()
 
-	boot, cleanup, err := service.Bootstrap(ctx, service.BootstrapConfig{
-		Flags:        flags,
-		Audience:     "agent",
-		Description:  "Agent lifecycle, session, context, and metrics service",
-		Capabilities: []string{"session", "context", "metrics"},
-	})
+	var (
+		boot    *service.BootstrapResult
+		cleanup func()
+		err     error
+	)
+
+	if os.Getenv("BUREAU_PROXY_SOCKET") != "" {
+		boot, cleanup, err = service.BootstrapViaProxy(ctx, service.ProxyBootstrapConfig{
+			Audience:     "agent",
+			Description:  "Agent lifecycle, session, context, and metrics service",
+			Capabilities: []string{"session", "context", "metrics"},
+		})
+	} else {
+		boot, cleanup, err = service.Bootstrap(ctx, service.BootstrapConfig{
+			Flags:        flags,
+			Audience:     "agent",
+			Description:  "Agent lifecycle, session, context, and metrics service",
+			Capabilities: []string{"session", "context", "metrics"},
+		})
+	}
 	if err != nil {
 		return err
 	}
@@ -161,7 +175,7 @@ func run() error {
 type AgentService struct {
 	mutex sync.RWMutex
 
-	session        *messaging.DirectSession
+	session        messaging.Session
 	artifactClient *artifactstore.Client
 	clock          clock.Clock
 

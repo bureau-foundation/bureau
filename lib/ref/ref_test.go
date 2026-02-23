@@ -491,10 +491,12 @@ func TestSocketPaths(t *testing.T) {
 		want  string
 	}
 	tests := []pathTest{
-		{"machine.SocketPath", machine.SocketPath(runDir), "/run/bureau/fleet/prod/machine/gpu-box.sock"},
-		{"machine.AdminSocketPath", machine.AdminSocketPath(runDir), "/run/bureau/fleet/prod/machine/gpu-box.admin.sock"},
-		{"service.SocketPath", service.SocketPath(runDir), "/run/bureau/fleet/prod/service/stt/whisper.sock"},
-		{"service.AdminSocketPath", service.AdminSocketPath(runDir), "/run/bureau/fleet/prod/service/stt/whisper.admin.sock"},
+		{"machine.ServiceSocketPath", machine.ServiceSocketPath(runDir), "/run/bureau/fleet/prod/machine/gpu-box.sock"},
+		{"machine.ProxySocketPath", machine.ProxySocketPath(runDir), "/run/bureau/fleet/prod/machine/gpu-box.proxy.sock"},
+		{"machine.ProxyAdminSocketPath", machine.ProxyAdminSocketPath(runDir), "/run/bureau/fleet/prod/machine/gpu-box.admin.sock"},
+		{"service.ServiceSocketPath", service.ServiceSocketPath(runDir), "/run/bureau/fleet/prod/service/stt/whisper.sock"},
+		{"service.ProxySocketPath", service.ProxySocketPath(runDir), "/run/bureau/fleet/prod/service/stt/whisper.proxy.sock"},
+		{"service.ProxyAdminSocketPath", service.ProxyAdminSocketPath(runDir), "/run/bureau/fleet/prod/service/stt/whisper.admin.sock"},
 	}
 	for _, tt := range tests {
 		if tt.got != tt.want {
@@ -521,45 +523,50 @@ func TestParseEntityUserID(t *testing.T) {
 	t.Parallel()
 
 	tests := []struct {
-		name       string
-		userID     string
-		wantType   string
-		wantName   string
-		wantSocket string // relative to fleet RunDir
-		wantAdmin  string
-		wantErr    bool
+		name              string
+		userID            string
+		wantType          string
+		wantName          string
+		wantServiceSocket string // relative to fleet RunDir
+		wantProxySocket   string
+		wantProxyAdmin    string
+		wantErr           bool
 	}{
 		{
-			name:       "machine",
-			userID:     "@my_bureau/fleet/prod/machine/gpu-box:" + testServer,
-			wantType:   "machine",
-			wantName:   "gpu-box",
-			wantSocket: "/run/bureau/fleet/prod/machine/gpu-box.sock",
-			wantAdmin:  "/run/bureau/fleet/prod/machine/gpu-box.admin.sock",
+			name:              "machine",
+			userID:            "@my_bureau/fleet/prod/machine/gpu-box:" + testServer,
+			wantType:          "machine",
+			wantName:          "gpu-box",
+			wantServiceSocket: "/run/bureau/fleet/prod/machine/gpu-box.sock",
+			wantProxySocket:   "/run/bureau/fleet/prod/machine/gpu-box.proxy.sock",
+			wantProxyAdmin:    "/run/bureau/fleet/prod/machine/gpu-box.admin.sock",
 		},
 		{
-			name:       "service",
-			userID:     "@my_bureau/fleet/prod/service/ticket:" + testServer,
-			wantType:   "service",
-			wantName:   "ticket",
-			wantSocket: "/run/bureau/fleet/prod/service/ticket.sock",
-			wantAdmin:  "/run/bureau/fleet/prod/service/ticket.admin.sock",
+			name:              "service",
+			userID:            "@my_bureau/fleet/prod/service/ticket:" + testServer,
+			wantType:          "service",
+			wantName:          "ticket",
+			wantServiceSocket: "/run/bureau/fleet/prod/service/ticket.sock",
+			wantProxySocket:   "/run/bureau/fleet/prod/service/ticket.proxy.sock",
+			wantProxyAdmin:    "/run/bureau/fleet/prod/service/ticket.admin.sock",
 		},
 		{
-			name:       "hierarchical_service",
-			userID:     "@my_bureau/fleet/prod/service/stt/whisper:" + testServer,
-			wantType:   "service",
-			wantName:   "stt/whisper",
-			wantSocket: "/run/bureau/fleet/prod/service/stt/whisper.sock",
-			wantAdmin:  "/run/bureau/fleet/prod/service/stt/whisper.admin.sock",
+			name:              "hierarchical_service",
+			userID:            "@my_bureau/fleet/prod/service/stt/whisper:" + testServer,
+			wantType:          "service",
+			wantName:          "stt/whisper",
+			wantServiceSocket: "/run/bureau/fleet/prod/service/stt/whisper.sock",
+			wantProxySocket:   "/run/bureau/fleet/prod/service/stt/whisper.proxy.sock",
+			wantProxyAdmin:    "/run/bureau/fleet/prod/service/stt/whisper.admin.sock",
 		},
 		{
-			name:       "agent",
-			userID:     "@my_bureau/fleet/prod/agent/code-reviewer:" + testServer,
-			wantType:   "agent",
-			wantName:   "code-reviewer",
-			wantSocket: "/run/bureau/fleet/prod/agent/code-reviewer.sock",
-			wantAdmin:  "/run/bureau/fleet/prod/agent/code-reviewer.admin.sock",
+			name:              "agent",
+			userID:            "@my_bureau/fleet/prod/agent/code-reviewer:" + testServer,
+			wantType:          "agent",
+			wantName:          "code-reviewer",
+			wantServiceSocket: "/run/bureau/fleet/prod/agent/code-reviewer.sock",
+			wantProxySocket:   "/run/bureau/fleet/prod/agent/code-reviewer.proxy.sock",
+			wantProxyAdmin:    "/run/bureau/fleet/prod/agent/code-reviewer.admin.sock",
 		},
 		{
 			name:    "non_fleet_user_id",
@@ -603,11 +610,14 @@ func TestParseEntityUserID(t *testing.T) {
 			fleet, _ := ref.NewFleet(ns, "prod")
 			fleetRunDir := fleet.RunDir("/run/bureau")
 
-			if got := entity.SocketPath(fleetRunDir); got != test.wantSocket {
-				t.Errorf("SocketPath(%q) = %q, want %q", fleetRunDir, got, test.wantSocket)
+			if got := entity.ServiceSocketPath(fleetRunDir); got != test.wantServiceSocket {
+				t.Errorf("ServiceSocketPath(%q) = %q, want %q", fleetRunDir, got, test.wantServiceSocket)
 			}
-			if got := entity.AdminSocketPath(fleetRunDir); got != test.wantAdmin {
-				t.Errorf("AdminSocketPath(%q) = %q, want %q", fleetRunDir, got, test.wantAdmin)
+			if got := entity.ProxySocketPath(fleetRunDir); got != test.wantProxySocket {
+				t.Errorf("ProxySocketPath(%q) = %q, want %q", fleetRunDir, got, test.wantProxySocket)
+			}
+			if got := entity.ProxyAdminSocketPath(fleetRunDir); got != test.wantProxyAdmin {
+				t.Errorf("ProxyAdminSocketPath(%q) = %q, want %q", fleetRunDir, got, test.wantProxyAdmin)
 			}
 		})
 	}
@@ -1052,53 +1062,53 @@ func TestNewEntityFromAccountLocalpart(t *testing.T) {
 	}
 
 	tests := []struct {
-		name             string
-		accountLocalpart string
-		wantLocalpart    string
-		wantEntityType   string
-		wantEntityName   string
-		wantSocketSuffix string
-		wantErr          bool
+		name                    string
+		accountLocalpart        string
+		wantLocalpart           string
+		wantEntityType          string
+		wantEntityName          string
+		wantServiceSocketSuffix string
+		wantErr                 bool
 	}{
 		{
-			name:             "simple agent",
-			accountLocalpart: "agent/frontend",
-			wantLocalpart:    "bureau/fleet/prod/agent/frontend",
-			wantEntityType:   "agent",
-			wantEntityName:   "frontend",
-			wantSocketSuffix: "agent/frontend.sock",
+			name:                    "simple agent",
+			accountLocalpart:        "agent/frontend",
+			wantLocalpart:           "bureau/fleet/prod/agent/frontend",
+			wantEntityType:          "agent",
+			wantEntityName:          "frontend",
+			wantServiceSocketSuffix: "agent/frontend.sock",
 		},
 		{
-			name:             "simple service",
-			accountLocalpart: "service/ticket",
-			wantLocalpart:    "bureau/fleet/prod/service/ticket",
-			wantEntityType:   "service",
-			wantEntityName:   "ticket",
-			wantSocketSuffix: "service/ticket.sock",
+			name:                    "simple service",
+			accountLocalpart:        "service/ticket",
+			wantLocalpart:           "bureau/fleet/prod/service/ticket",
+			wantEntityType:          "service",
+			wantEntityName:          "ticket",
+			wantServiceSocketSuffix: "service/ticket.sock",
 		},
 		{
-			name:             "hierarchical service",
-			accountLocalpart: "service/stt/whisper",
-			wantLocalpart:    "bureau/fleet/prod/service/stt/whisper",
-			wantEntityType:   "service",
-			wantEntityName:   "stt/whisper",
-			wantSocketSuffix: "service/stt/whisper.sock",
+			name:                    "hierarchical service",
+			accountLocalpart:        "service/stt/whisper",
+			wantLocalpart:           "bureau/fleet/prod/service/stt/whisper",
+			wantEntityType:          "service",
+			wantEntityName:          "stt/whisper",
+			wantServiceSocketSuffix: "service/stt/whisper.sock",
 		},
 		{
-			name:             "machine",
-			accountLocalpart: "machine/workstation",
-			wantLocalpart:    "bureau/fleet/prod/machine/workstation",
-			wantEntityType:   "machine",
-			wantEntityName:   "workstation",
-			wantSocketSuffix: "machine/workstation.sock",
+			name:                    "machine",
+			accountLocalpart:        "machine/workstation",
+			wantLocalpart:           "bureau/fleet/prod/machine/workstation",
+			wantEntityType:          "machine",
+			wantEntityName:          "workstation",
+			wantServiceSocketSuffix: "machine/workstation.sock",
 		},
 		{
-			name:             "pipeline executor",
-			accountLocalpart: "pipeline/deploy/1709234567123",
-			wantLocalpart:    "bureau/fleet/prod/pipeline/deploy/1709234567123",
-			wantEntityType:   "pipeline",
-			wantEntityName:   "deploy/1709234567123",
-			wantSocketSuffix: "pipeline/deploy/1709234567123.sock",
+			name:                    "pipeline executor",
+			accountLocalpart:        "pipeline/deploy/1709234567123",
+			wantLocalpart:           "bureau/fleet/prod/pipeline/deploy/1709234567123",
+			wantEntityType:          "pipeline",
+			wantEntityName:          "deploy/1709234567123",
+			wantServiceSocketSuffix: "pipeline/deploy/1709234567123.sock",
 		},
 		{
 			name:             "single segment only",
@@ -1138,10 +1148,10 @@ func TestNewEntityFromAccountLocalpart(t *testing.T) {
 				t.Errorf("AccountLocalpart() = %q, want %q", got, test.accountLocalpart)
 			}
 
-			// Verify socket path ends with the expected suffix.
-			socketPath := entity.SocketPath("/run/bureau/fleet/prod")
-			if !strings.HasSuffix(socketPath, test.wantSocketSuffix) {
-				t.Errorf("SocketPath() = %q, want suffix %q", socketPath, test.wantSocketSuffix)
+			// Verify service socket path ends with the expected suffix.
+			socketPath := entity.ServiceSocketPath("/run/bureau/fleet/prod")
+			if !strings.HasSuffix(socketPath, test.wantServiceSocketSuffix) {
+				t.Errorf("ServiceSocketPath() = %q, want suffix %q", socketPath, test.wantServiceSocketSuffix)
 			}
 
 			// Verify the entity's fleet matches the input fleet.
@@ -1281,8 +1291,8 @@ func TestMachineEntity(t *testing.T) {
 	if entity.Localpart() != machine.Localpart() {
 		t.Errorf("Entity().Localpart() = %q, want %q", entity.Localpart(), machine.Localpart())
 	}
-	if entity.SocketPath("/run/bureau") != machine.SocketPath("/run/bureau") {
-		t.Errorf("Entity().SocketPath() = %q, want %q", entity.SocketPath("/run/bureau"), machine.SocketPath("/run/bureau"))
+	if entity.ServiceSocketPath("/run/bureau") != machine.ServiceSocketPath("/run/bureau") {
+		t.Errorf("Entity().ServiceSocketPath() = %q, want %q", entity.ServiceSocketPath("/run/bureau"), machine.ServiceSocketPath("/run/bureau"))
 	}
 	if entity.EntityType() != "machine" {
 		t.Errorf("Entity().EntityType() = %q, want %q", entity.EntityType(), "machine")
@@ -1310,8 +1320,8 @@ func TestServiceEntity(t *testing.T) {
 	if entity.Localpart() != service.Localpart() {
 		t.Errorf("Entity().Localpart() = %q, want %q", entity.Localpart(), service.Localpart())
 	}
-	if entity.SocketPath("/run/bureau") != service.SocketPath("/run/bureau") {
-		t.Errorf("Entity().SocketPath() = %q, want %q", entity.SocketPath("/run/bureau"), service.SocketPath("/run/bureau"))
+	if entity.ServiceSocketPath("/run/bureau") != service.ServiceSocketPath("/run/bureau") {
+		t.Errorf("Entity().ServiceSocketPath() = %q, want %q", entity.ServiceSocketPath("/run/bureau"), service.ServiceSocketPath("/run/bureau"))
 	}
 	if entity.EntityType() != "service" {
 		t.Errorf("Entity().EntityType() = %q, want %q", entity.EntityType(), "service")

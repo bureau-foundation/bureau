@@ -346,7 +346,7 @@ func run() error {
 		peerTransports:        make(map[string]http.RoundTripper),
 		tunnels:               make(map[string]*tunnelInstance),
 		adminSocketPathFunc: func(principal ref.Entity) string {
-			return principal.AdminSocketPath(fleet.RunDir(runDir))
+			return principal.ProxyAdminSocketPath(fleet.RunDir(runDir))
 		},
 		observeSocketPath:      principal.ObserveSocketPath(runDir),
 		tmuxServer:             tmux.NewServer(principal.TmuxSocketPath(runDir), ""),

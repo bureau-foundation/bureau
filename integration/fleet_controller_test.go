@@ -693,7 +693,7 @@ func TestFleetPlaceAndUnplace(t *testing.T) {
 		// Wait for the daemon to create the proxy. The daemon detects
 		// the MachineConfig change (written by the fleet controller),
 		// reads credentials, and creates a proxy sandbox.
-		proxySocket := machine.PrincipalSocketPath(t, serviceLocalpart)
+		proxySocket := machine.PrincipalProxySocketPath(t, serviceLocalpart)
 		waitForFile(t, proxySocket)
 
 		// Verify the proxy serves the correct identity.
@@ -741,7 +741,7 @@ func TestFleetPlaceAndUnplace(t *testing.T) {
 
 	// --- Unplace the service ---
 	t.Run("Unplace", func(t *testing.T) {
-		proxySocket := machine.PrincipalSocketPath(t, serviceLocalpart)
+		proxySocket := machine.PrincipalProxySocketPath(t, serviceLocalpart)
 
 		var unplaceResponse fleetUnplaceResponse
 		if err := authClient.Call(ctx, "unplace", map[string]any{
@@ -855,8 +855,8 @@ func TestFleetReconciliation(t *testing.T) {
 	// Wait for proxy sockets on both machines. Proxy socket existence
 	// proves the full chain: fleet controller reconcile → place() writes
 	// MachineConfig → daemon /sync → launcher sandbox creation.
-	proxySocketA := machineA.PrincipalSocketPath(t, serviceLocalpart)
-	proxySocketB := machineB.PrincipalSocketPath(t, serviceLocalpart)
+	proxySocketA := machineA.PrincipalProxySocketPath(t, serviceLocalpart)
+	proxySocketB := machineB.PrincipalProxySocketPath(t, serviceLocalpart)
 	waitForFile(t, proxySocketA)
 	waitForFile(t, proxySocketB)
 

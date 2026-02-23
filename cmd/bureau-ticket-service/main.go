@@ -43,12 +43,24 @@ func run() error {
 
 	capabilities := []string{"dependency-graph", "gate-evaluation"}
 
-	boot, cleanup, err := service.Bootstrap(ctx, service.BootstrapConfig{
-		Flags:        flags,
-		Audience:     "ticket",
-		Description:  "Ticket tracking and coordination service",
-		Capabilities: capabilities,
-	})
+	var boot *service.BootstrapResult
+	var cleanup func()
+	var err error
+
+	if os.Getenv("BUREAU_PROXY_SOCKET") != "" {
+		boot, cleanup, err = service.BootstrapViaProxy(ctx, service.ProxyBootstrapConfig{
+			Audience:     "ticket",
+			Description:  "Ticket tracking and coordination service",
+			Capabilities: capabilities,
+		})
+	} else {
+		boot, cleanup, err = service.Bootstrap(ctx, service.BootstrapConfig{
+			Flags:        flags,
+			Audience:     "ticket",
+			Description:  "Ticket tracking and coordination service",
+			Capabilities: capabilities,
+		})
+	}
 	if err != nil {
 		return err
 	}
@@ -61,7 +73,6 @@ func run() error {
 		clock:         boot.Clock,
 		service:       boot.Service,
 		machine:       boot.Machine,
-		runDir:        boot.RunDir,
 		serviceRoomID: boot.ServiceRoomID,
 		startedAt:     boot.Clock.Now(),
 		rooms:         make(map[ref.RoomID]*roomState),
@@ -138,14 +149,13 @@ type TicketService struct {
 	// mutate the same shared state.
 	mu sync.RWMutex
 
-	session  *messaging.DirectSession
+	session  messaging.Session
 	writer   matrixWriter
 	resolver aliasResolver
 	clock    clock.Clock
 
 	service       ref.Service
 	machine       ref.Machine
-	runDir        string
 	serviceRoomID ref.RoomID
 	startedAt     time.Time
 

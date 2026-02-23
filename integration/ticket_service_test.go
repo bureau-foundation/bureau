@@ -260,12 +260,12 @@ func TestTicketLifecycleAgent(t *testing.T) {
 			}},
 		})
 
-		proxySocket := machine.PrincipalSocketPath(t, account.Localpart)
+		proxySocket := machine.PrincipalProxySocketPath(t, account.Localpart)
 		waitForFile(t, proxySocket)
 		readyWatch.WaitForMessage(t, "agent-ready", account.UserID)
 
 		currentDeployedLocalpart = account.Localpart
-		currentAdminSocket = machine.PrincipalAdminSocketPath(t, account.Localpart)
+		currentAdminSocket = machine.PrincipalProxyAdminSocketPath(t, account.Localpart)
 		return currentAdminSocket
 	}
 

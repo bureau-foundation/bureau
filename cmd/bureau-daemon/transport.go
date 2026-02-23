@@ -421,7 +421,7 @@ func (d *Daemon) localProviderSocket(proxyName string) (string, bool) {
 		if service.Machine != d.machine {
 			continue // Remote, not local.
 		}
-		return service.Principal.SocketPath(d.fleetRunDir), true
+		return service.Principal.ServiceSocketPath(d.fleetRunDir), true
 	}
 	return "", false
 }
@@ -503,7 +503,7 @@ func (d *Daemon) handleTransportTunnel(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, fmt.Sprintf("invalid service localpart: %v", parseErr), http.StatusBadRequest)
 		return
 	}
-	socketPath := serviceRef.SocketPath(d.fleetRunDir)
+	socketPath := serviceRef.ServiceSocketPath(d.fleetRunDir)
 	serviceConnection, err := net.DialTimeout("unix", socketPath, 5*time.Second)
 	if err != nil {
 		d.logger.Error("tunnel: cannot connect to local service socket",

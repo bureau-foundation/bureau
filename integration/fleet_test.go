@@ -636,8 +636,8 @@ func TestConfigReconciliation(t *testing.T) {
 	pushCredentials(t, admin, machine, alpha)
 	pushCredentials(t, admin, machine, beta)
 
-	alphaSocket := machine.PrincipalSocketPath(t, alpha.Localpart)
-	betaSocket := machine.PrincipalSocketPath(t, beta.Localpart)
+	alphaSocket := machine.PrincipalProxySocketPath(t, alpha.Localpart)
+	betaSocket := machine.PrincipalProxySocketPath(t, beta.Localpart)
 
 	// --- Phase 1: deploy alpha ---
 	t.Run("AddFirstPrincipal", func(t *testing.T) {

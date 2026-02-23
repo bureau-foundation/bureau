@@ -297,7 +297,7 @@ func (l *Launcher) reconnectSandboxes() error {
 			cleanupConfigDir(entry.ConfigDir)
 			continue
 		}
-		adminSocketPath := principalRef.AdminSocketPath(l.fleetRunDir)
+		adminSocketPath := principalRef.ProxyAdminSocketPath(l.fleetRunDir)
 		if _, err := os.Stat(adminSocketPath); err != nil {
 			l.logger.Warn("reconnected sandbox admin socket missing, killing wedged proxy",
 				"principal", localpart, "proxy_pid", entry.ProxyPID,

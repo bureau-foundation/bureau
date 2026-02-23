@@ -101,7 +101,7 @@ func TestHALeaseAcquisition(t *testing.T) {
 
 	// Wait for the proxy socket — proves the full end-to-end path:
 	// HA acquisition → PrincipalAssignment → reconcile → sandbox creation.
-	proxySocket := machine.PrincipalSocketPath(t, serviceLocalpart)
+	proxySocket := machine.PrincipalProxySocketPath(t, serviceLocalpart)
 	waitForFile(t, proxySocket)
 
 	// Verify the proxy serves the correct identity.
@@ -238,7 +238,7 @@ func TestHALeaseFailover(t *testing.T) {
 	}
 
 	// Wait for the proxy socket on the winner.
-	winnerProxySocket := winner.PrincipalSocketPath(t, serviceLocalpart)
+	winnerProxySocket := winner.PrincipalProxySocketPath(t, serviceLocalpart)
 	waitForFile(t, winnerProxySocket)
 
 	proxyClient := proxyHTTPClient(winnerProxySocket)
@@ -280,7 +280,7 @@ func TestHALeaseFailover(t *testing.T) {
 	t.Logf("failover lease acquired by %s", loser.Name)
 
 	// Wait for the proxy socket on the loser (now the new holder).
-	loserProxySocket := loser.PrincipalSocketPath(t, serviceLocalpart)
+	loserProxySocket := loser.PrincipalProxySocketPath(t, serviceLocalpart)
 	waitForFile(t, loserProxySocket)
 
 	loserProxyClient := proxyHTTPClient(loserProxySocket)

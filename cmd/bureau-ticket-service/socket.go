@@ -284,7 +284,7 @@ func (ts *TicketService) matchRoomAlias(localpart string, serverName ref.ServerN
 
 // --- Matrix state writer ---
 
-// matrixWriter is the subset of *messaging.DirectSession needed for writing
+// matrixWriter is the subset of messaging.Session needed for writing
 // ticket state events to Matrix. Tests substitute a fake implementation.
 type matrixWriter interface {
 	SendStateEvent(ctx context.Context, roomID ref.RoomID, eventType ref.EventType, stateKey string, content any) (ref.EventID, error)

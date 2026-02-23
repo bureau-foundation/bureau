@@ -66,7 +66,7 @@ func TestPayloadDeliveryAndHotReload(t *testing.T) {
 	})
 
 	// Wait for proxy socket (proves sandbox creation).
-	proxySocketPath := machine.PrincipalSocketPath(t, agent.Localpart)
+	proxySocketPath := machine.PrincipalProxySocketPath(t, agent.Localpart)
 	waitForFile(t, proxySocketPath)
 	t.Logf("proxy socket appeared: %s", proxySocketPath)
 
@@ -196,7 +196,7 @@ func TestPayloadHotReloadFromEmpty(t *testing.T) {
 	})
 
 	// Wait for proxy socket (proves sandbox creation).
-	proxySocketPath := machine.PrincipalSocketPath(t, agent.Localpart)
+	proxySocketPath := machine.PrincipalProxySocketPath(t, agent.Localpart)
 	waitForFile(t, proxySocketPath)
 	t.Logf("proxy socket appeared: %s", proxySocketPath)
 

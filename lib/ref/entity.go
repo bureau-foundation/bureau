@@ -114,16 +114,29 @@ func (e entity) String() string { return e.localpart }
 // IsZero reports whether this is an uninitialized zero-value entity.
 func (e entity) IsZero() bool { return e.userID.IsZero() }
 
-// SocketPath returns the agent-facing socket path within a fleet's
-// run directory.
-func (e entity) SocketPath(runDir string) string {
-	return runDir + "/" + e.entityType + "/" + e.name + socketSuffix
+// ServiceSocketPath returns the path where a service principal
+// listens for incoming CBOR requests from other principals. Only
+// meaningful for service entities; agents and machines do not accept
+// incoming connections on this path.
+func (e entity) ServiceSocketPath(runDir string) string {
+	return runDir + "/" + e.entityType + "/" + e.name + serviceSocketSuffix
 }
 
-// AdminSocketPath returns the daemon-only admin socket path within a
-// fleet's run directory.
-func (e entity) AdminSocketPath(runDir string) string {
-	return runDir + "/" + e.entityType + "/" + e.name + adminSocketSuffix
+// ProxySocketPath returns the path where a principal's proxy listens
+// for HTTP requests from the sandboxed process. The launcher creates
+// this socket and bind-mounts it into the sandbox at
+// /run/bureau/proxy.sock. Also accessible from the host for
+// integration tests and diagnostics.
+func (e entity) ProxySocketPath(runDir string) string {
+	return runDir + "/" + e.entityType + "/" + e.name + proxySocketSuffix
+}
+
+// ProxyAdminSocketPath returns the daemon-only admin socket path
+// for a principal's proxy. The daemon uses this to push authorization
+// grants, service routes, and configuration updates to the proxy.
+// Not bind-mounted into sandboxes — only reachable from the host.
+func (e entity) ProxyAdminSocketPath(runDir string) string {
+	return runDir + "/" + e.entityType + "/" + e.name + proxyAdminSocketSuffix
 }
 
 // MarshalText implements encoding.TextMarshaler. Serializes as the
@@ -149,8 +162,9 @@ func (e entity) AccountLocalpart() string {
 //
 // Use ParseEntityUserID or ParseEntityLocalpart when you have a Matrix
 // user ID or localpart and need socket paths without caring about the
-// specific entity type. All accessor methods (SocketPath, AdminSocketPath,
-// Localpart, UserID, Fleet, Name, Server, etc.) are inherited.
+// specific entity type. All accessor methods (ServiceSocketPath,
+// ProxySocketPath, ProxyAdminSocketPath, Localpart, UserID, Fleet,
+// Name, Server, etc.) are inherited.
 //
 // Entity implements encoding.TextMarshaler (via entity) and
 // encoding.TextUnmarshaler, so it can be used as a JSON or CBOR struct

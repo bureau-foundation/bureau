@@ -93,15 +93,30 @@ func run() error {
 	ctx, stop := signal.NotifyContext(context.Background(), syscall.SIGINT, syscall.SIGTERM)
 	defer stop()
 
-	boot, cleanup, err := service.Bootstrap(ctx, service.BootstrapConfig{
-		Flags:        flags,
-		Audience:     "artifact",
-		Description:  "Content-addressable artifact storage service",
-		Capabilities: []string{"content-addressed-store"},
-		Logger:       logger,
-	})
-	if err != nil {
-		return err
+	var (
+		boot    *service.BootstrapResult
+		cleanup func()
+		bootErr error
+	)
+
+	if os.Getenv("BUREAU_PROXY_SOCKET") != "" {
+		boot, cleanup, bootErr = service.BootstrapViaProxy(ctx, service.ProxyBootstrapConfig{
+			Audience:     "artifact",
+			Description:  "Content-addressable artifact storage service",
+			Capabilities: []string{"content-addressed-store"},
+			Logger:       logger,
+		})
+	} else {
+		boot, cleanup, bootErr = service.Bootstrap(ctx, service.BootstrapConfig{
+			Flags:        flags,
+			Audience:     "artifact",
+			Description:  "Content-addressable artifact storage service",
+			Capabilities: []string{"content-addressed-store"},
+			Logger:       logger,
+		})
+	}
+	if bootErr != nil {
+		return bootErr
 	}
 	defer cleanup()
 
@@ -179,7 +194,6 @@ func run() error {
 		principalName:  boot.PrincipalName,
 		machineName:    boot.MachineName,
 		serverName:     boot.ServerName,
-		runDir:         boot.RunDir,
 		serviceRoomID:  boot.ServiceRoomID,
 		upstreamSocket: upstreamSocket,
 		startedAt:      clk.Now(),
@@ -263,13 +277,12 @@ type ArtifactService struct {
 	cache          *artifactstore.Cache            // nil if no cache directory configured
 	authConfig     *service.AuthConfig             // nil in tests that don't exercise auth
 	encryptionKeys *artifactstore.EncryptionKeySet // nil if no encryption key provided (local-only mode)
-	session        *messaging.DirectSession
+	session        messaging.Session
 	clock          clock.Clock
 
 	principalName string
 	machineName   string
 	serverName    ref.ServerName
-	runDir        string
 	serviceRoomID ref.RoomID
 	startedAt     time.Time
 

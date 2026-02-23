@@ -18,11 +18,23 @@ const (
 	// boundary in a fleet-scoped localpart.
 	fleetLiteral = "fleet"
 
-	// socketSuffix is the file extension for agent-facing sockets.
-	socketSuffix = ".sock"
+	// serviceSocketSuffix is the file extension for service CBOR
+	// endpoint sockets — where a service listens for incoming
+	// requests from other principals.
+	serviceSocketSuffix = ".sock"
 
-	// adminSocketSuffix is the file extension for daemon-only admin sockets.
-	adminSocketSuffix = ".admin.sock"
+	// proxySocketSuffix is the file extension for per-principal proxy
+	// sockets — where the proxy listens for HTTP requests from the
+	// sandboxed process. Bind-mounted into the sandbox at
+	// /run/bureau/proxy.sock. Also reachable from the host for
+	// integration tests and diagnostics.
+	proxySocketSuffix = ".proxy.sock"
+
+	// proxyAdminSocketSuffix is the file extension for daemon-only
+	// proxy admin sockets — used by the daemon to push configuration
+	// updates (authorization grants, service routes) to a proxy.
+	// Not bind-mounted into sandboxes — only reachable from the host.
+	proxyAdminSocketSuffix = ".admin.sock"
 )
 
 // allowedChars is the set of characters permitted in Matrix localparts

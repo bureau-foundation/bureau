@@ -158,7 +158,7 @@ func TestReconnectSandboxes(t *testing.T) {
 	if err != nil {
 		t.Fatalf("ParseEntityLocalpart: %v", err)
 	}
-	adminSocketPath := principalRef.AdminSocketPath(fleetRunDir)
+	adminSocketPath := principalRef.ProxyAdminSocketPath(fleetRunDir)
 	adminSocketDir := filepath.Dir(adminSocketPath)
 	if err := os.MkdirAll(adminSocketDir, 0755); err != nil {
 		t.Fatal(err)

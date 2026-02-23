@@ -51,40 +51,52 @@ type testMachine struct {
 	MachineRoomID ref.RoomID // fleet-scoped machine room (daemon status heartbeats)
 }
 
-// PrincipalSocketPath returns the proxy socket path for a principal on
+// PrincipalProxySocketPath returns the proxy socket path for a principal on
 // this machine, using the same fleet-scoped derivation as the launcher.
-func (m *testMachine) PrincipalSocketPath(t *testing.T, localpart string) string {
+func (m *testMachine) PrincipalProxySocketPath(t *testing.T, localpart string) string {
 	t.Helper()
 	entity, err := ref.NewEntityFromAccountLocalpart(m.Ref.Fleet(), localpart)
 	if err != nil {
-		t.Fatalf("PrincipalSocketPath(%q): %v", localpart, err)
+		t.Fatalf("PrincipalProxySocketPath(%q): %v", localpart, err)
 	}
-	return entity.SocketPath(m.Ref.Fleet().RunDir(m.RunDir))
+	return entity.ProxySocketPath(m.Ref.Fleet().RunDir(m.RunDir))
 }
 
-// PrincipalAdminSocketPath returns the admin socket path for a principal
-// on this machine. The admin socket is on the host side (not
+// PrincipalProxyAdminSocketPath returns the admin socket path for a
+// principal on this machine. The admin socket is on the host side (not
 // bind-mounted into the sandbox) and is used by the daemon and tests
 // to register services on the proxy.
-func (m *testMachine) PrincipalAdminSocketPath(t *testing.T, localpart string) string {
+func (m *testMachine) PrincipalProxyAdminSocketPath(t *testing.T, localpart string) string {
 	t.Helper()
 	entity, err := ref.NewEntityFromAccountLocalpart(m.Ref.Fleet(), localpart)
 	if err != nil {
-		t.Fatalf("PrincipalAdminSocketPath(%q): %v", localpart, err)
+		t.Fatalf("PrincipalProxyAdminSocketPath(%q): %v", localpart, err)
 	}
-	return entity.AdminSocketPath(m.Ref.Fleet().RunDir(m.RunDir))
+	return entity.ProxyAdminSocketPath(m.Ref.Fleet().RunDir(m.RunDir))
 }
 
-// principalSocketPath is a standalone version of testMachine.PrincipalSocketPath
-// for tests that construct launcher/daemon lifecycle manually without a full
-// testMachine. It uses the same fleet-scoped derivation as the method.
-func principalSocketPath(t *testing.T, machineRef ref.Machine, runDir, localpart string) string {
+// PrincipalServiceSocketPath returns the service CBOR endpoint socket
+// path for a service principal on this machine. Only meaningful for
+// service entities — agents and machines do not create service sockets.
+func (m *testMachine) PrincipalServiceSocketPath(t *testing.T, localpart string) string {
+	t.Helper()
+	entity, err := ref.NewEntityFromAccountLocalpart(m.Ref.Fleet(), localpart)
+	if err != nil {
+		t.Fatalf("PrincipalServiceSocketPath(%q): %v", localpart, err)
+	}
+	return entity.ServiceSocketPath(m.Ref.Fleet().RunDir(m.RunDir))
+}
+
+// principalProxySocketPath is a standalone version of
+// testMachine.PrincipalProxySocketPath for tests that construct
+// launcher/daemon lifecycle manually without a full testMachine.
+func principalProxySocketPath(t *testing.T, machineRef ref.Machine, runDir, localpart string) string {
 	t.Helper()
 	entity, err := ref.NewEntityFromAccountLocalpart(machineRef.Fleet(), localpart)
 	if err != nil {
-		t.Fatalf("principalSocketPath(%q): %v", localpart, err)
+		t.Fatalf("principalProxySocketPath(%q): %v", localpart, err)
 	}
-	return entity.SocketPath(machineRef.Fleet().RunDir(runDir))
+	return entity.ProxySocketPath(machineRef.Fleet().RunDir(runDir))
 }
 
 // machineOptions configures process binaries and daemon settings for
@@ -688,7 +700,7 @@ func deployPrincipals(t *testing.T, admin *messaging.DirectSession, machine *tes
 
 	proxySockets := make(map[string]string, len(config.Principals))
 	for _, spec := range config.Principals {
-		socketPath := machine.PrincipalSocketPath(t, spec.Account.Localpart)
+		socketPath := machine.PrincipalProxySocketPath(t, spec.Account.Localpart)
 		waitForFile(t, socketPath)
 		proxySockets[spec.Account.Localpart] = socketPath
 	}
@@ -882,7 +894,7 @@ func deployAgent(t *testing.T, admin *messaging.DirectSession, machine *testMach
 		t.Fatalf("create agent %q: %v", options.Localpart, err)
 	}
 
-	proxySocketPath := machine.PrincipalSocketPath(t, options.Localpart)
+	proxySocketPath := machine.PrincipalProxySocketPath(t, options.Localpart)
 	waitForFile(t, proxySocketPath)
 
 	if !options.SkipWaitForReady {
@@ -897,7 +909,7 @@ func deployAgent(t *testing.T, admin *messaging.DirectSession, machine *testMach
 		},
 		TemplateRef:     templateRef,
 		ProxySocketPath: proxySocketPath,
-		AdminSocketPath: machine.PrincipalAdminSocketPath(t, options.Localpart),
+		AdminSocketPath: machine.PrincipalProxyAdminSocketPath(t, options.Localpart),
 	}
 }
 
@@ -1064,7 +1076,7 @@ func deployService(
 	inviteToRooms(t, admin, result.PrincipalUserID, inviteRooms...)
 
 	// Start the service binary with standard service flags.
-	socketPath := machine.PrincipalSocketPath(t, options.Localpart)
+	socketPath := machine.PrincipalServiceSocketPath(t, options.Localpart)
 	if err := os.MkdirAll(filepath.Dir(socketPath), 0755); err != nil {
 		t.Fatalf("create service socket directory: %v", err)
 	}

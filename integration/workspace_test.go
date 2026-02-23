@@ -132,9 +132,9 @@ func TestWorkspaceStartConditionLifecycle(t *testing.T) {
 		},
 	})
 
-	setupSocket := machine.PrincipalSocketPath(t, setupAccount.Localpart)
-	agentSocket := machine.PrincipalSocketPath(t, agentAccount.Localpart)
-	teardownSocket := machine.PrincipalSocketPath(t, teardownAccount.Localpart)
+	setupSocket := machine.PrincipalProxySocketPath(t, setupAccount.Localpart)
+	agentSocket := machine.PrincipalProxySocketPath(t, agentAccount.Localpart)
+	teardownSocket := machine.PrincipalProxySocketPath(t, teardownAccount.Localpart)
 
 	// --- Phase 1: Setup starts, agent and teardown are deferred ---
 	t.Log("phase 1: verifying setup starts with pending workspace status")
@@ -382,7 +382,7 @@ func TestWorkspaceCLILifecycle(t *testing.T) {
 	t.Logf("workspace state verified: project=%s, machine=%s, status=%s", activeState.Project, activeState.Machine, activeState.Status)
 
 	// --- Phase 3: Verify agent started and its proxy works ---
-	agentSocket := machine.PrincipalSocketPath(t, agentAccount.Localpart)
+	agentSocket := machine.PrincipalProxySocketPath(t, agentAccount.Localpart)
 	waitForFile(t, agentSocket)
 	t.Log("agent proxy socket appeared after workspace became active")
 

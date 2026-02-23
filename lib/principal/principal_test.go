@@ -264,12 +264,23 @@ func TestRoomAliasLocalpart(t *testing.T) {
 	}
 }
 
-func TestAdminSocketPathLength(t *testing.T) {
-	// Verify that the max localpart length keeps admin socket paths within
+func TestSocketPathLengths(t *testing.T) {
+	// Verify that the max localpart length keeps all socket paths within
 	// the 108-byte sun_path limit for unix domain sockets.
-	maxPath := DefaultRunDir + "/" + strings.Repeat("a", MaxLocalpartLength) + AdminSocketSuffix
-	if length := len(maxPath); length > 108 {
-		t.Errorf("max admin socket path is %d bytes (%q), exceeds 108-byte sun_path limit", length, maxPath)
+	suffixes := []struct {
+		name   string
+		suffix string
+	}{
+		{"service", ServiceSocketSuffix},
+		{"proxy", ProxySocketSuffix},
+		{"proxy_admin", ProxyAdminSocketSuffix},
+	}
+	for _, test := range suffixes {
+		maxPath := DefaultRunDir + "/" + strings.Repeat("a", MaxLocalpartLength) + test.suffix
+		if length := len(maxPath); length > 108 {
+			t.Errorf("max %s socket path is %d bytes (%q), exceeds 108-byte sun_path limit",
+				test.name, length, maxPath)
+		}
 	}
 }
 

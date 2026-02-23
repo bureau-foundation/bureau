@@ -13,6 +13,7 @@ import (
 
 	"github.com/bureau-foundation/bureau/lib/clock"
 	"github.com/bureau-foundation/bureau/lib/principal"
+	"github.com/bureau-foundation/bureau/lib/proxyclient"
 	"github.com/bureau-foundation/bureau/lib/ref"
 	"github.com/bureau-foundation/bureau/lib/servicetoken"
 	"github.com/bureau-foundation/bureau/messaging"
@@ -79,8 +80,10 @@ type BootstrapConfig struct {
 // socket server, sync loop) and to populate the service struct.
 type BootstrapResult struct {
 	// Session is the authenticated Matrix session. Closed by the
-	// cleanup function returned from Bootstrap.
-	Session *messaging.DirectSession
+	// cleanup function returned from Bootstrap. This is the
+	// messaging.Session interface — callers do not depend on the
+	// concrete session type (DirectSession vs ProxySession).
+	Session messaging.Session
 
 	// Fleet is the typed fleet identity parsed from the flag values.
 	Fleet ref.Fleet
@@ -132,9 +135,6 @@ type BootstrapResult struct {
 	// ServerName is the Matrix server name as passed via
 	// --server-name, validated and typed.
 	ServerName ref.ServerName
-
-	// RunDir is the validated runtime directory for sockets.
-	RunDir string
 }
 
 // Bootstrap performs the common startup sequence for Bureau service
@@ -272,7 +272,7 @@ func Bootstrap(ctx context.Context, config BootstrapConfig) (*BootstrapResult, f
 		Clock:     clk,
 	}
 
-	socketPath := serviceRef.SocketPath(fleet.RunDir(flags.RunDir))
+	socketPath := serviceRef.ServiceSocketPath(fleet.RunDir(flags.RunDir))
 
 	// Register in the fleet service room so daemons can discover us.
 	if err := Register(ctx, session, serviceRoomID, serviceRef, Registration{
@@ -315,7 +315,200 @@ func Bootstrap(ctx context.Context, config BootstrapConfig) (*BootstrapResult, f
 		PrincipalName: flags.PrincipalName,
 		MachineName:   flags.MachineName,
 		ServerName:    serverName,
-		RunDir:        flags.RunDir,
+	}, cleanup, nil
+}
+
+// ProxyBootstrapConfig controls the [BootstrapViaProxy] process.
+// Identity and topology are discovered from the environment
+// (BUREAU_PROXY_SOCKET, BUREAU_MACHINE_NAME, BUREAU_SERVER_NAME,
+// BUREAU_PRINCIPAL_NAME, BUREAU_FLEET, BUREAU_SERVICE_SOCKET);
+// the config struct carries only service-specific parameters.
+type ProxyBootstrapConfig struct {
+	// Audience is the token verification scope (e.g., "ticket").
+	Audience string
+
+	// Description is the human-readable service description for
+	// the fleet service directory entry.
+	Description string
+
+	// Capabilities lists feature tags for the service directory
+	// entry (e.g., ["dependency-graph", "gate-evaluation"]).
+	Capabilities []string
+
+	// Logger is the structured logger for Bootstrap output. If nil,
+	// BootstrapViaProxy creates a default JSON handler on stderr.
+	Logger *slog.Logger
+}
+
+// BootstrapViaProxy performs the common startup sequence for Bureau
+// service binaries running inside a sandbox. Unlike [Bootstrap],
+// which loads a direct Matrix session from disk, this function
+// creates a [proxyclient.ProxySession] that delegates all Matrix
+// operations to the per-principal proxy.
+//
+// Environment variables (set by the launcher via template variable
+// expansion):
+//
+//   - BUREAU_PROXY_SOCKET — Unix socket path to the proxy
+//   - BUREAU_MACHINE_NAME — fleet-scoped machine localpart
+//   - BUREAU_SERVER_NAME — Matrix server name
+//   - BUREAU_PRINCIPAL_NAME — service principal localpart
+//   - BUREAU_FLEET — fleet prefix
+//   - BUREAU_SERVICE_SOCKET — path for the CBOR listener socket
+//
+// The startup sequence mirrors [Bootstrap]:
+//
+//  1. Read and validate environment variables
+//  2. Construct typed identity refs (fleet, machine, service)
+//  3. Create a proxy client and ProxySession
+//  4. Resolve and join the fleet's service and system rooms
+//  5. Load the daemon's token signing public key
+//  6. Configure token-based socket authentication
+//  7. Register the service in the fleet directory
+//
+// Returns a [BootstrapResult] and a cleanup function. The cleanup
+// function deregisters the service from the fleet directory.
+func BootstrapViaProxy(ctx context.Context, config ProxyBootstrapConfig) (*BootstrapResult, func(), error) {
+	logger := config.Logger
+	if logger == nil {
+		logger = NewLogger()
+	}
+
+	// Read and validate required environment variables.
+	proxySocket := os.Getenv("BUREAU_PROXY_SOCKET")
+	if proxySocket == "" {
+		return nil, nil, fmt.Errorf("BUREAU_PROXY_SOCKET is required")
+	}
+	machineName := os.Getenv("BUREAU_MACHINE_NAME")
+	if machineName == "" {
+		return nil, nil, fmt.Errorf("BUREAU_MACHINE_NAME is required")
+	}
+	serverNameStr := os.Getenv("BUREAU_SERVER_NAME")
+	if serverNameStr == "" {
+		return nil, nil, fmt.Errorf("BUREAU_SERVER_NAME is required")
+	}
+	principalName := os.Getenv("BUREAU_PRINCIPAL_NAME")
+	if principalName == "" {
+		return nil, nil, fmt.Errorf("BUREAU_PRINCIPAL_NAME is required")
+	}
+	fleetPrefix := os.Getenv("BUREAU_FLEET")
+	if fleetPrefix == "" {
+		return nil, nil, fmt.Errorf("BUREAU_FLEET is required")
+	}
+	serviceSocket := os.Getenv("BUREAU_SERVICE_SOCKET")
+	if serviceSocket == "" {
+		return nil, nil, fmt.Errorf("BUREAU_SERVICE_SOCKET is required")
+	}
+
+	// Parse typed refs from the environment strings.
+	serverName, err := ref.ParseServerName(serverNameStr)
+	if err != nil {
+		return nil, nil, fmt.Errorf("invalid BUREAU_SERVER_NAME %q: %w", serverNameStr, err)
+	}
+	fleet, err := ref.ParseFleet(fleetPrefix, serverName)
+	if err != nil {
+		return nil, nil, fmt.Errorf("invalid BUREAU_FLEET %q: %w", fleetPrefix, err)
+	}
+	_, bareMachineName, err := ref.ExtractEntityName(machineName)
+	if err != nil {
+		return nil, nil, fmt.Errorf("invalid BUREAU_MACHINE_NAME %q: %w", machineName, err)
+	}
+	machineRef, err := ref.NewMachine(fleet, bareMachineName)
+	if err != nil {
+		return nil, nil, fmt.Errorf("invalid machine ref: %w", err)
+	}
+	_, bareServiceName, err := ref.ExtractEntityName(principalName)
+	if err != nil {
+		return nil, nil, fmt.Errorf("invalid BUREAU_PRINCIPAL_NAME %q: %w", principalName, err)
+	}
+	serviceRef, err := ref.NewService(fleet, bareServiceName)
+	if err != nil {
+		return nil, nil, fmt.Errorf("invalid service ref: %w", err)
+	}
+
+	// Create the proxy client and session.
+	proxy := proxyclient.New(proxySocket, serverName)
+	userID, err := proxy.Whoami(ctx)
+	if err != nil {
+		return nil, nil, fmt.Errorf("proxy whoami: %w", err)
+	}
+	session := proxyclient.NewProxySession(proxy, userID)
+	logger.Info("proxy session established", "user_id", userID, "proxy_socket", proxySocket)
+
+	// Resolve and join fleet-scoped rooms.
+	serviceRoomID, err := ResolveFleetServiceRoom(ctx, session, fleet)
+	if err != nil {
+		return nil, nil, fmt.Errorf("resolving fleet service room: %w", err)
+	}
+
+	namespace := fleet.Namespace()
+	systemRoomID, err := ResolveSystemRoom(ctx, session, namespace)
+	if err != nil {
+		return nil, nil, fmt.Errorf("resolving system room: %w", err)
+	}
+	logger.Info("global rooms ready",
+		"service_room", serviceRoomID,
+		"system_room", systemRoomID,
+	)
+
+	// Load the daemon's token signing public key.
+	signingKey, err := LoadTokenSigningKey(ctx, session, systemRoomID, machineRef)
+	if err != nil {
+		return nil, nil, fmt.Errorf("loading token signing key: %w", err)
+	}
+	logger.Info("token signing key loaded", "machine", machineRef.Localpart())
+
+	clk := clock.Real()
+
+	authConfig := &AuthConfig{
+		PublicKey: signingKey,
+		Audience:  config.Audience,
+		Blacklist: servicetoken.NewBlacklist(),
+		Clock:     clk,
+	}
+
+	// Register in the fleet service room.
+	if err := Register(ctx, session, serviceRoomID, serviceRef, Registration{
+		Machine:      machineRef,
+		Protocol:     "cbor",
+		Description:  config.Description,
+		Capabilities: config.Capabilities,
+	}); err != nil {
+		return nil, nil, fmt.Errorf("registering service: %w", err)
+	}
+	logger.Info("service registered",
+		"principal", serviceRef.Localpart(),
+		"machine", machineRef.UserID(),
+	)
+
+	cleanup := func() {
+		deregisterContext, deregisterCancel := context.WithTimeout(context.Background(), 5*time.Second)
+		defer deregisterCancel()
+		if err := Deregister(deregisterContext, session, serviceRoomID, serviceRef); err != nil {
+			logger.Error("failed to deregister service", "error", err)
+		} else {
+			logger.Info("service deregistered")
+		}
+		// ProxySession.Close is a no-op (the proxy manages credentials),
+		// but call it for interface consistency.
+		session.Close()
+	}
+
+	return &BootstrapResult{
+		Session:       session,
+		Fleet:         fleet,
+		Machine:       machineRef,
+		Service:       serviceRef,
+		Namespace:     namespace,
+		SystemRoomID:  systemRoomID,
+		ServiceRoomID: serviceRoomID,
+		AuthConfig:    authConfig,
+		Clock:         clk,
+		Logger:        logger,
+		SocketPath:    serviceSocket,
+		PrincipalName: principalName,
+		MachineName:   machineName,
+		ServerName:    serverName,
 	}, cleanup, nil
 }
 

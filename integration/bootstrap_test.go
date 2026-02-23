@@ -247,7 +247,7 @@ func TestBootstrapScript(t *testing.T) {
 
 		// Wait for the proxy socket inside the container. The socket
 		// path matches the container's /run/bureau layout.
-		proxySocketPath := principalSocketPath(t, machineRef, "/run/bureau", principalAccount.Localpart)
+		proxySocketPath := principalProxySocketPath(t, machineRef, "/run/bureau", principalAccount.Localpart)
 		waitForFileInContainer(t, containerID, proxySocketPath, 30*time.Second)
 		t.Log("proxy socket appeared — sandbox created inside Docker container")
 	})

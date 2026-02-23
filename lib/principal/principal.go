@@ -38,19 +38,24 @@ const (
 
 	// MaxLocalpartLength is the maximum allowed length for a Bureau
 	// principal localpart. Derived from the unix socket path limit with
-	// the default run directory. The longest socket subpath is
-	// /<localpart>.admin.sock, where the overhead is len("/") +
-	// len(".admin.sock") = 12 characters:
+	// the default run directory. The longest socket suffixes are
+	// ".proxy.sock" and ".admin.sock" (both 11 chars). The overhead is
+	// len("/") + len(".proxy.sock") = 12 characters:
 	//   107 (usable sun_path bytes) - 11 (DefaultRunDir) - 12 (overhead) = 84
 	MaxLocalpartLength = 84
 
-	// SocketSuffix is the file extension for agent-facing principal sockets.
-	SocketSuffix = ".sock"
+	// ServiceSocketSuffix is the file extension for service CBOR
+	// endpoint sockets where services listen for incoming requests.
+	ServiceSocketSuffix = ".sock"
 
-	// AdminSocketSuffix is the file extension for daemon-only admin sockets.
-	// The ".admin.sock" suffix distinguishes admin sockets from agent-facing
-	// sockets in the same directory — no parallel directory hierarchy needed.
-	AdminSocketSuffix = ".admin.sock"
+	// ProxySocketSuffix is the file extension for per-principal proxy
+	// sockets where the proxy listens for HTTP requests from the
+	// sandboxed process.
+	ProxySocketSuffix = ".proxy.sock"
+
+	// ProxyAdminSocketSuffix is the file extension for daemon-only
+	// proxy admin sockets used to push configuration to proxies.
+	ProxyAdminSocketSuffix = ".admin.sock"
 )
 
 // allowedChars is the set of characters permitted in Matrix localparts
@@ -215,7 +220,7 @@ func ObserveSocketPath(runDir string) string {
 func ValidateRunDir(runDir string) error {
 	available := MaxLocalpartAvailable(runDir)
 	if available < 1 {
-		overhead := len("/") + len(AdminSocketSuffix)
+		overhead := len("/") + len(ProxyAdminSocketSuffix)
 		return fmt.Errorf("--run-dir %q is %d bytes, too long for any localpart "+
 			"(unix socket path limit is 108 bytes, overhead is %d bytes)",
 			runDir, len(runDir), overhead+1)
@@ -229,7 +234,7 @@ func ValidateRunDir(runDir string) error {
 // overhead is len("/") + len(".admin.sock") = 12 characters.
 // Returns 0 if the run directory is too long for any localpart.
 func MaxLocalpartAvailable(runDir string) int {
-	overhead := len("/") + len(AdminSocketSuffix) // 1 + 11 = 12
+	overhead := len("/") + len(ProxyAdminSocketSuffix) // 1 + 11 = 12
 	available := 107 - len(runDir) - overhead
 	if available < 0 {
 		return 0

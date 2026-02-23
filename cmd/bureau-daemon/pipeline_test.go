@@ -354,7 +354,7 @@ func TestHandlePipelineExecute_Accepted(t *testing.T) {
 	harness.daemon.fleetRunDir = harness.daemon.fleet.RunDir(socketDir)
 
 	ticketEntity := testEntity(t, harness.daemon.fleet, "service/ticket/workspace")
-	ticketSocketPath := ticketEntity.SocketPath(harness.daemon.fleetRunDir)
+	ticketSocketPath := ticketEntity.ServiceSocketPath(harness.daemon.fleetRunDir)
 
 	// Create parent directories for the socket path.
 	if err := os.MkdirAll(filepath.Dir(ticketSocketPath), 0755); err != nil {

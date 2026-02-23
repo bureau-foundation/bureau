@@ -111,7 +111,7 @@ func SaveSession(stateDir, homeserverURL string, session *messaging.DirectSessio
 // ValidateSession calls WhoAmI to verify the session's access token
 // is still valid and returns the authenticated user ID. This should
 // be called once at startup after LoadSession.
-func ValidateSession(ctx context.Context, session *messaging.DirectSession) (ref.UserID, error) {
+func ValidateSession(ctx context.Context, session messaging.Session) (ref.UserID, error) {
 	userID, err := session.WhoAmI(ctx)
 	if err != nil {
 		return ref.UserID{}, fmt.Errorf("validating matrix session: %w", err)

@@ -40,26 +40,28 @@ func testMachine(t *testing.T) ref.Machine {
 	return machine
 }
 
-// testEntitySocketPath returns the agent-facing socket path for a fleet-scoped
-// localpart within the given fleet run directory.
-func testEntitySocketPath(t *testing.T, fleetRunDir, localpart string) string {
+// testProxySocketPath returns the proxy's agent-facing socket path for a
+// fleet-scoped localpart. The proxy socket is at a deterministic path
+// derived from the principal identity in the fleet run directory.
+func testProxySocketPath(t *testing.T, fleetRunDir, localpart string) string {
 	t.Helper()
 	entity, err := ref.ParseEntityLocalpart(localpart, ref.MustParseServerName("bureau.local"))
 	if err != nil {
 		t.Fatalf("ParseEntityLocalpart(%q): %v", localpart, err)
 	}
-	return entity.SocketPath(fleetRunDir)
+	return entity.ProxySocketPath(fleetRunDir)
 }
 
-// testEntityAdminSocketPath returns the admin socket path for a fleet-scoped
-// localpart within the given fleet run directory.
-func testEntityAdminSocketPath(t *testing.T, fleetRunDir, localpart string) string {
+// testProxyAdminSocketPath returns the proxy admin socket path for a
+// fleet-scoped localpart. The admin socket is at a deterministic path
+// derived from the principal identity so the daemon can find it.
+func testProxyAdminSocketPath(t *testing.T, fleetRunDir, localpart string) string {
 	t.Helper()
 	entity, err := ref.ParseEntityLocalpart(localpart, ref.MustParseServerName("bureau.local"))
 	if err != nil {
 		t.Fatalf("ParseEntityLocalpart(%q): %v", localpart, err)
 	}
-	return entity.AdminSocketPath(fleetRunDir)
+	return entity.ProxyAdminSocketPath(fleetRunDir)
 }
 
 func testBuffer(t *testing.T, value string) *secret.Buffer {
@@ -841,12 +843,12 @@ func TestProxyLifecycle(t *testing.T) {
 	}
 
 	// --- Verify agent socket exists and serves health check ---
-	socketPath := testEntitySocketPath(t, launcher.fleetRunDir, "bureau/fleet/test/agent/echo")
-	agentClient := unixHTTPClient(socketPath)
+	proxySocketPath := testProxySocketPath(t, launcher.fleetRunDir, "bureau/fleet/test/agent/echo")
+	agentClient := unixHTTPClient(proxySocketPath)
 
 	healthResponse, err := agentClient.Get("http://localhost/health")
 	if err != nil {
-		t.Fatalf("health check through agent socket: %v", err)
+		t.Fatalf("health check through proxy socket: %v", err)
 	}
 	healthResponse.Body.Close()
 	if healthResponse.StatusCode != http.StatusOK {
@@ -876,7 +878,7 @@ func TestProxyLifecycle(t *testing.T) {
 	}
 
 	// --- Verify admin socket accepts service registration ---
-	adminSocketPath := testEntityAdminSocketPath(t, launcher.fleetRunDir, "bureau/fleet/test/agent/echo")
+	adminSocketPath := testProxyAdminSocketPath(t, launcher.fleetRunDir, "bureau/fleet/test/agent/echo")
 	adminClient := unixHTTPClient(adminSocketPath)
 
 	serviceRequest, _ := http.NewRequest("PUT", "http://localhost/v1/admin/services/test-svc",
@@ -917,8 +919,8 @@ func TestProxyLifecycle(t *testing.T) {
 	if _, exists := launcher.sandboxes["bureau/fleet/test/agent/echo"]; exists {
 		t.Error("sandbox should be removed from map after destroy")
 	}
-	if _, err := os.Stat(socketPath); !os.IsNotExist(err) {
-		t.Errorf("agent socket should be removed after destroy, stat error: %v", err)
+	if _, err := os.Stat(proxySocketPath); !os.IsNotExist(err) {
+		t.Errorf("proxy socket should be removed after destroy, stat error: %v", err)
 	}
 	if _, err := os.Stat(adminSocketPath); !os.IsNotExist(err) {
 		t.Errorf("admin socket should be removed after destroy, stat error: %v", err)
@@ -964,8 +966,8 @@ func TestProxyLifecycle_WithoutCredentials(t *testing.T) {
 	}
 
 	// Verify health endpoint works.
-	socketPath := testEntitySocketPath(t, launcher.fleetRunDir, "bureau/fleet/test/agent/nocreds")
-	client := unixHTTPClient(socketPath)
+	proxySocketPath := testProxySocketPath(t, launcher.fleetRunDir, "bureau/fleet/test/agent/nocreds")
+	client := unixHTTPClient(proxySocketPath)
 
 	healthResponse, err := client.Get("http://localhost/health")
 	if err != nil {
@@ -1253,9 +1255,9 @@ func TestTmuxSessionWithProxyLifecycle(t *testing.T) {
 		t.Fatalf("tmux session %q should exist after sandbox creation", sessionName)
 	}
 
-	// Verify the proxy is also running (agent socket responds).
-	socketPath := testEntitySocketPath(t, launcher.fleetRunDir, "bureau/fleet/test/agent/tmuxproxy")
-	agentClient := unixHTTPClient(socketPath)
+	// Verify the proxy is also running (proxy socket responds).
+	proxySocketPath := testProxySocketPath(t, launcher.fleetRunDir, "bureau/fleet/test/agent/tmuxproxy")
+	agentClient := unixHTTPClient(proxySocketPath)
 	healthResponse, err := agentClient.Get("http://localhost/health")
 	if err != nil {
 		t.Fatalf("health check: %v", err)

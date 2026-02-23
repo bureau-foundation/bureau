@@ -15,7 +15,7 @@ import (
 	"github.com/bureau-foundation/bureau/messaging"
 )
 
-// configStore is the subset of *messaging.DirectSession needed for reading
+// configStore is the subset of messaging.Session needed for reading
 // and writing machine config state events. Tests substitute a fake.
 type configStore interface {
 	GetStateEvent(ctx context.Context, roomID ref.RoomID, eventType ref.EventType, stateKey string) (json.RawMessage, error)

@@ -76,7 +76,7 @@ func TestQuickstartTestAgent(t *testing.T) {
 	})
 
 	// Wait for the proxy socket to appear (proves sandbox creation worked).
-	proxySocketPath := machine.PrincipalSocketPath(t, agent.Localpart)
+	proxySocketPath := machine.PrincipalProxySocketPath(t, agent.Localpart)
 	waitForFile(t, proxySocketPath)
 	t.Logf("proxy socket appeared: %s", proxySocketPath)
 

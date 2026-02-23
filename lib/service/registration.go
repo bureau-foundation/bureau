@@ -40,7 +40,7 @@ type Registration struct {
 // room. The state key is the service's fleet-scoped localpart (e.g.,
 // "bureau/fleet/prod/service/stt/whisper"). The daemon's syncServiceDirectory
 // picks this up and makes the service available for routing.
-func Register(ctx context.Context, session *messaging.DirectSession, serviceRoomID ref.RoomID, svc ref.Service, reg Registration) error {
+func Register(ctx context.Context, session messaging.Session, serviceRoomID ref.RoomID, svc ref.Service, reg Registration) error {
 	stateKey := svc.Localpart()
 	entry := schema.Service{
 		Principal:    svc.Entity(),
@@ -61,7 +61,7 @@ func Register(ctx context.Context, session *messaging.DirectSession, serviceRoom
 // by publishing a state event with an empty Principal field. The daemon's
 // syncServiceDirectory skips entries with empty principals, effectively
 // removing the service from the directory.
-func Deregister(ctx context.Context, session *messaging.DirectSession, serviceRoomID ref.RoomID, svc ref.Service) error {
+func Deregister(ctx context.Context, session messaging.Session, serviceRoomID ref.RoomID, svc ref.Service) error {
 	stateKey := svc.Localpart()
 	empty := schema.Service{}
 	if _, err := session.SendStateEvent(ctx, serviceRoomID, schema.EventTypeService, stateKey, empty); err != nil {
@@ -75,7 +75,7 @@ func Deregister(ctx context.Context, session *messaging.DirectSession, serviceRo
 // discovering fleet-scoped and global rooms at startup. The alias
 // parameter is typically produced by a ref method (e.g.,
 // fleet.ServiceRoomAlias(), namespace.SystemRoomAlias()).
-func ResolveRoom(ctx context.Context, session *messaging.DirectSession, alias ref.RoomAlias) (ref.RoomID, error) {
+func ResolveRoom(ctx context.Context, session messaging.Session, alias ref.RoomAlias) (ref.RoomID, error) {
 	roomID, err := session.ResolveAlias(ctx, alias)
 	if err != nil {
 		return ref.RoomID{}, fmt.Errorf("resolving room alias %q: %w", alias, err)
@@ -91,6 +91,6 @@ func ResolveRoom(ctx context.Context, session *messaging.DirectSession, alias re
 // ResolveFleetServiceRoom resolves the fleet-scoped service room alias
 // and joins it. This is called once at startup to establish the
 // service's connection to the fleet's service directory.
-func ResolveFleetServiceRoom(ctx context.Context, session *messaging.DirectSession, fleet ref.Fleet) (ref.RoomID, error) {
+func ResolveFleetServiceRoom(ctx context.Context, session messaging.Session, fleet ref.Fleet) (ref.RoomID, error) {
 	return ResolveRoom(ctx, session, fleet.ServiceRoomAlias())
 }

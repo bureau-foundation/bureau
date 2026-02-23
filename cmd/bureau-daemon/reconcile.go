@@ -1344,11 +1344,12 @@ func (d *Daemon) resolveServiceSocket(ctx context.Context, role string, rooms []
 			}
 		}
 
-		// Derive the host-side socket path from the service principal.
-		// For local services this is the actual proxy socket; for remote
-		// services (future) the daemon would create a tunnel socket and
-		// use that path instead.
-		socketPath := binding.Principal.SocketPath(d.fleetRunDir)
+		// Derive the host-side service CBOR socket path from the service
+		// principal. For local services this is the path where the service
+		// binary listens for incoming requests. For remote services
+		// (future) the daemon would create a tunnel socket and use that
+		// path instead.
+		socketPath := binding.Principal.ServiceSocketPath(d.fleetRunDir)
 		d.logger.Info("resolved service binding",
 			"role", role,
 			"principal", binding.Principal,

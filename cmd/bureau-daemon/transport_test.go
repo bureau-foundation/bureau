@@ -143,7 +143,7 @@ func TestLocalProviderSocket(t *testing.T) {
 		if err != nil {
 			t.Fatalf("construct stt ref: %v", err)
 		}
-		want := sttRef.SocketPath(daemon.fleetRunDir)
+		want := sttRef.ServiceSocketPath(daemon.fleetRunDir)
 		if socket != want {
 			t.Errorf("socket = %q, want %q", socket, want)
 		}
@@ -558,7 +558,7 @@ func TestTransportTunnel(t *testing.T) {
 		t.Fatalf("construct service ref: %v", err)
 	}
 	serviceLocalpart := serviceRef.Localpart()
-	serviceSocketViaRunDir := serviceRef.SocketPath(providerDaemon.fleetRunDir)
+	serviceSocketViaRunDir := serviceRef.ServiceSocketPath(providerDaemon.fleetRunDir)
 
 	if err := os.MkdirAll(filepath.Dir(serviceSocketViaRunDir), 0755); err != nil {
 		t.Fatalf("mkdir: %v", err)
@@ -767,7 +767,7 @@ func TestMultipleTunnels(t *testing.T) {
 		t.Fatalf("construct service ref: %v", err)
 	}
 	serviceLocalpart := serviceRef.Localpart()
-	serviceSocketViaRunDir := serviceRef.SocketPath(providerDaemon.fleetRunDir)
+	serviceSocketViaRunDir := serviceRef.ServiceSocketPath(providerDaemon.fleetRunDir)
 	if err := os.MkdirAll(filepath.Dir(serviceSocketViaRunDir), 0755); err != nil {
 		t.Fatalf("mkdir: %v", err)
 	}
@@ -920,7 +920,7 @@ func TestStopAllTunnels(t *testing.T) {
 		t.Fatalf("construct service ref: %v", err)
 	}
 	serviceLocalpart := serviceRef.Localpart()
-	serviceSocketViaRunDir := serviceRef.SocketPath(providerDaemon.fleetRunDir)
+	serviceSocketViaRunDir := serviceRef.ServiceSocketPath(providerDaemon.fleetRunDir)
 	if err := os.MkdirAll(filepath.Dir(serviceSocketViaRunDir), 0755); err != nil {
 		t.Fatalf("mkdir: %v", err)
 	}

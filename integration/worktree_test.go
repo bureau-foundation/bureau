@@ -691,7 +691,7 @@ func TestWorkspaceWorktreeLifecycle(t *testing.T) {
 	t.Log("workspace is active — setup pipeline completed")
 
 	// --- Phase 3: Agent starts ---
-	agentSocket := machine.PrincipalSocketPath(t, agentAccount.Localpart)
+	agentSocket := machine.PrincipalProxySocketPath(t, agentAccount.Localpart)
 	waitForFile(t, agentSocket)
 
 	agentProxyClient := proxyHTTPClient(agentSocket)

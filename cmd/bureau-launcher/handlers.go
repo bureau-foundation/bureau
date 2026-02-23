@@ -721,15 +721,21 @@ func (l *Launcher) cleanupSandbox(principalLocalpart string) {
 		os.RemoveAll(sb.configDir)
 	}
 
-	// Remove socket files (the proxy may have already removed them during
-	// graceful shutdown, so ignore errors).
+	// Remove socket files (the proxy may have already removed them
+	// during graceful shutdown, so ignore errors).
 	principalRef, parseErr := ref.NewEntityFromAccountLocalpart(l.machine.Fleet(), principalLocalpart)
 	if parseErr != nil {
 		l.logger.Error("cannot parse principal for socket cleanup",
 			"principal", principalLocalpart, "error", parseErr)
 	} else {
-		os.Remove(principalRef.SocketPath(l.fleetRunDir))
-		os.Remove(principalRef.AdminSocketPath(l.fleetRunDir))
+		os.Remove(principalRef.ProxySocketPath(l.fleetRunDir))
+		os.Remove(principalRef.ProxyAdminSocketPath(l.fleetRunDir))
+		// For service principals, also remove the symlink from
+		// ServiceSocketPath to the configDir listen directory.
+		// The symlink target directory is cleaned up with configDir.
+		if principalRef.EntityType() == "service" {
+			os.Remove(principalRef.ServiceSocketPath(l.fleetRunDir))
+		}
 	}
 
 	// Kill the principal's tmux session if it still exists. This is

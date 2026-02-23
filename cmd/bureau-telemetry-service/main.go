@@ -40,11 +40,24 @@ func run() error {
 	ctx, stop := signal.NotifyContext(context.Background(), syscall.SIGINT, syscall.SIGTERM)
 	defer stop()
 
-	boot, cleanup, err := service.Bootstrap(ctx, service.BootstrapConfig{
-		Flags:       flags,
-		Audience:    "telemetry",
-		Description: "Telemetry aggregation and query service",
-	})
+	var (
+		boot    *service.BootstrapResult
+		cleanup func()
+		err     error
+	)
+
+	if os.Getenv("BUREAU_PROXY_SOCKET") != "" {
+		boot, cleanup, err = service.BootstrapViaProxy(ctx, service.ProxyBootstrapConfig{
+			Audience:    "telemetry",
+			Description: "Telemetry aggregation and query service",
+		})
+	} else {
+		boot, cleanup, err = service.Bootstrap(ctx, service.BootstrapConfig{
+			Flags:       flags,
+			Audience:    "telemetry",
+			Description: "Telemetry aggregation and query service",
+		})
+	}
 	if err != nil {
 		return err
 	}

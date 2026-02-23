@@ -321,7 +321,7 @@ func TestMintServiceTokenSocketPathDerivation(t *testing.T) {
 	// The socket path should be derived from the service principal
 	// and the fleet run dir.
 	expectedPrincipal := mustParseEntity(t, "@bureau/fleet/prod/service/ticket:bureau.local")
-	expectedPath := expectedPrincipal.SocketPath(daemon.fleetRunDir)
+	expectedPath := expectedPrincipal.ServiceSocketPath(daemon.fleetRunDir)
 	if response.SocketPath != expectedPath {
 		t.Errorf("SocketPath = %q, want %q", response.SocketPath, expectedPath)
 	}

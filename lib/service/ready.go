@@ -37,7 +37,7 @@ type ServiceReadyContent struct {
 // A failed ready announcement means consumers waiting via
 // EnsureServiceInRoom will time out, which surfaces the problem
 // clearly. Retrying here would delay the service's sync loop.
-func AnnounceReady(ctx context.Context, session *messaging.DirectSession, roomID ref.RoomID, serviceType string, capabilities []string, logger *slog.Logger) {
+func AnnounceReady(ctx context.Context, session messaging.Session, roomID ref.RoomID, serviceType string, capabilities []string, logger *slog.Logger) {
 	content := ServiceReadyContent{
 		Body:         fmt.Sprintf("%s service ready", serviceType),
 		ServiceType:  serviceType,

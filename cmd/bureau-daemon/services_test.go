@@ -228,7 +228,7 @@ func TestReconcileServices_Removal(t *testing.T) {
 	if err != nil {
 		t.Fatalf("construct stt ref: %v", err)
 	}
-	daemon.proxyRoutes[sttProxyName] = sttRef.SocketPath(daemon.fleetRunDir)
+	daemon.proxyRoutes[sttProxyName] = sttRef.ServiceSocketPath(daemon.fleetRunDir)
 	daemon.adminSocketPathFunc = func(principal ref.Entity) string {
 		return filepath.Join(adminDir, principal.AccountLocalpart()+".admin.sock")
 	}
@@ -264,7 +264,7 @@ func TestReconcileServices_ServiceMigration(t *testing.T) {
 	if err != nil {
 		t.Fatalf("construct stt ref: %v", err)
 	}
-	daemon.proxyRoutes[sttProxyName] = sttRef.SocketPath(daemon.fleetRunDir)
+	daemon.proxyRoutes[sttProxyName] = sttRef.ServiceSocketPath(daemon.fleetRunDir)
 	daemon.adminSocketPathFunc = func(principal ref.Entity) string {
 		return filepath.Join(adminDir, principal.AccountLocalpart()+".admin.sock")
 	}
@@ -346,7 +346,7 @@ func TestProxyRouteRegistration(t *testing.T) {
 	if err != nil {
 		t.Fatalf("construct stt ref: %v", err)
 	}
-	expectedSocket := sttRef.SocketPath(daemon.fleetRunDir)
+	expectedSocket := sttRef.ServiceSocketPath(daemon.fleetRunDir)
 
 	aliceEntity := testEntity(t, daemon.fleet, "agent/alice")
 	daemon.running[aliceEntity] = true
@@ -493,8 +493,8 @@ func TestConfigureConsumerProxy(t *testing.T) {
 	}
 	sttProxyName := principal.ProxyServiceName(sttRef.Localpart())
 	llmProxyName := principal.ProxyServiceName(llmRef.Localpart())
-	daemon.proxyRoutes[sttProxyName] = sttRef.SocketPath(daemon.fleetRunDir)
-	daemon.proxyRoutes[llmProxyName] = llmRef.SocketPath(daemon.fleetRunDir)
+	daemon.proxyRoutes[sttProxyName] = sttRef.ServiceSocketPath(daemon.fleetRunDir)
+	daemon.proxyRoutes[llmProxyName] = llmRef.ServiceSocketPath(daemon.fleetRunDir)
 	daemon.adminSocketPathFunc = func(principal ref.Entity) string {
 		return filepath.Join(tempDir, principal.AccountLocalpart()+".admin.sock")
 	}
@@ -549,7 +549,7 @@ func TestReconcileServices_RemoteWithRelay(t *testing.T) {
 	if err != nil {
 		t.Fatalf("construct stt ref: %v", err)
 	}
-	expectedSttSocket := sttRef.SocketPath(daemon.fleetRunDir)
+	expectedSttSocket := sttRef.ServiceSocketPath(daemon.fleetRunDir)
 
 	daemon.adminSocketPathFunc = func(principal ref.Entity) string {
 		return filepath.Join(adminDir, principal.AccountLocalpart()+".admin.sock")
@@ -861,7 +861,7 @@ func TestReconcileServices_MigrationWithRelay(t *testing.T) {
 	if err != nil {
 		t.Fatalf("construct stt ref: %v", err)
 	}
-	expectedSocket := sttRef.SocketPath(daemon.fleetRunDir)
+	expectedSocket := sttRef.ServiceSocketPath(daemon.fleetRunDir)
 
 	daemon.proxyRoutes[sttProxyName] = relaySocket // was remote
 	daemon.adminSocketPathFunc = func(principal ref.Entity) string {

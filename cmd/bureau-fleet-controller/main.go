@@ -42,12 +42,26 @@ func run() error {
 	ctx, stop := signal.NotifyContext(context.Background(), syscall.SIGINT, syscall.SIGTERM)
 	defer stop()
 
-	boot, cleanup, err := service.Bootstrap(ctx, service.BootstrapConfig{
-		Flags:        flags,
-		Audience:     "fleet",
-		Description:  "Fleet controller for service placement and machine lifecycle",
-		Capabilities: []string{"placement", "scaling", "failover"},
-	})
+	var (
+		boot    *service.BootstrapResult
+		cleanup func()
+		err     error
+	)
+
+	if os.Getenv("BUREAU_PROXY_SOCKET") != "" {
+		boot, cleanup, err = service.BootstrapViaProxy(ctx, service.ProxyBootstrapConfig{
+			Audience:     "fleet",
+			Description:  "Fleet controller for service placement and machine lifecycle",
+			Capabilities: []string{"placement", "scaling", "failover"},
+		})
+	} else {
+		boot, cleanup, err = service.Bootstrap(ctx, service.BootstrapConfig{
+			Flags:        flags,
+			Audience:     "fleet",
+			Description:  "Fleet controller for service placement and machine lifecycle",
+			Capabilities: []string{"placement", "scaling", "failover"},
+		})
+	}
 	if err != nil {
 		return err
 	}
@@ -65,7 +79,7 @@ func run() error {
 	}
 
 	boot.Logger.Info("fleet rooms ready",
-		"fleet", flags.FleetPrefix,
+		"fleet", boot.Fleet,
 		"fleet_room", fleetRoomID,
 		"system_room", boot.SystemRoomID,
 		"machine_room", machineRoomID,
@@ -80,7 +94,6 @@ func run() error {
 		machineName:   boot.MachineName,
 		serverName:    boot.ServerName,
 		fleet:         boot.Fleet,
-		runDir:        boot.RunDir,
 		serviceRoomID: boot.ServiceRoomID,
 		startedAt:     boot.Clock.Now(),
 		machines:      make(map[string]*machineState),
@@ -138,7 +151,7 @@ func run() error {
 type FleetController struct {
 	mu sync.Mutex
 
-	session     *messaging.DirectSession
+	session     messaging.Session
 	configStore configStore
 	clock       clock.Clock
 
@@ -146,7 +159,6 @@ type FleetController struct {
 	machineName   string
 	serverName    ref.ServerName
 	fleet         ref.Fleet
-	runDir        string
 	serviceRoomID ref.RoomID
 	startedAt     time.Time
 

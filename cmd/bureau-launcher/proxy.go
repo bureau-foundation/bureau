@@ -42,10 +42,10 @@ func (l *Launcher) spawnProxy(principalLocalpart string, credentials map[string]
 	if err != nil {
 		return 0, fmt.Errorf("parsing principal %q: %w", principalLocalpart, err)
 	}
-	socketPath := principalRef.SocketPath(l.fleetRunDir)
-	adminSocketPath := principalRef.AdminSocketPath(l.fleetRunDir)
+	proxySocketPath := principalRef.ProxySocketPath(l.fleetRunDir)
+	adminSocketPath := principalRef.ProxyAdminSocketPath(l.fleetRunDir)
 
-	// Create a temp directory for the proxy config.
+	// Create a temp directory for the proxy config file.
 	sanitizedName := strings.ReplaceAll(principalLocalpart, "/", "-")
 	configDir, err := os.MkdirTemp("", "bureau-proxy-"+sanitizedName+"-")
 	if err != nil {
@@ -55,17 +55,19 @@ func (l *Launcher) spawnProxy(principalLocalpart string, credentials map[string]
 	// Write the proxy config. The services map is empty because the daemon
 	// registers services dynamically via the admin socket.
 	configContent := fmt.Sprintf("socket_path: %s\nadmin_socket_path: %s\nservices: {}\n",
-		socketPath, adminSocketPath)
+		proxySocketPath, adminSocketPath)
 	configPath := filepath.Join(configDir, "config.yaml")
 	if err := os.WriteFile(configPath, []byte(configContent), 0600); err != nil {
 		os.RemoveAll(configDir)
 		return 0, fmt.Errorf("writing proxy config: %w", err)
 	}
 
-	// Ensure socket parent directories exist.
-	if err := os.MkdirAll(filepath.Dir(socketPath), 0755); err != nil {
+	// Ensure socket parent directories exist. Both the proxy socket
+	// and admin socket live under the fleet run dir in entity-type
+	// subdirectories (e.g., /run/bureau/fleet/prod/agent/).
+	if err := os.MkdirAll(filepath.Dir(proxySocketPath), 0755); err != nil {
 		os.RemoveAll(configDir)
-		return 0, fmt.Errorf("creating socket directory for %s: %w", socketPath, err)
+		return 0, fmt.Errorf("creating proxy socket directory for %s: %w", proxySocketPath, err)
 	}
 	if err := os.MkdirAll(filepath.Dir(adminSocketPath), 0755); err != nil {
 		os.RemoveAll(configDir)
@@ -167,7 +169,7 @@ func (l *Launcher) spawnProxy(principalLocalpart string, credentials map[string]
 	// Wait for the proxy to become ready (agent socket file appears).
 	// Uses sb.proxyDone to detect early proxy death and fail fast
 	// rather than waiting the full 10-second timeout.
-	if err := waitForSocket(socketPath, sb.proxyDone, 10*time.Second); err != nil {
+	if err := waitForSocket(proxySocketPath, sb.proxyDone, 10*time.Second); err != nil {
 		cmd.Process.Kill()
 		<-sb.proxyDone
 		os.RemoveAll(configDir)
@@ -179,7 +181,7 @@ func (l *Launcher) spawnProxy(principalLocalpart string, credentials map[string]
 	l.logger.Info("proxy started",
 		"principal", principalLocalpart,
 		"pid", cmd.Process.Pid,
-		"socket", socketPath,
+		"socket", proxySocketPath,
 		"admin_socket", adminSocketPath,
 	)
 
@@ -272,12 +274,14 @@ func (l *Launcher) buildSandboxCommand(principalLocalpart string, spec *schema.S
 		return nil, fmt.Errorf("no sandbox entry for %q (proxy must be spawned first)", principalLocalpart)
 	}
 
-	// Determine the proxy socket path (same as spawnProxy uses).
+	// Derive the proxy socket path from the entity ref. The proxy
+	// creates this socket in the fleet run dir; the sandbox bind-mounts
+	// it at /run/bureau/proxy.sock for the sandboxed process to use.
 	principalRef, err := ref.NewEntityFromAccountLocalpart(l.machine.Fleet(), principalLocalpart)
 	if err != nil {
-		return nil, fmt.Errorf("parsing principal %q: %w", principalLocalpart, err)
+		return nil, fmt.Errorf("parsing principal %q for sandbox command: %w", principalLocalpart, err)
 	}
-	proxySocketPath := principalRef.SocketPath(l.fleetRunDir)
+	proxySocketPath := principalRef.ProxySocketPath(l.fleetRunDir)
 
 	// Convert the SandboxSpec to a sandbox.Profile.
 	profile := specToProfile(spec, proxySocketPath)
@@ -295,6 +299,8 @@ func (l *Launcher) buildSandboxCommand(principalLocalpart string, spec *schema.S
 		"TERM":           os.Getenv("TERM"),
 		"MACHINE_NAME":   l.machine.Localpart(),
 		"SERVER_NAME":    l.machine.Server().String(),
+		"PRINCIPAL_NAME": principalLocalpart,
+		"FLEET":          l.machine.Fleet().Localpart(),
 	}
 	// Extract workspace variables from the payload. The daemon populates
 	// these for workspace principals via PrincipalAssignment.Payload;
@@ -372,6 +378,61 @@ func (l *Launcher) buildSandboxCommand(principalLocalpart string, spec *schema.S
 			Dest:   "/run/bureau/service/token",
 			Mode:   sandbox.MountModeRO,
 		})
+	}
+
+	// For service principals, bind-mount a per-service directory so the
+	// service's CBOR listener socket is visible on the host. The service
+	// creates its socket at /run/bureau/listen/service.sock inside the
+	// sandbox; the bind mount maps /run/bureau/listen/ to a directory
+	// under the service's configDir on the host, making the socket file
+	// accessible from outside the namespace.
+	//
+	// Each service gets its own bind-mounted directory (not the shared
+	// <runDir>/service/ directory), preventing sandboxed services from
+	// seeing each other's CBOR sockets.
+	//
+	// A symlink from ServiceSocketPath() to the actual host path lets
+	// the daemon find the socket at the canonical location without
+	// knowing about the configDir layout.
+	if principalRef.EntityType() == "service" {
+		listenDir := filepath.Join(sb.configDir, "listen")
+		if err := os.MkdirAll(listenDir, 0755); err != nil {
+			return nil, fmt.Errorf("creating service listen directory: %w", err)
+		}
+		sandboxSocketPath := "/run/bureau/listen/service.sock"
+		profile.Filesystem = append(profile.Filesystem, sandbox.Mount{
+			Source: listenDir,
+			Dest:   "/run/bureau/listen",
+			Mode:   sandbox.MountModeRW,
+		})
+		// Set the environment variables that BootstrapViaProxy reads.
+		// BUREAU_PROXY_SOCKET, BUREAU_MACHINE_NAME, and BUREAU_SERVER_NAME
+		// are already available via template variable expansion
+		// (${PROXY_SOCKET}, ${MACHINE_NAME}, ${SERVER_NAME}), but
+		// BUREAU_PRINCIPAL_NAME, BUREAU_FLEET, and BUREAU_SERVICE_SOCKET
+		// are service-specific and injected directly by the launcher.
+		if profile.Environment == nil {
+			profile.Environment = make(map[string]string)
+		}
+		profile.Environment["BUREAU_SERVICE_SOCKET"] = sandboxSocketPath
+		profile.Environment["BUREAU_PRINCIPAL_NAME"] = principalLocalpart
+		profile.Environment["BUREAU_FLEET"] = l.machine.Fleet().Localpart()
+
+		// Create a symlink from the canonical ServiceSocketPath to the
+		// actual socket location inside the config directory. The daemon
+		// dials ServiceSocketPath; the symlink redirects to the real
+		// socket exposed via the bind mount.
+		hostSocketPath := principalRef.ServiceSocketPath(l.fleetRunDir)
+		hostSocketDir := filepath.Dir(hostSocketPath)
+		if err := os.MkdirAll(hostSocketDir, 0755); err != nil {
+			return nil, fmt.Errorf("creating service socket symlink directory: %w", err)
+		}
+		actualSocketPath := filepath.Join(listenDir, "service.sock")
+		// Remove any stale symlink from a previous run.
+		os.Remove(hostSocketPath)
+		if err := os.Symlink(actualSocketPath, hostSocketPath); err != nil {
+			return nil, fmt.Errorf("creating service socket symlink %s → %s: %w", hostSocketPath, actualSocketPath, err)
+		}
 	}
 
 	// Find bwrap.

@@ -434,13 +434,13 @@ type Service struct {
 	Metadata map[string]any `json:"metadata,omitempty"`
 }
 
-// RoomServiceContent is the content of an EventTypeRoomService state event.
-// It binds a service role to a specific service principal in a room. The
-// daemon reads these when resolving a template's RequiredServices to
+// ServiceBindingContent is the content of an EventTypeServiceBinding state
+// event. It binds a service role to a specific service principal in a room.
+// The daemon reads these when resolving a template's RequiredServices to
 // determine which service sockets to bind-mount into a sandbox.
 //
 // State key: the service role name (e.g., "ticket", "rag", "ci")
-type RoomServiceContent struct {
+type ServiceBindingContent struct {
 	// Principal is the service instance that handles this role in this
 	// room (e.g., the ref for
 	// "@bureau/fleet/prod/service/ticket:bureau.local").

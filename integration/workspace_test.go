@@ -248,7 +248,7 @@ func TestWorkspaceCLILifecycle(t *testing.T) {
 
 	// --- Ticket service ---
 	// workspace.Create requires a deployed ticket service — it calls
-	// ticket.ConfigureRoom (config, room_service binding, power levels)
+	// ticket.ConfigureRoom (config, service binding, power levels)
 	// and service.EnsureServiceInRoom (waits for join) before publishing
 	// MachineConfig. Deploy the ticket service first.
 	deployTicketService(t, admin, fleet, machine, "ws-cli")

@@ -1038,7 +1038,7 @@ type serviceDeployOptions struct {
 	Localpart string
 
 	// RequiredServices lists service roles this service depends on. The
-	// daemon resolves each role's socket via m.bureau.room_service state
+	// daemon resolves each role's socket via m.bureau.service_binding state
 	// events and bind-mounts it into the sandbox at
 	// /run/bureau/service/<role>.sock.
 	RequiredServices []string

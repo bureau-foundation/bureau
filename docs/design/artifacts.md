@@ -1038,9 +1038,9 @@ can create a race between marking and sweeping.
 
 ---
 
-## Room Service Binding and Matrix Integration
+## Service Binding and Matrix Integration
 
-Rooms opt into artifact service via `m.bureau.room_service` state events
+Rooms opt into artifact service via `m.bureau.service_binding` state events
 with state key `"artifact"`. The state event identifies which machine's artifact
 service is responsible for the room. The daemon resolves the service
 socket at sandbox creation time and bind-mounts it into the sandbox at
@@ -1064,8 +1064,8 @@ loop, accepting room invitations and tracking which rooms it manages.
   socket, CBOR protocol, service identity tokens, daemon-managed
   lifecycle.
 
-- **information-architecture.md**: `m.bureau.room_service` and
-  `m.bureau.artifact_scope` state events use the standard room service
+- **information-architecture.md**: `m.bureau.service_binding` and
+  `m.bureau.artifact_scope` state events use the standard service
   binding model defined there.
 
 - **credentials.md**: the deployment master key is provisioned and

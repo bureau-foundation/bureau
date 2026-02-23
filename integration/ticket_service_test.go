@@ -598,7 +598,7 @@ func TestTicketLifecycleAgent(t *testing.T) {
 // on a test machine. Tests use Entity to configure rooms with service
 // bindings, and the daemon uses the socket for ticket operations.
 type ticketServiceDeployment struct {
-	Entity ref.Entity // fleet-scoped entity ref for room service bindings
+	Entity ref.Entity // fleet-scoped entity ref for service bindings
 }
 
 // deployTicketService deploys a ticket service using the production
@@ -622,7 +622,7 @@ func deployTicketService(t *testing.T, admin *messaging.DirectSession, fleet *te
 
 // enableTicketsInRoom configures an existing room for ticket management
 // using the production ticket.ConfigureRoom path. Publishes ticket config,
-// room service binding, invites the service, and configures power levels.
+// service binding, invites the service, and configures power levels.
 func enableTicketsInRoom(t *testing.T, admin *messaging.DirectSession, roomID ref.RoomID, ticketService ticketServiceDeployment, prefix string, allowedTypes []string) {
 	t.Helper()
 
@@ -635,7 +635,7 @@ func enableTicketsInRoom(t *testing.T, admin *messaging.DirectSession, roomID re
 }
 
 // createTicketProjectRoom creates a project room with ticket config,
-// room service binding, and appropriate power levels. Invites the ticket
+// service binding, and appropriate power levels. Invites the ticket
 // service account and any additional users (machine accounts, etc.)
 // so they can participate. Uses ticket.ConfigureRoom for the full
 // production setup path.

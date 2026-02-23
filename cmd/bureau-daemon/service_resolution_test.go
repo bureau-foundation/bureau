@@ -24,7 +24,7 @@ import (
 // TestReconcile_ServiceMountsResolved verifies that when a principal's
 // template declares RequiredServices, the daemon resolves them to
 // ServiceMounts on the IPC request. The service binding comes from an
-// m.bureau.room_service state event in the config room.
+// m.bureau.service_binding state event in the config room.
 func TestReconcile_ServiceMountsResolved(t *testing.T) {
 	t.Parallel()
 
@@ -48,7 +48,7 @@ func TestReconcile_ServiceMountsResolved(t *testing.T) {
 
 	// Bind "ticket" service to a provider principal in the config room.
 	ticketEntity := testEntity(t, daemon.fleet, "service/ticket")
-	matrixState.setStateEvent(configRoomID, schema.EventTypeRoomService, "ticket", schema.RoomServiceContent{
+	matrixState.setStateEvent(configRoomID, schema.EventTypeServiceBinding, "ticket", schema.ServiceBindingContent{
 		Principal: ticketEntity,
 	})
 
@@ -174,7 +174,7 @@ func TestReconcile_ServiceMountsUnresolvable(t *testing.T) {
 	matrixState := newMockMatrixState()
 	matrixState.setRoomAlias(daemon.fleet.Namespace().TemplateRoomAlias(), templateRoomID)
 
-	// Template requires "ticket" but no m.bureau.room_service binding exists.
+	// Template requires "ticket" but no m.bureau.service_binding exists.
 	matrixState.setStateEvent(templateRoomID, schema.EventTypeTemplate, "needs-ticket", schema.TemplateContent{
 		Command:          []string{"/bin/echo", "hello"},
 		RequiredServices: []string{"ticket"},
@@ -239,13 +239,13 @@ func TestReconcile_ServiceMountsWorkspaceRoom(t *testing.T) {
 
 	// Bind "ticket" in config room to one principal.
 	globalTicketEntity := testEntity(t, daemon.fleet, "service/ticket/global")
-	matrixState.setStateEvent(configRoomID, schema.EventTypeRoomService, "ticket", schema.RoomServiceContent{
+	matrixState.setStateEvent(configRoomID, schema.EventTypeServiceBinding, "ticket", schema.ServiceBindingContent{
 		Principal: globalTicketEntity,
 	})
 
 	// Bind "ticket" in workspace room to a different principal. This should win.
 	wsTicketEntity := testEntity(t, daemon.fleet, "service/ticket/workspace")
-	matrixState.setStateEvent(workspaceRoomID, schema.EventTypeRoomService, "ticket", schema.RoomServiceContent{
+	matrixState.setStateEvent(workspaceRoomID, schema.EventTypeServiceBinding, "ticket", schema.ServiceBindingContent{
 		Principal: wsTicketEntity,
 	})
 
@@ -380,11 +380,11 @@ func TestReconcile_ServiceMountsMultipleServices(t *testing.T) {
 
 	// Bind both services in the config room.
 	ticketEntity := testEntity(t, daemon.fleet, "service/ticket")
-	matrixState.setStateEvent(configRoomID, schema.EventTypeRoomService, "ticket", schema.RoomServiceContent{
+	matrixState.setStateEvent(configRoomID, schema.EventTypeServiceBinding, "ticket", schema.ServiceBindingContent{
 		Principal: ticketEntity,
 	})
 	ragEntity := testEntity(t, daemon.fleet, "service/rag")
-	matrixState.setStateEvent(configRoomID, schema.EventTypeRoomService, "rag", schema.RoomServiceContent{
+	matrixState.setStateEvent(configRoomID, schema.EventTypeServiceBinding, "rag", schema.ServiceBindingContent{
 		Principal: ragEntity,
 	})
 
@@ -513,7 +513,7 @@ func TestReconcile_ServiceMountsPartialFailure(t *testing.T) {
 		RequiredServices: []string{"ticket", "rag"},
 	})
 
-	matrixState.setStateEvent(configRoomID, schema.EventTypeRoomService, "ticket", schema.RoomServiceContent{
+	matrixState.setStateEvent(configRoomID, schema.EventTypeServiceBinding, "ticket", schema.ServiceBindingContent{
 		Principal: testEntity(t, daemon.fleet, "service/ticket"),
 	})
 	// "rag" is intentionally NOT bound.

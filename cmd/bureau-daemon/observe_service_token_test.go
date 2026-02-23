@@ -103,9 +103,9 @@ func newTestDaemonWithServiceToken(t *testing.T) *Daemon {
 	ticketServicePrincipal := "@bureau/fleet/prod/service/ticket:bureau.local"
 	matrixState.setStateEvent(
 		daemon.configRoomID.String(),
-		schema.EventTypeRoomService,
+		schema.EventTypeServiceBinding,
 		"ticket",
-		schema.RoomServiceContent{
+		schema.ServiceBindingContent{
 			Principal: mustParseEntity(t, ticketServicePrincipal),
 		},
 	)

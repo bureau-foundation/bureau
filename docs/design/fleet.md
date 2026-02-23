@@ -156,7 +156,7 @@ A fleet service carries:
 - **Fleet** — the localpart of the fleet controller that manages this
   service. If empty, any controller may claim it.
 - **Service rooms** — room alias glob patterns where the fleet
-  controller ensures the service is bound via `m.bureau.room_service`.
+  controller ensures the service is bound via `m.bureau.service_binding`.
 - **Payload** — per-service configuration passed to the template,
   merged with the PrincipalAssignment payload.
 
@@ -331,7 +331,7 @@ previewed via the CLI before committing.
 chosen machine's config room. The assignment includes the service
 template reference, a label `fleet_managed: "<fleet-controller-localpart>"`
 to identify it as fleet-managed, any payload from the fleet service
-definition, and ServiceRooms for room_service bindings. The daemon
+definition, and ServiceRooms for service bindings. The daemon
 reconciles and starts the sandbox.
 
 **Remove.** The fleet controller removes (blanks) the

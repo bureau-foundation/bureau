@@ -105,7 +105,7 @@ func (agentService *AgentService) initialSync(ctx context.Context) (string, erro
 func (agentService *AgentService) handleSync(ctx context.Context, response *messaging.SyncResponse) {
 	// Accept pending invites from the incremental sync. The daemon may
 	// invite the service to additional rooms during operation (e.g.,
-	// config rooms for new room service bindings).
+	// config rooms for new service bindings).
 	if len(response.Rooms.Invite) > 0 {
 		service.AcceptInvites(ctx, agentService.session, response.Rooms.Invite, agentService.logger)
 	}

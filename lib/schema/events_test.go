@@ -31,7 +31,7 @@ func TestEventTypeConstants(t *testing.T) {
 		{"workspace", EventTypeWorkspace, "m.bureau.workspace"},
 		{"pipeline", EventTypePipeline, "m.bureau.pipeline"},
 		{"pipeline_result", EventTypePipelineResult, "m.bureau.pipeline_result"},
-		{"room_service", EventTypeRoomService, "m.bureau.room_service"},
+		{"service_binding", EventTypeServiceBinding, "m.bureau.service_binding"},
 		{"ticket", EventTypeTicket, "m.bureau.ticket"},
 		{"ticket_config", EventTypeTicketConfig, "m.bureau.ticket_config"},
 		{"artifact_scope", EventTypeArtifactScope, "m.bureau.artifact_scope"},

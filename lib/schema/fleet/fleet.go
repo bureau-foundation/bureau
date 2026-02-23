@@ -101,7 +101,7 @@ type FleetServiceContent struct {
 	HAClass string `json:"ha_class,omitempty"`
 
 	// ServiceRooms is a list of room alias glob patterns. The fleet
-	// controller ensures the service is bound (via m.bureau.room_service
+	// controller ensures the service is bound (via m.bureau.service_binding
 	// state events) in rooms matching these patterns.
 	ServiceRooms []string `json:"service_rooms,omitempty"`
 

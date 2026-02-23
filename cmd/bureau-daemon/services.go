@@ -669,8 +669,8 @@ func (d *Daemon) unregisterProxyRoute(ctx context.Context, consumer ref.Entity, 
 	return nil
 }
 
-// discoverSharedCache looks for an "artifact-cache" room service
-// binding in #bureau/service. If found, resolves the shared cache
+// discoverSharedCache looks for an "artifact-cache" service binding
+// in #bureau/service. If found, resolves the shared cache
 // service principal to a socket path and pushes the upstream
 // configuration to the local artifact service.
 //
@@ -679,7 +679,7 @@ func (d *Daemon) unregisterProxyRoute(ctx context.Context, consumer ref.Entity, 
 // machine): creates a transport tunnel socket that bridges connections
 // to the remote service.
 func (d *Daemon) discoverSharedCache(ctx context.Context) {
-	content, err := d.session.GetStateEvent(ctx, d.serviceRoomID, schema.EventTypeRoomService, "artifact-cache")
+	content, err := d.session.GetStateEvent(ctx, d.serviceRoomID, schema.EventTypeServiceBinding, "artifact-cache")
 	if err != nil {
 		// No artifact-cache binding is normal — not all fleets have
 		// a shared cache. Only log at debug level.
@@ -689,7 +689,7 @@ func (d *Daemon) discoverSharedCache(ctx context.Context) {
 		return
 	}
 
-	var binding schema.RoomServiceContent
+	var binding schema.ServiceBindingContent
 	if err := json.Unmarshal(content, &binding); err != nil {
 		d.logger.Error("failed to parse artifact-cache binding",
 			"error", err,

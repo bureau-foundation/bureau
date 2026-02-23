@@ -618,12 +618,12 @@ has ticket management enabled. No event means no tickets in that room.
 
 ---
 
-## Room Service Binding
+## Service Binding
 
 Rooms declare which service instance manages their tickets via a
 general-purpose state event:
 
-- **Event type:** `m.bureau.room_service`
+- **Event type:** `m.bureau.service_binding`
 - **State key:** service role (e.g., `"ticket"`)
 - **Content:** the principal that provides the service for this room
 
@@ -863,7 +863,7 @@ dependencies are in the batch.
 Agents access the ticket service through a Unix socket bind-mounted
 into the sandbox at `/run/bureau/service/ticket.sock`. The template
 declares `ticket` in its `required_services`; the daemon resolves the
-role to a concrete service principal via `m.bureau.room_service` state
+role to a concrete service principal via `m.bureau.service_binding` state
 events and mounts the socket at sandbox creation time. See
 [architecture.md](architecture.md) for the general service socket
 pattern, resolution mechanism, and wire protocol.
@@ -1156,7 +1156,7 @@ bureau ticket enable --space iree --host workstation
 
 This registers the service's Matrix account, publishes a
 PrincipalAssignment to the appropriate machine config room, sets
-`m.bureau.room_service` state events in the target rooms, and invites
+`m.bureau.service_binding` state events in the target rooms, and invites
 the service to those rooms.
 
 Only one machine's daemon sees the assignment — machine affinity
@@ -1197,7 +1197,7 @@ bureau ticket export --jsonl tickets.jsonl --room ROOM
   carry agent session history and discussion (Level 3).
 - [architecture.md](architecture.md) — the ticket service is a service
   principal, discoverable via `#bureau/service`, reachable via Unix
-  socket. Service resolution flows through `m.bureau.room_service`
+  socket. Service resolution flows through `m.bureau.service_binding`
   state events and the daemon's sandbox creation path.
 - [pipelines.md](pipelines.md) — pipeline definitions are templates;
   pipeline executions are tickets. Pipeline `publish` steps can create

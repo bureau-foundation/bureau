@@ -48,7 +48,7 @@ The command:
   - Provisions encrypted credentials to the target machine
   - Publishes a PrincipalAssignment to the machine's config room
   - For each existing room in the space: publishes m.bureau.ticket_config,
-    sets the m.bureau.room_service binding (role=ticket), invites the
+    sets the m.bureau.service_binding (role=ticket), invites the
     service, and configures power levels
 
 The ticket service uses the "ticket-service" template (published by
@@ -344,10 +344,10 @@ type ConfigureRoomParams struct {
 
 // ConfigureRoom enables ticket management in an existing room:
 //   - Publishes m.bureau.ticket_config (enables ticket management)
-//   - Publishes m.bureau.room_service with state_key "ticket" (binds the service)
+//   - Publishes m.bureau.service_binding with state_key "ticket" (binds the service)
 //   - Invites the service principal
 //   - Configures power levels (service at PL 10, m.bureau.ticket at PL 10,
-//     m.bureau.ticket_config and m.bureau.room_service at PL 100)
+//     m.bureau.ticket_config and m.bureau.service_binding at PL 100)
 func ConfigureRoom(ctx context.Context, logger *slog.Logger, session messaging.Session, roomID ref.RoomID, serviceEntity ref.Entity, params ConfigureRoomParams) error {
 	// Publish ticket config (singleton, state_key="").
 	ticketConfig := ticketschema.TicketConfigContent{
@@ -360,13 +360,13 @@ func ConfigureRoom(ctx context.Context, logger *slog.Logger, session messaging.S
 		return cli.Internal("publishing ticket config: %w", err)
 	}
 
-	// Publish room service binding (state_key="ticket").
-	roomService := schema.RoomServiceContent{
+	// Publish service binding (state_key="ticket").
+	binding := schema.ServiceBindingContent{
 		Principal: serviceEntity,
 	}
-	_, err = session.SendStateEvent(ctx, roomID, schema.EventTypeRoomService, "ticket", roomService)
+	_, err = session.SendStateEvent(ctx, roomID, schema.EventTypeServiceBinding, "ticket", binding)
 	if err != nil {
-		return cli.Internal("publishing room service binding: %w", err)
+		return cli.Internal("publishing service binding: %w", err)
 	}
 
 	// Invite the service to the room (idempotent — M_FORBIDDEN means already a member).
@@ -391,14 +391,14 @@ func ConfigureRoom(ctx context.Context, logger *slog.Logger, session messaging.S
 //   - Service principal user gets PL 10
 //   - m.bureau.ticket event type requires PL 10
 //   - m.bureau.ticket_config requires PL 100 (admin-only)
-//   - m.bureau.room_service requires PL 100 (admin-only)
+//   - m.bureau.service_binding requires PL 100 (admin-only)
 func configureTicketPowerLevels(ctx context.Context, session messaging.Session, roomID ref.RoomID, serviceUserID ref.UserID) error {
 	return schema.GrantPowerLevels(ctx, session, roomID, schema.PowerLevelGrants{
 		Users: map[ref.UserID]int{serviceUserID: 10},
 		Events: map[ref.EventType]int{
-			schema.EventTypeTicket:       10,
-			schema.EventTypeTicketConfig: 100,
-			schema.EventTypeRoomService:  100,
+			schema.EventTypeTicket:         10,
+			schema.EventTypeTicketConfig:   100,
+			schema.EventTypeServiceBinding: 100,
 		},
 	})
 }

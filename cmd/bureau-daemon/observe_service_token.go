@@ -80,7 +80,7 @@ func (d *Daemon) handleMintServiceToken(clientConnection net.Conn, request obser
 	}
 
 	// Resolve the service socket path. Search the config room for
-	// the m.bureau.room_service state event with the role as state key.
+	// the m.bureau.service_binding state event with the role as state key.
 	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
 	defer cancel()
 

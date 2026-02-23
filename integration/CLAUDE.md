@@ -269,7 +269,7 @@ and similar calls are appropriate when:
 - **Sending test messages** — `admin.SendMessage` to trigger agent behavior
   from the test harness.
 - **Setting up domain-specific fixtures** — creating project rooms with
-  ticket configuration, publishing room service bindings, configuring
+  ticket configuration, publishing service bindings, configuring
   power levels. These are specific to the domain (tickets, services) and
   don't have Bureau-level library functions.
 - **Deliberately crafting invalid or edge-case state** — tests that verify

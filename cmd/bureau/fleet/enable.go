@@ -308,7 +308,7 @@ func extractMachineName(localpart string) (string, error) {
 	return entityName, nil
 }
 
-// publishFleetBindings publishes an m.bureau.room_service state event with
+// publishFleetBindings publishes an m.bureau.service_binding state event with
 // state key "fleet" in every active machine's config room. This binds the
 // "fleet" service role to the fleet controller so agents with
 // required_services: ["fleet"] can discover the fleet controller socket.
@@ -327,7 +327,7 @@ func publishFleetBindings(ctx context.Context, session messaging.Session, fleet 
 		return 0, cli.Internal("reading machine room state: %w", err)
 	}
 
-	binding := schema.RoomServiceContent{Principal: serviceRef.Entity()}
+	binding := schema.ServiceBindingContent{Principal: serviceRef.Entity()}
 	count := 0
 
 	for _, event := range events {
@@ -359,7 +359,7 @@ func publishFleetBindings(ctx context.Context, session messaging.Session, fleet 
 			continue
 		}
 
-		_, sendErr := session.SendStateEvent(ctx, configRoomID, schema.EventTypeRoomService, "fleet", binding)
+		_, sendErr := session.SendStateEvent(ctx, configRoomID, schema.EventTypeServiceBinding, "fleet", binding)
 		if sendErr != nil {
 			logger.Warn("cannot publish fleet binding", "machine", machine.Localpart(), "error", sendErr)
 			continue

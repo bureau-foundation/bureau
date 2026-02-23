@@ -31,7 +31,7 @@ import (
 // needed because the mock driver handles event generation internally.
 //
 // The template declares RequiredServices: ["agent"], which triggers
-// the full production path: daemon resolves the "agent" room service
+// the full production path: daemon resolves the "agent" service
 // binding, finds the agent service socket, mints an authentication
 // token, and passes the socket mount + token directory to the launcher.
 // The launcher bind-mounts both into the sandbox. Run() auto-detects
@@ -87,12 +87,12 @@ func TestAgentServiceSessionTracking(t *testing.T) {
 		},
 	})
 
-	// Publish room service binding so the daemon maps "agent" role to
-	// this service. Must be published before deploying any principal
-	// with RequiredServices: ["agent"].
+	// Publish service binding so the daemon maps "agent" role to this
+	// service. Must be published before deploying any principal with
+	// RequiredServices: ["agent"].
 	if _, err := admin.SendStateEvent(ctx, machine.ConfigRoomID,
-		schema.EventTypeRoomService, "agent",
-		schema.RoomServiceContent{Principal: agentSvc.Entity}); err != nil {
+		schema.EventTypeServiceBinding, "agent",
+		schema.ServiceBindingContent{Principal: agentSvc.Entity}); err != nil {
 		t.Fatalf("publish agent service binding in config room: %v", err)
 	}
 

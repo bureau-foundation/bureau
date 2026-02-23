@@ -495,11 +495,11 @@ picks the closest instance based on latency, load, and locality.
 ### Room binding
 
 Room-level service bindings declare which service instance handles each
-role in each room, via `m.bureau.room_service` state events:
+role in each room, via `m.bureau.service_binding` state events:
 
 ```json
 {
-  "type": "m.bureau.room_service",
+  "type": "m.bureau.service_binding",
   "state_key": "ticket",
   "content": {
     "principal": "@service/ticket:bureau.local"
@@ -516,7 +516,7 @@ service instances (who register by principal name).
 At sandbox creation time, the daemon resolves each entry in the
 template's `RequiredServices` list:
 
-1. Scan the principal's rooms for `m.bureau.room_service` state events
+1. Scan the principal's rooms for `m.bureau.service_binding` state events
    matching the required role.
 2. Look up the bound principal in the `#bureau/service` directory to
    find which machine hosts it.

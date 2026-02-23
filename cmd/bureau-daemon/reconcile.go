@@ -548,7 +548,7 @@ func (d *Daemon) reconcile(ctx context.Context) error {
 		}
 
 		// Resolve required service sockets to host-side paths. The daemon
-		// looks up m.bureau.room_service state events in rooms the principal
+		// looks up m.bureau.service_binding state events in rooms the principal
 		// will be a member of (workspace room first, then config room).
 		// Failure to resolve any required service blocks sandbox creation.
 		var serviceMounts []launcherServiceMount
@@ -1475,7 +1475,7 @@ func (d *Daemon) ensurePrincipalRoomAccess(ctx context.Context, principalEntity 
 }
 
 // resolveServiceMounts resolves a list of required service roles to host-side
-// socket paths by looking up m.bureau.room_service state events. Rooms are
+// socket paths by looking up m.bureau.service_binding state events. Rooms are
 // checked in specificity order: workspace room first (if any), then the
 // machine config room. The first binding found for each role wins.
 //
@@ -1506,12 +1506,12 @@ func (d *Daemon) resolveServiceMounts(ctx context.Context, requiredServices []st
 }
 
 // resolveServiceSocket looks up a single service role in the given rooms.
-// For each room, it fetches the m.bureau.room_service state event with the
+// For each room, it fetches the m.bureau.service_binding state event with the
 // role as the state key. If found, derives the host-side socket path from
 // the binding's principal localpart.
 func (d *Daemon) resolveServiceSocket(ctx context.Context, role string, rooms []ref.RoomID) (string, error) {
 	for _, roomID := range rooms {
-		content, err := d.session.GetStateEvent(ctx, roomID, schema.EventTypeRoomService, role)
+		content, err := d.session.GetStateEvent(ctx, roomID, schema.EventTypeServiceBinding, role)
 		if err != nil {
 			if messaging.IsMatrixError(err, messaging.ErrCodeNotFound) {
 				d.logger.Debug("no service binding in room",
@@ -1523,7 +1523,7 @@ func (d *Daemon) resolveServiceSocket(ctx context.Context, role string, rooms []
 			return "", fmt.Errorf("fetching service binding in room %s: %w", roomID, err)
 		}
 
-		var binding schema.RoomServiceContent
+		var binding schema.ServiceBindingContent
 		if err := json.Unmarshal(content, &binding); err != nil {
 			return "", fmt.Errorf("parsing service binding for role %q in room %s: %w", role, roomID, err)
 		}

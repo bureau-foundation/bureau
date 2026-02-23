@@ -623,9 +623,9 @@ func TestServiceOmitsOptionalFields(t *testing.T) {
 	}
 }
 
-func TestRoomServiceContentRoundTrip(t *testing.T) {
+func TestServiceBindingContentRoundTrip(t *testing.T) {
 	principalUserID := "@bureau/fleet/prod/service/ticket/iree:bureau.local"
-	original := RoomServiceContent{
+	original := ServiceBindingContent{
 		Principal: mustParseEntity(t, principalUserID),
 	}
 
@@ -640,7 +640,7 @@ func TestRoomServiceContentRoundTrip(t *testing.T) {
 	}
 	assertField(t, raw, "principal", principalUserID)
 
-	var decoded RoomServiceContent
+	var decoded ServiceBindingContent
 	if err := json.Unmarshal(data, &decoded); err != nil {
 		t.Fatalf("Unmarshal: %v", err)
 	}

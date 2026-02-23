@@ -315,7 +315,7 @@ func Create(ctx context.Context, session messaging.Session, params CreateParams,
 	// need a ticket service for pipeline tickets (pip-* IDs for
 	// setup/teardown tracking) and work tickets (tkt-* IDs for
 	// task/bug/feature tracking). ConfigureRoom publishes ticket_config,
-	// the room_service binding (so the daemon can resolve the ticket
+	// the service binding (so the daemon can resolve the ticket
 	// socket for RequiredServices), power levels, and service invitation.
 	// EnsureServiceInRoom then waits for the service to join — the daemon
 	// creates pip- tickets during reconciliation, and if the ticket

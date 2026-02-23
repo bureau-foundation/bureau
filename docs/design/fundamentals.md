@@ -406,7 +406,7 @@ hold system-wide configuration. Per-workspace rooms hold project state.
 JSON object identified by (room, event type, state key). Bureau defines
 event types for everything: templates (`m.bureau.template`), pipeline
 definitions (`m.bureau.pipeline`), tickets (`m.bureau.ticket`), service
-bindings (`m.bureau.room_service`), machine config, fleet definitions,
+bindings (`m.bureau.service_binding`), machine config, fleet definitions,
 artifact tags.
 
 **Threads** carry conversation — agent work logs, review comments,
@@ -476,7 +476,7 @@ sockets, registered services):
   state events. The daemon evaluates conditions on each sync tick and
   launches principals when conditions are met, passing the matched
   event content as trigger.json.
-- **Service bindings** (`m.bureau.room_service`) declare which service
+- **Service bindings** (`m.bureau.service_binding`) declare which service
   instance handles each role in each room. The daemon resolves these at
   sandbox creation time and passes socket mount instructions to the
   launcher.
@@ -563,7 +563,7 @@ RequiredServices []string `json:"required_services,omitempty"`
 
 These are service *roles* (e.g., `"ticket"`, `"artifact"`, `"forgejo"`),
 not specific principal names. Rooms declare which service instance
-handles each role via `m.bureau.room_service` state events.
+handles each role via `m.bureau.service_binding` state events.
 
 At sandbox creation time, the daemon resolves each required role to a
 concrete service principal by scanning the principal's rooms for
@@ -726,7 +726,7 @@ A service handling queries across machines:
 
 ```
 Service runs on machine A, agent runs on machine B
-  → daemon B resolves service socket via room_service binding
+  → daemon B resolves service socket via service_binding
   → daemon B creates local tunnel socket via WebRTC to daemon A
   → launcher B mounts tunnel socket as /run/bureau/service/<role>.sock
   → agent sends CBOR request to socket, reads CBOR response

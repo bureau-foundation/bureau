@@ -191,7 +191,7 @@ const (
 	// Room: any room the service has joined and is tracking
 	EventTypeServiceReady ref.EventType = "m.bureau.service_ready"
 
-	// EventTypeRoomService declares which service principal handles a
+	// EventTypeServiceBinding declares which service principal handles a
 	// given service role in a room. This is a general mechanism for
 	// room-scoped service binding — any service type (tickets, CI, code
 	// review, RAG) uses the same event type with different state keys.
@@ -202,7 +202,7 @@ const (
 	//
 	// State key: service role name (e.g., "ticket", "rag", "ci")
 	// Room: any room that uses the service
-	EventTypeRoomService ref.EventType = "m.bureau.room_service"
+	EventTypeServiceBinding ref.EventType = "m.bureau.service_binding"
 
 	// EventTypeTicket is a work item tracked in a room by the ticket
 	// service. Each ticket is a state event whose state key is the
@@ -217,7 +217,7 @@ const (
 	// EventTypeTicketConfig enables and configures ticket management
 	// for a room. Rooms without this event do not accept ticket
 	// operations from the ticket service. Published by the admin
-	// (via "bureau ticket enable") alongside the room service binding
+	// (via "bureau ticket enable") alongside the service binding
 	// and service invitation.
 	//
 	// State key: "" (singleton per room)

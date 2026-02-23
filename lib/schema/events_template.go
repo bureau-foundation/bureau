@@ -297,7 +297,7 @@ type TemplateContent struct {
 	// RequiredServices lists service roles (e.g., "ticket", "rag")
 	// that must be available when a sandbox is created from this
 	// template. The daemon resolves each role to a concrete service
-	// principal by reading m.bureau.room_service state events in the
+	// principal by reading m.bureau.service_binding state events in the
 	// principal's rooms, then bind-mounts the service's Unix socket
 	// into the sandbox at /run/bureau/service/<role>.sock. If any
 	// required service cannot be resolved, sandbox creation fails.

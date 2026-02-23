@@ -242,7 +242,7 @@ principals working in the workspace:
 - `m.bureau.layout` — tmux session structure for observation
 - `m.bureau.ticket` and `m.bureau.ticket_config` — when ticket
   management is enabled for the room
-- `m.bureau.room_service` — service bindings (ticket, artifact, etc.)
+- `m.bureau.service_binding` — service bindings (ticket, artifact, etc.)
 - `m.bureau.pipeline_result` — pipeline execution outcomes
 
 Power levels: admin (100) for room metadata. Machine daemon (50) for
@@ -313,10 +313,10 @@ sandboxes to match.
 | Event type | State key | Room | Purpose |
 |---|---|---|---|
 | `m.bureau.service` | service localpart | `#bureau/service` | service directory entry (principal, machine, capabilities, protocol) |
-| `m.bureau.room_service` | service role name | any room | binds a service role to a concrete service principal |
+| `m.bureau.service_binding` | service role name | any room | binds a service role to a concrete service principal |
 
 `m.bureau.service` is the global registry — what services exist and
-where they run. `m.bureau.room_service` is the local binding — which
+where they run. `m.bureau.service_binding` is the local binding — which
 service instance handles a role in this specific room. The daemon
 resolves `RequiredServices` by joining these two: find the room
 binding, look up the service, locate its socket.

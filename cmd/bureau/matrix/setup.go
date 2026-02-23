@@ -422,6 +422,22 @@ type namedTemplate struct {
 // isolation. Use for sandboxes that need direct host network access (e.g.,
 // services binding to host ports, agents that need raw TCP rather than
 // going through the proxy/bridge).
+//
+// "agent-base" inherits from base-networked and adds proxy socket,
+// machine name, and server name environment variables for agent processes.
+//
+// "service-base" inherits from base-networked and adds the environment
+// variables needed by service.BootstrapViaProxy. The launcher injects
+// additional service-specific variables (BUREAU_SERVICE_SOCKET,
+// BUREAU_PRINCIPAL_NAME, BUREAU_FLEET) directly into the sandbox
+// environment for service principals, so the template only needs the
+// three variables that flow through the sandbox variable expansion system.
+//
+// Individual service templates (ticket-service, fleet-controller, etc.)
+// inherit from service-base and set their Command to the bare binary name.
+// Deployment requires either a Nix environment (via EnvironmentOverride
+// in the PrincipalAssignment) that provides the binary, or a
+// CommandOverride with the absolute binary path plus filesystem mounts.
 func baseTemplates() []namedTemplate {
 	return []namedTemplate{
 		{
@@ -476,6 +492,58 @@ func baseTemplates() []namedTemplate {
 					"BUREAU_MACHINE_NAME": "${MACHINE_NAME}",
 					"BUREAU_SERVER_NAME":  "${SERVER_NAME}",
 				},
+			},
+		},
+		{
+			name: "service-base",
+			content: schema.TemplateContent{
+				Description: "Base service template with proxy bootstrap environment variables",
+				Inherits:    []string{"bureau/template:base-networked"},
+				EnvironmentVariables: map[string]string{
+					"BUREAU_PROXY_SOCKET": "${PROXY_SOCKET}",
+					"BUREAU_MACHINE_NAME": "${MACHINE_NAME}",
+					"BUREAU_SERVER_NAME":  "${SERVER_NAME}",
+				},
+			},
+		},
+		{
+			name: "ticket-service",
+			content: schema.TemplateContent{
+				Description: "Bureau ticket service for work item tracking, dependencies, and gates",
+				Inherits:    []string{"bureau/template:service-base"},
+				Command:     []string{"bureau-ticket-service"},
+			},
+		},
+		{
+			name: "fleet-controller",
+			content: schema.TemplateContent{
+				Description: "Bureau fleet controller for service placement, scaling, and machine lifecycle",
+				Inherits:    []string{"bureau/template:service-base"},
+				Command:     []string{"bureau-fleet-controller"},
+			},
+		},
+		{
+			name: "artifact-service",
+			content: schema.TemplateContent{
+				Description: "Bureau artifact service for content-addressable storage, caching, and distribution",
+				Inherits:    []string{"bureau/template:service-base"},
+				Command:     []string{"bureau-artifact-service"},
+			},
+		},
+		{
+			name: "agent-service",
+			content: schema.TemplateContent{
+				Description: "Bureau agent service for agent session management, context tracking, and metrics",
+				Inherits:    []string{"bureau/template:service-base"},
+				Command:     []string{"bureau-agent-service"},
+			},
+		},
+		{
+			name: "telemetry-service",
+			content: schema.TemplateContent{
+				Description: "Bureau telemetry service for span, metric, and log aggregation and query",
+				Inherits:    []string{"bureau/template:service-base"},
+				Command:     []string{"bureau-telemetry-service"},
 			},
 		},
 	}

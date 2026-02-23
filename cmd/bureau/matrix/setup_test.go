@@ -14,8 +14,8 @@ func TestBaseTemplates(t *testing.T) {
 
 	templates := baseTemplates()
 
-	if len(templates) != 3 {
-		t.Fatalf("expected 3 base templates, got %d", len(templates))
+	if len(templates) != 9 {
+		t.Fatalf("expected 9 base templates, got %d", len(templates))
 	}
 
 	// Find templates by name.
@@ -134,6 +134,72 @@ func TestBaseTemplates(t *testing.T) {
 	for _, key := range []string{"BUREAU_PROXY_SOCKET", "BUREAU_MACHINE_NAME", "BUREAU_SERVER_NAME"} {
 		if agentBase.EnvironmentVariables[key] == "" {
 			t.Errorf("agent-base missing environment variable %q", key)
+		}
+	}
+
+	// Verify the "service-base" template.
+	serviceBase, ok := byName["service-base"]
+	if !ok {
+		t.Fatal("missing 'service-base' template")
+	}
+	if serviceBase.Description == "" {
+		t.Error("service-base template has empty description")
+	}
+
+	// Should inherit from base-networked.
+	if len(serviceBase.Inherits) != 1 {
+		t.Fatalf("service-base should inherit from exactly one parent, got %v", serviceBase.Inherits)
+	}
+	serviceBaseRef, err := schema.ParseTemplateRef(serviceBase.Inherits[0])
+	if err != nil {
+		t.Fatalf("service-base Inherits[0] %q is not a valid template reference: %v",
+			serviceBase.Inherits[0], err)
+	}
+	if serviceBaseRef.Template != "base-networked" {
+		t.Errorf("service-base should inherit from 'base-networked', got %q", serviceBaseRef.Template)
+	}
+
+	// Should expose the same bootstrap env vars as agent-base.
+	for _, key := range []string{"BUREAU_PROXY_SOCKET", "BUREAU_MACHINE_NAME", "BUREAU_SERVER_NAME"} {
+		if serviceBase.EnvironmentVariables[key] == "" {
+			t.Errorf("service-base missing environment variable %q", key)
+		}
+	}
+
+	// Verify each individual service template inherits from service-base
+	// and has a bare binary command name.
+	serviceTemplates := []struct {
+		name    string
+		command string
+	}{
+		{"ticket-service", "bureau-ticket-service"},
+		{"fleet-controller", "bureau-fleet-controller"},
+		{"artifact-service", "bureau-artifact-service"},
+		{"agent-service", "bureau-agent-service"},
+		{"telemetry-service", "bureau-telemetry-service"},
+	}
+
+	for _, serviceTemplate := range serviceTemplates {
+		template, ok := byName[serviceTemplate.name]
+		if !ok {
+			t.Fatalf("missing %q template", serviceTemplate.name)
+		}
+		if template.Description == "" {
+			t.Errorf("%s template has empty description", serviceTemplate.name)
+		}
+		if len(template.Inherits) != 1 {
+			t.Fatalf("%s should inherit from exactly one parent, got %v", serviceTemplate.name, template.Inherits)
+		}
+		templateRef, err := schema.ParseTemplateRef(template.Inherits[0])
+		if err != nil {
+			t.Fatalf("%s Inherits[0] %q is not a valid template reference: %v",
+				serviceTemplate.name, template.Inherits[0], err)
+		}
+		if templateRef.Template != "service-base" {
+			t.Errorf("%s should inherit from 'service-base', got %q", serviceTemplate.name, templateRef.Template)
+		}
+		if len(template.Command) != 1 || template.Command[0] != serviceTemplate.command {
+			t.Errorf("%s command = %v, want [%q]", serviceTemplate.name, template.Command, serviceTemplate.command)
 		}
 	}
 }

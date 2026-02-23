@@ -905,17 +905,19 @@ func TestReconcilePayloadOnlyChangeHotReloads(t *testing.T) {
 	machineName := daemon.machine.Localpart()
 	fleetPrefix := daemon.fleet.Localpart() + "/"
 
-	// Template with same command but different payload.
+	agentTestEntity := testEntity(t, daemon.fleet, "agent/test")
+
+	// Template with a command and a default payload.
 	state := newMockMatrixState()
 	state.setRoomAlias(daemon.fleet.Namespace().TemplateRoomAlias(), templateRoomID)
 	state.setStateEvent(templateRoomID, schema.EventTypeTemplate, "test-template", schema.TemplateContent{
 		Command:        []string{"/bin/agent", "--mode=v1"},
-		DefaultPayload: map[string]any{"model": "claude-4"},
+		DefaultPayload: map[string]any{"model": "gpt-4"},
 	})
 	state.setStateEvent(configRoomID, schema.EventTypeMachineConfig, machineName, schema.MachineConfig{
 		Principals: []schema.PrincipalAssignment{
 			{
-				Principal: testEntity(t, daemon.fleet, "agent/test"),
+				Principal: agentTestEntity,
 				Template:  "bureau/template:test-template",
 				AutoStart: true,
 			},
@@ -953,17 +955,10 @@ func TestReconcilePayloadOnlyChangeHotReloads(t *testing.T) {
 	})
 	t.Cleanup(func() { listener.Close() })
 
-	// Old spec has same command but different payload.
-	agentTestEntity := testEntity(t, daemon.fleet, "agent/test")
 	daemon.runDir = principal.DefaultRunDir
 	daemon.session = session
 	daemon.configRoomID = mustRoomID(configRoomID)
 	daemon.launcherSocket = launcherSocket
-	daemon.running[agentTestEntity] = true
-	daemon.lastSpecs[agentTestEntity] = &schema.SandboxSpec{
-		Command: []string{"/bin/agent", "--mode=v1"},
-		Payload: map[string]any{"model": "gpt-4"},
-	}
 	daemon.adminSocketPathFunc = func(principal ref.Entity) string {
 		return filepath.Join(socketDir, principal.AccountLocalpart()+".admin.sock")
 	}
@@ -971,8 +966,30 @@ func TestReconcilePayloadOnlyChangeHotReloads(t *testing.T) {
 	t.Cleanup(daemon.stopAllLayoutWatchers)
 	t.Cleanup(daemon.stopAllHealthMonitors)
 
+	// First reconcile: creates the sandbox through the production path,
+	// populating lastSpecs with whatever the create path produces.
 	if err := daemon.reconcile(context.Background()); err != nil {
-		t.Fatalf("reconcile() error: %v", err)
+		t.Fatalf("first reconcile() error: %v", err)
+	}
+	if !daemon.running[agentTestEntity] {
+		t.Fatal("principal should be running after first reconcile")
+	}
+
+	// Clear tracked actions so we only see the second reconcile's IPC.
+	launcherMu.Lock()
+	ipcActions = nil
+	launcherMu.Unlock()
+
+	// Change the template's default payload. The command stays the same,
+	// so the only difference is in Payload → hot-reload, not restart.
+	state.setStateEvent(templateRoomID, schema.EventTypeTemplate, "test-template", schema.TemplateContent{
+		Command:        []string{"/bin/agent", "--mode=v1"},
+		DefaultPayload: map[string]any{"model": "claude-4"},
+	})
+
+	// Second reconcile: should hot-reload the payload, not destroy.
+	if err := daemon.reconcile(context.Background()); err != nil {
+		t.Fatalf("second reconcile() error: %v", err)
 	}
 
 	launcherMu.Lock()
@@ -2267,6 +2284,98 @@ func TestValidateCommandBinary(t *testing.T) {
 			}
 		})
 	}
+}
+
+func TestEnsureCommandBinaryMounted(t *testing.T) {
+	t.Parallel()
+
+	// Create a temporary binary to use for absolute path tests.
+	tempDir := t.TempDir()
+	binaryPath := filepath.Join(tempDir, "bureau-test-binary")
+	if err := os.WriteFile(binaryPath, []byte("#!/bin/sh\n"), 0755); err != nil {
+		t.Fatalf("writing test binary: %v", err)
+	}
+
+	t.Run("shell interpreter unchanged", func(t *testing.T) {
+		t.Parallel()
+		spec := &schema.SandboxSpec{Command: []string{"bash", "-c", "echo hi"}}
+		ensureCommandBinaryMounted(spec)
+		if spec.Command[0] != "bash" {
+			t.Errorf("command = %q, want bash", spec.Command[0])
+		}
+		if len(spec.Filesystem) != 0 {
+			t.Errorf("expected no filesystem mounts for shell interpreter, got %d", len(spec.Filesystem))
+		}
+	})
+
+	t.Run("nix environment skipped", func(t *testing.T) {
+		t.Parallel()
+		spec := &schema.SandboxSpec{
+			Command:         []string{"bureau-test-binary"},
+			EnvironmentPath: "/nix/store/abc123-env",
+		}
+		ensureCommandBinaryMounted(spec)
+		// Command should remain bare — Nix handles resolution.
+		if spec.Command[0] != "bureau-test-binary" {
+			t.Errorf("command = %q, want bureau-test-binary", spec.Command[0])
+		}
+		if len(spec.Filesystem) != 0 {
+			t.Errorf("expected no filesystem mounts for nix environment, got %d", len(spec.Filesystem))
+		}
+	})
+
+	t.Run("absolute path adds mount", func(t *testing.T) {
+		t.Parallel()
+		spec := &schema.SandboxSpec{Command: []string{binaryPath}}
+		ensureCommandBinaryMounted(spec)
+		if spec.Command[0] != binaryPath {
+			t.Errorf("command = %q, want %q", spec.Command[0], binaryPath)
+		}
+		found := false
+		for _, mount := range spec.Filesystem {
+			if mount.Source == binaryPath && mount.Dest == binaryPath && mount.Mode == "ro" {
+				found = true
+				break
+			}
+		}
+		if !found {
+			t.Errorf("expected filesystem mount for %q, got %v", binaryPath, spec.Filesystem)
+		}
+	})
+
+	t.Run("absolute path with existing mount skips", func(t *testing.T) {
+		t.Parallel()
+		spec := &schema.SandboxSpec{
+			Command: []string{binaryPath},
+			Filesystem: []schema.TemplateMount{
+				{Source: binaryPath, Dest: binaryPath, Mode: "ro"},
+			},
+		}
+		ensureCommandBinaryMounted(spec)
+		if len(spec.Filesystem) != 1 {
+			t.Errorf("expected exactly 1 filesystem mount, got %d", len(spec.Filesystem))
+		}
+	})
+
+	t.Run("absolute path under directory mount skips", func(t *testing.T) {
+		t.Parallel()
+		spec := &schema.SandboxSpec{
+			Command: []string{binaryPath},
+			Filesystem: []schema.TemplateMount{
+				{Source: tempDir, Dest: tempDir, Mode: "ro"},
+			},
+		}
+		ensureCommandBinaryMounted(spec)
+		if len(spec.Filesystem) != 1 {
+			t.Errorf("expected exactly 1 filesystem mount, got %d", len(spec.Filesystem))
+		}
+	})
+
+	t.Run("empty command no panic", func(t *testing.T) {
+		t.Parallel()
+		spec := &schema.SandboxSpec{}
+		ensureCommandBinaryMounted(spec) // should not panic
+	})
 }
 
 // TestReconcileCommandBinaryValidationBlocksCreate verifies that when the

@@ -492,6 +492,14 @@ func (d *Daemon) reconcile(ctx context.Context) error {
 				}
 				continue
 			}
+
+			// Resolve bare command names to absolute paths and add a
+			// filesystem mount when the binary is not covered by a Nix
+			// environment or existing template mounts. Without this,
+			// the sandbox's minimal filesystem wouldn't contain the
+			// binary even though the daemon validated it exists on the
+			// host.
+			ensureCommandBinaryMounted(sandboxSpec)
 		}
 
 		// Ensure the principal is a member of the config room. In the
@@ -775,11 +783,12 @@ func (d *Daemon) reconcileRunningPrincipal(ctx context.Context, principal ref.En
 	}
 	newSpec := resolveInstanceConfig(template, &assignment)
 
-	// Apply the same pipeline executor overlay that the create path
-	// uses so the stored spec (which has the overlay applied) doesn't
-	// always differ from the freshly resolved spec, which would cause
-	// an infinite destroy-recreate loop.
+	// Apply the same overlays that the create path uses so the stored
+	// spec (which has overlays applied) doesn't always differ from the
+	// freshly resolved spec, which would cause an infinite
+	// destroy-recreate loop.
 	d.applyPipelineExecutorOverlay(newSpec)
+	ensureCommandBinaryMounted(newSpec)
 
 	// Compare with the previously deployed spec.
 	oldSpec := d.lastSpecs[principal]
@@ -2305,4 +2314,76 @@ func validateCommandBinary(command string, environmentPath string) error {
 	}
 
 	return nil
+}
+
+// ensureCommandBinaryMounted resolves the command binary to an absolute path
+// and adds a read-only bind mount to the SandboxSpec if the binary is not
+// already covered by existing mounts (Nix store or explicit template mounts).
+//
+// This handles the gap between host-side binary validation
+// (validateCommandBinary) and sandbox-side binary availability: the daemon
+// can find a binary via exec.LookPath or an absolute path, but the sandbox
+// has a minimal filesystem. Without Nix (which auto-mounts /nix/store), the
+// binary needs an explicit mount. The pipeline executor overlay has this
+// logic inlined; this function generalizes it for all commands.
+//
+// Commands inside a Nix environment are not modified because the launcher's
+// specToProfile adds the /nix/store mount and prepends the environment's
+// bin directory to PATH.
+func ensureCommandBinaryMounted(spec *schema.SandboxSpec) {
+	if len(spec.Command) == 0 {
+		return
+	}
+	command := spec.Command[0]
+
+	// Shell interpreters are always available inside the sandbox.
+	if shellInterpreters[command] {
+		return
+	}
+
+	// Nix environments handle binary resolution: the launcher mounts
+	// /nix/store and prepends environment/bin to PATH. Bare command names
+	// work because the binary is inside the Nix closure.
+	if spec.EnvironmentPath != "" {
+		return
+	}
+
+	// Resolve bare command names to absolute paths.
+	resolvedPath := command
+	if !filepath.IsAbs(command) {
+		path, err := exec.LookPath(command)
+		if err != nil {
+			// validateCommandBinary already succeeded, so this
+			// should not happen. Leave the command as-is and let
+			// the sandbox fail with a clear error.
+			return
+		}
+		resolvedPath = path
+		spec.Command[0] = resolvedPath
+	}
+
+	// Check if the binary is already covered by an existing mount.
+	for _, mount := range spec.Filesystem {
+		if mount.Source == "" || mount.Type == "tmpfs" {
+			continue
+		}
+		// Exact file mount.
+		if mount.Source == resolvedPath {
+			return
+		}
+		// Directory mount that contains the binary.
+		if strings.HasPrefix(resolvedPath, mount.Source+"/") {
+			return
+		}
+	}
+
+	// Add a read-only bind mount for the binary at its host path. This is
+	// the same pattern as applyPipelineExecutorOverlay: mount the binary
+	// at its absolute host path so bwrap makes it accessible inside the
+	// sandbox.
+	spec.Filesystem = append(spec.Filesystem, schema.TemplateMount{
+		Source: resolvedPath,
+		Dest:   resolvedPath,
+		Mode:   "ro",
+	})
 }

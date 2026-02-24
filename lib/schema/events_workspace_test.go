@@ -48,7 +48,7 @@ func TestWorkspaceRoomPowerLevels(t *testing.T) {
 	}
 
 	// Admin-only events (PL 100).
-	for _, eventType := range []ref.EventType{EventTypeProject} {
+	for _, eventType := range []ref.EventType{EventTypeProject, EventTypeStewardship} {
 		if events[eventType] != 100 {
 			t.Errorf("%s power level = %v, want 100", eventType, events[eventType])
 		}

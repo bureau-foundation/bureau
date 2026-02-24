@@ -43,7 +43,7 @@ revocation event for fleet-wide notification.`,
 		Examples: []cli.Example{
 			{
 				Description: "Provision a new worker machine",
-				Command:     "bureau machine provision bureau/fleet/prod worker-01 --credential-file ./bureau-creds --output bootstrap.json",
+				Command:     "bureau machine provision bureau/fleet/prod/machine/worker-01 --credential-file ./bureau-creds --output bootstrap.json",
 			},
 			{
 				Description: "List all fleet machines",
@@ -55,11 +55,11 @@ revocation event for fleet-wide notification.`,
 			},
 			{
 				Description: "Remove a machine from the fleet",
-				Command:     "bureau machine decommission bureau/fleet/prod worker-01 --credential-file ./bureau-creds",
+				Command:     "bureau machine decommission bureau/fleet/prod/machine/worker-01 --credential-file ./bureau-creds",
 			},
 			{
 				Description: "Emergency revoke a compromised machine",
-				Command:     "bureau machine revoke bureau/fleet/prod worker-01 --credential-file ./bureau-creds --reason 'suspected compromise'",
+				Command:     "bureau machine revoke bureau/fleet/prod/machine/worker-01 --credential-file ./bureau-creds --reason 'suspected compromise'",
 			},
 		},
 	}

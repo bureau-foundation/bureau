@@ -328,39 +328,28 @@ fleet prefix lives in the run-dir, not duplicated in the socket filename.
 
 ## CLI Conventions
 
-### Entity names are bare
+### Full localpart references
 
-The entity type is implicit in the command. CLI arguments are bare entity
-names without the type prefix:
+Machine commands take the full machine localpart as a positional
+argument. The entity type (`machine/`) is embedded in the localpart,
+making the reference unambiguous and self-contained:
 
 ```
-bureau machine provision gpu-box --fleet my_bureau/fleet/prod
+bureau machine provision my_bureau/fleet/prod/machine/gpu-box
   → @my_bureau/fleet/prod/machine/gpu-box:server
 
-bureau service define stt/whisper --fleet my_bureau/fleet/prod
-  → @my_bureau/fleet/prod/service/stt/whisper:server
-
-bureau fleet create prod --namespace my_bureau
+bureau fleet create my_bureau/fleet/prod
   → #my_bureau/fleet/prod:server
 ```
 
-### Explicit naming
+For federation, the `@` sigil indicates a full Matrix user ID with an
+explicit server name. Without the sigil, the server is derived from
+the connected admin session:
 
-`--namespace` and `--fleet` are explicit. No hardcoded defaults.
-Environment variables (`BUREAU_NAMESPACE`, `BUREAU_FLEET`) and config
-files provide defaults so day-to-day commands don't require flags on
-every invocation.
-
-The `--fleet` flag accepts two forms:
-
-| Input | Interpretation |
-|-------|---------------|
-| `--fleet prod --namespace my_bureau` | Constructs `my_bureau/fleet/prod` |
-| `--fleet my_bureau/fleet/prod` | Used verbatim (namespace extracted from prefix) |
-
-When `--fleet` contains `/fleet/`, the namespace is extracted
-automatically and `--namespace` is not required. This makes full-form
-fleet references self-contained.
+```
+bureau machine provision @my_bureau/fleet/prod/machine/gpu-box:remote.server
+  → @my_bureau/fleet/prod/machine/gpu-box:remote.server
+```
 
 ### Entity-oriented commands
 
@@ -368,31 +357,24 @@ Commands are organized by entity type, not by which process handles
 the request:
 
 ```
-bureau machine list [--fleet F]
-bureau machine show <name> [--fleet F]
-bureau machine provision <name> --fleet F
-bureau machine decommission <name> --fleet F
-bureau machine drain <name> [--fleet F]
-bureau machine cordon/uncordon <name> [--fleet F]
-bureau machine doctor [--fleet F]
+bureau machine list <fleet-localpart>
+bureau machine provision <machine-ref>
+bureau machine upgrade <machine-ref> --host-env <path>
+bureau machine decommission <machine-ref>
+bureau machine revoke <machine-ref>
 
-bureau service list [--fleet F]
-bureau service define <name> --template <ref> --fleet F
-bureau service show <name> [--fleet F]
-bureau service place/unplace <name>
-bureau service plan <name>
-bureau service doctor [--fleet F]
+bureau fleet create <fleet-localpart>
+bureau fleet enable <fleet-localpart> --host <machine-ref>
+bureau fleet status <fleet-localpart>
 
-bureau fleet create <name> --namespace <ns>
-bureau fleet destroy <name> --namespace <ns>
-bureau fleet enable --name <name> --host <machine>
-bureau fleet status [--fleet F]
-bureau fleet doctor [--fleet F]
-
-bureau doctor                         composite: all doctors in order
-bureau matrix setup --namespace <ns>  bootstrap namespace
-bureau matrix doctor --namespace <ns> namespace health
+bureau matrix setup <namespace>
+bureau matrix doctor <namespace>
 ```
+
+Machine commands accept a full machine localpart (e.g.,
+`my_bureau/fleet/prod/machine/gpu-box`) or a Matrix user ID with `@`
+sigil for federation (e.g., `@.../machine/gpu-box:remote.server`).
+Fleet commands accept a fleet localpart (e.g., `my_bureau/fleet/prod`).
 
 Query commands read Matrix state directly (work without a fleet
 controller). Mutation commands that require placement intelligence
@@ -443,7 +425,7 @@ Fleet "prod" (bureau fleet create prod --namespace my_bureau):
   #my_bureau/fleet/prod/machine                  machine presence
   #my_bureau/fleet/prod/service                  service directory
 
-Machine (bureau machine provision gpu-box --fleet my_bureau/fleet/prod):
+Machine (bureau machine provision my_bureau/fleet/prod/machine/gpu-box):
   @my_bureau/fleet/prod/machine/gpu-box          machine account
   #my_bureau/fleet/prod/machine/gpu-box          machine config room (@ → #)
 

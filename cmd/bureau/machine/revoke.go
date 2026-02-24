@@ -40,10 +40,11 @@ func revokeCommand() *cli.Command {
 		Summary: "Emergency credential revocation for a compromised machine",
 		Description: `Immediately revoke all credentials for a machine and shut it down.
 
-The first argument is a fleet localpart (e.g., "bureau/fleet/prod").
-The second argument is the bare machine name within the fleet (e.g.,
-"worker-01"). The server name is derived from the connected session's
-identity.
+The argument is a machine reference — either a bare localpart (e.g.,
+"bureau/fleet/prod/machine/worker-01") or a full Matrix user ID (e.g.,
+"@bureau/fleet/prod/machine/worker-01:remote.server"). The @ sigil
+distinguishes the two forms. When a bare localpart is given, the server
+name is derived from the connected admin session.
 
 This is the emergency response command for a compromised machine. It
 executes three layers of defense:
@@ -64,22 +65,22 @@ executes three layers of defense:
 After revocation, the machine name can be re-provisioned with
 "bureau machine provision". Account deactivation may be permanent
 depending on the homeserver — this is by design for emergency revocation.`,
-		Usage: "bureau machine revoke <fleet-localpart> <machine-name> [flags]",
+		Usage: "bureau machine revoke <machine-ref> [flags]",
 		Examples: []cli.Example{
 			{
 				Description: "Revoke a compromised machine",
-				Command:     "bureau machine revoke bureau/fleet/prod worker-01 --credential-file ./bureau-creds --reason 'suspected compromise'",
+				Command:     "bureau machine revoke bureau/fleet/prod/machine/worker-01 --credential-file ./bureau-creds --reason 'suspected compromise'",
 			},
 		},
 		Params:         func() any { return &params },
 		RequiredGrants: []string{"command/machine/revoke"},
 		Annotations:    cli.Destructive(),
 		Run: func(ctx context.Context, args []string, logger *slog.Logger) error {
-			if len(args) < 2 {
-				return cli.Validation("fleet localpart and machine name are required\n\nUsage: bureau machine revoke <fleet-localpart> <machine-name> [flags]")
+			if len(args) == 0 {
+				return cli.Validation("machine reference is required\n\nUsage: bureau machine revoke <machine-ref> [flags]")
 			}
-			if len(args) > 2 {
-				return cli.Validation("unexpected argument: %s", args[2])
+			if len(args) > 1 {
+				return cli.Validation("expected exactly one argument (machine reference), got %d", len(args))
 			}
 			if params.SessionConfig.CredentialFile == "" {
 				return cli.Validation("--credential-file is required")
@@ -99,22 +100,16 @@ depending on the homeserver — this is by design for emergency revocation.`,
 				return cli.Internal("revoke requires a direct session (credential file), not a proxy session")
 			}
 
-			server, err := ref.ServerFromUserID(adminSession.UserID().String())
+			defaultServer, err := ref.ServerFromUserID(adminSession.UserID().String())
 			if err != nil {
 				return cli.Internal("cannot determine server name from session: %w", err)
 			}
-
-			fleet, err := ref.ParseFleet(args[0], server)
+			machine, err := resolveMachineArg(args[0], defaultServer)
 			if err != nil {
-				return cli.Validation("%v", err)
-			}
-			machine, err := ref.NewMachine(fleet, args[1])
-			if err != nil {
-				return cli.Validation("invalid machine name: %v", err)
+				return cli.Validation("invalid machine reference: %v", err)
 			}
 
 			logger = logger.With(
-				"fleet", fleet.Localpart(),
 				"machine", machine.Localpart(),
 			)
 

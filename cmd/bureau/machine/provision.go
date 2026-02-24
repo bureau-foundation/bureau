@@ -55,11 +55,11 @@ func provisionCommand() *cli.Command {
 		Summary: "Create a machine account and bootstrap config",
 		Description: `Provision a new machine for the Bureau fleet.
 
-The first argument is a fleet localpart (e.g., "bureau/fleet/prod").
-The second argument is the bare machine name within the fleet (e.g.,
-"worker-01"). The server name is derived from the connected session's
-identity. The full machine localpart is derived from these:
-bureau/fleet/prod/machine/worker-01.
+The argument is a machine reference — either a bare localpart (e.g.,
+"bureau/fleet/prod/machine/worker-01") or a full Matrix user ID (e.g.,
+"@bureau/fleet/prod/machine/worker-01:remote.server"). The @ sigil
+distinguishes the two forms. When a bare localpart is given, the server
+name is derived from the connected admin session.
 
 This creates the machine's Matrix account with a random one-time password,
 sets up its per-machine config room, and invites it to the global rooms
@@ -82,26 +82,30 @@ If a machine was previously decommissioned and the account already exists,
 provision verifies it has been fully decommissioned (zero Bureau room
 memberships, cleared state events) before re-provisioning. This prevents
 accidental or intentional spoofing of active machines.`,
-		Usage: "bureau machine provision <fleet-localpart> <machine-name> [flags]",
+		Usage: "bureau machine provision <machine-ref> [flags]",
 		Examples: []cli.Example{
 			{
 				Description: "Provision and write config to a file",
-				Command:     "bureau machine provision bureau/fleet/prod worker-01 --credential-file ./bureau-creds --output bootstrap.json",
+				Command:     "bureau machine provision bureau/fleet/prod/machine/worker-01 --credential-file ./bureau-creds --output bootstrap.json",
 			},
 			{
 				Description: "Provision and pipe config to scp",
-				Command:     "bureau machine provision bureau/fleet/prod gpu-box --credential-file ./bureau-creds | ssh user@host 'cat > /tmp/bootstrap.json'",
+				Command:     "bureau machine provision bureau/fleet/prod/machine/gpu-box --credential-file ./bureau-creds | ssh user@host 'cat > /tmp/bootstrap.json'",
+			},
+			{
+				Description: "Provision on a remote homeserver",
+				Command:     "bureau machine provision @bureau/fleet/prod/machine/worker-01:remote.server --credential-file ./bureau-creds --output bootstrap.json",
 			},
 		},
 		Params:         func() any { return &params },
 		RequiredGrants: []string{"command/machine/provision"},
 		Annotations:    cli.Create(),
 		Run: func(ctx context.Context, args []string, logger *slog.Logger) error {
-			if len(args) < 2 {
-				return cli.Validation("fleet localpart and machine name are required\n\nUsage: bureau machine provision <fleet-localpart> <machine-name> [flags]")
+			if len(args) == 0 {
+				return cli.Validation("machine reference is required\n\nUsage: bureau machine provision <machine-ref> [flags]")
 			}
-			if len(args) > 2 {
-				return cli.Validation("unexpected argument: %s", args[2])
+			if len(args) > 1 {
+				return cli.Validation("expected exactly one argument (machine reference), got %d", len(args))
 			}
 			if params.SessionConfig.CredentialFile == "" {
 				return cli.Validation("--credential-file is required")
@@ -158,21 +162,16 @@ accidental or intentional spoofing of active machines.`,
 				return cli.Internal("create matrix client: %w", err)
 			}
 
-			server, err := ref.ServerFromUserID(adminSession.UserID().String())
+			defaultServer, err := ref.ServerFromUserID(adminSession.UserID().String())
 			if err != nil {
 				return cli.Internal("cannot determine server name from session: %w", err)
 			}
-			fleet, err := ref.ParseFleet(args[0], server)
+			machine, err := resolveMachineArg(args[0], defaultServer)
 			if err != nil {
-				return cli.Validation("%v", err)
-			}
-			machine, err := ref.NewMachine(fleet, args[1])
-			if err != nil {
-				return cli.Validation("invalid machine name: %v", err)
+				return cli.Validation("invalid machine reference: %v", err)
 			}
 
 			logger = logger.With(
-				"fleet", fleet.Localpart(),
 				"machine", machine.Localpart(),
 			)
 
@@ -429,8 +428,8 @@ func verifyFullDecommission(ctx context.Context, session messaging.Session, mach
 			"count", len(activeRooms),
 			"rooms", roomDescriptions,
 		)
-		return cli.Conflict("machine account %s exists and is not fully decommissioned — run 'bureau machine decommission %s %s' first",
-			machineUserID, machine.Fleet().Localpart(), machine.Name())
+		return cli.Conflict("machine account %s exists and is not fully decommissioned — run 'bureau machine decommission %s' first",
+			machineUserID, machineUsername)
 	}
 
 	// Check that machine_key and machine_status are cleared in the fleet
@@ -459,8 +458,8 @@ func verifyFullDecommission(ctx context.Context, session messaging.Session, mach
 		}
 		content := string(contentBytes)
 		if content != "{}" && content != "null" && content != "" {
-			return cli.Conflict("machine account %s has active %s state event — run 'bureau machine decommission %s %s' first",
-				machineUserID, event.Type, machine.Fleet().Localpart(), machine.Name())
+			return cli.Conflict("machine account %s has active %s state event — run 'bureau machine decommission %s' first",
+				machineUserID, event.Type, machineUsername)
 		}
 	}
 

@@ -1,7 +1,7 @@
 # Copyright 2026 The Bureau Authors
 # SPDX-License-Identifier: Apache-2.0
 
-load("@rules_go//go:def.bzl", "go_library")
+load("@rules_go//go:def.bzl", "go_library", "go_test")
 
 go_library(
     name = "machine",
@@ -13,6 +13,7 @@ go_library(
         "provision.go",
         "revoke.go",
         "rooms.go",
+        "upgrade.go",
     ],
     importpath = "github.com/bureau-foundation/bureau/cmd/bureau/machine",
     visibility = ["//visibility:public"],
@@ -24,4 +25,11 @@ go_library(
         "//lib/secret",
         "//messaging",
     ],
+)
+
+go_test(
+    name = "machine_test",
+    srcs = ["upgrade_test.go"],
+    embed = [":machine"],
+    deps = ["//lib/ref"],
 )

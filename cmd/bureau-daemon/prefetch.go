@@ -68,8 +68,26 @@ func (d *Daemon) prefetchBureauVersion(ctx context.Context, version *schema.Bure
 		if entry.path == "" {
 			continue
 		}
-		if err := d.prefetchEnvironment(ctx, entry.path); err != nil {
-			return fmt.Errorf("prefetching %s store path %s: %w", entry.label, entry.path, err)
+
+		// BureauVersion contains full file paths (e.g.,
+		// /nix/store/abc-bureau-daemon/bin/bureau-daemon). Check if
+		// the file already exists locally (fast path — skips
+		// nix-store invocation on the common case where the binary
+		// was built on this machine).
+		if _, statErr := os.Stat(entry.path); statErr == nil {
+			continue
+		}
+
+		// File doesn't exist locally. Extract the Nix store directory
+		// (e.g., /nix/store/abc-bureau-daemon) and prefetch it.
+		// nix-store --realise expects store directory paths, not file
+		// paths within them.
+		storeDirectory, err := nix.StoreDirectory(entry.path)
+		if err != nil {
+			return fmt.Errorf("invalid %s store path %s: %w", entry.label, entry.path, err)
+		}
+		if err := d.prefetchEnvironment(ctx, storeDirectory); err != nil {
+			return fmt.Errorf("prefetching %s store path %s: %w", entry.label, storeDirectory, err)
 		}
 	}
 	return nil

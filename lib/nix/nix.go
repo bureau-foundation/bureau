@@ -86,6 +86,40 @@ func run(ctx context.Context, binaryName string, args []string) (string, error) 
 	return stdout.String(), nil
 }
 
+// nixStorePrefix is the standard Nix store root directory.
+const nixStorePrefix = "/nix/store/"
+
+// StoreDirectory extracts the Nix store directory from a path within it.
+// A Nix store directory is the first path component after /nix/store/:
+//
+//	"/nix/store/abc-bureau-daemon/bin/bureau-daemon" → "/nix/store/abc-bureau-daemon"
+//	"/nix/store/abc-bureau-daemon"                   → "/nix/store/abc-bureau-daemon"
+//
+// Returns an error for paths not under /nix/store/ or paths that are
+// exactly /nix/store/ with no entry name.
+func StoreDirectory(path string) (string, error) {
+	if !strings.HasPrefix(path, nixStorePrefix) {
+		return "", fmt.Errorf("path %q is not under /nix/store/", path)
+	}
+
+	// Everything after "/nix/store/" is the store entry name, potentially
+	// followed by subdirectory components. The store directory is just the
+	// first component.
+	remainder := path[len(nixStorePrefix):]
+	if remainder == "" {
+		return "", fmt.Errorf("path %q has no store entry name", path)
+	}
+
+	// Find the first slash after the store entry name. If there is no
+	// slash, the path IS the store directory.
+	slashIndex := strings.IndexByte(remainder, '/')
+	if slashIndex == -1 {
+		return path, nil
+	}
+
+	return path[:len(nixStorePrefix)+slashIndex], nil
+}
+
 // formatError produces an error message for a failed nix command,
 // preferring stderr output (which contains the actual nix error) over
 // the generic exec error.

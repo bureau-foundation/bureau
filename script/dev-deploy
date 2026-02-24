@@ -1,0 +1,101 @@
+#!/usr/bin/env bash
+# Copyright 2026 The Bureau Authors
+# SPDX-License-Identifier: Apache-2.0
+#
+# Build and deploy the current worktree to the local machine.
+#
+# This script builds bureau-host-env from the current worktree, then
+# publishes a BureauVersion state event via "bureau machine upgrade --local".
+# The running daemon picks up the new version via /sync and performs an
+# atomic exec() transition.
+#
+# Usage:
+#   script/dev-deploy [options]
+#
+# Options:
+#   --credential-file FILE   Path to Bureau credentials (default: deploy/matrix/bureau-creds)
+#   --dry-run                Build but do not publish the upgrade event
+#   --help                   Show this help
+#
+# Environment variables:
+#   BUREAU_CREDENTIAL_FILE       Override default credential file path
+#   BUREAU_LAUNCHER_SESSION      Path to launcher session.json (for non-default state dirs)
+
+set -euo pipefail
+
+SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+REPO_ROOT="$(cd "$SCRIPT_DIR/.." && pwd)"
+
+# Defaults.
+CREDENTIAL_FILE="${BUREAU_CREDENTIAL_FILE:-$REPO_ROOT/deploy/matrix/bureau-creds}"
+DRY_RUN=false
+
+usage() {
+    sed -n '/^# Usage:/,/^[^#]/p' "$0" | sed 's/^# \?//' | head -n -1
+    exit "${1:-0}"
+}
+
+# Parse arguments.
+while [[ $# -gt 0 ]]; do
+    case "$1" in
+        --credential-file)
+            CREDENTIAL_FILE="$2"
+            shift 2
+            ;;
+        --dry-run)
+            DRY_RUN=true
+            shift
+            ;;
+        --help|-h)
+            usage 0
+            ;;
+        -*)
+            echo "Unknown option: $1" >&2
+            usage 1
+            ;;
+        *)
+            echo "Unexpected argument: $1" >&2
+            usage 1
+            ;;
+    esac
+done
+
+# Verify credentials exist before spending time building.
+if [ ! -f "$CREDENTIAL_FILE" ]; then
+    echo "Error: credential file not found: $CREDENTIAL_FILE" >&2
+    echo "  Set BUREAU_CREDENTIAL_FILE or pass --credential-file" >&2
+    exit 1
+fi
+
+# Build bureau-host-env from the current worktree.
+VERSION=$(git -C "$REPO_ROOT" describe --dirty --always 2>/dev/null || echo "unknown")
+echo "Building bureau-host-env from $VERSION..."
+HOST_ENV=$(nix build "$REPO_ROOT#bureau-host-env" --print-out-paths --no-link)
+echo "Built: $HOST_ENV"
+
+if [ "$DRY_RUN" = true ]; then
+    echo ""
+    echo "Dry run: would publish BureauVersion from $HOST_ENV"
+    echo "  Daemon:   $(readlink -f "$HOST_ENV/bin/bureau-daemon")"
+    echo "  Launcher: $(readlink -f "$HOST_ENV/bin/bureau-launcher")"
+    echo "  Proxy:    $(readlink -f "$HOST_ENV/bin/bureau-proxy")"
+    exit 0
+fi
+
+# Build the bureau CLI from the same worktree so the upgrade command
+# matches the code that produced the host-env.
+echo "Building bureau CLI..."
+BUREAU_CLI=$(nix build "$REPO_ROOT#bureau" --print-out-paths --no-link)/bin/bureau
+
+if [ ! -x "$BUREAU_CLI" ]; then
+    echo "Error: bureau CLI not found at $BUREAU_CLI" >&2
+    exit 1
+fi
+
+# Publish the BureauVersion state event. The running daemon picks this
+# up via /sync, prefetches the store paths, compares content hashes,
+# and performs the atomic exec() transition.
+echo "Publishing BureauVersion..."
+"$BUREAU_CLI" machine upgrade --local \
+    --host-env "$HOST_ENV" \
+    --credential-file "$CREDENTIAL_FILE"

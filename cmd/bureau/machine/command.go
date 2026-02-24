@@ -12,7 +12,7 @@ func Command() *cli.Command {
 	return &cli.Command{
 		Name:    "machine",
 		Summary: "Manage fleet machines",
-		Description: `Provision, list, decommission, and revoke machines in the Bureau fleet.
+		Description: `Manage fleet machines: provisioning, listing, upgrades, decommission, and revocation.
 
 The "provision" subcommand creates a machine's Matrix account and writes
 a bootstrap config file. Transfer this file to the new machine and start
@@ -20,6 +20,11 @@ the launcher with --bootstrap-file to complete registration.
 
 The "list" subcommand shows all machines that have published keys to the
 fleet's machine room.
+
+The "upgrade" subcommand publishes a BureauVersion state event to trigger
+the daemon's binary self-update mechanism. Point it at a bureau-host-env
+Nix derivation and the daemon handles the rest: prefetching, hash
+comparison, and atomic exec() transitions.
 
 The "decommission" subcommand removes a machine from the fleet: clears
 its state events, kicks it from all rooms, and cleans up its config room.
@@ -31,6 +36,7 @@ revocation event for fleet-wide notification.`,
 		Subcommands: []*cli.Command{
 			provisionCommand(),
 			listCommand(),
+			upgradeCommand(),
 			decommissionCommand(),
 			revokeCommand(),
 		},
@@ -42,6 +48,10 @@ revocation event for fleet-wide notification.`,
 			{
 				Description: "List all fleet machines",
 				Command:     "bureau machine list bureau/fleet/prod --credential-file ./bureau-creds",
+			},
+			{
+				Description: "Upgrade the local machine's Bureau binaries",
+				Command:     "bureau machine upgrade --local --host-env /nix/store/...-bureau-host-env --credential-file ./bureau-creds",
 			},
 			{
 				Description: "Remove a machine from the fleet",

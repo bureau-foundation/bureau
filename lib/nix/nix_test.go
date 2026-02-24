@@ -54,6 +54,72 @@ func TestFindBinary_NonexistentBinary(t *testing.T) {
 	}
 }
 
+func TestStoreDirectory(t *testing.T) {
+	t.Parallel()
+
+	tests := []struct {
+		name    string
+		path    string
+		want    string
+		wantErr bool
+	}{
+		{
+			name: "file path within store entry",
+			path: "/nix/store/abc-bureau-daemon/bin/bureau-daemon",
+			want: "/nix/store/abc-bureau-daemon",
+		},
+		{
+			name: "bare store directory",
+			path: "/nix/store/abc-bureau-daemon",
+			want: "/nix/store/abc-bureau-daemon",
+		},
+		{
+			name: "deeply nested file",
+			path: "/nix/store/xyz-env/share/doc/readme.txt",
+			want: "/nix/store/xyz-env",
+		},
+		{
+			name:    "not under nix store",
+			path:    "/usr/local/bin/bureau-daemon",
+			wantErr: true,
+		},
+		{
+			name:    "bare nix store root",
+			path:    "/nix/store/",
+			wantErr: true,
+		},
+		{
+			name:    "nix store without trailing slash",
+			path:    "/nix/store",
+			wantErr: true,
+		},
+		{
+			name:    "empty path",
+			path:    "",
+			wantErr: true,
+		},
+	}
+
+	for _, testCase := range tests {
+		t.Run(testCase.name, func(t *testing.T) {
+			t.Parallel()
+			got, err := StoreDirectory(testCase.path)
+			if testCase.wantErr {
+				if err == nil {
+					t.Fatalf("expected error for path %q, got %q", testCase.path, got)
+				}
+				return
+			}
+			if err != nil {
+				t.Fatalf("unexpected error for path %q: %v", testCase.path, err)
+			}
+			if got != testCase.want {
+				t.Errorf("StoreDirectory(%q) = %q, want %q", testCase.path, got, testCase.want)
+			}
+		})
+	}
+}
+
 func TestFormatError_PrefersStderr(t *testing.T) {
 	t.Parallel()
 

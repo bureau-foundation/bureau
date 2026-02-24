@@ -301,3 +301,85 @@ br close <id1> <id2>  # Close multiple issues at once
 - Always sync before ending session
 
 <!-- end-br-agent-instructions -->
+
+## Bureau Ticket System
+
+Bureau has its own ticket system backed by Matrix state events. Tickets are
+the canonical work tracking mechanism. Use `script/bt` — a convenience wrapper
+that auto-discovers the ticket room and adds `--service` mode.
+
+### Quick Reference
+
+```bash
+# See what's ready to work on
+script/bt ready
+
+# Show ticket details
+script/bt show tkt-a3f9
+
+# Create a ticket
+script/bt create --title "Fix the thing" --type bug --priority 1
+
+# Create with a body
+script/bt create --title "Implement feature" --type task --priority 2 \
+    --body "Description of what needs to happen"
+
+# Create a subtask of an epic
+script/bt create --title "Subtask" --type task --parent tkt-epic-id
+
+# List open tickets
+script/bt list --status open
+
+# Search tickets
+script/bt search "memory leak"
+script/bt grep "proxy.*socket"
+
+# Update a ticket
+script/bt update tkt-a3f9 --status in_progress
+script/bt update tkt-a3f9 --assignee '@bureau/fleet/prod/agent/code-reviewer:bureau.local'
+
+# Close a ticket
+script/bt close tkt-a3f9 --reason "Fixed in commit abc123"
+
+# View epic health
+script/bt epic-health tkt-de1b
+
+# Stats
+script/bt stats
+
+# Dependencies
+script/bt dep add tkt-child tkt-blocker
+script/bt dep remove tkt-child tkt-blocker
+
+# Show dependency closure
+script/bt deps tkt-a3f9
+```
+
+### Workflow
+
+1. Run `script/bt ready` to find actionable work (unblocked, open)
+2. Claim: `script/bt update <id> --status in_progress`
+3. Work on the ticket
+4. Close: `script/bt close <id> --reason "description"`
+5. Check `script/bt ready` for next work
+
+### Room specification
+
+The `--room` flag accepts three forms:
+- Room ID: `!opaque:bureau.local`
+- Full alias: `#prod/tickets:bureau.local`
+- Bare localpart: `prod/tickets`
+
+`script/bt` auto-discovers the room when there is exactly one ticket room.
+Set `BUREAU_TICKET_ROOM` to override (any of the three forms above).
+
+### Priority and type conventions
+
+Same as beads: P0=critical, P1=high, P2=medium, P3=low, P4=backlog.
+Types: task, bug, feature, epic, chore, docs, question.
+
+### Epics
+
+Epics are tickets with `--type epic`. Child tickets reference their parent
+with `--parent <epic-id>`. Use `script/bt epic-health <epic-id>` to see
+progress. Use `script/bt children <epic-id>` to list children.

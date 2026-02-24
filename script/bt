@@ -1,0 +1,92 @@
+#!/usr/bin/env bash
+# Copyright 2026 The Bureau Authors
+# SPDX-License-Identifier: Apache-2.0
+#
+# bt — Bureau Ticket convenience wrapper.
+#
+# Wraps "bureau ticket" with --service mode and a default room,
+# so agents and operators can issue ticket commands without boilerplate.
+#
+# The default room is discovered from the ticket service on first
+# invocation and cached for the session. Override with BUREAU_TICKET_ROOM.
+#
+# Usage:
+#   bt list --status open
+#   bt create --title "Fix the thing" --type bug --priority 1
+#   bt show tkt-a3f9
+#   bt ready
+#   bt stats
+#   bt search "memory leak"
+
+set -euo pipefail
+
+BUREAU="${BUREAU_BIN:-bureau}"
+
+# Commands that take a --room flag. When only one room exists
+# we inject it automatically so callers don't have to.
+ROOM_COMMANDS="list|ready|blocked|ranked|stats|create|batch|import|export|show|close|reopen|update|deps|children|epic-health|grep|search|upcoming|defer|review|dep|gate"
+
+# Resolve the default room. BUREAU_TICKET_ROOM can be a room ID,
+# a full alias (#prod/tickets:bureau.local), or a bare localpart
+# (prod/tickets) — the CLI resolves all three forms.
+resolve_room() {
+    if [ -n "${BUREAU_TICKET_ROOM:-}" ]; then
+        echo "$BUREAU_TICKET_ROOM"
+        return
+    fi
+
+    # Auto-discover: if the ticket service has exactly one room, use it.
+    local info
+    info=$($BUREAU ticket info --service --json 2>/dev/null) || {
+        echo "Error: cannot reach ticket service. Is the daemon running?" >&2
+        exit 1
+    }
+
+    local count
+    count=$(echo "$info" | python3 -c "import json,sys; print(json.load(sys.stdin).get('rooms', 0))" 2>/dev/null || echo "0")
+
+    if [ "$count" = "1" ]; then
+        echo "$info" | python3 -c "import json,sys; print(json.load(sys.stdin)['room_details'][0]['room_id'])"
+    elif [ "$count" = "0" ]; then
+        echo "Error: no ticket rooms configured. Run 'bureau ticket enable' first." >&2
+        exit 1
+    else
+        echo "Error: multiple ticket rooms found. Set BUREAU_TICKET_ROOM to pick one." >&2
+        echo "Rooms:" >&2
+        echo "$info" | python3 -c "
+import json, sys
+data = json.load(sys.stdin)
+for room in data.get('room_details', []):
+    print(f\"  {room['room_id']}  ({room.get('tickets', '?')} tickets)\", file=sys.stderr)
+"
+        exit 1
+    fi
+}
+
+if [ $# -eq 0 ]; then
+    exec $BUREAU ticket --help
+fi
+
+COMMAND="$1"
+
+# Check if this command needs --room injected.
+needs_room=false
+if echo "$COMMAND" | grep -qE "^($ROOM_COMMANDS)$"; then
+    needs_room=true
+fi
+
+# Check if --room was explicitly provided.
+has_room=false
+for arg in "$@"; do
+    if [ "$arg" = "--room" ] || [ "$arg" = "-r" ] || echo "$arg" | grep -q "^--room="; then
+        has_room=true
+        break
+    fi
+done
+
+if [ "$needs_room" = true ] && [ "$has_room" = false ]; then
+    ROOM=$(resolve_room)
+    exec $BUREAU ticket "$@" --service --room "$ROOM"
+else
+    exec $BUREAU ticket "$@" --service
+fi

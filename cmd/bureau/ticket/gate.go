@@ -91,8 +91,8 @@ The gate is identified by its ID within the ticket.`,
 				"ticket": params.Ticket,
 				"gate":   params.Gate,
 			}
-			if params.Room != "" {
-				fields["room"] = params.Room
+			if err := addResolvedRoom(ctx, fields, params.Room); err != nil {
+				return err
 			}
 			var result mutationResult
 			if err := client.Call(ctx, "resolve-gate", fields, &result); err != nil {
@@ -175,8 +175,8 @@ gate satisfaction.`,
 				"gate":   params.Gate,
 				"status": params.Status,
 			}
-			if params.Room != "" {
-				fields["room"] = params.Room
+			if err := addResolvedRoom(ctx, fields, params.Room); err != nil {
+				return err
 			}
 			if params.SatisfiedBy != "" {
 				fields["satisfied_by"] = params.SatisfiedBy

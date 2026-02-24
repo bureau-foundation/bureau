@@ -74,8 +74,8 @@ Dispositions:
 				"ticket":      params.Ticket,
 				"disposition": disposition,
 			}
-			if params.Room != "" {
-				fields["room"] = params.Room
+			if err := addResolvedRoom(ctx, fields, params.Room); err != nil {
+				return err
 			}
 
 			var result mutationResult

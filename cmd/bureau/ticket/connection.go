@@ -164,3 +164,20 @@ func (c *TicketConnection) MintServiceToken() (*MintResult, error) {
 func callContext(parent context.Context) (context.Context, context.CancelFunc) {
 	return context.WithTimeout(parent, 30*time.Second)
 }
+
+// addResolvedRoom resolves a room string (ID, alias, or bare
+// localpart) and adds it to a service call fields map. If the room
+// string is empty, the field is not added (for commands where --room
+// is optional). Returns an error only if the room string is non-empty
+// but cannot be resolved.
+func addResolvedRoom(ctx context.Context, fields map[string]any, room string) error {
+	if room == "" {
+		return nil
+	}
+	roomID, err := cli.ResolveRoom(ctx, room)
+	if err != nil {
+		return err
+	}
+	fields["room"] = roomID.String()
+	return nil
+}

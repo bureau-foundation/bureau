@@ -90,8 +90,8 @@ cycle.`,
 			// Read-modify-write: fetch current ticket, add dependency,
 			// send update with the full blocked_by list.
 			fields := map[string]any{"ticket": params.Ticket}
-			if params.Room != "" {
-				fields["room"] = params.Room
+			if err := addResolvedRoom(ctx, fields, params.Room); err != nil {
+				return err
 			}
 			var current showResult
 			if err := client.Call(ctx, "show", fields, &current); err != nil {
@@ -110,8 +110,8 @@ cycle.`,
 				"ticket":     params.Ticket,
 				"blocked_by": blockedBy,
 			}
-			if params.Room != "" {
-				updateFields["room"] = params.Room
+			if err := addResolvedRoom(ctx, updateFields, params.Room); err != nil {
+				return err
 			}
 			var result mutationResult
 			if err := client.Call(ctx, "update", updateFields, &result); err != nil {
@@ -184,8 +184,8 @@ func depRemoveCommand() *cli.Command {
 			// Read-modify-write: fetch current ticket, remove dependency,
 			// send update with the modified blocked_by list.
 			fields := map[string]any{"ticket": params.Ticket}
-			if params.Room != "" {
-				fields["room"] = params.Room
+			if err := addResolvedRoom(ctx, fields, params.Room); err != nil {
+				return err
 			}
 			var current showResult
 			if err := client.Call(ctx, "show", fields, &current); err != nil {
@@ -204,8 +204,8 @@ func depRemoveCommand() *cli.Command {
 				"ticket":     params.Ticket,
 				"blocked_by": blockedBy,
 			}
-			if params.Room != "" {
-				updateFields["room"] = params.Room
+			if err := addResolvedRoom(ctx, updateFields, params.Room); err != nil {
+				return err
 			}
 			var result mutationResult
 			if err := client.Call(ctx, "update", updateFields, &result); err != nil {

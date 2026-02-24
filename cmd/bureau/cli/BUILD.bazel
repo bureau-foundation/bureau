@@ -42,6 +42,7 @@ go_test(
     name = "cli_test",
     srcs = [
         "command_test.go",
+        "connect_test.go",
         "local_machine_test.go",
         "operator_session_test.go",
         "params_test.go",

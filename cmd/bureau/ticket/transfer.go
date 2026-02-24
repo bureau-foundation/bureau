@@ -61,9 +61,11 @@ Use --status to export only tickets in a particular state (e.g.
 		Annotations:    cli.ReadOnly(),
 		RequiredGrants: []string{"command/ticket/export"},
 		Run: func(ctx context.Context, args []string, logger *slog.Logger) error {
-			if params.Room == "" {
-				return cli.Validation("--room is required")
+			roomID, err := cli.ResolveRoom(ctx, params.Room)
+			if err != nil {
+				return err
 			}
+			roomString := roomID.String()
 
 			client, err := params.connect()
 			if err != nil {
@@ -73,7 +75,7 @@ Use --status to export only tickets in a particular state (e.g.
 			ctx, cancel := callContext(ctx)
 			defer cancel()
 
-			fields := map[string]any{"room": params.Room}
+			fields := map[string]any{"room": roomString}
 			if params.Status != "" {
 				fields["status"] = params.Status
 			}
@@ -103,7 +105,7 @@ Use --status to export only tickets in a particular state (e.g.
 				// round-trip fidelity — the list response may
 				// omit it for room-scoped queries.
 				if entry.Room == "" {
-					entry.Room = params.Room
+					entry.Room = roomString
 				}
 				if err := encoder.Encode(entry); err != nil {
 					return cli.Internal("writing entry %s: %w", entry.ID, err)
@@ -115,7 +117,7 @@ Use --status to export only tickets in a particular state (e.g.
 			}
 
 			if params.File != "" && params.File != "-" {
-				logger.Info("exported tickets", "count", len(entries), "room", params.Room, "file", params.File)
+				logger.Info("exported tickets", "count", len(entries), "room", roomString, "file", params.File)
 			}
 
 			return nil
@@ -197,8 +199,9 @@ invalid, none are imported.`,
 		Annotations:    cli.Create(),
 		RequiredGrants: []string{"command/ticket/import"},
 		Run: func(ctx context.Context, args []string, logger *slog.Logger) error {
-			if params.Room == "" {
-				return cli.Validation("--room is required")
+			roomID, err := cli.ResolveRoom(ctx, params.Room)
+			if err != nil {
+				return err
 			}
 			if params.File == "" {
 				return cli.Validation("--file is required")
@@ -291,7 +294,7 @@ invalid, none are imported.`,
 
 			var result importResult
 			if err := client.Call(ctx, "import", map[string]any{
-				"room":    params.Room,
+				"room":    roomID.String(),
 				"tickets": tickets,
 			}, &result); err != nil {
 				return err

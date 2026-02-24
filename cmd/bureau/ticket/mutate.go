@@ -81,8 +81,9 @@ Required fields: --room, --title, --type. Priority defaults to P2
 		Annotations:    cli.Create(),
 		RequiredGrants: []string{"command/ticket/create"},
 		Run: func(ctx context.Context, args []string, _ *slog.Logger) error {
-			if params.Room == "" {
-				return cli.Validation("--room is required")
+			roomID, err := cli.ResolveRoom(ctx, params.Room)
+			if err != nil {
+				return err
 			}
 			if params.Title == "" {
 				return cli.Validation("--title is required")
@@ -106,7 +107,7 @@ Required fields: --room, --title, --type. Priority defaults to P2
 			defer cancel()
 
 			fields := map[string]any{
-				"room":     params.Room,
+				"room":     roomID.String(),
 				"title":    params.Title,
 				"type":     params.Type,
 				"priority": params.Priority,
@@ -235,8 +236,8 @@ in_progress returns a contention error with the current assignee.`,
 			// fields that were explicitly set. The service interprets
 			// nil pointers as "not provided."
 			fields := map[string]any{"ticket": params.Ticket}
-			if params.Room != "" {
-				fields["room"] = params.Room
+			if err := addResolvedRoom(ctx, fields, params.Room); err != nil {
+				return err
 			}
 			if params.Title != "" {
 				fields["title"] = params.Title
@@ -355,8 +356,8 @@ close a recurring ticket by stripping its recurring gates first.`,
 			defer cancel()
 
 			fields := map[string]any{"ticket": params.Ticket}
-			if params.Room != "" {
-				fields["room"] = params.Room
+			if err := addResolvedRoom(ctx, fields, params.Room); err != nil {
+				return err
 			}
 			if params.Reason != "" {
 				fields["reason"] = params.Reason
@@ -421,8 +422,8 @@ close timestamp and reason.`,
 			defer cancel()
 
 			fields := map[string]any{"ticket": params.Ticket}
-			if params.Room != "" {
-				fields["room"] = params.Room
+			if err := addResolvedRoom(ctx, fields, params.Room); err != nil {
+				return err
 			}
 			var result mutationResult
 			if err := client.Call(ctx, "reopen", fields, &result); err != nil {
@@ -488,8 +489,9 @@ created.`,
 		Annotations:    cli.Create(),
 		RequiredGrants: []string{"command/ticket/batch"},
 		Run: func(ctx context.Context, args []string, logger *slog.Logger) error {
-			if params.Room == "" {
-				return cli.Validation("--room is required")
+			roomID, err := cli.ResolveRoom(ctx, params.Room)
+			if err != nil {
+				return err
 			}
 			if params.File == "" {
 				return cli.Validation("--file is required")
@@ -519,7 +521,7 @@ created.`,
 			defer cancel()
 
 			fields := map[string]any{
-				"room":    params.Room,
+				"room":    roomID.String(),
 				"tickets": tickets,
 			}
 
@@ -604,8 +606,8 @@ remove a defer gate (un-defer), use: bureau ticket gate resolve ID defer`,
 			defer cancel()
 
 			fields := map[string]any{"ticket": params.Ticket}
-			if params.Room != "" {
-				fields["room"] = params.Room
+			if err := addResolvedRoom(ctx, fields, params.Room); err != nil {
+				return err
 			}
 			if params.Until != "" {
 				fields["until"] = params.Until

@@ -60,8 +60,9 @@ time (oldest first).`,
 		Annotations:    cli.ReadOnly(),
 		RequiredGrants: []string{"command/ticket/list"},
 		Run: func(ctx context.Context, args []string, logger *slog.Logger) error {
-			if params.Room == "" {
-				return cli.Validation("--room is required")
+			roomID, err := cli.ResolveRoom(ctx, params.Room)
+			if err != nil {
+				return err
 			}
 
 			client, err := params.connect()
@@ -72,7 +73,7 @@ time (oldest first).`,
 			ctx, cancel := callContext(ctx)
 			defer cancel()
 
-			fields := map[string]any{"room": params.Room}
+			fields := map[string]any{"room": roomID.String()}
 			if params.Status != "" {
 				fields["status"] = params.Status
 			}
@@ -166,7 +167,11 @@ The ticket is resolved via --room or a room-qualified ticket reference (e.g., ir
 
 			fields := map[string]any{"ticket": params.Ticket}
 			if params.Room != "" {
-				fields["room"] = params.Room
+				roomID, err := cli.ResolveRoom(ctx, params.Room)
+				if err != nil {
+					return err
+				}
+				fields["room"] = roomID.String()
 			}
 			var result showResult
 			if err := client.Call(ctx, "show", fields, &result); err != nil {
@@ -269,8 +274,9 @@ This is the primary query for PM agents deciding what to assign next.`,
 		Annotations:    cli.ReadOnly(),
 		RequiredGrants: []string{"command/ticket/ranked"},
 		Run: func(ctx context.Context, args []string, logger *slog.Logger) error {
-			if params.Room == "" {
-				return cli.Validation("--room is required")
+			roomID, err := cli.ResolveRoom(ctx, params.Room)
+			if err != nil {
+				return err
 			}
 
 			client, err := params.connect()
@@ -282,7 +288,7 @@ This is the primary query for PM agents deciding what to assign next.`,
 			defer cancel()
 
 			var entries []rankedEntry
-			if err := client.Call(ctx, "ranked", map[string]any{"room": params.Room}, &entries); err != nil {
+			if err := client.Call(ctx, "ranked", map[string]any{"room": roomID.String()}, &entries); err != nil {
 				return err
 			}
 
@@ -382,8 +388,8 @@ with all blockers closed and all gates satisfied).`,
 			defer cancel()
 
 			fields := map[string]any{"pattern": params.Pattern}
-			if params.Room != "" {
-				fields["room"] = params.Room
+			if err := addResolvedRoom(ctx, fields, params.Room); err != nil {
+				return err
 			}
 			if params.Status != "" {
 				fields["status"] = params.Status
@@ -494,8 +500,8 @@ rooms and includes the room ID in results.`,
 			defer cancel()
 
 			fields := map[string]any{"query": params.Query}
-			if params.Room != "" {
-				fields["room"] = params.Room
+			if err := addResolvedRoom(ctx, fields, params.Room); err != nil {
+				return err
 			}
 			if params.Status != "" {
 				fields["status"] = params.Status
@@ -569,8 +575,9 @@ for a room.`,
 		Annotations:    cli.ReadOnly(),
 		RequiredGrants: []string{"command/ticket/stats"},
 		Run: func(ctx context.Context, args []string, _ *slog.Logger) error {
-			if params.Room == "" {
-				return cli.Validation("--room is required")
+			roomID, err := cli.ResolveRoom(ctx, params.Room)
+			if err != nil {
+				return err
 			}
 
 			client, err := params.connect()
@@ -582,7 +589,7 @@ for a room.`,
 			defer cancel()
 
 			var stats ticketindex.Stats
-			if err := client.Call(ctx, "stats", map[string]any{"room": params.Room}, &stats); err != nil {
+			if err := client.Call(ctx, "stats", map[string]any{"room": roomID.String()}, &stats); err != nil {
 				return err
 			}
 
@@ -731,8 +738,8 @@ becomes ready, including indirect (transitive) dependencies.`,
 			defer cancel()
 
 			fields := map[string]any{"ticket": params.Ticket}
-			if params.Room != "" {
-				fields["room"] = params.Room
+			if err := addResolvedRoom(ctx, fields, params.Room); err != nil {
+				return err
 			}
 			var result depsResult
 			if err := client.Call(ctx, "deps", fields, &result); err != nil {
@@ -798,8 +805,8 @@ showing how many are closed out of the total.`,
 			defer cancel()
 
 			fields := map[string]any{"ticket": params.Ticket}
-			if params.Room != "" {
-				fields["room"] = params.Room
+			if err := addResolvedRoom(ctx, fields, params.Room); err != nil {
+				return err
 			}
 			var result childrenResult
 			if err := client.Call(ctx, "children", fields, &result); err != nil {
@@ -864,8 +871,8 @@ depth (irreducible sequential steps).`,
 			defer cancel()
 
 			fields := map[string]any{"ticket": params.Ticket}
-			if params.Room != "" {
-				fields["room"] = params.Room
+			if err := addResolvedRoom(ctx, fields, params.Room); err != nil {
+				return err
 			}
 			var result epicHealthResult
 			if err := client.Call(ctx, "epic-health", fields, &result); err != nil {
@@ -893,8 +900,9 @@ depth (irreducible sequential steps).`,
 // that return a list of ticket entries: check room, call service,
 // output as JSON or table.
 func roomScopedQuery(ctx context.Context, logger *slog.Logger, connection TicketConnection, room, action, grant string, jsonOutput *cli.JSONOutput) error {
-	if room == "" {
-		return cli.Validation("--room is required")
+	roomID, err := cli.ResolveRoom(ctx, room)
+	if err != nil {
+		return err
 	}
 
 	client, err := connection.connect()
@@ -906,7 +914,7 @@ func roomScopedQuery(ctx context.Context, logger *slog.Logger, connection Ticket
 	defer cancel()
 
 	var entries []ticketEntry
-	if err := client.Call(ctx, action, map[string]any{"room": room}, &entries); err != nil {
+	if err := client.Call(ctx, action, map[string]any{"room": roomID.String()}, &entries); err != nil {
 		return err
 	}
 
@@ -1092,8 +1100,8 @@ recurring tickets.`,
 			defer cancel()
 
 			fields := map[string]any{}
-			if params.Room != "" {
-				fields["room"] = params.Room
+			if err := addResolvedRoom(ctx, fields, params.Room); err != nil {
+				return err
 			}
 
 			var results []upcomingGateResult

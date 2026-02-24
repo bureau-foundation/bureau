@@ -50,11 +50,11 @@ type StewardshipContent struct {
 	// declares affects entries that match any pattern in
 	// ResourcePatterns, the ticket service auto-configures a review
 	// gate from the stewardship tiers.
-	GateTypes []string `json:"gate_types,omitempty"`
+	GateTypes []ticket.TicketType `json:"gate_types,omitempty"`
 
 	// NotifyTypes lists ticket types that trigger steward notification
 	// without a gate. Stewards are informed but not required to approve.
-	NotifyTypes []string `json:"notify_types,omitempty"`
+	NotifyTypes []ticket.TicketType `json:"notify_types,omitempty"`
 
 	// Tiers is an ordered list of reviewer tiers. Each tier specifies
 	// which principals are involved, the approval threshold, and when
@@ -99,12 +99,12 @@ func (s *StewardshipContent) Validate() error {
 		}
 	}
 	for i, typeName := range s.GateTypes {
-		if !ticket.IsValidType(typeName) {
+		if !typeName.IsKnown() {
 			return fmt.Errorf("stewardship: gate_types[%d]: unknown ticket type %q", i, typeName)
 		}
 	}
 	for i, typeName := range s.NotifyTypes {
-		if !ticket.IsValidType(typeName) {
+		if !typeName.IsKnown() {
 			return fmt.Errorf("stewardship: notify_types[%d]: unknown ticket type %q", i, typeName)
 		}
 	}
@@ -222,11 +222,11 @@ func (t *StewardshipTier) Validate() error {
 // validateNoOverlap checks that no ticket type appears in both
 // gate_types and notify_types. A ticket type should trigger exactly one
 // involvement mode per stewardship declaration.
-func validateNoOverlap(gateTypes, notifyTypes []string) error {
+func validateNoOverlap(gateTypes, notifyTypes []ticket.TicketType) error {
 	if len(gateTypes) == 0 || len(notifyTypes) == 0 {
 		return nil
 	}
-	gateSet := make(map[string]bool, len(gateTypes))
+	gateSet := make(map[ticket.TicketType]bool, len(gateTypes))
 	for _, typeName := range gateTypes {
 		gateSet[typeName] = true
 	}

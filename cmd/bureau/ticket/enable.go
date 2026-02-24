@@ -339,7 +339,7 @@ type ConfigureRoomParams struct {
 
 	// AllowedTypes restricts which ticket types can be created in this room.
 	// An empty slice allows all types.
-	AllowedTypes []string
+	AllowedTypes []ticketschema.TicketType
 }
 
 // ConfigureRoom enables ticket management in an existing room:

@@ -102,8 +102,8 @@ func TestPipelineExecution(t *testing.T) {
 	if final.Status != ticket.StatusClosed {
 		t.Errorf("ticket status = %q, want %s", final.Status, ticket.StatusClosed)
 	}
-	if final.Type != "pipeline" {
-		t.Errorf("ticket type = %q, want pipeline", final.Type)
+	if final.Type != ticket.TypePipeline {
+		t.Errorf("ticket type = %q, want %s", final.Type, ticket.TypePipeline)
 	}
 	if final.Pipeline == nil {
 		t.Fatal("ticket has nil pipeline content")

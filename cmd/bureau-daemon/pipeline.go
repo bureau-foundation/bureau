@@ -197,7 +197,7 @@ func (d *Daemon) processPipelineTickets(ctx context.Context, response *messaging
 				continue
 			}
 
-			if ticketContent.Type != "pipeline" {
+			if ticketContent.Type != ticket.TypePipeline {
 				continue
 			}
 			if ticketContent.Status != ticket.StatusOpen {

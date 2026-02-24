@@ -69,6 +69,72 @@ func (s TicketStatus) IsKnown() bool {
 	return false
 }
 
+// TicketType categorizes the kind of work a ticket represents.
+type TicketType string
+
+const (
+	// TypeTask is a generic work item.
+	TypeTask TicketType = "task"
+
+	// TypeBug is a defect report.
+	TypeBug TicketType = "bug"
+
+	// TypeFeature is a new capability request.
+	TypeFeature TicketType = "feature"
+
+	// TypeEpic is a high-level grouping of related tickets.
+	TypeEpic TicketType = "epic"
+
+	// TypeChore is maintenance or housekeeping work.
+	TypeChore TicketType = "chore"
+
+	// TypeDocs is documentation work.
+	TypeDocs TicketType = "docs"
+
+	// TypeQuestion is a question needing resolution.
+	TypeQuestion TicketType = "question"
+
+	// TypePipeline is a pipeline execution ticket carrying
+	// structured execution state in the Pipeline field.
+	TypePipeline TicketType = "pipeline"
+
+	// TypeReviewFinding is a finding from a code review, always
+	// parented to the review ticket that produced it.
+	TypeReviewFinding TicketType = "review_finding"
+
+	// TypeReview is a review request ticket.
+	TypeReview TicketType = "review"
+
+	// TypeResourceRequest is a request for compute, storage, or
+	// other infrastructure resources.
+	TypeResourceRequest TicketType = "resource_request"
+
+	// TypeAccessRequest is a request for access to a system,
+	// service, or credential.
+	TypeAccessRequest TicketType = "access_request"
+
+	// TypeDeployment is a deployment coordination ticket.
+	TypeDeployment TicketType = "deployment"
+
+	// TypeCredentialRotation is a credential rotation task.
+	TypeCredentialRotation TicketType = "credential_rotation"
+)
+
+// IsKnown reports whether this is a type value understood by this
+// version of the code. Unknown types may appear in events written
+// by newer service versions and are safe to read but not to use
+// when creating or updating tickets.
+func (t TicketType) IsKnown() bool {
+	switch t {
+	case TypeTask, TypeBug, TypeFeature, TypeEpic, TypeChore,
+		TypeDocs, TypeQuestion, TypePipeline, TypeReviewFinding,
+		TypeReview, TypeResourceRequest, TypeAccessRequest,
+		TypeDeployment, TypeCredentialRotation:
+		return true
+	}
+	return false
+}
+
 // TicketContent is the content of an EventTypeTicket state event. Each
 // ticket is a work item tracked in a room. The ticket service maintains
 // an indexed cache of these events for fast queries via its unix socket
@@ -122,13 +188,11 @@ type TicketContent struct {
 	// 4=backlog.
 	Priority int `json:"priority"`
 
-	// Type categorizes the work: "task", "bug", "feature",
-	// "epic", "chore", "docs", "question", "pipeline",
-	// "review_finding", "review", "resource_request",
-	// "access_request", "deployment", or "credential_rotation".
-	// Pipeline tickets represent pipeline executions and carry
-	// type-specific content in the Pipeline field.
-	Type string `json:"type"`
+	// Type categorizes the work. See the TicketType constants for
+	// recognized values. Pipeline tickets represent pipeline
+	// executions and carry type-specific content in the Pipeline
+	// field.
+	Type TicketType `json:"type"`
 
 	// Labels are free-form tags for filtering and grouping.
 	Labels []string `json:"labels,omitempty"`
@@ -254,20 +318,16 @@ func (t *TicketContent) Validate() error {
 	if t.Priority < 0 || t.Priority > 4 {
 		return fmt.Errorf("ticket content: priority must be 0-4, got %d", t.Priority)
 	}
-	switch t.Type {
-	case "task", "bug", "feature", "epic", "chore", "docs", "question",
-		"pipeline", "review_finding", "review", "resource_request",
-		"access_request", "deployment", "credential_rotation":
-		// Valid.
-	case "":
+	if t.Type == "" {
 		return errors.New("ticket content: type is required")
-	default:
+	}
+	if !t.Type.IsKnown() {
 		return fmt.Errorf("ticket content: unknown type %q", t.Type)
 	}
-	if t.Type == "review_finding" && t.Parent == "" {
+	if t.Type == TypeReviewFinding && t.Parent == "" {
 		return errors.New("ticket content: parent is required for review_finding type")
 	}
-	if t.Type == "pipeline" {
+	if t.Type == TypePipeline {
 		if t.Pipeline == nil {
 			return errors.New("ticket content: pipeline content is required when type is \"pipeline\"")
 		}
@@ -275,7 +335,7 @@ func (t *TicketContent) Validate() error {
 			return fmt.Errorf("ticket content: pipeline: %w", err)
 		}
 	} else if t.Pipeline != nil {
-		return fmt.Errorf("ticket content: pipeline content must be nil when type is %q", t.Type)
+		return fmt.Errorf("ticket content: pipeline content must be nil when type is %q", string(t.Type))
 	}
 	for i, resource := range t.Affects {
 		if resource == "" {
@@ -979,37 +1039,13 @@ func (p *PipelineExecutionContent) Validate() error {
 	return nil
 }
 
-// validTicketTypes is the set of recognized ticket types. Used for
-// validation in both TicketContent and TicketConfigContent.AllowedTypes.
-var validTicketTypes = map[string]bool{
-	"task":                true,
-	"bug":                 true,
-	"feature":             true,
-	"epic":                true,
-	"chore":               true,
-	"docs":                true,
-	"question":            true,
-	"pipeline":            true,
-	"review_finding":      true,
-	"review":              true,
-	"resource_request":    true,
-	"access_request":      true,
-	"deployment":          true,
-	"credential_rotation": true,
-}
-
-// IsValidType reports whether the given string is a recognized ticket type.
-func IsValidType(ticketType string) bool {
-	return validTicketTypes[ticketType]
-}
-
 // PrefixForType returns the ticket ID prefix for a given ticket type.
 // Pipeline tickets use "pip", all other types use the room's configured
 // prefix (defaulting to "tkt"). Returns the type-specific prefix if one
 // exists, or empty string to indicate the room default should be used.
-func PrefixForType(ticketType string) string {
+func PrefixForType(ticketType TicketType) string {
 	switch ticketType {
-	case "pipeline":
+	case TypePipeline:
 		return "pip"
 	default:
 		return ""
@@ -1039,7 +1075,7 @@ type TicketConfigContent struct {
 	// enables dedicated rooms for specific ticket types: a pipeline
 	// execution room might set AllowedTypes to ["pipeline"] to
 	// prevent manual task tickets from being filed there.
-	AllowedTypes []string `json:"allowed_types,omitempty"`
+	AllowedTypes []TicketType `json:"allowed_types,omitempty"`
 
 	// DefaultLabels are applied to new tickets that don't
 	// explicitly specify labels.
@@ -1057,7 +1093,7 @@ func (c *TicketConfigContent) Validate() error {
 		return fmt.Errorf("ticket config: version must be >= 1, got %d", c.Version)
 	}
 	for i, typeName := range c.AllowedTypes {
-		if !IsValidType(typeName) {
+		if !typeName.IsKnown() {
 			return fmt.Errorf("ticket config: allowed_types[%d]: unknown type %q", i, typeName)
 		}
 	}

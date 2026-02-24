@@ -35,7 +35,7 @@ func validTicketContent() TicketContent {
 		Title:     "Fix authentication bug in login flow",
 		Status:    StatusOpen,
 		Priority:  2,
-		Type:      "bug",
+		Type:      TypeBug,
 		CreatedBy: ref.MustParseUserID("@iree/amdgpu/pm:bureau.local"),
 		CreatedAt: "2026-02-12T10:00:00Z",
 		UpdatedAt: "2026-02-12T10:00:00Z",
@@ -49,7 +49,7 @@ func TestTicketContentRoundTrip(t *testing.T) {
 		Body:      "Set up the full inference pipeline for AMDGPU targets.",
 		Status:    StatusInProgress,
 		Priority:  1,
-		Type:      "feature",
+		Type:      TypeFeature,
 		Labels:    []string{"amdgpu", "inference", "p1"},
 		Affects:   []string{"fleet/gpu/a100", "workspace/lib/schema/ticket.go"},
 		Assignee:  ref.MustParseUserID("@iree/amdgpu/pm:bureau.local"),
@@ -518,43 +518,43 @@ func TestTicketContentValidate(t *testing.T) {
 		},
 		{
 			name:    "type_task",
-			modify:  func(tc *TicketContent) { tc.Type = "task" },
+			modify:  func(tc *TicketContent) { tc.Type = TypeTask },
 			wantErr: "",
 		},
 		{
 			name:    "type_bug",
-			modify:  func(tc *TicketContent) { tc.Type = "bug" },
+			modify:  func(tc *TicketContent) { tc.Type = TypeBug },
 			wantErr: "",
 		},
 		{
 			name:    "type_feature",
-			modify:  func(tc *TicketContent) { tc.Type = "feature" },
+			modify:  func(tc *TicketContent) { tc.Type = TypeFeature },
 			wantErr: "",
 		},
 		{
 			name:    "type_epic",
-			modify:  func(tc *TicketContent) { tc.Type = "epic" },
+			modify:  func(tc *TicketContent) { tc.Type = TypeEpic },
 			wantErr: "",
 		},
 		{
 			name:    "type_chore",
-			modify:  func(tc *TicketContent) { tc.Type = "chore" },
+			modify:  func(tc *TicketContent) { tc.Type = TypeChore },
 			wantErr: "",
 		},
 		{
 			name:    "type_docs",
-			modify:  func(tc *TicketContent) { tc.Type = "docs" },
+			modify:  func(tc *TicketContent) { tc.Type = TypeDocs },
 			wantErr: "",
 		},
 		{
 			name:    "type_question",
-			modify:  func(tc *TicketContent) { tc.Type = "question" },
+			modify:  func(tc *TicketContent) { tc.Type = TypeQuestion },
 			wantErr: "",
 		},
 		{
 			name: "type_pipeline",
 			modify: func(tc *TicketContent) {
-				tc.Type = "pipeline"
+				tc.Type = TypePipeline
 				tc.Pipeline = &PipelineExecutionContent{
 					PipelineRef: "dev-workspace-init",
 					TotalSteps:  3,
@@ -564,13 +564,13 @@ func TestTicketContentValidate(t *testing.T) {
 		},
 		{
 			name:    "type_pipeline_missing_content",
-			modify:  func(tc *TicketContent) { tc.Type = "pipeline" },
+			modify:  func(tc *TicketContent) { tc.Type = TypePipeline },
 			wantErr: "pipeline content is required when type is \"pipeline\"",
 		},
 		{
 			name: "type_pipeline_invalid_content",
 			modify: func(tc *TicketContent) {
-				tc.Type = "pipeline"
+				tc.Type = TypePipeline
 				tc.Pipeline = &PipelineExecutionContent{
 					PipelineRef: "",
 					TotalSteps:  3,
@@ -581,7 +581,7 @@ func TestTicketContentValidate(t *testing.T) {
 		{
 			name: "non_pipeline_type_with_pipeline_content",
 			modify: func(tc *TicketContent) {
-				tc.Type = "task"
+				tc.Type = TypeTask
 				tc.Pipeline = &PipelineExecutionContent{
 					PipelineRef: "dev-workspace-init",
 					TotalSteps:  3,
@@ -592,14 +592,14 @@ func TestTicketContentValidate(t *testing.T) {
 		{
 			name: "type_review_finding_with_parent",
 			modify: func(tc *TicketContent) {
-				tc.Type = "review_finding"
+				tc.Type = TypeReviewFinding
 				tc.Parent = "tkt-parent"
 			},
 			wantErr: "",
 		},
 		{
 			name:    "type_review_finding_missing_parent",
-			modify:  func(tc *TicketContent) { tc.Type = "review_finding" },
+			modify:  func(tc *TicketContent) { tc.Type = TypeReviewFinding },
 			wantErr: "parent is required for review_finding type",
 		},
 		{
@@ -1682,7 +1682,7 @@ func TestPipelineExecutionContentValidate(t *testing.T) {
 func TestPipelineTicketRoundTrip(t *testing.T) {
 	// A complete pipeline ticket with type-specific content.
 	original := validTicketContent()
-	original.Type = "pipeline"
+	original.Type = TypePipeline
 	original.Pipeline = &PipelineExecutionContent{
 		PipelineRef:     "dev-workspace-init",
 		Variables:       map[string]string{"REPOSITORY": "https://github.com/example/repo.git"},
@@ -1731,21 +1731,21 @@ func TestPipelineTicketRoundTrip(t *testing.T) {
 
 func TestPrefixForType(t *testing.T) {
 	tests := []struct {
-		ticketType string
+		ticketType TicketType
 		want       string
 	}{
-		{"pipeline", "pip"},
-		{"task", ""},
-		{"bug", ""},
-		{"feature", ""},
-		{"epic", ""},
-		{"chore", ""},
-		{"docs", ""},
-		{"question", ""},
-		{"unknown", ""},
+		{TypePipeline, "pip"},
+		{TypeTask, ""},
+		{TypeBug, ""},
+		{TypeFeature, ""},
+		{TypeEpic, ""},
+		{TypeChore, ""},
+		{TypeDocs, ""},
+		{TypeQuestion, ""},
+		{TicketType("unknown"), ""},
 	}
 	for _, test := range tests {
-		t.Run(test.ticketType, func(t *testing.T) {
+		t.Run(string(test.ticketType), func(t *testing.T) {
 			if got := PrefixForType(test.ticketType); got != test.want {
 				t.Errorf("PrefixForType(%q) = %q, want %q", test.ticketType, got, test.want)
 			}
@@ -1753,22 +1753,23 @@ func TestPrefixForType(t *testing.T) {
 	}
 }
 
-func TestIsValidType(t *testing.T) {
-	validTypes := []string{
-		"task", "bug", "feature", "epic", "chore", "docs", "question",
-		"pipeline", "review_finding", "review", "resource_request",
-		"access_request", "deployment", "credential_rotation",
+func TestTicketTypeIsKnown(t *testing.T) {
+	knownTypes := []TicketType{
+		TypeTask, TypeBug, TypeFeature, TypeEpic, TypeChore,
+		TypeDocs, TypeQuestion, TypePipeline, TypeReviewFinding,
+		TypeReview, TypeResourceRequest, TypeAccessRequest,
+		TypeDeployment, TypeCredentialRotation,
 	}
-	for _, typeName := range validTypes {
-		if !IsValidType(typeName) {
-			t.Errorf("IsValidType(%q) = false, want true", typeName)
+	for _, typeName := range knownTypes {
+		if !typeName.IsKnown() {
+			t.Errorf("TicketType(%q).IsKnown() = false, want true", typeName)
 		}
 	}
 
-	invalidTypes := []string{"", "improvement", "story", "incident"}
-	for _, typeName := range invalidTypes {
-		if IsValidType(typeName) {
-			t.Errorf("IsValidType(%q) = true, want false", typeName)
+	unknownTypes := []TicketType{"", "improvement", "story", "incident"}
+	for _, typeName := range unknownTypes {
+		if typeName.IsKnown() {
+			t.Errorf("TicketType(%q).IsKnown() = true, want false", typeName)
 		}
 	}
 }
@@ -1816,7 +1817,7 @@ func TestTicketConfigContentAllowedTypesRoundTrip(t *testing.T) {
 	original := TicketConfigContent{
 		Version:      1,
 		Prefix:       "pip",
-		AllowedTypes: []string{"pipeline"},
+		AllowedTypes: []TicketType{TypePipeline},
 	}
 
 	data, err := json.Marshal(original)
@@ -1841,7 +1842,7 @@ func TestTicketConfigContentAllowedTypesRoundTrip(t *testing.T) {
 	if err := json.Unmarshal(data, &decoded); err != nil {
 		t.Fatalf("Unmarshal: %v", err)
 	}
-	if len(decoded.AllowedTypes) != 1 || decoded.AllowedTypes[0] != "pipeline" {
+	if len(decoded.AllowedTypes) != 1 || decoded.AllowedTypes[0] != TypePipeline {
 		t.Errorf("AllowedTypes = %v, want [pipeline]", decoded.AllowedTypes)
 	}
 }
@@ -1889,17 +1890,17 @@ func TestTicketConfigContentValidate(t *testing.T) {
 		},
 		{
 			name:    "valid_with_allowed_types",
-			config:  TicketConfigContent{Version: 1, AllowedTypes: []string{"pipeline"}},
+			config:  TicketConfigContent{Version: 1, AllowedTypes: []TicketType{TypePipeline}},
 			wantErr: "",
 		},
 		{
 			name:    "valid_with_multiple_allowed_types",
-			config:  TicketConfigContent{Version: 1, AllowedTypes: []string{"task", "bug", "pipeline"}},
+			config:  TicketConfigContent{Version: 1, AllowedTypes: []TicketType{TypeTask, TypeBug, TypePipeline}},
 			wantErr: "",
 		},
 		{
 			name:    "invalid_allowed_type",
-			config:  TicketConfigContent{Version: 1, AllowedTypes: []string{"task", "story"}},
+			config:  TicketConfigContent{Version: 1, AllowedTypes: []TicketType{TypeTask, TicketType("story")}},
 			wantErr: `allowed_types[1]: unknown type "story"`,
 		},
 		{

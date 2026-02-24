@@ -109,8 +109,8 @@ func TestTicketServiceAgent(t *testing.T) {
 	if ticketContent.Status != ticket.StatusOpen {
 		t.Errorf("status = %q, want %s", ticketContent.Status, ticket.StatusOpen)
 	}
-	if ticketContent.Type != "task" {
-		t.Errorf("type = %q, want task", ticketContent.Type)
+	if ticketContent.Type != ticket.TypeTask {
+		t.Errorf("type = %q, want %s", ticketContent.Type, ticket.TypeTask)
 	}
 	if ticketContent.Priority != 2 {
 		t.Errorf("priority = %d, want 2", ticketContent.Priority)
@@ -305,8 +305,8 @@ func TestTicketLifecycleAgent(t *testing.T) {
 		}}, "Create alpha ticket")
 
 		alphaTicketID, alphaContent := waitForTicket(t, &alphaWatch, "Alpha ticket")
-		if alphaContent.Type != "task" {
-			t.Errorf("alpha type = %q, want task", alphaContent.Type)
+		if alphaContent.Type != ticket.TypeTask {
+			t.Errorf("alpha type = %q, want %s", alphaContent.Type, ticket.TypeTask)
 		}
 		t.Logf("alpha ticket %s created", alphaTicketID)
 
@@ -323,8 +323,8 @@ func TestTicketLifecycleAgent(t *testing.T) {
 		}}, "Create beta ticket")
 
 		betaTicketID, betaContent := waitForTicket(t, &betaWatch, "Beta ticket")
-		if betaContent.Type != "feature" {
-			t.Errorf("beta type = %q, want feature", betaContent.Type)
+		if betaContent.Type != ticket.TypeFeature {
+			t.Errorf("beta type = %q, want %s", betaContent.Type, ticket.TypeFeature)
 		}
 		t.Logf("beta ticket %s created — cross-room filing verified", betaTicketID)
 	})
@@ -691,7 +691,7 @@ func TestStewardship(t *testing.T) {
 		stewardship.StewardshipContent{
 			Version:          1,
 			ResourcePatterns: []string{"fleet/gpu/**"},
-			GateTypes:        []string{"task"},
+			GateTypes:        []ticket.TicketType{ticket.TypeTask},
 			Tiers: []stewardship.StewardshipTier{{
 				Principals: []string{"admin-*:" + testServerName},
 				Threshold:  &tierThreshold,
@@ -1041,7 +1041,7 @@ func deployTicketService(t *testing.T, admin *messaging.DirectSession, fleet *te
 // enableTicketsInRoom configures an existing room for ticket management
 // using the production ticket.ConfigureRoom path. Publishes ticket config,
 // service binding, invites the service, and configures power levels.
-func enableTicketsInRoom(t *testing.T, admin *messaging.DirectSession, roomID ref.RoomID, ticketService ticketServiceDeployment, prefix string, allowedTypes []string) {
+func enableTicketsInRoom(t *testing.T, admin *messaging.DirectSession, roomID ref.RoomID, ticketService ticketServiceDeployment, prefix string, allowedTypes []ticket.TicketType) {
 	t.Helper()
 
 	if err := ticketcmd.ConfigureRoom(t.Context(), slog.Default(), admin, roomID, ticketService.Entity, ticketcmd.ConfigureRoomParams{

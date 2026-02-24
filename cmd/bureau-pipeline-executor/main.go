@@ -124,8 +124,8 @@ func run() error {
 	if err := json.Unmarshal(triggerData, &ticketContent); err != nil {
 		return fmt.Errorf("parsing trigger file as TicketContent: %w", err)
 	}
-	if ticketContent.Type != "pipeline" {
-		return fmt.Errorf("trigger ticket type is %q, expected \"pipeline\"", ticketContent.Type)
+	if ticketContent.Type != ticket.TypePipeline {
+		return fmt.Errorf("trigger ticket type is %q, expected %q", ticketContent.Type, ticket.TypePipeline)
 	}
 	if ticketContent.Pipeline == nil {
 		return fmt.Errorf("trigger ticket has type \"pipeline\" but no pipeline content")

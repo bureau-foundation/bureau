@@ -417,7 +417,7 @@ func TestHandleUpcomingGates(t *testing.T) {
 				Title:     "scheduled check",
 				Status:    ticket.StatusOpen,
 				Priority:  2,
-				Type:      "chore",
+				Type:      ticket.TypeChore,
 				CreatedBy: ref.MustParseUserID("@agent/creator:bureau.local"),
 				CreatedAt: "2026-01-01T00:00:00Z",
 				UpdatedAt: "2026-01-01T00:00:00Z",
@@ -436,7 +436,7 @@ func TestHandleUpcomingGates(t *testing.T) {
 				Title:     "interval poll",
 				Status:    ticket.StatusOpen,
 				Priority:  3,
-				Type:      "chore",
+				Type:      ticket.TypeChore,
 				CreatedBy: ref.MustParseUserID("@agent/creator:bureau.local"),
 				CreatedAt: "2026-01-01T00:00:00Z",
 				UpdatedAt: "2026-01-01T00:00:00Z",
@@ -455,7 +455,7 @@ func TestHandleUpcomingGates(t *testing.T) {
 				Title:     "already fired",
 				Status:    ticket.StatusOpen,
 				Priority:  2,
-				Type:      "task",
+				Type:      ticket.TypeTask,
 				CreatedBy: ref.MustParseUserID("@agent/creator:bureau.local"),
 				CreatedAt: "2026-01-01T00:00:00Z",
 				UpdatedAt: "2026-01-01T00:00:00Z",
@@ -524,7 +524,7 @@ func TestHandleUpcomingGatesRoomFilter(t *testing.T) {
 		testRoomID("!room1:bureau.local"): newTrackedRoom(map[string]ticket.TicketContent{
 			"tkt-a": {
 				Version: 1, Title: "room1 task", Status: ticket.StatusOpen,
-				Priority: 2, Type: "chore",
+				Priority: 2, Type: ticket.TypeChore,
 				CreatedBy: ref.MustParseUserID("@agent/creator:bureau.local"),
 				CreatedAt: "2026-01-01T00:00:00Z",
 				UpdatedAt: "2026-01-01T00:00:00Z",
@@ -536,7 +536,7 @@ func TestHandleUpcomingGatesRoomFilter(t *testing.T) {
 		testRoomID("!room2:bureau.local"): newTrackedRoom(map[string]ticket.TicketContent{
 			"tkt-b": {
 				Version: 1, Title: "room2 task", Status: ticket.StatusOpen,
-				Priority: 2, Type: "chore",
+				Priority: 2, Type: ticket.TypeChore,
 				CreatedBy: ref.MustParseUserID("@agent/creator:bureau.local"),
 				CreatedAt: "2026-01-01T00:00:00Z",
 				UpdatedAt: "2026-01-01T00:00:00Z",
@@ -781,7 +781,7 @@ func TestTimerLifecycleMaxOccurrences(t *testing.T) {
 				Title:     "limited recurring",
 				Status:    ticket.StatusOpen,
 				Priority:  2,
-				Type:      "chore",
+				Type:      ticket.TypeChore,
 				CreatedBy: ref.MustParseUserID("@agent/creator:bureau.local"),
 				CreatedAt: "2026-01-01T00:00:00Z",
 				UpdatedAt: "2026-01-01T00:00:00Z",

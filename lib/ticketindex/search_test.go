@@ -122,7 +122,7 @@ func TestSearchGraphExpansionChildren(t *testing.T) {
 		Title:  "Epic: authentication overhaul",
 		Body:   "Parent epic for all auth work.",
 		Status: ticket.StatusOpen,
-		Type:   "epic",
+		Type:   ticket.TypeEpic,
 	})
 	index.Put("tkt-c001", ticket.TicketContent{
 		Title:  "Implement OAuth provider",

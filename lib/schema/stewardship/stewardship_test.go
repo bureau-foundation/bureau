@@ -8,6 +8,8 @@ import (
 	"reflect"
 	"strings"
 	"testing"
+
+	"github.com/bureau-foundation/bureau/lib/schema/ticket"
 )
 
 // assertField checks that a JSON object has a field with the expected value.
@@ -49,8 +51,8 @@ func TestStewardshipContentRoundTrip(t *testing.T) {
 		Version:          StewardshipContentVersion,
 		ResourcePatterns: []string{"fleet/gpu/**", "fleet/cpu/batch/**"},
 		Description:      "GPU and CPU fleet capacity governance",
-		GateTypes:        []string{"resource_request", "deployment"},
-		NotifyTypes:      []string{"bug", "question"},
+		GateTypes:        []ticket.TicketType{ticket.TypeResourceRequest, ticket.TypeDeployment},
+		NotifyTypes:      []ticket.TicketType{ticket.TypeBug, ticket.TypeQuestion},
 		Tiers: []StewardshipTier{
 			{
 				Principals: []string{"iree/amdgpu/pm:bureau.local", "other-project/pm:bureau.local"},
@@ -154,8 +156,8 @@ func TestStewardshipContentValidate(t *testing.T) {
 			name: "valid_full",
 			modify: func(s *StewardshipContent) {
 				s.Description = "GPU fleet governance"
-				s.GateTypes = []string{"resource_request", "deployment"}
-				s.NotifyTypes = []string{"bug"}
+				s.GateTypes = []ticket.TicketType{ticket.TypeResourceRequest, ticket.TypeDeployment}
+				s.NotifyTypes = []ticket.TicketType{ticket.TypeBug}
 				s.OverlapPolicy = "cooperative"
 				s.DigestInterval = "4h"
 				s.Tiers[0].Threshold = intPointer(1)
@@ -206,22 +208,22 @@ func TestStewardshipContentValidate(t *testing.T) {
 		{
 			name: "invalid_gate_type",
 			modify: func(s *StewardshipContent) {
-				s.GateTypes = []string{"nonexistent_type"}
+				s.GateTypes = []ticket.TicketType{ticket.TicketType("nonexistent_type")}
 			},
 			wantErr: "unknown ticket type",
 		},
 		{
 			name: "invalid_notify_type",
 			modify: func(s *StewardshipContent) {
-				s.NotifyTypes = []string{"nonexistent_type"}
+				s.NotifyTypes = []ticket.TicketType{ticket.TicketType("nonexistent_type")}
 			},
 			wantErr: "unknown ticket type",
 		},
 		{
 			name: "type_in_both_gate_and_notify",
 			modify: func(s *StewardshipContent) {
-				s.GateTypes = []string{"review"}
-				s.NotifyTypes = []string{"review"}
+				s.GateTypes = []ticket.TicketType{ticket.TypeReview}
+				s.NotifyTypes = []ticket.TicketType{ticket.TypeReview}
 			},
 			wantErr: "appears in both gate_types and notify_types",
 		},
@@ -351,8 +353,8 @@ func TestStewardshipContentValidate(t *testing.T) {
 		{
 			name: "valid_gate_and_notify_disjoint",
 			modify: func(s *StewardshipContent) {
-				s.GateTypes = []string{"review", "deployment"}
-				s.NotifyTypes = []string{"bug", "question"}
+				s.GateTypes = []ticket.TicketType{ticket.TypeReview, ticket.TypeDeployment}
+				s.NotifyTypes = []ticket.TicketType{ticket.TypeBug, ticket.TypeQuestion}
 			},
 			wantErr: "",
 		},

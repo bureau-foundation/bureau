@@ -27,7 +27,7 @@ func testTicket(title string) ticket.TicketContent {
 		Title:     title,
 		Status:    ticket.StatusOpen,
 		Priority:  2,
-		Type:      "task",
+		Type:      ticket.TypeTask,
 		CreatedBy: ref.MustParseUserID("@test:bureau.local"),
 		CreatedAt: "2026-02-12T10:00:00Z",
 		UpdatedAt: "2026-02-12T10:00:00Z",
@@ -400,7 +400,7 @@ func TestHumanGateNotAutoMatched(t *testing.T) {
 			Version: 1,
 			Title:   "gated ticket",
 			Status:  ticket.StatusOpen,
-			Type:    "task",
+			Type:    ticket.TypeTask,
 			Gates: []ticket.TicketGate{
 				{
 					ID:     "approval",
@@ -528,7 +528,7 @@ func TestFireExpiredTimersSatisfiesExpired(t *testing.T) {
 			Version:   1,
 			Title:     "timer gated",
 			Status:    ticket.StatusOpen,
-			Type:      "task",
+			Type:      ticket.TypeTask,
 			CreatedAt: "2026-01-01T00:00:00Z",
 			UpdatedAt: "2026-01-01T00:00:00Z",
 			Gates: []ticket.TicketGate{
@@ -583,7 +583,7 @@ func TestFireExpiredTimersSkipsUnexpired(t *testing.T) {
 			Version:   1,
 			Title:     "timer gated",
 			Status:    ticket.StatusOpen,
-			Type:      "task",
+			Type:      ticket.TypeTask,
 			CreatedAt: "2026-01-01T00:00:00Z",
 			UpdatedAt: "2026-01-01T00:00:00Z",
 			Gates: []ticket.TicketGate{
@@ -633,7 +633,7 @@ func TestFireExpiredTimersSkipsEmptyTarget(t *testing.T) {
 			Version:   1,
 			Title:     "waiting for unblock",
 			Status:    ticket.StatusOpen,
-			Type:      "task",
+			Type:      ticket.TypeTask,
 			BlockedBy: []string{"tkt-blocker"},
 			CreatedAt: "2026-01-01T00:00:00Z",
 			UpdatedAt: "2026-01-01T00:00:00Z",
@@ -653,7 +653,7 @@ func TestFireExpiredTimersSkipsEmptyTarget(t *testing.T) {
 			Version:   1,
 			Title:     "blocker",
 			Status:    ticket.StatusOpen,
-			Type:      "task",
+			Type:      ticket.TypeTask,
 			CreatedAt: "2026-01-01T00:00:00Z",
 			UpdatedAt: "2026-01-01T00:00:00Z",
 		},
@@ -694,7 +694,7 @@ func TestFireExpiredTimersLazyDeletion(t *testing.T) {
 			Version:   1,
 			Title:     "already satisfied",
 			Status:    ticket.StatusOpen,
-			Type:      "task",
+			Type:      ticket.TypeTask,
 			CreatedAt: "2026-01-01T00:00:00Z",
 			UpdatedAt: "2026-01-01T00:00:00Z",
 			Gates: []ticket.TicketGate{
@@ -783,7 +783,7 @@ func TestTimerLoopEndToEnd(t *testing.T) {
 			Version:   1,
 			Title:     "timer gated",
 			Status:    ticket.StatusOpen,
-			Type:      "task",
+			Type:      ticket.TypeTask,
 			CreatedAt: "2026-01-01T00:00:00Z",
 			UpdatedAt: "2026-01-01T00:00:00Z",
 			Gates: []ticket.TicketGate{
@@ -853,7 +853,7 @@ func TestTimerLoopRescheduleOnNewEntry(t *testing.T) {
 			Version:   1,
 			Title:     "far timer",
 			Status:    ticket.StatusOpen,
-			Type:      "task",
+			Type:      ticket.TypeTask,
 			CreatedAt: "2026-01-01T00:00:00Z",
 			UpdatedAt: "2026-01-01T00:00:00Z",
 			Gates: []ticket.TicketGate{
@@ -883,7 +883,7 @@ func TestTimerLoopRescheduleOnNewEntry(t *testing.T) {
 		Version:   1,
 		Title:     "near timer",
 		Status:    ticket.StatusOpen,
-		Type:      "task",
+		Type:      ticket.TypeTask,
 		CreatedAt: "2026-01-01T00:00:00Z",
 		UpdatedAt: "2026-01-01T00:00:00Z",
 		Gates: []ticket.TicketGate{
@@ -953,7 +953,7 @@ func TestSatisfyGateWritesToMatrixAndUpdatesIndex(t *testing.T) {
 		Version:   1,
 		Title:     "gated",
 		Status:    ticket.StatusOpen,
-		Type:      "task",
+		Type:      ticket.TypeTask,
 		CreatedAt: "2026-01-01T00:00:00Z",
 		UpdatedAt: "2026-01-01T00:00:00Z",
 		Gates: []ticket.TicketGate{
@@ -1016,7 +1016,7 @@ func TestEvaluateGatesForEventsPipelineGate(t *testing.T) {
 			Version:   1,
 			Title:     "needs CI",
 			Status:    ticket.StatusOpen,
-			Type:      "task",
+			Type:      ticket.TypeTask,
 			CreatedAt: "2026-01-01T00:00:00Z",
 			UpdatedAt: "2026-01-01T00:00:00Z",
 			Gates: []ticket.TicketGate{
@@ -1066,7 +1066,7 @@ func TestEvaluateGatesForEventsTicketGate(t *testing.T) {
 			Version:   1,
 			Title:     "blocker",
 			Status:    ticket.StatusClosed,
-			Type:      "task",
+			Type:      ticket.TypeTask,
 			CreatedAt: "2026-01-01T00:00:00Z",
 			UpdatedAt: "2026-01-01T00:00:00Z",
 		},
@@ -1074,7 +1074,7 @@ func TestEvaluateGatesForEventsTicketGate(t *testing.T) {
 			Version:   1,
 			Title:     "waiting on blocker",
 			Status:    ticket.StatusOpen,
-			Type:      "task",
+			Type:      ticket.TypeTask,
 			CreatedAt: "2026-01-01T00:00:00Z",
 			UpdatedAt: "2026-01-01T00:00:00Z",
 			Gates: []ticket.TicketGate{
@@ -1119,7 +1119,7 @@ func TestEvaluateGatesForEventsMultipleGatesOnOneTicket(t *testing.T) {
 			Version:   1,
 			Title:     "multi-gated",
 			Status:    ticket.StatusOpen,
-			Type:      "task",
+			Type:      ticket.TypeTask,
 			CreatedAt: "2026-01-01T00:00:00Z",
 			UpdatedAt: "2026-01-01T00:00:00Z",
 			Gates: []ticket.TicketGate{
@@ -1177,7 +1177,7 @@ func TestEvaluateGatesForEventsBothGatesSatisfiedByBatchEvents(t *testing.T) {
 			Version:   1,
 			Title:     "multi-gated",
 			Status:    ticket.StatusOpen,
-			Type:      "task",
+			Type:      ticket.TypeTask,
 			CreatedAt: "2026-01-01T00:00:00Z",
 			UpdatedAt: "2026-01-01T00:00:00Z",
 			Gates: []ticket.TicketGate{
@@ -1249,7 +1249,7 @@ func TestEvaluateGatesSkipsAlreadySatisfiedGates(t *testing.T) {
 			Version:   1,
 			Title:     "already satisfied",
 			Status:    ticket.StatusOpen,
-			Type:      "task",
+			Type:      ticket.TypeTask,
 			CreatedAt: "2026-01-01T00:00:00Z",
 			UpdatedAt: "2026-01-01T00:00:00Z",
 			Gates: []ticket.TicketGate{
@@ -1296,7 +1296,7 @@ func TestEvaluateGatesNoMatchDoesNotWrite(t *testing.T) {
 			Version:   1,
 			Title:     "gated",
 			Status:    ticket.StatusOpen,
-			Type:      "task",
+			Type:      ticket.TypeTask,
 			CreatedAt: "2026-01-01T00:00:00Z",
 			UpdatedAt: "2026-01-01T00:00:00Z",
 			Gates: []ticket.TicketGate{
@@ -1345,7 +1345,7 @@ func TestProcessRoomSyncTriggersGateEvaluation(t *testing.T) {
 			Version:   1,
 			Title:     "needs CI",
 			Status:    ticket.StatusOpen,
-			Type:      "task",
+			Type:      ticket.TypeTask,
 			CreatedAt: "2026-01-01T00:00:00Z",
 			UpdatedAt: "2026-01-01T00:00:00Z",
 			Gates: []ticket.TicketGate{
@@ -1399,7 +1399,7 @@ func TestProcessRoomSyncTicketCloseTriggersGate(t *testing.T) {
 			Version:   1,
 			Title:     "blocker",
 			Status:    ticket.StatusOpen,
-			Type:      "task",
+			Type:      ticket.TypeTask,
 			CreatedAt: "2026-01-01T00:00:00Z",
 			UpdatedAt: "2026-01-01T00:00:00Z",
 		},
@@ -1407,7 +1407,7 @@ func TestProcessRoomSyncTicketCloseTriggersGate(t *testing.T) {
 			Version:   1,
 			Title:     "dependent",
 			Status:    ticket.StatusOpen,
-			Type:      "task",
+			Type:      ticket.TypeTask,
 			CreatedAt: "2026-01-01T00:00:00Z",
 			UpdatedAt: "2026-01-01T00:00:00Z",
 			Gates: []ticket.TicketGate{
@@ -1427,7 +1427,7 @@ func TestProcessRoomSyncTicketCloseTriggersGate(t *testing.T) {
 		Version:   1,
 		Title:     "blocker",
 		Status:    ticket.StatusClosed,
-		Type:      "task",
+		Type:      ticket.TypeTask,
 		CreatedAt: "2026-01-01T00:00:00Z",
 		UpdatedAt: "2026-01-15T12:00:00Z",
 		ClosedAt:  "2026-01-15T12:00:00Z",
@@ -1556,7 +1556,7 @@ func TestCrossRoomGateSatisfiedByWatchedRoomEvent(t *testing.T) {
 			Version:   1,
 			Title:     "needs CI from other room",
 			Status:    ticket.StatusOpen,
-			Type:      "task",
+			Type:      ticket.TypeTask,
 			CreatedAt: "2026-01-01T00:00:00Z",
 			UpdatedAt: "2026-01-01T00:00:00Z",
 			Gates: []ticket.TicketGate{
@@ -1632,7 +1632,7 @@ func TestCrossRoomGateNoEventsFromWatchedRoom(t *testing.T) {
 			Version:   1,
 			Title:     "needs CI",
 			Status:    ticket.StatusOpen,
-			Type:      "task",
+			Type:      ticket.TypeTask,
 			CreatedAt: "2026-01-01T00:00:00Z",
 			UpdatedAt: "2026-01-01T00:00:00Z",
 			Gates: []ticket.TicketGate{
@@ -1695,7 +1695,7 @@ func TestCrossRoomGateUnresolvableAlias(t *testing.T) {
 			Version:   1,
 			Title:     "bad alias gate",
 			Status:    ticket.StatusOpen,
-			Type:      "task",
+			Type:      ticket.TypeTask,
 			CreatedAt: "2026-01-01T00:00:00Z",
 			UpdatedAt: "2026-01-01T00:00:00Z",
 			Gates: []ticket.TicketGate{
@@ -1781,7 +1781,7 @@ func TestCrossRoomGateSkipsSameRoomGates(t *testing.T) {
 			Version:   1,
 			Title:     "same-room gate",
 			Status:    ticket.StatusOpen,
-			Type:      "task",
+			Type:      ticket.TypeTask,
 			CreatedAt: "2026-01-01T00:00:00Z",
 			UpdatedAt: "2026-01-01T00:00:00Z",
 			Gates: []ticket.TicketGate{
@@ -1849,7 +1849,7 @@ func TestCrossRoomGateSkipsNonStateEventTypes(t *testing.T) {
 			Version:   1,
 			Title:     "pipeline gate with alias",
 			Status:    ticket.StatusOpen,
-			Type:      "task",
+			Type:      ticket.TypeTask,
 			CreatedAt: "2026-01-01T00:00:00Z",
 			UpdatedAt: "2026-01-01T00:00:00Z",
 			Gates: []ticket.TicketGate{
@@ -1912,7 +1912,7 @@ func TestCrossRoomGateContentMatch(t *testing.T) {
 			Version:   1,
 			Title:     "wait for staging deploy",
 			Status:    ticket.StatusOpen,
-			Type:      "task",
+			Type:      ticket.TypeTask,
 			CreatedAt: "2026-01-01T00:00:00Z",
 			UpdatedAt: "2026-01-01T00:00:00Z",
 			Gates: []ticket.TicketGate{
@@ -2003,7 +2003,7 @@ func TestCrossRoomGateTimelineEvents(t *testing.T) {
 			Version:   1,
 			Title:     "timeline event gate",
 			Status:    ticket.StatusOpen,
-			Type:      "task",
+			Type:      ticket.TypeTask,
 			CreatedAt: "2026-01-01T00:00:00Z",
 			UpdatedAt: "2026-01-01T00:00:00Z",
 			Gates: []ticket.TicketGate{
@@ -2066,7 +2066,7 @@ func TestCrossRoomGateNilResolverIsNoOp(t *testing.T) {
 			Version:   1,
 			Title:     "cross-room gate",
 			Status:    ticket.StatusOpen,
-			Type:      "task",
+			Type:      ticket.TypeTask,
 			CreatedAt: "2026-01-01T00:00:00Z",
 			UpdatedAt: "2026-01-01T00:00:00Z",
 			Gates: []ticket.TicketGate{
@@ -2162,7 +2162,7 @@ func TestHandleSyncCrossRoomGateEvaluation(t *testing.T) {
 			Version:   1,
 			Title:     "cross-room via handleSync",
 			Status:    ticket.StatusOpen,
-			Type:      "task",
+			Type:      ticket.TypeTask,
 			CreatedAt: "2026-01-01T00:00:00Z",
 			UpdatedAt: "2026-01-01T00:00:00Z",
 			Gates: []ticket.TicketGate{
@@ -2292,7 +2292,7 @@ func TestEnrichTimerTargetsCreatedBase(t *testing.T) {
 		Version:   1,
 		Title:     "timer test",
 		Status:    ticket.StatusOpen,
-		Type:      "task",
+		Type:      ticket.TypeTask,
 		CreatedAt: "2026-01-01T10:00:00Z",
 		UpdatedAt: "2026-01-01T10:00:00Z",
 		Gates: []ticket.TicketGate{
@@ -2319,7 +2319,7 @@ func TestEnrichTimerTargetsExplicitCreatedBase(t *testing.T) {
 		Version:   1,
 		Title:     "timer test",
 		Status:    ticket.StatusOpen,
-		Type:      "task",
+		Type:      ticket.TypeTask,
 		CreatedAt: "2026-01-01T10:00:00Z",
 		UpdatedAt: "2026-01-01T10:00:00Z",
 		Gates: []ticket.TicketGate{
@@ -2347,7 +2347,7 @@ func TestEnrichTimerTargetsUnblockedBaseNoBlockers(t *testing.T) {
 		Version:   1,
 		Title:     "unblocked timer",
 		Status:    ticket.StatusOpen,
-		Type:      "task",
+		Type:      ticket.TypeTask,
 		CreatedAt: "2026-01-01T10:00:00Z",
 		UpdatedAt: "2026-01-01T10:00:00Z",
 		// No BlockedBy — effectively unblocked at creation.
@@ -2376,7 +2376,7 @@ func TestEnrichTimerTargetsUnblockedBaseBlockersClosed(t *testing.T) {
 			Version:   1,
 			Title:     "blocker",
 			Status:    ticket.StatusClosed,
-			Type:      "task",
+			Type:      ticket.TypeTask,
 			CreatedAt: "2026-01-01T00:00:00Z",
 			UpdatedAt: "2026-01-01T09:00:00Z",
 		},
@@ -2386,7 +2386,7 @@ func TestEnrichTimerTargetsUnblockedBaseBlockersClosed(t *testing.T) {
 		Version:   1,
 		Title:     "unblocked timer",
 		Status:    ticket.StatusOpen,
-		Type:      "task",
+		Type:      ticket.TypeTask,
 		BlockedBy: []string{"tkt-blocker"},
 		CreatedAt: "2026-01-01T10:00:00Z",
 		UpdatedAt: "2026-01-01T10:00:00Z",
@@ -2416,7 +2416,7 @@ func TestEnrichTimerTargetsUnblockedBaseBlockersOpen(t *testing.T) {
 			Version:   1,
 			Title:     "blocker",
 			Status:    ticket.StatusOpen,
-			Type:      "task",
+			Type:      ticket.TypeTask,
 			CreatedAt: "2026-01-01T00:00:00Z",
 			UpdatedAt: "2026-01-01T00:00:00Z",
 		},
@@ -2426,7 +2426,7 @@ func TestEnrichTimerTargetsUnblockedBaseBlockersOpen(t *testing.T) {
 		Version:   1,
 		Title:     "unblocked timer",
 		Status:    ticket.StatusOpen,
-		Type:      "task",
+		Type:      ticket.TypeTask,
 		BlockedBy: []string{"tkt-blocker"},
 		CreatedAt: "2026-01-01T10:00:00Z",
 		UpdatedAt: "2026-01-01T10:00:00Z",
@@ -2456,7 +2456,7 @@ func TestEnrichTimerTargetsPreservesCallerTarget(t *testing.T) {
 		Version:   1,
 		Title:     "absolute timer",
 		Status:    ticket.StatusOpen,
-		Type:      "task",
+		Type:      ticket.TypeTask,
 		CreatedAt: "2026-01-01T10:00:00Z",
 		UpdatedAt: "2026-01-01T10:00:00Z",
 		Gates: []ticket.TicketGate{
@@ -2497,7 +2497,7 @@ func TestResolveUnblockedTimerTargetsComputesTarget(t *testing.T) {
 			Version:   1,
 			Title:     "blocker",
 			Status:    ticket.StatusClosed,
-			Type:      "task",
+			Type:      ticket.TypeTask,
 			CreatedAt: "2026-01-01T00:00:00Z",
 			UpdatedAt: "2026-02-01T12:00:00Z",
 			ClosedAt:  "2026-02-01T12:00:00Z",
@@ -2506,7 +2506,7 @@ func TestResolveUnblockedTimerTargetsComputesTarget(t *testing.T) {
 			Version:   1,
 			Title:     "depends on blocker",
 			Status:    ticket.StatusOpen,
-			Type:      "task",
+			Type:      ticket.TypeTask,
 			BlockedBy: []string{"tkt-blocker"},
 			CreatedAt: "2026-01-15T00:00:00Z",
 			UpdatedAt: "2026-01-15T00:00:00Z",
@@ -2557,7 +2557,7 @@ func TestResolveUnblockedTimerTargetsSkipsPartiallyBlocked(t *testing.T) {
 			Version:   1,
 			Title:     "blocker A",
 			Status:    ticket.StatusClosed,
-			Type:      "task",
+			Type:      ticket.TypeTask,
 			CreatedAt: "2026-01-01T00:00:00Z",
 			UpdatedAt: "2026-02-01T12:00:00Z",
 		},
@@ -2565,7 +2565,7 @@ func TestResolveUnblockedTimerTargetsSkipsPartiallyBlocked(t *testing.T) {
 			Version:   1,
 			Title:     "blocker B",
 			Status:    ticket.StatusOpen, // Still open!
-			Type:      "task",
+			Type:      ticket.TypeTask,
 			CreatedAt: "2026-01-01T00:00:00Z",
 			UpdatedAt: "2026-01-01T00:00:00Z",
 		},
@@ -2573,7 +2573,7 @@ func TestResolveUnblockedTimerTargetsSkipsPartiallyBlocked(t *testing.T) {
 			Version:   1,
 			Title:     "needs both blockers",
 			Status:    ticket.StatusOpen,
-			Type:      "task",
+			Type:      ticket.TypeTask,
 			BlockedBy: []string{"tkt-blocker-a", "tkt-blocker-b"},
 			CreatedAt: "2026-01-15T00:00:00Z",
 			UpdatedAt: "2026-01-15T00:00:00Z",
@@ -2619,7 +2619,7 @@ func TestResolveUnblockedTimerTargetsSkipsCreatedBase(t *testing.T) {
 			Version:   1,
 			Title:     "blocker",
 			Status:    ticket.StatusClosed,
-			Type:      "task",
+			Type:      ticket.TypeTask,
 			CreatedAt: "2026-01-01T00:00:00Z",
 			UpdatedAt: "2026-02-01T12:00:00Z",
 		},
@@ -2627,7 +2627,7 @@ func TestResolveUnblockedTimerTargetsSkipsCreatedBase(t *testing.T) {
 			Version:   1,
 			Title:     "created base timer",
 			Status:    ticket.StatusOpen,
-			Type:      "task",
+			Type:      ticket.TypeTask,
 			BlockedBy: []string{"tkt-blocker"},
 			CreatedAt: "2026-01-15T00:00:00Z",
 			UpdatedAt: "2026-01-15T00:00:00Z",
@@ -2674,7 +2674,7 @@ func TestResolveUnblockedTimerTargetsMultipleBlockersSameBatch(t *testing.T) {
 			Version:   1,
 			Title:     "blocker A",
 			Status:    ticket.StatusClosed,
-			Type:      "task",
+			Type:      ticket.TypeTask,
 			CreatedAt: "2026-01-01T00:00:00Z",
 			UpdatedAt: "2026-02-01T12:00:00Z",
 		},
@@ -2682,7 +2682,7 @@ func TestResolveUnblockedTimerTargetsMultipleBlockersSameBatch(t *testing.T) {
 			Version:   1,
 			Title:     "blocker B",
 			Status:    ticket.StatusClosed,
-			Type:      "task",
+			Type:      ticket.TypeTask,
 			CreatedAt: "2026-01-01T00:00:00Z",
 			UpdatedAt: "2026-02-01T12:00:00Z",
 		},
@@ -2690,7 +2690,7 @@ func TestResolveUnblockedTimerTargetsMultipleBlockersSameBatch(t *testing.T) {
 			Version:   1,
 			Title:     "needs both blockers",
 			Status:    ticket.StatusOpen,
-			Type:      "task",
+			Type:      ticket.TypeTask,
 			BlockedBy: []string{"tkt-blocker-a", "tkt-blocker-b"},
 			CreatedAt: "2026-01-15T00:00:00Z",
 			UpdatedAt: "2026-01-15T00:00:00Z",
@@ -3580,11 +3580,11 @@ func TestMatchReviewGateCommented(t *testing.T) {
 
 func TestMatchReviewGateAllApprovedWithClosedFindings(t *testing.T) {
 	finding1 := testTicket("Fix typo")
-	finding1.Type = "review_finding"
+	finding1.Type = ticket.TypeReviewFinding
 	finding1.Status = "closed"
 
 	finding2 := testTicket("Handle error")
-	finding2.Type = "review_finding"
+	finding2.Type = ticket.TypeReviewFinding
 	finding2.Status = "closed"
 
 	index, _ := reviewGateIndex(&ticket.TicketReview{
@@ -3600,11 +3600,11 @@ func TestMatchReviewGateAllApprovedWithClosedFindings(t *testing.T) {
 
 func TestMatchReviewGateAllApprovedWithOpenFinding(t *testing.T) {
 	finding1 := testTicket("Fix typo")
-	finding1.Type = "review_finding"
+	finding1.Type = ticket.TypeReviewFinding
 	finding1.Status = "closed"
 
 	finding2 := testTicket("Handle error")
-	finding2.Type = "review_finding"
+	finding2.Type = ticket.TypeReviewFinding
 	finding2.Status = "open"
 
 	index, _ := reviewGateIndex(&ticket.TicketReview{
@@ -3620,7 +3620,7 @@ func TestMatchReviewGateAllApprovedWithOpenFinding(t *testing.T) {
 
 func TestMatchReviewGatePendingReviewerWithClosedFindings(t *testing.T) {
 	finding := testTicket("Fix typo")
-	finding.Type = "review_finding"
+	finding.Type = ticket.TypeReviewFinding
 	finding.Status = "closed"
 
 	index, _ := reviewGateIndex(&ticket.TicketReview{
@@ -3649,7 +3649,7 @@ func TestMatchReviewGateNoFindingsNoChange(t *testing.T) {
 func TestMatchReviewGateNonFindingChildrenIgnored(t *testing.T) {
 	// Non-review_finding children should not affect the review gate.
 	subtask := testTicket("Subtask")
-	subtask.Type = "task"
+	subtask.Type = ticket.TypeTask
 	subtask.Status = "open"
 
 	index, _ := reviewGateIndex(&ticket.TicketReview{
@@ -3789,7 +3789,7 @@ func TestMatchReviewGateThresholdWithOpenFinding(t *testing.T) {
 	// Tier threshold met but review_finding child is still open.
 	threshold := 1
 	finding := testTicket("Fix typo")
-	finding.Type = "review_finding"
+	finding.Type = ticket.TypeReviewFinding
 	finding.Status = "open"
 
 	index, _ := reviewGateIndex(&ticket.TicketReview{

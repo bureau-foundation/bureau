@@ -30,23 +30,23 @@ const (
 // typeIcon returns a double-width emoji representing the ticket type.
 // Each icon is visually distinct so the type is recognizable at a
 // glance without reading text.
-func typeIcon(ticketType string) string {
+func typeIcon(ticketType ticket.TicketType) string {
 	switch ticketType {
-	case "bug":
+	case ticket.TypeBug:
 		return "🐛"
-	case "task":
+	case ticket.TypeTask:
 		return "📋"
-	case "feature":
+	case ticket.TypeFeature:
 		return "✨"
-	case "epic":
+	case ticket.TypeEpic:
 		return "🎯"
-	case "chore":
+	case ticket.TypeChore:
 		return "🔧"
-	case "docs":
+	case ticket.TypeDocs:
 		return "📝"
-	case "question":
+	case ticket.TypeQuestion:
 		return "❓"
-	case "pipeline":
+	case ticket.TypePipeline:
 		return "🚀"
 	default:
 		return "  " // 2 spaces to match emoji width

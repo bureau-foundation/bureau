@@ -30,7 +30,7 @@ func autolinkTestSource() *IndexSource {
 		Title:    "Epic one",
 		Status:   ticket.StatusOpen,
 		Priority: 0,
-		Type:     "epic",
+		Type:     ticket.TypeEpic,
 	})
 	index.Put("tkt-3abc", ticket.TicketContent{
 		Title:    "Hex-suffix ticket",

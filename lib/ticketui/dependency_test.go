@@ -29,7 +29,7 @@ func testDependencySource() *IndexSource {
 		Title:     "Center ticket",
 		Status:    ticket.StatusInProgress,
 		Priority:  1,
-		Type:      "task",
+		Type:      ticket.TypeTask,
 		BlockedBy: []string{"left-1", "left-2"},
 		CreatedBy: ref.MustParseUserID("@test:bureau.local"),
 	})
@@ -38,21 +38,21 @@ func testDependencySource() *IndexSource {
 		Title:    "Left one",
 		Status:   ticket.StatusClosed,
 		Priority: 0,
-		Type:     "task",
+		Type:     ticket.TypeTask,
 	})
 	index.Put("left-2", ticket.TicketContent{
 		Version:  1,
 		Title:    "Left two",
 		Status:   ticket.StatusOpen,
 		Priority: 1,
-		Type:     "bug",
+		Type:     ticket.TypeBug,
 	})
 	index.Put("right-1", ticket.TicketContent{
 		Version:   1,
 		Title:     "Right one",
 		Status:    ticket.StatusBlocked,
 		Priority:  2,
-		Type:      "task",
+		Type:      ticket.TypeTask,
 		BlockedBy: []string{"center"},
 	})
 	return NewIndexSource(index)
@@ -384,7 +384,7 @@ func TestDependencyGraphSymmetricFan(t *testing.T) {
 		Title:     "Center",
 		Status:    ticket.StatusOpen,
 		Priority:  1,
-		Type:      "task",
+		Type:      ticket.TypeTask,
 		BlockedBy: []string{"a", "b", "c"},
 	})
 	for _, ticketID := range []string{"a", "b", "c", "x", "y", "z"} {
@@ -393,7 +393,7 @@ func TestDependencyGraphSymmetricFan(t *testing.T) {
 			Title:    "Node " + ticketID,
 			Status:   ticket.StatusOpen,
 			Priority: 2,
-			Type:     "task",
+			Type:     ticket.TypeTask,
 		})
 	}
 	// Make x, y, z blocked by center.
@@ -402,7 +402,7 @@ func TestDependencyGraphSymmetricFan(t *testing.T) {
 		Title:     "Node x",
 		Status:    ticket.StatusOpen,
 		Priority:  2,
-		Type:      "task",
+		Type:      ticket.TypeTask,
 		BlockedBy: []string{"center"},
 	})
 	index.Put("y", ticket.TicketContent{
@@ -410,7 +410,7 @@ func TestDependencyGraphSymmetricFan(t *testing.T) {
 		Title:     "Node y",
 		Status:    ticket.StatusOpen,
 		Priority:  2,
-		Type:      "task",
+		Type:      ticket.TypeTask,
 		BlockedBy: []string{"center"},
 	})
 	index.Put("z", ticket.TicketContent{
@@ -418,7 +418,7 @@ func TestDependencyGraphSymmetricFan(t *testing.T) {
 		Title:     "Node z",
 		Status:    ticket.StatusOpen,
 		Priority:  2,
-		Type:      "task",
+		Type:      ticket.TypeTask,
 		BlockedBy: []string{"center"},
 	})
 	source := NewIndexSource(index)
@@ -669,7 +669,7 @@ func TestDependencyGraphBorrowedPriority(t *testing.T) {
 		Title:     "Center",
 		Status:    ticket.StatusOpen,
 		Priority:  2,
-		Type:      "task",
+		Type:      ticket.TypeTask,
 		BlockedBy: []string{"blocker"},
 	})
 	// blocker is P3 but blocks center (P2) which blocks downstream-p0.
@@ -680,14 +680,14 @@ func TestDependencyGraphBorrowedPriority(t *testing.T) {
 		Title:    "Blocker",
 		Status:   ticket.StatusOpen,
 		Priority: 3,
-		Type:     "task",
+		Type:     ticket.TypeTask,
 	})
 	index.Put("downstream-p0", ticket.TicketContent{
 		Version:   1,
 		Title:     "Urgent downstream",
 		Status:    ticket.StatusOpen,
 		Priority:  0,
-		Type:      "task",
+		Type:      ticket.TypeTask,
 		BlockedBy: []string{"center"},
 	})
 	source := NewIndexSource(index)

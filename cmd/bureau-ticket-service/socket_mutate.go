@@ -26,7 +26,7 @@ import (
 // pipeline tickets) take precedence over the room's configured prefix.
 // Falls back to "tkt" if neither the type nor the room config specifies
 // a prefix.
-func ticketPrefix(config *ticket.TicketConfigContent, ticketType string) string {
+func ticketPrefix(config *ticket.TicketConfigContent, ticketType ticket.TicketType) string {
 	if typePrefix := ticket.PrefixForType(ticketType); typePrefix != "" {
 		return typePrefix
 	}
@@ -41,7 +41,7 @@ func ticketPrefix(config *ticket.TicketConfigContent, ticketType string) string 
 // allowed (either AllowedTypes is empty, meaning all types are allowed,
 // or the type appears in the list). Returns a descriptive error if the
 // type is restricted.
-func checkAllowedType(config *ticket.TicketConfigContent, ticketType string) error {
+func checkAllowedType(config *ticket.TicketConfigContent, ticketType ticket.TicketType) error {
 	if len(config.AllowedTypes) == 0 {
 		return nil
 	}
@@ -58,7 +58,7 @@ func checkAllowedType(config *ticket.TicketConfigContent, ticketType string) err
 // that avoids collision with existing tickets and the exclusion set.
 // The exclusion set handles intra-batch collisions when generating
 // multiple IDs in a single batch-create call; pass nil for single creates.
-func (ts *TicketService) generateTicketID(state *roomState, ticketType, roomID, timestamp, title string, exclude map[string]struct{}) string {
+func (ts *TicketService) generateTicketID(state *roomState, ticketType ticket.TicketType, roomID, timestamp, title string, exclude map[string]struct{}) string {
 	prefix := ticketPrefix(state.config, ticketType)
 	input := roomID + "\n" + timestamp + "\n" + title
 	hash := sha256.Sum256([]byte(input))
@@ -499,8 +499,11 @@ func (ts *TicketService) handleCreate(ctx context.Context, token *servicetoken.T
 		return nil, err
 	}
 
+	// Convert wire-format type string to typed enum at the boundary.
+	requestType := ticket.TicketType(request.Type)
+
 	// Enforce room-level type restrictions.
-	if err := checkAllowedType(state.config, request.Type); err != nil {
+	if err := checkAllowedType(state.config, requestType); err != nil {
 		return nil, err
 	}
 
@@ -511,7 +514,7 @@ func (ts *TicketService) handleCreate(ctx context.Context, token *servicetoken.T
 		Body:      request.Body,
 		Status:    ticket.StatusOpen,
 		Priority:  request.Priority,
-		Type:      request.Type,
+		Type:      requestType,
 		Labels:    request.Labels,
 		Affects:   request.Affects,
 		Parent:    request.Parent,
@@ -573,7 +576,7 @@ func (ts *TicketService) handleCreate(ctx context.Context, token *servicetoken.T
 		}
 	}
 
-	ticketID := ts.generateTicketID(state, request.Type, request.Room, now, content.Title, nil)
+	ticketID := ts.generateTicketID(state, requestType, request.Room, now, content.Title, nil)
 
 	// Write to Matrix and update the local index so the creator sees
 	// the result without a /sync round-trip. putWithEcho records the
@@ -636,12 +639,12 @@ func (ts *TicketService) handleUpdate(ctx context.Context, token *servicetoken.T
 	}
 	if request.Type != nil {
 		oldType := content.Type
-		content.Type = *request.Type
+		content.Type = ticket.TicketType(*request.Type)
 
 		// Auto-clear pipeline content when changing away from pipeline
 		// type. The CBOR request format uses nil to mean "not provided",
 		// so there is no way for the caller to explicitly clear it.
-		if oldType == "pipeline" && content.Type != "pipeline" {
+		if oldType == ticket.TypePipeline && content.Type != ticket.TypePipeline {
 			content.Pipeline = nil
 		}
 
@@ -1074,12 +1077,15 @@ func (ts *TicketService) handleBatchCreate(ctx context.Context, token *serviceto
 			return nil, fmt.Errorf("tickets[%d]: duplicate ref %q", i, entry.Ref)
 		}
 
+		// Convert wire-format type string to typed enum at the boundary.
+		entryType := ticket.TicketType(entry.Type)
+
 		// Enforce room-level type restrictions.
-		if err := checkAllowedType(state.config, entry.Type); err != nil {
+		if err := checkAllowedType(state.config, entryType); err != nil {
 			return nil, fmt.Errorf("tickets[%d]: %w", i, err)
 		}
 
-		ticketID := ts.generateTicketID(state, entry.Type, roomID.String(), now, entry.Title, batchIDs)
+		ticketID := ts.generateTicketID(state, entryType, roomID.String(), now, entry.Title, batchIDs)
 		batchIDs[ticketID] = struct{}{}
 		refToID[entry.Ref] = ticketID
 
@@ -1089,7 +1095,7 @@ func (ts *TicketService) handleBatchCreate(ctx context.Context, token *serviceto
 			Body:      entry.Body,
 			Status:    ticket.StatusOpen,
 			Priority:  entry.Priority,
-			Type:      entry.Type,
+			Type:      entryType,
 			Labels:    entry.Labels,
 			Affects:   entry.Affects,
 			Parent:    entry.Parent,
@@ -1104,7 +1110,7 @@ func (ts *TicketService) handleBatchCreate(ctx context.Context, token *serviceto
 
 		// Auto-configure stewardship review gates.
 		if len(entry.Affects) > 0 {
-			stewardship := ts.resolveStewardshipGates(entry.Affects, entry.Type, entry.Priority)
+			stewardship := ts.resolveStewardshipGates(entry.Affects, entryType, entry.Priority)
 			content.Gates = append(content.Gates, stewardship.gates...)
 			if len(stewardship.reviewers) > 0 {
 				if content.Review == nil {

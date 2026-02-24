@@ -234,7 +234,7 @@ func (renderer DetailRenderer) RenderBody(source Source, entry ticketindex.Entry
 	// Pipeline-specific sections: execution progress, variables,
 	// and schedule info. Shown for pipeline tickets between the
 	// dependency graph and the structural sections (children, parent).
-	if entry.Content.Type == "pipeline" {
+	if entry.Content.Type == ticket.TypePipeline {
 		executionSection := renderer.renderPipelineExecution(entry.Content)
 		if executionSection != "" {
 			addSection(executionSection, nil)
@@ -336,7 +336,7 @@ func (renderer DetailRenderer) renderMetaLine(ticketID string, content ticket.Ti
 
 	leftPortion := statusStyle.Render(statusText) + "  " +
 		priorityStyle.Render(priorityText) + "  " +
-		typeStyle.Render(content.Type) + "  " +
+		typeStyle.Render(string(content.Type)) + "  " +
 		idStyle.Render(ticketID)
 
 	// Append labels inline if they fit.

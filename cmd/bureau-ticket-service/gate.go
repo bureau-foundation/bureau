@@ -216,7 +216,7 @@ func matchReviewGate(index *ticketindex.Index, ticketID string) bool {
 	}
 
 	for _, child := range index.Children(ticketID) {
-		if child.Content.Type == "review_finding" && child.Content.Status != ticket.StatusClosed {
+		if child.Content.Type == ticket.TypeReviewFinding && child.Content.Status != ticket.StatusClosed {
 			return false
 		}
 	}

@@ -262,7 +262,7 @@ func (idx *Index) Put(ticketID string, content ticket.TicketContent) {
 	// old parent's review gate watches if this ticket is a
 	// review_finding that changed parents.
 	var oldParent string
-	var oldType string
+	var oldType ticket.TicketType
 	if old, exists := idx.tickets[ticketID]; exists {
 		oldParent = old.Parent
 		oldType = old.Type
@@ -331,7 +331,7 @@ func (idx *Index) Put(ticketID string, content ticket.TicketContent) {
 	// When a review_finding child is added, removed, or reparented,
 	// refresh the affected parent(s)' review gate watches so they
 	// include or exclude this child's state key.
-	if content.Type == "review_finding" && content.Parent != "" {
+	if content.Type == ticket.TypeReviewFinding && content.Parent != "" {
 		idx.refreshReviewGateWatches(content.Parent)
 	}
 	if oldType == "review_finding" && oldParent != "" && oldParent != content.Parent {
@@ -354,7 +354,7 @@ func (idx *Index) Remove(ticketID string) {
 
 	// If the removed ticket was a review_finding, refresh the
 	// parent's review gate watches so they stop watching this child.
-	if old.Type == "review_finding" && old.Parent != "" {
+	if old.Type == ticket.TypeReviewFinding && old.Parent != "" {
 		idx.refreshReviewGateWatches(old.Parent)
 	}
 
@@ -573,7 +573,7 @@ func (idx *Index) watchKeysForGate(gate *ticket.TicketGate, ticketID string) []g
 		keys := []gateWatchKey{{eventType: schema.EventTypeTicket, stateKey: ticketID}}
 		if childIDs, exists := idx.children[ticketID]; exists {
 			for childID := range childIDs {
-				if child, exists := idx.tickets[childID]; exists && child.Type == "review_finding" {
+				if child, exists := idx.tickets[childID]; exists && child.Type == ticket.TypeReviewFinding {
 					keys = append(keys, gateWatchKey{eventType: schema.EventTypeTicket, stateKey: childID})
 				}
 			}
@@ -695,7 +695,7 @@ func (idx *Index) Stats() Stats {
 	for _, content := range idx.tickets {
 		stats.ByStatus[string(content.Status)]++
 		stats.ByPriority[content.Priority]++
-		stats.ByType[content.Type]++
+		stats.ByType[string(content.Type)]++
 	}
 	return stats
 }
@@ -1081,7 +1081,7 @@ func (idx *Index) updateIndexes(
 ) {
 	stringOp(idx.byStatus, string(content.Status), ticketID)
 	intOp(idx.byPriority, content.Priority, ticketID)
-	stringOp(idx.byType, content.Type, ticketID)
+	stringOp(idx.byType, string(content.Type), ticketID)
 
 	for _, label := range content.Labels {
 		stringOp(idx.byLabel, label, ticketID)
@@ -1163,7 +1163,7 @@ func (idx *Index) matchesFilter(content *ticket.TicketContent, filter *Filter) b
 	if !filter.Assignee.IsZero() && content.Assignee != filter.Assignee {
 		return false
 	}
-	if filter.Type != "" && content.Type != filter.Type {
+	if filter.Type != "" && string(content.Type) != filter.Type {
 		return false
 	}
 	if filter.Parent != "" && content.Parent != filter.Parent {

@@ -18,4 +18,5 @@ go_test(
     name = "stewardship_test",
     srcs = ["stewardship_test.go"],
     embed = [":stewardship"],
+    deps = ["//lib/schema/ticket"],
 )

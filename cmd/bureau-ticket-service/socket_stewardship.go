@@ -32,8 +32,8 @@ type stewardshipListEntry struct {
 	RoomID           ref.RoomID                    `cbor:"room_id"`
 	StateKey         string                        `cbor:"state_key"`
 	ResourcePatterns []string                      `cbor:"resource_patterns"`
-	GateTypes        []string                      `cbor:"gate_types,omitempty"`
-	NotifyTypes      []string                      `cbor:"notify_types,omitempty"`
+	GateTypes        []ticket.TicketType           `cbor:"gate_types,omitempty"`
+	NotifyTypes      []ticket.TicketType           `cbor:"notify_types,omitempty"`
 	OverlapPolicy    string                        `cbor:"overlap_policy,omitempty"`
 	Description      string                        `cbor:"description,omitempty"`
 	Tiers            []stewardship.StewardshipTier `cbor:"tiers"`
@@ -161,7 +161,7 @@ func (ts *TicketService) handleStewardshipResolve(_ context.Context, token *serv
 	}
 
 	// Resolve gates and reviewers using the same logic as create/update.
-	result := ts.resolveStewardshipGates(request.Affects, request.TicketType, request.Priority)
+	result := ts.resolveStewardshipGates(request.Affects, ticket.TicketType(request.TicketType), request.Priority)
 
 	return stewardshipResolveResponse{
 		Gates:      result.gates,

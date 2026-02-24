@@ -23,7 +23,7 @@ func makeTicket(title string) ticket.TicketContent {
 		Title:     title,
 		Status:    ticket.StatusOpen,
 		Priority:  2,
-		Type:      "task",
+		Type:      ticket.TypeTask,
 		CreatedBy: ref.MustParseUserID("@test:bureau.local"),
 		CreatedAt: "2026-02-12T10:00:00Z",
 		UpdatedAt: "2026-02-12T10:00:00Z",
@@ -558,11 +558,11 @@ func TestListByType(t *testing.T) {
 	idx := NewIndex()
 
 	bug := makeTicket("Bug")
-	bug.Type = "bug"
+	bug.Type = ticket.TypeBug
 	idx.Put("tkt-bug", bug)
 
 	task := makeTicket("Task")
-	task.Type = "task"
+	task.Type = ticket.TypeTask
 	idx.Put("tkt-task", task)
 
 	entries := idx.List(Filter{Type: "bug"})
@@ -593,19 +593,19 @@ func TestListMultipleFilters(t *testing.T) {
 	// Matches both status and type.
 	match := makeTicket("Match")
 	match.Status = ticket.StatusOpen
-	match.Type = "bug"
+	match.Type = ticket.TypeBug
 	idx.Put("tkt-match", match)
 
 	// Matches status but not type.
 	noTypeMatch := makeTicket("Wrong type")
 	noTypeMatch.Status = ticket.StatusOpen
-	noTypeMatch.Type = "task"
+	noTypeMatch.Type = ticket.TypeTask
 	idx.Put("tkt-nomatch1", noTypeMatch)
 
 	// Matches type but not status.
 	noStatusMatch := makeTicket("Wrong status")
 	noStatusMatch.Status = ticket.StatusClosed
-	noStatusMatch.Type = "bug"
+	noStatusMatch.Type = ticket.TypeBug
 	idx.Put("tkt-nomatch2", noStatusMatch)
 
 	entries := idx.List(Filter{Status: "open", Type: "bug"})
@@ -902,7 +902,7 @@ func TestChildren(t *testing.T) {
 	idx := NewIndex()
 
 	epic := makeTicket("Epic")
-	epic.Type = "epic"
+	epic.Type = ticket.TypeEpic
 	idx.Put("tkt-epic", epic)
 
 	child1 := makeTicket("Child 1")
@@ -967,7 +967,7 @@ func TestChildProgress(t *testing.T) {
 	idx := NewIndex()
 
 	epic := makeTicket("Epic")
-	epic.Type = "epic"
+	epic.Type = ticket.TypeEpic
 	idx.Put("tkt-epic", epic)
 
 	child1 := makeTicket("Child 1")
@@ -1146,7 +1146,7 @@ func TestWatchedGatesReviewGateWithChildren(t *testing.T) {
 
 	// Add a review_finding child.
 	finding := makeTicket("Fix typo")
-	finding.Type = "review_finding"
+	finding.Type = ticket.TypeReviewFinding
 	finding.Parent = "tkt-parent"
 	idx.Put("tkt-finding-1", finding)
 
@@ -1166,7 +1166,7 @@ func TestWatchedGatesReviewGateWithChildren(t *testing.T) {
 
 	// A non-review_finding child should NOT be watched.
 	task := makeTicket("Subtask")
-	task.Type = "task"
+	task.Type = ticket.TypeTask
 	task.Parent = "tkt-parent"
 	idx.Put("tkt-task-child", task)
 
@@ -1194,7 +1194,7 @@ func TestRefreshReviewGateWatchesOnChildAdd(t *testing.T) {
 
 	// Add a review_finding child — Put triggers watch refresh.
 	finding := makeTicket("Finding")
-	finding.Type = "review_finding"
+	finding.Type = ticket.TypeReviewFinding
 	finding.Parent = "tkt-parent"
 	idx.Put("tkt-finding-1", finding)
 
@@ -1216,7 +1216,7 @@ func TestRefreshReviewGateWatchesOnChildRemove(t *testing.T) {
 	idx.Put("tkt-parent", parent)
 
 	finding := makeTicket("Finding")
-	finding.Type = "review_finding"
+	finding.Type = ticket.TypeReviewFinding
 	finding.Parent = "tkt-parent"
 	idx.Put("tkt-finding-1", finding)
 
@@ -1254,7 +1254,7 @@ func TestRefreshReviewGateWatchesOnChildDelete(t *testing.T) {
 	idx.Put("tkt-parent", parent)
 
 	finding := makeTicket("Finding")
-	finding.Type = "review_finding"
+	finding.Type = ticket.TypeReviewFinding
 	finding.Parent = "tkt-parent"
 	idx.Put("tkt-finding-1", finding)
 
@@ -1609,19 +1609,19 @@ func TestStats(t *testing.T) {
 	tc1 := makeTicket("Task 1")
 	tc1.Status = ticket.StatusOpen
 	tc1.Priority = 2
-	tc1.Type = "task"
+	tc1.Type = ticket.TypeTask
 	idx.Put("tkt-a", tc1)
 
 	tc2 := makeTicket("Bug 1")
 	tc2.Status = ticket.StatusOpen
 	tc2.Priority = 0
-	tc2.Type = "bug"
+	tc2.Type = ticket.TypeBug
 	idx.Put("tkt-b", tc2)
 
 	tc3 := makeTicket("Task 2")
 	tc3.Status = ticket.StatusClosed
 	tc3.Priority = 2
-	tc3.Type = "task"
+	tc3.Type = ticket.TypeTask
 	idx.Put("tkt-c", tc3)
 
 	stats := idx.Stats()
@@ -2427,7 +2427,7 @@ func TestEpicHealthBasic(t *testing.T) {
 	idx := NewIndex()
 
 	epic := makeTicket("Epic")
-	epic.Type = "epic"
+	epic.Type = ticket.TypeEpic
 	idx.Put("tkt-epic", epic)
 
 	// 5 children: 2 closed, 2 ready (open, no blockers), 1 blocked.

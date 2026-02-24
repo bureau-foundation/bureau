@@ -60,7 +60,7 @@ func BeadsToTicketContent(entry BeadsEntry) TicketContent {
 		Body:        entry.Description,
 		Status:      TicketStatus(entry.Status),
 		Priority:    entry.Priority,
-		Type:        entry.IssueType,
+		Type:        TicketType(entry.IssueType),
 		Labels:      entry.Labels,
 		CreatedBy:   beadsParseUserID(entry.CreatedBy),
 		CreatedAt:   entry.CreatedAt,

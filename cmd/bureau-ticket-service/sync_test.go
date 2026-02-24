@@ -360,7 +360,7 @@ func TestHandleRoomTombstoneNoReplacementRoom(t *testing.T) {
 func TestConcurrentSyncAndReads(t *testing.T) {
 	ts := newTestService()
 	ts.rooms[testRoomID("!room:local")] = newTrackedRoom(map[string]ticket.TicketContent{
-		"tkt-1": {Version: 1, Title: "existing", Status: ticket.StatusOpen, Type: "task", CreatedAt: "2026-01-01T00:00:00Z", UpdatedAt: "2026-01-01T00:00:00Z"},
+		"tkt-1": {Version: 1, Title: "existing", Status: ticket.StatusOpen, Type: ticket.TypeTask, CreatedAt: "2026-01-01T00:00:00Z", UpdatedAt: "2026-01-01T00:00:00Z"},
 	})
 
 	ctx := context.Background()
@@ -450,7 +450,7 @@ func ticketIDForIteration(iteration int) string {
 func TestPendingEchoSkipsStaleEvent(t *testing.T) {
 	ts := newTestService()
 	state := newTrackedRoom(map[string]ticket.TicketContent{
-		"tkt-1": {Version: 1, Title: "original", Status: ticket.StatusOpen, Type: "task", CreatedAt: "2026-01-01T00:00:00Z", UpdatedAt: "2026-01-01T00:00:00Z"},
+		"tkt-1": {Version: 1, Title: "original", Status: ticket.StatusOpen, Type: ticket.TypeTask, CreatedAt: "2026-01-01T00:00:00Z", UpdatedAt: "2026-01-01T00:00:00Z"},
 	})
 	ts.rooms[testRoomID("!room:local")] = state
 
@@ -458,7 +458,7 @@ func TestPendingEchoSkipsStaleEvent(t *testing.T) {
 	// called putWithEcho which stored the pending echo.
 	closedContent := ticket.TicketContent{
 		Version: 1, Title: "original", Status: ticket.StatusClosed,
-		Type: "task", CreatedAt: "2026-01-01T00:00:00Z",
+		Type: ticket.TypeTask, CreatedAt: "2026-01-01T00:00:00Z",
 		UpdatedAt: "2026-01-02T00:00:00Z", ClosedAt: "2026-01-02T00:00:00Z",
 	}
 	state.pendingEchoes["tkt-1"] = ref.MustParseEventID("$mutation-event-id")
@@ -468,7 +468,7 @@ func TestPendingEchoSkipsStaleEvent(t *testing.T) {
 	// /sync response that was in-flight when the mutation happened).
 	staleContent := toContentMap(t, ticket.TicketContent{
 		Version: 1, Title: "original", Status: ticket.StatusInProgress,
-		Type: "task", Assignee: ref.MustParseUserID("@someone:bureau.local"),
+		Type: ticket.TypeTask, Assignee: ref.MustParseUserID("@someone:bureau.local"),
 		CreatedAt: "2026-01-01T00:00:00Z", UpdatedAt: "2026-01-01T12:00:00Z",
 	})
 	staleEvent := messaging.Event{
@@ -502,7 +502,7 @@ func TestPendingEchoSkipsStaleEvent(t *testing.T) {
 func TestPendingEchoClearsOnEchoArrival(t *testing.T) {
 	ts := newTestService()
 	state := newTrackedRoom(map[string]ticket.TicketContent{
-		"tkt-1": {Version: 1, Title: "original", Status: ticket.StatusOpen, Type: "task", CreatedAt: "2026-01-01T00:00:00Z", UpdatedAt: "2026-01-01T00:00:00Z"},
+		"tkt-1": {Version: 1, Title: "original", Status: ticket.StatusOpen, Type: ticket.TypeTask, CreatedAt: "2026-01-01T00:00:00Z", UpdatedAt: "2026-01-01T00:00:00Z"},
 	})
 	ts.rooms[testRoomID("!room:local")] = state
 
@@ -510,14 +510,14 @@ func TestPendingEchoClearsOnEchoArrival(t *testing.T) {
 	state.pendingEchoes["tkt-1"] = ref.MustParseEventID("$echo-event-id")
 	state.index.Put("tkt-1", ticket.TicketContent{
 		Version: 1, Title: "original", Status: ticket.StatusClosed,
-		Type: "task", CreatedAt: "2026-01-01T00:00:00Z",
+		Type: ticket.TypeTask, CreatedAt: "2026-01-01T00:00:00Z",
 		UpdatedAt: "2026-01-02T00:00:00Z", ClosedAt: "2026-01-02T00:00:00Z",
 	})
 
 	// The echo arrives: event ID matches the pending entry.
 	echoContent := toContentMap(t, ticket.TicketContent{
 		Version: 1, Title: "original", Status: ticket.StatusClosed,
-		Type: "task", CreatedAt: "2026-01-01T00:00:00Z",
+		Type: ticket.TypeTask, CreatedAt: "2026-01-01T00:00:00Z",
 		UpdatedAt: "2026-01-02T00:00:00Z", ClosedAt: "2026-01-02T00:00:00Z",
 	})
 	echoEvent := messaging.Event{
@@ -548,7 +548,7 @@ func TestPendingEchoClearsOnEchoArrival(t *testing.T) {
 func TestPendingEchoAllowsEventsAfterEcho(t *testing.T) {
 	ts := newTestService()
 	state := newTrackedRoom(map[string]ticket.TicketContent{
-		"tkt-1": {Version: 1, Title: "original", Status: ticket.StatusOpen, Type: "task", CreatedAt: "2026-01-01T00:00:00Z", UpdatedAt: "2026-01-01T00:00:00Z"},
+		"tkt-1": {Version: 1, Title: "original", Status: ticket.StatusOpen, Type: ticket.TypeTask, CreatedAt: "2026-01-01T00:00:00Z", UpdatedAt: "2026-01-01T00:00:00Z"},
 	})
 	ts.rooms[testRoomID("!room:local")] = state
 
@@ -556,7 +556,7 @@ func TestPendingEchoAllowsEventsAfterEcho(t *testing.T) {
 	state.pendingEchoes["tkt-1"] = ref.MustParseEventID("$echo-event-id")
 	echoContent := toContentMap(t, ticket.TicketContent{
 		Version: 1, Title: "original", Status: ticket.StatusClosed,
-		Type: "task", CreatedAt: "2026-01-01T00:00:00Z",
+		Type: ticket.TypeTask, CreatedAt: "2026-01-01T00:00:00Z",
 		UpdatedAt: "2026-01-02T00:00:00Z", ClosedAt: "2026-01-02T00:00:00Z",
 	})
 	ts.indexTicketEvent(testRoomID("!room:local"), state, messaging.Event{
@@ -570,7 +570,7 @@ func TestPendingEchoAllowsEventsAfterEcho(t *testing.T) {
 	// after our close). With no pending echo, it should be applied.
 	reopenContent := toContentMap(t, ticket.TicketContent{
 		Version: 1, Title: "original", Status: ticket.StatusOpen,
-		Type: "task", CreatedAt: "2026-01-01T00:00:00Z",
+		Type: ticket.TypeTask, CreatedAt: "2026-01-01T00:00:00Z",
 		UpdatedAt: "2026-01-03T00:00:00Z",
 	})
 	reopenEvent := messaging.Event{
@@ -595,7 +595,7 @@ func TestPendingEchoAllowsEventsAfterEcho(t *testing.T) {
 func TestPendingEchoLatestWriteWins(t *testing.T) {
 	ts := newTestService()
 	state := newTrackedRoom(map[string]ticket.TicketContent{
-		"tkt-1": {Version: 1, Title: "original", Status: ticket.StatusOpen, Type: "task", CreatedAt: "2026-01-01T00:00:00Z", UpdatedAt: "2026-01-01T00:00:00Z"},
+		"tkt-1": {Version: 1, Title: "original", Status: ticket.StatusOpen, Type: ticket.TypeTask, CreatedAt: "2026-01-01T00:00:00Z", UpdatedAt: "2026-01-01T00:00:00Z"},
 	})
 	ts.rooms[testRoomID("!room:local")] = state
 
@@ -603,7 +603,7 @@ func TestPendingEchoLatestWriteWins(t *testing.T) {
 	state.pendingEchoes["tkt-1"] = ref.MustParseEventID("$claim-event-id")
 	state.index.Put("tkt-1", ticket.TicketContent{
 		Version: 1, Title: "original", Status: ticket.StatusInProgress,
-		Type: "task", Assignee: ref.MustParseUserID("@alice:bureau.local"),
+		Type: ticket.TypeTask, Assignee: ref.MustParseUserID("@alice:bureau.local"),
 		CreatedAt: "2026-01-01T00:00:00Z", UpdatedAt: "2026-01-02T00:00:00Z",
 	})
 
@@ -611,7 +611,7 @@ func TestPendingEchoLatestWriteWins(t *testing.T) {
 	state.pendingEchoes["tkt-1"] = ref.MustParseEventID("$close-event-id")
 	state.index.Put("tkt-1", ticket.TicketContent{
 		Version: 1, Title: "original", Status: ticket.StatusClosed,
-		Type: "task", CreatedAt: "2026-01-01T00:00:00Z",
+		Type: ticket.TypeTask, CreatedAt: "2026-01-01T00:00:00Z",
 		UpdatedAt: "2026-01-02T01:00:00Z", ClosedAt: "2026-01-02T01:00:00Z",
 	})
 
@@ -619,7 +619,7 @@ func TestPendingEchoLatestWriteWins(t *testing.T) {
 	// (we expect the close echo now), so it should be skipped.
 	claimEchoContent := toContentMap(t, ticket.TicketContent{
 		Version: 1, Title: "original", Status: ticket.StatusInProgress,
-		Type: "task", Assignee: ref.MustParseUserID("@alice:bureau.local"),
+		Type: ticket.TypeTask, Assignee: ref.MustParseUserID("@alice:bureau.local"),
 		CreatedAt: "2026-01-01T00:00:00Z", UpdatedAt: "2026-01-02T00:00:00Z",
 	})
 	indexed := ts.indexTicketEvent(testRoomID("!room:local"), state, messaging.Event{
@@ -641,7 +641,7 @@ func TestPendingEchoLatestWriteWins(t *testing.T) {
 	// The close echo arrives and should be applied.
 	closeEchoContent := toContentMap(t, ticket.TicketContent{
 		Version: 1, Title: "original", Status: ticket.StatusClosed,
-		Type: "task", CreatedAt: "2026-01-01T00:00:00Z",
+		Type: ticket.TypeTask, CreatedAt: "2026-01-01T00:00:00Z",
 		UpdatedAt: "2026-01-02T01:00:00Z", ClosedAt: "2026-01-02T01:00:00Z",
 	})
 	indexed = ts.indexTicketEvent(testRoomID("!room:local"), state, messaging.Event{
@@ -663,14 +663,14 @@ func TestPendingEchoLatestWriteWins(t *testing.T) {
 func TestPendingEchoNoEffectWithoutPending(t *testing.T) {
 	ts := newTestService()
 	state := newTrackedRoom(map[string]ticket.TicketContent{
-		"tkt-1": {Version: 1, Title: "original", Status: ticket.StatusOpen, Type: "task", CreatedAt: "2026-01-01T00:00:00Z", UpdatedAt: "2026-01-01T00:00:00Z"},
+		"tkt-1": {Version: 1, Title: "original", Status: ticket.StatusOpen, Type: ticket.TypeTask, CreatedAt: "2026-01-01T00:00:00Z", UpdatedAt: "2026-01-01T00:00:00Z"},
 	})
 	ts.rooms[testRoomID("!room:local")] = state
 
 	// No pending echo — events should be indexed normally.
 	newContent := toContentMap(t, ticket.TicketContent{
 		Version: 1, Title: "updated", Status: ticket.StatusInProgress,
-		Type: "task", Assignee: ref.MustParseUserID("@bob:bureau.local"),
+		Type: ticket.TypeTask, Assignee: ref.MustParseUserID("@bob:bureau.local"),
 		CreatedAt: "2026-01-01T00:00:00Z", UpdatedAt: "2026-01-02T00:00:00Z",
 	})
 
@@ -709,7 +709,7 @@ func TestPutWithEchoRecordsEcho(t *testing.T) {
 
 	content := ticket.TicketContent{
 		Version: 1, Title: "test", Status: ticket.StatusOpen,
-		Type: "task", CreatedAt: "2026-01-01T00:00:00Z",
+		Type: ticket.TypeTask, CreatedAt: "2026-01-01T00:00:00Z",
 		UpdatedAt: "2026-01-01T00:00:00Z",
 	}
 

@@ -383,7 +383,7 @@ func recurringRooms() map[ref.RoomID]*roomState {
 			Title:     "daily standup",
 			Status:    ticket.StatusOpen,
 			Priority:  2,
-			Type:      "task",
+			Type:      ticket.TypeTask,
 			CreatedBy: ref.MustParseUserID("@agent/creator:bureau.local"),
 			CreatedAt: "2026-01-10T00:00:00Z",
 			UpdatedAt: "2026-01-10T00:00:00Z",
@@ -405,7 +405,7 @@ func recurringRooms() map[ref.RoomID]*roomState {
 			Title:     "polling task",
 			Status:    ticket.StatusOpen,
 			Priority:  2,
-			Type:      "task",
+			Type:      ticket.TypeTask,
 			CreatedBy: ref.MustParseUserID("@agent/creator:bureau.local"),
 			CreatedAt: "2026-01-10T00:00:00Z",
 			UpdatedAt: "2026-01-10T00:00:00Z",
@@ -427,7 +427,7 @@ func recurringRooms() map[ref.RoomID]*roomState {
 			Title:     "limited recurring",
 			Status:    ticket.StatusOpen,
 			Priority:  2,
-			Type:      "task",
+			Type:      ticket.TypeTask,
 			CreatedBy: ref.MustParseUserID("@agent/creator:bureau.local"),
 			CreatedAt: "2026-01-10T00:00:00Z",
 			UpdatedAt: "2026-01-10T00:00:00Z",
@@ -450,7 +450,7 @@ func recurringRooms() map[ref.RoomID]*roomState {
 			Title:     "normal ticket",
 			Status:    ticket.StatusOpen,
 			Priority:  2,
-			Type:      "task",
+			Type:      ticket.TypeTask,
 			CreatedBy: ref.MustParseUserID("@agent/creator:bureau.local"),
 			CreatedAt: "2026-01-10T00:00:00Z",
 			UpdatedAt: "2026-01-10T00:00:00Z",
@@ -1095,8 +1095,8 @@ func TestHandleCreatePipelineTicket(t *testing.T) {
 	if !exists {
 		t.Fatalf("ticket %s not in index", result.ID)
 	}
-	if content.Type != "pipeline" {
-		t.Errorf("type: got %q, want 'pipeline'", content.Type)
+	if content.Type != ticket.TypePipeline {
+		t.Errorf("type: got %q, want %q", content.Type, ticket.TypePipeline)
 	}
 	if content.Pipeline == nil {
 		t.Fatal("pipeline content is nil")
@@ -1159,7 +1159,7 @@ func TestHandleUpdatePipelineProgress(t *testing.T) {
 			Title:    "deploy staging",
 			Status:   ticket.StatusInProgress,
 			Priority: 1,
-			Type:     "pipeline",
+			Type:     ticket.TypePipeline,
 			Pipeline: &ticket.PipelineExecutionContent{
 				PipelineRef: "pipelines/deploy",
 				TotalSteps:  3,
@@ -1214,7 +1214,7 @@ func TestHandleUpdateTypeFromPipelineAutoClearsPipelineContent(t *testing.T) {
 			Title:    "deploy staging",
 			Status:   ticket.StatusOpen,
 			Priority: 1,
-			Type:     "pipeline",
+			Type:     ticket.TypePipeline,
 			Pipeline: &ticket.PipelineExecutionContent{
 				PipelineRef: "pipelines/deploy",
 				TotalSteps:  3,
@@ -1242,8 +1242,8 @@ func TestHandleUpdateTypeFromPipelineAutoClearsPipelineContent(t *testing.T) {
 		t.Fatalf("Call: %v", err)
 	}
 
-	if result.Content.Type != "task" {
-		t.Errorf("type: got %q, want 'task'", result.Content.Type)
+	if result.Content.Type != ticket.TypeTask {
+		t.Errorf("type: got %q, want %q", result.Content.Type, ticket.TypeTask)
 	}
 	if result.Content.Pipeline != nil {
 		t.Error("pipeline content should be nil after changing type away from pipeline")
@@ -1273,7 +1273,7 @@ func TestHandleUpdateTypeToPipelineRequiresContent(t *testing.T) {
 // created.
 func TestHandleCreateAllowedTypesEnforced(t *testing.T) {
 	room := newTrackedRoom(nil)
-	room.config.AllowedTypes = []string{"task", "bug"}
+	room.config.AllowedTypes = []ticket.TicketType{ticket.TypeTask, ticket.TypeBug}
 	rooms := map[ref.RoomID]*roomState{
 		testRoomID("!room:bureau.local"): room,
 	}
@@ -1319,13 +1319,13 @@ func TestHandleUpdateAllowedTypesEnforced(t *testing.T) {
 			Title:     "some task",
 			Status:    ticket.StatusOpen,
 			Priority:  2,
-			Type:      "task",
+			Type:      ticket.TypeTask,
 			CreatedBy: ref.MustParseUserID("@agent/creator:bureau.local"),
 			CreatedAt: "2026-01-01T00:00:00Z",
 			UpdatedAt: "2026-01-01T00:00:00Z",
 		},
 	})
-	room.config.AllowedTypes = []string{"task", "bug"}
+	room.config.AllowedTypes = []ticket.TicketType{ticket.TypeTask, ticket.TypeBug}
 	rooms := map[ref.RoomID]*roomState{
 		testRoomID("!room:bureau.local"): room,
 	}
@@ -1521,7 +1521,7 @@ func TestHandleAddNoteWithExistingNotes(t *testing.T) {
 			Title:    "ticket with notes",
 			Status:   ticket.StatusOpen,
 			Priority: 2,
-			Type:     "task",
+			Type:     ticket.TypeTask,
 			Notes: []ticket.TicketNote{
 				{
 					ID:        "n-1",
@@ -1622,7 +1622,7 @@ func TestHandleAddNoteMissingTicket(t *testing.T) {
 // disallowed type, the entire batch is rejected.
 func TestHandleBatchCreateAllowedTypesEnforced(t *testing.T) {
 	room := newTrackedRoom(nil)
-	room.config.AllowedTypes = []string{"task"}
+	room.config.AllowedTypes = []ticket.TicketType{ticket.TypeTask}
 	rooms := map[ref.RoomID]*roomState{
 		testRoomID("!room:bureau.local"): room,
 	}
@@ -1994,7 +1994,7 @@ func TestHandleSetDispositionNotReviewer(t *testing.T) {
 			Title:    "review without tester",
 			Status:   ticket.StatusReview,
 			Priority: 2,
-			Type:     "task",
+			Type:     ticket.TypeTask,
 			Review: &ticket.TicketReview{
 				Reviewers: []ticket.ReviewerEntry{
 					{

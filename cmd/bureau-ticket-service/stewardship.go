@@ -39,7 +39,7 @@ type stewardshipResult struct {
 //
 // Returns an empty result if affects is empty, no declarations match,
 // or no matching declarations' GateTypes include the ticket type.
-func (ts *TicketService) resolveStewardshipGates(affects []string, ticketType string, priority int) stewardshipResult {
+func (ts *TicketService) resolveStewardshipGates(affects []string, ticketType ticket.TicketType, priority int) stewardshipResult {
 	if len(affects) == 0 {
 		return stewardshipResult{}
 	}
@@ -384,7 +384,7 @@ func mergeStewardshipReview(
 // --- Helpers ---
 
 // typeInList reports whether the given type name appears in the list.
-func typeInList(typeName string, list []string) bool {
+func typeInList(typeName ticket.TicketType, list []ticket.TicketType) bool {
 	for _, entry := range list {
 		if entry == typeName {
 			return true

@@ -44,8 +44,8 @@ func TestBeadsToTicketContent(t *testing.T) {
 	if content.Priority != 1 {
 		t.Errorf("Priority = %d, want 1", content.Priority)
 	}
-	if content.Type != "bug" {
-		t.Errorf("Type = %q, want %q", content.Type, "bug")
+	if content.Type != TypeBug {
+		t.Errorf("Type = %q, want %q", content.Type, TypeBug)
 	}
 	if len(content.Labels) != 2 || content.Labels[0] != "infra" || content.Labels[1] != "security" {
 		t.Errorf("Labels = %v, want [infra security]", content.Labels)
@@ -88,7 +88,7 @@ func TestRenameBeadsIDs(t *testing.T) {
 		Body:      "This is blocked by bd-002 and related to bd-003.\nSee bd-004 for context.",
 		Status:    StatusOpen,
 		Priority:  1,
-		Type:      "bug",
+		Type:      TypeBug,
 		BlockedBy: []string{"bd-002", "bd-005"},
 		Parent:    "bd-010",
 		Notes: []TicketNote{
@@ -124,7 +124,7 @@ func TestRenameBeadsIDs_DoesNotMutateOriginal(t *testing.T) {
 		Title:     "Original",
 		Body:      "See bd-001",
 		Status:    StatusOpen,
-		Type:      "task",
+		Type:      TypeTask,
 		BlockedBy: []string{"bd-002"},
 		Parent:    "bd-003",
 	}
@@ -157,7 +157,7 @@ func TestRenameBeadsIDs_CustomPrefix(t *testing.T) {
 		Title:     "Custom prefix proj-abc",
 		Body:      "See proj-def",
 		Status:    StatusOpen,
-		Type:      "task",
+		Type:      TypeTask,
 		BlockedBy: []string{"proj-ghi"},
 	}
 
@@ -183,7 +183,7 @@ func TestRenameBeadsIDs_NoMatchingPrefix(t *testing.T) {
 		Title:     "No matching refs",
 		Body:      "This has tkt-001 and no beads refs",
 		Status:    StatusOpen,
-		Type:      "task",
+		Type:      TypeTask,
 		BlockedBy: []string{"tkt-002"},
 		Parent:    "tkt-003",
 	}

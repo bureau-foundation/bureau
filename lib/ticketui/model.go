@@ -1313,7 +1313,7 @@ func (model *Model) buildGroupedItems() []ListItem {
 		if entry.Content.Parent == "" {
 			// No parent — check if this entry IS an epic with children.
 			// Epics themselves don't appear as rows; they appear as headers.
-			if entry.Content.Type == "epic" {
+			if entry.Content.Type == ticket.TypeEpic {
 				continue
 			}
 			ungrouped = append(ungrouped, entry)

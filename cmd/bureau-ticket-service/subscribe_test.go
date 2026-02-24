@@ -255,7 +255,7 @@ func TestPutWithEchoNotifiesSubscribers(t *testing.T) {
 
 	content := ticket.TicketContent{
 		Version: 1, Title: "test", Status: ticket.StatusOpen,
-		Type: "task", CreatedAt: "2026-01-01T00:00:00Z",
+		Type: ticket.TypeTask, CreatedAt: "2026-01-01T00:00:00Z",
 		UpdatedAt: "2026-01-01T00:00:00Z",
 	}
 	err := ts.putWithEcho(context.Background(), roomID, state, "tkt-1", content)
@@ -290,7 +290,7 @@ func TestIndexTicketEventNotifiesOnPut(t *testing.T) {
 
 	contentMap := toContentMap(t, ticket.TicketContent{
 		Version: 1, Title: "synced ticket", Status: ticket.StatusOpen,
-		Type: "task", CreatedAt: "2026-01-01T00:00:00Z",
+		Type: ticket.TypeTask, CreatedAt: "2026-01-01T00:00:00Z",
 		UpdatedAt: "2026-01-01T00:00:00Z",
 	})
 
@@ -454,23 +454,23 @@ func TestSubscribeHandlerPhasedSnapshot(t *testing.T) {
 	state := newTrackedRoom(map[string]ticket.TicketContent{
 		"tkt-open-1": {
 			Version: 1, Title: "open blocked", Status: ticket.StatusOpen,
-			Type: "task", BlockedBy: []string{"tkt-closed-dep"},
+			Type: ticket.TypeTask, BlockedBy: []string{"tkt-closed-dep"},
 			CreatedAt: "2026-01-01T00:00:00Z", UpdatedAt: "2026-01-01T00:00:00Z",
 		},
 		"tkt-open-2": {
 			Version: 1, Title: "open unblocked", Status: ticket.StatusOpen,
-			Type:      "task",
+			Type:      ticket.TypeTask,
 			CreatedAt: "2026-01-02T00:00:00Z", UpdatedAt: "2026-01-02T00:00:00Z",
 		},
 		"tkt-closed-dep": {
 			Version: 1, Title: "closed dep", Status: ticket.StatusClosed,
-			Type:      "task",
+			Type:      ticket.TypeTask,
 			CreatedAt: "2026-01-01T00:00:00Z", UpdatedAt: "2026-01-03T00:00:00Z",
 			ClosedAt: "2026-01-03T00:00:00Z",
 		},
 		"tkt-closed-old": {
 			Version: 1, Title: "closed old", Status: ticket.StatusClosed,
-			Type:      "task",
+			Type:      ticket.TypeTask,
 			CreatedAt: "2025-12-01T00:00:00Z", UpdatedAt: "2025-12-15T00:00:00Z",
 			ClosedAt: "2025-12-15T00:00:00Z",
 		},
@@ -569,7 +569,7 @@ func TestSubscribeHandlerLiveEvents(t *testing.T) {
 	roomID := testRoomID("!room:local")
 
 	state := newTrackedRoom(map[string]ticket.TicketContent{
-		"tkt-1": {Version: 1, Title: "existing", Status: ticket.StatusOpen, Type: "task",
+		"tkt-1": {Version: 1, Title: "existing", Status: ticket.StatusOpen, Type: ticket.TypeTask,
 			CreatedAt: "2026-01-01T00:00:00Z", UpdatedAt: "2026-01-01T00:00:00Z"},
 	})
 	ts.rooms[roomID] = state
@@ -597,7 +597,7 @@ func TestSubscribeHandlerLiveEvents(t *testing.T) {
 	// was registered by handleSubscribe, so notifySubscribers will
 	// reach it.
 	newContent := ticket.TicketContent{
-		Version: 1, Title: "updated", Status: ticket.StatusInProgress, Type: "task",
+		Version: 1, Title: "updated", Status: ticket.StatusInProgress, Type: ticket.TypeTask,
 		Assignee:  ref.MustParseUserID("@alice:bureau.local"),
 		CreatedAt: "2026-01-01T00:00:00Z", UpdatedAt: "2026-01-02T00:00:00Z",
 	}
@@ -690,7 +690,7 @@ func TestSubscribeHandlerResync(t *testing.T) {
 	roomID := testRoomID("!room:local")
 
 	state := newTrackedRoom(map[string]ticket.TicketContent{
-		"tkt-1": {Version: 1, Title: "ticket one", Status: ticket.StatusOpen, Type: "task",
+		"tkt-1": {Version: 1, Title: "ticket one", Status: ticket.StatusOpen, Type: ticket.TypeTask,
 			CreatedAt: "2026-01-01T00:00:00Z", UpdatedAt: "2026-01-01T00:00:00Z"},
 	})
 	ts.rooms[roomID] = state
@@ -726,7 +726,7 @@ func TestSubscribeHandlerResync(t *testing.T) {
 
 	// Add a new ticket to the index so the resync snapshot differs.
 	state.index.Put("tkt-2", ticket.TicketContent{
-		Version: 1, Title: "ticket two", Status: ticket.StatusOpen, Type: "task",
+		Version: 1, Title: "ticket two", Status: ticket.StatusOpen, Type: ticket.TypeTask,
 		CreatedAt: "2026-01-02T00:00:00Z", UpdatedAt: "2026-01-02T00:00:00Z",
 	})
 
@@ -811,31 +811,31 @@ func TestSubscribeHandlerCleanup(t *testing.T) {
 func TestCollectSnapshotPartitioning(t *testing.T) {
 	state := newTrackedRoom(map[string]ticket.TicketContent{
 		"epic-1": {
-			Version: 1, Title: "epic", Status: ticket.StatusOpen, Type: "epic",
+			Version: 1, Title: "epic", Status: ticket.StatusOpen, Type: ticket.TypeEpic,
 			CreatedAt: "2026-01-01T00:00:00Z", UpdatedAt: "2026-01-01T00:00:00Z",
 			BlockedBy: []string{"dep-a", "dep-b"},
 		},
 		"task-1": {
-			Version: 1, Title: "task", Status: ticket.StatusInProgress, Type: "task",
+			Version: 1, Title: "task", Status: ticket.StatusInProgress, Type: ticket.TypeTask,
 			CreatedAt: "2026-01-02T00:00:00Z", UpdatedAt: "2026-01-02T00:00:00Z",
 		},
 		"dep-a": {
-			Version: 1, Title: "dep a", Status: ticket.StatusClosed, Type: "task",
+			Version: 1, Title: "dep a", Status: ticket.StatusClosed, Type: ticket.TypeTask,
 			CreatedAt: "2026-01-01T00:00:00Z", UpdatedAt: "2026-01-03T00:00:00Z",
 			ClosedAt: "2026-01-03T00:00:00Z",
 		},
 		"dep-b": {
-			Version: 1, Title: "dep b", Status: ticket.StatusClosed, Type: "task",
+			Version: 1, Title: "dep b", Status: ticket.StatusClosed, Type: ticket.TypeTask,
 			CreatedAt: "2026-01-01T00:00:00Z", UpdatedAt: "2026-01-04T00:00:00Z",
 			ClosedAt: "2026-01-04T00:00:00Z",
 		},
 		"old-closed-1": {
-			Version: 1, Title: "old closed 1", Status: ticket.StatusClosed, Type: "task",
+			Version: 1, Title: "old closed 1", Status: ticket.StatusClosed, Type: ticket.TypeTask,
 			CreatedAt: "2025-12-01T00:00:00Z", UpdatedAt: "2025-12-10T00:00:00Z",
 			ClosedAt: "2025-12-10T00:00:00Z",
 		},
 		"old-closed-2": {
-			Version: 1, Title: "old closed 2", Status: ticket.StatusClosed, Type: "task",
+			Version: 1, Title: "old closed 2", Status: ticket.StatusClosed, Type: ticket.TypeTask,
 			CreatedAt: "2025-12-01T00:00:00Z", UpdatedAt: "2025-12-20T00:00:00Z",
 			ClosedAt: "2025-12-20T00:00:00Z",
 		},

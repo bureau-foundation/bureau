@@ -70,7 +70,7 @@ func TestProcessFramesPut(t *testing.T) {
 
 	content := ticket.TicketContent{
 		Version: 1, Title: "test ticket", Status: ticket.StatusOpen,
-		Type: "task", CreatedAt: "2026-01-01T00:00:00Z",
+		Type: ticket.TypeTask, CreatedAt: "2026-01-01T00:00:00Z",
 		UpdatedAt: "2026-01-01T00:00:00Z",
 	}
 	writeFrame(t, serverConn, serviceSubscribeFrame{

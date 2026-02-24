@@ -157,7 +157,7 @@ func TestBuildIndependentGate(t *testing.T) {
 		Content: stewardship.StewardshipContent{
 			Version:          1,
 			ResourcePatterns: []string{"fleet/gpu/**"},
-			GateTypes:        []string{"task", "bug"},
+			GateTypes:        []ticket.TicketType{ticket.TypeTask, ticket.TypeBug},
 			Tiers: []stewardship.StewardshipTier{
 				{Principals: []string{"iree/amdgpu/*:bureau.local"}, Threshold: threshold},
 				{Principals: []string{"bureau/admin:bureau.local"}},
@@ -214,7 +214,7 @@ func TestBuildIndependentGateWithTierOffset(t *testing.T) {
 		Content: stewardship.StewardshipContent{
 			Version:          1,
 			ResourcePatterns: []string{"workspace/lib/**"},
-			GateTypes:        []string{"feature"},
+			GateTypes:        []ticket.TicketType{ticket.TypeFeature},
 			Tiers: []stewardship.StewardshipTier{
 				{Principals: []string{"dev/*:bureau.local"}},
 			},
@@ -263,7 +263,7 @@ func TestBuildCooperativeGate(t *testing.T) {
 			Content: stewardship.StewardshipContent{
 				Version:          1,
 				ResourcePatterns: []string{"shared/**"},
-				GateTypes:        []string{"task"},
+				GateTypes:        []ticket.TicketType{ticket.TypeTask},
 				OverlapPolicy:    "cooperative",
 				Tiers: []stewardship.StewardshipTier{
 					{Principals: []string{"team/*:bureau.local"}, Threshold: threshold2},
@@ -276,7 +276,7 @@ func TestBuildCooperativeGate(t *testing.T) {
 			Content: stewardship.StewardshipContent{
 				Version:          1,
 				ResourcePatterns: []string{"shared/**"},
-				GateTypes:        []string{"task"},
+				GateTypes:        []ticket.TicketType{ticket.TypeTask},
 				OverlapPolicy:    "cooperative",
 				Tiers: []stewardship.StewardshipTier{
 					{Principals: []string{"team/*:bureau.local"}, Threshold: threshold1},
@@ -323,7 +323,7 @@ func TestBuildCooperativeGateDeduplicatesSameUser(t *testing.T) {
 			Content: stewardship.StewardshipContent{
 				Version:          1,
 				ResourcePatterns: []string{"res/**"},
-				GateTypes:        []string{"task"},
+				GateTypes:        []ticket.TicketType{ticket.TypeTask},
 				OverlapPolicy:    "cooperative",
 				Tiers: []stewardship.StewardshipTier{
 					{Principals: []string{"shared/*:bureau.local"}},
@@ -336,7 +336,7 @@ func TestBuildCooperativeGateDeduplicatesSameUser(t *testing.T) {
 			Content: stewardship.StewardshipContent{
 				Version:          1,
 				ResourcePatterns: []string{"res/**"},
-				GateTypes:        []string{"task"},
+				GateTypes:        []ticket.TicketType{ticket.TypeTask},
 				OverlapPolicy:    "cooperative",
 				Tiers: []stewardship.StewardshipTier{
 					{Principals: []string{"shared/*:bureau.local"}},
@@ -367,7 +367,7 @@ func TestBuildCooperativeGateNilThresholdWins(t *testing.T) {
 			Content: stewardship.StewardshipContent{
 				Version:          1,
 				ResourcePatterns: []string{"res/**"},
-				GateTypes:        []string{"task"},
+				GateTypes:        []ticket.TicketType{ticket.TypeTask},
 				OverlapPolicy:    "cooperative",
 				Tiers: []stewardship.StewardshipTier{
 					{Principals: []string{"dev/*:bureau.local"}, Threshold: threshold1},
@@ -380,7 +380,7 @@ func TestBuildCooperativeGateNilThresholdWins(t *testing.T) {
 			Content: stewardship.StewardshipContent{
 				Version:          1,
 				ResourcePatterns: []string{"res/**"},
-				GateTypes:        []string{"task"},
+				GateTypes:        []ticket.TicketType{ticket.TypeTask},
 				OverlapPolicy:    "cooperative",
 				Tiers: []stewardship.StewardshipTier{
 					// Nil threshold means "all must approve" — stricter.
@@ -413,20 +413,20 @@ func TestResolveStewardshipGatesFiltersByGateTypes(t *testing.T) {
 	ts.stewardshipIndex.Put(roomID, "fleet/gpu", stewardship.StewardshipContent{
 		Version:          1,
 		ResourcePatterns: []string{"fleet/gpu/**"},
-		GateTypes:        []string{"bug"},
+		GateTypes:        []ticket.TicketType{ticket.TypeBug},
 		Tiers: []stewardship.StewardshipTier{
 			{Principals: []string{"dev/*:bureau.local"}},
 		},
 	})
 
 	// Ticket type "task" is not in GateTypes ["bug"].
-	result := ts.resolveStewardshipGates([]string{"fleet/gpu/a100"}, "task", 2)
+	result := ts.resolveStewardshipGates([]string{"fleet/gpu/a100"}, ticket.TypeTask, 2)
 	if len(result.gates) != 0 {
 		t.Fatalf("expected 0 gates for non-matching ticket type, got %d", len(result.gates))
 	}
 
 	// Ticket type "bug" matches.
-	result = ts.resolveStewardshipGates([]string{"fleet/gpu/a100"}, "bug", 2)
+	result = ts.resolveStewardshipGates([]string{"fleet/gpu/a100"}, ticket.TypeBug, 2)
 	if len(result.gates) != 1 {
 		t.Fatalf("expected 1 gate for matching ticket type, got %d", len(result.gates))
 	}
@@ -443,14 +443,14 @@ func TestResolveStewardshipGatesSkipsNotifyTypes(t *testing.T) {
 	ts.stewardshipIndex.Put(roomID, "fleet/gpu", stewardship.StewardshipContent{
 		Version:          1,
 		ResourcePatterns: []string{"fleet/gpu/**"},
-		NotifyTypes:      []string{"task"},
+		NotifyTypes:      []ticket.TicketType{ticket.TypeTask},
 		Tiers: []stewardship.StewardshipTier{
 			{Principals: []string{"dev/*:bureau.local"}},
 		},
 	})
 
 	// "task" is in NotifyTypes, not GateTypes — no gate produced.
-	result := ts.resolveStewardshipGates([]string{"fleet/gpu/a100"}, "task", 2)
+	result := ts.resolveStewardshipGates([]string{"fleet/gpu/a100"}, ticket.TypeTask, 2)
 	if len(result.gates) != 0 {
 		t.Fatalf("expected 0 gates for notify-only type, got %d", len(result.gates))
 	}
@@ -458,7 +458,7 @@ func TestResolveStewardshipGatesSkipsNotifyTypes(t *testing.T) {
 
 func TestResolveStewardshipGatesEmptyAffects(t *testing.T) {
 	ts := newTestService()
-	result := ts.resolveStewardshipGates(nil, "task", 2)
+	result := ts.resolveStewardshipGates(nil, ticket.TypeTask, 2)
 	if len(result.gates) != 0 {
 		t.Fatalf("expected 0 gates for nil affects, got %d", len(result.gates))
 	}
@@ -471,14 +471,14 @@ func TestResolveStewardshipGatesNoMatchingDeclarations(t *testing.T) {
 	ts.stewardshipIndex.Put(roomID, "fleet/gpu", stewardship.StewardshipContent{
 		Version:          1,
 		ResourcePatterns: []string{"fleet/gpu/**"},
-		GateTypes:        []string{"task"},
+		GateTypes:        []ticket.TicketType{ticket.TypeTask},
 		Tiers: []stewardship.StewardshipTier{
 			{Principals: []string{"dev/*:bureau.local"}},
 		},
 	})
 
 	// Affects don't match any ResourcePatterns.
-	result := ts.resolveStewardshipGates([]string{"workspace/lib/foo.go"}, "task", 2)
+	result := ts.resolveStewardshipGates([]string{"workspace/lib/foo.go"}, ticket.TypeTask, 2)
 	if len(result.gates) != 0 {
 		t.Fatalf("expected 0 gates for non-matching affects, got %d", len(result.gates))
 	}
@@ -504,7 +504,7 @@ func TestResolveStewardshipGatesMixedOverlapPolicies(t *testing.T) {
 	ts.stewardshipIndex.Put(roomA, "shared/alpha", stewardship.StewardshipContent{
 		Version:          1,
 		ResourcePatterns: []string{"shared/**"},
-		GateTypes:        []string{"task"},
+		GateTypes:        []ticket.TicketType{ticket.TypeTask},
 		OverlapPolicy:    "independent",
 		Tiers: []stewardship.StewardshipTier{
 			{Principals: []string{"team/alpha:bureau.local"}},
@@ -515,7 +515,7 @@ func TestResolveStewardshipGatesMixedOverlapPolicies(t *testing.T) {
 	ts.stewardshipIndex.Put(roomB, "shared/beta", stewardship.StewardshipContent{
 		Version:          1,
 		ResourcePatterns: []string{"shared/**"},
-		GateTypes:        []string{"task"},
+		GateTypes:        []ticket.TicketType{ticket.TypeTask},
 		OverlapPolicy:    "cooperative",
 		Tiers: []stewardship.StewardshipTier{
 			{Principals: []string{"team/beta:bureau.local"}},
@@ -524,14 +524,14 @@ func TestResolveStewardshipGatesMixedOverlapPolicies(t *testing.T) {
 	ts.stewardshipIndex.Put(roomC, "shared/gamma", stewardship.StewardshipContent{
 		Version:          1,
 		ResourcePatterns: []string{"shared/**"},
-		GateTypes:        []string{"task"},
+		GateTypes:        []ticket.TicketType{ticket.TypeTask},
 		OverlapPolicy:    "cooperative",
 		Tiers: []stewardship.StewardshipTier{
 			{Principals: []string{"team/gamma:bureau.local"}},
 		},
 	})
 
-	result := ts.resolveStewardshipGates([]string{"shared/resource"}, "task", 2)
+	result := ts.resolveStewardshipGates([]string{"shared/resource"}, ticket.TypeTask, 2)
 
 	// Should produce 2 gates: one independent + one cooperative.
 	if len(result.gates) != 2 {
@@ -568,13 +568,13 @@ func TestResolveStewardshipGatesSkipsDeclarationWithNoMembers(t *testing.T) {
 	ts.stewardshipIndex.Put(roomID, "fleet/gpu", stewardship.StewardshipContent{
 		Version:          1,
 		ResourcePatterns: []string{"fleet/gpu/**"},
-		GateTypes:        []string{"task"},
+		GateTypes:        []ticket.TicketType{ticket.TypeTask},
 		Tiers: []stewardship.StewardshipTier{
 			{Principals: []string{"iree/**:bureau.local"}},
 		},
 	})
 
-	result := ts.resolveStewardshipGates([]string{"fleet/gpu/a100"}, "task", 2)
+	result := ts.resolveStewardshipGates([]string{"fleet/gpu/a100"}, ticket.TypeTask, 2)
 	if len(result.gates) != 0 {
 		t.Fatalf("expected 0 gates when no members match, got %d", len(result.gates))
 	}
@@ -747,7 +747,7 @@ func TestHandleCreateWithStewardshipAffects(t *testing.T) {
 	env.service.stewardshipIndex.Put(stewardRoomID, "fleet/gpu", stewardship.StewardshipContent{
 		Version:          1,
 		ResourcePatterns: []string{"fleet/gpu/**"},
-		GateTypes:        []string{"feature"},
+		GateTypes:        []ticket.TicketType{ticket.TypeFeature},
 		Tiers: []stewardship.StewardshipTier{
 			{Principals: []string{"dev/*:bureau.local"}},
 		},
@@ -852,7 +852,7 @@ func TestHandleUpdateChangesAffects(t *testing.T) {
 	env.service.stewardshipIndex.Put(stewardRoomID, "fleet/gpu", stewardship.StewardshipContent{
 		Version:          1,
 		ResourcePatterns: []string{"fleet/gpu/**"},
-		GateTypes:        []string{"task"},
+		GateTypes:        []ticket.TicketType{ticket.TypeTask},
 		Tiers: []stewardship.StewardshipTier{
 			{Principals: []string{"dev/*:bureau.local"}},
 		},
@@ -901,7 +901,7 @@ func TestHandleUpdateClearsAffects(t *testing.T) {
 	env.service.stewardshipIndex.Put(stewardRoomID, "fleet/gpu", stewardship.StewardshipContent{
 		Version:          1,
 		ResourcePatterns: []string{"fleet/gpu/**"},
-		GateTypes:        []string{"feature"},
+		GateTypes:        []ticket.TicketType{ticket.TypeFeature},
 		Tiers: []stewardship.StewardshipTier{
 			{Principals: []string{"dev/*:bureau.local"}},
 		},
@@ -950,7 +950,7 @@ func TestHandleStewardshipList(t *testing.T) {
 	env.service.stewardshipIndex.Put(stewardRoomID, "fleet/gpu", stewardship.StewardshipContent{
 		Version:          1,
 		ResourcePatterns: []string{"fleet/gpu/**"},
-		GateTypes:        []string{"task"},
+		GateTypes:        []ticket.TicketType{ticket.TypeTask},
 		Description:      "GPU fleet stewardship",
 		Tiers: []stewardship.StewardshipTier{
 			{Principals: []string{"dev/*:bureau.local"}},
@@ -959,7 +959,7 @@ func TestHandleStewardshipList(t *testing.T) {
 	env.service.stewardshipIndex.Put(stewardRoomID, "workspace/lib", stewardship.StewardshipContent{
 		Version:          1,
 		ResourcePatterns: []string{"workspace/lib/**"},
-		GateTypes:        []string{"feature"},
+		GateTypes:        []ticket.TicketType{ticket.TypeFeature},
 		Tiers: []stewardship.StewardshipTier{
 			{Principals: []string{"lib/*:bureau.local"}},
 		},
@@ -996,13 +996,13 @@ func TestHandleStewardshipListByRoom(t *testing.T) {
 	env.service.stewardshipIndex.Put(roomA, "res/a", stewardship.StewardshipContent{
 		Version:          1,
 		ResourcePatterns: []string{"res/a/**"},
-		GateTypes:        []string{"task"},
+		GateTypes:        []ticket.TicketType{ticket.TypeTask},
 		Tiers:            []stewardship.StewardshipTier{{Principals: []string{"dev/*:bureau.local"}}},
 	})
 	env.service.stewardshipIndex.Put(roomB, "res/b", stewardship.StewardshipContent{
 		Version:          1,
 		ResourcePatterns: []string{"res/b/**"},
-		GateTypes:        []string{"task"},
+		GateTypes:        []ticket.TicketType{ticket.TypeTask},
 		Tiers:            []stewardship.StewardshipTier{{Principals: []string{"dev/*:bureau.local"}}},
 	})
 
@@ -1050,7 +1050,7 @@ func TestHandleStewardshipResolve(t *testing.T) {
 	env.service.stewardshipIndex.Put(stewardRoomID, "fleet/gpu", stewardship.StewardshipContent{
 		Version:          1,
 		ResourcePatterns: []string{"fleet/gpu/**"},
-		GateTypes:        []string{"task"},
+		GateTypes:        []ticket.TicketType{ticket.TypeTask},
 		Tiers: []stewardship.StewardshipTier{
 			{Principals: []string{"dev/*:bureau.local"}},
 		},
@@ -1438,7 +1438,7 @@ func TestResolveStewardshipGatesP0Bypass(t *testing.T) {
 	ts.stewardshipIndex.Put(stewardRoomID, "fleet/gpu", stewardship.StewardshipContent{
 		Version:          1,
 		ResourcePatterns: []string{"fleet/gpu/**"},
-		GateTypes:        []string{"task"},
+		GateTypes:        []ticket.TicketType{ticket.TypeTask},
 		Tiers: []stewardship.StewardshipTier{
 			{Principals: []string{"dev/*:bureau.local"}, Escalation: "immediate"},
 			{Principals: []string{"dev/*:bureau.local"}, Escalation: "last_pending"},
@@ -1446,7 +1446,7 @@ func TestResolveStewardshipGatesP0Bypass(t *testing.T) {
 	})
 
 	// P2: escalation preserved.
-	result := ts.resolveStewardshipGates([]string{"fleet/gpu/a100"}, "task", 2)
+	result := ts.resolveStewardshipGates([]string{"fleet/gpu/a100"}, ticket.TypeTask, 2)
 	if len(result.thresholds) != 2 {
 		t.Fatalf("expected 2 thresholds, got %d", len(result.thresholds))
 	}
@@ -1455,7 +1455,7 @@ func TestResolveStewardshipGatesP0Bypass(t *testing.T) {
 	}
 
 	// P0: all escalation overridden to "immediate".
-	result = ts.resolveStewardshipGates([]string{"fleet/gpu/a100"}, "task", 0)
+	result = ts.resolveStewardshipGates([]string{"fleet/gpu/a100"}, ticket.TypeTask, 0)
 	if len(result.thresholds) != 2 {
 		t.Fatalf("expected 2 thresholds, got %d", len(result.thresholds))
 	}
@@ -1545,7 +1545,7 @@ func TestSetDispositionTriggersEscalation(t *testing.T) {
 		Version:   ticket.TicketContentVersion,
 		Title:     "GPU fleet change",
 		Status:    ticket.StatusReview,
-		Type:      "task",
+		Type:      ticket.TypeTask,
 		Priority:  2,
 		CreatedBy: ref.MustParseUserID("@agent/creator:bureau.local"),
 		CreatedAt: "2026-01-15T12:00:00Z",
@@ -1608,7 +1608,7 @@ func TestSetDispositionNoEscalationWhenNotLastPending(t *testing.T) {
 		Version:   ticket.TicketContentVersion,
 		Title:     "Simple review",
 		Status:    ticket.StatusReview,
-		Type:      "task",
+		Type:      ticket.TypeTask,
 		Priority:  2,
 		CreatedBy: ref.MustParseUserID("@agent/creator:bureau.local"),
 		CreatedAt: "2026-01-15T12:00:00Z",

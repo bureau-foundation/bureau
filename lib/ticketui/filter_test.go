@@ -85,7 +85,7 @@ func TestFilterMatchesType(t *testing.T) {
 		ID: "tkt-001",
 		Content: ticket.TicketContent{
 			Title: "Fix connection pooling leak",
-			Type:  "bug",
+			Type:  ticket.TypeBug,
 		},
 	}
 
@@ -118,7 +118,7 @@ func TestFilterNoMatch(t *testing.T) {
 		ID: "tkt-001",
 		Content: ticket.TicketContent{
 			Title: "Fix connection pooling leak",
-			Type:  "bug",
+			Type:  ticket.TypeBug,
 		},
 	}
 
@@ -154,8 +154,8 @@ func TestFilterApply(t *testing.T) {
 	}
 
 	for _, entry := range result {
-		if entry.Content.Type != "bug" {
-			t.Errorf("filtered entry %s has type %q, expected 'bug'", entry.ID, entry.Content.Type)
+		if entry.Content.Type != ticket.TypeBug {
+			t.Errorf("filtered entry %s has type %q, expected %q", entry.ID, entry.Content.Type, ticket.TypeBug)
 		}
 	}
 }

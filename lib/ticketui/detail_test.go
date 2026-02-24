@@ -328,7 +328,7 @@ func TestRenderBodyIncludesAffects(t *testing.T) {
 		Version: 1,
 		Title:   "Review ticket",
 		Status:  ticket.StatusReview,
-		Type:    "task",
+		Type:    ticket.TypeTask,
 		Affects: []string{"fleet/gpu/a100", "workspace/deploy"},
 	})
 	source = NewIndexSource(index)
@@ -340,7 +340,7 @@ func TestRenderBodyIncludesAffects(t *testing.T) {
 			Version: 1,
 			Title:   "Review ticket",
 			Status:  ticket.StatusReview,
-			Type:    "task",
+			Type:    ticket.TypeTask,
 			Affects: []string{"fleet/gpu/a100", "workspace/deploy"},
 		},
 	}
@@ -363,7 +363,7 @@ func TestRenderBodyNoAffectsWhenEmpty(t *testing.T) {
 		Version: 1,
 		Title:   "Plain ticket",
 		Status:  ticket.StatusOpen,
-		Type:    "task",
+		Type:    ticket.TypeTask,
 	})
 	source := NewIndexSource(index)
 
@@ -374,7 +374,7 @@ func TestRenderBodyNoAffectsWhenEmpty(t *testing.T) {
 			Version: 1,
 			Title:   "Plain ticket",
 			Status:  ticket.StatusOpen,
-			Type:    "task",
+			Type:    ticket.TypeTask,
 		},
 	}
 
@@ -404,7 +404,7 @@ func TestCanReviewFileMode(t *testing.T) {
 		Version: 1,
 		Title:   "Review ticket",
 		Status:  ticket.StatusReview,
-		Type:    "task",
+		Type:    ticket.TypeTask,
 		Review: &ticket.TicketReview{
 			Reviewers: []ticket.ReviewerEntry{
 				{UserID: ref.MustParseUserID("@alice:bureau.local"), Disposition: "pending"},

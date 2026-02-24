@@ -271,8 +271,8 @@ func TestReadyWithSatisfiedGates(t *testing.T) {
 
 	gated := makeTicket("Gated ticket")
 	gated.Gates = []ticket.TicketGate{
-		{ID: "g1", Type: "human", Status: "satisfied"},
-		{ID: "g2", Type: "pipeline", Status: "satisfied", PipelineRef: "ci/test"},
+		{ID: "g1", Type: ticket.GateHuman, Status: ticket.GateSatisfied},
+		{ID: "g2", Type: ticket.GatePipeline, Status: ticket.GateSatisfied, PipelineRef: "ci/test"},
 	}
 	idx.Put("tkt-gated", gated)
 
@@ -287,8 +287,8 @@ func TestReadyWithPendingGate(t *testing.T) {
 
 	gated := makeTicket("Gated ticket")
 	gated.Gates = []ticket.TicketGate{
-		{ID: "g1", Type: "human", Status: "satisfied"},
-		{ID: "g2", Type: "pipeline", Status: "pending", PipelineRef: "ci/test"},
+		{ID: "g1", Type: ticket.GateHuman, Status: ticket.GateSatisfied},
+		{ID: "g2", Type: ticket.GatePipeline, Status: ticket.GatePending, PipelineRef: "ci/test"},
 	}
 	idx.Put("tkt-gated", gated)
 
@@ -382,7 +382,7 @@ func TestBlockedWithPendingGate(t *testing.T) {
 
 	gated := makeTicket("Gated")
 	gated.Gates = []ticket.TicketGate{
-		{ID: "g1", Type: "timer", Status: "pending", Duration: "24h"},
+		{ID: "g1", Type: ticket.GateTimer, Status: ticket.GatePending, Duration: "24h"},
 	}
 	idx.Put("tkt-gated", gated)
 
@@ -428,7 +428,7 @@ func TestReadyAndBlockedPartitionOpen(t *testing.T) {
 
 	// Open, pending gate → blocked.
 	gated := makeTicket("Gated")
-	gated.Gates = []ticket.TicketGate{{ID: "g1", Type: "human", Status: "pending"}}
+	gated.Gates = []ticket.TicketGate{{ID: "g1", Type: ticket.GateHuman, Status: ticket.GatePending}}
 	idx.Put("tkt-c", gated)
 
 	// Closed → neither.
@@ -883,7 +883,7 @@ func TestListWithReadyStatus(t *testing.T) {
 	// Open but with a pending gate → not ready.
 	gated := makeTicket("B")
 	gated.Status = ticket.StatusOpen
-	gated.Gates = []ticket.TicketGate{{ID: "g-1", Type: "human", Status: "pending"}}
+	gated.Gates = []ticket.TicketGate{{ID: "g-1", Type: ticket.GateHuman, Status: ticket.GatePending}}
 	idx.Put("tkt-gated", gated)
 
 	closed := makeTicket("C")
@@ -1015,15 +1015,15 @@ func TestPendingGates(t *testing.T) {
 	// All gates satisfied.
 	allSatisfied := makeTicket("Satisfied")
 	allSatisfied.Gates = []ticket.TicketGate{
-		{ID: "g1", Type: "human", Status: "satisfied"},
+		{ID: "g1", Type: ticket.GateHuman, Status: ticket.GateSatisfied},
 	}
 	idx.Put("tkt-b", allSatisfied)
 
 	// Has pending gate.
 	pending := makeTicket("Pending")
 	pending.Gates = []ticket.TicketGate{
-		{ID: "g1", Type: "human", Status: "satisfied"},
-		{ID: "g2", Type: "pipeline", Status: "pending", PipelineRef: "ci/test"},
+		{ID: "g1", Type: ticket.GateHuman, Status: ticket.GateSatisfied},
+		{ID: "g2", Type: ticket.GatePipeline, Status: ticket.GatePending, PipelineRef: "ci/test"},
 	}
 	idx.Put("tkt-c", pending)
 
@@ -1051,7 +1051,7 @@ func TestWatchedGatesPipelineGate(t *testing.T) {
 
 	tc := makeTicket("Gated by pipeline")
 	tc.Gates = []ticket.TicketGate{
-		{ID: "ci", Type: "pipeline", Status: "pending", PipelineRef: "build-check"},
+		{ID: "ci", Type: ticket.GatePipeline, Status: ticket.GatePending, PipelineRef: "build-check"},
 	}
 	idx.Put("tkt-a", tc)
 
@@ -1083,7 +1083,7 @@ func TestWatchedGatesTicketGate(t *testing.T) {
 
 	tc := makeTicket("Gated by ticket")
 	tc.Gates = []ticket.TicketGate{
-		{ID: "blocker-done", Type: "ticket", Status: "pending", TicketID: "tkt-blocker"},
+		{ID: "blocker-done", Type: ticket.GateTicket, Status: ticket.GatePending, TicketID: "tkt-blocker"},
 	}
 	idx.Put("tkt-a", tc)
 
@@ -1108,7 +1108,7 @@ func TestWatchedGatesReviewGate(t *testing.T) {
 
 	tc := makeTicket("Gated by review")
 	tc.Gates = []ticket.TicketGate{
-		{ID: "review-approval", Type: "review", Status: "pending"},
+		{ID: "review-approval", Type: ticket.GateReview, Status: ticket.GatePending},
 	}
 	idx.Put("tkt-a", tc)
 
@@ -1140,7 +1140,7 @@ func TestWatchedGatesReviewGateWithChildren(t *testing.T) {
 	// Parent ticket with a review gate.
 	parent := makeTicket("Review parent")
 	parent.Gates = []ticket.TicketGate{
-		{ID: "review-approval", Type: "review", Status: "pending"},
+		{ID: "review-approval", Type: ticket.GateReview, Status: ticket.GatePending},
 	}
 	idx.Put("tkt-parent", parent)
 
@@ -1182,7 +1182,7 @@ func TestRefreshReviewGateWatchesOnChildAdd(t *testing.T) {
 	// Parent with a review gate, initially no children.
 	parent := makeTicket("Review parent")
 	parent.Gates = []ticket.TicketGate{
-		{ID: "review-approval", Type: "review", Status: "pending"},
+		{ID: "review-approval", Type: ticket.GateReview, Status: ticket.GatePending},
 	}
 	idx.Put("tkt-parent", parent)
 
@@ -1211,7 +1211,7 @@ func TestRefreshReviewGateWatchesOnChildRemove(t *testing.T) {
 	// Parent with review gate + one finding child.
 	parent := makeTicket("Review parent")
 	parent.Gates = []ticket.TicketGate{
-		{ID: "review-approval", Type: "review", Status: "pending"},
+		{ID: "review-approval", Type: ticket.GateReview, Status: ticket.GatePending},
 	}
 	idx.Put("tkt-parent", parent)
 
@@ -1249,7 +1249,7 @@ func TestRefreshReviewGateWatchesOnChildDelete(t *testing.T) {
 	// Parent with review gate + one finding child.
 	parent := makeTicket("Review parent")
 	parent.Gates = []ticket.TicketGate{
-		{ID: "review-approval", Type: "review", Status: "pending"},
+		{ID: "review-approval", Type: ticket.GateReview, Status: ticket.GatePending},
 	}
 	idx.Put("tkt-parent", parent)
 
@@ -1278,7 +1278,7 @@ func TestWatchedGatesStateEventGateExactKey(t *testing.T) {
 
 	tc := makeTicket("Gated by state event")
 	tc.Gates = []ticket.TicketGate{
-		{ID: "ws-ready", Type: "state_event", Status: "pending",
+		{ID: "ws-ready", Type: ticket.GateStateEvent, Status: ticket.GatePending,
 			EventType: "m.bureau.workspace", StateKey: "/workspace/proj"},
 	}
 	idx.Put("tkt-a", tc)
@@ -1308,7 +1308,7 @@ func TestWatchedGatesStateEventGateWildcardKey(t *testing.T) {
 	// state_event gate with empty StateKey matches any state key.
 	tc := makeTicket("Gated by any workspace event")
 	tc.Gates = []ticket.TicketGate{
-		{ID: "any-ws", Type: "state_event", Status: "pending",
+		{ID: "any-ws", Type: ticket.GateStateEvent, Status: ticket.GatePending,
 			EventType: "m.bureau.workspace"},
 	}
 	idx.Put("tkt-a", tc)
@@ -1338,14 +1338,14 @@ func TestWatchedGatesExactAndWildcardCombined(t *testing.T) {
 	// for the same event type.
 	tc1 := makeTicket("Specific workspace gate")
 	tc1.Gates = []ticket.TicketGate{
-		{ID: "exact", Type: "state_event", Status: "pending",
+		{ID: "exact", Type: ticket.GateStateEvent, Status: ticket.GatePending,
 			EventType: "m.bureau.workspace", StateKey: "ws-1"},
 	}
 	idx.Put("tkt-exact", tc1)
 
 	tc2 := makeTicket("Any workspace gate")
 	tc2.Gates = []ticket.TicketGate{
-		{ID: "wildcard", Type: "state_event", Status: "pending",
+		{ID: "wildcard", Type: ticket.GateStateEvent, Status: ticket.GatePending,
 			EventType: "m.bureau.workspace"},
 	}
 	idx.Put("tkt-wildcard", tc2)
@@ -1373,7 +1373,7 @@ func TestWatchedGatesSkipsCrossRoomGates(t *testing.T) {
 	// in the watch map — they're evaluated by evaluateCrossRoomGates.
 	tc := makeTicket("Cross-room gated")
 	tc.Gates = []ticket.TicketGate{
-		{ID: "cross", Type: "state_event", Status: "pending",
+		{ID: "cross", Type: ticket.GateStateEvent, Status: ticket.GatePending,
 			EventType: "m.bureau.workspace", RoomAlias: ref.MustParseRoomAlias("#other:local")},
 	}
 	idx.Put("tkt-a", tc)
@@ -1389,8 +1389,8 @@ func TestWatchedGatesSkipsHumanAndTimerGates(t *testing.T) {
 
 	tc := makeTicket("Human and timer gates")
 	tc.Gates = []ticket.TicketGate{
-		{ID: "approval", Type: "human", Status: "pending"},
-		{ID: "soak", Type: "timer", Status: "pending", Duration: "1h"},
+		{ID: "approval", Type: ticket.GateHuman, Status: ticket.GatePending},
+		{ID: "soak", Type: ticket.GateTimer, Status: ticket.GatePending, Duration: "1h"},
 	}
 	idx.Put("tkt-a", tc)
 
@@ -1407,7 +1407,7 @@ func TestWatchedGatesSkipsSatisfiedGates(t *testing.T) {
 
 	tc := makeTicket("Satisfied gate")
 	tc.Gates = []ticket.TicketGate{
-		{ID: "ci", Type: "pipeline", Status: "satisfied", PipelineRef: "build"},
+		{ID: "ci", Type: ticket.GatePipeline, Status: ticket.GateSatisfied, PipelineRef: "build"},
 	}
 	idx.Put("tkt-a", tc)
 
@@ -1423,7 +1423,7 @@ func TestWatchedGatesUpdatedOnPut(t *testing.T) {
 	// Insert a ticket with a pending pipeline gate.
 	tc := makeTicket("Pipeline gated")
 	tc.Gates = []ticket.TicketGate{
-		{ID: "ci", Type: "pipeline", Status: "pending", PipelineRef: "build"},
+		{ID: "ci", Type: ticket.GatePipeline, Status: ticket.GatePending, PipelineRef: "build"},
 	}
 	idx.Put("tkt-a", tc)
 
@@ -1433,7 +1433,7 @@ func TestWatchedGatesUpdatedOnPut(t *testing.T) {
 	}
 
 	// Satisfy the gate and re-Put the ticket.
-	tc.Gates[0].Status = "satisfied"
+	tc.Gates[0].Status = ticket.GateSatisfied
 	idx.Put("tkt-a", tc)
 
 	watches = idx.WatchedGates(schema.EventTypePipelineResult, "build")
@@ -1447,7 +1447,7 @@ func TestWatchedGatesCleanedOnRemove(t *testing.T) {
 
 	tc := makeTicket("Pipeline gated")
 	tc.Gates = []ticket.TicketGate{
-		{ID: "ci", Type: "pipeline", Status: "pending", PipelineRef: "build"},
+		{ID: "ci", Type: ticket.GatePipeline, Status: ticket.GatePending, PipelineRef: "build"},
 	}
 	idx.Put("tkt-a", tc)
 
@@ -1469,10 +1469,10 @@ func TestWatchedGatesMultipleGatesOnOneTicket(t *testing.T) {
 
 	tc := makeTicket("Multi-gated")
 	tc.Gates = []ticket.TicketGate{
-		{ID: "ci", Type: "pipeline", Status: "pending", PipelineRef: "build"},
-		{ID: "blocker", Type: "ticket", Status: "pending", TicketID: "tkt-dep"},
-		{ID: "ws", Type: "state_event", Status: "pending", EventType: "m.bureau.workspace", StateKey: "ws-1"},
-		{ID: "approval", Type: "human", Status: "pending"},
+		{ID: "ci", Type: ticket.GatePipeline, Status: ticket.GatePending, PipelineRef: "build"},
+		{ID: "blocker", Type: ticket.GateTicket, Status: ticket.GatePending, TicketID: "tkt-dep"},
+		{ID: "ws", Type: ticket.GateStateEvent, Status: ticket.GatePending, EventType: "m.bureau.workspace", StateKey: "ws-1"},
+		{ID: "approval", Type: ticket.GateHuman, Status: ticket.GatePending},
 	}
 	idx.Put("tkt-a", tc)
 
@@ -1505,7 +1505,7 @@ func TestWatchedGatesMultipleTicketsSameWatchKey(t *testing.T) {
 	for _, id := range []string{"tkt-a", "tkt-b"} {
 		tc := makeTicket(id)
 		tc.Gates = []ticket.TicketGate{
-			{ID: "ci", Type: "pipeline", Status: "pending", PipelineRef: "build"},
+			{ID: "ci", Type: ticket.GatePipeline, Status: ticket.GatePending, PipelineRef: "build"},
 		}
 		idx.Put(id, tc)
 	}
@@ -1517,7 +1517,7 @@ func TestWatchedGatesMultipleTicketsSameWatchKey(t *testing.T) {
 
 	// After satisfying one, only one should remain.
 	tc, _ := idx.Get("tkt-a")
-	tc.Gates[0].Status = "satisfied"
+	tc.Gates[0].Status = ticket.GateSatisfied
 	idx.Put("tkt-a", tc)
 
 	watches = idx.WatchedGates(schema.EventTypePipelineResult, "build")
@@ -1545,19 +1545,19 @@ func TestWatchedGatesGateWatchKeyConsistency(t *testing.T) {
 	// Insert three tickets with various gate types.
 	tc1 := makeTicket("Pipeline")
 	tc1.Gates = []ticket.TicketGate{
-		{ID: "ci", Type: "pipeline", Status: "pending", PipelineRef: "build"},
+		{ID: "ci", Type: ticket.GatePipeline, Status: ticket.GatePending, PipelineRef: "build"},
 	}
 	idx.Put("tkt-1", tc1)
 
 	tc2 := makeTicket("Ticket dep")
 	tc2.Gates = []ticket.TicketGate{
-		{ID: "dep", Type: "ticket", Status: "pending", TicketID: "tkt-blocker"},
+		{ID: "dep", Type: ticket.GateTicket, Status: ticket.GatePending, TicketID: "tkt-blocker"},
 	}
 	idx.Put("tkt-2", tc2)
 
 	tc3 := makeTicket("State event")
 	tc3.Gates = []ticket.TicketGate{
-		{ID: "ws", Type: "state_event", Status: "pending", EventType: "m.bureau.workspace"},
+		{ID: "ws", Type: ticket.GateStateEvent, Status: ticket.GatePending, EventType: "m.bureau.workspace"},
 	}
 	idx.Put("tkt-3", tc3)
 
@@ -1573,7 +1573,7 @@ func TestWatchedGatesGateWatchKeyConsistency(t *testing.T) {
 	}
 
 	// Satisfy tc1's gate.
-	tc1.Gates[0].Status = "satisfied"
+	tc1.Gates[0].Status = ticket.GateSatisfied
 	idx.Put("tkt-1", tc1)
 	if len(idx.WatchedGates(schema.EventTypePipelineResult, "x")) != 0 {
 		t.Error("pipeline watch should be removed after satisfaction")
@@ -1985,7 +1985,7 @@ func TestReadyRecomputesWhenGateSatisfied(t *testing.T) {
 
 	gated := makeTicket("Gated")
 	gated.Gates = []ticket.TicketGate{
-		{ID: "g1", Type: "human", Status: "pending"},
+		{ID: "g1", Type: ticket.GateHuman, Status: ticket.GatePending},
 	}
 	idx.Put("tkt-gated", gated)
 
@@ -1994,7 +1994,7 @@ func TestReadyRecomputesWhenGateSatisfied(t *testing.T) {
 	}
 
 	// Satisfy the gate.
-	gated.Gates[0].Status = "satisfied"
+	gated.Gates[0].Status = ticket.GateSatisfied
 	idx.Put("tkt-gated", gated)
 
 	if !containsID(idx.Ready(), "tkt-gated") {
@@ -2219,7 +2219,7 @@ func TestUnblockScoreRequiresGatesSatisfied(t *testing.T) {
 
 	depB := makeTicket("B")
 	depB.BlockedBy = []string{"tkt-a"}
-	depB.Gates = []ticket.TicketGate{{ID: "g1", Status: "pending"}}
+	depB.Gates = []ticket.TicketGate{{ID: "g1", Status: ticket.GatePending}}
 	idx.Put("tkt-b", depB)
 
 	if score := idx.UnblockScore("tkt-a"); score != 0 {

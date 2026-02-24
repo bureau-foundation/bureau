@@ -892,7 +892,7 @@ func (renderer DetailRenderer) renderPipelineVariables(variables map[string]stri
 func (renderer DetailRenderer) renderPipelineSchedule(content ticket.TicketContent) string {
 	var timerGates []ticket.TicketGate
 	for index := range content.Gates {
-		if content.Gates[index].Type == "timer" {
+		if content.Gates[index].Type == ticket.GateTimer {
 			timerGates = append(timerGates, content.Gates[index])
 		}
 	}
@@ -913,7 +913,7 @@ func (renderer DetailRenderer) renderPipelineSchedule(content ticket.TicketConte
 		// Gate ID and status.
 		statusIndicator := "⏲ pending"
 		statusColor := renderer.theme.StatusInProgress
-		if gate.Status == "satisfied" {
+		if gate.Status == ticket.GateSatisfied {
 			statusIndicator = "✓ satisfied"
 			statusColor = renderer.theme.StatusOpen
 		}
@@ -989,12 +989,12 @@ func (renderer DetailRenderer) renderReview(content ticket.TicketContent) string
 	// satisfaction state. Gives context before individual dispositions.
 	for index := range content.Gates {
 		gate := &content.Gates[index]
-		if gate.Type != "review" {
+		if gate.Type != ticket.GateReview {
 			continue
 		}
 		indicator := "⏳"
 		indicatorColor := renderer.theme.StatusInProgress
-		if gate.Status == "satisfied" {
+		if gate.Status == ticket.GateSatisfied {
 			indicator = "✓"
 			indicatorColor = renderer.theme.StatusOpen
 		}
@@ -1004,7 +1004,7 @@ func (renderer DetailRenderer) renderReview(content ticket.TicketContent) string
 			gateLabel = gate.Description
 		}
 		contentStyle := lipgloss.NewStyle().Foreground(renderer.theme.NormalText)
-		lines = append(lines, indicatorStyle.Render(indicator+" "+gate.Status)+
+		lines = append(lines, indicatorStyle.Render(indicator+" "+string(gate.Status))+
 			"  "+contentStyle.Render(gateLabel))
 	}
 

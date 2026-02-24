@@ -394,7 +394,7 @@ func TestSearchGateTicketIDReference(t *testing.T) {
 		Body:   "Deploy after service A is ready.",
 		Status: ticket.StatusOpen,
 		Gates: []ticket.TicketGate{
-			{ID: "wait-for-a", Type: "ticket", TicketID: "tkt-9a7e", Status: "pending"},
+			{ID: "wait-for-a", Type: ticket.GateTicket, TicketID: "tkt-9a7e", Status: ticket.GatePending},
 		},
 	})
 

@@ -237,7 +237,7 @@ type stewardshipContext struct {
 // single stewardship review gate.
 type stewardshipGateProgress struct {
 	GateID string                `json:"gate_id"`
-	Status string                `json:"status"`
+	Status ticket.GateStatus     `json:"status"`
 	Tiers  []tierApprovalSummary `json:"tiers,omitempty"`
 }
 
@@ -269,7 +269,7 @@ func (ts *TicketService) computeStewardshipContext(roomID ref.RoomID, content ti
 	// Compute per-gate tier progress for stewardship review gates.
 	var gateProgress []stewardshipGateProgress
 	for _, gate := range content.Gates {
-		if gate.Type != "review" || !strings.HasPrefix(gate.ID, "stewardship:") {
+		if gate.Type != ticket.GateReview || !strings.HasPrefix(gate.ID, "stewardship:") {
 			continue
 		}
 		progress := stewardshipGateProgress{
@@ -367,7 +367,7 @@ func computeStewardshipSummary(content ticket.TicketContent) (int, int) {
 	for _, gate := range content.Gates {
 		if strings.HasPrefix(gate.ID, "stewardship:") {
 			gateCount++
-			if gate.Status == "satisfied" {
+			if gate.Status == ticket.GateSatisfied {
 				satisfied++
 			}
 		}
@@ -843,7 +843,7 @@ func (ts *TicketService) handleUpcomingGates(ctx context.Context, token *service
 		for _, pending := range state.index.PendingGates() {
 			for i := range pending.Content.Gates {
 				gate := &pending.Content.Gates[i]
-				if gate.Type != "timer" || gate.Status != "pending" || gate.Target == "" {
+				if gate.Type != ticket.GateTimer || gate.Status != ticket.GatePending || gate.Target == "" {
 					continue
 				}
 

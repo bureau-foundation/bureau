@@ -562,15 +562,15 @@ func mutationRooms() map[ref.RoomID]*roomState {
 			Gates: []ticket.TicketGate{
 				{
 					ID:          "human-review",
-					Type:        "human",
-					Status:      "pending",
+					Type:        ticket.GateHuman,
+					Status:      ticket.GatePending,
 					Description: "needs human review",
 					CreatedAt:   "2026-01-01T00:00:00Z",
 				},
 				{
 					ID:          "ci-pass",
-					Type:        "pipeline",
-					Status:      "pending",
+					Type:        ticket.GatePipeline,
+					Status:      ticket.GatePending,
 					PipelineRef: "build/main",
 					CreatedAt:   "2026-01-01T00:00:00Z",
 				},

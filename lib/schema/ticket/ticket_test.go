@@ -58,8 +58,8 @@ func TestTicketContentRoundTrip(t *testing.T) {
 		Gates: []TicketGate{
 			{
 				ID:          "ci-pass",
-				Type:        "pipeline",
-				Status:      "pending",
+				Type:        GatePipeline,
+				Status:      GatePending,
 				Description: "CI pipeline must pass",
 				PipelineRef: "ci/amdgpu-tests",
 				Conclusion:  "success",
@@ -67,8 +67,8 @@ func TestTicketContentRoundTrip(t *testing.T) {
 			},
 			{
 				ID:          "lead-approval",
-				Type:        "human",
-				Status:      "satisfied",
+				Type:        GateHuman,
+				Status:      GateSatisfied,
 				Description: "Team lead approval",
 				CreatedAt:   "2026-02-12T10:00:00Z",
 				SatisfiedAt: "2026-02-12T11:00:00Z",
@@ -620,7 +620,7 @@ func TestTicketContentValidate(t *testing.T) {
 		{
 			name: "invalid_gate",
 			modify: func(tc *TicketContent) {
-				tc.Gates = []TicketGate{{ID: "", Type: "human", Status: "pending"}}
+				tc.Gates = []TicketGate{{ID: "", Type: GateHuman, Status: GatePending}}
 			},
 			wantErr: "gates[0]: gate: id is required",
 		},
@@ -703,7 +703,7 @@ func TestTicketContentValidate(t *testing.T) {
 				tc.Assignee = ref.MustParseUserID("@test:bureau.local")
 				tc.Parent = "tkt-parent"
 				tc.BlockedBy = []string{"tkt-dep"}
-				tc.Gates = []TicketGate{{ID: "g1", Type: "human", Status: "pending"}}
+				tc.Gates = []TicketGate{{ID: "g1", Type: GateHuman, Status: GatePending}}
 				tc.Notes = []TicketNote{{ID: "n-1", Author: ref.MustParseUserID("@a:b.c"), CreatedAt: "2026-01-01T00:00:00Z", Body: "note"}}
 				tc.Attachments = []TicketAttachment{{Ref: "art-abc123"}}
 				tc.ContextID = "ctx-a1b2c3d4"
@@ -790,8 +790,8 @@ func TestTicketGateRoundTrip(t *testing.T) {
 			name: "pipeline_gate",
 			gate: TicketGate{
 				ID:          "ci-pass",
-				Type:        "pipeline",
-				Status:      "pending",
+				Type:        GatePipeline,
+				Status:      GatePending,
 				Description: "CI must pass",
 				PipelineRef: "ci/build-test",
 				Conclusion:  "success",
@@ -811,8 +811,8 @@ func TestTicketGateRoundTrip(t *testing.T) {
 			name: "human_gate_satisfied",
 			gate: TicketGate{
 				ID:          "lead-approval",
-				Type:        "human",
-				Status:      "satisfied",
+				Type:        GateHuman,
+				Status:      GateSatisfied,
 				Description: "Team lead approval",
 				CreatedAt:   "2026-02-12T10:00:00Z",
 				SatisfiedAt: "2026-02-12T11:00:00Z",
@@ -830,8 +830,8 @@ func TestTicketGateRoundTrip(t *testing.T) {
 			name: "state_event_gate",
 			gate: TicketGate{
 				ID:        "workspace-ready",
-				Type:      "state_event",
-				Status:    "pending",
+				Type:      GateStateEvent,
+				Status:    GatePending,
 				EventType: "m.bureau.workspace",
 				StateKey:  "",
 				RoomAlias: ref.MustParseRoomAlias("#iree/amdgpu/inference:bureau.local"),
@@ -850,8 +850,8 @@ func TestTicketGateRoundTrip(t *testing.T) {
 			name: "ticket_gate",
 			gate: TicketGate{
 				ID:       "dep-closed",
-				Type:     "ticket",
-				Status:   "pending",
+				Type:     GateTicket,
+				Status:   GatePending,
 				TicketID: "tkt-a3f9",
 			},
 			checks: map[string]any{
@@ -864,8 +864,8 @@ func TestTicketGateRoundTrip(t *testing.T) {
 			name: "timer_gate_duration",
 			gate: TicketGate{
 				ID:        "soak-period",
-				Type:      "timer",
-				Status:    "pending",
+				Type:      GateTimer,
+				Status:    GatePending,
 				Duration:  "24h",
 				CreatedAt: "2026-02-12T10:00:00Z",
 			},
@@ -879,8 +879,8 @@ func TestTicketGateRoundTrip(t *testing.T) {
 			name: "timer_gate_recurring",
 			gate: TicketGate{
 				ID:             "daily-check",
-				Type:           "timer",
-				Status:         "pending",
+				Type:           GateTimer,
+				Status:         GatePending,
 				Target:         "2026-02-18T07:00:00Z",
 				Schedule:       "0 7 * * *",
 				LastFiredAt:    "2026-02-17T07:00:00Z",
@@ -902,8 +902,8 @@ func TestTicketGateRoundTrip(t *testing.T) {
 			name: "timer_gate_interval_with_base",
 			gate: TicketGate{
 				ID:       "retry",
-				Type:     "timer",
-				Status:   "pending",
+				Type:     GateTimer,
+				Status:   GatePending,
 				Duration: "4h",
 				Interval: "4h",
 				Base:     "unblocked",
@@ -950,8 +950,8 @@ func TestTicketGateOmitsEmptyOptionals(t *testing.T) {
 	// A minimal human gate has no type-specific or lifecycle fields.
 	gate := TicketGate{
 		ID:     "manual",
-		Type:   "human",
-		Status: "pending",
+		Type:   GateHuman,
+		Status: GatePending,
 	}
 
 	data, err := json.Marshal(gate)
@@ -991,108 +991,108 @@ func TestTicketGateValidate(t *testing.T) {
 	}{
 		{
 			name:    "valid_human",
-			gate:    TicketGate{ID: "g1", Type: "human", Status: "pending"},
+			gate:    TicketGate{ID: "g1", Type: GateHuman, Status: GatePending},
 			wantErr: "",
 		},
 		{
 			name:    "valid_pipeline",
-			gate:    TicketGate{ID: "g1", Type: "pipeline", Status: "pending", PipelineRef: "ci/test"},
+			gate:    TicketGate{ID: "g1", Type: GatePipeline, Status: GatePending, PipelineRef: "ci/test"},
 			wantErr: "",
 		},
 		{
 			name:    "valid_state_event",
-			gate:    TicketGate{ID: "g1", Type: "state_event", Status: "satisfied", EventType: "m.bureau.workspace"},
+			gate:    TicketGate{ID: "g1", Type: GateStateEvent, Status: GateSatisfied, EventType: "m.bureau.workspace"},
 			wantErr: "",
 		},
 		{
 			name:    "valid_ticket",
-			gate:    TicketGate{ID: "g1", Type: "ticket", Status: "pending", TicketID: "tkt-abc"},
+			gate:    TicketGate{ID: "g1", Type: GateTicket, Status: GatePending, TicketID: "tkt-abc"},
 			wantErr: "",
 		},
 		{
 			name:    "valid_timer",
-			gate:    TicketGate{ID: "g1", Type: "timer", Status: "pending", Duration: "24h"},
+			gate:    TicketGate{ID: "g1", Type: GateTimer, Status: GatePending, Duration: "24h"},
 			wantErr: "",
 		},
 		{
 			name:    "id_empty",
-			gate:    TicketGate{ID: "", Type: "human", Status: "pending"},
+			gate:    TicketGate{ID: "", Type: GateHuman, Status: GatePending},
 			wantErr: "id is required",
 		},
 		{
 			name:    "type_empty",
-			gate:    TicketGate{ID: "g1", Type: "", Status: "pending"},
+			gate:    TicketGate{ID: "g1", Type: "", Status: GatePending},
 			wantErr: "type is required",
 		},
 		{
 			name:    "type_invalid",
-			gate:    TicketGate{ID: "g1", Type: "webhook", Status: "pending"},
+			gate:    TicketGate{ID: "g1", Type: "webhook", Status: GatePending},
 			wantErr: `unknown type "webhook"`,
 		},
 		{
 			name:    "status_empty",
-			gate:    TicketGate{ID: "g1", Type: "human", Status: ""},
+			gate:    TicketGate{ID: "g1", Type: GateHuman, Status: ""},
 			wantErr: "status is required",
 		},
 		{
 			name:    "status_invalid",
-			gate:    TicketGate{ID: "g1", Type: "human", Status: "failed"},
+			gate:    TicketGate{ID: "g1", Type: GateHuman, Status: "failed"},
 			wantErr: `unknown status "failed"`,
 		},
 		{
 			name:    "pipeline_missing_ref",
-			gate:    TicketGate{ID: "g1", Type: "pipeline", Status: "pending"},
+			gate:    TicketGate{ID: "g1", Type: GatePipeline, Status: GatePending},
 			wantErr: "pipeline_ref is required for pipeline gates",
 		},
 		{
 			name:    "state_event_missing_event_type",
-			gate:    TicketGate{ID: "g1", Type: "state_event", Status: "pending"},
+			gate:    TicketGate{ID: "g1", Type: GateStateEvent, Status: GatePending},
 			wantErr: "event_type is required for state_event gates",
 		},
 		{
 			name:    "ticket_missing_ticket_id",
-			gate:    TicketGate{ID: "g1", Type: "ticket", Status: "pending"},
+			gate:    TicketGate{ID: "g1", Type: GateTicket, Status: GatePending},
 			wantErr: "ticket_id is required for ticket gates",
 		},
 		{
 			name:    "timer_missing_target_and_duration",
-			gate:    TicketGate{ID: "g1", Type: "timer", Status: "pending"},
+			gate:    TicketGate{ID: "g1", Type: GateTimer, Status: GatePending},
 			wantErr: "target or duration is required for timer gates",
 		},
 		{
 			name:    "timer_target_only",
-			gate:    TicketGate{ID: "g1", Type: "timer", Status: "pending", Target: "2026-02-18T07:00:00Z"},
+			gate:    TicketGate{ID: "g1", Type: GateTimer, Status: GatePending, Target: "2026-02-18T07:00:00Z"},
 			wantErr: "",
 		},
 		{
 			name:    "timer_duration_only",
-			gate:    TicketGate{ID: "g1", Type: "timer", Status: "pending", Duration: "4h"},
+			gate:    TicketGate{ID: "g1", Type: GateTimer, Status: GatePending, Duration: "4h"},
 			wantErr: "",
 		},
 		{
 			name:    "timer_target_and_duration",
-			gate:    TicketGate{ID: "g1", Type: "timer", Status: "pending", Target: "2026-02-18T07:00:00Z", Duration: "4h"},
+			gate:    TicketGate{ID: "g1", Type: GateTimer, Status: GatePending, Target: "2026-02-18T07:00:00Z", Duration: "4h"},
 			wantErr: "",
 		},
 		{
 			name:    "timer_invalid_target",
-			gate:    TicketGate{ID: "g1", Type: "timer", Status: "pending", Target: "not-a-time"},
+			gate:    TicketGate{ID: "g1", Type: GateTimer, Status: GatePending, Target: "not-a-time"},
 			wantErr: "target must be RFC 3339",
 		},
 		{
 			name:    "timer_invalid_duration",
-			gate:    TicketGate{ID: "g1", Type: "timer", Status: "pending", Duration: "3 days"},
+			gate:    TicketGate{ID: "g1", Type: GateTimer, Status: GatePending, Duration: "3 days"},
 			wantErr: "invalid duration",
 		},
 		{
 			name:    "timer_negative_duration",
-			gate:    TicketGate{ID: "g1", Type: "timer", Status: "pending", Duration: "-1h"},
+			gate:    TicketGate{ID: "g1", Type: GateTimer, Status: GatePending, Duration: "-1h"},
 			wantErr: "duration must be positive",
 		},
 		{
 			name: "timer_schedule_valid",
 			gate: TicketGate{
-				ID: "g1", Type: "timer", Status: "pending",
+				ID: "g1", Type: GateTimer, Status: GatePending,
 				Target: "2026-02-18T07:00:00Z", Schedule: "0 7 * * *",
 			},
 			wantErr: "",
@@ -1100,7 +1100,7 @@ func TestTicketGateValidate(t *testing.T) {
 		{
 			name: "timer_interval_valid",
 			gate: TicketGate{
-				ID: "g1", Type: "timer", Status: "pending",
+				ID: "g1", Type: GateTimer, Status: GatePending,
 				Duration: "4h", Interval: "4h",
 			},
 			wantErr: "",
@@ -1108,7 +1108,7 @@ func TestTicketGateValidate(t *testing.T) {
 		{
 			name: "timer_schedule_and_interval_exclusive",
 			gate: TicketGate{
-				ID: "g1", Type: "timer", Status: "pending",
+				ID: "g1", Type: GateTimer, Status: GatePending,
 				Duration: "1h", Schedule: "0 7 * * *", Interval: "4h",
 			},
 			wantErr: "schedule and interval are mutually exclusive",
@@ -1116,7 +1116,7 @@ func TestTicketGateValidate(t *testing.T) {
 		{
 			name: "timer_schedule_wrong_field_count",
 			gate: TicketGate{
-				ID: "g1", Type: "timer", Status: "pending",
+				ID: "g1", Type: GateTimer, Status: GatePending,
 				Target: "2026-02-18T07:00:00Z", Schedule: "0 7 * *",
 			},
 			wantErr: "expected 5 fields",
@@ -1124,7 +1124,7 @@ func TestTicketGateValidate(t *testing.T) {
 		{
 			name: "timer_interval_too_short",
 			gate: TicketGate{
-				ID: "g1", Type: "timer", Status: "pending",
+				ID: "g1", Type: GateTimer, Status: GatePending,
 				Duration: "5s", Interval: "5s",
 			},
 			wantErr: "interval must be >= 30s",
@@ -1132,7 +1132,7 @@ func TestTicketGateValidate(t *testing.T) {
 		{
 			name: "timer_interval_at_minimum",
 			gate: TicketGate{
-				ID: "g1", Type: "timer", Status: "pending",
+				ID: "g1", Type: GateTimer, Status: GatePending,
 				Duration: "30s", Interval: "30s",
 			},
 			wantErr: "",
@@ -1140,7 +1140,7 @@ func TestTicketGateValidate(t *testing.T) {
 		{
 			name: "timer_base_created",
 			gate: TicketGate{
-				ID: "g1", Type: "timer", Status: "pending",
+				ID: "g1", Type: GateTimer, Status: GatePending,
 				Duration: "1h", Base: "created",
 			},
 			wantErr: "",
@@ -1148,7 +1148,7 @@ func TestTicketGateValidate(t *testing.T) {
 		{
 			name: "timer_base_unblocked",
 			gate: TicketGate{
-				ID: "g1", Type: "timer", Status: "pending",
+				ID: "g1", Type: GateTimer, Status: GatePending,
 				Duration: "1h", Base: "unblocked",
 			},
 			wantErr: "",
@@ -1156,7 +1156,7 @@ func TestTicketGateValidate(t *testing.T) {
 		{
 			name: "timer_base_invalid",
 			gate: TicketGate{
-				ID: "g1", Type: "timer", Status: "pending",
+				ID: "g1", Type: GateTimer, Status: GatePending,
 				Duration: "1h", Base: "started",
 			},
 			wantErr: `unknown base "started"`,
@@ -1164,7 +1164,7 @@ func TestTicketGateValidate(t *testing.T) {
 		{
 			name: "timer_max_occurrences_without_recurrence",
 			gate: TicketGate{
-				ID: "g1", Type: "timer", Status: "pending",
+				ID: "g1", Type: GateTimer, Status: GatePending,
 				Duration: "1h", MaxOccurrences: 5,
 			},
 			wantErr: "max_occurrences requires schedule or interval",
@@ -1172,7 +1172,7 @@ func TestTicketGateValidate(t *testing.T) {
 		{
 			name: "timer_max_occurrences_with_schedule",
 			gate: TicketGate{
-				ID: "g1", Type: "timer", Status: "pending",
+				ID: "g1", Type: GateTimer, Status: GatePending,
 				Target: "2026-02-18T07:00:00Z", Schedule: "0 7 * * *", MaxOccurrences: 10,
 			},
 			wantErr: "",
@@ -2006,27 +2006,27 @@ func TestTicketGateIsRecurring(t *testing.T) {
 	}{
 		{
 			name: "schedule",
-			gate: TicketGate{Type: "timer", Schedule: "0 7 * * *"},
+			gate: TicketGate{Type: GateTimer, Schedule: "0 7 * * *"},
 			want: true,
 		},
 		{
 			name: "interval",
-			gate: TicketGate{Type: "timer", Interval: "4h"},
+			gate: TicketGate{Type: GateTimer, Interval: "4h"},
 			want: true,
 		},
 		{
 			name: "one_shot_duration",
-			gate: TicketGate{Type: "timer", Duration: "1h"},
+			gate: TicketGate{Type: GateTimer, Duration: "1h"},
 			want: false,
 		},
 		{
 			name: "one_shot_target",
-			gate: TicketGate{Type: "timer", Target: "2026-02-18T07:00:00Z"},
+			gate: TicketGate{Type: GateTimer, Target: "2026-02-18T07:00:00Z"},
 			want: false,
 		},
 		{
 			name: "non_timer_type",
-			gate: TicketGate{Type: "human"},
+			gate: TicketGate{Type: GateHuman},
 			want: false,
 		},
 	}

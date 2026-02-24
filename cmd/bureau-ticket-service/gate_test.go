@@ -39,8 +39,8 @@ func testTicket(title string) ticket.TicketContent {
 func TestMatchPipelineGateMatches(t *testing.T) {
 	gate := &ticket.TicketGate{
 		ID:          "ci-pass",
-		Type:        "pipeline",
-		Status:      "pending",
+		Type:        ticket.GatePipeline,
+		Status:      ticket.GatePending,
 		PipelineRef: "dev-workspace-init",
 		Conclusion:  "success",
 	}
@@ -62,8 +62,8 @@ func TestMatchPipelineGateMatches(t *testing.T) {
 func TestMatchPipelineGateWrongRef(t *testing.T) {
 	gate := &ticket.TicketGate{
 		ID:          "ci-pass",
-		Type:        "pipeline",
-		Status:      "pending",
+		Type:        ticket.GatePipeline,
+		Status:      ticket.GatePending,
 		PipelineRef: "dev-workspace-init",
 		Conclusion:  "success",
 	}
@@ -85,8 +85,8 @@ func TestMatchPipelineGateWrongRef(t *testing.T) {
 func TestMatchPipelineGateWrongConclusion(t *testing.T) {
 	gate := &ticket.TicketGate{
 		ID:          "ci-pass",
-		Type:        "pipeline",
-		Status:      "pending",
+		Type:        ticket.GatePipeline,
+		Status:      ticket.GatePending,
 		PipelineRef: "dev-workspace-init",
 		Conclusion:  "success",
 	}
@@ -108,8 +108,8 @@ func TestMatchPipelineGateWrongConclusion(t *testing.T) {
 func TestMatchPipelineGateAnyConclusionMatches(t *testing.T) {
 	gate := &ticket.TicketGate{
 		ID:          "ci-done",
-		Type:        "pipeline",
-		Status:      "pending",
+		Type:        ticket.GatePipeline,
+		Status:      ticket.GatePending,
 		PipelineRef: "dev-workspace-init",
 		Conclusion:  "", // Empty = any completed result.
 	}
@@ -131,8 +131,8 @@ func TestMatchPipelineGateAnyConclusionMatches(t *testing.T) {
 func TestMatchPipelineGateWrongEventType(t *testing.T) {
 	gate := &ticket.TicketGate{
 		ID:          "ci-pass",
-		Type:        "pipeline",
-		Status:      "pending",
+		Type:        ticket.GatePipeline,
+		Status:      ticket.GatePending,
 		PipelineRef: "dev-workspace-init",
 	}
 
@@ -155,8 +155,8 @@ func TestMatchPipelineGateWrongEventType(t *testing.T) {
 func TestMatchTicketGateClosedMatches(t *testing.T) {
 	gate := &ticket.TicketGate{
 		ID:       "blocker-done",
-		Type:     "ticket",
-		Status:   "pending",
+		Type:     ticket.GateTicket,
+		Status:   ticket.GatePending,
 		TicketID: "tkt-abc",
 	}
 
@@ -176,8 +176,8 @@ func TestMatchTicketGateClosedMatches(t *testing.T) {
 func TestMatchTicketGateNotClosedDoesNotMatch(t *testing.T) {
 	gate := &ticket.TicketGate{
 		ID:       "blocker-done",
-		Type:     "ticket",
-		Status:   "pending",
+		Type:     ticket.GateTicket,
+		Status:   ticket.GatePending,
 		TicketID: "tkt-abc",
 	}
 
@@ -197,8 +197,8 @@ func TestMatchTicketGateNotClosedDoesNotMatch(t *testing.T) {
 func TestMatchTicketGateWrongTicketID(t *testing.T) {
 	gate := &ticket.TicketGate{
 		ID:       "blocker-done",
-		Type:     "ticket",
-		Status:   "pending",
+		Type:     ticket.GateTicket,
+		Status:   ticket.GatePending,
 		TicketID: "tkt-abc",
 	}
 
@@ -220,8 +220,8 @@ func TestMatchTicketGateWrongTicketID(t *testing.T) {
 func TestMatchStateEventGateBasicMatch(t *testing.T) {
 	gate := &ticket.TicketGate{
 		ID:        "deploy-ready",
-		Type:      "state_event",
-		Status:    "pending",
+		Type:      ticket.GateStateEvent,
+		Status:    ticket.GatePending,
 		EventType: "m.bureau.workspace",
 		StateKey:  "/workspace/proj",
 	}
@@ -242,8 +242,8 @@ func TestMatchStateEventGateBasicMatch(t *testing.T) {
 func TestMatchStateEventGateWrongEventType(t *testing.T) {
 	gate := &ticket.TicketGate{
 		ID:        "deploy-ready",
-		Type:      "state_event",
-		Status:    "pending",
+		Type:      ticket.GateStateEvent,
+		Status:    ticket.GatePending,
 		EventType: "m.bureau.workspace",
 	}
 
@@ -261,8 +261,8 @@ func TestMatchStateEventGateWrongEventType(t *testing.T) {
 func TestMatchStateEventGateWrongStateKey(t *testing.T) {
 	gate := &ticket.TicketGate{
 		ID:        "deploy-ready",
-		Type:      "state_event",
-		Status:    "pending",
+		Type:      ticket.GateStateEvent,
+		Status:    ticket.GatePending,
 		EventType: "m.bureau.workspace",
 		StateKey:  "/workspace/proj-a",
 	}
@@ -281,8 +281,8 @@ func TestMatchStateEventGateWrongStateKey(t *testing.T) {
 func TestMatchStateEventGateNoStateKeyMatchesAny(t *testing.T) {
 	gate := &ticket.TicketGate{
 		ID:        "any-workspace",
-		Type:      "state_event",
-		Status:    "pending",
+		Type:      ticket.GateStateEvent,
+		Status:    ticket.GatePending,
 		EventType: "m.bureau.workspace",
 		// StateKey empty — matches any state key.
 	}
@@ -301,8 +301,8 @@ func TestMatchStateEventGateNoStateKeyMatchesAny(t *testing.T) {
 func TestMatchStateEventGateWithContentMatch(t *testing.T) {
 	gate := &ticket.TicketGate{
 		ID:        "status-active",
-		Type:      "state_event",
-		Status:    "pending",
+		Type:      ticket.GateStateEvent,
+		Status:    ticket.GatePending,
 		EventType: "m.bureau.workspace",
 		ContentMatch: schema.ContentMatch{
 			"status": schema.Eq("active"),
@@ -325,8 +325,8 @@ func TestMatchStateEventGateWithContentMatch(t *testing.T) {
 func TestMatchStateEventGateContentMatchFails(t *testing.T) {
 	gate := &ticket.TicketGate{
 		ID:        "status-active",
-		Type:      "state_event",
-		Status:    "pending",
+		Type:      ticket.GateStateEvent,
+		Status:    ticket.GatePending,
 		EventType: "m.bureau.workspace",
 		ContentMatch: schema.ContentMatch{
 			"status": schema.Eq("active"),
@@ -349,8 +349,8 @@ func TestMatchStateEventGateContentMatchFails(t *testing.T) {
 func TestMatchStateEventGateWithNumericContentMatch(t *testing.T) {
 	gate := &ticket.TicketGate{
 		ID:        "high-priority",
-		Type:      "state_event",
-		Status:    "pending",
+		Type:      ticket.GateStateEvent,
+		Status:    ticket.GatePending,
 		EventType: schema.EventTypeTicket,
 		ContentMatch: schema.ContentMatch{
 			"priority": schema.Lte(1),
@@ -373,8 +373,8 @@ func TestMatchStateEventGateWithNumericContentMatch(t *testing.T) {
 func TestMatchStateEventGateSkipsCrossRoom(t *testing.T) {
 	gate := &ticket.TicketGate{
 		ID:        "cross-room",
-		Type:      "state_event",
-		Status:    "pending",
+		Type:      ticket.GateStateEvent,
+		Status:    ticket.GatePending,
 		EventType: "m.bureau.workspace",
 		RoomAlias: ref.MustParseRoomAlias("#other/room:bureau.local"),
 	}
@@ -404,8 +404,8 @@ func TestHumanGateNotAutoMatched(t *testing.T) {
 			Gates: []ticket.TicketGate{
 				{
 					ID:     "approval",
-					Type:   "human",
-					Status: "pending",
+					Type:   ticket.GateHuman,
+					Status: ticket.GatePending,
 				},
 			},
 			CreatedAt: "2026-01-01T00:00:00Z",
@@ -424,7 +424,7 @@ func TestHumanGateNotAutoMatched(t *testing.T) {
 	ts.evaluateGatesForEvent(context.Background(), roomID, ts.rooms[roomID], event)
 
 	content, _ := ts.rooms[roomID].index.Get("tkt-1")
-	if content.Gates[0].Status != "pending" {
+	if content.Gates[0].Status != ticket.GatePending {
 		t.Fatalf("human gate should remain pending, got %q", content.Gates[0].Status)
 	}
 }
@@ -534,8 +534,8 @@ func TestFireExpiredTimersSatisfiesExpired(t *testing.T) {
 			Gates: []ticket.TicketGate{
 				{
 					ID:        "soak",
-					Type:      "timer",
-					Status:    "pending",
+					Type:      ticket.GateTimer,
+					Status:    ticket.GatePending,
 					Duration:  "1h",
 					Target:    "2026-01-01T01:00:00Z",
 					CreatedAt: "2026-01-01T00:00:00Z",
@@ -551,7 +551,7 @@ func TestFireExpiredTimersSatisfiesExpired(t *testing.T) {
 	if !exists {
 		t.Fatal("ticket should still exist")
 	}
-	if content.Gates[0].Status != "satisfied" {
+	if content.Gates[0].Status != ticket.GateSatisfied {
 		t.Fatalf("timer gate should be satisfied, got %q", content.Gates[0].Status)
 	}
 	if content.Gates[0].SatisfiedBy != "timer" {
@@ -589,8 +589,8 @@ func TestFireExpiredTimersSkipsUnexpired(t *testing.T) {
 			Gates: []ticket.TicketGate{
 				{
 					ID:        "soak",
-					Type:      "timer",
-					Status:    "pending",
+					Type:      ticket.GateTimer,
+					Status:    ticket.GatePending,
 					Duration:  "1h",
 					Target:    "2026-01-01T01:00:00Z",
 					CreatedAt: "2026-01-01T00:00:00Z",
@@ -603,7 +603,7 @@ func TestFireExpiredTimersSkipsUnexpired(t *testing.T) {
 	ts.fireExpiredTimersLocked(context.Background())
 
 	content, _ := ts.rooms[roomID].index.Get("tkt-timer")
-	if content.Gates[0].Status != "pending" {
+	if content.Gates[0].Status != ticket.GatePending {
 		t.Fatalf("unexpired timer gate should remain pending, got %q", content.Gates[0].Status)
 	}
 	if len(writer.events) != 0 {
@@ -640,8 +640,8 @@ func TestFireExpiredTimersSkipsEmptyTarget(t *testing.T) {
 			Gates: []ticket.TicketGate{
 				{
 					ID:        "soak",
-					Type:      "timer",
-					Status:    "pending",
+					Type:      ticket.GateTimer,
+					Status:    ticket.GatePending,
 					Duration:  "1h",
 					Base:      "unblocked",
 					CreatedAt: "2026-01-01T00:00:00Z",
@@ -667,7 +667,7 @@ func TestFireExpiredTimersSkipsEmptyTarget(t *testing.T) {
 	ts.fireExpiredTimersLocked(context.Background())
 
 	content, _ := ts.rooms[roomID].index.Get("tkt-unblocked-pending")
-	if content.Gates[0].Status != "pending" {
+	if content.Gates[0].Status != ticket.GatePending {
 		t.Fatalf("timer gate with empty target should remain pending, got %q", content.Gates[0].Status)
 	}
 	if len(writer.events) != 0 {
@@ -700,8 +700,8 @@ func TestFireExpiredTimersLazyDeletion(t *testing.T) {
 			Gates: []ticket.TicketGate{
 				{
 					ID:        "soak",
-					Type:      "timer",
-					Status:    "satisfied", // Already satisfied.
+					Type:      ticket.GateTimer,
+					Status:    ticket.GateSatisfied, // Already satisfied.
 					Duration:  "1h",
 					Target:    "2026-01-01T01:00:00Z",
 					CreatedAt: "2026-01-01T00:00:00Z",
@@ -716,8 +716,8 @@ func TestFireExpiredTimersLazyDeletion(t *testing.T) {
 		Gates: []ticket.TicketGate{
 			{
 				ID:     "soak",
-				Type:   "timer",
-				Status: "pending", // Push sees "pending" but index has "satisfied".
+				Type:   ticket.GateTimer,
+				Status: ticket.GatePending, // Push sees "pending" but index has "satisfied".
 				Target: "2026-01-01T01:00:00Z",
 			},
 		},
@@ -745,9 +745,9 @@ func TestTimerHeapOrdering(t *testing.T) {
 	// Push entries in non-chronological order.
 	content := &ticket.TicketContent{
 		Gates: []ticket.TicketGate{
-			{ID: "late", Type: "timer", Status: "pending", Target: "2026-01-01T03:00:00Z"},
-			{ID: "early", Type: "timer", Status: "pending", Target: "2026-01-01T01:00:00Z"},
-			{ID: "mid", Type: "timer", Status: "pending", Target: "2026-01-01T02:00:00Z"},
+			{ID: "late", Type: ticket.GateTimer, Status: ticket.GatePending, Target: "2026-01-01T03:00:00Z"},
+			{ID: "early", Type: ticket.GateTimer, Status: ticket.GatePending, Target: "2026-01-01T01:00:00Z"},
+			{ID: "mid", Type: ticket.GateTimer, Status: ticket.GatePending, Target: "2026-01-01T02:00:00Z"},
 		},
 	}
 	ts.pushTimerGates(testRoomID("!room:local"), "tkt-1", content)
@@ -789,8 +789,8 @@ func TestTimerLoopEndToEnd(t *testing.T) {
 			Gates: []ticket.TicketGate{
 				{
 					ID:        "soak",
-					Type:      "timer",
-					Status:    "pending",
+					Type:      ticket.GateTimer,
+					Status:    ticket.GatePending,
 					Duration:  "1h",
 					Target:    "2026-01-01T01:00:00Z",
 					CreatedAt: "2026-01-01T00:00:00Z",
@@ -825,7 +825,7 @@ func TestTimerLoopEndToEnd(t *testing.T) {
 	if !exists {
 		t.Fatal("ticket should still exist")
 	}
-	if content.Gates[0].Status != "satisfied" {
+	if content.Gates[0].Status != ticket.GateSatisfied {
 		t.Fatalf("timer gate should be satisfied via timer loop, got %q", content.Gates[0].Status)
 	}
 	if len(writer.events) != 1 {
@@ -859,8 +859,8 @@ func TestTimerLoopRescheduleOnNewEntry(t *testing.T) {
 			Gates: []ticket.TicketGate{
 				{
 					ID:        "far-gate",
-					Type:      "timer",
-					Status:    "pending",
+					Type:      ticket.GateTimer,
+					Status:    ticket.GatePending,
 					Duration:  "24h",
 					Target:    "2026-01-02T00:00:00Z",
 					CreatedAt: "2026-01-01T00:00:00Z",
@@ -889,8 +889,8 @@ func TestTimerLoopRescheduleOnNewEntry(t *testing.T) {
 		Gates: []ticket.TicketGate{
 			{
 				ID:        "near-gate",
-				Type:      "timer",
-				Status:    "pending",
+				Type:      ticket.GateTimer,
+				Status:    ticket.GatePending,
 				Duration:  "1h",
 				Target:    "2026-01-01T01:00:00Z",
 				CreatedAt: "2026-01-01T00:00:00Z",
@@ -901,8 +901,8 @@ func TestTimerLoopRescheduleOnNewEntry(t *testing.T) {
 		Gates: []ticket.TicketGate{
 			{
 				ID:     "near-gate",
-				Type:   "timer",
-				Status: "pending",
+				Type:   ticket.GateTimer,
+				Status: ticket.GatePending,
 				Target: "2026-01-01T01:00:00Z",
 			},
 		},
@@ -924,13 +924,13 @@ func TestTimerLoopRescheduleOnNewEntry(t *testing.T) {
 
 	// The near timer should have fired.
 	nearContent, _ := ts.rooms[roomID].index.Get("tkt-near")
-	if nearContent.Gates[0].Status != "satisfied" {
+	if nearContent.Gates[0].Status != ticket.GateSatisfied {
 		t.Fatalf("near timer should be satisfied, got %q", nearContent.Gates[0].Status)
 	}
 
 	// The far timer should still be pending.
 	farContent, _ := ts.rooms[roomID].index.Get("tkt-far")
-	if farContent.Gates[0].Status != "pending" {
+	if farContent.Gates[0].Status != ticket.GatePending {
 		t.Fatalf("far timer should still be pending, got %q", farContent.Gates[0].Status)
 	}
 }
@@ -959,8 +959,8 @@ func TestSatisfyGateWritesToMatrixAndUpdatesIndex(t *testing.T) {
 		Gates: []ticket.TicketGate{
 			{
 				ID:        "ci-pass",
-				Type:      "pipeline",
-				Status:    "pending",
+				Type:      ticket.GatePipeline,
+				Status:    ticket.GatePending,
 				CreatedAt: "2026-01-01T00:00:00Z",
 			},
 		},
@@ -979,7 +979,7 @@ func TestSatisfyGateWritesToMatrixAndUpdatesIndex(t *testing.T) {
 	if !exists {
 		t.Fatal("ticket should exist in index")
 	}
-	if updated.Gates[0].Status != "satisfied" {
+	if updated.Gates[0].Status != ticket.GateSatisfied {
 		t.Fatalf("gate should be satisfied in index, got %q", updated.Gates[0].Status)
 	}
 	if updated.Gates[0].SatisfiedBy != "$event-id" {
@@ -1022,8 +1022,8 @@ func TestEvaluateGatesForEventsPipelineGate(t *testing.T) {
 			Gates: []ticket.TicketGate{
 				{
 					ID:          "ci",
-					Type:        "pipeline",
-					Status:      "pending",
+					Type:        ticket.GatePipeline,
+					Status:      ticket.GatePending,
 					PipelineRef: "build-check",
 					Conclusion:  "success",
 					CreatedAt:   "2026-01-01T00:00:00Z",
@@ -1047,7 +1047,7 @@ func TestEvaluateGatesForEventsPipelineGate(t *testing.T) {
 	ts.evaluateGatesForEvents(context.Background(), roomID, ts.rooms[roomID], events)
 
 	content, _ := ts.rooms[roomID].index.Get("tkt-1")
-	if content.Gates[0].Status != "satisfied" {
+	if content.Gates[0].Status != ticket.GateSatisfied {
 		t.Fatalf("pipeline gate should be satisfied, got %q", content.Gates[0].Status)
 	}
 	if content.Gates[0].SatisfiedBy != "$pipeline-result-1" {
@@ -1080,8 +1080,8 @@ func TestEvaluateGatesForEventsTicketGate(t *testing.T) {
 			Gates: []ticket.TicketGate{
 				{
 					ID:        "blocker-done",
-					Type:      "ticket",
-					Status:    "pending",
+					Type:      ticket.GateTicket,
+					Status:    ticket.GatePending,
 					TicketID:  "tkt-1",
 					CreatedAt: "2026-01-01T00:00:00Z",
 				},
@@ -1104,7 +1104,7 @@ func TestEvaluateGatesForEventsTicketGate(t *testing.T) {
 	ts.evaluateGatesForEvents(context.Background(), roomID, ts.rooms[roomID], events)
 
 	content, _ := ts.rooms[roomID].index.Get("tkt-2")
-	if content.Gates[0].Status != "satisfied" {
+	if content.Gates[0].Status != ticket.GateSatisfied {
 		t.Fatalf("ticket gate should be satisfied, got %q", content.Gates[0].Status)
 	}
 }
@@ -1125,16 +1125,16 @@ func TestEvaluateGatesForEventsMultipleGatesOnOneTicket(t *testing.T) {
 			Gates: []ticket.TicketGate{
 				{
 					ID:          "ci",
-					Type:        "pipeline",
-					Status:      "pending",
+					Type:        ticket.GatePipeline,
+					Status:      ticket.GatePending,
 					PipelineRef: "build-check",
 					Conclusion:  "success",
 					CreatedAt:   "2026-01-01T00:00:00Z",
 				},
 				{
 					ID:          "lint",
-					Type:        "pipeline",
-					Status:      "pending",
+					Type:        ticket.GatePipeline,
+					Status:      ticket.GatePending,
 					PipelineRef: "lint-check",
 					Conclusion:  "success",
 					CreatedAt:   "2026-01-01T00:00:00Z",
@@ -1159,10 +1159,10 @@ func TestEvaluateGatesForEventsMultipleGatesOnOneTicket(t *testing.T) {
 	ts.evaluateGatesForEvents(context.Background(), roomID, ts.rooms[roomID], events)
 
 	content, _ := ts.rooms[roomID].index.Get("tkt-1")
-	if content.Gates[0].Status != "satisfied" {
+	if content.Gates[0].Status != ticket.GateSatisfied {
 		t.Fatalf("ci gate should be satisfied, got %q", content.Gates[0].Status)
 	}
-	if content.Gates[1].Status != "pending" {
+	if content.Gates[1].Status != ticket.GatePending {
 		t.Fatalf("lint gate should remain pending, got %q", content.Gates[1].Status)
 	}
 }
@@ -1183,16 +1183,16 @@ func TestEvaluateGatesForEventsBothGatesSatisfiedByBatchEvents(t *testing.T) {
 			Gates: []ticket.TicketGate{
 				{
 					ID:          "ci",
-					Type:        "pipeline",
-					Status:      "pending",
+					Type:        ticket.GatePipeline,
+					Status:      ticket.GatePending,
 					PipelineRef: "build-check",
 					Conclusion:  "success",
 					CreatedAt:   "2026-01-01T00:00:00Z",
 				},
 				{
 					ID:          "lint",
-					Type:        "pipeline",
-					Status:      "pending",
+					Type:        ticket.GatePipeline,
+					Status:      ticket.GatePending,
 					PipelineRef: "lint-check",
 					Conclusion:  "success",
 					CreatedAt:   "2026-01-01T00:00:00Z",
@@ -1226,10 +1226,10 @@ func TestEvaluateGatesForEventsBothGatesSatisfiedByBatchEvents(t *testing.T) {
 	ts.evaluateGatesForEvents(context.Background(), roomID, ts.rooms[roomID], events)
 
 	content, _ := ts.rooms[roomID].index.Get("tkt-1")
-	if content.Gates[0].Status != "satisfied" {
+	if content.Gates[0].Status != ticket.GateSatisfied {
 		t.Fatalf("ci gate should be satisfied, got %q", content.Gates[0].Status)
 	}
-	if content.Gates[1].Status != "satisfied" {
+	if content.Gates[1].Status != ticket.GateSatisfied {
 		t.Fatalf("lint gate should be satisfied, got %q", content.Gates[1].Status)
 	}
 
@@ -1255,8 +1255,8 @@ func TestEvaluateGatesSkipsAlreadySatisfiedGates(t *testing.T) {
 			Gates: []ticket.TicketGate{
 				{
 					ID:          "ci",
-					Type:        "pipeline",
-					Status:      "satisfied",
+					Type:        ticket.GatePipeline,
+					Status:      ticket.GateSatisfied,
 					PipelineRef: "build-check",
 					SatisfiedAt: "2026-01-01T01:00:00Z",
 					SatisfiedBy: "$earlier",
@@ -1302,8 +1302,8 @@ func TestEvaluateGatesNoMatchDoesNotWrite(t *testing.T) {
 			Gates: []ticket.TicketGate{
 				{
 					ID:          "ci",
-					Type:        "pipeline",
-					Status:      "pending",
+					Type:        ticket.GatePipeline,
+					Status:      ticket.GatePending,
 					PipelineRef: "build-check",
 					Conclusion:  "success",
 					CreatedAt:   "2026-01-01T00:00:00Z",
@@ -1325,7 +1325,7 @@ func TestEvaluateGatesNoMatchDoesNotWrite(t *testing.T) {
 	ts.evaluateGatesForEvents(context.Background(), roomID, ts.rooms[roomID], events)
 
 	content, _ := ts.rooms[roomID].index.Get("tkt-1")
-	if content.Gates[0].Status != "pending" {
+	if content.Gates[0].Status != ticket.GatePending {
 		t.Fatalf("gate should remain pending, got %q", content.Gates[0].Status)
 	}
 	if len(writer.events) != 0 {
@@ -1351,8 +1351,8 @@ func TestProcessRoomSyncTriggersGateEvaluation(t *testing.T) {
 			Gates: []ticket.TicketGate{
 				{
 					ID:          "ci",
-					Type:        "pipeline",
-					Status:      "pending",
+					Type:        ticket.GatePipeline,
+					Status:      ticket.GatePending,
 					PipelineRef: "build-check",
 					Conclusion:  "success",
 					CreatedAt:   "2026-01-01T00:00:00Z",
@@ -1382,7 +1382,7 @@ func TestProcessRoomSyncTriggersGateEvaluation(t *testing.T) {
 	ts.processRoomSync(context.Background(), roomID, room)
 
 	content, _ := ts.rooms[roomID].index.Get("tkt-1")
-	if content.Gates[0].Status != "satisfied" {
+	if content.Gates[0].Status != ticket.GateSatisfied {
 		t.Fatalf("gate should be satisfied after processRoomSync, got %q", content.Gates[0].Status)
 	}
 }
@@ -1413,8 +1413,8 @@ func TestProcessRoomSyncTicketCloseTriggersGate(t *testing.T) {
 			Gates: []ticket.TicketGate{
 				{
 					ID:        "wait-for-blocker",
-					Type:      "ticket",
-					Status:    "pending",
+					Type:      ticket.GateTicket,
+					Status:    ticket.GatePending,
 					TicketID:  "tkt-1",
 					CreatedAt: "2026-01-01T00:00:00Z",
 				},
@@ -1456,7 +1456,7 @@ func TestProcessRoomSyncTicketCloseTriggersGate(t *testing.T) {
 
 	// tkt-2's gate should be satisfied (from gate evaluation).
 	tkt2, _ := ts.rooms[roomID].index.Get("tkt-2")
-	if tkt2.Gates[0].Status != "satisfied" {
+	if tkt2.Gates[0].Status != ticket.GateSatisfied {
 		t.Fatalf("ticket gate on tkt-2 should be satisfied, got %q", tkt2.Gates[0].Status)
 	}
 }
@@ -1470,7 +1470,7 @@ func TestProcessRoomSyncTicketCloseTriggersGate(t *testing.T) {
 
 func TestMatchStateEventConditionBasic(t *testing.T) {
 	gate := &ticket.TicketGate{
-		Type:      "state_event",
+		Type:      ticket.GateStateEvent,
 		EventType: "m.bureau.workspace",
 	}
 	event := messaging.Event{
@@ -1485,7 +1485,7 @@ func TestMatchStateEventConditionBasic(t *testing.T) {
 
 func TestMatchStateEventConditionWrongType(t *testing.T) {
 	gate := &ticket.TicketGate{
-		Type:      "state_event",
+		Type:      ticket.GateStateEvent,
 		EventType: "m.bureau.workspace",
 	}
 	event := messaging.Event{
@@ -1500,7 +1500,7 @@ func TestMatchStateEventConditionWrongType(t *testing.T) {
 
 func TestMatchStateEventConditionStateKey(t *testing.T) {
 	gate := &ticket.TicketGate{
-		Type:      "state_event",
+		Type:      ticket.GateStateEvent,
 		EventType: "m.bureau.workspace",
 		StateKey:  "ws-1",
 	}
@@ -1516,7 +1516,7 @@ func TestMatchStateEventConditionStateKey(t *testing.T) {
 
 func TestMatchStateEventConditionWrongStateKey(t *testing.T) {
 	gate := &ticket.TicketGate{
-		Type:      "state_event",
+		Type:      ticket.GateStateEvent,
 		EventType: "m.bureau.workspace",
 		StateKey:  "ws-1",
 	}
@@ -1562,8 +1562,8 @@ func TestCrossRoomGateSatisfiedByWatchedRoomEvent(t *testing.T) {
 			Gates: []ticket.TicketGate{
 				{
 					ID:        "cross-ci",
-					Type:      "state_event",
-					Status:    "pending",
+					Type:      ticket.GateStateEvent,
+					Status:    ticket.GatePending,
 					EventType: schema.EventTypePipelineResult,
 					StateKey:  "build-check",
 					RoomAlias: ref.MustParseRoomAlias("#ci/results:bureau.local"),
@@ -1594,7 +1594,7 @@ func TestCrossRoomGateSatisfiedByWatchedRoomEvent(t *testing.T) {
 	ts.evaluateCrossRoomGates(context.Background(), joinedRooms)
 
 	content, _ := ts.rooms[ticketRoomID].index.Get("tkt-1")
-	if content.Gates[0].Status != "satisfied" {
+	if content.Gates[0].Status != ticket.GateSatisfied {
 		t.Fatalf("cross-room gate should be satisfied, got %q", content.Gates[0].Status)
 	}
 	if content.Gates[0].SatisfiedBy != "$ci-result-1" {
@@ -1638,8 +1638,8 @@ func TestCrossRoomGateNoEventsFromWatchedRoom(t *testing.T) {
 			Gates: []ticket.TicketGate{
 				{
 					ID:        "cross-ci",
-					Type:      "state_event",
-					Status:    "pending",
+					Type:      ticket.GateStateEvent,
+					Status:    ticket.GatePending,
 					EventType: schema.EventTypePipelineResult,
 					RoomAlias: ref.MustParseRoomAlias("#ci/results:bureau.local"),
 				},
@@ -1666,7 +1666,7 @@ func TestCrossRoomGateNoEventsFromWatchedRoom(t *testing.T) {
 	ts.evaluateCrossRoomGates(context.Background(), joinedRooms)
 
 	content, _ := ts.rooms[ticketRoomID].index.Get("tkt-1")
-	if content.Gates[0].Status != "pending" {
+	if content.Gates[0].Status != ticket.GatePending {
 		t.Fatalf("gate should remain pending when watched room has no events, got %q", content.Gates[0].Status)
 	}
 	if len(writer.events) != 0 {
@@ -1701,8 +1701,8 @@ func TestCrossRoomGateUnresolvableAlias(t *testing.T) {
 			Gates: []ticket.TicketGate{
 				{
 					ID:        "cross-ci",
-					Type:      "state_event",
-					Status:    "pending",
+					Type:      ticket.GateStateEvent,
+					Status:    ticket.GatePending,
 					EventType: schema.EventTypePipelineResult,
 					RoomAlias: ref.MustParseRoomAlias("#nonexistent:bureau.local"),
 				},
@@ -1715,7 +1715,7 @@ func TestCrossRoomGateUnresolvableAlias(t *testing.T) {
 	ts.evaluateCrossRoomGates(context.Background(), joinedRooms)
 
 	content, _ := ts.rooms[ticketRoomID].index.Get("tkt-1")
-	if content.Gates[0].Status != "pending" {
+	if content.Gates[0].Status != ticket.GatePending {
 		t.Fatalf("gate should remain pending when alias is unresolvable, got %q", content.Gates[0].Status)
 	}
 }
@@ -1787,8 +1787,8 @@ func TestCrossRoomGateSkipsSameRoomGates(t *testing.T) {
 			Gates: []ticket.TicketGate{
 				{
 					ID:        "local",
-					Type:      "state_event",
-					Status:    "pending",
+					Type:      ticket.GateStateEvent,
+					Status:    ticket.GatePending,
 					EventType: "m.bureau.workspace",
 					// No RoomAlias — same-room gate.
 				},
@@ -1815,7 +1815,7 @@ func TestCrossRoomGateSkipsSameRoomGates(t *testing.T) {
 
 	// Same-room gate should NOT be touched by cross-room evaluation.
 	content, _ := ts.rooms[ticketRoomID].index.Get("tkt-1")
-	if content.Gates[0].Status != "pending" {
+	if content.Gates[0].Status != ticket.GatePending {
 		t.Fatalf("same-room gate should remain pending in cross-room evaluation, got %q", content.Gates[0].Status)
 	}
 	if len(writer.events) != 0 {
@@ -1855,8 +1855,8 @@ func TestCrossRoomGateSkipsNonStateEventTypes(t *testing.T) {
 			Gates: []ticket.TicketGate{
 				{
 					ID:          "ci",
-					Type:        "pipeline",
-					Status:      "pending",
+					Type:        ticket.GatePipeline,
+					Status:      ticket.GatePending,
 					PipelineRef: "build",
 				},
 			},
@@ -1884,7 +1884,7 @@ func TestCrossRoomGateSkipsNonStateEventTypes(t *testing.T) {
 	ts.evaluateCrossRoomGates(context.Background(), joinedRooms)
 
 	content, _ := ts.rooms[ticketRoomID].index.Get("tkt-1")
-	if content.Gates[0].Status != "pending" {
+	if content.Gates[0].Status != ticket.GatePending {
 		t.Fatalf("pipeline gate should not be touched by cross-room evaluation, got %q", content.Gates[0].Status)
 	}
 }
@@ -1918,8 +1918,8 @@ func TestCrossRoomGateContentMatch(t *testing.T) {
 			Gates: []ticket.TicketGate{
 				{
 					ID:        "staging-deploy",
-					Type:      "state_event",
-					Status:    "pending",
+					Type:      ticket.GateStateEvent,
+					Status:    ticket.GatePending,
 					EventType: "m.bureau.deploy",
 					RoomAlias: ref.MustParseRoomAlias("#deploy/staging:bureau.local"),
 					ContentMatch: schema.ContentMatch{
@@ -1949,7 +1949,7 @@ func TestCrossRoomGateContentMatch(t *testing.T) {
 	ts.evaluateCrossRoomGates(context.Background(), joinedRooms)
 
 	content, _ := ts.rooms[ticketRoomID].index.Get("tkt-1")
-	if content.Gates[0].Status != "pending" {
+	if content.Gates[0].Status != ticket.GatePending {
 		t.Fatalf("gate should remain pending when content doesn't match, got %q", content.Gates[0].Status)
 	}
 
@@ -1970,7 +1970,7 @@ func TestCrossRoomGateContentMatch(t *testing.T) {
 	ts.evaluateCrossRoomGates(context.Background(), joinedRooms)
 
 	content, _ = ts.rooms[ticketRoomID].index.Get("tkt-1")
-	if content.Gates[0].Status != "satisfied" {
+	if content.Gates[0].Status != ticket.GateSatisfied {
 		t.Fatalf("gate should be satisfied when content matches, got %q", content.Gates[0].Status)
 	}
 	if content.Gates[0].SatisfiedBy != "$deploy-2" {
@@ -2009,8 +2009,8 @@ func TestCrossRoomGateTimelineEvents(t *testing.T) {
 			Gates: []ticket.TicketGate{
 				{
 					ID:        "cross-ci",
-					Type:      "state_event",
-					Status:    "pending",
+					Type:      ticket.GateStateEvent,
+					Status:    ticket.GatePending,
 					EventType: schema.EventTypePipelineResult,
 					StateKey:  "lint",
 					RoomAlias: ref.MustParseRoomAlias("#ci/results:bureau.local"),
@@ -2041,7 +2041,7 @@ func TestCrossRoomGateTimelineEvents(t *testing.T) {
 	ts.evaluateCrossRoomGates(context.Background(), joinedRooms)
 
 	content, _ := ts.rooms[ticketRoomID].index.Get("tkt-1")
-	if content.Gates[0].Status != "satisfied" {
+	if content.Gates[0].Status != ticket.GateSatisfied {
 		t.Fatalf("gate should be satisfied by timeline state event, got %q", content.Gates[0].Status)
 	}
 }
@@ -2072,8 +2072,8 @@ func TestCrossRoomGateNilResolverIsNoOp(t *testing.T) {
 			Gates: []ticket.TicketGate{
 				{
 					ID:        "cross-ci",
-					Type:      "state_event",
-					Status:    "pending",
+					Type:      ticket.GateStateEvent,
+					Status:    ticket.GatePending,
 					EventType: schema.EventTypePipelineResult,
 					RoomAlias: ref.MustParseRoomAlias("#ci/results:bureau.local"),
 				},
@@ -2100,7 +2100,7 @@ func TestCrossRoomGateNilResolverIsNoOp(t *testing.T) {
 	ts.evaluateCrossRoomGates(context.Background(), joinedRooms)
 
 	content, _ := ts.rooms[ticketRoomID].index.Get("tkt-1")
-	if content.Gates[0].Status != "pending" {
+	if content.Gates[0].Status != ticket.GatePending {
 		t.Fatalf("gate should remain pending with nil resolver, got %q", content.Gates[0].Status)
 	}
 }
@@ -2168,8 +2168,8 @@ func TestHandleSyncCrossRoomGateEvaluation(t *testing.T) {
 			Gates: []ticket.TicketGate{
 				{
 					ID:        "cross-ci",
-					Type:      "state_event",
-					Status:    "pending",
+					Type:      ticket.GateStateEvent,
+					Status:    ticket.GatePending,
 					EventType: schema.EventTypePipelineResult,
 					StateKey:  "build-check",
 					RoomAlias: ref.MustParseRoomAlias("#ci/results:bureau.local"),
@@ -2206,7 +2206,7 @@ func TestHandleSyncCrossRoomGateEvaluation(t *testing.T) {
 	ts.handleSync(context.Background(), response)
 
 	content, _ := ts.rooms[ticketRoomID].index.Get("tkt-1")
-	if content.Gates[0].Status != "satisfied" {
+	if content.Gates[0].Status != ticket.GateSatisfied {
 		t.Fatalf("cross-room gate should be satisfied via handleSync, got %q", content.Gates[0].Status)
 	}
 }
@@ -2216,8 +2216,8 @@ func TestHandleSyncCrossRoomGateEvaluation(t *testing.T) {
 func TestComputeTimerTargetCreatedBase(t *testing.T) {
 	gate := &ticket.TicketGate{
 		ID:        "soak",
-		Type:      "timer",
-		Status:    "pending",
+		Type:      ticket.GateTimer,
+		Status:    ticket.GatePending,
 		Duration:  "1h",
 		CreatedAt: "2026-01-01T00:00:00Z",
 	}
@@ -2235,8 +2235,8 @@ func TestComputeTimerTargetCreatedBase(t *testing.T) {
 func TestComputeTimerTargetSkipsExistingTarget(t *testing.T) {
 	gate := &ticket.TicketGate{
 		ID:       "soak",
-		Type:     "timer",
-		Status:   "pending",
+		Type:     ticket.GateTimer,
+		Status:   ticket.GatePending,
 		Duration: "1h",
 		Target:   "2026-06-01T00:00:00Z", // Already set by caller.
 	}
@@ -2255,8 +2255,8 @@ func TestComputeTimerTargetSkipsExistingTarget(t *testing.T) {
 func TestComputeTimerTargetSkipsNonTimer(t *testing.T) {
 	gate := &ticket.TicketGate{
 		ID:       "ci",
-		Type:     "pipeline",
-		Status:   "pending",
+		Type:     ticket.GatePipeline,
+		Status:   ticket.GatePending,
 		Duration: "1h",
 	}
 
@@ -2273,8 +2273,8 @@ func TestComputeTimerTargetSkipsNonTimer(t *testing.T) {
 func TestComputeTimerTargetInvalidDuration(t *testing.T) {
 	gate := &ticket.TicketGate{
 		ID:       "soak",
-		Type:     "timer",
-		Status:   "pending",
+		Type:     ticket.GateTimer,
+		Status:   ticket.GatePending,
 		Duration: "bogus",
 	}
 
@@ -2298,8 +2298,8 @@ func TestEnrichTimerTargetsCreatedBase(t *testing.T) {
 		Gates: []ticket.TicketGate{
 			{
 				ID:        "soak",
-				Type:      "timer",
-				Status:    "pending",
+				Type:      ticket.GateTimer,
+				Status:    ticket.GatePending,
 				Duration:  "2h",
 				CreatedAt: "2026-01-01T10:00:00Z",
 			},
@@ -2325,8 +2325,8 @@ func TestEnrichTimerTargetsExplicitCreatedBase(t *testing.T) {
 		Gates: []ticket.TicketGate{
 			{
 				ID:        "soak",
-				Type:      "timer",
-				Status:    "pending",
+				Type:      ticket.GateTimer,
+				Status:    ticket.GatePending,
 				Duration:  "30m",
 				Base:      "created",
 				CreatedAt: "2026-01-01T10:00:00Z",
@@ -2354,8 +2354,8 @@ func TestEnrichTimerTargetsUnblockedBaseNoBlockers(t *testing.T) {
 		Gates: []ticket.TicketGate{
 			{
 				ID:        "soak",
-				Type:      "timer",
-				Status:    "pending",
+				Type:      ticket.GateTimer,
+				Status:    ticket.GatePending,
 				Duration:  "1h",
 				Base:      "unblocked",
 				CreatedAt: "2026-01-01T10:00:00Z",
@@ -2393,8 +2393,8 @@ func TestEnrichTimerTargetsUnblockedBaseBlockersClosed(t *testing.T) {
 		Gates: []ticket.TicketGate{
 			{
 				ID:        "soak",
-				Type:      "timer",
-				Status:    "pending",
+				Type:      ticket.GateTimer,
+				Status:    ticket.GatePending,
 				Duration:  "1h",
 				Base:      "unblocked",
 				CreatedAt: "2026-01-01T10:00:00Z",
@@ -2433,8 +2433,8 @@ func TestEnrichTimerTargetsUnblockedBaseBlockersOpen(t *testing.T) {
 		Gates: []ticket.TicketGate{
 			{
 				ID:        "soak",
-				Type:      "timer",
-				Status:    "pending",
+				Type:      ticket.GateTimer,
+				Status:    ticket.GatePending,
 				Duration:  "1h",
 				Base:      "unblocked",
 				CreatedAt: "2026-01-01T10:00:00Z",
@@ -2462,8 +2462,8 @@ func TestEnrichTimerTargetsPreservesCallerTarget(t *testing.T) {
 		Gates: []ticket.TicketGate{
 			{
 				ID:        "deadline",
-				Type:      "timer",
-				Status:    "pending",
+				Type:      ticket.GateTimer,
+				Status:    ticket.GatePending,
 				Target:    "2026-06-01T00:00:00Z",
 				CreatedAt: "2026-01-01T10:00:00Z",
 			},
@@ -2513,8 +2513,8 @@ func TestResolveUnblockedTimerTargetsComputesTarget(t *testing.T) {
 			Gates: []ticket.TicketGate{
 				{
 					ID:        "soak-after-unblock",
-					Type:      "timer",
-					Status:    "pending",
+					Type:      ticket.GateTimer,
+					Status:    ticket.GatePending,
 					Duration:  "24h",
 					Base:      "unblocked",
 					CreatedAt: "2026-01-15T00:00:00Z",
@@ -2580,8 +2580,8 @@ func TestResolveUnblockedTimerTargetsSkipsPartiallyBlocked(t *testing.T) {
 			Gates: []ticket.TicketGate{
 				{
 					ID:        "soak",
-					Type:      "timer",
-					Status:    "pending",
+					Type:      ticket.GateTimer,
+					Status:    ticket.GatePending,
 					Duration:  "1h",
 					Base:      "unblocked",
 					CreatedAt: "2026-01-15T00:00:00Z",
@@ -2634,8 +2634,8 @@ func TestResolveUnblockedTimerTargetsSkipsCreatedBase(t *testing.T) {
 			Gates: []ticket.TicketGate{
 				{
 					ID:        "soak",
-					Type:      "timer",
-					Status:    "pending",
+					Type:      ticket.GateTimer,
+					Status:    ticket.GatePending,
 					Duration:  "1h",
 					Base:      "created",
 					Target:    "2026-01-15T01:00:00Z", // Already computed at creation.
@@ -2697,8 +2697,8 @@ func TestResolveUnblockedTimerTargetsMultipleBlockersSameBatch(t *testing.T) {
 			Gates: []ticket.TicketGate{
 				{
 					ID:        "soak",
-					Type:      "timer",
-					Status:    "pending",
+					Type:      ticket.GateTimer,
+					Status:    ticket.GatePending,
 					Duration:  "1h",
 					Base:      "unblocked",
 					CreatedAt: "2026-01-15T00:00:00Z",
@@ -2818,7 +2818,7 @@ func newGateTestServiceWithWriter(writer matrixWriter) *TicketService {
 func TestHasRecurringGatesWithSchedule(t *testing.T) {
 	content := &ticket.TicketContent{
 		Gates: []ticket.TicketGate{
-			{ID: "daily", Type: "timer", Status: "satisfied", Schedule: "0 7 * * *"},
+			{ID: "daily", Type: ticket.GateTimer, Status: ticket.GateSatisfied, Schedule: "0 7 * * *"},
 		},
 	}
 	if !hasRecurringGates(content) {
@@ -2829,7 +2829,7 @@ func TestHasRecurringGatesWithSchedule(t *testing.T) {
 func TestHasRecurringGatesWithInterval(t *testing.T) {
 	content := &ticket.TicketContent{
 		Gates: []ticket.TicketGate{
-			{ID: "poll", Type: "timer", Status: "satisfied", Interval: "4h"},
+			{ID: "poll", Type: ticket.GateTimer, Status: ticket.GateSatisfied, Interval: "4h"},
 		},
 	}
 	if !hasRecurringGates(content) {
@@ -2840,7 +2840,7 @@ func TestHasRecurringGatesWithInterval(t *testing.T) {
 func TestHasRecurringGatesNonRecurring(t *testing.T) {
 	content := &ticket.TicketContent{
 		Gates: []ticket.TicketGate{
-			{ID: "soak", Type: "timer", Status: "satisfied", Duration: "1h", Target: "2026-01-01T01:00:00Z"},
+			{ID: "soak", Type: ticket.GateTimer, Status: ticket.GateSatisfied, Duration: "1h", Target: "2026-01-01T01:00:00Z"},
 		},
 	}
 	if hasRecurringGates(content) {
@@ -2851,7 +2851,7 @@ func TestHasRecurringGatesNonRecurring(t *testing.T) {
 func TestHasRecurringGatesNonTimer(t *testing.T) {
 	content := &ticket.TicketContent{
 		Gates: []ticket.TicketGate{
-			{ID: "ci", Type: "pipeline", Status: "pending", PipelineRef: "build"},
+			{ID: "ci", Type: ticket.GatePipeline, Status: ticket.GatePending, PipelineRef: "build"},
 		},
 	}
 	if hasRecurringGates(content) {
@@ -2877,8 +2877,8 @@ func TestRearmRecurringGatesSchedule(t *testing.T) {
 		Gates: []ticket.TicketGate{
 			{
 				ID:          "daily",
-				Type:        "timer",
-				Status:      "satisfied",
+				Type:        ticket.GateTimer,
+				Status:      ticket.GateSatisfied,
 				Duration:    "1h",
 				Target:      "2026-01-15T07:00:00Z",
 				Schedule:    "0 7 * * *",
@@ -2899,7 +2899,7 @@ func TestRearmRecurringGatesSchedule(t *testing.T) {
 	}
 
 	gate := content.Gates[0]
-	if gate.Status != "pending" {
+	if gate.Status != ticket.GatePending {
 		t.Fatalf("Status = %q, want pending", gate.Status)
 	}
 	if gate.Target != "2026-01-16T07:00:00Z" {
@@ -2927,8 +2927,8 @@ func TestRearmRecurringGatesInterval(t *testing.T) {
 		Gates: []ticket.TicketGate{
 			{
 				ID:          "poll",
-				Type:        "timer",
-				Status:      "satisfied",
+				Type:        ticket.GateTimer,
+				Status:      ticket.GateSatisfied,
 				Duration:    "4h",
 				Target:      "2026-01-15T08:00:00Z",
 				Interval:    "4h",
@@ -2949,7 +2949,7 @@ func TestRearmRecurringGatesInterval(t *testing.T) {
 	}
 
 	gate := content.Gates[0]
-	if gate.Status != "pending" {
+	if gate.Status != ticket.GatePending {
 		t.Fatalf("Status = %q, want pending", gate.Status)
 	}
 	if gate.Target != "2026-01-15T16:00:00Z" {
@@ -2968,8 +2968,8 @@ func TestRearmRecurringGatesMaxOccurrencesExhausted(t *testing.T) {
 		Gates: []ticket.TicketGate{
 			{
 				ID:             "daily",
-				Type:           "timer",
-				Status:         "satisfied",
+				Type:           ticket.GateTimer,
+				Status:         ticket.GateSatisfied,
 				Duration:       "1h",
 				Target:         "2026-01-15T07:00:00Z",
 				Schedule:       "0 7 * * *",
@@ -2999,7 +2999,7 @@ func TestRearmRecurringGatesMaxOccurrencesExhausted(t *testing.T) {
 		t.Fatalf("LastFiredAt = %q, want 2026-01-15T12:00:00Z", gate.LastFiredAt)
 	}
 	// Status should remain satisfied (not re-armed).
-	if gate.Status != "satisfied" {
+	if gate.Status != ticket.GateSatisfied {
 		t.Fatalf("Status = %q, want satisfied", gate.Status)
 	}
 }
@@ -3012,8 +3012,8 @@ func TestRearmRecurringGatesMaxOccurrencesNotYetExhausted(t *testing.T) {
 		Gates: []ticket.TicketGate{
 			{
 				ID:             "daily",
-				Type:           "timer",
-				Status:         "satisfied",
+				Type:           ticket.GateTimer,
+				Status:         ticket.GateSatisfied,
 				Duration:       "1h",
 				Target:         "2026-01-15T07:00:00Z",
 				Schedule:       "0 7 * * *",
@@ -3038,7 +3038,7 @@ func TestRearmRecurringGatesMaxOccurrencesNotYetExhausted(t *testing.T) {
 	if gate.FireCount != 4 {
 		t.Fatalf("FireCount = %d, want 4", gate.FireCount)
 	}
-	if gate.Status != "pending" {
+	if gate.Status != ticket.GatePending {
 		t.Fatalf("Status = %q, want pending", gate.Status)
 	}
 }
@@ -3050,8 +3050,8 @@ func TestRearmRecurringGatesUnlimitedOccurrences(t *testing.T) {
 		Gates: []ticket.TicketGate{
 			{
 				ID:             "daily",
-				Type:           "timer",
-				Status:         "satisfied",
+				Type:           ticket.GateTimer,
+				Status:         ticket.GateSatisfied,
 				Duration:       "1h",
 				Target:         "2026-01-15T07:00:00Z",
 				Schedule:       "0 7 * * *",
@@ -3084,8 +3084,8 @@ func TestRearmRecurringGatesMixedGates(t *testing.T) {
 		Gates: []ticket.TicketGate{
 			{
 				ID:          "ci",
-				Type:        "pipeline",
-				Status:      "satisfied",
+				Type:        ticket.GatePipeline,
+				Status:      ticket.GateSatisfied,
 				PipelineRef: "build-check",
 				SatisfiedAt: "2026-01-14T12:00:00Z",
 				SatisfiedBy: "$event",
@@ -3093,8 +3093,8 @@ func TestRearmRecurringGatesMixedGates(t *testing.T) {
 			},
 			{
 				ID:          "daily",
-				Type:        "timer",
-				Status:      "satisfied",
+				Type:        ticket.GateTimer,
+				Status:      ticket.GateSatisfied,
 				Duration:    "1h",
 				Target:      "2026-01-15T07:00:00Z",
 				Schedule:    "0 7 * * *",
@@ -3114,7 +3114,7 @@ func TestRearmRecurringGatesMixedGates(t *testing.T) {
 	}
 
 	// Pipeline gate should be untouched.
-	if content.Gates[0].Status != "satisfied" {
+	if content.Gates[0].Status != ticket.GateSatisfied {
 		t.Fatalf("pipeline gate Status = %q, want satisfied", content.Gates[0].Status)
 	}
 	if content.Gates[0].SatisfiedAt != "2026-01-14T12:00:00Z" {
@@ -3122,7 +3122,7 @@ func TestRearmRecurringGatesMixedGates(t *testing.T) {
 	}
 
 	// Timer gate should be re-armed.
-	if content.Gates[1].Status != "pending" {
+	if content.Gates[1].Status != ticket.GatePending {
 		t.Fatalf("timer gate Status = %q, want pending", content.Gates[1].Status)
 	}
 	if content.Gates[1].Target != "2026-01-16T07:00:00Z" {
@@ -3136,8 +3136,8 @@ func TestRearmRecurringGatesInvalidSchedule(t *testing.T) {
 		Gates: []ticket.TicketGate{
 			{
 				ID:       "bad",
-				Type:     "timer",
-				Status:   "satisfied",
+				Type:     ticket.GateTimer,
+				Status:   ticket.GateSatisfied,
 				Duration: "1h",
 				Schedule: "bogus cron expression",
 			},
@@ -3156,8 +3156,8 @@ func TestRearmRecurringGatesInvalidInterval(t *testing.T) {
 		Gates: []ticket.TicketGate{
 			{
 				ID:       "bad",
-				Type:     "timer",
-				Status:   "satisfied",
+				Type:     ticket.GateTimer,
+				Status:   ticket.GateSatisfied,
 				Duration: "1h",
 				Interval: "not-a-duration",
 			},
@@ -3184,8 +3184,8 @@ func TestRearmRecurringGatesMissedOccurrences(t *testing.T) {
 		Gates: []ticket.TicketGate{
 			{
 				ID:          "daily",
-				Type:        "timer",
-				Status:      "satisfied",
+				Type:        ticket.GateTimer,
+				Status:      ticket.GateSatisfied,
 				Duration:    "1h",
 				Target:      "2026-01-12T07:00:00Z",
 				Schedule:    "0 7 * * *",
@@ -3221,10 +3221,10 @@ func TestRearmRecurringGatesMissedOccurrences(t *testing.T) {
 func TestStripRecurringGatesRemovesRecurring(t *testing.T) {
 	content := &ticket.TicketContent{
 		Gates: []ticket.TicketGate{
-			{ID: "ci", Type: "pipeline", Status: "satisfied", PipelineRef: "build"},
-			{ID: "daily", Type: "timer", Status: "satisfied", Schedule: "0 7 * * *"},
-			{ID: "soak", Type: "timer", Status: "pending", Duration: "1h"},
-			{ID: "poll", Type: "timer", Status: "satisfied", Interval: "4h"},
+			{ID: "ci", Type: ticket.GatePipeline, Status: ticket.GateSatisfied, PipelineRef: "build"},
+			{ID: "daily", Type: ticket.GateTimer, Status: ticket.GateSatisfied, Schedule: "0 7 * * *"},
+			{ID: "soak", Type: ticket.GateTimer, Status: ticket.GatePending, Duration: "1h"},
+			{ID: "poll", Type: ticket.GateTimer, Status: ticket.GateSatisfied, Interval: "4h"},
 		},
 	}
 
@@ -3244,8 +3244,8 @@ func TestStripRecurringGatesRemovesRecurring(t *testing.T) {
 func TestStripRecurringGatesNoRecurring(t *testing.T) {
 	content := &ticket.TicketContent{
 		Gates: []ticket.TicketGate{
-			{ID: "ci", Type: "pipeline", Status: "satisfied", PipelineRef: "build"},
-			{ID: "soak", Type: "timer", Status: "pending", Duration: "1h"},
+			{ID: "ci", Type: ticket.GatePipeline, Status: ticket.GateSatisfied, PipelineRef: "build"},
+			{ID: "soak", Type: ticket.GateTimer, Status: ticket.GatePending, Duration: "1h"},
 		},
 	}
 
@@ -3259,8 +3259,8 @@ func TestStripRecurringGatesNoRecurring(t *testing.T) {
 func TestStripRecurringGatesAllRecurring(t *testing.T) {
 	content := &ticket.TicketContent{
 		Gates: []ticket.TicketGate{
-			{ID: "daily", Type: "timer", Status: "satisfied", Schedule: "0 7 * * *"},
-			{ID: "poll", Type: "timer", Status: "satisfied", Interval: "4h"},
+			{ID: "daily", Type: ticket.GateTimer, Status: ticket.GateSatisfied, Schedule: "0 7 * * *"},
+			{ID: "poll", Type: ticket.GateTimer, Status: ticket.GateSatisfied, Interval: "4h"},
 		},
 	}
 
@@ -3285,10 +3285,10 @@ func TestSynthesizeRecurringGateSchedule(t *testing.T) {
 	if gate.ID != "schedule" {
 		t.Errorf("ID: got %q, want 'schedule'", gate.ID)
 	}
-	if gate.Type != "timer" {
+	if gate.Type != ticket.GateTimer {
 		t.Errorf("Type: got %q, want 'timer'", gate.Type)
 	}
-	if gate.Status != "pending" {
+	if gate.Status != ticket.GatePending {
 		t.Errorf("Status: got %q, want 'pending'", gate.Status)
 	}
 	if gate.Schedule != "0 7 * * *" {
@@ -3362,10 +3362,10 @@ func TestSynthesizeDeferGateUntil(t *testing.T) {
 	if gate.ID != "defer" {
 		t.Errorf("ID: got %q, want 'defer'", gate.ID)
 	}
-	if gate.Type != "timer" {
+	if gate.Type != ticket.GateTimer {
 		t.Errorf("Type: got %q, want 'timer'", gate.Type)
 	}
-	if gate.Status != "pending" {
+	if gate.Status != ticket.GatePending {
 		t.Errorf("Status: got %q, want 'pending'", gate.Status)
 	}
 	if gate.Target != "2026-02-01T09:00:00Z" {
@@ -3468,8 +3468,8 @@ func reviewGateIndex(ticketReview *ticket.TicketReview, children []ticket.Ticket
 	idx := ticketindex.NewIndex()
 	gate := ticket.TicketGate{
 		ID:     "review-approval",
-		Type:   "review",
-		Status: "pending",
+		Type:   ticket.GateReview,
+		Status: ticket.GatePending,
 	}
 	parent := testTicket("Review parent")
 	parent.Status = "review"

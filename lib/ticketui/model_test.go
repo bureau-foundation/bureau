@@ -996,8 +996,8 @@ func testPipelineSource() *IndexSource {
 		UpdatedAt: "2026-02-19T00:00:00Z",
 		Gates: []ticket.TicketGate{{
 			ID:       "nightly-timer",
-			Type:     "timer",
-			Status:   "pending",
+			Type:     ticket.GateTimer,
+			Status:   ticket.GatePending,
 			Target:   "2026-02-22T03:00:00Z",
 			Schedule: "0 3 * * *",
 		}},
@@ -1019,8 +1019,8 @@ func testPipelineSource() *IndexSource {
 		UpdatedAt: "2026-02-18T00:00:00Z",
 		Gates: []ticket.TicketGate{{
 			ID:        "weekly-timer",
-			Type:      "timer",
-			Status:    "pending",
+			Type:      ticket.GateTimer,
+			Status:    ticket.GatePending,
 			Target:    "2026-02-24T00:00:00Z",
 			Schedule:  "0 0 * * 0",
 			FireCount: 5,

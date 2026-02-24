@@ -90,8 +90,8 @@ func (ts *TicketService) synthesizeRecurringGate(schedule, interval string) (tic
 	now := ts.clock.Now()
 
 	gate := ticket.TicketGate{
-		Type:   "timer",
-		Status: "pending",
+		Type:   ticket.GateTimer,
+		Status: ticket.GatePending,
 	}
 
 	if schedule != "" {
@@ -152,8 +152,8 @@ func (ts *TicketService) synthesizeDeferGate(until, forDuration string) (ticket.
 
 	return ticket.TicketGate{
 		ID:     "defer",
-		Type:   "timer",
-		Status: "pending",
+		Type:   ticket.GateTimer,
+		Status: ticket.GatePending,
 		Target: target.UTC().Format(time.RFC3339),
 	}, nil
 }
@@ -1304,15 +1304,15 @@ func (ts *TicketService) handleResolveGate(ctx context.Context, token *serviceto
 	}
 
 	gate := &content.Gates[gateIndex]
-	if gate.Type != "human" {
+	if gate.Type != ticket.GateHuman {
 		return nil, fmt.Errorf("gate %q is type %q: only human gates can be resolved manually; use update-gate for programmatic gates", gate.ID, gate.Type)
 	}
-	if gate.Status == "satisfied" {
+	if gate.Status == ticket.GateSatisfied {
 		return nil, fmt.Errorf("gate %q is already satisfied", gate.ID)
 	}
 
 	now := ts.clock.Now().UTC().Format(time.RFC3339)
-	gate.Status = "satisfied"
+	gate.Status = ticket.GateSatisfied
 	gate.SatisfiedAt = now
 	gate.SatisfiedBy = token.Subject.String()
 	content.UpdatedAt = now
@@ -1373,8 +1373,8 @@ func (ts *TicketService) handleUpdateGate(ctx context.Context, token *servicetok
 	gate := &content.Gates[gateIndex]
 	now := ts.clock.Now().UTC().Format(time.RFC3339)
 
-	gate.Status = request.Status
-	if request.Status == "satisfied" {
+	gate.Status = ticket.GateStatus(request.Status)
+	if gate.Status == ticket.GateSatisfied {
 		gate.SatisfiedAt = now
 		if request.SatisfiedBy != "" {
 			gate.SatisfiedBy = request.SatisfiedBy
@@ -1605,15 +1605,15 @@ func (ts *TicketService) handleDefer(ctx context.Context, token *servicetoken.To
 		// Update existing defer gate's target and reset to pending.
 		gate := &content.Gates[gateIndex]
 		gate.Target = targetStr
-		gate.Status = "pending"
+		gate.Status = ticket.GatePending
 		gate.SatisfiedAt = ""
 		gate.SatisfiedBy = ""
 	} else {
 		// Create a new defer gate.
 		content.Gates = append(content.Gates, ticket.TicketGate{
 			ID:        "defer",
-			Type:      "timer",
-			Status:    "pending",
+			Type:      ticket.GateTimer,
+			Status:    ticket.GatePending,
 			Target:    targetStr,
 			CreatedAt: nowStr,
 		})

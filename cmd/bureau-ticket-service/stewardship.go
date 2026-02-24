@@ -165,8 +165,8 @@ func (ts *TicketService) buildIndependentGate(
 
 	gate := ticket.TicketGate{
 		ID:          "stewardship:" + declaration.StateKey,
-		Type:        "review",
-		Status:      "pending",
+		Type:        ticket.GateReview,
+		Status:      ticket.GatePending,
 		Description: stewardshipGateDescription(declaration),
 	}
 
@@ -263,8 +263,8 @@ func (ts *TicketService) buildCooperativeGate(
 
 	gate := ticket.TicketGate{
 		ID:          "stewardship:cooperative",
-		Type:        "review",
-		Status:      "pending",
+		Type:        ticket.GateReview,
+		Status:      ticket.GatePending,
 		Description: "Cooperative stewardship review",
 	}
 

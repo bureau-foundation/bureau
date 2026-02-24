@@ -554,7 +554,7 @@ func (d *Daemon) createPipelineTicket(
 		Title:     fmt.Sprintf("Pipeline: %s", pipelineNameFromRef(pipelineRef)),
 		Status:    ticket.StatusOpen,
 		Priority:  2,
-		Type:      "pipeline",
+		Type:      ticket.TypePipeline,
 		CreatedBy: principal.UserID(),
 		CreatedAt: now,
 		UpdatedAt: now,

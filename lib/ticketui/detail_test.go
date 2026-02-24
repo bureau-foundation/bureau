@@ -161,8 +161,8 @@ func TestRenderReviewWithGateStatus(t *testing.T) {
 		Gates: []ticket.TicketGate{
 			{
 				ID:          "stewardship:fleet/gpu",
-				Type:        "review",
-				Status:      "pending",
+				Type:        ticket.GateReview,
+				Status:      ticket.GatePending,
 				Description: "Fleet GPU stewardship",
 			},
 		},
@@ -197,8 +197,8 @@ func TestRenderReviewSatisfiedGate(t *testing.T) {
 		Gates: []ticket.TicketGate{
 			{
 				ID:          "stewardship:fleet/gpu",
-				Type:        "review",
-				Status:      "satisfied",
+				Type:        ticket.GateReview,
+				Status:      ticket.GateSatisfied,
 				Description: "Fleet GPU stewardship",
 			},
 		},
@@ -222,8 +222,8 @@ func TestRenderReviewSkipsNonReviewGates(t *testing.T) {
 	content := ticket.TicketContent{
 		Status: ticket.StatusOpen,
 		Gates: []ticket.TicketGate{
-			{ID: "ci-pass", Type: "pipeline", Status: "pending"},
-			{ID: "stewardship:fleet/gpu", Type: "review", Status: "pending", Description: "Fleet GPU"},
+			{ID: "ci-pass", Type: ticket.GatePipeline, Status: ticket.GatePending},
+			{ID: "stewardship:fleet/gpu", Type: ticket.GateReview, Status: ticket.GatePending, Description: "Fleet GPU"},
 		},
 		Review: &ticket.TicketReview{
 			Reviewers: []ticket.ReviewerEntry{

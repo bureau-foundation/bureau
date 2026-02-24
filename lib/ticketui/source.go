@@ -243,7 +243,7 @@ func (source *IndexSource) Pipelines() Snapshot {
 	source.mutex.RLock()
 	defer source.mutex.RUnlock()
 	return Snapshot{
-		Entries: source.index.List(ticketindex.Filter{Type: "pipeline"}),
+		Entries: source.index.List(ticketindex.Filter{Type: string(ticket.TypePipeline)}),
 		Stats:   source.index.Stats(),
 	}
 }

@@ -171,10 +171,10 @@ func TestBuildIndependentGate(t *testing.T) {
 	if gate.ID != "stewardship:fleet/gpu" {
 		t.Errorf("gate ID: got %q, want stewardship:fleet/gpu", gate.ID)
 	}
-	if gate.Type != "review" {
+	if gate.Type != ticket.GateReview {
 		t.Errorf("gate type: got %q, want review", gate.Type)
 	}
-	if gate.Status != "pending" {
+	if gate.Status != ticket.GatePending {
 		t.Errorf("gate status: got %q, want pending", gate.Status)
 	}
 
@@ -290,7 +290,7 @@ func TestBuildCooperativeGate(t *testing.T) {
 	if gate.ID != "stewardship:cooperative" {
 		t.Errorf("gate ID: got %q, want stewardship:cooperative", gate.ID)
 	}
-	if gate.Type != "review" {
+	if gate.Type != ticket.GateReview {
 		t.Errorf("gate type: got %q, want review", gate.Type)
 	}
 
@@ -584,10 +584,10 @@ func TestResolveStewardshipGatesSkipsDeclarationWithNoMembers(t *testing.T) {
 
 func TestRemoveStewardshipGates(t *testing.T) {
 	gates := []ticket.TicketGate{
-		{ID: "ci-pass", Type: "pipeline", Status: "pending"},
-		{ID: "stewardship:fleet/gpu", Type: "review", Status: "pending"},
-		{ID: "lead-approval", Type: "human", Status: "pending"},
-		{ID: "stewardship:cooperative", Type: "review", Status: "satisfied"},
+		{ID: "ci-pass", Type: ticket.GatePipeline, Status: ticket.GatePending},
+		{ID: "stewardship:fleet/gpu", Type: ticket.GateReview, Status: ticket.GatePending},
+		{ID: "lead-approval", Type: ticket.GateHuman, Status: ticket.GatePending},
+		{ID: "stewardship:cooperative", Type: ticket.GateReview, Status: ticket.GateSatisfied},
 	}
 
 	filtered := removeStewardshipGates(gates)
@@ -604,7 +604,7 @@ func TestRemoveStewardshipGates(t *testing.T) {
 
 func TestRemoveStewardshipGatesNoStewardship(t *testing.T) {
 	gates := []ticket.TicketGate{
-		{ID: "ci-pass", Type: "pipeline", Status: "pending"},
+		{ID: "ci-pass", Type: ticket.GatePipeline, Status: ticket.GatePending},
 	}
 
 	filtered := removeStewardshipGates(gates)
@@ -781,10 +781,10 @@ func TestHandleCreateWithStewardshipAffects(t *testing.T) {
 	if stewardshipGate == nil {
 		t.Fatal("expected stewardship:fleet/gpu gate")
 	}
-	if stewardshipGate.Type != "review" {
+	if stewardshipGate.Type != ticket.GateReview {
 		t.Errorf("gate type: got %q, want review", stewardshipGate.Type)
 	}
-	if stewardshipGate.Status != "pending" {
+	if stewardshipGate.Status != ticket.GatePending {
 		t.Errorf("gate status: got %q, want pending", stewardshipGate.Status)
 	}
 	if stewardshipGate.CreatedAt == "" {
@@ -874,7 +874,7 @@ func TestHandleUpdateChangesAffects(t *testing.T) {
 	for _, gate := range result.Content.Gates {
 		if gate.ID == "stewardship:fleet/gpu" {
 			foundGate = true
-			if gate.Type != "review" {
+			if gate.Type != ticket.GateReview {
 				t.Errorf("gate type: got %q", gate.Type)
 			}
 		}
@@ -1561,7 +1561,7 @@ func TestSetDispositionTriggersEscalation(t *testing.T) {
 			},
 		},
 		Gates: []ticket.TicketGate{
-			{ID: "stewardship:fleet/gpu", Type: "review", Status: "pending", CreatedAt: "2026-01-15T12:00:00Z"},
+			{ID: "stewardship:fleet/gpu", Type: ticket.GateReview, Status: ticket.GatePending, CreatedAt: "2026-01-15T12:00:00Z"},
 		},
 	}
 	env.service.rooms[roomID].index.Put("tkt-1", content)
@@ -1623,7 +1623,7 @@ func TestSetDispositionNoEscalationWhenNotLastPending(t *testing.T) {
 			},
 		},
 		Gates: []ticket.TicketGate{
-			{ID: "stewardship:fleet/gpu", Type: "review", Status: "pending", CreatedAt: "2026-01-15T12:00:00Z"},
+			{ID: "stewardship:fleet/gpu", Type: ticket.GateReview, Status: ticket.GatePending, CreatedAt: "2026-01-15T12:00:00Z"},
 		},
 	}
 	env.service.rooms[roomID].index.Put("tkt-2", content)

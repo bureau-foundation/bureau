@@ -73,7 +73,7 @@ func (ts *TicketService) evaluateGatesForEvent(ctx context.Context, roomID ref.R
 			continue
 		}
 		gate := &current.Gates[watch.GateIndex]
-		if gate.Status != "pending" {
+		if gate.Status != ticket.GatePending {
 			// Gate was already satisfied by a previous event
 			// in this batch, or the ticket was re-indexed
 			// with different gates.
@@ -127,13 +127,13 @@ func (ts *TicketService) evaluateGatesForEvent(ctx context.Context, roomID ref.R
 // children). Other gate types use only the event.
 func matchGateEvent(gate *ticket.TicketGate, event messaging.Event, index *ticketindex.Index, ticketID string) bool {
 	switch gate.Type {
-	case "pipeline":
+	case ticket.GatePipeline:
 		return matchPipelineGate(gate, event)
-	case "ticket":
+	case ticket.GateTicket:
 		return matchTicketGate(gate, event)
-	case "review":
+	case ticket.GateReview:
 		return matchReviewGate(index, ticketID)
-	case "state_event":
+	case ticket.GateStateEvent:
 		return matchStateEventGate(gate, event)
 	default:
 		return false
@@ -364,7 +364,7 @@ func (ts *TicketService) evaluateCrossRoomGates(ctx context.Context, joinedRooms
 		for _, entry := range candidates {
 			for gateIndex := range entry.Content.Gates {
 				gate := &entry.Content.Gates[gateIndex]
-				if gate.Status != "pending" || gate.Type != "state_event" || gate.RoomAlias.IsZero() {
+				if gate.Status != ticket.GatePending || gate.Type != ticket.GateStateEvent || gate.RoomAlias.IsZero() {
 					continue
 				}
 
@@ -402,7 +402,7 @@ func (ts *TicketService) evaluateCrossRoomGates(ctx context.Context, joinedRooms
 						break
 					}
 					currentGate := &current.Gates[gateIndex]
-					if currentGate.ID != gate.ID || currentGate.Status != "pending" {
+					if currentGate.ID != gate.ID || currentGate.Status != ticket.GatePending {
 						break
 					}
 
@@ -486,7 +486,7 @@ func (ts *TicketService) satisfyGate(
 ) error {
 	now := ts.clock.Now().UTC().Format(time.RFC3339)
 
-	content.Gates[gateIndex].Status = "satisfied"
+	content.Gates[gateIndex].Status = ticket.GateSatisfied
 	content.Gates[gateIndex].SatisfiedAt = now
 	content.Gates[gateIndex].SatisfiedBy = satisfiedBy
 	content.UpdatedAt = now
@@ -520,7 +520,7 @@ func timerExpired(gate *ticket.TicketGate, now time.Time) (bool, error) {
 // has a Target, has no Duration, or is not a timer gate. Mutates the
 // gate in place.
 func computeTimerTarget(gate *ticket.TicketGate, baseTime time.Time) error {
-	if gate.Type != "timer" || gate.Target != "" || gate.Duration == "" {
+	if gate.Type != ticket.GateTimer || gate.Target != "" || gate.Duration == "" {
 		return nil
 	}
 	duration, err := time.ParseDuration(gate.Duration)
@@ -543,7 +543,7 @@ func computeTimerTarget(gate *ticket.TicketGate, baseTime time.Time) error {
 func enrichTimerTargets(content *ticket.TicketContent, index *ticketindex.Index) {
 	for i := range content.Gates {
 		gate := &content.Gates[i]
-		if gate.Type != "timer" || gate.Target != "" || gate.Duration == "" {
+		if gate.Type != ticket.GateTimer || gate.Target != "" || gate.Duration == "" {
 			continue
 		}
 
@@ -609,7 +609,7 @@ func (ts *TicketService) resolveUnblockedTimerTargets(ctx context.Context, roomI
 			needsWrite := false
 			for i := range content.Gates {
 				gate := &content.Gates[i]
-				if gate.Type != "timer" || gate.Status != "pending" {
+				if gate.Type != ticket.GateTimer || gate.Status != ticket.GatePending {
 					continue
 				}
 				if gate.Base != "unblocked" || gate.Target != "" || gate.Duration == "" {
@@ -687,7 +687,7 @@ func (ts *TicketService) pushTimerGates(roomID ref.RoomID, ticketID string, cont
 	pushed := false
 	for i := range content.Gates {
 		gate := &content.Gates[i]
-		if gate.Type != "timer" || gate.Status != "pending" || gate.Target == "" {
+		if gate.Type != ticket.GateTimer || gate.Status != ticket.GatePending || gate.Target == "" {
 			continue
 		}
 		target, err := time.Parse(time.RFC3339, gate.Target)
@@ -742,7 +742,7 @@ func (ts *TicketService) rebuildTimerHeap() {
 		for _, entry := range state.index.PendingGates() {
 			for i := range entry.Content.Gates {
 				gate := &entry.Content.Gates[i]
-				if gate.Type != "timer" || gate.Status != "pending" || gate.Target == "" {
+				if gate.Type != ticket.GateTimer || gate.Status != ticket.GatePending || gate.Target == "" {
 					continue
 				}
 				target, err := time.Parse(time.RFC3339, gate.Target)
@@ -878,7 +878,7 @@ func (ts *TicketService) fireExpiredTimersLocked(ctx context.Context) {
 		}
 
 		gate := &content.Gates[gateIndex]
-		if gate.Status != "pending" || gate.Type != "timer" {
+		if gate.Status != ticket.GatePending || gate.Type != ticket.GateTimer {
 			continue
 		}
 
@@ -1053,7 +1053,7 @@ func rearmRecurringGates(content *ticket.TicketContent, now time.Time) (bool, er
 		// Re-arm the gate.
 		gate.FireCount++
 		gate.LastFiredAt = nowStr
-		gate.Status = "pending"
+		gate.Status = ticket.GatePending
 		gate.SatisfiedAt = ""
 		gate.SatisfiedBy = ""
 		gate.Target = nextTarget.UTC().Format(time.RFC3339)

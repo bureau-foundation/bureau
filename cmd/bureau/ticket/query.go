@@ -1005,11 +1005,11 @@ func writeShowDetail(result showResult) error {
 	if len(content.Gates) > 0 {
 		fmt.Println("\nGates:")
 		for _, gate := range content.Gates {
-			status := gate.Status
+			statusDisplay := string(gate.Status)
 			if gate.SatisfiedBy != "" {
-				status += " (by " + gate.SatisfiedBy + ")"
+				statusDisplay += " (by " + gate.SatisfiedBy + ")"
 			}
-			fmt.Printf("  %s  %s  %s\n", gate.ID, gate.Type, status)
+			fmt.Printf("  %s  %s  %s\n", gate.ID, gate.Type, statusDisplay)
 		}
 	}
 

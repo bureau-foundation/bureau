@@ -40,13 +40,13 @@ func TestHandleCreateWithSchedule(t *testing.T) {
 	if gate.ID != "schedule" {
 		t.Errorf("gate ID: got %q, want 'schedule'", gate.ID)
 	}
-	if gate.Type != "timer" {
+	if gate.Type != ticket.GateTimer {
 		t.Errorf("gate Type: got %q, want 'timer'", gate.Type)
 	}
 	if gate.Schedule != "0 7 * * *" {
 		t.Errorf("gate Schedule: got %q, want '0 7 * * *'", gate.Schedule)
 	}
-	if gate.Status != "pending" {
+	if gate.Status != ticket.GatePending {
 		t.Errorf("gate Status: got %q, want 'pending'", gate.Status)
 	}
 	// testClockEpoch is 2026-01-15T12:00:00Z. Next 7am is 2026-01-16T07:00:00Z.
@@ -208,10 +208,10 @@ func TestHandleDeferWithFor(t *testing.T) {
 		t.Fatal("expected 'defer' gate on ticket")
 	}
 	gate := result.Content.Gates[gateIndex]
-	if gate.Type != "timer" {
+	if gate.Type != ticket.GateTimer {
 		t.Errorf("gate Type: got %q, want 'timer'", gate.Type)
 	}
-	if gate.Status != "pending" {
+	if gate.Status != ticket.GatePending {
 		t.Errorf("gate Status: got %q, want 'pending'", gate.Status)
 	}
 	// testClockEpoch + 24h = 2026-01-16T12:00:00Z.
@@ -288,7 +288,7 @@ func TestHandleDeferUpdatesExistingGate(t *testing.T) {
 	if gate.Target != "2026-01-17T12:00:00Z" {
 		t.Errorf("gate Target: got %q, want '2026-01-17T12:00:00Z'", gate.Target)
 	}
-	if gate.Status != "pending" {
+	if gate.Status != ticket.GatePending {
 		t.Errorf("gate Status: got %q, want 'pending'", gate.Status)
 	}
 }
@@ -424,8 +424,8 @@ func TestHandleUpcomingGates(t *testing.T) {
 				Gates: []ticket.TicketGate{
 					{
 						ID:       "schedule",
-						Type:     "timer",
-						Status:   "pending",
+						Type:     ticket.GateTimer,
+						Status:   ticket.GatePending,
 						Schedule: "0 7 * * *",
 						Target:   "2026-01-16T07:00:00Z",
 					},
@@ -443,8 +443,8 @@ func TestHandleUpcomingGates(t *testing.T) {
 				Gates: []ticket.TicketGate{
 					{
 						ID:       "interval",
-						Type:     "timer",
-						Status:   "pending",
+						Type:     ticket.GateTimer,
+						Status:   ticket.GatePending,
 						Interval: "4h",
 						Target:   "2026-01-15T16:00:00Z",
 					},
@@ -462,8 +462,8 @@ func TestHandleUpcomingGates(t *testing.T) {
 				Gates: []ticket.TicketGate{
 					{
 						ID:          "done",
-						Type:        "timer",
-						Status:      "satisfied",
+						Type:        ticket.GateTimer,
+						Status:      ticket.GateSatisfied,
 						Target:      "2026-01-14T00:00:00Z",
 						SatisfiedAt: "2026-01-14T00:00:00Z",
 					},
@@ -529,7 +529,7 @@ func TestHandleUpcomingGatesRoomFilter(t *testing.T) {
 				CreatedAt: "2026-01-01T00:00:00Z",
 				UpdatedAt: "2026-01-01T00:00:00Z",
 				Gates: []ticket.TicketGate{
-					{ID: "t", Type: "timer", Status: "pending", Target: "2026-01-16T00:00:00Z"},
+					{ID: "t", Type: ticket.GateTimer, Status: ticket.GatePending, Target: "2026-01-16T00:00:00Z"},
 				},
 			},
 		}),
@@ -541,7 +541,7 @@ func TestHandleUpcomingGatesRoomFilter(t *testing.T) {
 				CreatedAt: "2026-01-01T00:00:00Z",
 				UpdatedAt: "2026-01-01T00:00:00Z",
 				Gates: []ticket.TicketGate{
-					{ID: "t", Type: "timer", Status: "pending", Target: "2026-01-17T00:00:00Z"},
+					{ID: "t", Type: ticket.GateTimer, Status: ticket.GatePending, Target: "2026-01-17T00:00:00Z"},
 				},
 			},
 		}),
@@ -590,7 +590,7 @@ func TestHandleUpcomingGatesEmpty(t *testing.T) {
 // means a state event was written, so the test checks whether the
 // write produced the expected gate status. If the gate never reaches
 // the expected status, Go's test timeout catches the hang.
-func waitForGateStatus(t *testing.T, env *testEnv, room, ticketID, gateID, expectedStatus string) ticket.TicketContent {
+func waitForGateStatus(t *testing.T, env *testEnv, room, ticketID, gateID string, expectedStatus ticket.GateStatus) ticket.TicketContent {
 	t.Helper()
 
 	for {
@@ -659,7 +659,7 @@ func TestTimerLifecycleScheduleFireAndRearm(t *testing.T) {
 	// should fire the gate.
 	env.clock.Advance(20 * time.Hour) // Now: 2026-01-16T08:00:00Z
 
-	content := waitForGateStatus(t, env, room, ticketID, "schedule", "satisfied")
+	content := waitForGateStatus(t, env, room, ticketID, "schedule", ticket.GateSatisfied)
 	if content.Gates[0].SatisfiedBy != "timer" {
 		t.Errorf("satisfied_by: got %q, want 'timer'", content.Gates[0].SatisfiedBy)
 	}
@@ -680,7 +680,7 @@ func TestTimerLifecycleScheduleFireAndRearm(t *testing.T) {
 		t.Fatalf("status after rearm: got %q, want 'open'", closeResult.Content.Status)
 	}
 	rearmedGate := closeResult.Content.Gates[0]
-	if rearmedGate.Status != "pending" {
+	if rearmedGate.Status != ticket.GatePending {
 		t.Errorf("gate status after rearm: got %q, want 'pending'", rearmedGate.Status)
 	}
 	if rearmedGate.FireCount != 1 {
@@ -694,7 +694,7 @@ func TestTimerLifecycleScheduleFireAndRearm(t *testing.T) {
 	// Step 4: Advance to the second occurrence and verify it fires again.
 	env.clock.Advance(24 * time.Hour) // Now: 2026-01-17T08:00:00Z
 
-	waitForGateStatus(t, env, room, ticketID, "schedule", "satisfied")
+	waitForGateStatus(t, env, room, ticketID, "schedule", ticket.GateSatisfied)
 
 	// Step 5: Close with --end-recurrence to permanently close.
 	// Use a fresh result variable to avoid stale slice values from
@@ -746,7 +746,7 @@ func TestTimerLifecycleIntervalFireAndRearm(t *testing.T) {
 	// Advance past the first target.
 	env.clock.Advance(5 * time.Hour) // Now: 2026-01-15T17:00:00Z
 
-	content := waitForGateStatus(t, env, room, ticketID, "interval", "satisfied")
+	content := waitForGateStatus(t, env, room, ticketID, "interval", ticket.GateSatisfied)
 	if content.Gates[0].SatisfiedBy != "timer" {
 		t.Errorf("satisfied_by: got %q, want 'timer'", content.Gates[0].SatisfiedBy)
 	}
@@ -788,8 +788,8 @@ func TestTimerLifecycleMaxOccurrences(t *testing.T) {
 				Gates: []ticket.TicketGate{
 					{
 						ID:             "interval",
-						Type:           "timer",
-						Status:         "pending",
+						Type:           ticket.GateTimer,
+						Status:         ticket.GatePending,
 						Interval:       "1h",
 						Target:         "2026-01-15T13:00:00Z",
 						MaxOccurrences: 2,
@@ -808,7 +808,7 @@ func TestTimerLifecycleMaxOccurrences(t *testing.T) {
 
 	// Fire the first occurrence.
 	env.clock.Advance(2 * time.Hour) // Now: 2026-01-15T14:00:00Z
-	waitForGateStatus(t, env, room, "tkt-max", "interval", "satisfied")
+	waitForGateStatus(t, env, room, "tkt-max", "interval", ticket.GateSatisfied)
 
 	// Close — should rearm (fire_count becomes 1, max is 2).
 	var closeResult mutationResponse
@@ -825,7 +825,7 @@ func TestTimerLifecycleMaxOccurrences(t *testing.T) {
 
 	// Fire the second occurrence.
 	env.clock.Advance(2 * time.Hour) // Now: 2026-01-15T16:00:00Z
-	waitForGateStatus(t, env, room, "tkt-max", "interval", "satisfied")
+	waitForGateStatus(t, env, room, "tkt-max", "interval", ticket.GateSatisfied)
 
 	// Close — should NOT rearm (fire_count becomes 2 == max_occurrences).
 	err = env.client.Call(ctx, "close", map[string]any{
@@ -863,14 +863,14 @@ func TestTimerLifecycleDeferCreateAndFire(t *testing.T) {
 	if gateIndex < 0 {
 		t.Fatal("expected 'defer' gate")
 	}
-	if deferResult.Content.Gates[gateIndex].Status != "pending" {
+	if deferResult.Content.Gates[gateIndex].Status != ticket.GatePending {
 		t.Fatalf("gate status: got %q, want 'pending'", deferResult.Content.Gates[gateIndex].Status)
 	}
 
 	// Advance past the defer target.
 	env.clock.Advance(3 * time.Hour) // Now: 2026-01-15T15:00:00Z
 
-	content := waitForGateStatus(t, env, room, "tkt-open", "defer", "satisfied")
+	content := waitForGateStatus(t, env, room, "tkt-open", "defer", ticket.GateSatisfied)
 	if content.Gates[gateIndex].SatisfiedBy != "timer" {
 		t.Errorf("satisfied_by: got %q, want 'timer'", content.Gates[gateIndex].SatisfiedBy)
 	}

@@ -390,8 +390,8 @@ func recurringRooms() map[ref.RoomID]*roomState {
 			Gates: []ticket.TicketGate{
 				{
 					ID:        "daily",
-					Type:      "timer",
-					Status:    "satisfied",
+					Type:      ticket.GateTimer,
+					Status:    ticket.GateSatisfied,
 					Duration:  "1h",
 					Target:    "2026-01-15T07:00:00Z",
 					Schedule:  "0 7 * * *",
@@ -412,8 +412,8 @@ func recurringRooms() map[ref.RoomID]*roomState {
 			Gates: []ticket.TicketGate{
 				{
 					ID:        "poll",
-					Type:      "timer",
-					Status:    "satisfied",
+					Type:      ticket.GateTimer,
+					Status:    ticket.GateSatisfied,
 					Duration:  "4h",
 					Target:    "2026-01-15T08:00:00Z",
 					Interval:  "4h",
@@ -434,8 +434,8 @@ func recurringRooms() map[ref.RoomID]*roomState {
 			Gates: []ticket.TicketGate{
 				{
 					ID:             "limited",
-					Type:           "timer",
-					Status:         "satisfied",
+					Type:           ticket.GateTimer,
+					Status:         ticket.GateSatisfied,
 					Duration:       "1h",
 					Target:         "2026-01-15T07:00:00Z",
 					Schedule:       "0 7 * * *",
@@ -492,7 +492,7 @@ func TestHandleCloseRecurringScheduleRearms(t *testing.T) {
 
 	// Gate should be re-armed with a new target.
 	gate := result.Content.Gates[0]
-	if gate.Status != "pending" {
+	if gate.Status != ticket.GatePending {
 		t.Errorf("gate status: got %q, want 'pending'", gate.Status)
 	}
 	// testClockEpoch is 2026-01-15T12:00:00Z. Next cron occurrence
@@ -532,7 +532,7 @@ func TestHandleCloseRecurringIntervalRearms(t *testing.T) {
 	}
 
 	gate := result.Content.Gates[0]
-	if gate.Status != "pending" {
+	if gate.Status != ticket.GatePending {
 		t.Errorf("gate status: got %q, want 'pending'", gate.Status)
 	}
 	// testClockEpoch + 4h = 2026-01-15T16:00:00Z
@@ -791,7 +791,7 @@ func TestHandleResolveGate(t *testing.T) {
 	if gate == nil {
 		t.Fatal("human-review gate not found in response")
 	}
-	if gate.Status != "satisfied" {
+	if gate.Status != ticket.GateSatisfied {
 		t.Errorf("gate status: got %q, want 'satisfied'", gate.Status)
 	}
 	if gate.SatisfiedBy != "@bureau/fleet/prod/agent/tester:bureau.local" {
@@ -876,7 +876,7 @@ func TestHandleUpdateGate(t *testing.T) {
 	if gate == nil {
 		t.Fatal("ci-pass gate not found in response")
 	}
-	if gate.Status != "satisfied" {
+	if gate.Status != ticket.GateSatisfied {
 		t.Errorf("gate status: got %q, want 'satisfied'", gate.Status)
 	}
 	if gate.SatisfiedBy != "$pipeline-event-123" {

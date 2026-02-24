@@ -729,7 +729,7 @@ func TestStewardship(t *testing.T) {
 		if stewardshipGate == nil {
 			t.Fatalf("no stewardship review gate; gates = %v", content.Gates)
 		}
-		if stewardshipGate.Type != "review" {
+		if stewardshipGate.Type != ticket.GateReview {
 			t.Errorf("gate type = %q, want review", stewardshipGate.Type)
 		}
 
@@ -834,7 +834,7 @@ func TestStewardship(t *testing.T) {
 		}
 		for _, gate := range content.Gates {
 			if gate.ID == stewardshipGate.ID {
-				if gate.Status != "satisfied" {
+				if gate.Status != ticket.GateSatisfied {
 					t.Errorf("stewardship gate status = %q, want satisfied", gate.Status)
 				}
 				break

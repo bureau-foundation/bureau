@@ -275,7 +275,7 @@ func (idx *Index) Put(ticketID string, content ticket.TicketContent) {
 	// stores a copy of the struct, but slice headers in that copy
 	// share backing arrays with the caller's original. If the caller
 	// later modifies slice elements in-place (e.g., setting
-	// gate.Status = "satisfied" before calling Put), those mutations
+	// gate.Status = ticket.GateSatisfied before calling Put), those mutations
 	// alias through to the stored copy, corrupting secondary index
 	// maintenance that needs to see the original values for removal.
 	// Cloning at the storage boundary makes the index self-protecting
@@ -496,7 +496,7 @@ func (idx *Index) PendingGates() []Entry {
 	var result []Entry
 	for id, content := range idx.tickets {
 		for i := range content.Gates {
-			if content.Gates[i].Status == "pending" {
+			if content.Gates[i].Status == ticket.GatePending {
 				result = append(result, Entry{ID: id, Content: content})
 				break
 			}
@@ -549,14 +549,14 @@ func (idx *Index) WatchedGates(eventType ref.EventType, stateKey string) []GateW
 // and any review_finding children.
 func (idx *Index) watchKeysForGate(gate *ticket.TicketGate, ticketID string) []gateWatchKey {
 	switch gate.Type {
-	case "pipeline":
+	case ticket.GatePipeline:
 		// Pipeline gates watch for pipeline_result events with any
 		// state key. The fine-grained match on pipeline_ref and
 		// conclusion is done by matchGateEvent after the watch map
 		// narrows candidates.
 		return []gateWatchKey{{eventType: schema.EventTypePipelineResult}}
 
-	case "ticket":
+	case ticket.GateTicket:
 		// Ticket gates watch for a specific ticket's state event to
 		// reach status "closed". The state key is the ticket ID.
 		if gate.TicketID == "" {
@@ -564,7 +564,7 @@ func (idx *Index) watchKeysForGate(gate *ticket.TicketGate, ticketID string) []g
 		}
 		return []gateWatchKey{{eventType: schema.EventTypeTicket, stateKey: gate.TicketID}}
 
-	case "review":
+	case ticket.GateReview:
 		// Review gates watch their own ticket's state event (for
 		// reviewer disposition changes) and all review_finding
 		// children (for finding closure). The gate is satisfied
@@ -580,7 +580,7 @@ func (idx *Index) watchKeysForGate(gate *ticket.TicketGate, ticketID string) []g
 		}
 		return keys
 
-	case "state_event":
+	case ticket.GateStateEvent:
 		// Cross-room gates (RoomAlias set) are evaluated separately
 		// by evaluateCrossRoomGates, not the per-event watch path.
 		if !gate.RoomAlias.IsZero() {
@@ -604,7 +604,7 @@ func (idx *Index) watchKeysForGate(gate *ticket.TicketGate, ticketID string) []g
 // primary map.
 func (idx *Index) addGateWatches(ticketID string, content *ticket.TicketContent) {
 	for i := range content.Gates {
-		if content.Gates[i].Status != "pending" {
+		if content.Gates[i].Status != ticket.GatePending {
 			continue
 		}
 		for _, key := range idx.watchKeysForGate(&content.Gates[i], ticketID) {
@@ -663,7 +663,7 @@ func (idx *Index) refreshReviewGateWatches(ticketID string) {
 	}
 	hasReviewGate := false
 	for i := range content.Gates {
-		if content.Gates[i].Type == "review" {
+		if content.Gates[i].Type == ticket.GateReview {
 			hasReviewGate = true
 			break
 		}
@@ -1124,7 +1124,7 @@ func (idx *Index) AllBlockersClosed(content *ticket.TicketContent) bool {
 // allGatesSatisfied returns true if every gate has status "satisfied".
 func allGatesSatisfied(content *ticket.TicketContent) bool {
 	for i := range content.Gates {
-		if content.Gates[i].Status != "satisfied" {
+		if content.Gates[i].Status != ticket.GateSatisfied {
 			return false
 		}
 	}

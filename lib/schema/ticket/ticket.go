@@ -120,6 +120,67 @@ const (
 	TypeCredentialRotation TicketType = "credential_rotation"
 )
 
+// GateType identifies how a gate condition is evaluated.
+type GateType string
+
+const (
+	// GateHuman requires explicit resolution by a person via the
+	// satisfy-gate or update-gate action. No automatic evaluation.
+	GateHuman GateType = "human"
+
+	// GatePipeline watches for m.bureau.pipeline_result state
+	// events matching the gate's PipelineRef and Conclusion.
+	GatePipeline GateType = "pipeline"
+
+	// GateStateEvent watches for a Matrix state event matching the
+	// gate's EventType, StateKey, RoomAlias, and optional
+	// ContentMatch.
+	GateStateEvent GateType = "state_event"
+
+	// GateTicket watches for m.bureau.ticket with the given
+	// TicketID transitioning to StatusClosed.
+	GateTicket GateType = "ticket"
+
+	// GateReview watches the ticket's review state: satisfied when
+	// all reviewers have disposition "approved" and all
+	// review_finding children are closed.
+	GateReview GateType = "review"
+
+	// GateTimer fires when the current time reaches the gate's
+	// Target. Supports one-shot, cron-scheduled, and
+	// interval-based recurrence.
+	GateTimer GateType = "timer"
+)
+
+// IsKnown reports whether the gate type is one of the defined constants.
+func (t GateType) IsKnown() bool {
+	switch t {
+	case GateHuman, GatePipeline, GateStateEvent, GateTicket, GateReview, GateTimer:
+		return true
+	}
+	return false
+}
+
+// GateStatus represents the evaluation state of a gate.
+type GateStatus string
+
+const (
+	// GatePending means the gate's condition has not yet been met.
+	GatePending GateStatus = "pending"
+
+	// GateSatisfied means the gate's condition has been met.
+	GateSatisfied GateStatus = "satisfied"
+)
+
+// IsKnown reports whether the gate status is one of the defined constants.
+func (s GateStatus) IsKnown() bool {
+	switch s {
+	case GatePending, GateSatisfied:
+		return true
+	}
+	return false
+}
+
 // IsKnown reports whether this is a type value understood by this
 // version of the code. Unknown types may appear in events written
 // by newer service versions and are safe to read but not to use
@@ -446,13 +507,12 @@ type TicketGate struct {
 	// "ci-pass", "lead-approval"). Used for targeted updates.
 	ID string `json:"id"`
 
-	// Type determines how the condition is evaluated: "human",
-	// "pipeline", "state_event", "ticket", or "timer".
-	Type string `json:"type"`
+	// Type determines how the condition is evaluated.
+	Type GateType `json:"type"`
 
-	// Status is "pending" or "satisfied". The ticket service
-	// transitions this when the condition is met.
-	Status string `json:"status"`
+	// Status is the evaluation state of this gate. The ticket
+	// service transitions this when the condition is met.
+	Status GateStatus `json:"status"`
 
 	// Description is a human-readable explanation of what this
 	// gate waits for (e.g., "CI pipeline must pass", "24h soak
@@ -570,27 +630,27 @@ func (g *TicketGate) Validate() error {
 		return errors.New("gate: id is required")
 	}
 	switch g.Type {
-	case "human":
+	case GateHuman:
 		// No type-specific fields required.
-	case "pipeline":
+	case GatePipeline:
 		if g.PipelineRef == "" {
 			return fmt.Errorf("gate %q: pipeline_ref is required for pipeline gates", g.ID)
 		}
-	case "state_event":
+	case GateStateEvent:
 		if g.EventType == "" {
 			return fmt.Errorf("gate %q: event_type is required for state_event gates", g.ID)
 		}
-	case "ticket":
+	case GateTicket:
 		if g.TicketID == "" {
 			return fmt.Errorf("gate %q: ticket_id is required for ticket gates", g.ID)
 		}
-	case "review":
+	case GateReview:
 		// Review gates have no type-specific fields. They implicitly
 		// watch the ticket they are attached to (and any
 		// review_finding children) and are satisfied when all
 		// reviewers have disposition "approved" and all
 		// review_finding children are status "closed".
-	case "timer":
+	case GateTimer:
 		if err := g.validateTimer(); err != nil {
 			return err
 		}
@@ -600,7 +660,7 @@ func (g *TicketGate) Validate() error {
 		return fmt.Errorf("gate %q: unknown type %q", g.ID, g.Type)
 	}
 	switch g.Status {
-	case "pending", "satisfied":
+	case GatePending, GateSatisfied:
 		// Valid.
 	case "":
 		return fmt.Errorf("gate %q: status is required", g.ID)
@@ -665,7 +725,7 @@ func (g *TicketGate) validateTimer() error {
 // IsRecurring reports whether this timer gate has a recurring schedule
 // (Schedule or Interval set).
 func (g *TicketGate) IsRecurring() bool {
-	return g.Type == "timer" && (g.Schedule != "" || g.Interval != "")
+	return g.Type == GateTimer && (g.Schedule != "" || g.Interval != "")
 }
 
 // validateCronExpression parses and validates a cron expression using

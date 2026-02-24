@@ -1465,7 +1465,7 @@ func (model *Model) buildPipelineItems() []ListItem {
 // timer gate with status "pending".
 func hasPendingTimerGate(content ticket.TicketContent) bool {
 	for index := range content.Gates {
-		if content.Gates[index].Type == "timer" && content.Gates[index].Status == "pending" {
+		if content.Gates[index].Type == ticket.GateTimer && content.Gates[index].Status == ticket.GatePending {
 			return true
 		}
 	}
@@ -1478,7 +1478,7 @@ func hasPendingTimerGate(content ticket.TicketContent) bool {
 func firstPendingTimerGateTarget(content ticket.TicketContent) string {
 	for index := range content.Gates {
 		gate := &content.Gates[index]
-		if gate.Type == "timer" && gate.Status == "pending" && gate.Target != "" {
+		if gate.Type == ticket.GateTimer && gate.Status == ticket.GatePending && gate.Target != "" {
 			return gate.Target
 		}
 	}
@@ -2019,7 +2019,7 @@ func (model *Model) openReviewDropdown() {
 	// Find the first pending review gate.
 	gateID := ""
 	for _, gate := range content.Gates {
-		if gate.Type == "review" && gate.Status == "pending" {
+		if gate.Type == ticket.GateReview && gate.Status == ticket.GatePending {
 			gateID = gate.ID
 			break
 		}

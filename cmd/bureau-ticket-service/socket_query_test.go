@@ -932,9 +932,9 @@ func TestComputeTierProgressEmptyReview(t *testing.T) {
 func TestComputeStewardshipSummary(t *testing.T) {
 	content := ticket.TicketContent{
 		Gates: []ticket.TicketGate{
-			{ID: "stewardship:fleet/gpu", Type: "review", Status: "satisfied"},
-			{ID: "stewardship:cooperative", Type: "review", Status: "pending"},
-			{ID: "pipeline:ci", Type: "pipeline", Status: "pending"},
+			{ID: "stewardship:fleet/gpu", Type: ticket.GateReview, Status: ticket.GateSatisfied},
+			{ID: "stewardship:cooperative", Type: ticket.GateReview, Status: ticket.GatePending},
+			{ID: "pipeline:ci", Type: ticket.GatePipeline, Status: ticket.GatePending},
 		},
 	}
 
@@ -951,7 +951,7 @@ func TestComputeStewardshipSummary(t *testing.T) {
 func TestComputeStewardshipSummaryNoGates(t *testing.T) {
 	content := ticket.TicketContent{
 		Gates: []ticket.TicketGate{
-			{ID: "pipeline:ci", Type: "pipeline", Status: "pending"},
+			{ID: "pipeline:ci", Type: ticket.GatePipeline, Status: ticket.GatePending},
 		},
 	}
 
@@ -978,7 +978,7 @@ func TestHandleShowIncludesStewardshipContext(t *testing.T) {
 				Type:     ticket.TypeTask,
 				Affects:  []string{"fleet/gpu/a100"},
 				Gates: []ticket.TicketGate{
-					{ID: "stewardship:fleet/gpu", Type: "review", Status: "pending"},
+					{ID: "stewardship:fleet/gpu", Type: ticket.GateReview, Status: ticket.GatePending},
 				},
 				Review: &ticket.TicketReview{
 					TierThresholds: []ticket.TierThreshold{
@@ -1046,7 +1046,7 @@ func TestHandleShowIncludesStewardshipContext(t *testing.T) {
 	if gate.GateID != "stewardship:fleet/gpu" {
 		t.Errorf("gate_id = %q, want stewardship:fleet/gpu", gate.GateID)
 	}
-	if gate.Status != "pending" {
+	if gate.Status != ticket.GatePending {
 		t.Errorf("gate status = %q, want pending", gate.Status)
 	}
 	if len(gate.Tiers) != 1 {
@@ -1092,8 +1092,8 @@ func TestListIncludesStewardshipSummary(t *testing.T) {
 				Type:     ticket.TypeTask,
 				Affects:  []string{"fleet/gpu/a100"},
 				Gates: []ticket.TicketGate{
-					{ID: "stewardship:fleet/gpu", Type: "review", Status: "satisfied"},
-					{ID: "stewardship:cooperative", Type: "review", Status: "pending"},
+					{ID: "stewardship:fleet/gpu", Type: ticket.GateReview, Status: ticket.GateSatisfied},
+					{ID: "stewardship:cooperative", Type: ticket.GateReview, Status: ticket.GatePending},
 				},
 				Review: &ticket.TicketReview{
 					TierThresholds: []ticket.TierThreshold{

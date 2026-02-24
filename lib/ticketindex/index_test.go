@@ -2703,3 +2703,90 @@ func TestBulkInsertAndQuery(t *testing.T) {
 		t.Errorf("List(label=flagged) = %d, want 15", len(flagged))
 	}
 }
+
+func TestPutClonesAffectsSlice(t *testing.T) {
+	idx := NewIndex()
+
+	affects := []string{"fleet/gpu/a100", "workspace/lib/schema"}
+	content := makeTicket("clone-affects")
+	content.Affects = affects
+
+	idx.Put("tkt-1", content)
+
+	// Mutate the caller's slice after Put.
+	affects[0] = "MUTATED"
+
+	// The stored copy should be unaffected.
+	stored, ok := idx.Get("tkt-1")
+	if !ok {
+		t.Fatal("ticket not found")
+	}
+	if stored.Affects[0] != "fleet/gpu/a100" {
+		t.Errorf("stored Affects[0] = %q, want %q (caller mutation leaked through)",
+			stored.Affects[0], "fleet/gpu/a100")
+	}
+}
+
+func TestPutClonesReviewPointer(t *testing.T) {
+	idx := NewIndex()
+
+	threshold := 2
+	review := &ticket.TicketReview{
+		Reviewers: []ticket.ReviewerEntry{
+			{UserID: ref.MustParseUserID("@a:b.c"), Disposition: "pending", Tier: 0},
+			{UserID: ref.MustParseUserID("@b:b.c"), Disposition: "pending", Tier: 1},
+		},
+		TierThresholds: []ticket.TierThreshold{
+			{Tier: 0},
+			{Tier: 1, Threshold: &threshold},
+		},
+	}
+	content := makeTicket("clone-review")
+	content.Review = review
+
+	idx.Put("tkt-1", content)
+
+	// Mutate the caller's Review after Put.
+	review.Reviewers[0].Disposition = "MUTATED"
+	review.TierThresholds[0].Tier = 99
+
+	// The stored copy should be unaffected.
+	stored, ok := idx.Get("tkt-1")
+	if !ok {
+		t.Fatal("ticket not found")
+	}
+	if stored.Review.Reviewers[0].Disposition != "pending" {
+		t.Errorf("stored Reviewers[0].Disposition = %q, want %q (caller mutation leaked through)",
+			stored.Review.Reviewers[0].Disposition, "pending")
+	}
+	if stored.Review.TierThresholds[0].Tier != 0 {
+		t.Errorf("stored TierThresholds[0].Tier = %d, want 0 (caller mutation leaked through)",
+			stored.Review.TierThresholds[0].Tier)
+	}
+}
+
+func TestPutClonesOriginPointer(t *testing.T) {
+	idx := NewIndex()
+
+	origin := &ticket.TicketOrigin{
+		Source:      "github",
+		ExternalRef: "GH-1234",
+	}
+	content := makeTicket("clone-origin")
+	content.Origin = origin
+
+	idx.Put("tkt-1", content)
+
+	// Mutate the caller's Origin after Put.
+	origin.Source = "MUTATED"
+
+	// The stored copy should be unaffected.
+	stored, ok := idx.Get("tkt-1")
+	if !ok {
+		t.Fatal("ticket not found")
+	}
+	if stored.Origin.Source != "github" {
+		t.Errorf("stored Origin.Source = %q, want %q (caller mutation leaked through)",
+			stored.Origin.Source, "github")
+	}
+}

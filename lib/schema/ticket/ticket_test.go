@@ -51,6 +51,7 @@ func TestTicketContentRoundTrip(t *testing.T) {
 		Priority:  1,
 		Type:      "feature",
 		Labels:    []string{"amdgpu", "inference", "p1"},
+		Affects:   []string{"fleet/gpu/a100", "workspace/lib/schema/ticket.go"},
 		Assignee:  ref.MustParseUserID("@iree/amdgpu/pm:bureau.local"),
 		Parent:    "tkt-epic1",
 		BlockedBy: []string{"tkt-a3f9", "tkt-b2c4"},
@@ -139,6 +140,15 @@ func TestTicketContentRoundTrip(t *testing.T) {
 	}
 	if len(labels) != 3 || labels[0] != "amdgpu" || labels[1] != "inference" || labels[2] != "p1" {
 		t.Errorf("labels = %v, want [amdgpu inference p1]", labels)
+	}
+
+	// Affects: verify as JSON array.
+	affects, ok := raw["affects"].([]any)
+	if !ok {
+		t.Fatalf("affects is not an array: %T", raw["affects"])
+	}
+	if len(affects) != 2 || affects[0] != "fleet/gpu/a100" || affects[1] != "workspace/lib/schema/ticket.go" {
+		t.Errorf("affects = %v, want [fleet/gpu/a100 workspace/lib/schema/ticket.go]", affects)
 	}
 
 	// BlockedBy: verify as JSON array.
@@ -246,7 +256,7 @@ func TestTicketContentOmitsEmptyOptionals(t *testing.T) {
 	}
 
 	optionalFields := []string{
-		"body", "labels", "parent", "blocked_by",
+		"body", "labels", "affects", "parent", "blocked_by",
 		"gates", "notes", "attachments", "closed_at", "close_reason",
 		"context_id", "origin", "review", "pipeline", "extra",
 	}
@@ -636,10 +646,60 @@ func TestTicketContentValidate(t *testing.T) {
 			wantErr: "origin: origin: source is required",
 		},
 		{
+			name: "affects_valid",
+			modify: func(tc *TicketContent) {
+				tc.Affects = []string{"fleet/gpu/a100", "workspace/lib/schema/ticket.go"}
+			},
+			wantErr: "",
+		},
+		{
+			name: "affects_empty_string",
+			modify: func(tc *TicketContent) {
+				tc.Affects = []string{"fleet/gpu/a100", ""}
+			},
+			wantErr: "affects[1]: resource identifier cannot be empty",
+		},
+		{
+			name:    "affects_nil",
+			modify:  func(tc *TicketContent) { tc.Affects = nil },
+			wantErr: "",
+		},
+		{
+			name: "review_with_invalid_tier_threshold",
+			modify: func(tc *TicketContent) {
+				tc.Review = &TicketReview{
+					Reviewers: []ReviewerEntry{
+						{UserID: ref.MustParseUserID("@reviewer:bureau.local"), Disposition: "pending"},
+					},
+					TierThresholds: []TierThreshold{
+						{Tier: -1},
+					},
+				}
+			},
+			wantErr: "review: tier_thresholds[0]: tier must be >= 0",
+		},
+		{
+			name: "review_with_valid_tier_thresholds",
+			modify: func(tc *TicketContent) {
+				threshold := 2
+				tc.Review = &TicketReview{
+					Reviewers: []ReviewerEntry{
+						{UserID: ref.MustParseUserID("@reviewer:bureau.local"), Disposition: "pending", Tier: 1},
+					},
+					TierThresholds: []TierThreshold{
+						{Tier: 0},
+						{Tier: 1, Threshold: &threshold},
+					},
+				}
+			},
+			wantErr: "",
+		},
+		{
 			name: "valid_with_all_optional",
 			modify: func(tc *TicketContent) {
 				tc.Body = "Full description"
 				tc.Labels = []string{"important"}
+				tc.Affects = []string{"fleet/gpu/a100"}
 				tc.Assignee = ref.MustParseUserID("@test:bureau.local")
 				tc.Parent = "tkt-parent"
 				tc.BlockedBy = []string{"tkt-dep"}
@@ -2219,6 +2279,41 @@ func TestTicketReviewValidate(t *testing.T) {
 			},
 			wantErr: `reviewers[0]: unknown disposition "rejected"`,
 		},
+		{
+			name: "valid_with_tier_thresholds",
+			review: TicketReview{
+				Reviewers: []ReviewerEntry{
+					{UserID: ref.MustParseUserID("@a:b.c"), Disposition: "pending", Tier: 0},
+					{UserID: ref.MustParseUserID("@b:b.c"), Disposition: "pending", Tier: 1},
+				},
+				TierThresholds: []TierThreshold{
+					{Tier: 0},
+					{Tier: 1, Threshold: func() *int { v := 1; return &v }()},
+				},
+			},
+			wantErr: "",
+		},
+		{
+			name: "invalid_tier_threshold",
+			review: TicketReview{
+				Reviewers: []ReviewerEntry{
+					{UserID: ref.MustParseUserID("@a:b.c"), Disposition: "pending"},
+				},
+				TierThresholds: []TierThreshold{
+					{Tier: 0, Threshold: func() *int { v := 0; return &v }()},
+				},
+			},
+			wantErr: "tier_thresholds[0]: threshold must be >= 1",
+		},
+		{
+			name: "invalid_reviewer_tier",
+			review: TicketReview{
+				Reviewers: []ReviewerEntry{
+					{UserID: ref.MustParseUserID("@a:b.c"), Disposition: "pending", Tier: -1},
+				},
+			},
+			wantErr: "reviewers[0]: tier must be >= 0",
+		},
 	}
 
 	for _, test := range tests {
@@ -2280,6 +2375,21 @@ func TestReviewerEntryValidate(t *testing.T) {
 			name:    "invalid_disposition",
 			entry:   ReviewerEntry{UserID: ref.MustParseUserID("@a:b.c"), Disposition: "lgtm"},
 			wantErr: `unknown disposition "lgtm"`,
+		},
+		{
+			name:    "valid_tier_zero",
+			entry:   ReviewerEntry{UserID: ref.MustParseUserID("@a:b.c"), Disposition: "pending", Tier: 0},
+			wantErr: "",
+		},
+		{
+			name:    "valid_tier_two",
+			entry:   ReviewerEntry{UserID: ref.MustParseUserID("@a:b.c"), Disposition: "pending", Tier: 2},
+			wantErr: "",
+		},
+		{
+			name:    "negative_tier",
+			entry:   ReviewerEntry{UserID: ref.MustParseUserID("@a:b.c"), Disposition: "pending", Tier: -1},
+			wantErr: "tier must be >= 0",
 		},
 	}
 
@@ -2474,5 +2584,214 @@ func TestReviewTicketRoundTrip(t *testing.T) {
 
 	if err := decoded.Validate(); err != nil {
 		t.Errorf("Validate() = %v, want nil", err)
+	}
+}
+
+func TestTierThresholdValidate(t *testing.T) {
+	intPointer := func(value int) *int { return &value }
+
+	tests := []struct {
+		name    string
+		entry   TierThreshold
+		wantErr string
+	}{
+		{
+			name:    "valid_tier_zero_all_approve",
+			entry:   TierThreshold{Tier: 0},
+			wantErr: "",
+		},
+		{
+			name:    "valid_tier_one_threshold_two",
+			entry:   TierThreshold{Tier: 1, Threshold: intPointer(2)},
+			wantErr: "",
+		},
+		{
+			name:    "valid_threshold_one",
+			entry:   TierThreshold{Tier: 0, Threshold: intPointer(1)},
+			wantErr: "",
+		},
+		{
+			name:    "negative_tier",
+			entry:   TierThreshold{Tier: -1},
+			wantErr: "tier must be >= 0",
+		},
+		{
+			name:    "threshold_zero",
+			entry:   TierThreshold{Tier: 0, Threshold: intPointer(0)},
+			wantErr: "threshold must be >= 1 when set",
+		},
+		{
+			name:    "threshold_negative",
+			entry:   TierThreshold{Tier: 0, Threshold: intPointer(-1)},
+			wantErr: "threshold must be >= 1 when set",
+		},
+	}
+
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			err := test.entry.Validate()
+			if test.wantErr == "" {
+				if err != nil {
+					t.Errorf("Validate() = %v, want nil", err)
+				}
+			} else {
+				if err == nil {
+					t.Fatalf("Validate() = nil, want error containing %q", test.wantErr)
+				}
+				if !strings.Contains(err.Error(), test.wantErr) {
+					t.Errorf("Validate() = %q, want error containing %q", err, test.wantErr)
+				}
+			}
+		})
+	}
+}
+
+func TestTierThresholdRoundTrip(t *testing.T) {
+	intPointer := func(value int) *int { return &value }
+
+	// TierThreshold with nil Threshold — threshold absent from JSON.
+	nilThreshold := TierThreshold{Tier: 0}
+	data, err := json.Marshal(nilThreshold)
+	if err != nil {
+		t.Fatalf("Marshal nil threshold: %v", err)
+	}
+	var raw map[string]any
+	if err := json.Unmarshal(data, &raw); err != nil {
+		t.Fatalf("Unmarshal raw: %v", err)
+	}
+	assertField(t, raw, "tier", float64(0))
+	if _, exists := raw["threshold"]; exists {
+		t.Error("nil Threshold should be absent from JSON")
+	}
+
+	// TierThreshold with non-nil Threshold — round-trips.
+	withThreshold := TierThreshold{Tier: 1, Threshold: intPointer(2)}
+	data, err = json.Marshal(withThreshold)
+	if err != nil {
+		t.Fatalf("Marshal with threshold: %v", err)
+	}
+	var decoded TierThreshold
+	if err := json.Unmarshal(data, &decoded); err != nil {
+		t.Fatalf("Unmarshal: %v", err)
+	}
+	if decoded.Tier != 1 {
+		t.Errorf("Tier = %d, want 1", decoded.Tier)
+	}
+	if decoded.Threshold == nil || *decoded.Threshold != 2 {
+		t.Errorf("Threshold round-trip: got %v, want 2", decoded.Threshold)
+	}
+}
+
+func TestReviewerEntryTierRoundTrip(t *testing.T) {
+	// Tier 0 should be omitted from JSON (omitempty with zero value).
+	tierZero := ReviewerEntry{
+		UserID:      ref.MustParseUserID("@reviewer:bureau.local"),
+		Disposition: "pending",
+		Tier:        0,
+	}
+	data, err := json.Marshal(tierZero)
+	if err != nil {
+		t.Fatalf("Marshal tier 0: %v", err)
+	}
+	var raw map[string]any
+	if err := json.Unmarshal(data, &raw); err != nil {
+		t.Fatalf("Unmarshal raw: %v", err)
+	}
+	if _, exists := raw["tier"]; exists {
+		t.Error("Tier 0 should be absent from JSON (omitempty)")
+	}
+
+	// Tier 2 should be present.
+	tierTwo := ReviewerEntry{
+		UserID:      ref.MustParseUserID("@reviewer:bureau.local"),
+		Disposition: "pending",
+		Tier:        2,
+	}
+	data, err = json.Marshal(tierTwo)
+	if err != nil {
+		t.Fatalf("Marshal tier 2: %v", err)
+	}
+	raw = nil
+	if err := json.Unmarshal(data, &raw); err != nil {
+		t.Fatalf("Unmarshal raw: %v", err)
+	}
+	assertField(t, raw, "tier", float64(2))
+
+	// Round-trip: Tier 2 survives marshal/unmarshal.
+	var decoded ReviewerEntry
+	if err := json.Unmarshal(data, &decoded); err != nil {
+		t.Fatalf("Unmarshal: %v", err)
+	}
+	if decoded.Tier != 2 {
+		t.Errorf("Tier round-trip: got %d, want 2", decoded.Tier)
+	}
+}
+
+func TestTicketReviewWithTierThresholdsRoundTrip(t *testing.T) {
+	intPointer := func(value int) *int { return &value }
+
+	original := TicketReview{
+		Reviewers: []ReviewerEntry{
+			{
+				UserID:      ref.MustParseUserID("@iree/amdgpu/engineer:bureau.local"),
+				Disposition: "approved",
+				UpdatedAt:   "2026-02-20T14:30:00Z",
+				Tier:        0,
+			},
+			{
+				UserID:      ref.MustParseUserID("@ben:bureau.local"),
+				Disposition: "pending",
+				Tier:        1,
+			},
+		},
+		TierThresholds: []TierThreshold{
+			{Tier: 0},
+			{Tier: 1, Threshold: intPointer(1)},
+		},
+	}
+
+	data, err := json.Marshal(original)
+	if err != nil {
+		t.Fatalf("Marshal: %v", err)
+	}
+
+	var decoded TicketReview
+	if err := json.Unmarshal(data, &decoded); err != nil {
+		t.Fatalf("Unmarshal: %v", err)
+	}
+
+	if !reflect.DeepEqual(original, decoded) {
+		t.Errorf("round-trip mismatch:\n  got:  %+v\n  want: %+v", decoded, original)
+	}
+
+	// Verify tier_thresholds appears in JSON.
+	var raw map[string]any
+	if err := json.Unmarshal(data, &raw); err != nil {
+		t.Fatalf("Unmarshal to map: %v", err)
+	}
+	thresholds, ok := raw["tier_thresholds"].([]any)
+	if !ok {
+		t.Fatalf("tier_thresholds is not an array: %T", raw["tier_thresholds"])
+	}
+	if len(thresholds) != 2 {
+		t.Fatalf("tier_thresholds count = %d, want 2", len(thresholds))
+	}
+
+	// TierThresholds absent — should be omitted.
+	noThresholds := TicketReview{
+		Reviewers: []ReviewerEntry{
+			{UserID: ref.MustParseUserID("@a:b.c"), Disposition: "pending"},
+		},
+	}
+	data, err = json.Marshal(noThresholds)
+	if err != nil {
+		t.Fatalf("Marshal no thresholds: %v", err)
+	}
+	raw = nil
+	if err := json.Unmarshal(data, &raw); err != nil {
+		t.Fatalf("Unmarshal raw: %v", err)
+	}
+	if _, exists := raw["tier_thresholds"]; exists {
+		t.Error("nil TierThresholds should be absent from JSON")
 	}
 }

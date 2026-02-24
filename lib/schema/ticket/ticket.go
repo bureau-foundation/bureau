@@ -19,7 +19,7 @@ const (
 	// TicketContentVersion is the current schema version for
 	// TicketContent events. Increment when adding fields that
 	// existing code must not silently drop during read-modify-write.
-	TicketContentVersion = 3
+	TicketContentVersion = 4
 
 	// TicketConfigVersion is the current schema version for
 	// TicketConfigContent events.
@@ -94,6 +94,16 @@ type TicketContent struct {
 
 	// Labels are free-form tags for filtering and grouping.
 	Labels []string `json:"labels,omitempty"`
+
+	// Affects lists resource identifiers describing what this ticket
+	// impacts. The ticket service matches these against stewardship
+	// declarations' ResourcePatterns to auto-configure review gates
+	// or queue notifications. Each entry is a hierarchical
+	// slash-separated resource path (e.g., "fleet/gpu/a100",
+	// "workspace/lib/schema/ticket.go"). The namespace is shared
+	// with stewardship ResourcePatterns — both sides use the same
+	// glob matching.
+	Affects []string `json:"affects,omitempty"`
 
 	// Assignee is the Matrix user ID of the principal working
 	// on this ticket (e.g., "@iree/amdgpu/pm:bureau.local").
@@ -230,6 +240,11 @@ func (t *TicketContent) Validate() error {
 		}
 	} else if t.Pipeline != nil {
 		return fmt.Errorf("ticket content: pipeline content must be nil when type is %q", t.Type)
+	}
+	for i, resource := range t.Affects {
+		if resource == "" {
+			return fmt.Errorf("ticket content: affects[%d]: resource identifier cannot be empty", i)
+		}
 	}
 	if t.Status == "review" && (t.Review == nil || len(t.Review.Reviewers) == 0) {
 		return errors.New("ticket content: review with at least one reviewer is required when status is \"review\"")
@@ -649,8 +664,8 @@ func (a *TicketAttachment) Validate() error {
 // Review is for structured multi-reviewer feedback: N people examine
 // work and provide individual dispositions. This is distinct from
 // gates, which are binary coordination conditions (one approval,
-// one pipeline pass). A review gate type (planned) bridges the two
-// by watching for all-approved dispositions.
+// one pipeline pass). A review gate type bridges the two by watching
+// for all-approved dispositions.
 //
 // The ticket service does not automatically transition status based
 // on dispositions. The author reads all feedback and decides when to
@@ -668,6 +683,16 @@ type TicketReview struct {
 	// fields apply: Base/Head/Worktree for code review, ArtifactRef
 	// for document review, Description for freeform requests.
 	Scope *ReviewScope `json:"scope,omitempty"`
+
+	// TierThresholds captures per-tier approval requirements from
+	// stewardship declarations. Each entry specifies how many
+	// approvals a given tier requires. When absent (nil), the review
+	// gate uses the pre-stewardship behavior: all reviewers must
+	// approve. When present, the tier-aware evaluator groups
+	// reviewers by their Tier field and checks each tier against
+	// its threshold independently. The overall gate is satisfied
+	// when all tiers are satisfied.
+	TierThresholds []TierThreshold `json:"tier_thresholds,omitempty"`
 }
 
 // Validate checks that the review has at least one reviewer and all
@@ -679,6 +704,11 @@ func (r *TicketReview) Validate() error {
 	for i := range r.Reviewers {
 		if err := r.Reviewers[i].Validate(); err != nil {
 			return fmt.Errorf("reviewers[%d]: %w", i, err)
+		}
+	}
+	for i := range r.TierThresholds {
+		if err := r.TierThresholds[i].Validate(); err != nil {
+			return fmt.Errorf("tier_thresholds[%d]: %w", i, err)
 		}
 	}
 	return nil
@@ -699,6 +729,16 @@ type ReviewerEntry struct {
 	// UpdatedAt is the ISO 8601 timestamp of the last disposition
 	// change. Empty when disposition is "pending" (initial state).
 	UpdatedAt string `json:"updated_at,omitempty"`
+
+	// Tier is the stewardship tier this reviewer belongs to. Tier 0
+	// reviewers are notified immediately when the review gate is
+	// created. Higher tiers are notified according to their
+	// escalation policy (e.g., "last_pending" tiers activate only
+	// when all earlier tiers have met their thresholds). The zero
+	// value means Tier 0, which is backward compatible:
+	// pre-stewardship reviewers (with no tier annotation) are
+	// treated as Tier 0.
+	Tier int `json:"tier,omitempty"`
 }
 
 // validDispositions is the set of recognized reviewer dispositions.
@@ -723,6 +763,41 @@ func (r *ReviewerEntry) Validate() error {
 	}
 	if !IsValidDisposition(r.Disposition) {
 		return fmt.Errorf("unknown disposition %q", r.Disposition)
+	}
+	if r.Tier < 0 {
+		return fmt.Errorf("tier must be >= 0, got %d", r.Tier)
+	}
+	return nil
+}
+
+// TierThreshold specifies the approval requirement for one
+// stewardship tier within a review gate. Written by the ticket
+// service at auto-gate configuration time from the matching
+// stewardship declaration's tier data.
+type TierThreshold struct {
+	// Tier is the tier index (0, 1, 2, ...) matching
+	// ReviewerEntry.Tier values.
+	Tier int `json:"tier"`
+
+	// Threshold is the number of approvals required from this
+	// tier. Nil means all reviewers in the tier must approve.
+	// When non-nil, at least this many reviewers in the tier
+	// must have disposition "approved" for the tier to be
+	// satisfied.
+	Threshold *int `json:"threshold,omitempty"`
+}
+
+// Validate checks that the tier threshold has valid values.
+func (tt *TierThreshold) Validate() error {
+	if tt.Tier < 0 {
+		return fmt.Errorf("tier must be >= 0, got %d", tt.Tier)
+	}
+	if tt.Threshold != nil && *tt.Threshold < 1 {
+		return fmt.Errorf(
+			"threshold must be >= 1 when set (got %d); "+
+				"omit the field to require all reviewers in the tier to approve",
+			*tt.Threshold,
+		)
 	}
 	return nil
 }

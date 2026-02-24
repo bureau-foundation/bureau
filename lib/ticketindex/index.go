@@ -301,6 +301,28 @@ func (idx *Index) Put(ticketID string, content ticket.TicketContent) {
 		copy(cloned, content.Attachments)
 		content.Attachments = cloned
 	}
+	if len(content.Affects) > 0 {
+		content.Affects = append([]string(nil), content.Affects...)
+	}
+
+	// Clone pointer fields to break aliasing between the stored
+	// content and the caller's copy. Without this, the caller and
+	// stored copy share the same underlying struct through the
+	// pointer, and mutations on either side corrupt the other.
+	if content.Review != nil {
+		cloned := *content.Review
+		if len(cloned.Reviewers) > 0 {
+			cloned.Reviewers = append([]ticket.ReviewerEntry(nil), cloned.Reviewers...)
+		}
+		if len(cloned.TierThresholds) > 0 {
+			cloned.TierThresholds = append([]ticket.TierThreshold(nil), cloned.TierThresholds...)
+		}
+		content.Review = &cloned
+	}
+	if content.Origin != nil {
+		cloned := *content.Origin
+		content.Origin = &cloned
+	}
 
 	idx.tickets[ticketID] = content
 	idx.updateIndexes(ticketID, &content, addToStringIndex, addToIntIndex)

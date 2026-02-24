@@ -14,6 +14,7 @@ import (
 	"github.com/bureau-foundation/bureau/lib/service"
 	"github.com/bureau-foundation/bureau/lib/servicetoken"
 	"github.com/bureau-foundation/bureau/lib/ticketindex"
+	"github.com/bureau-foundation/bureau/messaging"
 )
 
 // withReadLock wraps an authenticated handler with a read lock on
@@ -293,6 +294,15 @@ func (ts *TicketService) matchRoomAlias(localpart string, serverName ref.ServerN
 // ticket state events to Matrix. Tests substitute a fake implementation.
 type matrixWriter interface {
 	SendStateEvent(ctx context.Context, roomID ref.RoomID, eventType ref.EventType, stateKey string, content any) (ref.EventID, error)
+}
+
+// messageSender is the subset of messaging.Session needed for sending
+// room messages (notifications, escalation alerts). Tests substitute a
+// fake implementation. Separated from matrixWriter because state event
+// writes and message sends have different semantics (state events are
+// idempotent by key; messages are append-only).
+type messageSender interface {
+	SendMessage(ctx context.Context, roomID ref.RoomID, content messaging.MessageContent) (ref.EventID, error)
 }
 
 // findGate returns the index of a gate with the given ID in the gates

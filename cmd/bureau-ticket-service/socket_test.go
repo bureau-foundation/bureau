@@ -23,6 +23,7 @@ import (
 	"github.com/bureau-foundation/bureau/lib/service"
 	"github.com/bureau-foundation/bureau/lib/servicetoken"
 	"github.com/bureau-foundation/bureau/lib/stewardshipindex"
+	"github.com/bureau-foundation/bureau/messaging"
 )
 
 // testClockEpoch is the fixed time used by the fake clock in ticket
@@ -77,11 +78,13 @@ func newTestServer(t *testing.T, rooms map[ref.RoomID]*roomState, opts testServe
 	if !opts.noWriter {
 		writer = &fakeWriter{notify: make(chan struct{}, 64)}
 	}
+	messenger := &fakeMessenger{}
 
 	testServiceRef := mustParseService(t, "@bureau/fleet/prod/service/ticket/test:bureau.local")
 	testMachineRef := mustParseMachine(t, "@bureau/fleet/prod/machine/test:bureau.local")
 	ts := &TicketService{
 		writer:           writer,
+		messenger:        messenger,
 		clock:            testClock,
 		startedAt:        time.Date(2026, 1, 1, 12, 0, 0, 0, time.UTC),
 		service:          testServiceRef,
@@ -152,10 +155,11 @@ func newTestServer(t *testing.T, rooms map[ref.RoomID]*roomState, opts testServe
 	client := service.NewServiceClientFromToken(socketPath, tokenBytes)
 
 	return &testEnv{
-		client:  client,
-		writer:  writer,
-		service: ts,
-		clock:   testClock,
+		client:    client,
+		writer:    writer,
+		messenger: messenger,
+		service:   ts,
+		clock:     testClock,
 		cleanup: func() {
 			cancel()
 			wg.Wait()
@@ -470,13 +474,36 @@ func (f *fakeWriter) SendStateEvent(_ context.Context, roomID ref.RoomID, eventT
 	return ref.MustParseEventID("$event-" + stateKey), nil
 }
 
+// fakeMessenger records messages sent via SendMessage for test
+// verification. Thread-safe.
+type fakeMessenger struct {
+	mu       sync.Mutex
+	messages []sentMessage
+}
+
+type sentMessage struct {
+	RoomID  string
+	Content messaging.MessageContent
+}
+
+func (f *fakeMessenger) SendMessage(_ context.Context, roomID ref.RoomID, content messaging.MessageContent) (ref.EventID, error) {
+	f.mu.Lock()
+	f.messages = append(f.messages, sentMessage{
+		RoomID:  roomID.String(),
+		Content: content,
+	})
+	f.mu.Unlock()
+	return ref.MustParseEventID("$msg-1"), nil
+}
+
 // testEnv holds the server, client, and writer for mutation tests.
 type testEnv struct {
-	client  *service.ServiceClient
-	writer  *fakeWriter
-	service *TicketService
-	clock   *clock.FakeClock
-	cleanup func()
+	client    *service.ServiceClient
+	writer    *fakeWriter
+	messenger *fakeMessenger
+	service   *TicketService
+	clock     *clock.FakeClock
+	cleanup   func()
 }
 
 func testMutationServer(t *testing.T, rooms map[ref.RoomID]*roomState) *testEnv {

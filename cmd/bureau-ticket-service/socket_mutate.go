@@ -531,7 +531,7 @@ func (ts *TicketService) handleCreate(ctx context.Context, token *servicetoken.T
 	// enrichment so stewardship gates get CreatedAt populated by
 	// the same loop as explicit gates.
 	if len(content.Affects) > 0 {
-		stewardship := ts.resolveStewardshipGates(content.Affects, content.Type)
+		stewardship := ts.resolveStewardshipGates(content.Affects, content.Type, content.Priority)
 		content.Gates = append(content.Gates, stewardship.gates...)
 		if len(stewardship.reviewers) > 0 {
 			if content.Review == nil {
@@ -679,7 +679,7 @@ func (ts *TicketService) handleUpdate(ctx context.Context, token *servicetoken.T
 	if request.Affects != nil || request.Type != nil {
 		content.Gates = removeStewardshipGates(content.Gates)
 		if len(content.Affects) > 0 {
-			stewardship := ts.resolveStewardshipGates(content.Affects, content.Type)
+			stewardship := ts.resolveStewardshipGates(content.Affects, content.Type, content.Priority)
 			content.Gates = append(content.Gates, stewardship.gates...)
 			mergeStewardshipReview(&content, stewardship.reviewers, stewardship.thresholds)
 		} else {
@@ -1104,7 +1104,7 @@ func (ts *TicketService) handleBatchCreate(ctx context.Context, token *serviceto
 
 		// Auto-configure stewardship review gates.
 		if len(entry.Affects) > 0 {
-			stewardship := ts.resolveStewardshipGates(entry.Affects, entry.Type)
+			stewardship := ts.resolveStewardshipGates(entry.Affects, entry.Type, entry.Priority)
 			content.Gates = append(content.Gates, stewardship.gates...)
 			if len(stewardship.reviewers) > 0 {
 				if content.Review == nil {
@@ -1452,6 +1452,10 @@ func (ts *TicketService) handleSetDisposition(ctx context.Context, token *servic
 		return nil, fmt.Errorf("caller %s is not in the reviewer list", callerID)
 	}
 
+	// Snapshot the review state before the disposition change so
+	// we can detect newly-activated last_pending tiers.
+	oldReview := snapshotReview(content.Review)
+
 	now := ts.clock.Now().UTC().Format(time.RFC3339)
 	content.Review.Reviewers[reviewerIndex].Disposition = request.Disposition
 	content.Review.Reviewers[reviewerIndex].UpdatedAt = now
@@ -1464,6 +1468,9 @@ func (ts *TicketService) handleSetDisposition(ctx context.Context, token *servic
 	if err := ts.putWithEcho(ctx, roomID, state, ticketID, content); err != nil {
 		return nil, fmt.Errorf("writing ticket to Matrix: %w", err)
 	}
+
+	// Check for escalation notifications after the successful write.
+	ts.sendEscalationNotifications(ctx, roomID, ticketID, oldReview, content)
 
 	return mutationResponse{
 		ID:      ticketID,

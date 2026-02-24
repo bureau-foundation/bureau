@@ -785,6 +785,16 @@ type TierThreshold struct {
 	// must have disposition "approved" for the tier to be
 	// satisfied.
 	Threshold *int `json:"threshold,omitempty"`
+
+	// Escalation controls when this tier's reviewers are
+	// notified. "immediate" (default, including empty) means
+	// reviewers are notified when the review gate is created.
+	// "last_pending" means reviewers are notified only when
+	// all earlier tiers have met their thresholds and this tier
+	// is the last remaining unsatisfied tier. Copied from the
+	// stewardship declaration's StewardshipTier.Escalation at
+	// gate creation time so the ticket is self-contained.
+	Escalation string `json:"escalation,omitempty"`
 }
 
 // Validate checks that the tier threshold has valid values.
@@ -798,6 +808,12 @@ func (tt *TierThreshold) Validate() error {
 				"omit the field to require all reviewers in the tier to approve",
 			*tt.Threshold,
 		)
+	}
+	switch tt.Escalation {
+	case "", "immediate", "last_pending":
+		// Valid. Empty defaults to "immediate" at runtime.
+	default:
+		return fmt.Errorf("unknown escalation %q (must be \"immediate\" or \"last_pending\")", tt.Escalation)
 	}
 	return nil
 }

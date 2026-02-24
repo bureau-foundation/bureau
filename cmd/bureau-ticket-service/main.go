@@ -57,6 +57,7 @@ func run() error {
 	ticketService := &TicketService{
 		session:          boot.Session,
 		writer:           boot.Session,
+		messenger:        boot.Session,
 		resolver:         boot.Session,
 		clock:            boot.Clock,
 		service:          boot.Service,
@@ -139,10 +140,11 @@ type TicketService struct {
 	// mutate the same shared state.
 	mu sync.RWMutex
 
-	session  messaging.Session
-	writer   matrixWriter
-	resolver aliasResolver
-	clock    clock.Clock
+	session   messaging.Session
+	writer    matrixWriter
+	messenger messageSender
+	resolver  aliasResolver
+	clock     clock.Clock
 
 	service       ref.Service
 	machine       ref.Machine

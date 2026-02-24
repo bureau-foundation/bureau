@@ -4,6 +4,9 @@
 package main
 
 import (
+	"context"
+	"fmt"
+	"sort"
 	"strings"
 
 	"github.com/bureau-foundation/bureau/lib/principal"
@@ -11,6 +14,7 @@ import (
 	"github.com/bureau-foundation/bureau/lib/schema/stewardship"
 	"github.com/bureau-foundation/bureau/lib/schema/ticket"
 	"github.com/bureau-foundation/bureau/lib/stewardshipindex"
+	"github.com/bureau-foundation/bureau/messaging"
 )
 
 // stewardshipResult holds the outputs of stewardship resolution:
@@ -29,9 +33,13 @@ type stewardshipResult struct {
 // the ticket's type produce gates; NotifyTypes are handled separately
 // by the notification subsystem.
 //
+// When priority is 0 (P0/critical), all tier escalation policies are
+// overridden to "immediate" — every tier is notified at gate creation
+// time regardless of the declaration's last_pending setting.
+//
 // Returns an empty result if affects is empty, no declarations match,
 // or no matching declarations' GateTypes include the ticket type.
-func (ts *TicketService) resolveStewardshipGates(affects []string, ticketType string) stewardshipResult {
+func (ts *TicketService) resolveStewardshipGates(affects []string, ticketType string, priority int) stewardshipResult {
 	if len(affects) == 0 {
 		return stewardshipResult{}
 	}
@@ -122,6 +130,14 @@ func (ts *TicketService) resolveStewardshipGates(affects []string, ticketType st
 		}
 	}
 
+	// P0 bypass: override all escalation to "immediate" so every
+	// tier is notified at gate creation time.
+	if priority == 0 {
+		for i := range result.thresholds {
+			result.thresholds[i].Escalation = "immediate"
+		}
+	}
+
 	return result
 }
 
@@ -141,8 +157,9 @@ func (ts *TicketService) buildIndependentGate(
 		reviewers := ts.resolveReviewersForTier(declaration.RoomID, tier, remappedTier)
 		allReviewers = append(allReviewers, reviewers...)
 		allThresholds = append(allThresholds, ticket.TierThreshold{
-			Tier:      remappedTier,
-			Threshold: tier.Threshold,
+			Tier:       remappedTier,
+			Threshold:  tier.Threshold,
+			Escalation: tier.Escalation,
 		})
 	}
 
@@ -183,12 +200,18 @@ func (ts *TicketService) buildCooperativeGate(
 		remappedTier := tierOffset + tierIndex
 		seenUsers := make(map[ref.UserID]bool)
 		var maxThreshold *int
+		// Escalation merging: "immediate" wins over "last_pending".
+		// Only when all declarations agree on "last_pending" does the
+		// merged tier use "last_pending". Empty defaults to "immediate".
+		mergedEscalation := "last_pending"
+		declarationsWithTier := 0
 
 		for _, declaration := range declarations {
 			if tierIndex >= len(declaration.Content.Tiers) {
 				continue
 			}
 			tier := declaration.Content.Tiers[tierIndex]
+			declarationsWithTier++
 
 			// Merge reviewers, deduplicating by UserID.
 			for _, reviewer := range ts.resolveReviewersForTier(declaration.RoomID, tier, remappedTier) {
@@ -213,11 +236,28 @@ func (ts *TicketService) buildCooperativeGate(
 				threshold := *tier.Threshold
 				maxThreshold = &threshold
 			}
+
+			// If any declaration uses "immediate" (or empty,
+			// which defaults to "immediate"), the merged tier
+			// is "immediate".
+			escalation := tier.Escalation
+			if escalation == "" {
+				escalation = "immediate"
+			}
+			if escalation == "immediate" {
+				mergedEscalation = "immediate"
+			}
+		}
+
+		// If no declarations had this tier, default to "immediate".
+		if declarationsWithTier == 0 {
+			mergedEscalation = "immediate"
 		}
 
 		allThresholds = append(allThresholds, ticket.TierThreshold{
-			Tier:      remappedTier,
-			Threshold: maxThreshold,
+			Tier:       remappedTier,
+			Threshold:  maxThreshold,
+			Escalation: mergedEscalation,
 		})
 	}
 
@@ -360,4 +400,237 @@ func stewardshipGateDescription(declaration stewardshipindex.Declaration) string
 		return "Stewardship review: " + declaration.Content.Description
 	}
 	return "Stewardship review for " + declaration.StateKey
+}
+
+// --- Review snapshotting ---
+
+// snapshotReview creates a shallow copy of a TicketReview suitable
+// for comparing tier satisfaction before and after a mutation. The
+// Reviewers and TierThresholds slices are copied so that mutations
+// to the original do not affect the snapshot. Returns nil if the
+// input is nil.
+func snapshotReview(review *ticket.TicketReview) *ticket.TicketReview {
+	if review == nil {
+		return nil
+	}
+	snapshot := &ticket.TicketReview{
+		Scope: review.Scope,
+	}
+	if len(review.Reviewers) > 0 {
+		snapshot.Reviewers = make([]ticket.ReviewerEntry, len(review.Reviewers))
+		copy(snapshot.Reviewers, review.Reviewers)
+	}
+	if len(review.TierThresholds) > 0 {
+		snapshot.TierThresholds = make([]ticket.TierThreshold, len(review.TierThresholds))
+		copy(snapshot.TierThresholds, review.TierThresholds)
+	}
+	return snapshot
+}
+
+// --- Escalation notifications ---
+
+// tierSatisfied checks whether a specific tier has met its approval
+// requirements given the review's current state. Returns true if the
+// tier's threshold is met (or the tier has no reviewers, which is
+// vacuously satisfied).
+func tierSatisfied(review *ticket.TicketReview, tier int) bool {
+	// Build threshold lookup.
+	var threshold *int
+	for i := range review.TierThresholds {
+		if review.TierThresholds[i].Tier == tier {
+			threshold = review.TierThresholds[i].Threshold
+			break
+		}
+	}
+
+	// Count reviewers in this tier.
+	total := 0
+	approved := 0
+	for _, reviewer := range review.Reviewers {
+		if reviewer.Tier == tier {
+			total++
+			if reviewer.Disposition == "approved" {
+				approved++
+			}
+		}
+	}
+
+	if total == 0 {
+		// No reviewers in this tier — vacuously satisfied.
+		return true
+	}
+
+	if threshold == nil {
+		// All must approve.
+		return approved >= total
+	}
+	return approved >= *threshold
+}
+
+// activatedLastPendingTiers returns the tier numbers of last_pending
+// tiers that should now be activated (notified). A last_pending tier
+// activates when all earlier tiers are satisfied.
+//
+// The oldReview parameter is the review state before the disposition
+// change; newReview is the state after. A tier is "newly activated" if
+// it was not activatable before but is now. This prevents duplicate
+// notifications on subsequent approvals that don't change which tiers
+// are active.
+//
+// Returns nil if no last_pending tiers should be activated.
+func activatedLastPendingTiers(oldReview, newReview *ticket.TicketReview) []int {
+	if newReview == nil || len(newReview.TierThresholds) == 0 {
+		return nil
+	}
+
+	// Collect last_pending tiers sorted by tier number.
+	var lastPendingTiers []int
+	for _, threshold := range newReview.TierThresholds {
+		if threshold.Escalation == "last_pending" {
+			lastPendingTiers = append(lastPendingTiers, threshold.Tier)
+		}
+	}
+	if len(lastPendingTiers) == 0 {
+		return nil
+	}
+
+	// Collect all distinct tier numbers for ordering.
+	tierNumbers := allTierNumbers(newReview)
+
+	var activated []int
+	for _, pendingTier := range lastPendingTiers {
+		// Check: all earlier tiers must be satisfied in the new state.
+		allEarlierSatisfied := true
+		for _, earlierTier := range tierNumbers {
+			if earlierTier >= pendingTier {
+				break
+			}
+			if !tierSatisfied(newReview, earlierTier) {
+				allEarlierSatisfied = false
+				break
+			}
+		}
+		if !allEarlierSatisfied {
+			continue
+		}
+
+		// Already satisfied in the new state — no need to notify.
+		if tierSatisfied(newReview, pendingTier) {
+			continue
+		}
+
+		// Check this wasn't already activatable in the old state.
+		if oldReview != nil {
+			wasActivatable := true
+			for _, earlierTier := range tierNumbers {
+				if earlierTier >= pendingTier {
+					break
+				}
+				if !tierSatisfied(oldReview, earlierTier) {
+					wasActivatable = false
+					break
+				}
+			}
+			if wasActivatable {
+				// Was already activatable — no new notification.
+				continue
+			}
+		}
+
+		activated = append(activated, pendingTier)
+	}
+
+	return activated
+}
+
+// allTierNumbers returns all distinct tier numbers from the review's
+// TierThresholds, sorted ascending.
+func allTierNumbers(review *ticket.TicketReview) []int {
+	seen := make(map[int]bool, len(review.TierThresholds))
+	var numbers []int
+	for _, threshold := range review.TierThresholds {
+		if !seen[threshold.Tier] {
+			seen[threshold.Tier] = true
+			numbers = append(numbers, threshold.Tier)
+		}
+	}
+	sort.Ints(numbers)
+	return numbers
+}
+
+// escalationMessage formats a notification message for a last_pending
+// tier that has just been activated. The message includes the ticket
+// ID, a summary of earlier tier approvals, and a mention of the
+// reviewers in the activated tier.
+func escalationMessage(ticketID string, content ticket.TicketContent, activatedTier int) string {
+	var builder strings.Builder
+
+	// Header.
+	fmt.Fprintf(&builder, "Stewardship escalation: %s", ticketID)
+	if content.Title != "" {
+		fmt.Fprintf(&builder, " (%s)", content.Title)
+	}
+	builder.WriteString("\n")
+
+	// Earlier tier summary.
+	builder.WriteString("\nEarlier tiers satisfied:")
+	for _, reviewer := range content.Review.Reviewers {
+		if reviewer.Tier < activatedTier && reviewer.Disposition == "approved" {
+			fmt.Fprintf(&builder, "\n  - %s (tier %d, approved)", reviewer.UserID, reviewer.Tier)
+		}
+	}
+
+	// Activated tier reviewers.
+	fmt.Fprintf(&builder, "\n\nTier %d review now needed:", activatedTier)
+	for _, reviewer := range content.Review.Reviewers {
+		if reviewer.Tier == activatedTier {
+			fmt.Fprintf(&builder, "\n  - %s", reviewer.UserID)
+		}
+	}
+
+	return builder.String()
+}
+
+// sendEscalationNotifications checks whether a disposition change
+// activated any last_pending tiers and sends notification messages
+// to the ticket's room for each activated tier.
+//
+// oldReview is the review state before the change; the current
+// content has the new state. This must be called after the ticket
+// has been written to Matrix (via putWithEcho) so that the
+// notification appears after the state event update.
+func (ts *TicketService) sendEscalationNotifications(
+	ctx context.Context,
+	roomID ref.RoomID,
+	ticketID string,
+	oldReview *ticket.TicketReview,
+	content ticket.TicketContent,
+) {
+	if ts.messenger == nil {
+		return
+	}
+
+	activated := activatedLastPendingTiers(oldReview, content.Review)
+	if len(activated) == 0 {
+		return
+	}
+
+	for _, tier := range activated {
+		message := escalationMessage(ticketID, content, tier)
+		_, err := ts.messenger.SendMessage(ctx, roomID, messaging.NewTextMessage(message))
+		if err != nil {
+			ts.logger.Error("failed to send escalation notification",
+				"ticket_id", ticketID,
+				"tier", tier,
+				"room_id", roomID,
+				"error", err,
+			)
+		} else {
+			ts.logger.Info("sent escalation notification",
+				"ticket_id", ticketID,
+				"tier", tier,
+				"room_id", roomID,
+			)
+		}
+	}
 }

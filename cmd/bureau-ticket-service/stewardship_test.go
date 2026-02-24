@@ -5,7 +5,10 @@ package main
 
 import (
 	"context"
+	"io"
+	"log/slog"
 	"sort"
+	"strings"
 	"testing"
 
 	"github.com/bureau-foundation/bureau/lib/ref"
@@ -417,13 +420,13 @@ func TestResolveStewardshipGatesFiltersByGateTypes(t *testing.T) {
 	})
 
 	// Ticket type "task" is not in GateTypes ["bug"].
-	result := ts.resolveStewardshipGates([]string{"fleet/gpu/a100"}, "task")
+	result := ts.resolveStewardshipGates([]string{"fleet/gpu/a100"}, "task", 2)
 	if len(result.gates) != 0 {
 		t.Fatalf("expected 0 gates for non-matching ticket type, got %d", len(result.gates))
 	}
 
 	// Ticket type "bug" matches.
-	result = ts.resolveStewardshipGates([]string{"fleet/gpu/a100"}, "bug")
+	result = ts.resolveStewardshipGates([]string{"fleet/gpu/a100"}, "bug", 2)
 	if len(result.gates) != 1 {
 		t.Fatalf("expected 1 gate for matching ticket type, got %d", len(result.gates))
 	}
@@ -447,7 +450,7 @@ func TestResolveStewardshipGatesSkipsNotifyTypes(t *testing.T) {
 	})
 
 	// "task" is in NotifyTypes, not GateTypes — no gate produced.
-	result := ts.resolveStewardshipGates([]string{"fleet/gpu/a100"}, "task")
+	result := ts.resolveStewardshipGates([]string{"fleet/gpu/a100"}, "task", 2)
 	if len(result.gates) != 0 {
 		t.Fatalf("expected 0 gates for notify-only type, got %d", len(result.gates))
 	}
@@ -455,7 +458,7 @@ func TestResolveStewardshipGatesSkipsNotifyTypes(t *testing.T) {
 
 func TestResolveStewardshipGatesEmptyAffects(t *testing.T) {
 	ts := newTestService()
-	result := ts.resolveStewardshipGates(nil, "task")
+	result := ts.resolveStewardshipGates(nil, "task", 2)
 	if len(result.gates) != 0 {
 		t.Fatalf("expected 0 gates for nil affects, got %d", len(result.gates))
 	}
@@ -475,7 +478,7 @@ func TestResolveStewardshipGatesNoMatchingDeclarations(t *testing.T) {
 	})
 
 	// Affects don't match any ResourcePatterns.
-	result := ts.resolveStewardshipGates([]string{"workspace/lib/foo.go"}, "task")
+	result := ts.resolveStewardshipGates([]string{"workspace/lib/foo.go"}, "task", 2)
 	if len(result.gates) != 0 {
 		t.Fatalf("expected 0 gates for non-matching affects, got %d", len(result.gates))
 	}
@@ -528,7 +531,7 @@ func TestResolveStewardshipGatesMixedOverlapPolicies(t *testing.T) {
 		},
 	})
 
-	result := ts.resolveStewardshipGates([]string{"shared/resource"}, "task")
+	result := ts.resolveStewardshipGates([]string{"shared/resource"}, "task", 2)
 
 	// Should produce 2 gates: one independent + one cooperative.
 	if len(result.gates) != 2 {
@@ -571,7 +574,7 @@ func TestResolveStewardshipGatesSkipsDeclarationWithNoMembers(t *testing.T) {
 		},
 	})
 
-	result := ts.resolveStewardshipGates([]string{"fleet/gpu/a100"}, "task")
+	result := ts.resolveStewardshipGates([]string{"fleet/gpu/a100"}, "task", 2)
 	if len(result.gates) != 0 {
 		t.Fatalf("expected 0 gates when no members match, got %d", len(result.gates))
 	}
@@ -1183,6 +1186,505 @@ func TestHandleStewardshipSetMissingRoom(t *testing.T) {
 	}, &result)
 	if err == nil {
 		t.Fatal("expected error for missing room")
+	}
+}
+
+// --- Tier satisfaction ---
+
+func TestTierSatisfiedAllApproved(t *testing.T) {
+	review := &ticket.TicketReview{
+		Reviewers: []ticket.ReviewerEntry{
+			{UserID: ref.MustParseUserID("@alice:bureau.local"), Disposition: "approved", Tier: 0},
+			{UserID: ref.MustParseUserID("@bob:bureau.local"), Disposition: "approved", Tier: 0},
+		},
+		TierThresholds: []ticket.TierThreshold{
+			{Tier: 0, Threshold: nil},
+		},
+	}
+	if !tierSatisfied(review, 0) {
+		t.Error("tier 0 should be satisfied when all reviewers approved")
+	}
+}
+
+func TestTierSatisfiedThresholdMet(t *testing.T) {
+	threshold := 1
+	review := &ticket.TicketReview{
+		Reviewers: []ticket.ReviewerEntry{
+			{UserID: ref.MustParseUserID("@alice:bureau.local"), Disposition: "approved", Tier: 0},
+			{UserID: ref.MustParseUserID("@bob:bureau.local"), Disposition: "pending", Tier: 0},
+		},
+		TierThresholds: []ticket.TierThreshold{
+			{Tier: 0, Threshold: &threshold},
+		},
+	}
+	if !tierSatisfied(review, 0) {
+		t.Error("tier 0 should be satisfied when threshold met (1 of 2 approved)")
+	}
+}
+
+func TestTierSatisfiedNotMet(t *testing.T) {
+	review := &ticket.TicketReview{
+		Reviewers: []ticket.ReviewerEntry{
+			{UserID: ref.MustParseUserID("@alice:bureau.local"), Disposition: "approved", Tier: 0},
+			{UserID: ref.MustParseUserID("@bob:bureau.local"), Disposition: "pending", Tier: 0},
+		},
+		TierThresholds: []ticket.TierThreshold{
+			{Tier: 0, Threshold: nil}, // All must approve.
+		},
+	}
+	if tierSatisfied(review, 0) {
+		t.Error("tier 0 should not be satisfied when not all approved")
+	}
+}
+
+func TestTierSatisfiedNoReviewers(t *testing.T) {
+	review := &ticket.TicketReview{
+		TierThresholds: []ticket.TierThreshold{
+			{Tier: 0, Threshold: nil},
+		},
+	}
+	if !tierSatisfied(review, 0) {
+		t.Error("tier with no reviewers should be vacuously satisfied")
+	}
+}
+
+// --- Activated last_pending tiers ---
+
+func TestActivatedLastPendingTiersBasic(t *testing.T) {
+	// Tier 0 is immediate, tier 1 is last_pending.
+	// After tier 0 becomes satisfied, tier 1 should activate.
+	oldReview := &ticket.TicketReview{
+		Reviewers: []ticket.ReviewerEntry{
+			{UserID: ref.MustParseUserID("@alice:bureau.local"), Disposition: "pending", Tier: 0},
+			{UserID: ref.MustParseUserID("@charlie:bureau.local"), Disposition: "pending", Tier: 1},
+		},
+		TierThresholds: []ticket.TierThreshold{
+			{Tier: 0, Escalation: "immediate"},
+			{Tier: 1, Escalation: "last_pending"},
+		},
+	}
+
+	newReview := &ticket.TicketReview{
+		Reviewers: []ticket.ReviewerEntry{
+			{UserID: ref.MustParseUserID("@alice:bureau.local"), Disposition: "approved", Tier: 0},
+			{UserID: ref.MustParseUserID("@charlie:bureau.local"), Disposition: "pending", Tier: 1},
+		},
+		TierThresholds: []ticket.TierThreshold{
+			{Tier: 0, Escalation: "immediate"},
+			{Tier: 1, Escalation: "last_pending"},
+		},
+	}
+
+	activated := activatedLastPendingTiers(oldReview, newReview)
+	if len(activated) != 1 || activated[0] != 1 {
+		t.Errorf("expected [1], got %v", activated)
+	}
+}
+
+func TestActivatedLastPendingTiersNotYet(t *testing.T) {
+	// Tier 0 still pending — tier 1 (last_pending) should not activate.
+	oldReview := &ticket.TicketReview{
+		Reviewers: []ticket.ReviewerEntry{
+			{UserID: ref.MustParseUserID("@alice:bureau.local"), Disposition: "pending", Tier: 0},
+			{UserID: ref.MustParseUserID("@bob:bureau.local"), Disposition: "pending", Tier: 0},
+			{UserID: ref.MustParseUserID("@charlie:bureau.local"), Disposition: "pending", Tier: 1},
+		},
+		TierThresholds: []ticket.TierThreshold{
+			{Tier: 0, Escalation: "immediate"},
+			{Tier: 1, Escalation: "last_pending"},
+		},
+	}
+
+	newReview := &ticket.TicketReview{
+		Reviewers: []ticket.ReviewerEntry{
+			{UserID: ref.MustParseUserID("@alice:bureau.local"), Disposition: "approved", Tier: 0},
+			{UserID: ref.MustParseUserID("@bob:bureau.local"), Disposition: "pending", Tier: 0},
+			{UserID: ref.MustParseUserID("@charlie:bureau.local"), Disposition: "pending", Tier: 1},
+		},
+		TierThresholds: []ticket.TierThreshold{
+			{Tier: 0, Escalation: "immediate"},
+			{Tier: 1, Escalation: "last_pending"},
+		},
+	}
+
+	activated := activatedLastPendingTiers(oldReview, newReview)
+	if len(activated) != 0 {
+		t.Errorf("expected no activations, got %v", activated)
+	}
+}
+
+func TestActivatedLastPendingTiersAlreadyActivated(t *testing.T) {
+	// Tier 0 was already satisfied before — tier 1 should not
+	// activate again (was already activatable).
+	oldReview := &ticket.TicketReview{
+		Reviewers: []ticket.ReviewerEntry{
+			{UserID: ref.MustParseUserID("@alice:bureau.local"), Disposition: "approved", Tier: 0},
+			{UserID: ref.MustParseUserID("@charlie:bureau.local"), Disposition: "pending", Tier: 1},
+		},
+		TierThresholds: []ticket.TierThreshold{
+			{Tier: 0, Escalation: "immediate"},
+			{Tier: 1, Escalation: "last_pending"},
+		},
+	}
+
+	// New review is the same — no change.
+	newReview := &ticket.TicketReview{
+		Reviewers: []ticket.ReviewerEntry{
+			{UserID: ref.MustParseUserID("@alice:bureau.local"), Disposition: "approved", Tier: 0},
+			{UserID: ref.MustParseUserID("@charlie:bureau.local"), Disposition: "pending", Tier: 1},
+		},
+		TierThresholds: []ticket.TierThreshold{
+			{Tier: 0, Escalation: "immediate"},
+			{Tier: 1, Escalation: "last_pending"},
+		},
+	}
+
+	activated := activatedLastPendingTiers(oldReview, newReview)
+	if len(activated) != 0 {
+		t.Errorf("expected no activations (was already activatable), got %v", activated)
+	}
+}
+
+func TestActivatedLastPendingTiersAlreadySatisfied(t *testing.T) {
+	// Tier 1 is last_pending but already satisfied — no notification.
+	newReview := &ticket.TicketReview{
+		Reviewers: []ticket.ReviewerEntry{
+			{UserID: ref.MustParseUserID("@alice:bureau.local"), Disposition: "approved", Tier: 0},
+			{UserID: ref.MustParseUserID("@charlie:bureau.local"), Disposition: "approved", Tier: 1},
+		},
+		TierThresholds: []ticket.TierThreshold{
+			{Tier: 0, Escalation: "immediate"},
+			{Tier: 1, Escalation: "last_pending"},
+		},
+	}
+
+	activated := activatedLastPendingTiers(nil, newReview)
+	if len(activated) != 0 {
+		t.Errorf("expected no activations (tier already satisfied), got %v", activated)
+	}
+}
+
+func TestActivatedLastPendingTiersNoThresholds(t *testing.T) {
+	// No TierThresholds — legacy mode, no last_pending concept.
+	review := &ticket.TicketReview{
+		Reviewers: []ticket.ReviewerEntry{
+			{UserID: ref.MustParseUserID("@alice:bureau.local"), Disposition: "approved"},
+		},
+	}
+
+	activated := activatedLastPendingTiers(nil, review)
+	if len(activated) != 0 {
+		t.Errorf("expected no activations (no thresholds), got %v", activated)
+	}
+}
+
+func TestActivatedLastPendingTiersNilReview(t *testing.T) {
+	activated := activatedLastPendingTiers(nil, nil)
+	if len(activated) != 0 {
+		t.Errorf("expected no activations (nil review), got %v", activated)
+	}
+}
+
+func TestActivatedLastPendingTiersThreeTiers(t *testing.T) {
+	// Three tiers: 0 (immediate), 1 (last_pending), 2 (last_pending).
+	// When tier 0 becomes satisfied, tier 1 should activate but not
+	// tier 2 (tier 1 is still unsatisfied, so tier 2's "all earlier
+	// tiers satisfied" check fails).
+	oldReview := &ticket.TicketReview{
+		Reviewers: []ticket.ReviewerEntry{
+			{UserID: ref.MustParseUserID("@alice:bureau.local"), Disposition: "pending", Tier: 0},
+			{UserID: ref.MustParseUserID("@bob:bureau.local"), Disposition: "pending", Tier: 1},
+			{UserID: ref.MustParseUserID("@charlie:bureau.local"), Disposition: "pending", Tier: 2},
+		},
+		TierThresholds: []ticket.TierThreshold{
+			{Tier: 0, Escalation: "immediate"},
+			{Tier: 1, Escalation: "last_pending"},
+			{Tier: 2, Escalation: "last_pending"},
+		},
+	}
+
+	newReview := &ticket.TicketReview{
+		Reviewers: []ticket.ReviewerEntry{
+			{UserID: ref.MustParseUserID("@alice:bureau.local"), Disposition: "approved", Tier: 0},
+			{UserID: ref.MustParseUserID("@bob:bureau.local"), Disposition: "pending", Tier: 1},
+			{UserID: ref.MustParseUserID("@charlie:bureau.local"), Disposition: "pending", Tier: 2},
+		},
+		TierThresholds: []ticket.TierThreshold{
+			{Tier: 0, Escalation: "immediate"},
+			{Tier: 1, Escalation: "last_pending"},
+			{Tier: 2, Escalation: "last_pending"},
+		},
+	}
+
+	activated := activatedLastPendingTiers(oldReview, newReview)
+	if len(activated) != 1 || activated[0] != 1 {
+		t.Errorf("expected [1], got %v", activated)
+	}
+}
+
+// --- P0 bypass ---
+
+func TestResolveStewardshipGatesP0Bypass(t *testing.T) {
+	stewardRoomID := testRoomID("!steward-room:bureau.local")
+	ts := &TicketService{
+		membersByRoom: map[ref.RoomID]map[ref.UserID]roomMember{
+			stewardRoomID: {
+				ref.MustParseUserID("@dev/lead:bureau.local"): {DisplayName: "Lead"},
+			},
+		},
+		stewardshipIndex: stewardshipindex.NewIndex(),
+		logger:           slog.New(slog.NewTextHandler(io.Discard, nil)),
+	}
+	ts.stewardshipIndex.Put(stewardRoomID, "fleet/gpu", stewardship.StewardshipContent{
+		Version:          1,
+		ResourcePatterns: []string{"fleet/gpu/**"},
+		GateTypes:        []string{"task"},
+		Tiers: []stewardship.StewardshipTier{
+			{Principals: []string{"dev/*:bureau.local"}, Escalation: "immediate"},
+			{Principals: []string{"dev/*:bureau.local"}, Escalation: "last_pending"},
+		},
+	})
+
+	// P2: escalation preserved.
+	result := ts.resolveStewardshipGates([]string{"fleet/gpu/a100"}, "task", 2)
+	if len(result.thresholds) != 2 {
+		t.Fatalf("expected 2 thresholds, got %d", len(result.thresholds))
+	}
+	if result.thresholds[1].Escalation != "last_pending" {
+		t.Errorf("P2: tier 1 escalation = %q, want last_pending", result.thresholds[1].Escalation)
+	}
+
+	// P0: all escalation overridden to "immediate".
+	result = ts.resolveStewardshipGates([]string{"fleet/gpu/a100"}, "task", 0)
+	if len(result.thresholds) != 2 {
+		t.Fatalf("expected 2 thresholds, got %d", len(result.thresholds))
+	}
+	for i, threshold := range result.thresholds {
+		if threshold.Escalation != "immediate" {
+			t.Errorf("P0: tier %d escalation = %q, want immediate", i, threshold.Escalation)
+		}
+	}
+}
+
+// --- Escalation message formatting ---
+
+func TestEscalationMessage(t *testing.T) {
+	content := ticket.TicketContent{
+		Title: "GPU fleet change",
+		Review: &ticket.TicketReview{
+			Reviewers: []ticket.ReviewerEntry{
+				{UserID: ref.MustParseUserID("@alice:bureau.local"), Disposition: "approved", Tier: 0},
+				{UserID: ref.MustParseUserID("@bob:bureau.local"), Disposition: "approved", Tier: 0},
+				{UserID: ref.MustParseUserID("@charlie:bureau.local"), Disposition: "pending", Tier: 1},
+				{UserID: ref.MustParseUserID("@dave:bureau.local"), Disposition: "pending", Tier: 1},
+			},
+		},
+	}
+
+	message := escalationMessage("tkt-a3f9", content, 1)
+
+	if !strings.Contains(message, "tkt-a3f9") {
+		t.Error("message should contain ticket ID")
+	}
+	if !strings.Contains(message, "GPU fleet change") {
+		t.Error("message should contain ticket title")
+	}
+	if !strings.Contains(message, "@alice:bureau.local") {
+		t.Error("message should mention earlier tier approvers")
+	}
+	if !strings.Contains(message, "@charlie:bureau.local") {
+		t.Error("message should mention activated tier reviewers")
+	}
+	if !strings.Contains(message, "Tier 1 review now needed") {
+		t.Error("message should indicate which tier is needed")
+	}
+}
+
+// --- Snapshot review ---
+
+func TestSnapshotReviewIndependence(t *testing.T) {
+	original := &ticket.TicketReview{
+		Reviewers: []ticket.ReviewerEntry{
+			{UserID: ref.MustParseUserID("@alice:bureau.local"), Disposition: "pending", Tier: 0},
+		},
+		TierThresholds: []ticket.TierThreshold{
+			{Tier: 0, Escalation: "immediate"},
+		},
+	}
+
+	snapshot := snapshotReview(original)
+
+	// Mutate the original.
+	original.Reviewers[0].Disposition = "approved"
+
+	// Snapshot should be unchanged.
+	if snapshot.Reviewers[0].Disposition != "pending" {
+		t.Error("snapshot should not be affected by original mutation")
+	}
+}
+
+func TestSnapshotReviewNil(t *testing.T) {
+	if snapshotReview(nil) != nil {
+		t.Error("snapshotReview(nil) should return nil")
+	}
+}
+
+// --- Escalation via set-disposition ---
+
+func TestSetDispositionTriggersEscalation(t *testing.T) {
+	env := testMutationServer(t, mutationRooms())
+	defer env.cleanup()
+
+	// The default test token subject is @bureau/fleet/prod/agent/tester:bureau.local.
+	// Use that as the tier 0 reviewer so the token is authorized.
+	roomID := testRoomID("!room:bureau.local")
+	reviewer0 := ref.MustParseUserID("@bureau/fleet/prod/agent/tester:bureau.local")
+	reviewer1 := ref.MustParseUserID("@dev/senior:bureau.local")
+
+	content := ticket.TicketContent{
+		Version:   ticket.TicketContentVersion,
+		Title:     "GPU fleet change",
+		Status:    "review",
+		Type:      "task",
+		Priority:  2,
+		CreatedBy: ref.MustParseUserID("@agent/creator:bureau.local"),
+		CreatedAt: "2026-01-15T12:00:00Z",
+		UpdatedAt: "2026-01-15T12:00:00Z",
+		Review: &ticket.TicketReview{
+			Reviewers: []ticket.ReviewerEntry{
+				{UserID: reviewer0, Disposition: "pending", Tier: 0},
+				{UserID: reviewer1, Disposition: "pending", Tier: 1},
+			},
+			TierThresholds: []ticket.TierThreshold{
+				{Tier: 0, Escalation: "immediate"},
+				{Tier: 1, Escalation: "last_pending"},
+			},
+		},
+		Gates: []ticket.TicketGate{
+			{ID: "stewardship:fleet/gpu", Type: "review", Status: "pending", CreatedAt: "2026-01-15T12:00:00Z"},
+		},
+	}
+	env.service.rooms[roomID].index.Put("tkt-1", content)
+
+	// Set disposition as the default test token subject (tier 0 approval).
+	var result mutationResponse
+	err := env.client.Call(context.Background(), "set-disposition", map[string]any{
+		"room":        roomID.String(),
+		"ticket":      "tkt-1",
+		"disposition": "approved",
+	}, &result)
+	if err != nil {
+		t.Fatalf("set-disposition: %v", err)
+	}
+
+	// Verify escalation message was sent.
+	env.messenger.mu.Lock()
+	messages := env.messenger.messages
+	env.messenger.mu.Unlock()
+
+	if len(messages) != 1 {
+		t.Fatalf("expected 1 escalation message, got %d", len(messages))
+	}
+	if messages[0].RoomID != roomID.String() {
+		t.Errorf("message sent to %q, want %q", messages[0].RoomID, roomID.String())
+	}
+	if !strings.Contains(messages[0].Content.Body, "tkt-1") {
+		t.Error("escalation message should contain ticket ID")
+	}
+	if !strings.Contains(messages[0].Content.Body, "@dev/senior:bureau.local") {
+		t.Error("escalation message should mention tier 1 reviewer")
+	}
+}
+
+func TestSetDispositionNoEscalationWhenNotLastPending(t *testing.T) {
+	env := testMutationServer(t, mutationRooms())
+	defer env.cleanup()
+
+	// Tier 0 has two reviewers, both immediate. No last_pending tiers.
+	roomID := testRoomID("!room:bureau.local")
+	reviewer0 := ref.MustParseUserID("@bureau/fleet/prod/agent/tester:bureau.local")
+
+	content := ticket.TicketContent{
+		Version:   ticket.TicketContentVersion,
+		Title:     "Simple review",
+		Status:    "review",
+		Type:      "task",
+		Priority:  2,
+		CreatedBy: ref.MustParseUserID("@agent/creator:bureau.local"),
+		CreatedAt: "2026-01-15T12:00:00Z",
+		UpdatedAt: "2026-01-15T12:00:00Z",
+		Review: &ticket.TicketReview{
+			Reviewers: []ticket.ReviewerEntry{
+				{UserID: reviewer0, Disposition: "pending", Tier: 0},
+				{UserID: ref.MustParseUserID("@dev/senior:bureau.local"), Disposition: "pending", Tier: 0},
+			},
+			TierThresholds: []ticket.TierThreshold{
+				{Tier: 0, Escalation: "immediate"},
+			},
+		},
+		Gates: []ticket.TicketGate{
+			{ID: "stewardship:fleet/gpu", Type: "review", Status: "pending", CreatedAt: "2026-01-15T12:00:00Z"},
+		},
+	}
+	env.service.rooms[roomID].index.Put("tkt-2", content)
+
+	var result mutationResponse
+	err := env.client.Call(context.Background(), "set-disposition", map[string]any{
+		"room":        roomID.String(),
+		"ticket":      "tkt-2",
+		"disposition": "approved",
+	}, &result)
+	if err != nil {
+		t.Fatalf("set-disposition: %v", err)
+	}
+
+	// No escalation messages — no last_pending tiers.
+	env.messenger.mu.Lock()
+	messageCount := len(env.messenger.messages)
+	env.messenger.mu.Unlock()
+
+	if messageCount != 0 {
+		t.Errorf("expected 0 escalation messages, got %d", messageCount)
+	}
+}
+
+// --- Escalation wired through stewardship resolution ---
+
+func TestBuildIndependentGatePreservesEscalation(t *testing.T) {
+	stewardRoomID := testRoomID("!steward-room:bureau.local")
+	ts := &TicketService{
+		membersByRoom: map[ref.RoomID]map[ref.UserID]roomMember{
+			stewardRoomID: {
+				ref.MustParseUserID("@dev/lead:bureau.local"):   {DisplayName: "Lead"},
+				ref.MustParseUserID("@dev/senior:bureau.local"): {DisplayName: "Senior"},
+			},
+		},
+		stewardshipIndex: stewardshipindex.NewIndex(),
+		logger:           slog.New(slog.NewTextHandler(io.Discard, nil)),
+	}
+
+	declaration := stewardshipindex.Declaration{
+		RoomID:   stewardRoomID,
+		StateKey: "fleet/gpu",
+		Content: stewardship.StewardshipContent{
+			Version:          1,
+			ResourcePatterns: []string{"fleet/gpu/**"},
+			Tiers: []stewardship.StewardshipTier{
+				{Principals: []string{"dev/lead:bureau.local"}, Escalation: "immediate"},
+				{Principals: []string{"dev/senior:bureau.local"}, Escalation: "last_pending"},
+			},
+		},
+	}
+
+	_, _, thresholds, _ := ts.buildIndependentGate(declaration, 0)
+	if len(thresholds) != 2 {
+		t.Fatalf("expected 2 thresholds, got %d", len(thresholds))
+	}
+	if thresholds[0].Escalation != "immediate" {
+		t.Errorf("tier 0 escalation = %q, want immediate", thresholds[0].Escalation)
+	}
+	if thresholds[1].Escalation != "last_pending" {
+		t.Errorf("tier 1 escalation = %q, want last_pending", thresholds[1].Escalation)
 	}
 }
 

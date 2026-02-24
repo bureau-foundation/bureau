@@ -97,6 +97,7 @@ func (ts *TicketService) handleStewardshipList(_ context.Context, token *service
 type stewardshipResolveRequest struct {
 	Affects    []string `cbor:"affects"`
 	TicketType string   `cbor:"ticket_type"`
+	Priority   int      `cbor:"priority,omitempty"`
 }
 
 // stewardshipResolveResponse previews what gates and reviewers would
@@ -160,7 +161,7 @@ func (ts *TicketService) handleStewardshipResolve(_ context.Context, token *serv
 	}
 
 	// Resolve gates and reviewers using the same logic as create/update.
-	result := ts.resolveStewardshipGates(request.Affects, request.TicketType)
+	result := ts.resolveStewardshipGates(request.Affects, request.TicketType, request.Priority)
 
 	return stewardshipResolveResponse{
 		Gates:      result.gates,

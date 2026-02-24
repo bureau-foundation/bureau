@@ -16,19 +16,10 @@ import (
 	"syscall"
 	"time"
 
-	"github.com/bureau-foundation/bureau/lib/artifactstore"
 	"github.com/bureau-foundation/bureau/lib/proxyclient"
 	"github.com/bureau-foundation/bureau/lib/ref"
 	"github.com/bureau-foundation/bureau/lib/schema/agent"
 	"github.com/bureau-foundation/bureau/messaging"
-)
-
-// Default sandbox paths for the artifact service socket and token.
-// These are bind-mounted into the sandbox by the daemon when the agent
-// template declares RequiredServices: ["artifact"].
-const (
-	DefaultArtifactServiceSocketPath = "/run/bureau/service/artifact.sock"
-	DefaultArtifactServiceTokenPath  = "/run/bureau/service/token/artifact.token"
 )
 
 // RunConfig holds the configuration for the agent lifecycle.
@@ -60,21 +51,12 @@ type RunConfig struct {
 	// Required when AgentServiceSocketPath is set.
 	AgentServiceTokenPath string
 
-	// ArtifactServiceSocketPath is the path to the artifact service
-	// Unix socket. Required when CheckpointFormat is set.
-	ArtifactServiceSocketPath string
-
-	// ArtifactServiceTokenPath is the path to the artifact service
-	// authentication token. Required when ArtifactServiceSocketPath
-	// is set.
-	ArtifactServiceTokenPath string
-
 	// CheckpointFormat enables event-level checkpointing in the
 	// event pump. When non-empty, the event pump checkpoints
 	// []Event as CBOR deltas using this format identifier (e.g.,
-	// "events-v1"). Both ArtifactServiceSocketPath and
-	// AgentServiceSocketPath must be set. When empty, no event
-	// checkpointing occurs.
+	// "events-v1"). AgentServiceSocketPath must be set — checkpoint
+	// data flows through the agent service, which stores artifacts
+	// internally. When empty, no event checkpointing occurs.
 	CheckpointFormat string
 
 	// AgentTemplate is the agent template identifier included in
@@ -115,12 +97,6 @@ func RunConfigFromEnvironment() RunConfig {
 	if _, err := os.Stat(DefaultAgentServiceSocketPath); err == nil {
 		config.AgentServiceSocketPath = DefaultAgentServiceSocketPath
 		config.AgentServiceTokenPath = DefaultAgentServiceTokenPath
-	}
-
-	// Auto-detect artifact service at the standard sandbox path.
-	if _, err := os.Stat(DefaultArtifactServiceSocketPath); err == nil {
-		config.ArtifactServiceSocketPath = DefaultArtifactServiceSocketPath
-		config.ArtifactServiceTokenPath = DefaultArtifactServiceTokenPath
 	}
 
 	config.AgentTemplate = os.Getenv("BUREAU_AGENT_TEMPLATE")
@@ -165,20 +141,11 @@ func Run(ctx context.Context, driver Driver, config RunConfig) error {
 		return fmt.Errorf("BUREAU_SERVER_NAME is required")
 	}
 
-	// Validate event checkpoint infrastructure. When CheckpointFormat
-	// is set, both service sockets are required — fail at startup,
-	// not at runtime when data is silently lost.
+	// Validate event checkpoint infrastructure. Checkpoint data flows
+	// through the agent service (which stores artifacts internally),
+	// so the agent service socket is required when checkpointing is
+	// enabled. Fail at startup, not at runtime.
 	if config.CheckpointFormat != "" {
-		if config.ArtifactServiceSocketPath == "" {
-			return fmt.Errorf(
-				"CheckpointFormat %q requires artifact service socket "+
-					"(ArtifactServiceSocketPath is empty)", config.CheckpointFormat)
-		}
-		if config.ArtifactServiceTokenPath == "" {
-			return fmt.Errorf(
-				"CheckpointFormat %q requires artifact service token "+
-					"(ArtifactServiceTokenPath is empty)", config.CheckpointFormat)
-		}
 		if config.AgentServiceSocketPath == "" {
 			return fmt.Errorf(
 				"CheckpointFormat %q requires agent service socket "+
@@ -288,21 +255,12 @@ func Run(ctx context.Context, driver Driver, config RunConfig) error {
 	}
 
 	// Create event checkpoint tracker when checkpointing is enabled.
-	// The tracker is created after the agent service client so it can
-	// reuse it for commit metadata, and after session start so the
-	// sessionID is available.
+	// The tracker sends CBOR event deltas to the agent service, which
+	// stores them as artifacts and records commit metadata. Created
+	// after session start so the sessionID is available.
 	var tracker *eventCheckpointTracker
 	if config.CheckpointFormat != "" {
-		artifactClient, artifactError := artifactstore.NewClient(
-			config.ArtifactServiceSocketPath,
-			config.ArtifactServiceTokenPath,
-		)
-		if artifactError != nil {
-			return fmt.Errorf("creating artifact client for event checkpointing: %w", artifactError)
-		}
-
 		tracker = newEventCheckpointTracker(
-			artifactClient,
 			agentServiceClient,
 			config.CheckpointFormat,
 			sessionID,

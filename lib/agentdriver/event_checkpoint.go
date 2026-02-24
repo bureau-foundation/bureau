@@ -6,19 +6,11 @@ package agentdriver
 import (
 	"context"
 	"fmt"
-	"io"
 	"log/slog"
 
-	"github.com/bureau-foundation/bureau/lib/artifactstore"
 	"github.com/bureau-foundation/bureau/lib/codec"
 	"github.com/bureau-foundation/bureau/lib/schema/agent"
 )
-
-// eventArtifactStorer is the subset of artifactstore.Client used by
-// the event checkpoint tracker. Extracted as an interface for testability.
-type eventArtifactStorer interface {
-	Store(ctx context.Context, header *artifactstore.StoreHeader, content io.Reader) (*artifactstore.StoreResponse, error)
-}
 
 // eventContextCheckpointer is the subset of AgentServiceClient used
 // by the event checkpoint tracker. Extracted as an interface for
@@ -32,18 +24,18 @@ type eventContextCheckpointer interface {
 // creates CBOR delta checkpoints at meaningful boundaries (turn
 // boundaries, compaction events, session end).
 //
-// The tracker uses the same commit chain infrastructure as the native
-// agent's message-level checkpointing: CBOR artifacts in the CAS,
-// commit metadata through the agent service. The difference is the
-// payload: this tracker serializes []agentdriver.Event (the observation
-// stream) rather than []llm.Message (the LLM conversation).
+// The tracker sends CBOR-encoded event deltas to the agent service,
+// which stores them as artifacts and records commit metadata in Matrix.
+// This keeps the agent's sandbox surface area minimal: the agent only
+// needs the agent service socket, not direct artifact service access.
+// The agent service owns both the data plane (artifact storage) and
+// the control plane (commit chain) for checkpoints, ensuring coherent
+// responses to queries without cross-service coordination.
 //
-// Runtime checkpoint failures (transient store/network errors) are
-// logged as warnings but do not interrupt the event pump. Setup
-// failures (missing infrastructure) are caught at startup before the
-// tracker is created.
+// Runtime checkpoint failures (transient network errors) are logged as
+// warnings but do not interrupt the event pump. Setup failures (missing
+// infrastructure) are caught at startup before the tracker is created.
 type eventCheckpointTracker struct {
-	artifactClient     eventArtifactStorer
 	agentServiceClient eventContextCheckpointer
 	format             string
 	sessionID          string
@@ -66,9 +58,8 @@ type eventCheckpointTracker struct {
 
 // newEventCheckpointTracker creates a tracker for Run()-level event
 // checkpointing. All arguments are required — the caller validates
-// that both clients are present before calling this.
+// that the agent service client is present before calling this.
 func newEventCheckpointTracker(
-	artifactClient eventArtifactStorer,
 	agentServiceClient eventContextCheckpointer,
 	format string,
 	sessionID string,
@@ -76,7 +67,6 @@ func newEventCheckpointTracker(
 	logger *slog.Logger,
 ) *eventCheckpointTracker {
 	return &eventCheckpointTracker{
-		artifactClient:     artifactClient,
 		agentServiceClient: agentServiceClient,
 		format:             format,
 		sessionID:          sessionID,
@@ -107,9 +97,9 @@ func (tracker *eventCheckpointTracker) checkpointDelta(ctx context.Context, trig
 	}
 }
 
-// checkpoint serializes events to CBOR, stores the artifact, and
-// records the commit through the agent service. Updates tracker state
-// on success.
+// checkpoint serializes events to CBOR, sends them to the agent
+// service for artifact storage and commit recording, and updates
+// tracker state on success.
 func (tracker *eventCheckpointTracker) checkpoint(
 	ctx context.Context,
 	trigger string,
@@ -123,26 +113,15 @@ func (tracker *eventCheckpointTracker) checkpoint(
 		return fmt.Errorf("encoding events to CBOR: %w", err)
 	}
 
-	// Store as artifact in the CAS.
-	header := &artifactstore.StoreHeader{
-		Action:      "store",
-		ContentType: "application/cbor",
-		Size:        int64(len(data)),
-		Data:        data,
-		Labels:      []string{"event-delta"},
-	}
-	storeResponse, err := tracker.artifactClient.Store(ctx, header, nil)
-	if err != nil {
-		return fmt.Errorf("storing event delta artifact: %w", err)
-	}
-
-	// Record the commit through the agent service.
+	// Send the CBOR bytes to the agent service. The agent service
+	// stores them as an artifact and records the commit metadata
+	// atomically (from the caller's perspective).
 	checkpointResponse, err := tracker.agentServiceClient.CheckpointContext(
 		ctx,
 		CheckpointContextRequest{
 			Parent:       tracker.currentContextID,
 			CommitType:   commitType,
-			ArtifactRef:  storeResponse.Ref,
+			Data:         data,
 			Format:       tracker.format,
 			Template:     tracker.template,
 			SessionID:    tracker.sessionID,
@@ -151,7 +130,7 @@ func (tracker *eventCheckpointTracker) checkpoint(
 		},
 	)
 	if err != nil {
-		return fmt.Errorf("recording event checkpoint: %w", err)
+		return fmt.Errorf("checkpoint-context: %w", err)
 	}
 
 	tracker.currentContextID = checkpointResponse.ID
@@ -162,8 +141,7 @@ func (tracker *eventCheckpointTracker) checkpoint(
 		"commit_type", commitType,
 		"checkpoint", trigger,
 		"event_count", len(events),
-		"artifact_ref", storeResponse.Ref,
-		"artifact_size", len(data),
+		"data_size", len(data),
 	)
 
 	return nil

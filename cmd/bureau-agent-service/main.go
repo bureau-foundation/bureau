@@ -53,22 +53,21 @@ func run() error {
 	}
 	defer cleanup()
 
-	// Initialize the artifact client. The agent service requires
-	// artifact access for context materialization — there is no useful
-	// degraded mode without it.
-	artifactSocket := os.Getenv("BUREAU_ARTIFACT_SOCKET")
-	if artifactSocket == "" {
-		return fmt.Errorf("BUREAU_ARTIFACT_SOCKET environment variable is required")
-	}
-	artifactToken := os.Getenv("BUREAU_ARTIFACT_TOKEN")
-	if artifactToken == "" {
-		return fmt.Errorf("BUREAU_ARTIFACT_TOKEN environment variable is required")
-	}
-	artifactClient, err := artifactstore.NewClient(artifactSocket, artifactToken)
+	// Initialize the artifact client using standard service paths.
+	// The agent service template declares RequiredServices: ["artifact"],
+	// which causes the daemon to bind-mount the artifact service socket
+	// and token at these paths. The agent service requires artifact
+	// access for two purposes: storing inline checkpoint data on behalf
+	// of agents, and fetching/concatenating deltas during materialization.
+	const (
+		artifactServiceSocketPath = "/run/bureau/service/artifact.sock"
+		artifactServiceTokenPath  = "/run/bureau/service/token/artifact.token"
+	)
+	artifactClient, err := artifactstore.NewClient(artifactServiceSocketPath, artifactServiceTokenPath)
 	if err != nil {
 		return fmt.Errorf("creating artifact client: %w", err)
 	}
-	boot.Logger.Info("artifact client initialized", "socket", artifactSocket)
+	boot.Logger.Info("artifact client initialized", "socket", artifactServiceSocketPath)
 
 	// Resolve the machine config room. Agent state events live here as
 	// state events keyed by principal localpart. Room membership is

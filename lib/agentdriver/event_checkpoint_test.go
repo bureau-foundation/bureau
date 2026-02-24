@@ -7,42 +7,15 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
-	"io"
 	"log/slog"
 	"testing"
 	"time"
 
-	"github.com/bureau-foundation/bureau/lib/artifactstore"
 	"github.com/bureau-foundation/bureau/lib/codec"
 	"github.com/bureau-foundation/bureau/lib/schema/agent"
 )
 
-// --- Mock implementations for event checkpoint tracker ---
-
-type mockEventArtifactStore struct {
-	calls    []eventArtifactStoreCall
-	response *artifactstore.StoreResponse
-	err      error
-}
-
-type eventArtifactStoreCall struct {
-	Header *artifactstore.StoreHeader
-}
-
-func (mock *mockEventArtifactStore) Store(_ context.Context, header *artifactstore.StoreHeader, _ io.Reader) (*artifactstore.StoreResponse, error) {
-	mock.calls = append(mock.calls, eventArtifactStoreCall{Header: header})
-	if mock.err != nil {
-		return nil, mock.err
-	}
-	response := mock.response
-	if response == nil {
-		response = &artifactstore.StoreResponse{
-			Ref:  fmt.Sprintf("blake3-%d", len(mock.calls)),
-			Size: header.Size,
-		}
-	}
-	return response, nil
-}
+// --- Mock implementation for event checkpoint tracker ---
 
 type mockEventCheckpointer struct {
 	calls    []CheckpointContextRequest
@@ -69,9 +42,8 @@ func (mock *mockEventCheckpointer) CheckpointContext(_ context.Context, request 
 // artifacts but never interpreted by checkpoint logic.
 var testTimestamp = time.Unix(1735689600, 0) // 2025-01-01T00:00:00Z
 
-func testEventTracker(store eventArtifactStorer, checkpointer eventContextCheckpointer) *eventCheckpointTracker {
+func testEventTracker(checkpointer eventContextCheckpointer) *eventCheckpointTracker {
 	return newEventCheckpointTracker(
-		store,
 		checkpointer,
 		"events-v1",
 		"test-session-1",
@@ -83,9 +55,8 @@ func testEventTracker(store eventArtifactStorer, checkpointer eventContextCheckp
 // --- Event checkpoint delta tests ---
 
 func TestEventCheckpointDelta(t *testing.T) {
-	store := &mockEventArtifactStore{}
 	checkpointer := &mockEventCheckpointer{}
-	tracker := testEventTracker(store, checkpointer)
+	tracker := testEventTracker(checkpointer)
 
 	tracker.appendEvent(Event{
 		Timestamp: testTimestamp,
@@ -100,32 +71,25 @@ func TestEventCheckpointDelta(t *testing.T) {
 
 	tracker.checkpointDelta(context.Background(), agent.CheckpointTurnBoundary)
 
-	// Verify one artifact was stored.
-	if len(store.calls) != 1 {
-		t.Fatalf("expected 1 store call, got %d", len(store.calls))
-	}
-	call := store.calls[0]
-	if call.Header.ContentType != "application/cbor" {
-		t.Errorf("content type = %q, want %q", call.Header.ContentType, "application/cbor")
-	}
-	if len(call.Header.Data) == 0 {
-		t.Fatal("expected non-empty artifact data")
-	}
-
-	// Verify the CBOR data decodes to 2 events.
-	var decoded []Event
-	if err := codec.Unmarshal(call.Header.Data, &decoded); err != nil {
-		t.Fatalf("decoding CBOR artifact: %v", err)
-	}
-	if len(decoded) != 2 {
-		t.Fatalf("expected 2 events in artifact, got %d", len(decoded))
-	}
-
-	// Verify one checkpoint was created.
+	// Verify one checkpoint was created with inline CBOR data.
 	if len(checkpointer.calls) != 1 {
 		t.Fatalf("expected 1 checkpoint call, got %d", len(checkpointer.calls))
 	}
 	request := checkpointer.calls[0]
+	if len(request.Data) == 0 {
+		t.Fatal("expected non-empty Data in checkpoint request")
+	}
+
+	// Verify the CBOR data decodes to 2 events.
+	var decoded []Event
+	if err := codec.Unmarshal(request.Data, &decoded); err != nil {
+		t.Fatalf("decoding CBOR from checkpoint Data: %v", err)
+	}
+	if len(decoded) != 2 {
+		t.Fatalf("expected 2 events in checkpoint Data, got %d", len(decoded))
+	}
+
+	// Verify checkpoint metadata.
 	if request.CommitType != "delta" {
 		t.Errorf("commit type = %q, want %q", request.CommitType, "delta")
 	}
@@ -158,54 +122,20 @@ func TestEventCheckpointDelta(t *testing.T) {
 }
 
 func TestEventCheckpointDelta_Empty(t *testing.T) {
-	store := &mockEventArtifactStore{}
 	checkpointer := &mockEventCheckpointer{}
-	tracker := testEventTracker(store, checkpointer)
+	tracker := testEventTracker(checkpointer)
 
 	// No events appended — should be a no-op.
 	tracker.checkpointDelta(context.Background(), agent.CheckpointTurnBoundary)
 
-	if len(store.calls) != 0 {
-		t.Errorf("expected 0 store calls, got %d", len(store.calls))
-	}
 	if len(checkpointer.calls) != 0 {
 		t.Errorf("expected 0 checkpoint calls, got %d", len(checkpointer.calls))
 	}
 }
 
-func TestEventCheckpointDelta_StoreFailure(t *testing.T) {
-	store := &mockEventArtifactStore{err: fmt.Errorf("disk full")}
-	checkpointer := &mockEventCheckpointer{}
-	tracker := testEventTracker(store, checkpointer)
-
-	tracker.appendEvent(Event{
-		Timestamp: testTimestamp,
-		Type:      EventTypeResponse,
-		Response:  &ResponseEvent{Content: "test"},
-	})
-	tracker.checkpointDelta(context.Background(), agent.CheckpointTurnBoundary)
-
-	// Store was called but failed.
-	if len(store.calls) != 1 {
-		t.Fatalf("expected 1 store call, got %d", len(store.calls))
-	}
-	// Checkpoint was not called (store failed first).
-	if len(checkpointer.calls) != 0 {
-		t.Errorf("expected 0 checkpoint calls after store failure, got %d", len(checkpointer.calls))
-	}
-	// Tracker state unchanged.
-	if tracker.currentContextID != "" {
-		t.Errorf("expected empty currentContextID after failure, got %q", tracker.currentContextID)
-	}
-	if tracker.lastCheckpointIndex != 0 {
-		t.Errorf("expected lastCheckpointIndex=0 after failure, got %d", tracker.lastCheckpointIndex)
-	}
-}
-
 func TestEventCheckpointDelta_CheckpointFailure(t *testing.T) {
-	store := &mockEventArtifactStore{}
 	checkpointer := &mockEventCheckpointer{err: fmt.Errorf("service unavailable")}
-	tracker := testEventTracker(store, checkpointer)
+	tracker := testEventTracker(checkpointer)
 
 	tracker.appendEvent(Event{
 		Timestamp: testTimestamp,
@@ -214,14 +144,11 @@ func TestEventCheckpointDelta_CheckpointFailure(t *testing.T) {
 	})
 	tracker.checkpointDelta(context.Background(), agent.CheckpointTurnBoundary)
 
-	// Store succeeded but checkpoint failed.
-	if len(store.calls) != 1 {
-		t.Fatalf("expected 1 store call, got %d", len(store.calls))
-	}
+	// Checkpoint was called but failed.
 	if len(checkpointer.calls) != 1 {
 		t.Fatalf("expected 1 checkpoint call, got %d", len(checkpointer.calls))
 	}
-	// Tracker state unchanged — the orphaned artifact is acceptable.
+	// Tracker state unchanged — the event pump continues.
 	if tracker.currentContextID != "" {
 		t.Errorf("expected empty currentContextID after failure, got %q", tracker.currentContextID)
 	}
@@ -231,9 +158,8 @@ func TestEventCheckpointDelta_CheckpointFailure(t *testing.T) {
 }
 
 func TestEventCheckpointParentChain(t *testing.T) {
-	store := &mockEventArtifactStore{}
 	checkpointer := &mockEventCheckpointer{}
-	tracker := testEventTracker(store, checkpointer)
+	tracker := testEventTracker(checkpointer)
 
 	// First checkpoint.
 	tracker.appendEvent(Event{Timestamp: testTimestamp, Type: EventTypePrompt, Prompt: &PromptEvent{Content: "msg1", Source: "initial"}})
@@ -279,9 +205,8 @@ func TestEventCheckpointParentChain(t *testing.T) {
 // that checkpoints fire at the correct boundaries when driven by the
 // same trigger logic used in Run()'s event consumer.
 func TestEventCheckpointTriggers(t *testing.T) {
-	store := &mockEventArtifactStore{}
 	checkpointer := &mockEventCheckpointer{}
-	tracker := testEventTracker(store, checkpointer)
+	tracker := testEventTracker(checkpointer)
 
 	// Simulate the event consumer trigger logic from Run().
 	appendAndTrigger := func(event Event) {
@@ -298,7 +223,7 @@ func TestEventCheckpointTriggers(t *testing.T) {
 		}
 	}
 
-	// Turn 1: prompt → tool call → tool result → response.
+	// Turn 1: prompt -> tool call -> tool result -> response.
 	appendAndTrigger(Event{Timestamp: testTimestamp, Type: EventTypePrompt, Prompt: &PromptEvent{Content: "analyze this", Source: "initial"}})
 	appendAndTrigger(Event{Timestamp: testTimestamp, Type: EventTypeToolCall, ToolCall: &ToolCallEvent{ID: "tc-1", Name: "Read"}})
 	appendAndTrigger(Event{Timestamp: testTimestamp, Type: EventTypeToolResult, ToolResult: &ToolResultEvent{ID: "tc-1", Output: "data"}})
@@ -315,7 +240,7 @@ func TestEventCheckpointTriggers(t *testing.T) {
 		t.Errorf("checkpoint 1 event count = %d, want 4", checkpointer.calls[0].MessageCount)
 	}
 
-	// Turn 2: thinking → tool call → tool result → response.
+	// Turn 2: thinking -> tool call -> tool result -> response.
 	appendAndTrigger(Event{Timestamp: testTimestamp, Type: EventTypeThinking, Thinking: &ThinkingEvent{Content: "let me think"}})
 	appendAndTrigger(Event{Timestamp: testTimestamp, Type: EventTypeToolCall, ToolCall: &ToolCallEvent{ID: "tc-2", Name: "Edit"}})
 	appendAndTrigger(Event{Timestamp: testTimestamp, Type: EventTypeToolResult, ToolResult: &ToolResultEvent{ID: "tc-2", Output: "done"}})
@@ -381,8 +306,8 @@ func TestEventCheckpointTriggers(t *testing.T) {
 }
 
 // TestEventCBORRoundTrip verifies that []Event with all event types
-// (including the new ThinkingEvent, SystemEvent with Metadata, and
-// ToolCallEvent with ServerTool) survive CBOR encode→decode.
+// (including ThinkingEvent, SystemEvent with Metadata, and
+// ToolCallEvent with ServerTool) survive CBOR encode/decode.
 func TestEventCBORRoundTrip(t *testing.T) {
 	events := []Event{
 		{Timestamp: testTimestamp, Type: EventTypePrompt, Prompt: &PromptEvent{Content: "analyze this", Source: "initial"}},

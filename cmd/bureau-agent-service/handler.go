@@ -594,10 +594,12 @@ func (agentService *AgentService) handleListContext(ctx context.Context, token *
 // --- Context commit handlers ---
 
 // checkpointContextRequest is the wire format for the "checkpoint-context"
-// action. The caller must have already stored the delta artifact in the
-// artifact service before calling this — the agent service only records
-// the artifact ref and metadata in a Matrix state event (write-through
-// ordering: artifact exists before ref is recorded).
+// action. The request may include inline Data (e.g., CBOR-encoded events)
+// for the agent service to store as an artifact, or a pre-stored
+// ArtifactRef from a caller that already wrote to the artifact service.
+// When Data is provided, the agent service stores it and derives
+// ArtifactRef from the resulting BLAKE3 hash. Exactly one of Data or
+// ArtifactRef must be set.
 //
 // Server-side fields (Principal, Machine, CreatedAt) are derived from
 // the service token and clock. The caller does not supply these.
@@ -605,7 +607,8 @@ type checkpointContextRequest struct {
 	Action       string `cbor:"action"`
 	Parent       string `cbor:"parent,omitempty"`
 	CommitType   string `cbor:"commit_type"`
-	ArtifactRef  string `cbor:"artifact_ref"`
+	Data         []byte `cbor:"data,omitempty"`
+	ArtifactRef  string `cbor:"artifact_ref,omitempty"`
 	Format       string `cbor:"format"`
 	Template     string `cbor:"template,omitempty"`
 	SessionID    string `cbor:"session_id,omitempty"`
@@ -629,13 +632,37 @@ func (agentService *AgentService) handleCheckpointContext(ctx context.Context, t
 		return nil, fmt.Errorf("invalid request: %w", err)
 	}
 
+	// Resolve artifact ref: either store inline data or use the
+	// pre-stored ref. Exactly one must be provided.
+	hasData := len(request.Data) > 0
+	hasRef := request.ArtifactRef != ""
+	if !hasData && !hasRef {
+		return nil, fmt.Errorf("exactly one of data or artifact_ref is required")
+	}
+	if hasData && hasRef {
+		return nil, fmt.Errorf("data and artifact_ref are mutually exclusive")
+	}
+
+	artifactRef := request.ArtifactRef
+	if hasData {
+		// Store the inline data as an artifact. The content type is
+		// derived from the format — CBOR for structured formats,
+		// application/octet-stream as fallback.
+		contentType := contentTypeForFormat(request.Format)
+		storedRef, storeErr := agentService.storeArtifact(ctx, request.Data, contentType)
+		if storeErr != nil {
+			return nil, fmt.Errorf("storing checkpoint data: %w", storeErr)
+		}
+		artifactRef = storedRef
+	}
+
 	createdAt := agentService.clock.Now().UTC().Format("2006-01-02T15:04:05Z")
 
 	content := agent.ContextCommitContent{
 		Version:      agent.ContextCommitVersion,
 		Parent:       request.Parent,
 		CommitType:   request.CommitType,
-		ArtifactRef:  request.ArtifactRef,
+		ArtifactRef:  artifactRef,
 		Format:       request.Format,
 		Template:     request.Template,
 		Principal:    token.Subject,
@@ -655,7 +682,7 @@ func (agentService *AgentService) handleCheckpointContext(ctx context.Context, t
 	}
 
 	commitID := agent.GenerateContextCommitID(
-		request.Parent, request.ArtifactRef, createdAt, request.Template,
+		request.Parent, artifactRef, createdAt, request.Template,
 	)
 
 	if _, err := agentService.session.SendStateEvent(
@@ -674,11 +701,25 @@ func (agentService *AgentService) handleCheckpointContext(ctx context.Context, t
 		"principal", token.Subject.Localpart(),
 		"commit_id", commitID,
 		"commit_type", request.CommitType,
-		"artifact_ref", request.ArtifactRef,
+		"artifact_ref", artifactRef,
 		"checkpoint", request.Checkpoint,
+		"data_size", len(request.Data),
 	)
 
 	return checkpointContextResponse{ID: commitID}, nil
+}
+
+// contentTypeForFormat returns the MIME content type for a checkpoint
+// format. Used when storing inline data as an artifact.
+func contentTypeForFormat(format string) string {
+	switch format {
+	case "events-v1", "bureau-agent-v1":
+		return "application/cbor"
+	case "claude-code-v1":
+		return "application/jsonl"
+	default:
+		return "application/octet-stream"
+	}
 }
 
 // --- Context materialization handler ---

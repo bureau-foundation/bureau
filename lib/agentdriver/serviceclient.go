@@ -239,9 +239,13 @@ func (c *AgentServiceClient) DeleteContext(ctx context.Context, key string) erro
 // --- Context commit actions ---
 
 // CheckpointContextRequest holds the parameters for creating a context
-// commit. The caller must have already stored the delta artifact in
-// the artifact service before calling this — the agent service only
-// records the artifact ref and metadata (write-through ordering).
+// commit. The request may include inline Data (CBOR checkpoint bytes)
+// for the agent service to store as an artifact, or a pre-stored
+// ArtifactRef. When Data is provided, the agent service stores it in
+// the artifact service and fills in the ArtifactRef. When ArtifactRef
+// is provided directly, the caller has already stored the artifact
+// (write-through ordering). Exactly one of Data or ArtifactRef must
+// be set.
 //
 // Server-side fields (Principal, Machine, CreatedAt) are derived from
 // the service token and clock. The caller does not supply these.
@@ -255,12 +259,19 @@ type CheckpointContextRequest struct {
 	// or "snapshot" (full materialized context). Required.
 	CommitType string
 
-	// ArtifactRef is the BLAKE3 content-addressed ref of the delta
-	// artifact. Required.
+	// Data is the raw checkpoint bytes (e.g., CBOR-encoded events)
+	// for the agent service to store as an artifact. When provided,
+	// the agent service stores the data in the artifact service and
+	// derives ArtifactRef from the resulting BLAKE3 hash. Mutually
+	// exclusive with ArtifactRef.
+	Data []byte
+
+	// ArtifactRef is the BLAKE3 content-addressed ref of a
+	// pre-stored artifact. Mutually exclusive with Data.
 	ArtifactRef string
 
 	// Format is the serialization format of the artifact (e.g.,
-	// "bureau-agent-v1", "claude-code-v1"). Required.
+	// "bureau-agent-v1", "events-v1"). Required.
 	Format string
 
 	// Template is the agent template identifier. Optional.
@@ -299,12 +310,21 @@ type CheckpointContextResponse struct {
 // CheckpointContext creates a new context commit in the agent's
 // understanding chain. Returns the deterministic ctx-* identifier
 // for the new commit.
+//
+// When request.Data is set, the agent service stores it as an artifact
+// and derives ArtifactRef. When request.ArtifactRef is set, the
+// caller has already stored the artifact. Exactly one must be provided.
 func (c *AgentServiceClient) CheckpointContext(ctx context.Context, request CheckpointContextRequest) (*CheckpointContextResponse, error) {
 	if request.CommitType == "" {
 		return nil, fmt.Errorf("commit_type is required")
 	}
-	if request.ArtifactRef == "" {
-		return nil, fmt.Errorf("artifact_ref is required")
+	hasData := len(request.Data) > 0
+	hasRef := request.ArtifactRef != ""
+	if !hasData && !hasRef {
+		return nil, fmt.Errorf("exactly one of data or artifact_ref is required")
+	}
+	if hasData && hasRef {
+		return nil, fmt.Errorf("data and artifact_ref are mutually exclusive")
 	}
 	if request.Format == "" {
 		return nil, fmt.Errorf("format is required")
@@ -314,10 +334,15 @@ func (c *AgentServiceClient) CheckpointContext(ctx context.Context, request Chec
 	}
 
 	fields := map[string]any{
-		"commit_type":  request.CommitType,
-		"artifact_ref": request.ArtifactRef,
-		"format":       request.Format,
-		"checkpoint":   request.Checkpoint,
+		"commit_type": request.CommitType,
+		"format":      request.Format,
+		"checkpoint":  request.Checkpoint,
+	}
+	if hasData {
+		fields["data"] = request.Data
+	}
+	if hasRef {
+		fields["artifact_ref"] = request.ArtifactRef
 	}
 	if request.Parent != "" {
 		fields["parent"] = request.Parent

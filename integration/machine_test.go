@@ -870,6 +870,11 @@ type agentOptions struct {
 	// schema.PrincipalAssignment.RestartPolicy for valid values.
 	RestartPolicy string
 
+	// ExtraMounts adds filesystem mounts beyond the standard base set.
+	// Use for test diagnostics (e.g., bind-mounting a host directory
+	// to capture debug logs from inside the sandbox).
+	ExtraMounts []schema.TemplateMount
+
 	// SkipWaitForReady skips waiting for "agent-ready" after deployment.
 	// Set to true for agents expected to exit/fail before posting ready.
 	SkipWaitForReady bool
@@ -914,6 +919,12 @@ func agentTemplateContent(binary string, options agentOptions) schema.TemplateCo
 		environmentVariables[key] = value
 	}
 
+	filesystem := []schema.TemplateMount{
+		{Source: binary, Dest: binary, Mode: "ro"},
+		{Dest: "/tmp", Type: "tmpfs"},
+	}
+	filesystem = append(filesystem, options.ExtraMounts...)
+
 	return schema.TemplateContent{
 		Description:      description,
 		Command:          []string{binary},
@@ -924,10 +935,7 @@ func agentTemplateContent(binary string, options agentOptions) schema.TemplateCo
 			DieWithParent: true,
 			NoNewPrivs:    true,
 		},
-		Filesystem: []schema.TemplateMount{
-			{Source: binary, Dest: binary, Mode: "ro"},
-			{Dest: "/tmp", Type: "tmpfs"},
-		},
+		Filesystem:           filesystem,
 		CreateDirs:           []string{"/tmp", "/var/tmp", "/run/bureau"},
 		EnvironmentVariables: environmentVariables,
 	}
@@ -1058,6 +1066,11 @@ type serviceDeployOptions struct {
 	// one homeserver). Required.
 	Localpart string
 
+	// Command overrides the default sandbox command (which is just the
+	// binary path with no arguments). Use this for services that require
+	// flags (e.g., artifact service needs --store-dir).
+	Command []string
+
 	// RequiredServices lists service roles this service depends on. The
 	// daemon resolves each role's socket via m.bureau.service_binding state
 	// events and bind-mounts it into the sandbox at
@@ -1082,6 +1095,11 @@ type serviceDeployOptions struct {
 	// service's proxy allows (join, invite, create room). When nil,
 	// the proxy uses default-deny.
 	MatrixPolicy *schema.MatrixPolicy
+
+	// Authorization is the authorization policy for this service
+	// principal. Grants are included in service tokens the daemon
+	// mints when resolving RequiredServices for other principals.
+	Authorization *schema.AuthorizationPolicy
 }
 
 // serviceDeployResult holds the result of deployService: entity reference,
@@ -1098,7 +1116,15 @@ type serviceDeployResult struct {
 // BUREAU_MACHINE_NAME, and BUREAU_SERVER_NAME from the template environment.
 // The launcher injects BUREAU_PRINCIPAL_NAME, BUREAU_FLEET, and
 // BUREAU_SERVICE_SOCKET for service entities.
-func serviceTemplateContent(binary string, requiredServices []string, extraMounts []schema.TemplateMount) schema.TemplateContent {
+//
+// When command is non-empty, it overrides the default command (which is
+// just [binary]). The binary is still bind-mounted regardless — the command
+// override is for services that need flags (e.g., --store-dir).
+func serviceTemplateContent(binary string, command, requiredServices []string, extraMounts []schema.TemplateMount) schema.TemplateContent {
+	if len(command) == 0 {
+		command = []string{binary}
+	}
+
 	filesystem := []schema.TemplateMount{
 		{Source: binary, Dest: binary, Mode: "ro"},
 		{Dest: "/tmp", Type: "tmpfs"},
@@ -1107,7 +1133,7 @@ func serviceTemplateContent(binary string, requiredServices []string, extraMount
 
 	return schema.TemplateContent{
 		Description:      "Service template",
-		Command:          []string{binary},
+		Command:          command,
 		RequiredServices: requiredServices,
 		Namespaces:       &schema.TemplateNamespaces{PID: true},
 		Security: &schema.TemplateSecurity{
@@ -1176,7 +1202,7 @@ func deployService(
 		t.Fatalf("parse service template ref for %q: %v", templateName, err)
 	}
 	_, err = templatedef.Push(ctx, admin, templateRef,
-		serviceTemplateContent(options.Binary, options.RequiredServices, options.ExtraMounts), testServer)
+		serviceTemplateContent(options.Binary, options.Command, options.RequiredServices, options.ExtraMounts), testServer)
 	if err != nil {
 		t.Fatalf("push service template %q: %v", templateName, err)
 	}
@@ -1218,6 +1244,7 @@ func deployService(
 		MachineRoomID:             machine.MachineRoomID,
 		ExtraEnvironmentVariables: options.ExtraEnvironmentVariables,
 		MatrixPolicy:              options.MatrixPolicy,
+		Authorization:             options.Authorization,
 	})
 	if err != nil {
 		t.Fatalf("create service %q: %v", options.Localpart, err)

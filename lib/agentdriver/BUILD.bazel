@@ -19,7 +19,6 @@ go_library(
     importpath = "github.com/bureau-foundation/bureau/lib/agentdriver",
     visibility = ["//visibility:public"],
     deps = [
-        "//lib/artifactstore",
         "//lib/codec",
         "//lib/proxyclient",
         "//lib/ref",
@@ -42,7 +41,6 @@ go_test(
     ],
     embed = [":agentdriver"],
     deps = [
-        "//lib/artifactstore",
         "//lib/codec",
         "//lib/proxyclient",
         "//lib/ref",

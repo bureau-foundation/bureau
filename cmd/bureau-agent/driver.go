@@ -26,11 +26,14 @@ import (
 	"github.com/bureau-foundation/bureau/lib/toolserver"
 )
 
-// Artifact service socket paths, aliased from the shared defaults in
-// lib/agentdriver for local use in the native driver's checkpoint setup.
+// Artifact service socket paths for the native agent's direct artifact
+// access. The native agent stores bureau-agent-v1 checkpoints (full
+// []llm.Message snapshots) directly in the artifact service, bypassing
+// the agent service data path. These are the standard paths the daemon
+// bind-mounts when a template declares RequiredServices: ["artifact"].
 const (
-	artifactServiceSocketPath = agentdriver.DefaultArtifactServiceSocketPath
-	artifactServiceTokenPath  = agentdriver.DefaultArtifactServiceTokenPath
+	artifactServiceSocketPath = "/run/bureau/service/artifact.sock"
+	artifactServiceTokenPath  = "/run/bureau/service/token/artifact.token"
 )
 
 // nativeDriver implements agentdriver.Driver for the Bureau-native agent.
@@ -158,11 +161,13 @@ func (driver *nativeDriver) Start(ctx context.Context, config agentdriver.Driver
 	)
 
 	// Auto-detect artifact and agent service sockets for context
-	// checkpointing. Both must be present for checkpointing to
-	// function — the artifact client stores delta bytes and the agent
-	// service client records commit metadata. If either is missing,
-	// checkpointing is disabled (the loop logs once and operates
-	// without persistence).
+	// checkpointing. The native agent's bureau-agent-v1 checkpoint
+	// format stores full []llm.Message snapshots directly in the
+	// artifact service, with commit metadata recorded via the agent
+	// service. Both must be present for checkpointing to function.
+	// If either is missing, checkpointing is disabled (the loop logs
+	// once and operates without persistence).
+	//
 	// Declare as interface types so a nil variable stays truly nil
 	// when assigned to the interface fields in agentLoopConfig.
 	// Using concrete types (e.g., *artifactstore.Client) would create

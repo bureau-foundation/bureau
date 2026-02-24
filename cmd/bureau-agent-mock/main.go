@@ -18,6 +18,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"io"
+	"log/slog"
 	"os"
 	"time"
 
@@ -27,6 +28,16 @@ import (
 func main() {
 	config := agentdriver.RunConfigFromEnvironment()
 	config.SessionLogPath = "/run/bureau/session.jsonl"
+
+	config.CheckpointFormat = "events-v1"
+
+	// Write structured logs to /run/bureau/debug/agent.log when the
+	// directory exists (bind-mounted from host for test diagnostics).
+	const debugLogPath = "/run/bureau/debug/agent.log"
+	if debugFile, err := os.Create(debugLogPath); err == nil {
+		config.Logger = slog.New(slog.NewTextHandler(io.MultiWriter(os.Stderr, debugFile), nil))
+		defer debugFile.Close()
+	}
 
 	if err := agentdriver.Run(context.Background(), &mockDriver{}, config); err != nil {
 		fmt.Fprintf(os.Stderr, "bureau-agent-mock: %v\n", err)

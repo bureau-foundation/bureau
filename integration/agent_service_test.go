@@ -14,34 +14,37 @@ import (
 	"github.com/bureau-foundation/bureau/lib/testutil"
 )
 
-// TestAgentServiceSessionTracking exercises the full agent service
-// integration path: daemon service discovery, sandbox creation with
-// agent service socket and token mount, agent auto-detecting the agent
-// service socket via RunConfigFromEnvironment, session lifecycle
-// (start → run → end), and metrics aggregation verified via Matrix
-// state events.
+// TestAgentServiceSessionTracking exercises the full agent lifecycle
+// in a real Bureau sandbox, including the production service stack:
 //
-// The test uses bureau-agent-mock, which calls lib/agent.Run with a
-// mock Driver that emits a fixed sequence of events (including metric
-// events with token counts) and exits. The mock driver exits naturally,
-// so Run()'s cleanup fires without needing sandbox destruction: it
-// calls EndSession (writing state events to the config room via the
-// agent service) then posts "agent-complete". No external LLM mock is
-// needed because the mock driver handles event generation internally.
+//   - Proxy client connectivity (Identity, Grants, Services, ResolveAlias)
+//   - Agent context building (system prompt generation, payload reading)
+//   - Session logging (JSONL event writing)
+//   - Matrix messaging (agent-ready and agent-complete)
+//   - Agent service session lifecycle (start -> run -> end)
+//   - Metrics aggregation (token counts, session count)
+//   - Event checkpoint persistence (CBOR deltas, commit chain)
+//
+// The test uses bureau-agent-mock, which calls lib/agentdriver.Run with
+// a mock Driver that emits a fixed sequence of events (including metric
+// events with token counts) and exits. The mock agent sets
+// CheckpointFormat = "events-v1", which triggers CBOR event
+// checkpointing at turn boundaries and session end. Checkpoint data
+// flows through the agent service (which stores it in the artifact
+// service) rather than the agent talking to the artifact service
+// directly, keeping the agent's sandbox surface area minimal.
 //
 // The agent is deployed with RestartPolicy "on-failure": a clean exit
 // (code 0) is final. The daemon marks the principal completed and does
 // not restart it. This is the correct pattern for bounded-task agents
 // (one-shot pipeline executors, mock agents in tests).
 //
-// The template declares RequiredServices: ["agent"], which triggers
-// the full production path: daemon resolves the "agent" service
-// binding, finds the agent service socket, mints an authentication
-// token, and passes the socket mount + token directory to the launcher.
-// The launcher bind-mounts both into the sandbox. Run() auto-detects
-// the socket at /run/bureau/service/agent.sock, reads the token from
-// /run/bureau/service/token/agent.token, and uses them to communicate
-// with the agent service.
+// The template declares RequiredServices: ["agent"], which triggers the
+// full production path: daemon resolves the "agent" service binding,
+// finds the agent service socket, mints an authentication token, and
+// passes the socket mount + token directory to the launcher. The agent
+// service itself declares RequiredServices: ["artifact"] for checkpoint
+// data storage and materialization.
 func TestAgentServiceSessionTracking(t *testing.T) {
 	t.Parallel()
 
@@ -60,44 +63,44 @@ func TestAgentServiceSessionTracking(t *testing.T) {
 		Fleet:          fleet,
 	})
 
+	// --- Artifact service setup ---
+
+	artifactBinary := testutil.DataBinary(t, "ARTIFACT_SERVICE_BINARY")
+	artifactSvc := deployService(t, admin, fleet, machine, serviceDeployOptions{
+		Binary:    artifactBinary,
+		Name:      "artifact-service",
+		Localpart: "service/artifact/agent-svc-test",
+		Command:   []string{artifactBinary, "--store-dir", "/tmp/artifacts"},
+	})
+
+	// Publish the artifact service binding so the daemon can resolve
+	// the "artifact" role for services that declare RequiredServices: ["artifact"].
+	if _, err := admin.SendStateEvent(ctx, machine.ConfigRoomID,
+		schema.EventTypeServiceBinding, "artifact",
+		schema.ServiceBindingContent{Principal: artifactSvc.Entity}); err != nil {
+		t.Fatalf("publish artifact service binding: %v", err)
+	}
+
 	// --- Agent service setup ---
 
-	// The agent service requires artifact access for context
-	// materialization. Provide a valid token file and socket path so
-	// the artifact client initializes. The client reads the token at
-	// startup but only connects to the socket on demand — this test
-	// exercises session tracking, not materialization, so no artifact
-	// requests are made.
-	//
-	// The token file is bind-mounted read-only into the sandbox.
-	// BUREAU_ARTIFACT_SOCKET points to a nonexistent sandbox-internal
-	// path — acceptable because no artifact operations run in this test.
-	artifactTokenFile := filepath.Join(t.TempDir(), "artifact.token")
-	if err := os.WriteFile(artifactTokenFile, []byte("test-artifact-token"), 0600); err != nil {
-		t.Fatalf("write artifact token file: %v", err)
-	}
-	const sandboxArtifactToken = "/run/bureau/artifact-token"
-
 	agentSvc := deployService(t, admin, fleet, machine, serviceDeployOptions{
-		Binary:    testutil.DataBinary(t, "AGENT_SERVICE_BINARY"),
-		Name:      "agent-service",
-		Localpart: "service/agent/session-test",
-		ExtraMounts: []schema.TemplateMount{
-			{Source: artifactTokenFile, Dest: sandboxArtifactToken, Mode: "ro"},
-		},
-		ExtraEnvironmentVariables: map[string]string{
-			"BUREAU_ARTIFACT_SOCKET": "/tmp/no-artifact.sock",
-			"BUREAU_ARTIFACT_TOKEN":  sandboxArtifactToken,
+		Binary:           testutil.DataBinary(t, "AGENT_SERVICE_BINARY"),
+		Name:             "agent-service",
+		Localpart:        "service/agent/session-test",
+		RequiredServices: []string{"artifact"},
+		Authorization: &schema.AuthorizationPolicy{
+			Grants: []schema.Grant{
+				{Actions: []string{"artifact/store", "artifact/fetch"}},
+			},
 		},
 	})
 
-	// Publish service binding so the daemon maps "agent" role to this
-	// service. Must be published before deploying any principal with
-	// RequiredServices: ["agent"].
+	// Publish the agent service binding so the daemon maps "agent"
+	// role to this service.
 	if _, err := admin.SendStateEvent(ctx, machine.ConfigRoomID,
 		schema.EventTypeServiceBinding, "agent",
 		schema.ServiceBindingContent{Principal: agentSvc.Entity}); err != nil {
-		t.Fatalf("publish agent service binding in config room: %v", err)
+		t.Fatalf("publish agent service binding: %v", err)
 	}
 
 	// --- Deploy mock agent with agent service ---
@@ -114,11 +117,17 @@ func TestAgentServiceSessionTracking(t *testing.T) {
 	// the metrics event written by EndSession.
 	metricsWatch := watchRoom(t, admin, machine.ConfigRoomID)
 
+	// Bind-mount a host directory into the sandbox so the mock agent
+	// can write debug logs readable from the test.
+	debugDir := t.TempDir()
 	agent := deployAgent(t, admin, machine, agentOptions{
 		Binary:           testutil.DataBinary(t, "MOCK_AGENT_BINARY"),
 		Localpart:        agentLocalpart,
 		RequiredServices: []string{"agent"},
 		RestartPolicy:    "on-failure",
+		ExtraMounts: []schema.TemplateMount{
+			{Source: debugDir, Dest: "/run/bureau/debug", Mode: "rw"},
+		},
 	})
 
 	// Wait for the agent service to write metrics. EndSession writes
@@ -129,7 +138,16 @@ func TestAgentServiceSessionTracking(t *testing.T) {
 	metricsWatch.WaitForStateEvent(t, agentschema.EventTypeAgentMetrics, metricsStateKey)
 	t.Log("agent service wrote metrics state event")
 
-	// Verify session state: no active session, latest session recorded.
+	// Dump the mock agent's debug log.
+	debugLogPath := filepath.Join(debugDir, "agent.log")
+	if debugLog, err := os.ReadFile(debugLogPath); err != nil {
+		t.Logf("no debug log at %s: %v", debugLogPath, err)
+	} else {
+		t.Logf("mock agent debug log (%d bytes):\n%s", len(debugLog), debugLog)
+	}
+
+	// --- Verify session state ---
+
 	sessionRaw, err := admin.GetStateEvent(ctx, machine.ConfigRoomID,
 		agentschema.EventTypeAgentSession, agent.Account.UserID.Localpart())
 	if err != nil {
@@ -147,8 +165,8 @@ func TestAgentServiceSessionTracking(t *testing.T) {
 		t.Error("LatestSessionID is empty, want non-empty (session should be recorded)")
 	}
 
-	// Verify metrics: one session counted, non-zero token counts from
-	// the mock driver's metric event (input_tokens: 100, output_tokens: 50).
+	// --- Verify metrics ---
+
 	metricsRaw, err := admin.GetStateEvent(ctx, machine.ConfigRoomID,
 		agentschema.EventTypeAgentMetrics, agent.Account.UserID.Localpart())
 	if err != nil {
@@ -179,4 +197,90 @@ func TestAgentServiceSessionTracking(t *testing.T) {
 		metricsContent.TotalInputTokens,
 		metricsContent.TotalOutputTokens,
 	)
+
+	// --- Verify context checkpoint chain ---
+
+	// The mock agent's event sequence produces:
+	//   - SystemEvent (init) + ResponseEvent (text1) → turn_boundary checkpoint
+	//   - ToolCallEvent + ToolResultEvent + ResponseEvent (text2) → turn_boundary checkpoint
+	//   - MetricEvent (result) → session_end checkpoint
+	//
+	// Plus the final safety checkpoint in Run() that catches any
+	// events after the last trigger. The minimum is 2 checkpoints
+	// (at least one turn boundary + session end).
+	//
+	// Read all agent_context_commit state events from the config room.
+	// Each commit is a state event keyed by its ctx-* identifier.
+	allState, err := admin.GetRoomState(ctx, machine.ConfigRoomID)
+	if err != nil {
+		t.Fatalf("get config room state: %v", err)
+	}
+
+	type commitEntry struct {
+		stateKey string
+		content  agentschema.ContextCommitContent
+	}
+	var commits []commitEntry
+	for _, event := range allState {
+		if event.Type != agentschema.EventTypeAgentContextCommit {
+			continue
+		}
+		if event.StateKey == nil {
+			continue
+		}
+		contentJSON, _ := json.Marshal(event.Content)
+		var content agentschema.ContextCommitContent
+		if err := json.Unmarshal(contentJSON, &content); err != nil {
+			t.Fatalf("unmarshal context commit %s: %v", *event.StateKey, err)
+		}
+		// Filter to commits from this agent's session.
+		if content.SessionID != sessionContent.LatestSessionID {
+			continue
+		}
+		commits = append(commits, commitEntry{stateKey: *event.StateKey, content: content})
+	}
+
+	if len(commits) < 2 {
+		t.Fatalf("expected at least 2 context commits, got %d", len(commits))
+	}
+
+	// Verify each commit has the expected format and a non-empty artifact ref.
+	for _, commit := range commits {
+		if commit.content.Format != "events-v1" {
+			t.Errorf("commit %s: format = %q, want %q", commit.stateKey, commit.content.Format, "events-v1")
+		}
+		if commit.content.ArtifactRef == "" {
+			t.Errorf("commit %s: artifact_ref is empty", commit.stateKey)
+		}
+		if commit.content.CommitType == "" {
+			t.Errorf("commit %s: commit_type is empty", commit.stateKey)
+		}
+		if commit.content.Checkpoint == "" {
+			t.Errorf("commit %s: checkpoint trigger is empty", commit.stateKey)
+		}
+	}
+
+	// Build parent chain map and verify linkage.
+	commitByID := make(map[string]agentschema.ContextCommitContent, len(commits))
+	for _, commit := range commits {
+		commitByID[commit.stateKey] = commit.content
+	}
+
+	// Find the root commit (no parent).
+	var rootCount int
+	for _, commit := range commits {
+		if commit.content.Parent == "" {
+			rootCount++
+		} else {
+			if _, exists := commitByID[commit.content.Parent]; !exists {
+				t.Errorf("commit %s references parent %s which is not in the chain",
+					commit.stateKey, commit.content.Parent)
+			}
+		}
+	}
+	if rootCount != 1 {
+		t.Errorf("expected exactly 1 root commit (no parent), got %d", rootCount)
+	}
+
+	t.Logf("checkpoint chain verified: %d commits, format=events-v1", len(commits))
 }

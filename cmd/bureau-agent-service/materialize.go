@@ -144,7 +144,7 @@ func (agentService *AgentService) concatenateDeltas(
 	switch format {
 	case "claude-code-v1":
 		return agentService.concatenateJSONL(ctx, chain)
-	case "bureau-agent-v1":
+	case "bureau-agent-v1", "events-v1":
 		return agentService.concatenateCBORArrays(ctx, chain)
 	default:
 		return nil, "", fmt.Errorf("unsupported context format %q: cannot concatenate", format)

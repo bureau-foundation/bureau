@@ -12,6 +12,7 @@ go_library(
         "socket.go",
         "socket_mutate.go",
         "socket_query.go",
+        "socket_stewardship.go",
         "stewardship.go",
         "subscribe.go",
         "sync.go",

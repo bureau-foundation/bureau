@@ -72,6 +72,11 @@ func (ts *TicketService) registerActions(server *service.SocketServer) {
 	server.HandleAuth("upcoming-gates", ts.withReadLock(ts.handleUpcomingGates))
 	server.HandleAuth("list-members", ts.withReadLock(ts.handleListMembers))
 
+	// Stewardship actions — read lock for queries, write lock for set.
+	server.HandleAuth("stewardship-list", ts.withReadLock(ts.handleStewardshipList))
+	server.HandleAuth("stewardship-resolve", ts.withReadLock(ts.handleStewardshipResolve))
+	server.HandleAuth("stewardship-set", ts.withWriteLock(ts.handleStewardshipSet))
+
 	// Mutation actions — write lock, all write to Matrix and update
 	// the local index.
 	server.HandleAuth("create", ts.withWriteLock(ts.handleCreate))

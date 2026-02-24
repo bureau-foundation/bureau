@@ -390,6 +390,37 @@ func TestResolveUniversalPattern(t *testing.T) {
 	}
 }
 
+func TestAll(t *testing.T) {
+	idx := NewIndex()
+	roomA := testRoomID("!roomA:bureau.local")
+	roomB := testRoomID("!roomB:bureau.local")
+
+	// Empty index returns nil.
+	if all := idx.All(); all != nil {
+		t.Errorf("All() on empty index: got %v, want nil", all)
+	}
+
+	idx.Put(roomA, "fleet/gpu", makeDeclarationContent("fleet/gpu/**"))
+	idx.Put(roomA, "workspace", makeDeclarationContent("workspace/**"))
+	idx.Put(roomB, "fleet/cpu", makeDeclarationContent("fleet/cpu/**"))
+
+	all := idx.All()
+	if len(all) != 3 {
+		t.Fatalf("All(): got %d declarations, want 3", len(all))
+	}
+
+	// Verify all state keys are present.
+	stateKeys := make(map[string]bool)
+	for _, declaration := range all {
+		stateKeys[declaration.StateKey] = true
+	}
+	for _, expected := range []string{"fleet/gpu", "workspace", "fleet/cpu"} {
+		if !stateKeys[expected] {
+			t.Errorf("All() missing declaration with state key %q", expected)
+		}
+	}
+}
+
 func TestDeclarationRoomIDPreserved(t *testing.T) {
 	idx := NewIndex()
 	roomA := testRoomID("!roomA:bureau.local")

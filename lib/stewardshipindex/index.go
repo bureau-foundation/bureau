@@ -74,6 +74,19 @@ func (idx *Index) Len() int {
 	return len(idx.declarations)
 }
 
+// All returns all declarations in the index. Returns nil if the
+// index is empty.
+func (idx *Index) All() []Declaration {
+	if len(idx.declarations) == 0 {
+		return nil
+	}
+	result := make([]Declaration, 0, len(idx.declarations))
+	for _, declaration := range idx.declarations {
+		result = append(result, declaration)
+	}
+	return result
+}
+
 // Put adds or updates a stewardship declaration in the index. If a
 // declaration with the same (roomID, stateKey) already exists, it is
 // replaced. Put does not validate the content — the caller is

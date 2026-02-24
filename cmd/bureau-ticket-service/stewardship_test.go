@@ -937,6 +937,255 @@ func TestHandleUpdateClearsAffects(t *testing.T) {
 	}
 }
 
+// --- Socket API: stewardship-list ---
+
+func TestHandleStewardshipList(t *testing.T) {
+	env := testMutationServer(t, mutationRooms())
+	defer env.cleanup()
+
+	stewardRoomID := testRoomID("!steward-room:bureau.local")
+	env.service.stewardshipIndex.Put(stewardRoomID, "fleet/gpu", stewardship.StewardshipContent{
+		Version:          1,
+		ResourcePatterns: []string{"fleet/gpu/**"},
+		GateTypes:        []string{"task"},
+		Description:      "GPU fleet stewardship",
+		Tiers: []stewardship.StewardshipTier{
+			{Principals: []string{"dev/*:bureau.local"}},
+		},
+	})
+	env.service.stewardshipIndex.Put(stewardRoomID, "workspace/lib", stewardship.StewardshipContent{
+		Version:          1,
+		ResourcePatterns: []string{"workspace/lib/**"},
+		GateTypes:        []string{"feature"},
+		Tiers: []stewardship.StewardshipTier{
+			{Principals: []string{"lib/*:bureau.local"}},
+		},
+	})
+
+	var result []stewardshipListEntry
+	err := env.client.Call(context.Background(), "stewardship-list", map[string]any{}, &result)
+	if err != nil {
+		t.Fatalf("Call: %v", err)
+	}
+
+	if len(result) != 2 {
+		t.Fatalf("expected 2 declarations, got %d", len(result))
+	}
+
+	// Results should be sorted by state key.
+	if result[0].StateKey != "fleet/gpu" {
+		t.Errorf("result[0].StateKey: got %q, want fleet/gpu", result[0].StateKey)
+	}
+	if result[1].StateKey != "workspace/lib" {
+		t.Errorf("result[1].StateKey: got %q, want workspace/lib", result[1].StateKey)
+	}
+	if result[0].Description != "GPU fleet stewardship" {
+		t.Errorf("result[0].Description: got %q", result[0].Description)
+	}
+}
+
+func TestHandleStewardshipListByRoom(t *testing.T) {
+	env := testMutationServer(t, mutationRooms())
+	defer env.cleanup()
+
+	roomA := testRoomID("!room-a:bureau.local")
+	roomB := testRoomID("!room-b:bureau.local")
+	env.service.stewardshipIndex.Put(roomA, "res/a", stewardship.StewardshipContent{
+		Version:          1,
+		ResourcePatterns: []string{"res/a/**"},
+		GateTypes:        []string{"task"},
+		Tiers:            []stewardship.StewardshipTier{{Principals: []string{"dev/*:bureau.local"}}},
+	})
+	env.service.stewardshipIndex.Put(roomB, "res/b", stewardship.StewardshipContent{
+		Version:          1,
+		ResourcePatterns: []string{"res/b/**"},
+		GateTypes:        []string{"task"},
+		Tiers:            []stewardship.StewardshipTier{{Principals: []string{"dev/*:bureau.local"}}},
+	})
+
+	var result []stewardshipListEntry
+	err := env.client.Call(context.Background(), "stewardship-list", map[string]any{
+		"room": roomA.String(),
+	}, &result)
+	if err != nil {
+		t.Fatalf("Call: %v", err)
+	}
+
+	if len(result) != 1 {
+		t.Fatalf("expected 1 declaration in room A, got %d", len(result))
+	}
+	if result[0].StateKey != "res/a" {
+		t.Errorf("state_key: got %q, want res/a", result[0].StateKey)
+	}
+}
+
+func TestHandleStewardshipListEmpty(t *testing.T) {
+	env := testMutationServer(t, mutationRooms())
+	defer env.cleanup()
+
+	var result []stewardshipListEntry
+	err := env.client.Call(context.Background(), "stewardship-list", map[string]any{}, &result)
+	if err != nil {
+		t.Fatalf("Call: %v", err)
+	}
+
+	if result != nil && len(result) != 0 {
+		t.Fatalf("expected empty list, got %d entries", len(result))
+	}
+}
+
+// --- Socket API: stewardship-resolve ---
+
+func TestHandleStewardshipResolve(t *testing.T) {
+	env := testMutationServer(t, mutationRooms())
+	defer env.cleanup()
+
+	stewardRoomID := testRoomID("!steward-room:bureau.local")
+	env.service.membersByRoom[stewardRoomID] = map[ref.UserID]roomMember{
+		ref.MustParseUserID("@dev/lead:bureau.local"): {DisplayName: "Lead"},
+	}
+	env.service.stewardshipIndex.Put(stewardRoomID, "fleet/gpu", stewardship.StewardshipContent{
+		Version:          1,
+		ResourcePatterns: []string{"fleet/gpu/**"},
+		GateTypes:        []string{"task"},
+		Tiers: []stewardship.StewardshipTier{
+			{Principals: []string{"dev/*:bureau.local"}},
+		},
+	})
+
+	var result stewardshipResolveResponse
+	err := env.client.Call(context.Background(), "stewardship-resolve", map[string]any{
+		"affects":     []string{"fleet/gpu/a100"},
+		"ticket_type": "task",
+	}, &result)
+	if err != nil {
+		t.Fatalf("Call: %v", err)
+	}
+
+	// Should produce a gate and reviewer.
+	if len(result.Gates) != 1 {
+		t.Fatalf("expected 1 gate, got %d", len(result.Gates))
+	}
+	if result.Gates[0].ID != "stewardship:fleet/gpu" {
+		t.Errorf("gate ID: got %q", result.Gates[0].ID)
+	}
+	if len(result.Reviewers) != 1 {
+		t.Fatalf("expected 1 reviewer, got %d", len(result.Reviewers))
+	}
+
+	// Should also include match info.
+	if len(result.Matches) != 1 {
+		t.Fatalf("expected 1 match, got %d", len(result.Matches))
+	}
+	if result.Matches[0].MatchedResource != "fleet/gpu/a100" {
+		t.Errorf("matched_resource: got %q", result.Matches[0].MatchedResource)
+	}
+	if result.Matches[0].MatchedPattern != "fleet/gpu/**" {
+		t.Errorf("matched_pattern: got %q", result.Matches[0].MatchedPattern)
+	}
+}
+
+func TestHandleStewardshipResolveNoMatch(t *testing.T) {
+	env := testMutationServer(t, mutationRooms())
+	defer env.cleanup()
+
+	var result stewardshipResolveResponse
+	err := env.client.Call(context.Background(), "stewardship-resolve", map[string]any{
+		"affects":     []string{"nonexistent/resource"},
+		"ticket_type": "task",
+	}, &result)
+	if err != nil {
+		t.Fatalf("Call: %v", err)
+	}
+
+	if len(result.Gates) != 0 {
+		t.Errorf("expected 0 gates, got %d", len(result.Gates))
+	}
+	if len(result.Matches) != 0 {
+		t.Errorf("expected 0 matches, got %d", len(result.Matches))
+	}
+}
+
+func TestHandleStewardshipResolveMissingAffects(t *testing.T) {
+	env := testMutationServer(t, mutationRooms())
+	defer env.cleanup()
+
+	var result stewardshipResolveResponse
+	err := env.client.Call(context.Background(), "stewardship-resolve", map[string]any{
+		"ticket_type": "task",
+	}, &result)
+	if err == nil {
+		t.Fatal("expected error for missing affects")
+	}
+}
+
+// --- Socket API: stewardship-set ---
+
+func TestHandleStewardshipSet(t *testing.T) {
+	env := testMutationServer(t, mutationRooms())
+	defer env.cleanup()
+
+	var result stewardshipSetResponse
+	err := env.client.Call(context.Background(), "stewardship-set", map[string]any{
+		"room":      "!steward-room:bureau.local",
+		"state_key": "fleet/gpu",
+		"content": map[string]any{
+			"version":           1,
+			"resource_patterns": []string{"fleet/gpu/**"},
+			"gate_types":        []string{"task"},
+			"tiers": []map[string]any{
+				{"principals": []string{"dev/*:bureau.local"}},
+			},
+		},
+	}, &result)
+	if err != nil {
+		t.Fatalf("Call: %v", err)
+	}
+
+	// The fakeWriter should have received the state event.
+	if result.EventID.IsZero() {
+		t.Error("expected non-zero event ID")
+	}
+}
+
+func TestHandleStewardshipSetInvalidContent(t *testing.T) {
+	env := testMutationServer(t, mutationRooms())
+	defer env.cleanup()
+
+	var result stewardshipSetResponse
+	err := env.client.Call(context.Background(), "stewardship-set", map[string]any{
+		"room":      "!steward-room:bureau.local",
+		"state_key": "fleet/gpu",
+		"content": map[string]any{
+			"version": 0, // Invalid: version must be >= 1.
+		},
+	}, &result)
+	if err == nil {
+		t.Fatal("expected validation error for invalid content")
+	}
+}
+
+func TestHandleStewardshipSetMissingRoom(t *testing.T) {
+	env := testMutationServer(t, mutationRooms())
+	defer env.cleanup()
+
+	var result stewardshipSetResponse
+	err := env.client.Call(context.Background(), "stewardship-set", map[string]any{
+		"state_key": "fleet/gpu",
+		"content": map[string]any{
+			"version":           1,
+			"resource_patterns": []string{"fleet/gpu/**"},
+			"gate_types":        []string{"task"},
+			"tiers": []map[string]any{
+				{"principals": []string{"dev/*:bureau.local"}},
+			},
+		},
+	}, &result)
+	if err == nil {
+		t.Fatal("expected error for missing room")
+	}
+}
+
 // --- Helpers ---
 
 func intPtr(value int) *int {

@@ -66,7 +66,7 @@ func buildSyncFilter() string {
 			},
 		},
 		"presence": map[string]any{
-			"types": emptyTypes,
+			"types": []string{"m.presence"},
 		},
 		"account_data": map[string]any{
 			"types": emptyTypes,
@@ -110,6 +110,15 @@ type machineState struct {
 	// healthState tracks the machine's current health: "online",
 	// "suspect", or "offline".
 	healthState string
+
+	// presenceState is the most recent m.presence state for this
+	// machine's daemon user. "online", "unavailable", or "offline".
+	// Used as a fast-path liveness signal alongside heartbeat
+	// staleness: when the homeserver reports a daemon offline (TCP
+	// connection dropped), the fleet controller can suspect the
+	// machine immediately rather than waiting for heartbeat expiry.
+	// Empty if no presence event has been received.
+	presenceState string
 }
 
 // fleetServiceState tracks a fleet service definition and its current
@@ -388,6 +397,42 @@ func (fc *FleetController) processMachineStatusEvent(event messaging.Event) {
 	}
 }
 
+// processPresenceEvents updates machine presence state from m.presence
+// events received via /sync. The sender's localpart is matched against
+// tracked machine entries. Presence provides a fast-path liveness
+// signal: when the homeserver reports a daemon offline (TCP connection
+// dropped), the fleet controller can immediately suspect the machine
+// rather than waiting for heartbeat staleness.
+//
+// Caller must hold fc.mu.
+func (fc *FleetController) processPresenceEvents(events []messaging.PresenceEvent) {
+	for _, event := range events {
+		if event.Type != "m.presence" {
+			continue
+		}
+		if event.Sender.IsZero() {
+			continue
+		}
+		senderLocalpart := event.Sender.Localpart()
+
+		machine, exists := fc.machines[senderLocalpart]
+		if !exists {
+			continue
+		}
+
+		previousPresence := machine.presenceState
+		machine.presenceState = event.Content.Presence
+
+		if previousPresence != event.Content.Presence {
+			fc.logger.Info("machine presence changed",
+				"machine", senderLocalpart,
+				"previous", previousPresence,
+				"current", event.Content.Presence,
+			)
+		}
+	}
+}
+
 // processMachineConfigEvent parses a machine config event from a
 // per-machine config room and extracts fleet-managed
 // PrincipalAssignment entries.
@@ -538,6 +583,11 @@ func (fc *FleetController) handleSync(ctx context.Context, response *messaging.S
 	for index := range acceptedRoomStates {
 		fc.processRoomState(acceptedRoomStates[index].roomID, acceptedRoomStates[index].events, nil)
 	}
+
+	// Update machine presence state from m.presence events. Presence
+	// is processed after room events (which may create machine entries)
+	// and before health evaluation (which uses presenceState).
+	fc.processPresenceEvents(response.Presence.Events)
 
 	// Emit notifications for newly discovered config rooms and services.
 	fc.emitDiscoveryNotifications(ctx, previousConfigRooms, previousServices)

@@ -418,6 +418,53 @@ func (s *DirectSession) GetDisplayName(ctx context.Context, userID ref.UserID) (
 	return response.DisplayName, nil
 }
 
+// SetPresence updates the session user's presence state and optional
+// status message. Presence must be "online", "unavailable", or "offline".
+//
+// Principals should call this to reflect application-level readiness:
+// "online" when ready to serve, "unavailable" when idle or draining,
+// "offline" on shutdown. The status message carries a human-readable
+// summary of what the principal is doing (current ticket, resource
+// usage, etc.).
+//
+// Corresponds to PUT /_matrix/client/v3/presence/{userId}/status.
+func (s *DirectSession) SetPresence(ctx context.Context, presence, statusMsg string) error {
+	switch presence {
+	case "online", "unavailable", "offline":
+	default:
+		return fmt.Errorf("messaging: invalid presence %q: must be online, unavailable, or offline", presence)
+	}
+
+	path := "/_matrix/client/v3/presence/" + url.PathEscape(s.userID.String()) + "/status"
+	_, err := s.client.doRequest(ctx, http.MethodPut, path, s.accessToken, SetPresenceRequest{
+		Presence:  presence,
+		StatusMsg: statusMsg,
+	})
+	if err != nil {
+		return fmt.Errorf("messaging: set presence failed: %w", err)
+	}
+	return nil
+}
+
+// GetPresence fetches the presence state of a Matrix user. The caller
+// must share at least one room with the target user; the homeserver
+// returns M_FORBIDDEN otherwise.
+//
+// Corresponds to GET /_matrix/client/v3/presence/{userId}/status.
+func (s *DirectSession) GetPresence(ctx context.Context, userID ref.UserID) (*PresenceEventContent, error) {
+	path := "/_matrix/client/v3/presence/" + url.PathEscape(userID.String()) + "/status"
+	body, err := s.client.doRequest(ctx, http.MethodGet, path, s.accessToken, nil)
+	if err != nil {
+		return nil, fmt.Errorf("messaging: get presence for %q failed: %w", userID, err)
+	}
+
+	var content PresenceEventContent
+	if err := json.Unmarshal(body, &content); err != nil {
+		return nil, fmt.Errorf("messaging: failed to parse presence response for %q: %w", userID, err)
+	}
+	return &content, nil
+}
+
 // TURNCredentials fetches time-limited TURN server credentials from the
 // homeserver. The homeserver generates these using its configured turn_secret
 // (shared with coturn via HMAC-SHA1). Returns the TURN URIs, ephemeral

@@ -763,6 +763,179 @@ func TestGetDisplayName(t *testing.T) {
 	})
 }
 
+func TestSetPresence(t *testing.T) {
+	t.Run("online with status message", func(t *testing.T) {
+		_, session := newTestSession(t, http.HandlerFunc(func(writer http.ResponseWriter, request *http.Request) {
+			assertAuth(t, request, "test-token")
+			if request.Method != http.MethodPut {
+				t.Errorf("expected PUT, got %s", request.Method)
+			}
+			expectedPath := "/_matrix/client/v3/presence/%40test%3Alocal/status"
+			if request.URL.RawPath != expectedPath && request.URL.Path != "/_matrix/client/v3/presence/@test:local/status" {
+				t.Errorf("unexpected path: raw=%s path=%s", request.URL.RawPath, request.URL.Path)
+			}
+
+			var body SetPresenceRequest
+			if err := json.NewDecoder(request.Body).Decode(&body); err != nil {
+				t.Fatalf("failed to decode request: %v", err)
+			}
+			if body.Presence != "online" {
+				t.Errorf("presence = %q, want %q", body.Presence, "online")
+			}
+			if body.StatusMsg != "working on TICKET-42" {
+				t.Errorf("status_msg = %q, want %q", body.StatusMsg, "working on TICKET-42")
+			}
+
+			writeJSON(writer, map[string]any{})
+		}))
+
+		err := session.SetPresence(context.Background(), "online", "working on TICKET-42")
+		if err != nil {
+			t.Fatalf("SetPresence failed: %v", err)
+		}
+	})
+
+	t.Run("unavailable without status message", func(t *testing.T) {
+		_, session := newTestSession(t, http.HandlerFunc(func(writer http.ResponseWriter, request *http.Request) {
+			var body map[string]any
+			if err := json.NewDecoder(request.Body).Decode(&body); err != nil {
+				t.Fatalf("failed to decode request: %v", err)
+			}
+			if body["presence"] != "unavailable" {
+				t.Errorf("presence = %v, want %q", body["presence"], "unavailable")
+			}
+			if _, exists := body["status_msg"]; exists {
+				t.Errorf("status_msg should be omitted when empty, got %v", body["status_msg"])
+			}
+
+			writeJSON(writer, map[string]any{})
+		}))
+
+		err := session.SetPresence(context.Background(), "unavailable", "")
+		if err != nil {
+			t.Fatalf("SetPresence failed: %v", err)
+		}
+	})
+
+	t.Run("offline", func(t *testing.T) {
+		_, session := newTestSession(t, http.HandlerFunc(func(writer http.ResponseWriter, request *http.Request) {
+			var body map[string]any
+			json.NewDecoder(request.Body).Decode(&body)
+			if body["presence"] != "offline" {
+				t.Errorf("presence = %v, want %q", body["presence"], "offline")
+			}
+			writeJSON(writer, map[string]any{})
+		}))
+
+		err := session.SetPresence(context.Background(), "offline", "shutting down")
+		if err != nil {
+			t.Fatalf("SetPresence failed: %v", err)
+		}
+	})
+
+	t.Run("invalid presence", func(t *testing.T) {
+		_, session := newTestSession(t, http.HandlerFunc(func(http.ResponseWriter, *http.Request) {
+			t.Fatal("server should not be called for invalid presence")
+		}))
+
+		err := session.SetPresence(context.Background(), "busy", "")
+		if err == nil {
+			t.Fatal("expected error for invalid presence value")
+		}
+		if !strings.Contains(err.Error(), "invalid presence") {
+			t.Errorf("error should mention invalid presence, got: %v", err)
+		}
+	})
+
+	t.Run("homeserver error", func(t *testing.T) {
+		_, session := newTestSession(t, http.HandlerFunc(func(writer http.ResponseWriter, _ *http.Request) {
+			writer.Header().Set("Content-Type", "application/json")
+			writer.WriteHeader(http.StatusForbidden)
+			json.NewEncoder(writer).Encode(MatrixError{Code: ErrCodeForbidden, Message: "Cannot set other user presence"})
+		}))
+
+		err := session.SetPresence(context.Background(), "online", "")
+		if err == nil {
+			t.Fatal("expected error for forbidden response")
+		}
+		if !IsMatrixError(err, ErrCodeForbidden) {
+			t.Errorf("expected M_FORBIDDEN, got: %v", err)
+		}
+	})
+}
+
+func TestGetPresence(t *testing.T) {
+	t.Run("online and active", func(t *testing.T) {
+		_, session := newTestSession(t, http.HandlerFunc(func(writer http.ResponseWriter, request *http.Request) {
+			assertAuth(t, request, "test-token")
+			if request.Method != http.MethodGet {
+				t.Errorf("expected GET, got %s", request.Method)
+			}
+			expectedPath := "/_matrix/client/v3/presence/%40alice%3Alocal/status"
+			if request.URL.RawPath != expectedPath && request.URL.Path != "/_matrix/client/v3/presence/@alice:local/status" {
+				t.Errorf("unexpected path: raw=%s path=%s", request.URL.RawPath, request.URL.Path)
+			}
+
+			writeJSON(writer, PresenceEventContent{
+				Presence:        "online",
+				CurrentlyActive: true,
+				StatusMsg:       "working on TICKET-42",
+			})
+		}))
+
+		content, err := session.GetPresence(context.Background(), mustUserID("@alice:local"))
+		if err != nil {
+			t.Fatalf("GetPresence failed: %v", err)
+		}
+		if content.Presence != "online" {
+			t.Errorf("presence = %q, want %q", content.Presence, "online")
+		}
+		if !content.CurrentlyActive {
+			t.Error("expected currently_active = true")
+		}
+		if content.StatusMsg != "working on TICKET-42" {
+			t.Errorf("status_msg = %q, want %q", content.StatusMsg, "working on TICKET-42")
+		}
+	})
+
+	t.Run("unavailable with last active", func(t *testing.T) {
+		_, session := newTestSession(t, http.HandlerFunc(func(writer http.ResponseWriter, _ *http.Request) {
+			writeJSON(writer, PresenceEventContent{
+				Presence:      "unavailable",
+				LastActiveAgo: 300000,
+				StatusMsg:     "idle",
+			})
+		}))
+
+		content, err := session.GetPresence(context.Background(), mustUserID("@bob:local"))
+		if err != nil {
+			t.Fatalf("GetPresence failed: %v", err)
+		}
+		if content.Presence != "unavailable" {
+			t.Errorf("presence = %q, want %q", content.Presence, "unavailable")
+		}
+		if content.LastActiveAgo != 300000 {
+			t.Errorf("last_active_ago = %d, want 300000", content.LastActiveAgo)
+		}
+	})
+
+	t.Run("no shared room", func(t *testing.T) {
+		_, session := newTestSession(t, http.HandlerFunc(func(writer http.ResponseWriter, _ *http.Request) {
+			writer.Header().Set("Content-Type", "application/json")
+			writer.WriteHeader(http.StatusForbidden)
+			json.NewEncoder(writer).Encode(MatrixError{Code: ErrCodeForbidden, Message: "You are not sharing a room"})
+		}))
+
+		_, err := session.GetPresence(context.Background(), mustUserID("@stranger:remote"))
+		if err == nil {
+			t.Fatal("expected error for user with no shared room")
+		}
+		if !IsMatrixError(err, ErrCodeForbidden) {
+			t.Errorf("expected M_FORBIDDEN, got: %v", err)
+		}
+	})
+}
+
 func TestTransactionIDUniqueness(t *testing.T) {
 	// Verify that consecutive sends produce different transaction IDs.
 	transactionIDs := make(map[string]bool)

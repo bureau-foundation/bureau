@@ -788,6 +788,7 @@ type memberInfo struct {
 	UserID          ref.UserID `cbor:"user_id"`
 	DisplayName     string     `cbor:"display_name"`
 	Presence        string     `cbor:"presence"`
+	StatusMsg       string     `cbor:"status_msg"`
 	CurrentlyActive bool       `cbor:"currently_active"`
 }
 
@@ -847,6 +848,7 @@ func (ts *TicketService) handleListMembers(ctx context.Context, token *serviceto
 		}
 		if presence, exists := ts.presence[member.UserID]; exists {
 			info.Presence = presence.Presence
+			info.StatusMsg = presence.StatusMsg
 			info.CurrentlyActive = presence.CurrentlyActive
 		}
 		result = append(result, info)

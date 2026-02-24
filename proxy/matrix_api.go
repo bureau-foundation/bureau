@@ -528,24 +528,21 @@ func (h *Handler) HandleMatrixThreadMessages(w http.ResponseWriter, r *http.Requ
 	h.copyResponseBody(w, response.Body, "thread_messages")
 }
 
-// HandleMatrixGetDisplayName handles GET /v1/matrix/display-name?user=<userId>.
-// Fetches a user's display name via GET /_matrix/client/v3/profile/{userId}/displayname.
-func (h *Handler) HandleMatrixGetDisplayName(w http.ResponseWriter, r *http.Request) {
-	service := h.getMatrixService(w)
-	if service == nil {
-		return
-	}
-
+// forwardUserQuery reads a "user" query parameter, constructs a Matrix
+// API path using pathFn(escapedUserID), and forwards the GET to the
+// homeserver. The label identifies the operation in logs and response
+// body copy diagnostics.
+func (h *Handler) forwardUserQuery(w http.ResponseWriter, r *http.Request, service *HTTPService, label string, pathFn func(escapedUserID string) string) {
 	userID := r.URL.Query().Get("user")
 	if userID == "" {
 		respondError(w, http.StatusBadRequest, "user query parameter is required")
 		return
 	}
 
-	path := "/_matrix/client/v3/profile/" + url.PathEscape(userID) + "/displayname"
+	path := pathFn(url.PathEscape(userID))
 	response, err := service.ForwardRequest(r.Context(), http.MethodGet, path, nil)
 	if err != nil {
-		h.logger.Error("matrix get display name failed", "user", userID, "error", err)
+		h.logger.Error("matrix "+label+" failed", "user", userID, "error", err)
 		respondError(w, http.StatusBadGateway, err.Error())
 		return
 	}
@@ -553,7 +550,19 @@ func (h *Handler) HandleMatrixGetDisplayName(w http.ResponseWriter, r *http.Requ
 
 	w.Header().Set("Content-Type", "application/json")
 	w.WriteHeader(response.StatusCode)
-	h.copyResponseBody(w, response.Body, "get_display_name")
+	h.copyResponseBody(w, response.Body, label)
+}
+
+// HandleMatrixGetDisplayName handles GET /v1/matrix/display-name?user=<userId>.
+// Fetches a user's display name via GET /_matrix/client/v3/profile/{userId}/displayname.
+func (h *Handler) HandleMatrixGetDisplayName(w http.ResponseWriter, r *http.Request) {
+	service := h.getMatrixService(w)
+	if service == nil {
+		return
+	}
+	h.forwardUserQuery(w, r, service, "get_display_name", func(escapedUserID string) string {
+		return "/_matrix/client/v3/profile/" + escapedUserID + "/displayname"
+	})
 }
 
 // MatrixCreateRoomRequest is the JSON body for POST /v1/matrix/room.
@@ -812,4 +821,88 @@ func (h *Handler) HandleMatrixSendEvent(w http.ResponseWriter, r *http.Request) 
 	w.Header().Set("Content-Type", "application/json")
 	w.WriteHeader(response.StatusCode)
 	h.copyResponseBody(w, response.Body, "send_event")
+}
+
+// MatrixPresenceRequest is the JSON body for POST /v1/matrix/presence.
+type MatrixPresenceRequest struct {
+	// Presence is the desired state: "online", "unavailable", or "offline".
+	Presence string `json:"presence"`
+
+	// StatusMsg is an optional human-readable status message.
+	StatusMsg string `json:"status_msg,omitempty"`
+}
+
+// HandleMatrixSetPresence handles POST /v1/matrix/presence. Sets the
+// principal's own presence state and optional status message via
+// PUT /_matrix/client/v3/presence/{userId}/status.
+//
+// No grant is required: a principal is always allowed to set its own
+// presence. The identity must be configured (set by the daemon after
+// credential injection) so the handler knows which user ID to target.
+func (h *Handler) HandleMatrixSetPresence(w http.ResponseWriter, r *http.Request) {
+	service := h.getMatrixService(w)
+	if service == nil {
+		return
+	}
+
+	h.mu.RLock()
+	identity := h.identity
+	h.mu.RUnlock()
+
+	if identity == nil {
+		respondError(w, http.StatusServiceUnavailable, "identity not configured")
+		return
+	}
+
+	var request MatrixPresenceRequest
+	if err := json.NewDecoder(r.Body).Decode(&request); err != nil {
+		respondErrorf(w, http.StatusBadRequest, "invalid request body: %v", err)
+		return
+	}
+
+	switch request.Presence {
+	case "online", "unavailable", "offline":
+	default:
+		respondErrorf(w, http.StatusBadRequest, "invalid presence %q: must be online, unavailable, or offline", request.Presence)
+		return
+	}
+
+	body, err := json.Marshal(messaging.SetPresenceRequest{
+		Presence:  request.Presence,
+		StatusMsg: request.StatusMsg,
+	})
+	if err != nil {
+		respondErrorf(w, http.StatusInternalServerError, "marshaling presence request: %v", err)
+		return
+	}
+
+	path := "/_matrix/client/v3/presence/" + url.PathEscape(identity.UserID) + "/status"
+	response, err := service.ForwardRequest(r.Context(), http.MethodPut, path, bytes.NewReader(body))
+	if err != nil {
+		h.logger.Error("matrix set presence failed", "error", err)
+		respondError(w, http.StatusBadGateway, err.Error())
+		return
+	}
+	defer response.Body.Close()
+
+	w.Header().Set("Content-Type", "application/json")
+	w.WriteHeader(response.StatusCode)
+	h.copyResponseBody(w, response.Body, "set_presence")
+}
+
+// HandleMatrixGetPresence handles GET /v1/matrix/presence?user=@...
+// Fetches a user's presence state via
+// GET /_matrix/client/v3/presence/{userId}/status.
+//
+// The homeserver enforces the shared-room requirement: if the caller
+// does not share a room with the target user, the homeserver returns
+// M_FORBIDDEN.
+func (h *Handler) HandleMatrixGetPresence(w http.ResponseWriter, r *http.Request) {
+	service := h.getMatrixService(w)
+	if service == nil {
+		return
+	}
+	h.forwardUserQuery(w, r, service, "get_presence", func(escapedUserID string) string {
+		return "/_matrix/client/v3/presence/" + escapedUserID + "/status"
+	})
 }

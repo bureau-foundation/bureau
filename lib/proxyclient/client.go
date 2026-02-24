@@ -485,6 +485,46 @@ func (client *Client) GetDisplayName(ctx context.Context, userID ref.UserID) (st
 	return result.DisplayName, nil
 }
 
+// SetPresence updates the principal's own presence state and optional
+// status message via POST /v1/matrix/presence. Presence must be
+// "online", "unavailable", or "offline".
+func (client *Client) SetPresence(ctx context.Context, presence, statusMessage string) error {
+	response, err := client.post(ctx, "/v1/matrix/presence", struct {
+		Presence  string `json:"presence"`
+		StatusMsg string `json:"status_msg,omitempty"`
+	}{Presence: presence, StatusMsg: statusMessage})
+	if err != nil {
+		return fmt.Errorf("set presence: %w", err)
+	}
+	defer response.Body.Close()
+
+	if response.StatusCode != http.StatusOK {
+		return responseErrorFromReader("set presence", response.StatusCode, response.Body)
+	}
+	return nil
+}
+
+// GetPresence fetches a user's presence state via
+// GET /v1/matrix/presence?user=@... The homeserver enforces the
+// shared-room requirement.
+func (client *Client) GetPresence(ctx context.Context, userID ref.UserID) (*messaging.PresenceEventContent, error) {
+	response, err := client.get(ctx, "/v1/matrix/presence?user="+url.QueryEscape(userID.String()))
+	if err != nil {
+		return nil, fmt.Errorf("get presence for %s: %w", userID, err)
+	}
+	defer response.Body.Close()
+
+	if response.StatusCode != http.StatusOK {
+		return nil, responseErrorFromReader(fmt.Sprintf("get presence for %s", userID), response.StatusCode, response.Body)
+	}
+
+	var result messaging.PresenceEventContent
+	if err := netutil.DecodeResponse(response.Body, &result); err != nil {
+		return nil, fmt.Errorf("get presence for %s: %w", userID, err)
+	}
+	return &result, nil
+}
+
 // CreateRoom creates a new Matrix room. Returns the room ID.
 func (client *Client) CreateRoom(ctx context.Context, request messaging.CreateRoomRequest) (*messaging.CreateRoomResponse, error) {
 	response, err := client.post(ctx, "/v1/matrix/room", request)

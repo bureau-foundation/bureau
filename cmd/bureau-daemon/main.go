@@ -459,12 +459,32 @@ func run() error {
 	go daemon.statusLoop(ctx)
 	go daemon.tokenRefreshLoop(ctx)
 
+	// Signal that this daemon is online and ready to manage sandboxes.
+	// Presence is the canonical liveness primitive: the fleet controller
+	// uses it for fast crash detection (seconds vs heartbeat staleness).
+	if err := daemon.session.SetPresence(ctx, "online", ""); err != nil {
+		logger.Error("setting initial presence to online", "error", err)
+	}
+
 	// Release any HA leases on shutdown so other daemons can take
 	// over quickly without waiting for the lease to expire.
 	defer func() {
 		releaseCtx, releaseCancel := context.WithTimeout(context.Background(), 5*time.Second)
 		defer releaseCancel()
 		daemon.haWatchdog.releaseAllLeases(releaseCtx)
+	}()
+
+	// Set presence to offline on shutdown. Uses context.Background()
+	// because ctx is already cancelled when the defer runs. On crash
+	// or token revocation this fails gracefully — the homeserver
+	// detects the TCP drop and marks the daemon offline via its
+	// built-in inactivity timeout.
+	defer func() {
+		presenceCtx, presenceCancel := context.WithTimeout(context.Background(), 5*time.Second)
+		defer presenceCancel()
+		if err := daemon.session.SetPresence(presenceCtx, "offline", "shutting down"); err != nil {
+			logger.Error("setting presence to offline on shutdown", "error", err)
+		}
 	}()
 
 	// Wait for shutdown.
@@ -1123,6 +1143,14 @@ func (d *Daemon) publishStatus(ctx context.Context) {
 		LastActivityAt:   lastActivity,
 		TransportAddress: transportAddress,
 		Principals:       principals,
+	}
+
+	// Update presence status_msg with a compact operational summary.
+	// This gives operators and the fleet controller a quick glance at
+	// machine state via any Matrix client, without parsing state events.
+	statusMsg := fmt.Sprintf("%d sandboxes, %d%% CPU", runningCount, int(cpuUtilization))
+	if err := d.session.SetPresence(ctx, "online", statusMsg); err != nil {
+		d.logger.Warn("updating presence status_msg", "error", err)
 	}
 
 	_, err := d.session.SendStateEvent(ctx, d.machineRoomID, schema.EventTypeMachineStatus, d.machine.Localpart(), status)

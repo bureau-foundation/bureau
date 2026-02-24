@@ -219,6 +219,16 @@ type PresenceEventContent struct {
 	StatusMsg string `json:"status_msg,omitempty"`
 }
 
+// SetPresenceRequest is the JSON body for
+// PUT /_matrix/client/v3/presence/{userId}/status.
+type SetPresenceRequest struct {
+	// Presence is the desired state: "online", "unavailable", or "offline".
+	Presence string `json:"presence"`
+
+	// StatusMsg is an optional human-readable status message.
+	StatusMsg string `json:"status_msg,omitempty"`
+}
+
 // RoomsSection contains per-room sync data grouped by membership state.
 // Map keys are room IDs; encoding/json uses ref.RoomID's TextUnmarshaler
 // for automatic validation at deserialization.

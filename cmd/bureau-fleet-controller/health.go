@@ -87,6 +87,19 @@ func (fc *FleetController) checkMachineHealth(ctx context.Context) {
 				fc.executeFailover(ctx, machineLocalpart, machine)
 			}
 		}
+
+		// Presence fast-path: if the homeserver reports the daemon
+		// offline but the heartbeat hasn't expired yet, escalate to
+		// suspect. This catches the window between a daemon crash
+		// (presence goes offline within seconds via TCP connection
+		// drop detection) and the heartbeat interval expiring.
+		if machine.presenceState == "offline" && machine.healthState == healthOnline {
+			machine.healthState = healthSuspect
+			fc.logger.Warn("machine suspect via presence offline",
+				"machine", machineLocalpart,
+				"staleness", staleness,
+			)
+		}
 	}
 }
 

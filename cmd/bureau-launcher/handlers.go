@@ -32,17 +32,18 @@ import (
 // command exits, user types exit, session killed), cleanup fires: the proxy
 // is killed, sockets are removed, and the done channel closes.
 type managedSandbox struct {
-	localpart     string
-	proxyProcess  *os.Process         // credential injection proxy (killed on sandbox exit)
-	configDir     string              // temp directory for proxy config, scripts, payload
-	done          chan struct{}       // closed when the sandbox exits (tmux session ends)
-	doneOnce      sync.Once           // protects close(done) from concurrent callers
-	exitCode      int                 // command exit code (set before done is closed)
-	exitError     error               // descriptive exit error (set before done is closed)
-	exitOutput    string              // captured terminal output from tmux pane (set before done is closed)
-	roles         map[string][]string // role name → command, from SandboxSpec.Roles
-	proxyDone     chan struct{}       // closed when the proxy process exits
-	proxyExitCode int                 // proxy exit code (set before proxyDone is closed)
+	localpart        string
+	proxyProcess     *os.Process         // credential injection proxy (killed on sandbox exit)
+	configDir        string              // temp directory for proxy config, scripts, payload
+	exitCodeFilePath string              // path to exit-code file written by bureau-log-relay; empty for bare shells and reconnected sandboxes
+	done             chan struct{}       // closed when the sandbox exits (tmux session ends)
+	doneOnce         sync.Once           // protects close(done) from concurrent callers
+	exitCode         int                 // command exit code (set before done is closed)
+	exitError        error               // descriptive exit error (set before done is closed)
+	exitOutput       string              // captured terminal output from tmux pane (set before done is closed)
+	roles            map[string][]string // role name → command, from SandboxSpec.Roles
+	proxyDone        chan struct{}       // closed when the proxy process exits
+	proxyExitCode    int                 // proxy exit code (set before proxyDone is closed)
 }
 
 // Launcher handles IPC requests from the daemon. The serve loop accepts

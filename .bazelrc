@@ -44,5 +44,13 @@ build:remote --extra_execution_platforms=//:remote_linux_amd64
 # tools since the Go SDK is shipped via CAS.
 test:remote --test_env=PATH=/bin:/usr/bin:/usr/local/bin
 
+# Stress test configuration for flake detection.
+# Runs each test multiple times and marks mixed pass/fail as FLAKY.
+# Usage: sg docker -c "bazel test --config=stress //integration:integration_test"
+test:stress --runs_per_test=10
+test:stress --runs_per_test_detects_flakes
+test:stress --test_output=all
+test:stress --experimental_ui_max_stdouterr_bytes=10485760
+
 # Import per-user local overrides if present.
 try-import %workspace%/.bazelrc.local

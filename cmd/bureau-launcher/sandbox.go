@@ -180,6 +180,11 @@ func writeTriggerFile(configDir string, content []byte) (string, error) {
 // between PTY EOF detection and SIGCHLD processing that causes exit codes
 // to be lost when bwrap is exec'd directly.
 //
+// When exitCodeFilePath is non-empty, the relay writes the child's exit
+// code to that path (atomic temp+rename) after child.Wait() but before
+// os.Exit(). The launcher's session watcher reads this via inotify,
+// bypassing tmux's #{pane_dead_status} race entirely.
+//
 // Process tree:
 //
 //	tmux pane → bureau-log-relay (holds PTY fds) → bwrap → sandboxed process
@@ -189,12 +194,16 @@ func writeTriggerFile(configDir string, content []byte) (string, error) {
 // through its PID-1 signal helper. This is the signal path for graceful drain.
 //
 // Returns the script path.
-func writeSandboxScript(configDir string, logRelayPath string, bwrapPath string, bwrapArgs []string) (string, error) {
+func writeSandboxScript(configDir string, logRelayPath string, exitCodeFilePath string, bwrapPath string, bwrapArgs []string) (string, error) {
 	scriptPath := filepath.Join(configDir, "sandbox.sh")
 
 	var script strings.Builder
 	script.WriteString("#!/bin/sh\nexec ")
 	script.WriteString(shellQuote(logRelayPath))
+	if exitCodeFilePath != "" {
+		script.WriteString(" --exit-code-file=")
+		script.WriteString(shellQuote(exitCodeFilePath))
+	}
 	script.WriteString(" -- ")
 	script.WriteString(shellQuote(bwrapPath))
 	for _, arg := range bwrapArgs {

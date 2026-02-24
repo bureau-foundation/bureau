@@ -10,6 +10,7 @@ go_library(
         "exec.go",
         "firstboot.go",
         "handlers.go",
+        "inotify.go",
         "main.go",
         "proxy.go",
         "sandbox.go",
@@ -33,6 +34,7 @@ go_library(
         "//lib/watchdog",
         "//messaging",
         "//sandbox",
+        "@org_golang_x_sys//unix",
     ],
 )
 

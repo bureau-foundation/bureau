@@ -464,11 +464,17 @@ func (l *Launcher) buildSandboxCommand(principalLocalpart string, spec *schema.S
 		}
 	}
 
+	// Compute the exit-code file path. The relay writes the child's
+	// exit code here after waitpid, and the session watcher reads it
+	// via inotify — bypassing tmux's #{pane_dead_status} race.
+	exitCodeFilePath := filepath.Join(sb.configDir, "exit-code")
+	sb.exitCodeFilePath = exitCodeFilePath
+
 	// Write the sandbox script. The script exec's bureau-log-relay
 	// wrapping bwrap. The log relay holds the outer PTY open until it
 	// collects the child's exit code, eliminating the tmux 3.4+ race
 	// between PTY EOF and SIGCHLD that causes exit codes to be lost.
-	scriptPath, err := writeSandboxScript(sb.configDir, l.logRelayBinaryPath, bwrapPath, bwrapArgs)
+	scriptPath, err := writeSandboxScript(sb.configDir, l.logRelayBinaryPath, exitCodeFilePath, bwrapPath, bwrapArgs)
 	if err != nil {
 		return nil, fmt.Errorf("writing sandbox script: %w", err)
 	}

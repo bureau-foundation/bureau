@@ -13,6 +13,7 @@ import (
 	"path/filepath"
 	"slices"
 	"strings"
+	"syscall"
 	"testing"
 
 	"github.com/bureau-foundation/bureau/lib/credential"
@@ -388,6 +389,7 @@ func startMachineDaemonManual(t *testing.T, admin *messaging.DirectSession, mach
 	cmd := exec.Command(options.DaemonBinary, daemonArgs...)
 	cmd.Stdout = os.Stderr
 	cmd.Stderr = os.Stderr
+	cmd.SysProcAttr = &syscall.SysProcAttr{Setpgid: true}
 	if err := cmd.Start(); err != nil {
 		t.Fatalf("start daemon: %v", err)
 	}

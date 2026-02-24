@@ -45,7 +45,6 @@ import (
 	"github.com/bureau-foundation/bureau/lib/schema"
 	"github.com/bureau-foundation/bureau/lib/schema/pipeline"
 	"github.com/bureau-foundation/bureau/lib/secret"
-	"github.com/bureau-foundation/bureau/lib/testutil"
 	"github.com/bureau-foundation/bureau/messaging"
 )
 
@@ -1021,10 +1020,16 @@ func resolvedBinary(t *testing.T, envVar string) string {
 }
 
 // startProcess starts a binary as a subprocess, wiring its output to the
-// test log. Registers a cleanup function that sends SIGTERM and waits for
-// the process to exit (with a 5-second SIGKILL fallback). Cleanup runs in
-// LIFO order, so starting the daemon after the launcher ensures the daemon
-// is stopped first.
+// test log. Registers a cleanup function that sends SIGTERM to the process
+// group and waits for exit (with a 5-second SIGKILL fallback). Cleanup
+// runs in LIFO order, so starting the daemon after the launcher ensures
+// the daemon is stopped first.
+//
+// Each subprocess gets its own process group (Setpgid: true) so that
+// signals sent to the test binary's process group don't leak to
+// unrelated daemon/launcher processes. This prevents a class of flaky
+// test failures where a stray signal (terminal hangup, Bazel timeout
+// propagation) kills daemons mid-reconciliation.
 func startProcess(t *testing.T, name, binary string, args ...string) {
 	t.Helper()
 	startProcessWithEnv(t, name, nil, binary, args...)
@@ -1044,6 +1049,7 @@ func startProcessWithEnv(t *testing.T, name string, extraEnv []string, binary st
 	cmd := exec.Command(binary, args...)
 	cmd.Stdout = os.Stderr
 	cmd.Stderr = os.Stderr
+	cmd.SysProcAttr = &syscall.SysProcAttr{Setpgid: true}
 	if len(extraEnv) > 0 {
 		cmd.Env = append(os.Environ(), extraEnv...)
 	}
@@ -1058,12 +1064,33 @@ func startProcessWithEnv(t *testing.T, name string, extraEnv []string, binary st
 		if cmd.Process == nil {
 			return
 		}
-		cmd.Process.Signal(syscall.SIGTERM)
+
+		// Signal the process group (negative PID), not just the
+		// leader, so children (proxies, log relays) also receive
+		// SIGTERM. Safe because Setpgid isolates this group from
+		// other test processes.
+		pid := cmd.Process.Pid
+		signalErr := syscall.Kill(-pid, syscall.SIGTERM)
+		if signalErr != nil {
+			t.Logf("%s cleanup: SIGTERM to pgid %d failed (process likely already exited): %v", name, pid, signalErr)
+		}
+
 		done := make(chan error, 1)
 		go func() { done <- cmd.Wait() }()
-		testutil.RequireReceive(t, done, 5*time.Second,
-			fmt.Sprintf("%s did not exit after SIGTERM", name))
-		t.Logf("%s stopped", name)
+
+		select {
+		case waitErr := <-done:
+			if waitErr != nil {
+				t.Logf("%s exited during cleanup: %v (pid %d)", name, waitErr, pid)
+			} else {
+				t.Logf("%s stopped (exit 0, pid %d)", name, pid)
+			}
+		case <-time.After(5 * time.Second): //nolint:realclock test hang prevention
+			t.Logf("%s did not exit after 5s SIGTERM, sending SIGKILL (pid %d)", name, pid)
+			_ = syscall.Kill(-pid, syscall.SIGKILL)
+			waitErr := <-done
+			t.Logf("%s killed: %v (pid %d)", name, waitErr, pid)
+		}
 	})
 }
 

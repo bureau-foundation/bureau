@@ -1,0 +1,80 @@
+#!/bin/bash
+# Copyright 2026 The Bureau Authors
+# SPDX-License-Identifier: Apache-2.0
+
+# Stress test the integration suite by running it multiple times to
+# detect flaky tests. Uses Bazel's --runs_per_test for efficient
+# parallel execution within a single invocation.
+#
+# Each run gets its own Docker Compose stack (PID-based project names),
+# so parallel runs don't collide on Docker resources.
+#
+# Usage:
+#   script/stress-integration              # 10 runs (default)
+#   script/stress-integration --runs=20    # 20 runs
+#   script/stress-integration --filter=TestSandboxExitOutputCapture
+#
+# Exit code:
+#   0  All runs passed
+#   1  At least one run failed or was marked flaky
+#
+# Bazel marks a test FLAKY (not FAILED) when --runs_per_test_detects_flakes
+# is set and some runs pass while others fail. The script treats FLAKY as
+# a failure because that's the whole point: finding intermittent failures.
+
+set -euo pipefail
+
+RUNS=10
+FILTER=""
+
+while [[ $# -gt 0 ]]; do
+    case "$1" in
+        --runs=*) RUNS="${1#*=}"; shift ;;
+        --filter=*) FILTER="${1#*=}"; shift ;;
+        -h|--help)
+            echo "Usage: script/stress-integration [--runs=N] [--filter=TestName]"
+            echo ""
+            echo "  --runs=N         Number of test runs (default: 10)"
+            echo "  --filter=NAME    Only run tests matching NAME (passed to --test_filter)"
+            echo ""
+            echo "Runs the integration test suite N times to detect flaky tests."
+            echo "Exits non-zero if any run fails or is marked flaky."
+            exit 0
+            ;;
+        *) echo "Unknown flag: $1 (try --help)"; exit 1 ;;
+    esac
+done
+
+# Verify the user is in the docker group (same check as check-integration).
+if ! getent group docker 2>/dev/null | grep -qw "$(id -un)"; then
+    echo ""
+    echo "ERROR: User $(id -un) is not in the docker group."
+    echo "Integration tests require Docker. Add yourself:"
+    echo "  sudo usermod -aG docker $(id -un)"
+    echo "Then log out and back in."
+    echo ""
+    exit 1
+fi
+
+BAZEL_ARGS=(
+    test //integration:integration_test
+    --config=stress
+    --runs_per_test="$RUNS"
+    --test_arg=-test.v
+)
+
+if [[ -n "$FILTER" ]]; then
+    BAZEL_ARGS+=("--test_filter=$FILTER")
+fi
+
+echo "Stress testing integration suite: $RUNS runs"
+if [[ -n "$FILTER" ]]; then
+    echo "Filter: $FILTER"
+fi
+echo ""
+
+# Restart the Bazel server under sg docker (same as check-integration).
+# The server inherits groups from its first invocation, so earlier hooks
+# may have started it without docker group membership.
+bazel shutdown 2>/dev/null || true
+exec sg docker -c "bazel ${BAZEL_ARGS[*]}"

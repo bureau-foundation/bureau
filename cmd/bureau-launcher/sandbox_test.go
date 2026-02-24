@@ -381,7 +381,7 @@ func TestWriteSandboxScript(t *testing.T) {
 
 	directory := t.TempDir()
 
-	path, err := writeSandboxScript(directory, "/usr/bin/bureau-log-relay", "/usr/bin/bwrap", []string{
+	path, err := writeSandboxScript(directory, "/usr/bin/bureau-log-relay", "", "/usr/bin/bwrap", []string{
 		"--unshare-pid",
 		"--bind", "/workspace", "/workspace",
 		"--", "/bin/bash",
@@ -436,6 +436,34 @@ func TestWriteSandboxScript(t *testing.T) {
 	}
 	if info.Mode()&0111 == 0 {
 		t.Errorf("script not executable: mode %v", info.Mode())
+	}
+}
+
+func TestWriteSandboxScriptWithExitCodeFile(t *testing.T) {
+	t.Parallel()
+
+	directory := t.TempDir()
+	exitCodeFilePath := filepath.Join(directory, "exit-code")
+
+	path, err := writeSandboxScript(directory, "/usr/bin/bureau-log-relay", exitCodeFilePath, "/usr/bin/bwrap", []string{
+		"--unshare-pid",
+		"--", "/bin/bash",
+	})
+	if err != nil {
+		t.Fatalf("writeSandboxScript: %v", err)
+	}
+
+	data, err := os.ReadFile(path)
+	if err != nil {
+		t.Fatalf("reading script file: %v", err)
+	}
+
+	content := string(data)
+
+	// Should include the --exit-code-file flag before the -- separator.
+	expectedFragment := "exec /usr/bin/bureau-log-relay --exit-code-file=" + shellQuote(exitCodeFilePath) + " -- /usr/bin/bwrap"
+	if !strings.Contains(content, expectedFragment) {
+		t.Errorf("expected %q in script, got:\n%s", expectedFragment, content)
 	}
 }
 

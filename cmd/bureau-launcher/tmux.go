@@ -144,35 +144,63 @@ func (l *Launcher) destroyTmuxSession(localpart string) {
 // lifecycle driver for all sandboxes — there are no special cases for pipeline
 // executors vs interactive agents vs human operators.
 //
-// Detection strategy: the tmux session has remain-on-exit enabled, so when the
-// sandboxed process exits, the pane stays alive (showing "Pane is dead") instead
-// of being destroyed. The watcher polls PaneStatus (#{pane_dead},
-// #{pane_dead_status}, #{pane_dead_signal}) to detect process exit.
+// Two exit code detection strategies, used in priority order:
 //
-// Exit code reliability: the bureau-log-relay wraps the sandbox script,
-// holding the outer PTY open until it has collected the child's exit code
-// via waitpid. This makes PTY EOF and SIGCHLD effectively simultaneous
-// from tmux's perspective, so #{pane_dead_status} and the "Pane is dead"
-// line are both available immediately when the watcher detects pane death.
-// A small capture-retry loop handles the rare case where tmux's event loop
-// hasn't quite finished SIGCHLD processing on the first poll.
+//  1. Exit code file (relay-backed sandboxes): bureau-log-relay writes the
+//     child's exit code to a file (configDir/exit-code) after waitpid but
+//     before os.Exit(). The watcher detects this via inotify on the
+//     configDir, providing the authoritative exit code without any tmux
+//     race conditions. This is the primary path for all sandboxes created
+//     with a SandboxSpec.
 //
-// Two detection paths:
+//  2. Tmux polling (bare shells, reconnected sandboxes): polls PaneStatus
+//     every 250ms. When the pane is dead, tries parsePaneDeadLine for the
+//     exit code, falling back to #{pane_dead_status}. This path has a race
+//     condition in tmux 3.4+ where #{pane_dead_status} can report 0 before
+//     the real exit code is populated, but it's the only option when no
+//     exit-code file exists.
 //
-//  1. PaneStatus reports dead — the log relay exited and remain-on-exit kept
-//     the pane alive. The watcher captures scrollback (for non-zero exits),
-//     kills the session, and reports the exit code.
-//
-//  2. Session gone — something external killed the session (handleDestroySandbox,
-//     shutdownAllSandboxes, or tmux server crash). No pane capture is possible.
-//
-// The watcher also listens on sb.done for early termination by other code paths
-// (e.g., handleDestroySandbox calls finishSandbox directly to avoid waiting for
-// the next poll interval).
+// Both strategies also detect session disappearance (external kill by
+// handleDestroySandbox, shutdownAllSandboxes, or tmux crash) and external
+// finish (sb.done closed by another code path).
 func (l *Launcher) startSessionWatcher(localpart string, sb *managedSandbox) {
 	sessionName := tmuxSessionName(localpart)
 
 	go func() {
+		// Set up inotify watch for the exit-code file. For relay-backed
+		// sandboxes, this is the primary detection path — it fires as
+		// soon as the relay writes the file, with no polling latency.
+		// For bare shells and reconnected sandboxes, exitCodeFilePath
+		// is empty and exitCodeReady stays nil (never fires in select).
+		var exitCodeReady <-chan struct{}
+		var inotifyCleanup func()
+		if sb.exitCodeFilePath != "" {
+			directory := filepath.Dir(sb.exitCodeFilePath)
+			filename := filepath.Base(sb.exitCodeFilePath)
+			ready, cleanup, watchErr := watchForFile(directory, filename)
+			if watchErr != nil {
+				l.logger.Warn("inotify watch setup failed, using tmux polling only",
+					"principal", localpart,
+					"directory", directory,
+					"error", watchErr,
+				)
+			} else {
+				exitCodeReady = ready
+				inotifyCleanup = cleanup
+				defer cleanup()
+
+				// Check if the relay already wrote the file before we
+				// started watching. The watch is installed before this
+				// check, so there's no race: if the file appeared
+				// between watch setup and this stat, the inotify event
+				// is already queued.
+				if _, statErr := os.Stat(sb.exitCodeFilePath); statErr == nil {
+					l.finishFromExitCodeFile(localpart, sessionName, sb)
+					return
+				}
+			}
+		}
+
 		ticker := time.NewTicker(250 * time.Millisecond)
 		defer ticker.Stop()
 
@@ -182,102 +210,226 @@ func (l *Launcher) startSessionWatcher(localpart string, sb *managedSandbox) {
 				// Sandbox already finished (e.g., handleDestroySandbox
 				// called finishSandbox before we detected the exit).
 				return
+			case <-exitCodeReady:
+				// Exit-code file appeared — authoritative exit code.
+				// Clean up inotify before the potentially blocking
+				// tmux capture calls.
+				inotifyCleanup()
+				l.finishFromExitCodeFile(localpart, sessionName, sb)
+				return
 			case <-ticker.C:
 			}
 
-			// Primary detection: check if the pane process has exited.
-			// PaneStatus queries tmux's #{pane_dead}, #{pane_dead_status},
-			// and #{pane_dead_signal} format variables. For signal deaths,
-			// the exit code follows the shell convention (128 + signal).
-			dead, exitCode, statusErr := l.tmuxServer.PaneStatus(sessionName)
+			// Tmux polling: check pane death and session existence.
+			dead, tmuxExitCode, statusErr := l.tmuxServer.PaneStatus(sessionName)
 			if statusErr == nil && dead {
-				l.logger.Info("pane dead detected",
-					"principal", localpart,
-					"session", sessionName,
-					"exit_code_from_format_var", exitCode,
-				)
-
-				// Capture pane content and extract the authoritative exit
-				// code from tmux's "Pane is dead (status N, ...)" line.
-				// With the log relay holding the outer PTY, the line is
-				// almost always present on the first capture. The retry
-				// loop handles the brief window between PTY EOF and
-				// SIGCHLD processing in tmux's event loop.
-				var output string
-				for attempt := 0; attempt < paneDeadCaptureMaxAttempts; attempt++ {
-					if attempt > 0 {
-						time.Sleep(paneDeadCaptureRetryDelay)
-					}
-
-					captured, captureErr := l.tmuxServer.CapturePane(sessionName, maxCapturedOutputLines)
-					if captureErr != nil {
-						l.logger.Warn("failed to capture pane output",
-							"principal", localpart,
-							"session", sessionName,
-							"attempt", attempt,
-							"error", captureErr,
-						)
-						break
-					}
-
-					output = strings.TrimRight(captured, "\n")
-					if parsedCode, ok := parsePaneDeadLine(output); ok {
-						exitCode = parsedCode
-						break
-					}
-
-					if attempt == paneDeadCaptureMaxAttempts-1 {
-						l.logger.Warn("pane dead line not found after retries; using format variable exit code",
-							"principal", localpart,
-							"session", sessionName,
-							"exit_code_from_format_var", exitCode,
-							"attempts", paneDeadCaptureMaxAttempts,
-							"captured_output_length", len(output),
-						)
-					}
-				}
-
-				// Kill the session now that we have the output. The pane
-				// was kept alive by remain-on-exit solely for this capture.
-				l.destroyTmuxSession(localpart)
-
-				var exitError error
-				if exitCode != 0 {
-					exitError = fmt.Errorf("sandbox command exited with code %d", exitCode)
-				}
-
-				// Only include captured output in the finish message for
-				// non-zero exits. Successful exits don't need diagnostics.
-				if exitCode == 0 {
-					output = ""
-				}
-
-				l.logger.Info("sandbox process exited",
-					"principal", localpart,
-					"session", sessionName,
-					"exit_code", exitCode,
-					"captured_output_length", len(output),
-				)
-
-				l.finishSandbox(sb, exitCode, exitError, output)
+				l.finishFromPaneDeath(localpart, sessionName, sb, tmuxExitCode)
 				return
 			}
 
-			// Fallback: session disappeared without PaneStatus detecting
-			// the exit first. This happens when the session is killed
-			// externally (handleDestroySandbox, shutdownAllSandboxes,
-			// tmux crash). No output capture is possible.
+			// Session disappeared without pane death detection. This
+			// happens when the session is killed externally
+			// (handleDestroySandbox, shutdownAllSandboxes, tmux crash).
 			if !l.tmuxServer.HasSession(sessionName) {
 				l.logger.Info("tmux session disappeared",
 					"principal", localpart,
 					"session", sessionName,
 				)
-
 				l.finishSandbox(sb, -1, fmt.Errorf("tmux session disappeared"), "")
 				return
 			}
 		}
 	}()
+}
+
+// finishFromExitCodeFile reads the exit code from the file written by
+// bureau-log-relay, captures pane output for non-zero exits, kills the
+// tmux session, and finishes the sandbox. Called when inotify detects
+// the exit-code file or when the file already exists at watch setup.
+func (l *Launcher) finishFromExitCodeFile(localpart, sessionName string, sb *managedSandbox) {
+	exitCode, err := readExitCodeFile(sb.exitCodeFilePath)
+	if err != nil {
+		// The file should be readable — inotify fired or stat succeeded.
+		// If it's not, something unexpected happened. Fall back to tmux.
+		l.logger.Warn("exit code file unreadable after detection",
+			"principal", localpart,
+			"path", sb.exitCodeFilePath,
+			"error", err,
+		)
+		dead, tmuxCode, statusErr := l.tmuxServer.PaneStatus(sessionName)
+		if statusErr == nil && dead {
+			l.finishFromPaneDeath(localpart, sessionName, sb, tmuxCode)
+			return
+		}
+		l.destroyTmuxSession(localpart)
+		l.finishSandbox(sb, -1, fmt.Errorf("exit code file unreadable: %w", err), "")
+		return
+	}
+
+	l.logger.Info("read exit code from file",
+		"principal", localpart,
+		"exit_code", exitCode,
+		"path", sb.exitCodeFilePath,
+	)
+
+	// Capture pane output for non-zero exits. All child output is
+	// already in the scrollback because child.Wait() completed before
+	// the relay wrote the file. The pane may or may not be dead yet
+	// (the relay hasn't necessarily exited), but capture works either
+	// way — CapturePane reads scrollback from live or dead panes.
+	var output string
+	if exitCode != 0 {
+		captured, captureErr := l.tmuxServer.CapturePane(sessionName, maxCapturedOutputLines)
+		if captureErr != nil {
+			l.logger.Warn("failed to capture pane output",
+				"principal", localpart,
+				"session", sessionName,
+				"error", captureErr,
+			)
+		} else {
+			output = strings.TrimRight(captured, "\n")
+		}
+	}
+
+	l.destroyTmuxSession(localpart)
+
+	var exitError error
+	if exitCode != 0 {
+		exitError = fmt.Errorf("sandbox command exited with code %d", exitCode)
+	}
+
+	l.logger.Info("sandbox process exited",
+		"principal", localpart,
+		"session", sessionName,
+		"exit_code", exitCode,
+		"exit_code_source", "file",
+		"captured_output_length", len(output),
+	)
+
+	l.finishSandbox(sb, exitCode, exitError, output)
+}
+
+// finishFromPaneDeath handles exit detection via tmux polling. This is the
+// fallback path for bare-shell sessions (no SandboxSpec, no relay, no
+// exit-code file), reconnected sandboxes after launcher exec(), and
+// relay-backed sandboxes where the relay was killed by a signal before
+// writing the exit-code file.
+//
+// Exit code priority: exit-code file (if it exists) > parsePaneDeadLine >
+// tmux #{pane_dead_status} format variable. The file check handles
+// reconnected sandboxes where the relay wrote the file before the launcher
+// restarted. The "Pane is dead" line is more reliable than the format
+// variable, which has a race condition in tmux 3.4+ that can report stale
+// values under load.
+func (l *Launcher) finishFromPaneDeath(localpart, sessionName string, sb *managedSandbox, tmuxExitCode int) {
+	l.logger.Info("pane dead detected",
+		"principal", localpart,
+		"session", sessionName,
+		"exit_code_from_format_var", tmuxExitCode,
+	)
+
+	exitCode := tmuxExitCode
+	exitCodeSource := "tmux_format_var"
+
+	// Prefer the exit-code file if it exists. This catches reconnected
+	// sandboxes (relay wrote the file before launcher exec'd) and the
+	// case where inotify wasn't set up but the relay still wrote the file.
+	if sb.exitCodeFilePath != "" {
+		if fileCode, err := readExitCodeFile(sb.exitCodeFilePath); err == nil {
+			exitCode = fileCode
+			exitCodeSource = "file"
+			l.logger.Info("exit code from file overrides tmux format variable",
+				"principal", localpart,
+				"file_exit_code", fileCode,
+				"tmux_exit_code", tmuxExitCode,
+			)
+		}
+	}
+
+	// Capture pane content. For the tmux polling path without an
+	// exit-code file, also try parsing the "Pane is dead" line for a
+	// more reliable exit code than the format variable.
+	var output string
+	captured, captureErr := l.tmuxServer.CapturePane(sessionName, maxCapturedOutputLines)
+	if captureErr != nil {
+		l.logger.Warn("failed to capture pane output",
+			"principal", localpart,
+			"session", sessionName,
+			"error", captureErr,
+		)
+	} else {
+		output = strings.TrimRight(captured, "\n")
+
+		// If we're still relying on the tmux format variable (no file),
+		// try the "Pane is dead" line. This is more reliable because tmux
+		// only renders the line after fully processing SIGCHLD, while the
+		// format variable can be stale in tmux 3.4+.
+		if exitCodeSource == "tmux_format_var" {
+			if parsedCode, ok := parsePaneDeadLine(output); ok {
+				exitCode = parsedCode
+				exitCodeSource = "pane_dead_line"
+			} else {
+				for attempt := 1; attempt < paneDeadCaptureMaxAttempts; attempt++ {
+					time.Sleep(paneDeadCaptureRetryDelay)
+					recaptured, recaptureErr := l.tmuxServer.CapturePane(sessionName, maxCapturedOutputLines)
+					if recaptureErr != nil {
+						break
+					}
+					output = strings.TrimRight(recaptured, "\n")
+					if parsedCode, ok := parsePaneDeadLine(output); ok {
+						exitCode = parsedCode
+						exitCodeSource = "pane_dead_line"
+						break
+					}
+				}
+				if exitCodeSource == "tmux_format_var" {
+					l.logger.Warn("pane dead line not found; using format variable exit code",
+						"principal", localpart,
+						"session", sessionName,
+						"exit_code", exitCode,
+						"attempts", paneDeadCaptureMaxAttempts,
+					)
+				}
+			}
+		}
+	}
+
+	l.destroyTmuxSession(localpart)
+
+	var exitError error
+	if exitCode != 0 {
+		exitError = fmt.Errorf("sandbox command exited with code %d", exitCode)
+	}
+
+	// Clear output for successful exits — no diagnostics needed.
+	if exitCode == 0 {
+		output = ""
+	}
+
+	l.logger.Info("sandbox process exited",
+		"principal", localpart,
+		"session", sessionName,
+		"exit_code", exitCode,
+		"exit_code_source", exitCodeSource,
+		"captured_output_length", len(output),
+	)
+
+	l.finishSandbox(sb, exitCode, exitError, output)
+}
+
+// readExitCodeFile reads and parses the exit code from a file written
+// by bureau-log-relay. The file contains a single integer in ASCII
+// decimal followed by a newline (e.g., "42\n").
+func readExitCodeFile(path string) (int, error) {
+	data, err := os.ReadFile(path)
+	if err != nil {
+		return 0, err
+	}
+	code, err := strconv.Atoi(strings.TrimSpace(string(data)))
+	if err != nil {
+		return 0, fmt.Errorf("parsing exit code from %q: %w", string(data), err)
+	}
+	return code, nil
 }
 
 // paneDeadStatusRegexp matches tmux's "Pane is dead (status N, ...)" line.

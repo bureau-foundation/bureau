@@ -118,8 +118,12 @@ type ContextCommitContent struct {
 
 	// Format is the serialization format of the delta artifact.
 	// Determines how deltas are concatenated during materialization
-	// and how translation works across runtimes. Examples:
-	// "claude-code-v1", "bureau-agent-v1".
+	// and how translation works across runtimes. Values:
+	// "events-v1" (CBOR-encoded []agentdriver.Event, used by all
+	// runtimes for observation-level checkpoints),
+	// "bureau-agent-v1" (CBOR-encoded []llm.Message, native agent
+	// conversation-level snapshots), "claude-code-v1" (raw JSONL
+	// byte ranges, for importing historical Claude Code sessions).
 	Format string `json:"format"`
 
 	// Template is the agent template that produced this commit.

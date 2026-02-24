@@ -201,14 +201,37 @@ The delta artifact format is agent-runtime-specific. The `format` field
 on the commit tells the agent service how to concatenate deltas during
 materialization:
 
-- **`claude-code-v1`** — JSONL byte ranges from Claude Code's
-  transcript file. Each delta is a sequence of complete JSONL lines.
-  Concatenation is byte append. Materialization produces a valid JSONL
-  transcript.
+- **`events-v1`** — CBOR-encoded `[]agentdriver.Event` arrays. Each
+  delta is a CBOR array of structured `Event` structs with typed
+  payloads (prompt, response, thinking, tool call, tool result, system,
+  metric, error, output). Concatenation decodes both arrays and merges
+  them. This is the primary checkpoint format for all agent runtimes:
+  both the Claude Code wrapper and the native agent produce
+  `agentdriver.Event` streams, and the checkpoint tracker serializes
+  them identically. The event types are runtime-agnostic — the same
+  `ToolCallEvent` represents a tool invocation whether it came from
+  Claude Code's stream-json or the native agent's Go structs.
+
+- **`claude-code-v1`** — Raw JSONL byte ranges from Claude Code's
+  transcript file (the `.jsonl` files Claude Code writes to its own
+  session log directory). Each delta is a sequence of complete JSONL
+  lines. Concatenation is byte append. Materialization produces a valid
+  JSONL transcript. This format is used for importing pre-existing
+  Claude Code sessions into the context chain (archaeology, analytics
+  on historical data, bootstrapping context for agents that previously
+  ran outside Bureau). It is not the primary checkpoint format — live
+  sessions use `events-v1`. See
+  [Claude Code Session Transcript Reference](#claude-code-session-transcript-reference)
+  for detailed format documentation.
 
 - **`bureau-agent-v1`** — CBOR-encoded message arrays from Bureau's
-  native agent loop. Each delta is a CBOR array of message structs.
-  Concatenation decodes and merges arrays.
+  native agent loop. Each delta is a CBOR array of `llm.Message`
+  structs (the LLM conversation, not the observation stream). Used when
+  the native agent needs conversation-level context restoration (resume
+  from the exact LLM state, not from the observation-level events).
+  Context chains may mix `events-v1` and `bureau-agent-v1` commits for
+  the same session: the observation stream checkpoints via `events-v1`,
+  while conversation-level snapshots use `bureau-agent-v1`.
 
 - Additional formats as new agent runtimes are added (codex, gemini,
   generic). Each format defines its own delta representation and
@@ -451,12 +474,66 @@ messages as Go structs in memory. At each checkpoint, it serializes
 and calls checkpoint on the agent service. No file I/O, no format
 conversion.
 
-**Claude Code** (`bureau-agent-claude`): The wrapper parses Claude
-Code's stream-json output via `ParseOutput`. At each checkpoint, it
-serializes the events accumulated since the last checkpoint, stores the
-delta artifact, and calls checkpoint on the agent service. The delta is
-the structured events the wrapper has already parsed — not a re-read of
-the transcript file.
+**Claude Code** (`bureau-agent-claude`): The wrapper launches Claude
+Code with `--output-format stream-json` and parses stdout line by line
+via `ParseOutput`. Each stream-json line is a JSON object with a `type`
+field; `ParseOutput` maps these to typed `agentdriver.Event` structs:
+
+- `{"type":"system","subtype":"init",...}` → `EventTypeSystem` with
+  full `Metadata` (session_id, tools, model). The `init` event fires
+  once at startup and carries the session configuration.
+- `{"type":"system","subtype":"compact_boundary",...}` → `EventTypeSystem`
+  with `Metadata` containing `{"trigger":"auto","pre_tokens":N}`. This
+  signals context window compaction.
+- `{"type":"assistant","subtype":"text",...}` → `EventTypeResponse` with
+  the agent's text output.
+- `{"type":"assistant","subtype":"thinking",...}` → `EventTypeThinking`
+  with chain-of-thought content and optional cryptographic signature.
+- `{"type":"assistant","subtype":"tool_use",...}` → `EventTypeToolCall`
+  with tool name, input, and the `tool_use_id` identifier.
+- `{"type":"assistant","subtype":"server_tool_use",...}` →
+  `EventTypeToolCall` with `ServerTool=true`. Server tools (web search,
+  file search) use `"id"` instead of `"tool_use_id"` as the identifier
+  field; the parser handles both.
+- `{"type":"tool","subtype":"result",...}` → `EventTypeToolResult` with
+  `tool_use_id`, `is_error`, and `content`.
+- `{"type":"user",...}` → `EventTypePrompt` with `Source="user"`.
+  Content may be a string or an array of content blocks; the parser
+  concatenates text blocks. Note: in the stream-json output, `type:
+  "user"` records appear only for actual human input injected via stdin.
+  The many categories of system-injected content that appear as `type:
+  "user"` in Claude Code's JSONL transcript files (tool results, context
+  continuations, task notifications) are represented by their own
+  event types in stream-json.
+- `{"type":"result","subtype":"success"}` → `EventTypeMetric` with
+  token counts, cost, duration, turn count, and `Status="success"`.
+  Error variants (`error_max_turns`, `error_during_execution`,
+  `error_max_budget_usd`) set Status to the subtype value.
+- Unknown types → `EventTypeOutput` with the raw JSON preserved.
+
+The event pump in `Run()` feeds each parsed event to an
+`eventCheckpointTracker` that accumulates events and creates CBOR
+delta checkpoints at three boundaries:
+
+- **Turn boundary** (`ResponseEvent`): after the agent finishes a text
+  response, capturing the complete turn (prompt, thinking, tool calls,
+  tool results, response).
+- **Compaction** (`SystemEvent` with `subtype: "compact_boundary"`):
+  the context window was compacted. The pre-compaction events are
+  checkpointed as a delta, and the compaction event itself marks the
+  boundary.
+- **Session end** (`MetricEvent`): the session is complete. A final
+  checkpoint captures any trailing events.
+
+Each checkpoint serializes `events[lastCheckpointIndex:]` to CBOR,
+sends the bytes to the agent service (which stores them as an artifact
+and records the commit metadata atomically), and chains the commit to
+the previous checkpoint via the parent field. The format is `events-v1`.
+
+The wrapper also disables Claude Code's non-essential network traffic
+(`CLAUDE_CODE_DISABLE_NONESSENTIAL_TRAFFIC`, `DISABLE_TELEMETRY`,
+`DISABLE_ERROR_REPORTING`) to avoid startup delays inside sandboxes
+where outbound connections are blocked.
 
 **Other runtimes** (codex, gemini, generic): Each wrapper's Driver
 implementation captures events in its native format and checkpoints
@@ -663,6 +740,176 @@ lifecycle:
 
 No agent runs during the waiting periods. Context is stored in the
 chain. Agents start fresh with full memory when triggered.
+
+---
+
+## Claude Code Session Transcript Reference
+
+Claude Code maintains its own session transcript files as JSONL (one
+JSON object per line) in `~/.claude/projects/<project-hash>/<uuid>.jsonl`.
+These are distinct from Bureau's `events-v1` checkpoint artifacts. This
+section documents the raw JSONL format for implementors of the
+`claude-code-v1` import format and for anyone building analytics over
+historical Claude Code sessions.
+
+### JSONL Record Types
+
+Each line has a top-level `type` field:
+
+- **`assistant`** — Model output. Contains `message` with `content`
+  blocks (text, tool_use, thinking). Also carries `costUSD`,
+  `inputTokens`, `outputTokens`, `cacheReadInputTokens`,
+  `cacheCreationInputTokens`, and the `model` identifier.
+
+- **`user`** — Overloaded: see
+  [The User Record Classification Problem](#the-user-record-classification-problem).
+  In principle represents human input, but the majority of `type:
+  "user"` records are not human-originated.
+
+- **`system`** — System events. The `subtype` field classifies them:
+  `compact_boundary` (context compaction with `trigger` and
+  `pre_tokens`), `microcompact_boundary` (lighter compaction variant),
+  `context_truncated`, `init`. The `compact_boundary` subtype is the
+  primary signal for context management events.
+
+- **`result`** — Session completion. Contains `subtype` (`success`,
+  `error_max_turns`, `error_during_execution`, `error_max_budget_usd`),
+  token counts, cost, duration, and turn count. One per session.
+
+- **`progress`** — Intermediate progress updates during long-running
+  tool executions. Not conversation content.
+
+- **`summary`** — Context continuation summaries written when a session
+  is continued from a previous conversation that ran out of context.
+  These are large (often 10K+ characters) and contain the compressed
+  history of the prior session.
+
+- **`file-history-snapshot`** — Periodic snapshots of file state for
+  change tracking.
+
+- **`queue-operation`** — Internal queue state changes (e.g., message
+  queue flushes in team workflows).
+
+### The User Record Classification Problem
+
+The `type: "user"` field in Claude Code's JSONL is massively overloaded.
+A naive count of `type: "user"` records in a real dataset (697 sessions
+across three projects) yielded 149,647 "human prompts" — the actual
+count was 7,778. The remaining 141,869 records were:
+
+- **Tool results** (~138K records): Each tool invocation returns its
+  result as a `type: "user"` record whose `content` is an array
+  containing only `tool_result` blocks. These are the bulk of the
+  overcounting.
+
+- **System-injected content** (~3.9K records): Various system messages
+  delivered as `type: "user"` records. These include:
+  - Context continuation summaries (prefixed "This session is being
+    continued from a previous conversation that ran out of context")
+  - Task notifications (`<task-notification>` tags)
+  - Skill injections ("Base directory for this skill:")
+  - Teammate messages (`<teammate-message` tags)
+  - Local command boilerplate (`<local-command-caveat>`,
+    `<local-command-stdout>`, `<local-command-stderr>`, `<command-name>`,
+    `<command-message>` tags)
+  - Bash output injection (`<bash-input>`, `<bash-stdout>` tags)
+  - Auto-continuation prompts ("Continue from where you left off.")
+
+The `events-v1` format avoids this problem entirely: the Claude Code
+wrapper parses `stream-json` output (not the JSONL transcript), where
+each event type has its own `type` field. Tool results arrive as
+`{"type":"tool","subtype":"result"}`, human input as
+`{"type":"user"}`, and system events as `{"type":"system"}`.
+
+For `claude-code-v1` import (ingesting historical sessions), the
+ingestion pipeline must classify `type: "user"` records:
+
+- If `content` is a list containing only `tool_result` blocks →
+  `EventTypeToolResult`.
+- If `content` matches a system-injected pattern (see list above) →
+  skip or tag as system metadata.
+- Otherwise → `EventTypePrompt` (actual human input).
+
+### Sidechain Agents and Session Structure
+
+Claude Code sessions may spawn sub-agents (via the Task tool). These
+appear in the JSONL with `isSidechain: true` and an `agentId` field on
+their records. A single JSONL file may contain the main conversation
+plus multiple sidechain agent transcripts interleaved by timestamp.
+
+For import, sidechain agent records should be separated into their own
+context chains (branching from the parent's chain at the point the
+sub-agent was spawned). The `agentId` field provides the grouping key.
+
+Records with `isMeta: true` are system-generated metadata (e.g.,
+permission grants, configuration changes) and do not represent
+conversation content.
+
+### Compaction in JSONL Transcripts
+
+Context compaction appears as a `type: "system"` record with
+`subtype: "compact_boundary"`. The record's content includes `trigger`
+(usually `"auto"`) and `pre_tokens` (the token count before
+compaction). A `microcompact_boundary` subtype represents a lighter
+compaction variant.
+
+After a `compact_boundary`, the next `type: "summary"` record (if
+present) contains the compaction summary that replaces the pre-boundary
+conversation. For `claude-code-v1` import, this maps to a compaction
+commit in the context chain.
+
+In a dataset of 697 sessions, 42.5% hit at least one compaction (1,427
+total compactions). The most-compacted session had 71 compactions over
+77 hours. No session reached 20 human prompts without compacting — the
+context window is the binding constraint for sustained work.
+
+---
+
+## Analytics Derivability
+
+Context chains stored via `events-v1` support automated analytics
+without re-parsing raw transcripts. The structured event types map
+directly to the metrics that matter for understanding agent workflows:
+
+**Session profiles.** Each `Event` has a timestamp and type. Binning
+events into time windows and classifying by type (human prompt, agent
+response, tool call, thinking, compaction, idle gaps) produces
+thread-scheduler-style session timelines. These visualize when the human
+was active, when the agent was working, and when context was being
+managed.
+
+**Amplification metrics.** Counting `EventTypePrompt` (human input),
+`EventTypeResponse` (agent output), and `EventTypeToolCall` (tool
+invocations) per session yields the amplification ratio: how many agent
+actions each human direction triggers. In the Bureau project data, this
+was 35.5x responses per prompt and 18 tool operations per human
+direction. Character ratios (human input characters vs. agent output
+characters) quantify the leverage differently — 8.3x in the same
+dataset.
+
+**Compaction frequency.** `EventTypeSystem` with `subtype:
+"compact_boundary"` marks each compaction. Counting these per session
+and correlating with session duration reveals the context window
+pressure curve: how quickly different workloads exhaust the context
+budget.
+
+**Activity patterns.** Event timestamps aggregated by hour-of-day and
+day-of-week produce heatmaps showing when work happens. Peak concurrent
+sessions (overlapping session time ranges) reveal parallelism patterns.
+
+**Tool usage distribution.** `ToolCallEvent.Name` frequencies show which
+tools the agent uses most and how tool patterns differ across templates
+(reviewers use Read heavily; implementers use Edit and Bash).
+
+**Session lifecycle.** `MetricEvent.Status` classifies session outcomes
+(success, error_max_turns, error_during_execution). Combined with
+session duration (first event timestamp to `MetricEvent` timestamp) and
+compaction count, this characterizes session health.
+
+The batch summarization service and analytics pipeline consume these
+metrics from the context chain without needing access to the live agent
+or the original runtime transcript files. The `events-v1` format is
+both the persistence layer and the analytics source.
 
 ---
 

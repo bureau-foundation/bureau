@@ -16,6 +16,7 @@ go_library(
         "query.go",
         "response.go",
         "review.go",
+        "stewardship.go",
         "transfer.go",
         "viewer.go",
     ],
@@ -27,6 +28,7 @@ go_library(
         "//lib/principal",
         "//lib/ref",
         "//lib/schema",
+        "//lib/schema/stewardship",
         "//lib/schema/ticket",
         "//lib/secret",
         "//lib/service",
@@ -42,7 +44,10 @@ go_library(
 
 go_test(
     name = "ticket_test",
-    srcs = ["connection_test.go"],
+    srcs = [
+        "connection_test.go",
+        "stewardship_test.go",
+    ],
     embed = [":ticket"],
     deps = ["//cmd/bureau/cli"],
 )

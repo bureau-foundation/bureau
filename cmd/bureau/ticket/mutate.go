@@ -32,6 +32,7 @@ type createParams struct {
 	DeferUntil string   `json:"defer_until"  flag:"defer-until"  desc:"defer until this time (RFC 3339)"`
 	DeferFor   string   `json:"defer_for"    flag:"defer-for"    desc:"defer for this duration (e.g., '24h')"`
 	Deadline   string   `json:"deadline"     flag:"deadline"     desc:"target completion time (RFC 3339 UTC)"`
+	Affects    []string `json:"affects"      flag:"affects,a"    desc:"affected resources for stewardship resolution (repeatable)"`
 }
 
 func createCommand() *cli.Command {
@@ -74,6 +75,10 @@ Required fields: --room, --title, --type. Priority defaults to P2
 			{
 				Description: "Create a ticket with a deadline",
 				Command:     "bureau ticket create --room '!abc:bureau.local' --title 'Ship v2 API' --type task --deadline '2026-03-01T00:00:00Z'",
+			},
+			{
+				Description: "Create a ticket with affected resources (triggers stewardship review)",
+				Command:     "bureau ticket create --room '!abc:bureau.local' --title 'GPU quota increase' --type task --affects fleet/gpu/a100",
 			},
 		},
 		Params:         func() any { return &params },
@@ -139,6 +144,9 @@ Required fields: --room, --title, --type. Priority defaults to P2
 			if params.Deadline != "" {
 				fields["deadline"] = params.Deadline
 			}
+			if len(params.Affects) > 0 {
+				fields["affects"] = params.Affects
+			}
 
 			var result createResult
 			if err := client.Call(ctx, "create", fields, &result); err != nil {
@@ -172,6 +180,7 @@ type updateParams struct {
 	Parent    string   `json:"parent"   flag:"parent"     desc:"set parent ticket ID"`
 	Deadline  string   `json:"deadline" flag:"deadline"   desc:"target completion time (RFC 3339 UTC, empty string to clear)"`
 	Reviewers []string `json:"reviewers" flag:"reviewer"  desc:"reviewer Matrix user IDs (repeatable, sets review.reviewers)"`
+	Affects   []string `json:"affects"   flag:"affects,a"  desc:"replace affected resources for stewardship resolution (repeatable)"`
 }
 
 func updateCommand() *cli.Command {
@@ -265,6 +274,9 @@ in_progress returns a contention error with the current assignee.`,
 			}
 			if params.Deadline != "" {
 				fields["deadline"] = params.Deadline
+			}
+			if params.Affects != nil {
+				fields["affects"] = params.Affects
 			}
 			if len(params.Reviewers) > 0 {
 				reviewers := make([]map[string]any, len(params.Reviewers))
@@ -460,6 +472,7 @@ type batchTicket struct {
 	Labels    []string                  `json:"labels,omitempty"`
 	Parent    string                    `json:"parent,omitempty"`
 	BlockedBy []string                  `json:"blocked_by,omitempty"`
+	Affects   []string                  `json:"affects,omitempty"`
 	Gates     []ticketschema.TicketGate `json:"gates,omitempty"`
 }
 

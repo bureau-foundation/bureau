@@ -63,6 +63,7 @@ the ticket across all rooms.`,
 			// Subcommand groups.
 			gateCommand(),
 			depCommand(),
+			stewardshipCommand(),
 
 			// Interactive viewer.
 			ViewerCommand(),

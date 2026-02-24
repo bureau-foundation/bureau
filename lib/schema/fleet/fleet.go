@@ -22,6 +22,13 @@ const (
 	// MsgTypeFleetServiceDiscovered is posted when the fleet
 	// controller processes a new fleet service definition.
 	MsgTypeFleetServiceDiscovered = "m.bureau.fleet_service_discovered"
+
+	// MsgTypeFleetPresenceChanged is posted when a tracked machine's
+	// m.presence state transitions. Presence provides a fast-path
+	// liveness signal: the homeserver detects TCP connection drops
+	// within seconds, while heartbeat staleness takes 1-3x the
+	// heartbeat interval.
+	MsgTypeFleetPresenceChanged = "m.bureau.fleet_presence_changed"
 )
 
 // FleetConfigRoomDiscoveredMessage is the content of an m.room.message
@@ -61,6 +68,28 @@ func NewFleetServiceDiscoveredMessage(service string) FleetServiceDiscoveredMess
 		MsgType: MsgTypeFleetServiceDiscovered,
 		Body:    fmt.Sprintf("Service discovered: %s", service),
 		Service: service,
+	}
+}
+
+// FleetPresenceChangedMessage is the content of an m.room.message event
+// with msgtype MsgTypeFleetPresenceChanged. Posted when the fleet
+// controller observes a presence state transition for a tracked machine.
+type FleetPresenceChangedMessage struct {
+	MsgType  string `json:"msgtype"`
+	Body     string `json:"body"`
+	Machine  string `json:"machine"`
+	Previous string `json:"previous"`
+	Current  string `json:"current"`
+}
+
+// NewFleetPresenceChangedMessage constructs a FleetPresenceChangedMessage.
+func NewFleetPresenceChangedMessage(machine, previous, current string) FleetPresenceChangedMessage {
+	return FleetPresenceChangedMessage{
+		MsgType:  MsgTypeFleetPresenceChanged,
+		Body:     fmt.Sprintf("Machine %s presence: %s → %s", machine, previous, current),
+		Machine:  machine,
+		Previous: previous,
+		Current:  current,
 	}
 }
 

@@ -185,6 +185,12 @@ func (fc *FleetController) initialSync(ctx context.Context) (string, error) {
 		"config_rooms", len(fc.configRooms),
 	)
 
+	// Process presence state from the initial sync. The homeserver
+	// may include current presence for users sharing rooms. Processed
+	// after building the fleet model so machine entries exist for
+	// presence event matching.
+	fc.processPresenceEvents(ctx, response.Presence.Events)
+
 	// Emit structured notifications for everything discovered during
 	// initial sync so observers can synchronize with the fleet
 	// controller's model state without polling its API.
@@ -404,8 +410,11 @@ func (fc *FleetController) processMachineStatusEvent(event messaging.Event) {
 // dropped), the fleet controller can immediately suspect the machine
 // rather than waiting for heartbeat staleness.
 //
+// When a presence state transition is detected, a FleetPresenceChanged
+// notification is published to the fleet room for operator visibility.
+//
 // Caller must hold fc.mu.
-func (fc *FleetController) processPresenceEvents(events []messaging.PresenceEvent) {
+func (fc *FleetController) processPresenceEvents(ctx context.Context, events []messaging.PresenceEvent) {
 	for _, event := range events {
 		if event.Type != "m.presence" {
 			continue
@@ -429,6 +438,8 @@ func (fc *FleetController) processPresenceEvents(events []messaging.PresenceEven
 				"previous", previousPresence,
 				"current", event.Content.Presence,
 			)
+			fc.sendFleetNotification(ctx,
+				fleet.NewFleetPresenceChangedMessage(senderLocalpart, previousPresence, event.Content.Presence))
 		}
 	}
 }
@@ -587,7 +598,7 @@ func (fc *FleetController) handleSync(ctx context.Context, response *messaging.S
 	// Update machine presence state from m.presence events. Presence
 	// is processed after room events (which may create machine entries)
 	// and before health evaluation (which uses presenceState).
-	fc.processPresenceEvents(response.Presence.Events)
+	fc.processPresenceEvents(ctx, response.Presence.Events)
 
 	// Emit notifications for newly discovered config rooms and services.
 	fc.emitDiscoveryNotifications(ctx, previousConfigRooms, previousServices)

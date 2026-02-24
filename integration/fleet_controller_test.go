@@ -6,13 +6,16 @@ package integration_test
 import (
 	"errors"
 	"strings"
+	"syscall"
 	"testing"
+	"time"
 
 	"github.com/bureau-foundation/bureau/lib/ref"
 	"github.com/bureau-foundation/bureau/lib/schema"
 	fleetschema "github.com/bureau-foundation/bureau/lib/schema/fleet"
 	"github.com/bureau-foundation/bureau/lib/service"
 	"github.com/bureau-foundation/bureau/lib/servicetoken"
+	"github.com/bureau-foundation/bureau/lib/testutil"
 	"github.com/bureau-foundation/bureau/messaging"
 )
 
@@ -102,6 +105,18 @@ type fleetPlanResponse struct {
 	Service         string               `json:"service"`
 	Candidates      []fleetPlanCandidate `json:"candidates"`
 	CurrentMachines []string             `json:"current_machines"`
+}
+
+type fleetMachineHealthEntry struct {
+	Localpart        string `json:"localpart"`
+	HealthState      string `json:"health_state"`
+	PresenceState    string `json:"presence_state"`
+	LastHeartbeat    string `json:"last_heartbeat"`
+	StalenessSeconds int    `json:"staleness_seconds"`
+}
+
+type fleetMachineHealthResponse struct {
+	Machines []fleetMachineHealthEntry `json:"machines"`
 }
 
 // --- Fleet controller test infrastructure ---
@@ -536,14 +551,7 @@ func TestFleetControllerLifecycle(t *testing.T) {
 	t.Run("MachineHealth", func(t *testing.T) {
 		authClient := fleetClient(t, fc, operatorToken)
 
-		var response struct {
-			Machines []struct {
-				Localpart        string `json:"localpart"`
-				HealthState      string `json:"health_state"`
-				LastHeartbeat    string `json:"last_heartbeat"`
-				StalenessSeconds int    `json:"staleness_seconds"`
-			} `json:"machines"`
-		}
+		var response fleetMachineHealthResponse
 		if err := authClient.Call(ctx, "machine-health",
 			map[string]any{"machine": machine.Name}, &response); err != nil {
 			t.Fatalf("machine-health: %v", err)
@@ -1243,4 +1251,153 @@ func TestFleetEligibilityConstraints(t *testing.T) {
 			t.Errorf("machineB (%s) should be eligible (does not host baseline)", machineB.Name)
 		}
 	})
+}
+
+// TestFleetPresenceDetection verifies that the fleet controller receives
+// m.presence events from machine daemons and uses them to accelerate
+// health detection. The sequence:
+//
+//   - Machine daemon starts, sets presence to "online"
+//   - Fleet controller receives presence via /sync, updates model
+//   - Daemon is killed (SIGTERM triggers graceful shutdown with
+//     SetPresence("offline", "shutting down"))
+//   - Fleet controller receives the presence change, escalates health
+//     from "online" to "suspect"
+//   - Fleet controller publishes a FleetPresenceChanged notification
+//
+// This tests the presence fast-path: the fleet controller detects the
+// daemon going offline via presence (seconds) rather than waiting for
+// heartbeat staleness (30-90 seconds). The heartbeat is still fresh
+// when presence reports offline, so checkMachineHealth escalates to
+// "suspect" via the presence fast-path rather than the heartbeat
+// staleness path.
+func TestFleetPresenceDetection(t *testing.T) {
+	t.Parallel()
+
+	daemonBinary := resolvedBinary(t, "DAEMON_BINARY")
+
+	admin := adminSession(t)
+	defer admin.Close()
+
+	fleet := createTestFleet(t, admin)
+	machine := newTestMachine(t, fleet, "presence")
+
+	options := machineOptions{
+		LauncherBinary: resolvedBinary(t, "LAUNCHER_BINARY"),
+		DaemonBinary:   daemonBinary,
+		Fleet:          fleet,
+	}
+
+	// Start launcher and daemon manually — we kill the daemon mid-test.
+	startMachineLauncher(t, admin, machine, options)
+	daemon := startMachineDaemonManual(t, admin, machine, options)
+	t.Cleanup(func() {
+		// If the test exits early (e.g., fatal), kill the daemon.
+		// After SIGTERM in the main test body, Process.Signal returns
+		// "os: process already finished" which is harmless.
+		daemon.Process.Signal(syscall.SIGTERM)
+		done := make(chan error, 1)
+		go func() { done <- daemon.Wait() }()
+		testutil.RequireReceive(t, done, 5*time.Second, "daemon cleanup")
+	})
+
+	// Push empty MachineConfig so the fleet controller can discover
+	// the machine's config room.
+	pushMachineConfig(t, admin, machine, deploymentConfig{})
+
+	// Create fleet room watch BEFORE starting the fleet controller
+	// so we capture all fleet notifications from initial startup.
+	fleetWatch := watchRoom(t, admin, fleet.FleetRoomID)
+
+	controllerName := "service/fleet/presence-test"
+	fc := startFleetController(t, admin, machine, controllerName, fleet)
+
+	// Wait for the fleet controller to discover the machine's config
+	// room. After this, the fleet controller has the machine in its
+	// model and is processing presence events for it.
+	waitForFleetConfigRoom(t, &fleetWatch, fc, machine.Name)
+
+	operatorToken := mintFleetToken(t, fleet, machine, []string{"fleet/**"})
+	authClient := fleetClient(t, fc, operatorToken)
+
+	// Verify initial health: machine should be online with a fresh
+	// heartbeat. The daemon set presence to "online" on startup, and
+	// the fleet controller received it via /sync.
+	var initialHealth fleetMachineHealthResponse
+	if err := authClient.Call(t.Context(), "machine-health",
+		map[string]any{"machine": machine.Name}, &initialHealth); err != nil {
+		t.Fatalf("machine-health (initial): %v", err)
+	}
+	if length := len(initialHealth.Machines); length != 1 {
+		t.Fatalf("machine-health returned %d entries, want 1", length)
+	}
+	initialEntry := initialHealth.Machines[0]
+	if initialEntry.HealthState != "online" {
+		t.Fatalf("initial health state = %q, want %q", initialEntry.HealthState, "online")
+	}
+	t.Log("initial machine health: online")
+
+	// Set up watch for the presence change notification BEFORE killing
+	// the daemon so the admin's sync checkpoint captures it.
+	presenceWatch := watchRoom(t, admin, fleet.FleetRoomID)
+
+	// Kill the daemon gracefully. SIGTERM triggers the shutdown path
+	// which calls SetPresence("offline", "shutting down") before exit.
+	t.Log("killing daemon (SIGTERM)")
+	if err := daemon.Process.Signal(syscall.SIGTERM); err != nil {
+		t.Fatalf("signal daemon: %v", err)
+	}
+	waitDone := make(chan error, 1)
+	go func() { waitDone <- daemon.Wait() }()
+	testutil.RequireReceive(t, waitDone, 5*time.Second, "daemon did not exit after SIGTERM")
+	t.Log("daemon exited")
+
+	// Trigger a fleet controller sync cycle. Conduwuit accumulates
+	// presence events but doesn't wake /sync long-polls for
+	// presence-only changes. Sending a room event to a shared room
+	// wakes the long-poll, and the accumulated presence events are
+	// included in the same sync response. In production, other
+	// activity (heartbeats, config changes) triggers syncs frequently,
+	// so presence events piggyback without needing an explicit trigger.
+	_, err := admin.SendEvent(t.Context(), fleet.FleetRoomID, schema.MatrixEventTypeMessage,
+		map[string]any{
+			"msgtype": "m.text",
+			"body":    "sync trigger after daemon shutdown",
+		})
+	if err != nil {
+		t.Fatalf("trigger fleet sync: %v", err)
+	}
+
+	// Wait for the fleet controller to process the presence event.
+	// The fleet controller publishes a FleetPresenceChanged notification
+	// to the fleet room when it detects a presence state transition.
+	presenceChanged := waitForNotification[fleetschema.FleetPresenceChangedMessage](
+		t, &presenceWatch, fleetschema.MsgTypeFleetPresenceChanged, fc.UserID,
+		func(message fleetschema.FleetPresenceChangedMessage) bool {
+			return message.Machine == machine.Name && message.Current == "offline"
+		}, "presence changed to offline for "+machine.Name)
+
+	t.Logf("fleet controller received presence offline (previous=%q)", presenceChanged.Previous)
+
+	// Query machine-health. The fleet controller has processed the
+	// presence event (the notification proves it), so the model
+	// reflects the updated state.
+	var afterHealth fleetMachineHealthResponse
+	if err := authClient.Call(t.Context(), "machine-health",
+		map[string]any{"machine": machine.Name}, &afterHealth); err != nil {
+		t.Fatalf("machine-health (after presence offline): %v", err)
+	}
+
+	afterEntry := afterHealth.Machines[0]
+	if afterEntry.PresenceState != "offline" {
+		t.Errorf("presence state = %q, want %q", afterEntry.PresenceState, "offline")
+	}
+	// Health should be "suspect": the heartbeat is still fresh (the daemon
+	// just exited), but presence reported offline, so checkMachineHealth
+	// escalated from "online" to "suspect" via the presence fast-path.
+	if afterEntry.HealthState != "suspect" {
+		t.Errorf("health state = %q, want %q (expected presence-based suspect escalation)", afterEntry.HealthState, "suspect")
+	}
+
+	t.Log("fleet controller: presence offline, health escalated to suspect")
 }

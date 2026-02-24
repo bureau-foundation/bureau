@@ -547,6 +547,7 @@ type machineHealthResponse struct {
 type machineHealthEntry struct {
 	Localpart        string `cbor:"localpart"`
 	HealthState      string `cbor:"health_state"`
+	PresenceState    string `cbor:"presence_state"`
 	LastHeartbeat    string `cbor:"last_heartbeat"`
 	StalenessSeconds int    `cbor:"staleness_seconds"`
 }
@@ -593,8 +594,9 @@ func (fc *FleetController) handleMachineHealth(ctx context.Context, token *servi
 // buildHealthEntry constructs a machineHealthEntry from a machineState.
 func buildHealthEntry(localpart string, machine *machineState, now time.Time) machineHealthEntry {
 	entry := machineHealthEntry{
-		Localpart:   localpart,
-		HealthState: machine.healthState,
+		Localpart:     localpart,
+		HealthState:   machine.healthState,
+		PresenceState: machine.presenceState,
 	}
 	if entry.HealthState == "" {
 		entry.HealthState = "unknown"

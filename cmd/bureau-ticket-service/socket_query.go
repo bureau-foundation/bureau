@@ -813,10 +813,11 @@ func presenceRank(presence string) int {
 // (online first, then unavailable, then offline/unknown), with
 // alphabetical ordering by display name within each group.
 //
-// This handler runs under the read lock. The GetRoomMembers HTTP call
-// runs while the lock is held — the same pattern mutation handlers use
-// with the write lock during SendStateEvent calls.
-func (ts *TicketService) handleListMembers(ctx context.Context, token *servicetoken.Token, raw []byte) (any, error) {
+// Membership data comes from the in-memory membership index
+// (membersByRoom), maintained incrementally from m.room.member
+// state events via /sync. This avoids synchronous HTTP calls to
+// the homeserver while the read lock is held.
+func (ts *TicketService) handleListMembers(_ context.Context, token *servicetoken.Token, raw []byte) (any, error) {
 	if err := requireGrant(token, "ticket/list-members"); err != nil {
 		return nil, err
 	}
@@ -831,22 +832,17 @@ func (ts *TicketService) handleListMembers(ctx context.Context, token *serviceto
 		return nil, err
 	}
 
-	members, err := ts.session.GetRoomMembers(ctx, roomID)
-	if err != nil {
-		return nil, fmt.Errorf("get room members: %w", err)
-	}
-
-	// Filter to joined members and enrich with presence state.
+	// Build member list from the in-memory membership index,
+	// enriched with presence state. Only joined members are stored
+	// in membersByRoom (leave/ban events remove them).
+	members := ts.membersByRoom[roomID]
 	result := make([]memberInfo, 0, len(members))
-	for _, member := range members {
-		if member.Membership != "join" {
-			continue
-		}
+	for userID, member := range members {
 		info := memberInfo{
-			UserID:      member.UserID,
+			UserID:      userID,
 			DisplayName: member.DisplayName,
 		}
-		if presence, exists := ts.presence[member.UserID]; exists {
+		if presence, exists := ts.presence[userID]; exists {
 			info.Presence = presence.Presence
 			info.StatusMsg = presence.StatusMsg
 			info.CurrentlyActive = presence.CurrentlyActive

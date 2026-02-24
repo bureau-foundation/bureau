@@ -9,6 +9,7 @@ import (
 	"fmt"
 	"io"
 	"log/slog"
+	"strings"
 	"sync"
 	"testing"
 	"time"
@@ -16,7 +17,9 @@ import (
 	"github.com/bureau-foundation/bureau/lib/clock"
 	"github.com/bureau-foundation/bureau/lib/ref"
 	"github.com/bureau-foundation/bureau/lib/schema"
+	"github.com/bureau-foundation/bureau/lib/schema/stewardship"
 	"github.com/bureau-foundation/bureau/lib/schema/ticket"
+	"github.com/bureau-foundation/bureau/lib/stewardshipindex"
 	"github.com/bureau-foundation/bureau/lib/ticketindex"
 	"github.com/bureau-foundation/bureau/messaging"
 )
@@ -36,11 +39,13 @@ func testRoomID(raw string) ref.RoomID {
 // make network calls (leave handling, tombstone detection, etc.).
 func newTestService() *TicketService {
 	return &TicketService{
-		clock:       clock.Real(),
-		startedAt:   time.Date(2026, 1, 1, 12, 0, 0, 0, time.UTC),
-		rooms:       make(map[ref.RoomID]*roomState),
-		subscribers: make(map[ref.RoomID][]*subscriber),
-		logger:      slog.New(slog.NewTextHandler(io.Discard, nil)),
+		clock:            clock.Real(),
+		startedAt:        time.Date(2026, 1, 1, 12, 0, 0, 0, time.UTC),
+		rooms:            make(map[ref.RoomID]*roomState),
+		membersByRoom:    make(map[ref.RoomID]map[ref.UserID]roomMember),
+		stewardshipIndex: stewardshipindex.NewIndex(),
+		subscribers:      make(map[ref.RoomID][]*subscriber),
+		logger:           slog.New(slog.NewTextHandler(io.Discard, nil)),
 	}
 }
 
@@ -742,4 +747,503 @@ type fakeWriterForEchoTest struct {
 
 func (f *fakeWriterForEchoTest) SendStateEvent(_ context.Context, _ ref.RoomID, _ ref.EventType, _ string, _ any) (ref.EventID, error) {
 	return f.nextEventID, nil
+}
+
+// --- Sync filter tests ---
+
+func TestSyncFilterIncludesStewardshipAndMember(t *testing.T) {
+	filter := syncFilter
+	if !strings.Contains(filter, schema.EventTypeStewardship.String()) {
+		t.Errorf("sync filter should include %s", schema.EventTypeStewardship)
+	}
+	if !strings.Contains(filter, schema.MatrixEventTypeRoomMember.String()) {
+		t.Errorf("sync filter should include %s", schema.MatrixEventTypeRoomMember)
+	}
+}
+
+// --- Member indexing tests ---
+
+func testUserID(raw string) ref.UserID {
+	userID, err := ref.ParseUserID(raw)
+	if err != nil {
+		panic(fmt.Sprintf("testUserID(%q): %v", raw, err))
+	}
+	return userID
+}
+
+func TestIndexMemberEventJoin(t *testing.T) {
+	ts := newTestService()
+	roomID := testRoomID("!room:local")
+
+	ts.indexMemberEvent(roomID, messaging.Event{
+		Type:     schema.MatrixEventTypeRoomMember,
+		StateKey: stringPtr("@alice:local"),
+		Content: map[string]any{
+			"membership":  "join",
+			"displayname": "Alice",
+		},
+	})
+
+	members := ts.membersByRoom[roomID]
+	if len(members) != 1 {
+		t.Fatalf("expected 1 member, got %d", len(members))
+	}
+	alice := members[testUserID("@alice:local")]
+	if alice.DisplayName != "Alice" {
+		t.Errorf("display name = %q, want %q", alice.DisplayName, "Alice")
+	}
+}
+
+func TestIndexMemberEventLeave(t *testing.T) {
+	ts := newTestService()
+	roomID := testRoomID("!room:local")
+
+	// Add a member first.
+	ts.indexMemberEvent(roomID, messaging.Event{
+		Type:     schema.MatrixEventTypeRoomMember,
+		StateKey: stringPtr("@alice:local"),
+		Content: map[string]any{
+			"membership":  "join",
+			"displayname": "Alice",
+		},
+	})
+
+	// Leave removes the member.
+	ts.indexMemberEvent(roomID, messaging.Event{
+		Type:     schema.MatrixEventTypeRoomMember,
+		StateKey: stringPtr("@alice:local"),
+		Content: map[string]any{
+			"membership": "leave",
+		},
+	})
+
+	members := ts.membersByRoom[roomID]
+	if len(members) != 0 {
+		t.Fatalf("expected 0 members after leave, got %d", len(members))
+	}
+}
+
+func TestIndexMemberEventBan(t *testing.T) {
+	ts := newTestService()
+	roomID := testRoomID("!room:local")
+
+	ts.indexMemberEvent(roomID, messaging.Event{
+		Type:     schema.MatrixEventTypeRoomMember,
+		StateKey: stringPtr("@alice:local"),
+		Content: map[string]any{
+			"membership":  "join",
+			"displayname": "Alice",
+		},
+	})
+
+	ts.indexMemberEvent(roomID, messaging.Event{
+		Type:     schema.MatrixEventTypeRoomMember,
+		StateKey: stringPtr("@alice:local"),
+		Content: map[string]any{
+			"membership": "ban",
+		},
+	})
+
+	if len(ts.membersByRoom[roomID]) != 0 {
+		t.Fatal("ban should remove the member")
+	}
+}
+
+func TestIndexMemberEventIgnoresInvite(t *testing.T) {
+	ts := newTestService()
+	roomID := testRoomID("!room:local")
+
+	ts.indexMemberEvent(roomID, messaging.Event{
+		Type:     schema.MatrixEventTypeRoomMember,
+		StateKey: stringPtr("@alice:local"),
+		Content: map[string]any{
+			"membership":  "invite",
+			"displayname": "Alice",
+		},
+	})
+
+	if len(ts.membersByRoom[roomID]) != 0 {
+		t.Fatal("invite events should not create member entries")
+	}
+}
+
+func TestIndexMemberEventMissingDisplayName(t *testing.T) {
+	ts := newTestService()
+	roomID := testRoomID("!room:local")
+
+	ts.indexMemberEvent(roomID, messaging.Event{
+		Type:     schema.MatrixEventTypeRoomMember,
+		StateKey: stringPtr("@bot:local"),
+		Content: map[string]any{
+			"membership": "join",
+		},
+	})
+
+	member := ts.membersByRoom[roomID][testUserID("@bot:local")]
+	if member.DisplayName != "" {
+		t.Errorf("display name should be empty, got %q", member.DisplayName)
+	}
+}
+
+func TestIndexMemberEventNilStateKey(t *testing.T) {
+	ts := newTestService()
+	roomID := testRoomID("!room:local")
+
+	// Should not panic.
+	ts.indexMemberEvent(roomID, messaging.Event{
+		Type: schema.MatrixEventTypeRoomMember,
+		Content: map[string]any{
+			"membership":  "join",
+			"displayname": "Ghost",
+		},
+	})
+
+	if len(ts.membersByRoom[roomID]) != 0 {
+		t.Fatal("nil state key should be ignored")
+	}
+}
+
+func TestIndexMemberEventLeaveFromEmptyRoom(t *testing.T) {
+	ts := newTestService()
+	roomID := testRoomID("!room:local")
+
+	// Leave event for a room with no prior joins — should not panic.
+	ts.indexMemberEvent(roomID, messaging.Event{
+		Type:     schema.MatrixEventTypeRoomMember,
+		StateKey: stringPtr("@alice:local"),
+		Content: map[string]any{
+			"membership": "leave",
+		},
+	})
+}
+
+// --- Stewardship indexing tests ---
+
+func makeStewardshipContentMap(t *testing.T, patterns ...string) map[string]any {
+	t.Helper()
+	content := stewardship.StewardshipContent{
+		Version:          stewardship.StewardshipContentVersion,
+		ResourcePatterns: patterns,
+		Tiers: []stewardship.StewardshipTier{
+			{
+				Principals: []string{"iree/amdgpu/pm:bureau.local"},
+				Escalation: "immediate",
+			},
+		},
+	}
+	return toContentMap(t, content)
+}
+
+func TestIndexStewardshipEventPut(t *testing.T) {
+	ts := newTestService()
+	roomID := testRoomID("!room:local")
+
+	ts.indexStewardshipEvent(roomID, messaging.Event{
+		Type:     schema.EventTypeStewardship,
+		StateKey: stringPtr("fleet/gpu"),
+		Content:  makeStewardshipContentMap(t, "fleet/gpu/**"),
+	})
+
+	if ts.stewardshipIndex.Len() != 1 {
+		t.Fatalf("stewardship index length = %d, want 1", ts.stewardshipIndex.Len())
+	}
+
+	matches := ts.stewardshipIndex.Resolve([]string{"fleet/gpu/a100"})
+	if len(matches) != 1 {
+		t.Fatalf("resolve: got %d matches, want 1", len(matches))
+	}
+}
+
+func TestIndexStewardshipEventRemoveOnEmpty(t *testing.T) {
+	ts := newTestService()
+	roomID := testRoomID("!room:local")
+
+	// Add a declaration.
+	ts.indexStewardshipEvent(roomID, messaging.Event{
+		Type:     schema.EventTypeStewardship,
+		StateKey: stringPtr("fleet/gpu"),
+		Content:  makeStewardshipContentMap(t, "fleet/gpu/**"),
+	})
+
+	// Empty content removes it.
+	ts.indexStewardshipEvent(roomID, messaging.Event{
+		Type:     schema.EventTypeStewardship,
+		StateKey: stringPtr("fleet/gpu"),
+		Content:  map[string]any{},
+	})
+
+	if ts.stewardshipIndex.Len() != 0 {
+		t.Fatalf("stewardship index length = %d, want 0 after removal", ts.stewardshipIndex.Len())
+	}
+}
+
+func TestIndexStewardshipEventNilStateKey(t *testing.T) {
+	ts := newTestService()
+	roomID := testRoomID("!room:local")
+
+	// Should not panic.
+	ts.indexStewardshipEvent(roomID, messaging.Event{
+		Type:    schema.EventTypeStewardship,
+		Content: makeStewardshipContentMap(t, "fleet/**"),
+	})
+
+	if ts.stewardshipIndex.Len() != 0 {
+		t.Fatal("nil state key should be ignored")
+	}
+}
+
+// --- processRoomState member/stewardship indexing tests ---
+
+func TestProcessRoomStateIndexesMembersForNonTicketRoom(t *testing.T) {
+	ts := newTestService()
+	roomID := testRoomID("!notickets:local")
+
+	// Room with member events but no ticket_config.
+	stateEvents := []messaging.Event{
+		{
+			Type:     schema.MatrixEventTypeRoomMember,
+			StateKey: stringPtr("@alice:local"),
+			Content: map[string]any{
+				"membership":  "join",
+				"displayname": "Alice",
+			},
+		},
+		{
+			Type:     schema.MatrixEventTypeRoomMember,
+			StateKey: stringPtr("@bob:local"),
+			Content: map[string]any{
+				"membership":  "join",
+				"displayname": "Bob",
+			},
+		},
+	}
+
+	count := ts.processRoomState(context.Background(), roomID, stateEvents, nil)
+
+	// No tickets (no config).
+	if count != 0 {
+		t.Fatalf("ticket count = %d, want 0 (no ticket config)", count)
+	}
+	if _, tracked := ts.rooms[roomID]; tracked {
+		t.Fatal("room should not be in ts.rooms (no ticket config)")
+	}
+
+	// But members should be indexed.
+	members := ts.membersByRoom[roomID]
+	if len(members) != 2 {
+		t.Fatalf("expected 2 members, got %d", len(members))
+	}
+}
+
+func TestProcessRoomStateIndexesStewardshipForNonTicketRoom(t *testing.T) {
+	ts := newTestService()
+	roomID := testRoomID("!notickets:local")
+
+	stateEvents := []messaging.Event{
+		{
+			Type:     schema.EventTypeStewardship,
+			StateKey: stringPtr("fleet/gpu"),
+			Content:  makeStewardshipContentMap(t, "fleet/gpu/**"),
+		},
+	}
+
+	count := ts.processRoomState(context.Background(), roomID, stateEvents, nil)
+
+	if count != 0 {
+		t.Fatalf("ticket count = %d, want 0 (no ticket config)", count)
+	}
+	if ts.stewardshipIndex.Len() != 1 {
+		t.Fatalf("stewardship declarations = %d, want 1", ts.stewardshipIndex.Len())
+	}
+}
+
+func TestProcessRoomStateSkipsMembersForTombstonedRoom(t *testing.T) {
+	ts := newTestService()
+	roomID := testRoomID("!doomed:local")
+
+	stateEvents := []messaging.Event{
+		{
+			Type:     schema.MatrixEventTypeRoomMember,
+			StateKey: stringPtr("@alice:local"),
+			Content: map[string]any{
+				"membership":  "join",
+				"displayname": "Alice",
+			},
+		},
+		{
+			Type:    schema.MatrixEventTypeTombstone,
+			Content: map[string]any{"replacement_room": "!new:local"},
+		},
+	}
+
+	count := ts.processRoomState(context.Background(), roomID, stateEvents, nil)
+
+	if count != 0 {
+		t.Fatalf("ticket count = %d, want 0", count)
+	}
+	if len(ts.membersByRoom[roomID]) != 0 {
+		t.Fatal("tombstoned room should not have indexed members")
+	}
+}
+
+func TestProcessRoomStateSkipsStewardshipForTombstonedRoom(t *testing.T) {
+	ts := newTestService()
+	roomID := testRoomID("!doomed:local")
+
+	stateEvents := []messaging.Event{
+		{
+			Type:     schema.EventTypeStewardship,
+			StateKey: stringPtr("fleet/gpu"),
+			Content:  makeStewardshipContentMap(t, "fleet/gpu/**"),
+		},
+		{
+			Type:    schema.MatrixEventTypeTombstone,
+			Content: map[string]any{"replacement_room": "!new:local"},
+		},
+	}
+
+	count := ts.processRoomState(context.Background(), roomID, stateEvents, nil)
+
+	if count != 0 {
+		t.Fatalf("ticket count = %d, want 0", count)
+	}
+	if ts.stewardshipIndex.Len() != 0 {
+		t.Fatal("tombstoned room should not have stewardship declarations")
+	}
+}
+
+// --- handleSync leave cleanup tests ---
+
+func TestHandleSyncLeaveCleansMembersAndStewardship(t *testing.T) {
+	ts := newTestService()
+	roomID := testRoomID("!leaving:local")
+
+	// Pre-populate member and stewardship data (non-ticket room).
+	ts.membersByRoom[roomID] = map[ref.UserID]roomMember{
+		testUserID("@alice:local"): {DisplayName: "Alice"},
+	}
+	ts.stewardshipIndex.Put(roomID, "fleet/gpu", stewardship.StewardshipContent{
+		Version:          stewardship.StewardshipContentVersion,
+		ResourcePatterns: []string{"fleet/gpu/**"},
+		Tiers: []stewardship.StewardshipTier{
+			{Principals: []string{"pm:bureau.local"}, Escalation: "immediate"},
+		},
+	})
+
+	response := &messaging.SyncResponse{
+		Rooms: messaging.RoomsSection{
+			Leave: map[ref.RoomID]messaging.LeftRoom{
+				roomID: {},
+			},
+		},
+	}
+
+	ts.handleSync(context.Background(), response)
+
+	if _, exists := ts.membersByRoom[roomID]; exists {
+		t.Fatal("members should have been cleaned up after leave")
+	}
+	if ts.stewardshipIndex.Len() != 0 {
+		t.Fatalf("stewardship declarations = %d, want 0 after leave", ts.stewardshipIndex.Len())
+	}
+}
+
+// --- handleRoomTombstone cleanup tests ---
+
+func TestHandleRoomTombstoneCleansMembersAndStewardship(t *testing.T) {
+	ts := newTestService()
+	roomID := testRoomID("!doomed:local")
+
+	// Pre-populate member and stewardship data.
+	ts.membersByRoom[roomID] = map[ref.UserID]roomMember{
+		testUserID("@alice:local"): {DisplayName: "Alice"},
+	}
+	ts.stewardshipIndex.Put(roomID, "fleet/gpu", stewardship.StewardshipContent{
+		Version:          stewardship.StewardshipContentVersion,
+		ResourcePatterns: []string{"fleet/gpu/**"},
+		Tiers: []stewardship.StewardshipTier{
+			{Principals: []string{"pm:bureau.local"}, Escalation: "immediate"},
+		},
+	})
+
+	event := messaging.Event{
+		Type: schema.MatrixEventTypeTombstone,
+		Content: map[string]any{
+			"replacement_room": "!new:local",
+		},
+	}
+
+	ts.handleRoomTombstone(roomID, event)
+
+	if _, exists := ts.membersByRoom[roomID]; exists {
+		t.Fatal("members should have been cleaned up after tombstone")
+	}
+	if ts.stewardshipIndex.Len() != 0 {
+		t.Fatalf("stewardship declarations = %d, want 0 after tombstone", ts.stewardshipIndex.Len())
+	}
+}
+
+func TestHandleRoomTombstoneCleansMembersEvenForUntrackedRoom(t *testing.T) {
+	ts := newTestService()
+	roomID := testRoomID("!untracked:local")
+
+	// Room has members but no ticket management.
+	ts.membersByRoom[roomID] = map[ref.UserID]roomMember{
+		testUserID("@alice:local"): {DisplayName: "Alice"},
+	}
+
+	event := messaging.Event{
+		Type: schema.MatrixEventTypeTombstone,
+		Content: map[string]any{
+			"replacement_room": "!new:local",
+		},
+	}
+
+	ts.handleRoomTombstone(roomID, event)
+
+	if _, exists := ts.membersByRoom[roomID]; exists {
+		t.Fatal("members should have been cleaned up even for untracked room")
+	}
+}
+
+// --- processRoomSync member/stewardship indexing tests ---
+
+func TestProcessRoomSyncIndexesMembersAndStewardship(t *testing.T) {
+	ts := newTestService()
+	roomID := testRoomID("!room:local")
+
+	room := messaging.JoinedRoom{
+		State: messaging.StateSection{
+			Events: []messaging.Event{
+				{
+					Type:     schema.MatrixEventTypeRoomMember,
+					StateKey: stringPtr("@alice:local"),
+					Content: map[string]any{
+						"membership":  "join",
+						"displayname": "Alice",
+					},
+				},
+				{
+					Type:     schema.EventTypeStewardship,
+					StateKey: stringPtr("fleet/gpu"),
+					Content:  makeStewardshipContentMap(t, "fleet/gpu/**"),
+				},
+			},
+		},
+	}
+
+	ts.processRoomSync(context.Background(), roomID, room)
+
+	// Room is not ticket-configured, so no ticket state.
+	if _, tracked := ts.rooms[roomID]; tracked {
+		t.Fatal("room should not be tracked (no ticket config)")
+	}
+
+	// But members and stewardship should be indexed.
+	if len(ts.membersByRoom[roomID]) != 1 {
+		t.Fatalf("expected 1 member, got %d", len(ts.membersByRoom[roomID]))
+	}
+	if ts.stewardshipIndex.Len() != 1 {
+		t.Fatalf("stewardship declarations = %d, want 1", ts.stewardshipIndex.Len())
+	}
 }

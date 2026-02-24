@@ -9,6 +9,7 @@ import (
 
 	"github.com/bureau-foundation/bureau/lib/ref"
 	"github.com/bureau-foundation/bureau/lib/schema"
+	"github.com/bureau-foundation/bureau/lib/schema/stewardship"
 	"github.com/bureau-foundation/bureau/lib/schema/ticket"
 	"github.com/bureau-foundation/bureau/lib/service"
 	"github.com/bureau-foundation/bureau/lib/ticketindex"
@@ -36,7 +37,9 @@ func buildSyncFilter() string {
 		schema.EventTypeTicket,
 		schema.EventTypeTicketConfig,
 		schema.EventTypePipelineResult,
+		schema.EventTypeStewardship,
 		schema.MatrixEventTypeTombstone,
+		schema.MatrixEventTypeRoomMember,
 	}
 
 	// Timeline includes the same state event types (state events can
@@ -109,6 +112,102 @@ type roomState struct {
 	alias string
 }
 
+// roomMember stores the display name of a joined room member. Used
+// by the membership index (membersByRoom on TicketService) to serve
+// list-members queries without synchronous HTTP calls to the
+// homeserver.
+type roomMember struct {
+	DisplayName string
+}
+
+// indexMemberEvent processes an m.room.member state event and updates
+// the in-memory membership index. Join events add/update the member
+// entry; leave and ban events remove it. Other membership states
+// (invite, knock) are ignored — only currently-joined members are
+// tracked.
+//
+// Called for ALL rooms (not just ticket-configured rooms) so that
+// list-members queries have complete membership data.
+func (ts *TicketService) indexMemberEvent(roomID ref.RoomID, event messaging.Event) {
+	if event.StateKey == nil {
+		return
+	}
+	userID, err := ref.ParseUserID(*event.StateKey)
+	if err != nil {
+		// Not a valid user ID (shouldn't happen for real member
+		// events, but be defensive).
+		return
+	}
+
+	membership, _ := event.Content["membership"].(string)
+	switch membership {
+	case "join":
+		displayName, _ := event.Content["displayname"].(string)
+		if ts.membersByRoom[roomID] == nil {
+			ts.membersByRoom[roomID] = make(map[ref.UserID]roomMember)
+		}
+		ts.membersByRoom[roomID][userID] = roomMember{
+			DisplayName: displayName,
+		}
+	case "leave", "ban":
+		if members := ts.membersByRoom[roomID]; members != nil {
+			delete(members, userID)
+		}
+	}
+}
+
+// indexStewardshipEvent processes an m.bureau.stewardship state event
+// and updates the in-memory stewardship index. Non-empty content is
+// parsed and stored; empty content (redacted/removed declaration)
+// triggers removal.
+//
+// Called for ALL rooms (not just ticket-configured rooms) because
+// stewardship declarations in any room can affect tickets in other
+// rooms.
+func (ts *TicketService) indexStewardshipEvent(roomID ref.RoomID, event messaging.Event) {
+	if event.StateKey == nil {
+		return
+	}
+	stateKey := *event.StateKey
+
+	// Empty content means the stewardship declaration was removed.
+	if len(event.Content) == 0 {
+		ts.stewardshipIndex.Remove(roomID, stateKey)
+		return
+	}
+
+	contentJSON, err := json.Marshal(event.Content)
+	if err != nil {
+		ts.logger.Warn("failed to marshal stewardship content",
+			"room_id", roomID,
+			"state_key", stateKey,
+			"error", err,
+		)
+		return
+	}
+
+	var content stewardship.StewardshipContent
+	if err := json.Unmarshal(contentJSON, &content); err != nil {
+		ts.logger.Warn("failed to parse stewardship content",
+			"room_id", roomID,
+			"state_key", stateKey,
+			"error", err,
+		)
+		return
+	}
+
+	ts.stewardshipIndex.Put(roomID, stateKey, content)
+}
+
+// removeStewardshipForRoom removes all stewardship declarations for
+// the given room from the stewardship index. Called during room leave
+// and tombstone cleanup.
+func (ts *TicketService) removeStewardshipForRoom(roomID ref.RoomID) {
+	for _, declaration := range ts.stewardshipIndex.DeclarationsInRoom(roomID) {
+		ts.stewardshipIndex.Remove(roomID, declaration.StateKey)
+	}
+}
+
 // initialSync performs the first /sync and builds the ticket index
 // from current room state. Returns the since token for incremental
 // sync.
@@ -167,6 +266,8 @@ func (ts *TicketService) initialSync(ctx context.Context) (string, error) {
 	ts.logger.Info("ticket index built",
 		"ticketed_rooms", len(ts.rooms),
 		"total_tickets", totalTickets,
+		"rooms_with_members", len(ts.membersByRoom),
+		"stewardship_declarations", ts.stewardshipIndex.Len(),
 	)
 
 	return sinceToken, nil
@@ -174,15 +275,16 @@ func (ts *TicketService) initialSync(ctx context.Context) (string, error) {
 
 // processRoomState examines state and timeline events from a room to
 // determine if it has ticket management enabled and, if so, indexes
-// all ticket events. Returns the number of tickets indexed.
+// all ticket events. Also indexes member and stewardship events for
+// all non-tombstoned rooms regardless of ticket configuration.
+// Returns the number of tickets indexed.
 //
 // Called during initial sync for each joined room and can be called
 // when the service joins a new room during incremental sync.
 func (ts *TicketService) processRoomState(ctx context.Context, roomID ref.RoomID, stateEvents, timelineEvents []messaging.Event) int {
-	// First pass: check for tombstone and look for ticket_config to
-	// determine if this room has ticket management enabled. Check
-	// both state and timeline events (timeline events with a
-	// state_key are state changes).
+	// Pass 1: detect tombstone and ticket_config. Check both state
+	// and timeline events (timeline events with a state_key are
+	// state changes).
 	var config *ticket.TicketConfigContent
 	var tombstoned bool
 	for _, event := range stateEvents {
@@ -202,9 +304,35 @@ func (ts *TicketService) processRoomState(ctx context.Context, roomID ref.RoomID
 		}
 	}
 
-	// Skip tombstoned rooms — they are being replaced and should
-	// not be tracked. Also skip rooms without ticket management.
-	if tombstoned || config == nil {
+	// Skip tombstoned rooms entirely — they are being replaced.
+	if tombstoned {
+		return 0
+	}
+
+	// Pass 2: index member and stewardship events for all
+	// non-tombstoned rooms. These indexes are global: stewardship
+	// declarations in any room can affect tickets in other rooms,
+	// and the membership index serves list-members queries without
+	// synchronous HTTP calls.
+	for _, event := range stateEvents {
+		if event.Type == schema.MatrixEventTypeRoomMember && event.StateKey != nil {
+			ts.indexMemberEvent(roomID, event)
+		}
+		if event.Type == schema.EventTypeStewardship && event.StateKey != nil {
+			ts.indexStewardshipEvent(roomID, event)
+		}
+	}
+	for _, event := range timelineEvents {
+		if event.Type == schema.MatrixEventTypeRoomMember && event.StateKey != nil {
+			ts.indexMemberEvent(roomID, event)
+		}
+		if event.Type == schema.EventTypeStewardship && event.StateKey != nil {
+			ts.indexStewardshipEvent(roomID, event)
+		}
+	}
+
+	// Skip rooms without ticket management.
+	if config == nil {
 		return 0
 	}
 
@@ -222,7 +350,7 @@ func (ts *TicketService) processRoomState(ctx context.Context, roomID ref.RoomID
 		state.config = config
 	}
 
-	// Second pass: index all ticket events.
+	// Pass 3: index all ticket events.
 	ticketCount := 0
 	for _, event := range stateEvents {
 		if event.Type == schema.EventTypeTicket && event.StateKey != nil {
@@ -291,7 +419,13 @@ func (ts *TicketService) handleSync(ctx context.Context, response *messaging.Syn
 	// in the Leave section when the membership transitions away from
 	// "join". Process leaves before joins so that a leave+rejoin in
 	// the same sync batch re-indexes cleanly from the join state.
+	//
+	// Membership and stewardship data is cleaned up for ALL rooms
+	// in Leave, including rooms that were never ticket-configured.
 	for roomID := range response.Rooms.Leave {
+		delete(ts.membersByRoom, roomID)
+		ts.removeStewardshipForRoom(roomID)
+
 		state, exists := ts.rooms[roomID]
 		if !exists {
 			continue
@@ -341,9 +475,17 @@ func (ts *TicketService) processRoomSync(ctx context.Context, roomID ref.RoomID,
 		}
 	}
 
-	// Check for ticket_config changes. A room might be gaining or
-	// losing ticket management.
+	// Index member and stewardship events, and check for
+	// ticket_config changes. Member and stewardship events are
+	// indexed for all rooms; ticket_config determines whether
+	// the room has ticket management.
 	for _, event := range stateEvents {
+		if event.Type == schema.MatrixEventTypeRoomMember && event.StateKey != nil {
+			ts.indexMemberEvent(roomID, event)
+		}
+		if event.Type == schema.EventTypeStewardship && event.StateKey != nil {
+			ts.indexStewardshipEvent(roomID, event)
+		}
 		if event.Type == schema.EventTypeTicketConfig {
 			ts.handleTicketConfigChange(ctx, roomID, event)
 		}
@@ -406,6 +548,11 @@ func (ts *TicketService) handleRoomTombstone(roomID ref.RoomID, event messaging.
 			replacementRoom = replacement
 		}
 	}
+
+	// Clean up membership and stewardship data regardless of
+	// whether this room had ticket management.
+	delete(ts.membersByRoom, roomID)
+	ts.removeStewardshipForRoom(roomID)
 
 	state, exists := ts.rooms[roomID]
 	if !exists {

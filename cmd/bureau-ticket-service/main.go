@@ -17,6 +17,7 @@ import (
 	"github.com/bureau-foundation/bureau/lib/clock"
 	"github.com/bureau-foundation/bureau/lib/ref"
 	"github.com/bureau-foundation/bureau/lib/service"
+	"github.com/bureau-foundation/bureau/lib/stewardshipindex"
 	"github.com/bureau-foundation/bureau/lib/version"
 	"github.com/bureau-foundation/bureau/messaging"
 )
@@ -54,22 +55,24 @@ func run() error {
 	defer cleanup()
 
 	ticketService := &TicketService{
-		session:       boot.Session,
-		writer:        boot.Session,
-		resolver:      boot.Session,
-		clock:         boot.Clock,
-		service:       boot.Service,
-		machine:       boot.Machine,
-		serviceRoomID: boot.ServiceRoomID,
-		startedAt:     boot.Clock.Now(),
-		rooms:         make(map[ref.RoomID]*roomState),
-		aliasCache:    make(map[ref.RoomAlias]ref.RoomID),
-		subscribers:   make(map[ref.RoomID][]*subscriber),
-		timerNotify:   make(chan struct{}, 1),
-		serviceType:   "ticket",
-		presence:      make(map[ref.UserID]messaging.PresenceEventContent),
-		capabilities:  capabilities,
-		logger:        boot.Logger,
+		session:          boot.Session,
+		writer:           boot.Session,
+		resolver:         boot.Session,
+		clock:            boot.Clock,
+		service:          boot.Service,
+		machine:          boot.Machine,
+		serviceRoomID:    boot.ServiceRoomID,
+		startedAt:        boot.Clock.Now(),
+		rooms:            make(map[ref.RoomID]*roomState),
+		aliasCache:       make(map[ref.RoomAlias]ref.RoomID),
+		subscribers:      make(map[ref.RoomID][]*subscriber),
+		timerNotify:      make(chan struct{}, 1),
+		serviceType:      "ticket",
+		membersByRoom:    make(map[ref.RoomID]map[ref.UserID]roomMember),
+		stewardshipIndex: stewardshipindex.NewIndex(),
+		presence:         make(map[ref.UserID]messaging.PresenceEventContent),
+		capabilities:     capabilities,
+		logger:           boot.Logger,
 	}
 
 	// Perform initial /sync to build the ticket index.
@@ -183,6 +186,22 @@ type TicketService struct {
 	// add/remove, write lock for notify since it may remove
 	// disconnected subscribers).
 	subscribers map[ref.RoomID][]*subscriber
+
+	// membersByRoom tracks joined members for each room the service
+	// has joined. Maintained incrementally from m.room.member state
+	// events via /sync. Provides room membership for list-members
+	// queries without synchronous HTTP calls to the homeserver.
+	// Indexed for ALL rooms, not just ticket-configured rooms.
+	// Protected by mu.
+	membersByRoom map[ref.RoomID]map[ref.UserID]roomMember
+
+	// stewardshipIndex resolves ticket affects entries against
+	// stewardship declarations across all rooms. Maintained
+	// incrementally from m.bureau.stewardship state events via /sync.
+	// Indexed for ALL rooms because stewardship declarations in any
+	// room can affect tickets in other rooms.
+	// Protected by mu.
+	stewardshipIndex *stewardshipindex.Index
 
 	// presence caches the latest m.presence event content for each
 	// user, populated from the /sync presence section. Used by

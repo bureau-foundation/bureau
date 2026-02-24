@@ -8,6 +8,7 @@ import (
 	"errors"
 	"fmt"
 	"sort"
+	"strings"
 	"time"
 
 	"github.com/bureau-foundation/bureau/lib/codec"
@@ -105,16 +106,25 @@ type entryWithRoom struct {
 	ID      string               `json:"id"`
 	Room    string               `json:"room,omitempty"`
 	Content ticket.TicketContent `json:"content"`
+
+	// Stewardship gate summary — populated when the ticket has
+	// stewardship review gates (gates with "stewardship:" prefix).
+	// Omitted when no stewardship gates exist.
+	StewardshipGates     int `json:"stewardship_gates,omitempty"`
+	StewardshipSatisfied int `json:"stewardship_satisfied,omitempty"`
 }
 
 // entriesFromIndex converts index entries to the wire format.
 func entriesFromIndex(entries []ticketindex.Entry, room string) []entryWithRoom {
 	result := make([]entryWithRoom, len(entries))
 	for i, entry := range entries {
+		gateCount, gateSatisfied := computeStewardshipSummary(entry.Content)
 		result[i] = entryWithRoom{
-			ID:      entry.ID,
-			Room:    room,
-			Content: entry.Content,
+			ID:                   entry.ID,
+			Room:                 room,
+			Content:              entry.Content,
+			StewardshipGates:     gateCount,
+			StewardshipSatisfied: gateSatisfied,
 		}
 	}
 	return result
@@ -131,7 +141,8 @@ type searchEntryResponse struct {
 
 // showResponse is the full detail response for a single ticket.
 // It embeds the schema content directly and adds computed fields
-// from the dependency graph, child progress, and scoring.
+// from the dependency graph, child progress, scoring, and
+// stewardship governance context.
 type showResponse struct {
 	ID      string               `json:"id"`
 	Room    string               `json:"room"`
@@ -145,6 +156,12 @@ type showResponse struct {
 	// Score holds the ranking dimensions for an open ticket. Nil
 	// for closed tickets where scoring is not meaningful.
 	Score *ticketindex.TicketScore `json:"score,omitempty"`
+
+	// Stewardship holds the governance context for this ticket:
+	// which declarations matched, and per-gate tier approval
+	// progress. Nil when the ticket has no Affects or no matching
+	// declarations.
+	Stewardship *stewardshipContext `json:"stewardship,omitempty"`
 }
 
 // childrenResponse includes the children list and progress summary.
@@ -197,6 +214,165 @@ type upcomingGateEntry struct {
 
 	// Computed fields.
 	UntilFire string `json:"until_fire"`
+}
+
+// --- Stewardship context types ---
+
+// stewardshipContext describes the governance context for a ticket:
+// which stewardship declarations matched its Affects field, and the
+// per-gate tier approval progress for each stewardship review gate.
+type stewardshipContext struct {
+	// Declarations lists the stewardship declarations that matched
+	// the ticket's Affects field. Reuses stewardshipMatchEntry from
+	// the stewardship-resolve action for consistent wire format.
+	Declarations []stewardshipMatchEntry `json:"declarations,omitempty"`
+
+	// Gates summarizes the approval progress for each stewardship
+	// review gate on the ticket. Each gate has per-tier counts of
+	// total reviewers, approvals, and whether the tier is satisfied.
+	Gates []stewardshipGateProgress `json:"gates,omitempty"`
+}
+
+// stewardshipGateProgress describes the approval progress for a
+// single stewardship review gate.
+type stewardshipGateProgress struct {
+	GateID string                `json:"gate_id"`
+	Status string                `json:"status"`
+	Tiers  []tierApprovalSummary `json:"tiers,omitempty"`
+}
+
+// tierApprovalSummary describes the approval state of a single tier
+// within a stewardship review gate.
+type tierApprovalSummary struct {
+	Tier      int  `json:"tier"`
+	Total     int  `json:"total"`
+	Approved  int  `json:"approved"`
+	Threshold *int `json:"threshold,omitempty"`
+	Satisfied bool `json:"satisfied"`
+}
+
+// computeStewardshipContext builds the full stewardship governance
+// context for a ticket. Re-resolves Affects against the stewardship
+// index (to show which declarations currently match) and computes
+// per-gate tier approval status from the ticket's Review data.
+func (ts *TicketService) computeStewardshipContext(roomID ref.RoomID, content ticket.TicketContent) *stewardshipContext {
+	if len(content.Affects) == 0 {
+		return nil
+	}
+
+	// Re-resolve declarations against current stewardship index.
+	// Scoped to the ticket's room — stewardship declarations are
+	// per-room state events, and a ticket's governance comes from
+	// declarations in the same room.
+	matches := ts.stewardshipIndex.ResolveForRoom(roomID, content.Affects)
+
+	// Compute per-gate tier progress for stewardship review gates.
+	var gateProgress []stewardshipGateProgress
+	for _, gate := range content.Gates {
+		if gate.Type != "review" || !strings.HasPrefix(gate.ID, "stewardship:") {
+			continue
+		}
+		progress := stewardshipGateProgress{
+			GateID: gate.ID,
+			Status: gate.Status,
+		}
+		if content.Review != nil {
+			progress.Tiers = computeTierProgress(content.Review)
+		}
+		gateProgress = append(gateProgress, progress)
+	}
+
+	if len(matches) == 0 && len(gateProgress) == 0 {
+		return nil
+	}
+
+	result := &stewardshipContext{
+		Gates: gateProgress,
+	}
+
+	for _, match := range matches {
+		result.Declarations = append(result.Declarations, stewardshipMatchEntry{
+			RoomID:          match.Declaration.RoomID,
+			StateKey:        match.Declaration.StateKey,
+			OverlapPolicy:   match.Declaration.Content.OverlapPolicy,
+			MatchedResource: match.MatchedResource,
+			MatchedPattern:  match.MatchedPattern,
+			Description:     match.Declaration.Content.Description,
+		})
+	}
+
+	return result
+}
+
+// computeTierProgress builds per-tier approval summaries from the
+// ticket's Review data. Groups reviewers by Tier, counts approvals,
+// and checks each tier's threshold.
+func computeTierProgress(review *ticket.TicketReview) []tierApprovalSummary {
+	// Collect distinct tiers from thresholds and reviewers.
+	tierSet := make(map[int]struct{})
+	thresholdByTier := make(map[int]*int)
+	for _, threshold := range review.TierThresholds {
+		tierSet[threshold.Tier] = struct{}{}
+		thresholdByTier[threshold.Tier] = threshold.Threshold
+	}
+	for _, reviewer := range review.Reviewers {
+		tierSet[reviewer.Tier] = struct{}{}
+	}
+
+	// Sort tiers for deterministic output.
+	tiers := make([]int, 0, len(tierSet))
+	for tier := range tierSet {
+		tiers = append(tiers, tier)
+	}
+	sort.Ints(tiers)
+
+	// Build per-tier counts.
+	var summaries []tierApprovalSummary
+	for _, tier := range tiers {
+		total := 0
+		approved := 0
+		for _, reviewer := range review.Reviewers {
+			if reviewer.Tier == tier {
+				total++
+				if reviewer.Disposition == "approved" {
+					approved++
+				}
+			}
+		}
+		threshold := thresholdByTier[tier]
+		satisfied := false
+		if total == 0 {
+			satisfied = true
+		} else if threshold == nil {
+			satisfied = approved >= total
+		} else {
+			satisfied = approved >= *threshold
+		}
+		summaries = append(summaries, tierApprovalSummary{
+			Tier:      tier,
+			Total:     total,
+			Approved:  approved,
+			Threshold: threshold,
+			Satisfied: satisfied,
+		})
+	}
+	return summaries
+}
+
+// computeStewardshipSummary counts stewardship gates and how many
+// are satisfied. Returns (gateCount, satisfiedCount).
+func computeStewardshipSummary(content ticket.TicketContent) (int, int) {
+	gateCount := 0
+	satisfied := 0
+	for _, gate := range content.Gates {
+		if strings.HasPrefix(gate.ID, "stewardship:") {
+			gateCount++
+			if gate.Status == "satisfied" {
+				satisfied++
+			}
+		}
+	}
+	return gateCount, satisfied
 }
 
 // --- Query helpers ---
@@ -364,6 +540,7 @@ func (ts *TicketService) handleShow(ctx context.Context, token *servicetoken.Tok
 		ChildTotal:  childTotal,
 		ChildClosed: childClosed,
 		Score:       score,
+		Stewardship: ts.computeStewardshipContext(roomID, content),
 	}, nil
 }
 
@@ -452,10 +629,13 @@ func (ts *TicketService) handleGrep(ctx context.Context, token *servicetoken.Tok
 			return nil, err
 		}
 		for _, entry := range entries {
+			gateCount, gateSatisfied := computeStewardshipSummary(entry.Content)
 			allEntries = append(allEntries, entryWithRoom{
-				ID:      entry.ID,
-				Room:    roomID.String(),
-				Content: entry.Content,
+				ID:                   entry.ID,
+				Room:                 roomID.String(),
+				Content:              entry.Content,
+				StewardshipGates:     gateCount,
+				StewardshipSatisfied: gateSatisfied,
 			})
 		}
 	}

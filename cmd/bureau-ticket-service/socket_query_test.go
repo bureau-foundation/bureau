@@ -8,6 +8,7 @@ import (
 	"testing"
 
 	"github.com/bureau-foundation/bureau/lib/ref"
+	"github.com/bureau-foundation/bureau/lib/schema/stewardship"
 	"github.com/bureau-foundation/bureau/lib/schema/ticket"
 	"github.com/bureau-foundation/bureau/lib/ticketindex"
 )
@@ -858,5 +859,285 @@ func TestHandleShowCrossRoom(t *testing.T) {
 	}
 	if result.Content.Title != "deploy service" {
 		t.Errorf("title: got %q, want 'deploy service'", result.Content.Title)
+	}
+}
+
+// --- Stewardship context tests ---
+
+func TestComputeTierProgress(t *testing.T) {
+	threshold := 1
+	review := &ticket.TicketReview{
+		TierThresholds: []ticket.TierThreshold{
+			{Tier: 0, Threshold: &threshold},
+			{Tier: 1, Threshold: nil},
+		},
+		Reviewers: []ticket.ReviewerEntry{
+			{UserID: ref.MustParseUserID("@alice:local"), Tier: 0, Disposition: "approved"},
+			{UserID: ref.MustParseUserID("@bob:local"), Tier: 0, Disposition: "pending"},
+			{UserID: ref.MustParseUserID("@carol:local"), Tier: 1, Disposition: "pending"},
+		},
+	}
+
+	progress := computeTierProgress(review)
+
+	if len(progress) != 2 {
+		t.Fatalf("tier count = %d, want 2", len(progress))
+	}
+
+	// Tier 0: threshold=1, 1 of 2 approved → satisfied.
+	tier0 := progress[0]
+	if tier0.Tier != 0 {
+		t.Errorf("tier[0].Tier = %d, want 0", tier0.Tier)
+	}
+	if tier0.Total != 2 {
+		t.Errorf("tier[0].Total = %d, want 2", tier0.Total)
+	}
+	if tier0.Approved != 1 {
+		t.Errorf("tier[0].Approved = %d, want 1", tier0.Approved)
+	}
+	if tier0.Threshold == nil || *tier0.Threshold != 1 {
+		t.Errorf("tier[0].Threshold = %v, want 1", tier0.Threshold)
+	}
+	if !tier0.Satisfied {
+		t.Error("tier[0] should be satisfied (threshold=1, approved=1)")
+	}
+
+	// Tier 1: threshold=nil (all must approve), 0 of 1 → not satisfied.
+	tier1 := progress[1]
+	if tier1.Tier != 1 {
+		t.Errorf("tier[1].Tier = %d, want 1", tier1.Tier)
+	}
+	if tier1.Total != 1 {
+		t.Errorf("tier[1].Total = %d, want 1", tier1.Total)
+	}
+	if tier1.Approved != 0 {
+		t.Errorf("tier[1].Approved = %d, want 0", tier1.Approved)
+	}
+	if tier1.Threshold != nil {
+		t.Errorf("tier[1].Threshold = %v, want nil", tier1.Threshold)
+	}
+	if tier1.Satisfied {
+		t.Error("tier[1] should not be satisfied (0 of 1 approved)")
+	}
+}
+
+func TestComputeTierProgressEmptyReview(t *testing.T) {
+	review := &ticket.TicketReview{}
+	progress := computeTierProgress(review)
+	if len(progress) != 0 {
+		t.Errorf("empty review should produce 0 tiers, got %d", len(progress))
+	}
+}
+
+func TestComputeStewardshipSummary(t *testing.T) {
+	content := ticket.TicketContent{
+		Gates: []ticket.TicketGate{
+			{ID: "stewardship:fleet/gpu", Type: "review", Status: "satisfied"},
+			{ID: "stewardship:cooperative", Type: "review", Status: "pending"},
+			{ID: "pipeline:ci", Type: "pipeline", Status: "pending"},
+		},
+	}
+
+	gateCount, satisfied := computeStewardshipSummary(content)
+
+	if gateCount != 2 {
+		t.Errorf("gate count = %d, want 2", gateCount)
+	}
+	if satisfied != 1 {
+		t.Errorf("satisfied = %d, want 1", satisfied)
+	}
+}
+
+func TestComputeStewardshipSummaryNoGates(t *testing.T) {
+	content := ticket.TicketContent{
+		Gates: []ticket.TicketGate{
+			{ID: "pipeline:ci", Type: "pipeline", Status: "pending"},
+		},
+	}
+
+	gateCount, satisfied := computeStewardshipSummary(content)
+
+	if gateCount != 0 {
+		t.Errorf("gate count = %d, want 0", gateCount)
+	}
+	if satisfied != 0 {
+		t.Errorf("satisfied = %d, want 0", satisfied)
+	}
+}
+
+func TestHandleShowIncludesStewardshipContext(t *testing.T) {
+	// Create a room with a ticket that has stewardship gates.
+	threshold := 1
+	rooms := map[ref.RoomID]*roomState{
+		testRoomID("!roomS:local"): newTrackedRoom(map[string]ticket.TicketContent{
+			"tkt-s1": {
+				Version:  1,
+				Title:    "GPU quota increase",
+				Status:   "review",
+				Priority: 2,
+				Type:     "task",
+				Affects:  []string{"fleet/gpu/a100"},
+				Gates: []ticket.TicketGate{
+					{ID: "stewardship:fleet/gpu", Type: "review", Status: "pending"},
+				},
+				Review: &ticket.TicketReview{
+					TierThresholds: []ticket.TierThreshold{
+						{Tier: 0, Threshold: &threshold},
+					},
+					Reviewers: []ticket.ReviewerEntry{
+						{UserID: ref.MustParseUserID("@admin:local"), Tier: 0, Disposition: "approved"},
+					},
+				},
+			},
+		}),
+	}
+
+	env := newTestServer(t, rooms, testServerOpts{noWriter: true})
+	defer env.cleanup()
+
+	// Add a stewardship declaration to the index for the room.
+	env.service.stewardshipIndex.Put(
+		testRoomID("!roomS:local"),
+		"fleet/gpu",
+		stewardship.StewardshipContent{
+			Version:          1,
+			ResourcePatterns: []string{"fleet/gpu/**"},
+			GateTypes:        []string{"task"},
+			Description:      "GPU fleet governance",
+			Tiers: []stewardship.StewardshipTier{
+				{Principals: []string{"admin-*:local"}, Threshold: &threshold},
+			},
+		},
+	)
+
+	var result showResponse
+	err := env.client.Call(context.Background(), "show", map[string]any{
+		"ticket": "tkt-s1",
+		"room":   "!roomS:local",
+	}, &result)
+	if err != nil {
+		t.Fatalf("Call: %v", err)
+	}
+
+	if result.Stewardship == nil {
+		t.Fatal("stewardship context is nil, want populated")
+	}
+
+	// Declarations should include the matched declaration.
+	if len(result.Stewardship.Declarations) != 1 {
+		t.Fatalf("declarations count = %d, want 1", len(result.Stewardship.Declarations))
+	}
+	declaration := result.Stewardship.Declarations[0]
+	if declaration.StateKey != "fleet/gpu" {
+		t.Errorf("declaration state_key = %q, want fleet/gpu", declaration.StateKey)
+	}
+	if declaration.MatchedResource != "fleet/gpu/a100" {
+		t.Errorf("matched_resource = %q, want fleet/gpu/a100", declaration.MatchedResource)
+	}
+	if declaration.Description != "GPU fleet governance" {
+		t.Errorf("description = %q, want 'GPU fleet governance'", declaration.Description)
+	}
+
+	// Gates should show tier progress.
+	if len(result.Stewardship.Gates) != 1 {
+		t.Fatalf("gates count = %d, want 1", len(result.Stewardship.Gates))
+	}
+	gate := result.Stewardship.Gates[0]
+	if gate.GateID != "stewardship:fleet/gpu" {
+		t.Errorf("gate_id = %q, want stewardship:fleet/gpu", gate.GateID)
+	}
+	if gate.Status != "pending" {
+		t.Errorf("gate status = %q, want pending", gate.Status)
+	}
+	if len(gate.Tiers) != 1 {
+		t.Fatalf("tier count = %d, want 1", len(gate.Tiers))
+	}
+	if gate.Tiers[0].Approved != 1 || gate.Tiers[0].Total != 1 {
+		t.Errorf("tier[0] approved=%d total=%d, want 1/1",
+			gate.Tiers[0].Approved, gate.Tiers[0].Total)
+	}
+	if !gate.Tiers[0].Satisfied {
+		t.Error("tier[0] should be satisfied (1/1 approved with threshold=1)")
+	}
+}
+
+func TestHandleShowNoStewardshipWithoutAffects(t *testing.T) {
+	// A ticket without Affects should have nil stewardship context.
+	client, cleanup := testServer(t, sampleRooms())
+	defer cleanup()
+
+	var result showResponse
+	err := client.Call(context.Background(), "show", map[string]any{
+		"ticket": "tkt-1",
+		"room":   "!roomA:local",
+	}, &result)
+	if err != nil {
+		t.Fatalf("Call: %v", err)
+	}
+
+	if result.Stewardship != nil {
+		t.Errorf("stewardship should be nil for ticket without affects, got %+v", result.Stewardship)
+	}
+}
+
+func TestListIncludesStewardshipSummary(t *testing.T) {
+	threshold := 1
+	rooms := map[ref.RoomID]*roomState{
+		testRoomID("!roomS:local"): newTrackedRoom(map[string]ticket.TicketContent{
+			"tkt-s1": {
+				Version:  1,
+				Title:    "with stewardship",
+				Status:   "open",
+				Priority: 2,
+				Type:     "task",
+				Affects:  []string{"fleet/gpu/a100"},
+				Gates: []ticket.TicketGate{
+					{ID: "stewardship:fleet/gpu", Type: "review", Status: "satisfied"},
+					{ID: "stewardship:cooperative", Type: "review", Status: "pending"},
+				},
+				Review: &ticket.TicketReview{
+					TierThresholds: []ticket.TierThreshold{
+						{Tier: 0, Threshold: &threshold},
+					},
+					Reviewers: []ticket.ReviewerEntry{
+						{UserID: ref.MustParseUserID("@admin:local"), Tier: 0, Disposition: "approved"},
+					},
+				},
+			},
+			"tkt-s2": {
+				Version:  1,
+				Title:    "without stewardship",
+				Status:   "open",
+				Priority: 2,
+				Type:     "task",
+			},
+		}),
+	}
+
+	client, cleanup := testServer(t, rooms)
+	defer cleanup()
+
+	var results []entryWithRoom
+	err := client.Call(context.Background(), "list", map[string]any{
+		"room": "!roomS:local",
+	}, &results)
+	if err != nil {
+		t.Fatalf("Call: %v", err)
+	}
+
+	for _, entry := range results {
+		switch entry.ID {
+		case "tkt-s1":
+			if entry.StewardshipGates != 2 {
+				t.Errorf("tkt-s1 stewardship_gates = %d, want 2", entry.StewardshipGates)
+			}
+			if entry.StewardshipSatisfied != 1 {
+				t.Errorf("tkt-s1 stewardship_satisfied = %d, want 1", entry.StewardshipSatisfied)
+			}
+		case "tkt-s2":
+			if entry.StewardshipGates != 0 {
+				t.Errorf("tkt-s2 stewardship_gates = %d, want 0", entry.StewardshipGates)
+			}
+		}
 	}
 }

@@ -7,6 +7,13 @@ machines. The barrier to entry is craft, not capital.
 
 **[Build Your Own Workshop — why this exists and what it means](docs/manifesto.md)**
 
+> Bureau is under active development by one person. This repository is
+> a peek into a working workshop, not yet a blueprint for building your
+> own. The code builds, the tests pass, and the system runs — but the
+> path from `git clone` to running your own Bureau doesn't exist yet
+> outside of the author's head. If you're here, you're looking at the
+> shop floor, not the showroom.
+
 ---
 
 Bureau provides isolation, identity, communication, observation, and
@@ -83,33 +90,99 @@ encoding, no translation bugs.
 ## Repository Layout
 
 ```
-sandbox/       Sandbox: bubblewrap namespace isolation
-proxy/         Proxy: credential injection via HTTP on Unix socket
-bridge/        Bridge: TCP-to-Unix socket forwarder for sandboxed HTTP
-transport/     Connectivity: cross-machine WebRTC service routing
-observe/       Observation: PTY relay, ring buffer, tmux integration
-messaging/     Messaging: Matrix client-server API (Client + Session)
+sandbox/       Primitive: bubblewrap namespace isolation
+proxy/         Primitive: credential injection via HTTP on Unix socket
+bridge/        Primitive: TCP-to-Unix socket forwarder for sandboxed HTTP
+transport/     Primitive: cross-machine WebRTC service routing
+observe/       Primitive: PTY relay, ring buffer, tmux integration
+messaging/     Primitive: Matrix client-server API (Client + Session)
+
 lib/           Supporting packages
+  agentdriver/   Agent process runtime (spawning, output parsing, session logging)
+  artifactstore/ CAS engine (BLAKE3, CDC chunking, compression, FUSE mount)
+  authorization/ Grant/denial evaluation for Matrix operations
+  bootstrap/     First-boot homeserver setup helpers
   config/        YAML configuration loading
-  principal/     Localpart validation, Matrix ID construction
-  schema/        Bureau protocol (Matrix state event types)
+  content/       Embedded pipeline definitions and templates
+  credential/    Credential management and provisioning
+  git/           Git worktree operations for workspace lifecycle
+  hwinfo/        Hardware fingerprinting (CPU, GPU, memory)
+  llm/           LLM client abstraction and context management
+  nix/           Nix store path and environment resolution
+  pipelinedef/   JSONC pipeline parsing, variable substitution, validation
+  principal/     Localpart validation, Matrix ID construction, socket paths
+  proxyclient/   HTTP client for proxy Unix sockets
+  schema/        Bureau protocol types (Matrix state event content structs)
+    agent/         Agent session, context, metrics events
+    artifact/      Artifact scope configuration events
+    fleet/         Fleet service, machine, HA lease, alert events
+    observation/   Layout, window, pane events
+    pipeline/      Pipeline definition, step, result events
+    telemetry/     Telemetry data types (spans, metrics, logs)
+    ticket/        Ticket content, gate, note, attachment events
+    workspace/     Workspace state, worktree, project config events
   sealed/        age encryption/decryption for credential bundles
-  secret/        In-memory secret handling
+  secret/        Guarded memory for secret material (zero-on-close)
+  service/       Service registration and discovery
+  templatedef/   Template resolution, inheritance, merge logic
+  ticketindex/   In-memory ticket index (readiness, search, dependencies)
+  ticketui/      Terminal UI components for ticket display
+  tmux/          tmux server/session management
+  toolsearch/    MCP tool discovery and matching
   version/       Build version info
-  watchdog/      Binary update success/failure detection
-  testutil/      Test helpers (socket dirs, runfiles)
+  watchdog/      Binary self-update detection
+
 cmd/           Binaries
-  bureau/              Unified CLI (observe, matrix, dashboard, environment)
-  bureau-launcher/     Privileged: keypair, credentials, sandbox lifecycle
-  bureau-daemon/       Unprivileged: Matrix sync, config, service routing
-  bureau-proxy/        Per-sandbox credential injection
-  bureau-bridge/       TCP-to-Unix socket bridge
-  bureau-sandbox/      Sandbox creation
-  bureau-credentials/  Credential provisioning
-  bureau-proxy-call/   One-shot proxied HTTP request
-deploy/        Deployment (Matrix homeserver, Buildbarn)
-script/        Dev setup (Nix installer, version pins)
+  bureau/                Unified CLI (agent, artifact, credential, environment,
+                         fleet, machine, matrix, mcp, observe, pipeline,
+                         service, template, ticket, workspace)
+  bureau-launcher/       Privileged: keypair, credential decryption, sandbox lifecycle
+  bureau-daemon/         Unprivileged: Matrix sync, config reconciliation, routing
+  bureau-proxy/          Per-sandbox credential injection proxy
+  bureau-bridge/         TCP-to-Unix socket bridge
+  bureau-sandbox/        Sandbox creation
+  bureau-credentials/    Credential provisioning and machine config
+  bureau-observe-relay/  Observation relay (PTY allocation, ring buffer)
+  bureau-agent/          Generic agent wrapper (any LLM backend)
+  bureau-agent-claude/   Claude Code agent wrapper
+  bureau-agent-service/  Agent lifecycle service
+  bureau-artifact-service/ Content-addressable artifact storage service
+  bureau-ticket-service/ Ticket index and query service
+  bureau-fleet-controller/ Multi-machine fleet management
+  bureau-pipeline-executor/ Sandboxed pipeline step sequencing
+  bureau-telemetry-relay/  Per-machine telemetry collection
+  bureau-telemetry-service/ Fleet-wide telemetry aggregation
+  bureau-log-relay/      Raw output capture and CAS storage
+  bureau-proxy-call/     One-shot HTTP request through a proxy socket
+  bureau-state-check/    State consistency validation
+
+integration/   End-to-end tests (real homeserver, full daemon+launcher stack)
+docs/          Documentation and design documents
+deploy/        Deployment (Matrix homeserver, Buildbarn, systemd)
+script/        Dev environment setup (Nix installer, version pins)
 ```
+
+## Design Documents
+
+Many design documents describe the target architecture. Start with the
+core architecture, then read subsystem deep-dives as needed.
+
+See **[docs/design/README.md](docs/design/README.md)** for the full
+reading guide.
+
+**Core**: fundamentals.md (five primitives, design principles),
+architecture.md (runtime topology), information-architecture.md
+(Matrix data model).
+
+**Primitives**: credentials.md, observation.md, pipelines.md, nix.md.
+
+**Services**: tickets.md, artifacts.md, workspace.md, fleet.md,
+authorization.md, stewardship.md, telemetry.md, logging.md,
+agent-context.md.
+
+**Applications**: dev-team.md (self-hosted team structure),
+agent-layering.md (agent runtime integration), forgejo.md (external
+service connectors).
 
 ## Building
 
@@ -126,34 +199,45 @@ After adding or removing Go files:
 bazel run //:gazelle
 ```
 
+Integration tests require Docker (they spin up a real Continuwuity
+homeserver):
+
+```bash
+sg docker -c "bazel test //integration:integration_test"
+```
+
 ## Development Setup
 
 Nix provides the hermetic dev environment. All tools (Go, Bazel,
 gazelle, buildifier, tmux, etc.) come from the Nix dev shell.
 
 ```bash
-script/setup-nix        # install Nix (requires sudo)
+script/setup-nix         # install Nix (requires sudo)
 script/setup-nix --check # verify
 nix develop              # enter dev shell
 ```
 
 ## Status
 
-Bureau is implemented in Go. All packages build and all tests pass.
+Bureau is implemented in Go. All packages build and all tests pass
+(77 unit test targets, 31 integration tests against a real homeserver).
 
-**Working**: sandbox isolation, proxy credential injection, bridge,
-observation (relay, dashboard, layouts), messaging library, launcher
-(IPC, lifecycle, credential decryption, self-update), daemon (Matrix
-sync, config reconciliation, health monitoring, self-update), CLI,
-protocol schema, naming/validation, WebRTC transport, Bazel build,
-Nix packaging, Buildbarn remote execution.
+**Working**: all five primitives (sandbox, proxy, bridge, transport,
+observation), messaging, launcher and daemon (full lifecycle, IPC,
+self-update), CLI with 15 command groups, protocol schema (all event
+types across 8 domains), templates (resolution, inheritance, merge),
+pipelines (definition, executor, thread logging), workspaces (git
+worktrees, setup/teardown pipelines), tickets (service, index, query,
+terminal UI), artifacts (CAS, CDC chunking, FUSE mount), fleet
+controller (multi-machine, health monitoring, service placement),
+telemetry (relay, service, Prometheus integration), agent wrappers
+(Claude, generic), authorization (grants, denials, temporal scoping),
+credentials (age encryption, TPM/keyring), Nix packaging, Buildbarn
+remote execution.
 
-**In progress**: templates (schema done, daemon resolution in progress),
-workspaces (convention defined, commands partial), pipelines (designed,
-executor pending).
-
-**Designed**: real-time channels (audio/video/data), LiveKit SFU, SSH
-certificates with on-demand tunnels.
+**Designed**: real-time channels (audio/video/data via WebRTC),
+service gateways (external service connectors), stewardship
+(governance and review escalation).
 
 ## License
 

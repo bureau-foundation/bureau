@@ -216,7 +216,8 @@ func TestEventCheckpointTriggers(t *testing.T) {
 			tracker.checkpointDelta(context.Background(), agent.CheckpointTurnBoundary)
 		case event.Type == EventTypeSystem &&
 			event.System != nil &&
-			event.System.Subtype == "compact_boundary":
+			(event.System.Subtype == "compact_boundary" ||
+				event.System.Subtype == "microcompact_boundary"):
 			tracker.checkpointDelta(context.Background(), agent.CheckpointCompaction)
 		case event.Type == EventTypeMetric:
 			tracker.checkpointDelta(context.Background(), agent.CheckpointSessionEnd)
@@ -280,6 +281,33 @@ func TestEventCheckpointTriggers(t *testing.T) {
 		t.Fatalf("after turn 3: expected 4 checkpoints, got %d", len(checkpointer.calls))
 	}
 
+	// Microcompaction event — lighter compaction variant, also
+	// triggers a checkpoint with the same compaction trigger.
+	appendAndTrigger(Event{
+		Timestamp: testTimestamp,
+		Type:      EventTypeSystem,
+		System:    &SystemEvent{Subtype: "microcompact_boundary", Metadata: json.RawMessage(`{"trigger":"auto"}`)},
+	})
+
+	// Should have 5 checkpoints (microcompaction).
+	if len(checkpointer.calls) != 5 {
+		t.Fatalf("after microcompaction: expected 5 checkpoints, got %d", len(checkpointer.calls))
+	}
+	if checkpointer.calls[4].Checkpoint != agent.CheckpointCompaction {
+		t.Errorf("checkpoint 5 trigger = %q, want %q", checkpointer.calls[4].Checkpoint, agent.CheckpointCompaction)
+	}
+	if checkpointer.calls[4].MessageCount != 1 {
+		t.Errorf("checkpoint 5 event count = %d, want 1", checkpointer.calls[4].MessageCount)
+	}
+
+	// Turn 4 after microcompaction: response only.
+	appendAndTrigger(Event{Timestamp: testTimestamp, Type: EventTypeResponse, Response: &ResponseEvent{Content: "resuming after microcompaction"}})
+
+	// Should have 6 checkpoints.
+	if len(checkpointer.calls) != 6 {
+		t.Fatalf("after turn 4: expected 6 checkpoints, got %d", len(checkpointer.calls))
+	}
+
 	// Session end: metric event.
 	appendAndTrigger(Event{Timestamp: testTimestamp, Type: EventTypeMetric, Metric: &MetricEvent{
 		InputTokens:  5000,
@@ -288,12 +316,12 @@ func TestEventCheckpointTriggers(t *testing.T) {
 		Status:       "success",
 	}})
 
-	// Should have 5 checkpoints (session end).
-	if len(checkpointer.calls) != 5 {
-		t.Fatalf("after metric: expected 5 checkpoints, got %d", len(checkpointer.calls))
+	// Should have 7 checkpoints (session end).
+	if len(checkpointer.calls) != 7 {
+		t.Fatalf("after metric: expected 7 checkpoints, got %d", len(checkpointer.calls))
 	}
-	if checkpointer.calls[4].Checkpoint != agent.CheckpointSessionEnd {
-		t.Errorf("checkpoint 5 trigger = %q, want %q", checkpointer.calls[4].Checkpoint, agent.CheckpointSessionEnd)
+	if checkpointer.calls[6].Checkpoint != agent.CheckpointSessionEnd {
+		t.Errorf("checkpoint 7 trigger = %q, want %q", checkpointer.calls[6].Checkpoint, agent.CheckpointSessionEnd)
 	}
 
 	// Verify the full parent chain is intact.

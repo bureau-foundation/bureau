@@ -331,7 +331,8 @@ func Run(ctx context.Context, driver Driver, config RunConfig) error {
 					tracker.checkpointDelta(ctx, agent.CheckpointTurnBoundary)
 				case event.Type == EventTypeSystem &&
 					event.System != nil &&
-					event.System.Subtype == "compact_boundary":
+					(event.System.Subtype == "compact_boundary" ||
+						event.System.Subtype == "microcompact_boundary"):
 					tracker.checkpointDelta(ctx, agent.CheckpointCompaction)
 				case event.Type == EventTypeMetric:
 					tracker.checkpointDelta(ctx, agent.CheckpointSessionEnd)

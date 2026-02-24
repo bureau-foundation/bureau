@@ -84,8 +84,10 @@ type PromptEvent struct {
 	// Content is the prompt text.
 	Content string `json:"content"`
 
-	// Source distinguishes the initial prompt from injected messages.
-	// Values: "initial", "injected".
+	// Source distinguishes the origin of the prompt.
+	// Values: "initial" (the first prompt at session start),
+	// "injected" (message injected via the messaging system),
+	// "user" (human input via stdin, used by Claude Code driver).
 	Source string `json:"source"`
 }
 
@@ -167,8 +169,11 @@ type ErrorEvent struct {
 
 // SystemEvent records system-level events.
 type SystemEvent struct {
-	// Subtype further classifies the system event (e.g., "init", "shutdown",
-	// "compact_boundary", "context_truncated").
+	// Subtype further classifies the system event. Known subtypes:
+	// "init" (session startup with configuration), "shutdown"
+	// (graceful termination), "compact_boundary" (full context
+	// compaction), "microcompact_boundary" (lighter compaction
+	// variant), "context_truncated" (hard truncation).
 	Subtype string `json:"subtype"`
 
 	// Message is an optional human-readable description.

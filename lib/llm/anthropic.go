@@ -186,6 +186,8 @@ func (provider *Anthropic) newEventStream(body io.ReadCloser) *EventStream {
 						Type        string `json:"type"`
 						Text        string `json:"text"`
 						PartialJSON string `json:"partial_json"`
+						Thinking    string `json:"thinking"`
+						Signature   string `json:"signature"`
 					} `json:"delta"`
 				}
 				if err := json.Unmarshal([]byte(sseEvent.Data), &envelope); err != nil {
@@ -206,6 +208,12 @@ func (provider *Anthropic) newEventStream(body io.ReadCloser) *EventStream {
 						// Input JSON deltas are not surfaced as events — the
 						// agent loop only cares about the complete tool_use
 						// block, emitted on content_block_stop.
+					case "thinking_delta":
+						block.textContent.WriteString(envelope.Delta.Thinking)
+						// Thinking deltas are not surfaced individually — the
+						// complete thinking block is emitted on content_block_stop.
+					case "signature_delta":
+						block.signatureContent.WriteString(envelope.Delta.Signature)
 					}
 				}
 				continue
@@ -312,6 +320,8 @@ type anthropicContentBlock struct {
 	ToolUseID string          `json:"tool_use_id,omitempty"`
 	Content   json.RawMessage `json:"content,omitempty"`
 	IsError   bool            `json:"is_error,omitempty"`
+	Thinking  string          `json:"thinking,omitempty"`
+	Signature string          `json:"signature,omitempty"`
 }
 
 type anthropicTool struct {
@@ -342,11 +352,12 @@ type anthropicUsage struct {
 // anthropicPartialBlock tracks the state of a content block being
 // assembled from streaming events.
 type anthropicPartialBlock struct {
-	blockType   string
-	textContent strings.Builder
-	inputJSON   strings.Builder
-	toolUseID   string
-	toolName    string
+	blockType        string
+	textContent      strings.Builder
+	inputJSON        strings.Builder
+	signatureContent strings.Builder
+	toolUseID        string
+	toolName         string
 	// rawContent holds content for blocks that arrive fully formed
 	// in content_block_start (e.g., tool_search_tool_result). These
 	// blocks have no deltas — the complete content is in the start event.
@@ -357,6 +368,8 @@ func (block *anthropicPartialBlock) toContentBlock() ContentBlock {
 	switch block.blockType {
 	case "text":
 		return TextBlock(block.textContent.String())
+	case "thinking":
+		return ThinkingContentBlock(block.textContent.String(), block.signatureContent.String())
 	case "tool_use":
 		return ToolUseBlock(
 			block.toolUseID,
@@ -404,6 +417,14 @@ func toAnthropicContentBlock(block ContentBlock) anthropicContentBlock {
 	switch block.Type {
 	case ContentText:
 		return anthropicContentBlock{Type: "text", Text: block.Text}
+	case ContentThinking:
+		if block.Thinking != nil {
+			return anthropicContentBlock{
+				Type:      "thinking",
+				Thinking:  block.Thinking.Content,
+				Signature: block.Thinking.Signature,
+			}
+		}
 	case ContentToolUse:
 		if block.ToolUse != nil {
 			return anthropicContentBlock{
@@ -468,6 +489,8 @@ func fromAnthropicContentBlock(wire anthropicContentBlock) ContentBlock {
 	switch wire.Type {
 	case "text":
 		return TextBlock(wire.Text)
+	case "thinking":
+		return ThinkingContentBlock(wire.Thinking, wire.Signature)
 	case "tool_use":
 		return ToolUseBlock(wire.ID, wire.Name, wire.Input)
 	case "server_tool_use":

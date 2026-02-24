@@ -361,18 +361,30 @@ type loopEvent struct {
 	Output  string          `json:"output,omitempty"`
 	IsError bool            `json:"is_error,omitempty"`
 
+	// For "tool_call": true when the tool call originated from
+	// the provider's server-side tool system (e.g., Anthropic's
+	// tool search), not from the agent loop's own tool execution.
+	ServerTool bool `json:"server_tool,omitempty"`
+
 	// For "metric".
-	InputTokens      int64 `json:"input_tokens,omitempty"`
-	OutputTokens     int64 `json:"output_tokens,omitempty"`
-	CacheReadTokens  int64 `json:"cache_read_tokens,omitempty"`
-	CacheWriteTokens int64 `json:"cache_write_tokens,omitempty"`
-	TurnCount        int64 `json:"turn_count,omitempty"`
+	InputTokens      int64   `json:"input_tokens,omitempty"`
+	OutputTokens     int64   `json:"output_tokens,omitempty"`
+	CacheReadTokens  int64   `json:"cache_read_tokens,omitempty"`
+	CacheWriteTokens int64   `json:"cache_write_tokens,omitempty"`
+	TurnCount        int64   `json:"turn_count,omitempty"`
+	DurationSeconds  float64 `json:"duration_seconds,omitempty"`
+	Status           string  `json:"status,omitempty"`
 
 	// For "error" and "system".
 	Message string `json:"message,omitempty"`
 
 	// For "system".
-	Subtype string `json:"subtype,omitempty"`
+	Subtype  string          `json:"subtype,omitempty"`
+	Metadata json.RawMessage `json:"metadata,omitempty"`
+
+	// For "thinking".
+	ThinkingContent   string `json:"thinking_content,omitempty"`
+	ThinkingSignature string `json:"thinking_signature,omitempty"`
 }
 
 // parseLoopEvent converts a JSON line from the agent loop into an
@@ -398,9 +410,10 @@ func parseLoopEvent(line []byte) (agentdriver.Event, error) {
 			Timestamp: now,
 			Type:      agentdriver.EventTypeToolCall,
 			ToolCall: &agentdriver.ToolCallEvent{
-				ID:    event.ID,
-				Name:  event.Name,
-				Input: event.Input,
+				ID:         event.ID,
+				Name:       event.Name,
+				Input:      event.Input,
+				ServerTool: event.ServerTool,
 			},
 		}, nil
 
@@ -430,10 +443,13 @@ func parseLoopEvent(line []byte) (agentdriver.Event, error) {
 			Timestamp: now,
 			Type:      agentdriver.EventTypeMetric,
 			Metric: &agentdriver.MetricEvent{
-				InputTokens:     event.InputTokens,
-				OutputTokens:    event.OutputTokens,
-				CacheReadTokens: event.CacheReadTokens,
-				TurnCount:       event.TurnCount,
+				InputTokens:      event.InputTokens,
+				OutputTokens:     event.OutputTokens,
+				CacheReadTokens:  event.CacheReadTokens,
+				CacheWriteTokens: event.CacheWriteTokens,
+				TurnCount:        event.TurnCount,
+				DurationSeconds:  event.DurationSeconds,
+				Status:           event.Status,
 			},
 		}, nil
 
@@ -449,8 +465,19 @@ func parseLoopEvent(line []byte) (agentdriver.Event, error) {
 			Timestamp: now,
 			Type:      agentdriver.EventTypeSystem,
 			System: &agentdriver.SystemEvent{
-				Subtype: event.Subtype,
-				Message: event.Message,
+				Subtype:  event.Subtype,
+				Message:  event.Message,
+				Metadata: event.Metadata,
+			},
+		}, nil
+
+	case "thinking":
+		return agentdriver.Event{
+			Timestamp: now,
+			Type:      agentdriver.EventTypeThinking,
+			Thinking: &agentdriver.ThinkingEvent{
+				Content:   event.ThinkingContent,
+				Signature: event.ThinkingSignature,
 			},
 		}, nil
 

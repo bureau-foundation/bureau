@@ -41,6 +41,12 @@ const (
 	// tool invocation. Paired with ContentServerToolUse in the
 	// conversation history.
 	ContentServerToolResult ContentType = "server_tool_result"
+
+	// ContentThinking is a reasoning/thinking block from the model.
+	// Contains chain-of-thought reasoning and a cryptographic signature
+	// for verification by the LLM provider. Thinking blocks must be
+	// sent back in conversation history for signature verification.
+	ContentThinking ContentType = "thinking"
 )
 
 // ContentBlock is a single unit of content within a [Message].
@@ -52,6 +58,7 @@ type ContentBlock struct {
 	ToolResult       *ToolResult       // Set when Type is ContentToolResult.
 	ServerToolUse    *ServerToolUse    // Set when Type is ContentServerToolUse.
 	ServerToolResult *ServerToolResult // Set when Type is ContentServerToolResult.
+	Thinking         *ThinkingBlock    // Set when Type is ContentThinking.
 }
 
 // TextBlock creates a text content block.
@@ -106,6 +113,24 @@ type ServerToolUse struct {
 type ServerToolResult struct {
 	ToolUseID string          // Matches [ServerToolUse.ID].
 	Content   json.RawMessage // Result content (provider-specific JSON structure).
+}
+
+// ThinkingBlock represents a reasoning/thinking block from the model.
+// Contains the model's chain-of-thought reasoning and a cryptographic
+// signature used by the provider for verification. Thinking blocks
+// must be preserved in conversation history and sent back to the
+// provider on subsequent requests.
+type ThinkingBlock struct {
+	Content   string // Chain-of-thought reasoning text.
+	Signature string // Provider-assigned cryptographic signature.
+}
+
+// ThinkingContentBlock creates a thinking content block.
+func ThinkingContentBlock(content, signature string) ContentBlock {
+	return ContentBlock{
+		Type:     ContentThinking,
+		Thinking: &ThinkingBlock{Content: content, Signature: signature},
+	}
 }
 
 // Message is a single turn in a conversation.
@@ -247,6 +272,18 @@ func (response *Response) TextContent() string {
 	for _, block := range response.Content {
 		if block.Type == ContentText {
 			text += block.Text
+		}
+	}
+	return text
+}
+
+// ThinkingContent returns the concatenated thinking text from all
+// thinking content blocks in the response.
+func (response *Response) ThinkingContent() string {
+	var text string
+	for _, block := range response.Content {
+		if block.Type == ContentThinking && block.Thinking != nil {
+			text += block.Thinking.Content
 		}
 	}
 	return text

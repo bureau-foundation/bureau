@@ -1118,3 +1118,284 @@ func TestAnthropicExtraHeaders(t *testing.T) {
 		t.Errorf("Content-Type = %q, want application/json", got)
 	}
 }
+
+func TestAnthropicStreamThinking(t *testing.T) {
+	t.Parallel()
+
+	mux := http.NewServeMux()
+	mux.HandleFunc("POST /http/anthropic/v1/messages", func(writer http.ResponseWriter, request *http.Request) {
+		writer.Header().Set("Content-Type", "text/event-stream")
+		writer.Header().Set("Cache-Control", "no-cache")
+
+		flusher, ok := writer.(http.Flusher)
+		if !ok {
+			t.Fatal("ResponseWriter does not support Flush")
+		}
+
+		// Simulate a response with a thinking block followed by a text block.
+		events := []string{
+			`event: message_start` + "\n" +
+				`data: {"type":"message_start","message":{"id":"msg_think","model":"claude-sonnet-4-5-20250929","usage":{"input_tokens":100,"output_tokens":0}}}` + "\n\n",
+			// Thinking block start.
+			`event: content_block_start` + "\n" +
+				`data: {"type":"content_block_start","index":0,"content_block":{"type":"thinking","thinking":""}}` + "\n\n",
+			// Thinking delta.
+			`event: content_block_delta` + "\n" +
+				`data: {"type":"content_block_delta","index":0,"delta":{"type":"thinking_delta","thinking":"Let me reason"}}` + "\n\n",
+			`event: content_block_delta` + "\n" +
+				`data: {"type":"content_block_delta","index":0,"delta":{"type":"thinking_delta","thinking":" about this carefully."}}` + "\n\n",
+			// Signature delta.
+			`event: content_block_delta` + "\n" +
+				`data: {"type":"content_block_delta","index":0,"delta":{"type":"signature_delta","signature":"sig_abc123"}}` + "\n\n",
+			`event: content_block_stop` + "\n" +
+				`data: {"type":"content_block_stop","index":0}` + "\n\n",
+			// Text block.
+			`event: content_block_start` + "\n" +
+				`data: {"type":"content_block_start","index":1,"content_block":{"type":"text","text":""}}` + "\n\n",
+			`event: content_block_delta` + "\n" +
+				`data: {"type":"content_block_delta","index":1,"delta":{"type":"text_delta","text":"The answer is 42."}}` + "\n\n",
+			`event: content_block_stop` + "\n" +
+				`data: {"type":"content_block_stop","index":1}` + "\n\n",
+			`event: message_delta` + "\n" +
+				`data: {"type":"message_delta","delta":{"stop_reason":"end_turn"},"usage":{"output_tokens":25}}` + "\n\n",
+			`event: message_stop` + "\n" +
+				`data: {"type":"message_stop"}` + "\n\n",
+		}
+
+		for _, event := range events {
+			fmt.Fprint(writer, event)
+			flusher.Flush()
+		}
+	})
+
+	provider := anthropicTestServer(t, mux)
+
+	eventStream, err := provider.Stream(context.Background(), Request{
+		Model:     "claude-sonnet-4-5-20250929",
+		MaxTokens: 1024,
+		Messages:  []Message{UserMessage("What is the meaning of life?")},
+	})
+	if err != nil {
+		t.Fatalf("Stream: %v", err)
+	}
+	defer eventStream.Close()
+
+	var contentBlocks []ContentBlock
+	for {
+		event, err := eventStream.Next()
+		if err == io.EOF {
+			break
+		}
+		if err != nil {
+			t.Fatalf("Next: %v", err)
+		}
+		if event.Type == EventContentBlockDone {
+			contentBlocks = append(contentBlocks, event.ContentBlock)
+		}
+	}
+
+	// Two content blocks: thinking + text.
+	if length := len(contentBlocks); length != 2 {
+		t.Fatalf("content blocks = %d, want 2", length)
+	}
+
+	// Verify thinking block.
+	if contentBlocks[0].Type != ContentThinking {
+		t.Errorf("block[0].Type = %q, want thinking", contentBlocks[0].Type)
+	}
+	if contentBlocks[0].Thinking == nil {
+		t.Fatal("block[0].Thinking is nil")
+	}
+	if contentBlocks[0].Thinking.Content != "Let me reason about this carefully." {
+		t.Errorf("thinking content = %q", contentBlocks[0].Thinking.Content)
+	}
+	if contentBlocks[0].Thinking.Signature != "sig_abc123" {
+		t.Errorf("thinking signature = %q, want sig_abc123", contentBlocks[0].Thinking.Signature)
+	}
+
+	// Verify text block.
+	if contentBlocks[1].Type != ContentText {
+		t.Errorf("block[1].Type = %q, want text", contentBlocks[1].Type)
+	}
+	if contentBlocks[1].Text != "The answer is 42." {
+		t.Errorf("text = %q", contentBlocks[1].Text)
+	}
+
+	// Verify accumulated response.
+	response := eventStream.Response()
+	if thinking := response.ThinkingContent(); thinking != "Let me reason about this carefully." {
+		t.Errorf("ThinkingContent = %q", thinking)
+	}
+	if text := response.TextContent(); text != "The answer is 42." {
+		t.Errorf("TextContent = %q", text)
+	}
+}
+
+func TestAnthropicCompleteThinking(t *testing.T) {
+	t.Parallel()
+
+	mux := http.NewServeMux()
+	mux.HandleFunc("POST /http/anthropic/v1/messages", func(writer http.ResponseWriter, request *http.Request) {
+		writer.Header().Set("Content-Type", "application/json")
+		json.NewEncoder(writer).Encode(map[string]any{
+			"id":   "msg_think_complete",
+			"type": "message",
+			"role": "assistant",
+			"content": []map[string]any{
+				{
+					"type":      "thinking",
+					"thinking":  "Step by step analysis...",
+					"signature": "sig_xyz789",
+				},
+				{
+					"type": "text",
+					"text": "Here is my answer.",
+				},
+			},
+			"model":       "claude-sonnet-4-5-20250929",
+			"stop_reason": "end_turn",
+			"usage":       map[string]any{"input_tokens": 80, "output_tokens": 30},
+		})
+	})
+
+	provider := anthropicTestServer(t, mux)
+
+	response, err := provider.Complete(context.Background(), Request{
+		Model:     "claude-sonnet-4-5-20250929",
+		MaxTokens: 1024,
+		Messages:  []Message{UserMessage("Analyze this")},
+	})
+	if err != nil {
+		t.Fatalf("Complete: %v", err)
+	}
+
+	if length := len(response.Content); length != 2 {
+		t.Fatalf("content blocks = %d, want 2", length)
+	}
+
+	// Thinking block.
+	if response.Content[0].Type != ContentThinking {
+		t.Errorf("block[0].Type = %q, want thinking", response.Content[0].Type)
+	}
+	if response.Content[0].Thinking == nil {
+		t.Fatal("block[0].Thinking is nil")
+	}
+	if response.Content[0].Thinking.Content != "Step by step analysis..." {
+		t.Errorf("thinking content = %q", response.Content[0].Thinking.Content)
+	}
+	if response.Content[0].Thinking.Signature != "sig_xyz789" {
+		t.Errorf("thinking signature = %q", response.Content[0].Thinking.Signature)
+	}
+
+	// Text block.
+	if response.Content[1].Type != ContentText {
+		t.Errorf("block[1].Type = %q, want text", response.Content[1].Type)
+	}
+	if response.Content[1].Text != "Here is my answer." {
+		t.Errorf("text = %q", response.Content[1].Text)
+	}
+
+	if thinking := response.ThinkingContent(); thinking != "Step by step analysis..." {
+		t.Errorf("ThinkingContent = %q", thinking)
+	}
+}
+
+func TestAnthropicThinkingConversationReplay(t *testing.T) {
+	t.Parallel()
+
+	// Verify that thinking blocks survive round-trip through
+	// conversation history. The API requires thinking blocks to be
+	// sent back in subsequent requests for signature verification.
+
+	var capturedRequest json.RawMessage
+
+	mux := http.NewServeMux()
+	mux.HandleFunc("POST /http/anthropic/v1/messages", func(writer http.ResponseWriter, request *http.Request) {
+		body, _ := io.ReadAll(request.Body)
+		capturedRequest = body
+
+		writer.Header().Set("Content-Type", "application/json")
+		json.NewEncoder(writer).Encode(map[string]any{
+			"id":          "msg_replay_thinking",
+			"type":        "message",
+			"role":        "assistant",
+			"content":     []map[string]any{{"type": "text", "text": "Follow-up."}},
+			"model":       "claude-sonnet-4-5-20250929",
+			"stop_reason": "end_turn",
+			"usage":       map[string]any{"input_tokens": 150, "output_tokens": 5},
+		})
+	})
+
+	provider := anthropicTestServer(t, mux)
+
+	// Build a conversation where the previous assistant response
+	// contained a thinking block.
+	_, err := provider.Complete(context.Background(), Request{
+		Model:     "claude-sonnet-4-5-20250929",
+		MaxTokens: 1024,
+		Messages: []Message{
+			UserMessage("Think about this"),
+			{
+				Role: RoleAssistant,
+				Content: []ContentBlock{
+					ThinkingContentBlock("My reasoning process...", "sig_replay_test"),
+					TextBlock("Here is my conclusion."),
+				},
+			},
+			UserMessage("Can you elaborate?"),
+		},
+	})
+	if err != nil {
+		t.Fatalf("Complete: %v", err)
+	}
+
+	// Parse the captured wire request to verify thinking block
+	// serialization.
+	var wireRequest struct {
+		Messages []struct {
+			Role    string `json:"role"`
+			Content []struct {
+				Type      string `json:"type"`
+				Text      string `json:"text,omitempty"`
+				Thinking  string `json:"thinking,omitempty"`
+				Signature string `json:"signature,omitempty"`
+			} `json:"content"`
+		} `json:"messages"`
+	}
+	if err := json.Unmarshal(capturedRequest, &wireRequest); err != nil {
+		t.Fatalf("unmarshal captured request: %v", err)
+	}
+
+	if length := len(wireRequest.Messages); length != 3 {
+		t.Fatalf("messages = %d, want 3", length)
+	}
+
+	assistantMessage := wireRequest.Messages[1]
+	if assistantMessage.Role != "assistant" {
+		t.Fatalf("message[1].role = %q, want assistant", assistantMessage.Role)
+	}
+	if length := len(assistantMessage.Content); length != 2 {
+		t.Fatalf("assistant content blocks = %d, want 2", length)
+	}
+
+	// Thinking block must be serialized with correct wire fields.
+	thinkingBlock := assistantMessage.Content[0]
+	if thinkingBlock.Type != "thinking" {
+		t.Errorf("block[0].type = %q, want thinking", thinkingBlock.Type)
+	}
+	if thinkingBlock.Thinking != "My reasoning process..." {
+		t.Errorf("block[0].thinking = %q", thinkingBlock.Thinking)
+	}
+	if thinkingBlock.Signature != "sig_replay_test" {
+		t.Errorf("block[0].signature = %q, want sig_replay_test", thinkingBlock.Signature)
+	}
+
+	// Text block follows.
+	textBlock := assistantMessage.Content[1]
+	if textBlock.Type != "text" {
+		t.Errorf("block[1].type = %q, want text", textBlock.Type)
+	}
+	if textBlock.Text != "Here is my conclusion." {
+		t.Errorf("block[1].text = %q", textBlock.Text)
+	}
+}

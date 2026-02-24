@@ -113,7 +113,7 @@ func TestAgentLoop_TextResponse(t *testing.T) {
 
 	loopDone := make(chan error, 1)
 	go func() {
-		loopDone <- runAgentLoop(ctx, &agentLoopConfig{
+		loopErr := runAgentLoop(ctx, &agentLoopConfig{
 			provider:       provider,
 			tools:          toolServer,
 			contextManager: &llmcontext.Unbounded{},
@@ -124,6 +124,8 @@ func TestAgentLoop_TextResponse(t *testing.T) {
 			stdout:         stdoutWriter,
 			logger:         slog.New(slog.NewTextHandler(io.Discard, nil)),
 		}, "Hello, agent!")
+		stdoutWriter.Close()
+		loopDone <- loopErr
 	}()
 
 	scanner := bufio.NewScanner(stdoutReader)
@@ -176,6 +178,10 @@ func TestAgentLoop_TextResponse(t *testing.T) {
 	// The loop is now blocked waiting for stdin. Close stdin to end it.
 	stdinWriter.Close()
 
+	// Drain remaining events (session outcome metric) until EOF.
+	for scanner.Scan() {
+	}
+
 	err := <-loopDone
 	if err != nil {
 		t.Errorf("loop returned error: %v", err)
@@ -224,7 +230,7 @@ func TestAgentLoop_ToolCallThenText(t *testing.T) {
 
 	loopDone := make(chan error, 1)
 	go func() {
-		loopDone <- runAgentLoop(ctx, &agentLoopConfig{
+		loopErr := runAgentLoop(ctx, &agentLoopConfig{
 			provider:       provider,
 			tools:          toolServer,
 			contextManager: &llmcontext.Unbounded{},
@@ -235,6 +241,8 @@ func TestAgentLoop_ToolCallThenText(t *testing.T) {
 			stdout:         stdoutWriter,
 			logger:         slog.New(slog.NewTextHandler(io.Discard, nil)),
 		}, "Echo hello for me")
+		stdoutWriter.Close()
+		loopDone <- loopErr
 	}()
 
 	scanner := bufio.NewScanner(stdoutReader)
@@ -295,6 +303,10 @@ func TestAgentLoop_ToolCallThenText(t *testing.T) {
 	// Close stdin to end the loop.
 	stdinWriter.Close()
 
+	// Drain remaining events (session outcome metric) until EOF.
+	for scanner.Scan() {
+	}
+
 	err := <-loopDone
 	if err != nil {
 		t.Errorf("loop returned error: %v", err)
@@ -334,7 +346,7 @@ func TestAgentLoop_MessageInjection(t *testing.T) {
 
 	loopDone := make(chan error, 1)
 	go func() {
-		loopDone <- runAgentLoop(ctx, &agentLoopConfig{
+		loopErr := runAgentLoop(ctx, &agentLoopConfig{
 			provider:       provider,
 			tools:          toolServer,
 			contextManager: &llmcontext.Unbounded{},
@@ -345,6 +357,8 @@ func TestAgentLoop_MessageInjection(t *testing.T) {
 			stdout:         stdoutWriter,
 			logger:         slog.New(slog.NewTextHandler(io.Discard, nil)),
 		}, "Hello")
+		stdoutWriter.Close()
+		loopDone <- loopErr
 	}()
 
 	scanner := bufio.NewScanner(stdoutReader)
@@ -388,6 +402,11 @@ func TestAgentLoop_MessageInjection(t *testing.T) {
 	}
 
 	stdinWriter.Close()
+
+	// Drain remaining events (session outcome metric) until EOF.
+	for scanner.Scan() {
+	}
+
 	err := <-loopDone
 	if err != nil {
 		t.Errorf("loop returned error: %v", err)
@@ -472,7 +491,7 @@ func TestAgentLoop_EmptyPromptWaitsForMessage(t *testing.T) {
 
 	loopDone := make(chan error, 1)
 	go func() {
-		loopDone <- runAgentLoop(ctx, &agentLoopConfig{
+		loopErr := runAgentLoop(ctx, &agentLoopConfig{
 			provider:       provider,
 			tools:          toolServer,
 			contextManager: &llmcontext.Unbounded{},
@@ -483,6 +502,8 @@ func TestAgentLoop_EmptyPromptWaitsForMessage(t *testing.T) {
 			stdout:         stdoutWriter,
 			logger:         slog.New(slog.NewTextHandler(io.Discard, nil)),
 		}, "") // Empty initial prompt.
+		stdoutWriter.Close()
+		loopDone <- loopErr
 	}()
 
 	scanner := bufio.NewScanner(stdoutReader)
@@ -535,6 +556,11 @@ func TestAgentLoop_EmptyPromptWaitsForMessage(t *testing.T) {
 	}
 
 	stdinWriter.Close()
+
+	// Drain remaining events (session outcome metric) until EOF.
+	for scanner.Scan() {
+	}
+
 	err := <-loopDone
 	if err != nil {
 		t.Errorf("loop returned error: %v", err)
@@ -639,7 +665,7 @@ func TestAgentLoop_ContextTruncation(t *testing.T) {
 
 	loopDone := make(chan error, 1)
 	go func() {
-		loopDone <- runAgentLoop(ctx, &agentLoopConfig{
+		loopErr := runAgentLoop(ctx, &agentLoopConfig{
 			provider:       provider,
 			tools:          toolServer,
 			contextManager: contextManager,
@@ -650,6 +676,8 @@ func TestAgentLoop_ContextTruncation(t *testing.T) {
 			stdout:         stdoutWriter,
 			logger:         slog.New(slog.NewTextHandler(io.Discard, nil)),
 		}, "Turn 1 prompt")
+		stdoutWriter.Close()
+		loopDone <- loopErr
 	}()
 
 	scanner := bufio.NewScanner(stdoutReader)
@@ -716,6 +744,11 @@ func TestAgentLoop_ContextTruncation(t *testing.T) {
 	}
 
 	stdinWriter.Close()
+
+	// Drain remaining events (session outcome metric) until EOF.
+	for scanner.Scan() {
+	}
+
 	err := <-loopDone
 	if err != nil {
 		t.Errorf("loop returned error: %v", err)
@@ -734,6 +767,238 @@ func (estimator *testTokenEstimator) EstimateTokens(messages []llm.Message) int 
 }
 
 func (estimator *testTokenEstimator) RecordUsage(_ []llm.Message, _ int64) {}
+
+// TestAgentLoop_ThinkingAndServerToolEvents verifies that thinking blocks
+// and server tool use blocks from the LLM response are emitted as separate
+// events in the session log, in the correct position (after metric, before
+// response).
+func TestAgentLoop_ThinkingAndServerToolEvents(t *testing.T) {
+	t.Parallel()
+
+	provider := &mockProvider{
+		responses: []*llm.Response{
+			{
+				Content: []llm.ContentBlock{
+					llm.ThinkingContentBlock("Let me think about this...", "sig_test_123"),
+					{
+						Type: llm.ContentServerToolUse,
+						ServerToolUse: &llm.ServerToolUse{
+							ID:    "srvtoolu_01",
+							Name:  "tool_search",
+							Input: json.RawMessage(`{"query":"relevant tools"}`),
+						},
+					},
+					llm.TextBlock("Here is my answer."),
+				},
+				StopReason: llm.StopReasonEndTurn,
+				Usage:      llm.Usage{InputTokens: 200, OutputTokens: 50},
+				Model:      "mock-model",
+			},
+		},
+	}
+
+	root := &cli.Command{Name: "test"}
+	toolServer := mcp.NewServer(root, []schema.Grant{
+		{Actions: []string{"command/**"}},
+	})
+
+	stdinReader, stdinWriter := io.Pipe()
+	stdoutReader, stdoutWriter := io.Pipe()
+
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+
+	loopDone := make(chan error, 1)
+	go func() {
+		loopErr := runAgentLoop(ctx, &agentLoopConfig{
+			provider:       provider,
+			tools:          toolServer,
+			contextManager: &llmcontext.Unbounded{},
+			model:          "mock-model",
+			systemPrompt:   "You are a test agent.",
+			maxTokens:      1024,
+			stdin:          stdinReader,
+			stdout:         stdoutWriter,
+			logger:         slog.New(slog.NewTextHandler(io.Discard, nil)),
+		}, "Think about this.")
+		stdoutWriter.Close()
+		loopDone <- loopErr
+	}()
+
+	scanner := bufio.NewScanner(stdoutReader)
+
+	// Collect all events until the response.
+	var events []loopEvent
+	for scanner.Scan() {
+		var event loopEvent
+		if err := json.Unmarshal(scanner.Bytes(), &event); err != nil {
+			t.Fatalf("parsing event: %v", err)
+		}
+		events = append(events, event)
+		if event.Type == "response" {
+			break
+		}
+	}
+
+	// Expected event sequence:
+	// system, metric, thinking, tool_call (server), response
+	expectedTypes := []string{"system", "metric", "thinking", "tool_call", "response"}
+	if len(events) != len(expectedTypes) {
+		types := make([]string, len(events))
+		for i, event := range events {
+			types[i] = event.Type
+		}
+		t.Fatalf("got %d events %v, want %d %v", len(events), types, len(expectedTypes), expectedTypes)
+	}
+	for i, expected := range expectedTypes {
+		if events[i].Type != expected {
+			t.Errorf("event[%d].Type = %q, want %q", i, events[i].Type, expected)
+		}
+	}
+
+	// Verify thinking event.
+	thinkingEvent := events[2]
+	if thinkingEvent.ThinkingContent != "Let me think about this..." {
+		t.Errorf("thinking content = %q", thinkingEvent.ThinkingContent)
+	}
+	if thinkingEvent.ThinkingSignature != "sig_test_123" {
+		t.Errorf("thinking signature = %q", thinkingEvent.ThinkingSignature)
+	}
+
+	// Verify server tool call event.
+	serverToolEvent := events[3]
+	if !serverToolEvent.ServerTool {
+		t.Error("ServerTool = false, want true")
+	}
+	if serverToolEvent.Name != "tool_search" {
+		t.Errorf("server tool Name = %q, want tool_search", serverToolEvent.Name)
+	}
+	if serverToolEvent.ID != "srvtoolu_01" {
+		t.Errorf("server tool ID = %q, want srvtoolu_01", serverToolEvent.ID)
+	}
+
+	// Verify response.
+	responseEvent := events[4]
+	if responseEvent.Content != "Here is my answer." {
+		t.Errorf("response Content = %q", responseEvent.Content)
+	}
+
+	// Verify metric includes DurationSeconds (non-zero since a mock
+	// provider call has some overhead).
+	metricEvent := events[1]
+	if metricEvent.DurationSeconds <= 0 {
+		t.Errorf("DurationSeconds = %f, want > 0", metricEvent.DurationSeconds)
+	}
+
+	// Close stdin to end the loop.
+	stdinWriter.Close()
+
+	// Drain remaining events (session outcome metric) until EOF.
+	var sawSessionMetric bool
+	for scanner.Scan() {
+		var event loopEvent
+		json.Unmarshal(scanner.Bytes(), &event)
+		if event.Type == "metric" && event.Status == "success" {
+			sawSessionMetric = true
+		}
+	}
+	if !sawSessionMetric {
+		t.Error("did not see session outcome metric with status=success")
+	}
+
+	err := <-loopDone
+	if err != nil {
+		t.Errorf("loop returned error: %v", err)
+	}
+}
+
+// TestAgentLoop_InitMetadata verifies that the init system event includes
+// structured metadata with model and tool count.
+func TestAgentLoop_InitMetadata(t *testing.T) {
+	t.Parallel()
+
+	provider := &mockProvider{
+		responses: []*llm.Response{
+			{
+				Content:    []llm.ContentBlock{llm.TextBlock("OK")},
+				StopReason: llm.StopReasonEndTurn,
+				Usage:      llm.Usage{InputTokens: 10, OutputTokens: 5},
+			},
+		},
+	}
+
+	root := &cli.Command{Name: "test"}
+	toolServer := mcp.NewServer(root, []schema.Grant{
+		{Actions: []string{"command/**"}},
+	})
+
+	stdinReader, stdinWriter := io.Pipe()
+	stdoutReader, stdoutWriter := io.Pipe()
+
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+
+	loopDone := make(chan error, 1)
+	go func() {
+		loopErr := runAgentLoop(ctx, &agentLoopConfig{
+			provider:       provider,
+			tools:          toolServer,
+			contextManager: &llmcontext.Unbounded{},
+			model:          "claude-sonnet-4-5-20250929",
+			systemPrompt:   "",
+			maxTokens:      1024,
+			sessionID:      "test-session-42",
+			template:       "test-template",
+			stdin:          stdinReader,
+			stdout:         stdoutWriter,
+			logger:         slog.New(slog.NewTextHandler(io.Discard, nil)),
+		}, "Hello")
+		stdoutWriter.Close()
+		loopDone <- loopErr
+	}()
+
+	scanner := bufio.NewScanner(stdoutReader)
+
+	// Read the init event.
+	if !scanner.Scan() {
+		t.Fatal("expected system event, got EOF")
+	}
+	var initEvent loopEvent
+	if err := json.Unmarshal(scanner.Bytes(), &initEvent); err != nil {
+		t.Fatalf("parsing init event: %v", err)
+	}
+	if initEvent.Type != "system" || initEvent.Subtype != "init" {
+		t.Fatalf("expected system/init, got %s/%s", initEvent.Type, initEvent.Subtype)
+	}
+	if initEvent.Metadata == nil {
+		t.Fatal("init event Metadata is nil")
+	}
+
+	var metadata map[string]any
+	if err := json.Unmarshal(initEvent.Metadata, &metadata); err != nil {
+		t.Fatalf("parsing metadata: %v", err)
+	}
+	if metadata["model"] != "claude-sonnet-4-5-20250929" {
+		t.Errorf("metadata.model = %v", metadata["model"])
+	}
+	if metadata["session_id"] != "test-session-42" {
+		t.Errorf("metadata.session_id = %v", metadata["session_id"])
+	}
+	if metadata["template"] != "test-template" {
+		t.Errorf("metadata.template = %v", metadata["template"])
+	}
+
+	stdinWriter.Close()
+
+	// Drain remaining events until EOF.
+	for scanner.Scan() {
+	}
+
+	err := <-loopDone
+	if err != nil {
+		t.Errorf("loop returned error: %v", err)
+	}
+}
 
 // testEchoCommandTree creates a command tree with a single echo tool.
 func testEchoCommandTree() *cli.Command {

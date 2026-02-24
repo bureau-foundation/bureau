@@ -10,6 +10,7 @@ import (
 	"fmt"
 	"io"
 	"log/slog"
+	"time"
 
 	"github.com/bureau-foundation/bureau/lib/llm"
 	llmcontext "github.com/bureau-foundation/bureau/lib/llm/context"
@@ -118,10 +119,12 @@ type agentLoopConfig struct {
 //
 // The loop continues until the context is cancelled, stdin reaches EOF
 // (message pump shut down), or an unrecoverable error occurs.
-func runAgentLoop(ctx context.Context, config *agentLoopConfig, initialPrompt string) error {
+func runAgentLoop(ctx context.Context, config *agentLoopConfig, initialPrompt string) (loopError error) {
 	encoder := json.NewEncoder(config.stdout)
 	encoder.SetEscapeHTML(false)
 	scanner := bufio.NewScanner(config.stdin)
+
+	sessionStart := time.Now()
 
 	// Initialize the checkpoint tracker. If the artifact or agent
 	// service clients are nil, the tracker is a no-op.
@@ -133,11 +136,21 @@ func runAgentLoop(ctx context.Context, config *agentLoopConfig, initialPrompt st
 		config.logger,
 	)
 
-	// Final checkpoint at session end. Uses context.Background()
-	// because the loop's ctx may already be cancelled, but the
-	// sandbox is still alive at this point.
+	// Final checkpoint and session outcome metric at session end.
+	// Uses context.Background() because the loop's ctx may already
+	// be cancelled, but the sandbox is still alive at this point.
 	defer func() {
 		tracker.checkpointDelta(context.Background(), agent.CheckpointSessionEnd)
+
+		status := "success"
+		if loopError != nil {
+			status = "error_during_execution"
+		}
+		encoder.Encode(loopEvent{
+			Type:            "metric",
+			Status:          status,
+			DurationSeconds: time.Since(sessionStart).Seconds(),
+		})
 	}()
 
 	// Build tool definitions from the MCP server's authorized tool catalog,
@@ -145,11 +158,18 @@ func runAgentLoop(ctx context.Context, config *agentLoopConfig, initialPrompt st
 	// to benefit from on-demand discovery.
 	toolDefinitions := selectToolStrategy(config)
 
-	// Emit init system event.
+	// Emit init system event with structured metadata.
+	initMetadata, _ := json.Marshal(map[string]any{
+		"model":      config.model,
+		"tool_count": len(toolDefinitions),
+		"session_id": config.sessionID,
+		"template":   config.template,
+	})
 	encoder.Encode(loopEvent{
-		Type:    "system",
-		Subtype: "init",
-		Message: fmt.Sprintf("bureau-agent starting with model %s, %d tools", config.model, len(toolDefinitions)),
+		Type:     "system",
+		Subtype:  "init",
+		Message:  fmt.Sprintf("bureau-agent starting with model %s, %d tools", config.model, len(toolDefinitions)),
+		Metadata: initMetadata,
 	})
 
 	// Initialize the conversation. If no prompt was configured in the
@@ -200,22 +220,33 @@ func runAgentLoop(ctx context.Context, config *agentLoopConfig, initialPrompt st
 				"appended", totalAppended,
 				"windowed", len(messages),
 			)
+			truncationMetadata, _ := json.Marshal(map[string]any{
+				"appended": totalAppended,
+				"windowed": len(messages),
+			})
 			encoder.Encode(loopEvent{
-				Type:    "system",
-				Subtype: "context_truncated",
-				Message: contextErr.Error(),
+				Type:     "system",
+				Subtype:  "context_truncated",
+				Message:  contextErr.Error(),
+				Metadata: truncationMetadata,
 			})
 		} else if truncated {
+			evicted := totalAppended - int64(len(messages))
 			config.logger.Info("context truncated to fit budget",
 				"appended", totalAppended,
 				"windowed", len(messages),
-				"evicted_messages", totalAppended-int64(len(messages)),
+				"evicted_messages", evicted,
 			)
+			truncationMetadata, _ := json.Marshal(map[string]any{
+				"appended": totalAppended,
+				"windowed": len(messages),
+				"evicted":  evicted,
+			})
 			encoder.Encode(loopEvent{
-				Type:    "system",
-				Subtype: "context_truncated",
-				Message: fmt.Sprintf("evicted %d messages to fit context budget (%d appended, %d sent)",
-					totalAppended-int64(len(messages)), totalAppended, len(messages)),
+				Type:     "system",
+				Subtype:  "context_truncated",
+				Message:  fmt.Sprintf("evicted %d messages to fit context budget (%d appended, %d sent)", evicted, totalAppended, len(messages)),
+				Metadata: truncationMetadata,
 			})
 		}
 
@@ -230,7 +261,9 @@ func runAgentLoop(ctx context.Context, config *agentLoopConfig, initialPrompt st
 		config.logger.Info("starting turn", "turn", totalTurns, "messages", len(messages))
 
 		// Call the LLM with the windowed conversation and tool catalog.
+		callStart := time.Now()
 		response, err := callLLM(ctx, config, messages, toolDefinitions)
+		callDuration := time.Since(callStart)
 		if err != nil {
 			encoder.Encode(loopEvent{Type: "error", Message: err.Error()})
 			return fmt.Errorf("LLM call failed on turn %d: %w", totalTurns, err)
@@ -248,7 +281,35 @@ func runAgentLoop(ctx context.Context, config *agentLoopConfig, initialPrompt st
 			CacheReadTokens:  response.Usage.CacheReadTokens,
 			CacheWriteTokens: response.Usage.CacheWriteTokens,
 			TurnCount:        1,
+			DurationSeconds:  callDuration.Seconds(),
 		})
+
+		// Emit thinking events for any reasoning blocks in the response.
+		for _, block := range response.Content {
+			if block.Type == llm.ContentThinking && block.Thinking != nil {
+				encoder.Encode(loopEvent{
+					Type:              "thinking",
+					ThinkingContent:   block.Thinking.Content,
+					ThinkingSignature: block.Thinking.Signature,
+				})
+			}
+		}
+
+		// Emit events for server-originated tool calls. These are
+		// managed by the provider's API (e.g., Anthropic's tool search)
+		// and don't require execution by the agent loop, but they
+		// should appear in the events-v1 stream for observability.
+		for _, block := range response.Content {
+			if block.Type == llm.ContentServerToolUse && block.ServerToolUse != nil {
+				encoder.Encode(loopEvent{
+					Type:       "tool_call",
+					ID:         block.ServerToolUse.ID,
+					Name:       block.ServerToolUse.Name,
+					Input:      block.ServerToolUse.Input,
+					ServerTool: true,
+				})
+			}
+		}
 
 		// Append the assistant's response to the conversation.
 		assistantMessage := llm.Message{

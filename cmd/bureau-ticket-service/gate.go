@@ -177,7 +177,7 @@ func matchTicketGate(gate *ticket.TicketGate, event messaging.Event) bool {
 	}
 
 	status, _ := event.Content["status"].(string)
-	return status == "closed"
+	return status == string(ticket.StatusClosed)
 }
 
 // matchReviewGate checks whether a review gate's conditions are met by
@@ -216,7 +216,7 @@ func matchReviewGate(index *ticketindex.Index, ticketID string) bool {
 	}
 
 	for _, child := range index.Children(ticketID) {
-		if child.Content.Type == "review_finding" && child.Content.Status != "closed" {
+		if child.Content.Type == "review_finding" && child.Content.Status != ticket.StatusClosed {
 			return false
 		}
 	}
@@ -596,7 +596,7 @@ func (ts *TicketService) resolveUnblockedTimerTargets(ctx context.Context, roomI
 
 		for _, dependentID := range dependentIDs {
 			content, exists := state.index.Get(dependentID)
-			if !exists || content.Status != "open" {
+			if !exists || content.Status != ticket.StatusOpen {
 				continue
 			}
 
@@ -714,7 +714,7 @@ func (ts *TicketService) pushTimerGates(roomID ref.RoomID, ticketID string, cont
 // deadline are handled by lazy deletion in fireExpiredTimersLocked.
 // Must be called with ts.mu held.
 func (ts *TicketService) pushDeadlineEntry(roomID ref.RoomID, ticketID string, content *ticket.TicketContent) {
-	if content.Deadline == "" || content.Status == "closed" {
+	if content.Deadline == "" || content.Status == ticket.StatusClosed {
 		return
 	}
 	target, err := time.Parse(time.RFC3339, content.Deadline)
@@ -760,7 +760,7 @@ func (ts *TicketService) rebuildTimerHeap() {
 
 		// Add deadline monitoring entries for non-closed tickets.
 		for _, entry := range state.index.List(ticketindex.Filter{}) {
-			if entry.Content.Deadline == "" || entry.Content.Status == "closed" {
+			if entry.Content.Deadline == "" || entry.Content.Status == ticket.StatusClosed {
 				continue
 			}
 			target, err := time.Parse(time.RFC3339, entry.Content.Deadline)
@@ -845,7 +845,7 @@ func (ts *TicketService) fireExpiredTimersLocked(ctx context.Context) {
 			continue
 		}
 		content, exists := state.index.Get(earliest.ticketID)
-		if !exists || content.Status == "closed" {
+		if !exists || content.Status == ticket.StatusClosed {
 			continue
 		}
 
@@ -860,7 +860,7 @@ func (ts *TicketService) fireExpiredTimersLocked(ctx context.Context) {
 		// Gate timer entries require open status specifically
 		// (non-open, non-closed statuses like blocked/in_progress
 		// should not fire gates).
-		if content.Status != "open" {
+		if content.Status != ticket.StatusOpen {
 			continue
 		}
 

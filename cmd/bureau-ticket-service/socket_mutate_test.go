@@ -49,8 +49,8 @@ func TestHandleCreate(t *testing.T) {
 	if content.Title != "new feature" {
 		t.Errorf("title: got %q, want 'new feature'", content.Title)
 	}
-	if content.Status != "open" {
-		t.Errorf("status: got %q, want 'open'", content.Status)
+	if content.Status != ticket.StatusOpen {
+		t.Errorf("status: got %q, want %q", content.Status, ticket.StatusOpen)
 	}
 	if content.CreatedBy != ref.MustParseUserID("@bureau/fleet/prod/agent/tester:bureau.local") {
 		t.Errorf("created_by: got %q, want '@bureau/fleet/prod/agent/tester:bureau.local'", content.CreatedBy)
@@ -165,8 +165,8 @@ func TestHandleUpdateTitle(t *testing.T) {
 	if result.Content.Title != "updated title" {
 		t.Errorf("title: got %q, want 'updated title'", result.Content.Title)
 	}
-	if result.Content.Status != "open" {
-		t.Errorf("status: got %q, want 'open'", result.Content.Status)
+	if result.Content.Status != ticket.StatusOpen {
+		t.Errorf("status: got %q, want %q", result.Content.Status, ticket.StatusOpen)
 	}
 	if result.Content.UpdatedAt != "2026-01-15T12:00:00Z" {
 		t.Errorf("updated_at: got %q, want '2026-01-15T12:00:00Z'", result.Content.UpdatedAt)
@@ -188,8 +188,8 @@ func TestHandleUpdateClaimTicket(t *testing.T) {
 		t.Fatalf("Call: %v", err)
 	}
 
-	if result.Content.Status != "in_progress" {
-		t.Errorf("status: got %q, want 'in_progress'", result.Content.Status)
+	if result.Content.Status != ticket.StatusInProgress {
+		t.Errorf("status: got %q, want %q", result.Content.Status, ticket.StatusInProgress)
 	}
 	if result.Content.Assignee != ref.MustParseUserID("@bureau/fleet/prod/agent/tester:bureau.local") {
 		t.Errorf("assignee: got %q", result.Content.Assignee)
@@ -226,8 +226,8 @@ func TestHandleUpdateUnclaim(t *testing.T) {
 		t.Fatalf("Call: %v", err)
 	}
 
-	if result.Content.Status != "open" {
-		t.Errorf("status: got %q, want 'open'", result.Content.Status)
+	if result.Content.Status != ticket.StatusOpen {
+		t.Errorf("status: got %q, want %q", result.Content.Status, ticket.StatusOpen)
 	}
 	if !result.Content.Assignee.IsZero() {
 		t.Errorf("assignee should be auto-cleared, got %q", result.Content.Assignee)
@@ -286,8 +286,8 @@ func TestHandleUpdateCloseViaUpdate(t *testing.T) {
 		t.Fatalf("Call: %v", err)
 	}
 
-	if result.Content.Status != "closed" {
-		t.Errorf("status: got %q, want 'closed'", result.Content.Status)
+	if result.Content.Status != ticket.StatusClosed {
+		t.Errorf("status: got %q, want %q", result.Content.Status, ticket.StatusClosed)
 	}
 	if result.Content.ClosedAt == "" {
 		t.Error("closed_at should be auto-set")
@@ -324,8 +324,8 @@ func TestHandleClose(t *testing.T) {
 		t.Fatalf("Call: %v", err)
 	}
 
-	if result.Content.Status != "closed" {
-		t.Errorf("status: got %q, want 'closed'", result.Content.Status)
+	if result.Content.Status != ticket.StatusClosed {
+		t.Errorf("status: got %q, want %q", result.Content.Status, ticket.StatusClosed)
 	}
 	if result.Content.CloseReason != "done" {
 		t.Errorf("close_reason: got %q, want 'done'", result.Content.CloseReason)
@@ -381,7 +381,7 @@ func recurringRooms() map[ref.RoomID]*roomState {
 		"tkt-recurring-schedule": {
 			Version:   1,
 			Title:     "daily standup",
-			Status:    "open",
+			Status:    ticket.StatusOpen,
 			Priority:  2,
 			Type:      "task",
 			CreatedBy: ref.MustParseUserID("@agent/creator:bureau.local"),
@@ -403,7 +403,7 @@ func recurringRooms() map[ref.RoomID]*roomState {
 		"tkt-recurring-interval": {
 			Version:   1,
 			Title:     "polling task",
-			Status:    "open",
+			Status:    ticket.StatusOpen,
 			Priority:  2,
 			Type:      "task",
 			CreatedBy: ref.MustParseUserID("@agent/creator:bureau.local"),
@@ -425,7 +425,7 @@ func recurringRooms() map[ref.RoomID]*roomState {
 		"tkt-recurring-exhausted": {
 			Version:   1,
 			Title:     "limited recurring",
-			Status:    "open",
+			Status:    ticket.StatusOpen,
 			Priority:  2,
 			Type:      "task",
 			CreatedBy: ref.MustParseUserID("@agent/creator:bureau.local"),
@@ -448,7 +448,7 @@ func recurringRooms() map[ref.RoomID]*roomState {
 		"tkt-non-recurring": {
 			Version:   1,
 			Title:     "normal ticket",
-			Status:    "open",
+			Status:    ticket.StatusOpen,
 			Priority:  2,
 			Type:      "task",
 			CreatedBy: ref.MustParseUserID("@agent/creator:bureau.local"),
@@ -477,8 +477,8 @@ func TestHandleCloseRecurringScheduleRearms(t *testing.T) {
 	}
 
 	// Ticket should reopen instead of closing.
-	if result.Content.Status != "open" {
-		t.Errorf("status: got %q, want 'open' (re-armed)", result.Content.Status)
+	if result.Content.Status != ticket.StatusOpen {
+		t.Errorf("status: got %q, want %q (re-armed)", result.Content.Status, ticket.StatusOpen)
 	}
 	if result.Content.ClosedAt != "" {
 		t.Errorf("closed_at should be empty (re-armed), got %q", result.Content.ClosedAt)
@@ -527,8 +527,8 @@ func TestHandleCloseRecurringIntervalRearms(t *testing.T) {
 		t.Fatalf("Call: %v", err)
 	}
 
-	if result.Content.Status != "open" {
-		t.Errorf("status: got %q, want 'open' (re-armed)", result.Content.Status)
+	if result.Content.Status != ticket.StatusOpen {
+		t.Errorf("status: got %q, want %q (re-armed)", result.Content.Status, ticket.StatusOpen)
 	}
 
 	gate := result.Content.Gates[0]
@@ -559,8 +559,8 @@ func TestHandleCloseRecurringExhaustedClosesNormally(t *testing.T) {
 	}
 
 	// MaxOccurrences reached — ticket should close normally.
-	if result.Content.Status != "closed" {
-		t.Errorf("status: got %q, want 'closed' (exhausted)", result.Content.Status)
+	if result.Content.Status != ticket.StatusClosed {
+		t.Errorf("status: got %q, want %q (exhausted)", result.Content.Status, ticket.StatusClosed)
 	}
 	if result.Content.ClosedAt == "" {
 		t.Error("closed_at should be set for normal close")
@@ -592,8 +592,8 @@ func TestHandleCloseEndRecurrenceClosesNormally(t *testing.T) {
 	}
 
 	// EndRecurrence strips recurring gates and closes normally.
-	if result.Content.Status != "closed" {
-		t.Errorf("status: got %q, want 'closed'", result.Content.Status)
+	if result.Content.Status != ticket.StatusClosed {
+		t.Errorf("status: got %q, want %q", result.Content.Status, ticket.StatusClosed)
 	}
 	if result.Content.CloseReason != "manual stop" {
 		t.Errorf("close_reason: got %q, want 'manual stop'", result.Content.CloseReason)
@@ -617,8 +617,8 @@ func TestHandleCloseNonRecurringClosesNormally(t *testing.T) {
 		t.Fatalf("Call: %v", err)
 	}
 
-	if result.Content.Status != "closed" {
-		t.Errorf("status: got %q, want 'closed'", result.Content.Status)
+	if result.Content.Status != ticket.StatusClosed {
+		t.Errorf("status: got %q, want %q", result.Content.Status, ticket.StatusClosed)
 	}
 }
 
@@ -637,8 +637,8 @@ func TestHandleReopen(t *testing.T) {
 		t.Fatalf("Call: %v", err)
 	}
 
-	if result.Content.Status != "open" {
-		t.Errorf("status: got %q, want 'open'", result.Content.Status)
+	if result.Content.Status != ticket.StatusOpen {
+		t.Errorf("status: got %q, want %q", result.Content.Status, ticket.StatusOpen)
 	}
 	if result.Content.ClosedAt != "" {
 		t.Errorf("closed_at should be cleared, got %q", result.Content.ClosedAt)
@@ -1005,8 +1005,8 @@ func TestCloseAllowedWithCloseGrant(t *testing.T) {
 	if err != nil {
 		t.Fatalf("close with ticket/close grant should succeed: %v", err)
 	}
-	if result.Content.Status != "closed" {
-		t.Errorf("status: got %q, want 'closed'", result.Content.Status)
+	if result.Content.Status != ticket.StatusClosed {
+		t.Errorf("status: got %q, want %q", result.Content.Status, ticket.StatusClosed)
 	}
 }
 
@@ -1025,8 +1025,8 @@ func TestReopenAllowedWithReopenGrant(t *testing.T) {
 	if err != nil {
 		t.Fatalf("reopen with ticket/reopen grant should succeed: %v", err)
 	}
-	if result.Content.Status != "open" {
-		t.Errorf("status: got %q, want 'open'", result.Content.Status)
+	if result.Content.Status != ticket.StatusOpen {
+		t.Errorf("status: got %q, want %q", result.Content.Status, ticket.StatusOpen)
 	}
 }
 
@@ -1157,7 +1157,7 @@ func TestHandleUpdatePipelineProgress(t *testing.T) {
 		"pip-deploy": {
 			Version:  1,
 			Title:    "deploy staging",
-			Status:   "in_progress",
+			Status:   ticket.StatusInProgress,
 			Priority: 1,
 			Type:     "pipeline",
 			Pipeline: &ticket.PipelineExecutionContent{
@@ -1212,7 +1212,7 @@ func TestHandleUpdateTypeFromPipelineAutoClearsPipelineContent(t *testing.T) {
 		"pip-deploy": {
 			Version:  1,
 			Title:    "deploy staging",
-			Status:   "open",
+			Status:   ticket.StatusOpen,
 			Priority: 1,
 			Type:     "pipeline",
 			Pipeline: &ticket.PipelineExecutionContent{
@@ -1317,7 +1317,7 @@ func TestHandleUpdateAllowedTypesEnforced(t *testing.T) {
 		"tkt-task": {
 			Version:   1,
 			Title:     "some task",
-			Status:    "open",
+			Status:    ticket.StatusOpen,
 			Priority:  2,
 			Type:      "task",
 			CreatedBy: ref.MustParseUserID("@agent/creator:bureau.local"),
@@ -1519,7 +1519,7 @@ func TestHandleAddNoteWithExistingNotes(t *testing.T) {
 		"tkt-noted": {
 			Version:  1,
 			Title:    "ticket with notes",
-			Status:   "open",
+			Status:   ticket.StatusOpen,
 			Priority: 2,
 			Type:     "task",
 			Notes: []ticket.TicketNote{
@@ -1670,8 +1670,8 @@ func TestHandleUpdateInProgressToReview(t *testing.T) {
 		t.Fatalf("Call: %v", err)
 	}
 
-	if result.Content.Status != "review" {
-		t.Errorf("status: got %q, want review", result.Content.Status)
+	if result.Content.Status != ticket.StatusReview {
+		t.Errorf("status: got %q, want %q", result.Content.Status, ticket.StatusReview)
 	}
 	// Assignee persists from in_progress to review.
 	if result.Content.Assignee != ref.MustParseUserID("@agent/worker:bureau.local") {
@@ -1698,8 +1698,8 @@ func TestHandleUpdateReviewToInProgress(t *testing.T) {
 		t.Fatalf("Call: %v", err)
 	}
 
-	if result.Content.Status != "in_progress" {
-		t.Errorf("status: got %q, want in_progress", result.Content.Status)
+	if result.Content.Status != ticket.StatusInProgress {
+		t.Errorf("status: got %q, want %q", result.Content.Status, ticket.StatusInProgress)
 	}
 	// Assignee persists from review to in_progress.
 	if result.Content.Assignee != ref.MustParseUserID("@agent/worker:bureau.local") {
@@ -1723,8 +1723,8 @@ func TestHandleUpdateReviewToOpen(t *testing.T) {
 		t.Fatalf("Call: %v", err)
 	}
 
-	if result.Content.Status != "open" {
-		t.Errorf("status: got %q, want open", result.Content.Status)
+	if result.Content.Status != ticket.StatusOpen {
+		t.Errorf("status: got %q, want %q", result.Content.Status, ticket.StatusOpen)
 	}
 	if !result.Content.Assignee.IsZero() {
 		t.Errorf("assignee should be cleared on review → open, got %q", result.Content.Assignee)
@@ -1747,8 +1747,8 @@ func TestHandleUpdateReviewToClosed(t *testing.T) {
 		t.Fatalf("Call: %v", err)
 	}
 
-	if result.Content.Status != "closed" {
-		t.Errorf("status: got %q, want closed", result.Content.Status)
+	if result.Content.Status != ticket.StatusClosed {
+		t.Errorf("status: got %q, want %q", result.Content.Status, ticket.StatusClosed)
 	}
 	if result.Content.ClosedAt == "" {
 		t.Error("closed_at should be set")
@@ -1774,8 +1774,8 @@ func TestHandleUpdateReviewToBlocked(t *testing.T) {
 		t.Fatalf("Call: %v", err)
 	}
 
-	if result.Content.Status != "blocked" {
-		t.Errorf("status: got %q, want blocked", result.Content.Status)
+	if result.Content.Status != ticket.StatusBlocked {
+		t.Errorf("status: got %q, want %q", result.Content.Status, ticket.StatusBlocked)
 	}
 }
 
@@ -1817,8 +1817,8 @@ func TestHandleUpdateOpenToReview(t *testing.T) {
 		t.Fatalf("Call: %v", err)
 	}
 
-	if result.Content.Status != "review" {
-		t.Errorf("status: got %q, want review", result.Content.Status)
+	if result.Content.Status != ticket.StatusReview {
+		t.Errorf("status: got %q, want %q", result.Content.Status, ticket.StatusReview)
 	}
 	// Open → review: no assignee required or preserved.
 	if !result.Content.Assignee.IsZero() {
@@ -1847,8 +1847,8 @@ func TestHandleUpdateBlockedToReview(t *testing.T) {
 		t.Fatalf("Call: %v", err)
 	}
 
-	if result.Content.Status != "review" {
-		t.Errorf("status: got %q, want review", result.Content.Status)
+	if result.Content.Status != ticket.StatusReview {
+		t.Errorf("status: got %q, want %q", result.Content.Status, ticket.StatusReview)
 	}
 }
 
@@ -1915,8 +1915,8 @@ func TestHandleUpdateReviewAssigneeOnReview(t *testing.T) {
 		t.Fatalf("Call: %v", err)
 	}
 
-	if result.Content.Status != "review" {
-		t.Errorf("status: got %q, want review", result.Content.Status)
+	if result.Content.Status != ticket.StatusReview {
+		t.Errorf("status: got %q, want %q", result.Content.Status, ticket.StatusReview)
 	}
 	if result.Content.Assignee != ref.MustParseUserID("@agent/author:bureau.local") {
 		t.Errorf("assignee: got %q, want @agent/author:bureau.local", result.Content.Assignee)
@@ -1992,7 +1992,7 @@ func TestHandleSetDispositionNotReviewer(t *testing.T) {
 		"tkt-review-other": {
 			Version:  ticket.TicketContentVersion,
 			Title:    "review without tester",
-			Status:   "review",
+			Status:   ticket.StatusReview,
 			Priority: 2,
 			Type:     "task",
 			Review: &ticket.TicketReview{

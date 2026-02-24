@@ -86,7 +86,7 @@ func TestRemoveSubscriberPreservesOthers(t *testing.T) {
 func TestNotifySubscribersDeliversEvent(t *testing.T) {
 	ts := newTestService()
 	roomID := testRoomID("!room:local")
-	content := ticket.TicketContent{Version: 1, Title: "test", Status: "open"}
+	content := ticket.TicketContent{Version: 1, Title: "test", Status: ticket.StatusOpen}
 
 	subscriber, cancel := newSubscriber(roomID)
 	defer cancel()
@@ -111,7 +111,7 @@ func TestNotifySubscribersIsolatesRooms(t *testing.T) {
 	ts := newTestService()
 	roomA := testRoomID("!room-a:local")
 	roomB := testRoomID("!room-b:local")
-	content := ticket.TicketContent{Version: 1, Title: "test", Status: "open"}
+	content := ticket.TicketContent{Version: 1, Title: "test", Status: ticket.StatusOpen}
 
 	subscriberA, cancelA := newSubscriber(roomA)
 	defer cancelA()
@@ -141,7 +141,7 @@ func TestNotifySubscribersIsolatesRooms(t *testing.T) {
 func TestNotifySubscribersFullChannelSetsResync(t *testing.T) {
 	ts := newTestService()
 	roomID := testRoomID("!room:local")
-	content := ticket.TicketContent{Version: 1, Title: "test", Status: "open"}
+	content := ticket.TicketContent{Version: 1, Title: "test", Status: ticket.StatusOpen}
 
 	// Create a subscriber with a tiny buffer so it overflows easily.
 	done := make(chan struct{})
@@ -174,7 +174,7 @@ func TestNotifySubscribersFullChannelSetsResync(t *testing.T) {
 func TestNotifySubscribersRemovesDisconnected(t *testing.T) {
 	ts := newTestService()
 	roomID := testRoomID("!room:local")
-	content := ticket.TicketContent{Version: 1, Title: "test", Status: "open"}
+	content := ticket.TicketContent{Version: 1, Title: "test", Status: ticket.StatusOpen}
 
 	// Create a subscriber that's already disconnected.
 	done := make(chan struct{})
@@ -209,7 +209,7 @@ func TestNotifySubscribersRemovesDisconnected(t *testing.T) {
 func TestNotifySubscribersRemovesAllDisconnected(t *testing.T) {
 	ts := newTestService()
 	roomID := testRoomID("!room:local")
-	content := ticket.TicketContent{Version: 1, Title: "test", Status: "open"}
+	content := ticket.TicketContent{Version: 1, Title: "test", Status: ticket.StatusOpen}
 
 	// Create two disconnected subscribers — no live ones.
 	done := make(chan struct{})
@@ -254,7 +254,7 @@ func TestPutWithEchoNotifiesSubscribers(t *testing.T) {
 	ts.addSubscriber(subscriber)
 
 	content := ticket.TicketContent{
-		Version: 1, Title: "test", Status: "open",
+		Version: 1, Title: "test", Status: ticket.StatusOpen,
 		Type: "task", CreatedAt: "2026-01-01T00:00:00Z",
 		UpdatedAt: "2026-01-01T00:00:00Z",
 	}
@@ -289,7 +289,7 @@ func TestIndexTicketEventNotifiesOnPut(t *testing.T) {
 	ts.addSubscriber(subscriber)
 
 	contentMap := toContentMap(t, ticket.TicketContent{
-		Version: 1, Title: "synced ticket", Status: "open",
+		Version: 1, Title: "synced ticket", Status: ticket.StatusOpen,
 		Type: "task", CreatedAt: "2026-01-01T00:00:00Z",
 		UpdatedAt: "2026-01-01T00:00:00Z",
 	})
@@ -323,7 +323,7 @@ func TestIndexTicketEventNotifiesOnRemove(t *testing.T) {
 	ts := newTestService()
 	roomID := testRoomID("!room:local")
 	state := newTrackedRoom(map[string]ticket.TicketContent{
-		"tkt-1": {Version: 1, Title: "existing", Status: "open"},
+		"tkt-1": {Version: 1, Title: "existing", Status: ticket.StatusOpen},
 	})
 	ts.rooms[roomID] = state
 
@@ -453,23 +453,23 @@ func TestSubscribeHandlerPhasedSnapshot(t *testing.T) {
 	//   tkt-closed-old: closed (no open tickets depend on it)
 	state := newTrackedRoom(map[string]ticket.TicketContent{
 		"tkt-open-1": {
-			Version: 1, Title: "open blocked", Status: "open",
+			Version: 1, Title: "open blocked", Status: ticket.StatusOpen,
 			Type: "task", BlockedBy: []string{"tkt-closed-dep"},
 			CreatedAt: "2026-01-01T00:00:00Z", UpdatedAt: "2026-01-01T00:00:00Z",
 		},
 		"tkt-open-2": {
-			Version: 1, Title: "open unblocked", Status: "open",
+			Version: 1, Title: "open unblocked", Status: ticket.StatusOpen,
 			Type:      "task",
 			CreatedAt: "2026-01-02T00:00:00Z", UpdatedAt: "2026-01-02T00:00:00Z",
 		},
 		"tkt-closed-dep": {
-			Version: 1, Title: "closed dep", Status: "closed",
+			Version: 1, Title: "closed dep", Status: ticket.StatusClosed,
 			Type:      "task",
 			CreatedAt: "2026-01-01T00:00:00Z", UpdatedAt: "2026-01-03T00:00:00Z",
 			ClosedAt: "2026-01-03T00:00:00Z",
 		},
 		"tkt-closed-old": {
-			Version: 1, Title: "closed old", Status: "closed",
+			Version: 1, Title: "closed old", Status: ticket.StatusClosed,
 			Type:      "task",
 			CreatedAt: "2025-12-01T00:00:00Z", UpdatedAt: "2025-12-15T00:00:00Z",
 			ClosedAt: "2025-12-15T00:00:00Z",
@@ -510,7 +510,7 @@ func TestSubscribeHandlerPhasedSnapshot(t *testing.T) {
 		if frame.Type != "put" {
 			t.Fatalf("unexpected frame type before open_complete: %q", frame.Type)
 		}
-		if frame.Content.Status == "closed" {
+		if frame.Content.Status == ticket.StatusClosed {
 			if len(openTicketIDs) > 0 {
 				t.Fatal("closed dep arrived after open ticket — closed deps must come first")
 			}
@@ -546,7 +546,7 @@ func TestSubscribeHandlerPhasedSnapshot(t *testing.T) {
 		if frame.Type != "put" {
 			t.Fatalf("unexpected frame type between open_complete and caught_up: %q", frame.Type)
 		}
-		if frame.Content.Status != "closed" {
+		if frame.Content.Status != ticket.StatusClosed {
 			t.Fatalf("expected only closed tickets after open_complete, got status %q", frame.Content.Status)
 		}
 		remainingClosedIDs = append(remainingClosedIDs, frame.TicketID)
@@ -569,7 +569,7 @@ func TestSubscribeHandlerLiveEvents(t *testing.T) {
 	roomID := testRoomID("!room:local")
 
 	state := newTrackedRoom(map[string]ticket.TicketContent{
-		"tkt-1": {Version: 1, Title: "existing", Status: "open", Type: "task",
+		"tkt-1": {Version: 1, Title: "existing", Status: ticket.StatusOpen, Type: "task",
 			CreatedAt: "2026-01-01T00:00:00Z", UpdatedAt: "2026-01-01T00:00:00Z"},
 	})
 	ts.rooms[roomID] = state
@@ -597,7 +597,7 @@ func TestSubscribeHandlerLiveEvents(t *testing.T) {
 	// was registered by handleSubscribe, so notifySubscribers will
 	// reach it.
 	newContent := ticket.TicketContent{
-		Version: 1, Title: "updated", Status: "in_progress", Type: "task",
+		Version: 1, Title: "updated", Status: ticket.StatusInProgress, Type: "task",
 		Assignee:  ref.MustParseUserID("@alice:bureau.local"),
 		CreatedAt: "2026-01-01T00:00:00Z", UpdatedAt: "2026-01-02T00:00:00Z",
 	}
@@ -614,7 +614,7 @@ func TestSubscribeHandlerLiveEvents(t *testing.T) {
 	if frame.TicketID != "tkt-1" {
 		t.Fatalf("expected ticket ID tkt-1, got %q", frame.TicketID)
 	}
-	if frame.Content.Status != "in_progress" {
+	if frame.Content.Status != ticket.StatusInProgress {
 		t.Fatalf("expected status in_progress, got %q", frame.Content.Status)
 	}
 
@@ -690,7 +690,7 @@ func TestSubscribeHandlerResync(t *testing.T) {
 	roomID := testRoomID("!room:local")
 
 	state := newTrackedRoom(map[string]ticket.TicketContent{
-		"tkt-1": {Version: 1, Title: "ticket one", Status: "open", Type: "task",
+		"tkt-1": {Version: 1, Title: "ticket one", Status: ticket.StatusOpen, Type: "task",
 			CreatedAt: "2026-01-01T00:00:00Z", UpdatedAt: "2026-01-01T00:00:00Z"},
 	})
 	ts.rooms[roomID] = state
@@ -726,14 +726,14 @@ func TestSubscribeHandlerResync(t *testing.T) {
 
 	// Add a new ticket to the index so the resync snapshot differs.
 	state.index.Put("tkt-2", ticket.TicketContent{
-		Version: 1, Title: "ticket two", Status: "open", Type: "task",
+		Version: 1, Title: "ticket two", Status: ticket.StatusOpen, Type: "task",
 		CreatedAt: "2026-01-02T00:00:00Z", UpdatedAt: "2026-01-02T00:00:00Z",
 	})
 
 	// Send an event to wake the event loop. The handler will check
 	// the resync flag and initiate a re-snapshot.
 	sub.channel <- subscribeEvent{Kind: "put", TicketID: "tkt-2",
-		Content: ticket.TicketContent{Version: 1, Title: "ticket two", Status: "open"}}
+		Content: ticket.TicketContent{Version: 1, Title: "ticket two", Status: ticket.StatusOpen}}
 	ts.mu.Unlock()
 
 	// Read frames: expect resync, then a fresh snapshot.
@@ -811,31 +811,31 @@ func TestSubscribeHandlerCleanup(t *testing.T) {
 func TestCollectSnapshotPartitioning(t *testing.T) {
 	state := newTrackedRoom(map[string]ticket.TicketContent{
 		"epic-1": {
-			Version: 1, Title: "epic", Status: "open", Type: "epic",
+			Version: 1, Title: "epic", Status: ticket.StatusOpen, Type: "epic",
 			CreatedAt: "2026-01-01T00:00:00Z", UpdatedAt: "2026-01-01T00:00:00Z",
 			BlockedBy: []string{"dep-a", "dep-b"},
 		},
 		"task-1": {
-			Version: 1, Title: "task", Status: "in_progress", Type: "task",
+			Version: 1, Title: "task", Status: ticket.StatusInProgress, Type: "task",
 			CreatedAt: "2026-01-02T00:00:00Z", UpdatedAt: "2026-01-02T00:00:00Z",
 		},
 		"dep-a": {
-			Version: 1, Title: "dep a", Status: "closed", Type: "task",
+			Version: 1, Title: "dep a", Status: ticket.StatusClosed, Type: "task",
 			CreatedAt: "2026-01-01T00:00:00Z", UpdatedAt: "2026-01-03T00:00:00Z",
 			ClosedAt: "2026-01-03T00:00:00Z",
 		},
 		"dep-b": {
-			Version: 1, Title: "dep b", Status: "closed", Type: "task",
+			Version: 1, Title: "dep b", Status: ticket.StatusClosed, Type: "task",
 			CreatedAt: "2026-01-01T00:00:00Z", UpdatedAt: "2026-01-04T00:00:00Z",
 			ClosedAt: "2026-01-04T00:00:00Z",
 		},
 		"old-closed-1": {
-			Version: 1, Title: "old closed 1", Status: "closed", Type: "task",
+			Version: 1, Title: "old closed 1", Status: ticket.StatusClosed, Type: "task",
 			CreatedAt: "2025-12-01T00:00:00Z", UpdatedAt: "2025-12-10T00:00:00Z",
 			ClosedAt: "2025-12-10T00:00:00Z",
 		},
 		"old-closed-2": {
-			Version: 1, Title: "old closed 2", Status: "closed", Type: "task",
+			Version: 1, Title: "old closed 2", Status: ticket.StatusClosed, Type: "task",
 			CreatedAt: "2025-12-01T00:00:00Z", UpdatedAt: "2025-12-20T00:00:00Z",
 			ClosedAt: "2025-12-20T00:00:00Z",
 		},

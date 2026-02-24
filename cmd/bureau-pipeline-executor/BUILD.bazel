@@ -47,6 +47,7 @@ go_test(
         "//lib/clock",
         "//lib/codec",
         "//lib/schema/pipeline",
+        "//lib/schema/ticket",
         "//lib/service",
     ],
 )

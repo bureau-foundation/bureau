@@ -260,7 +260,7 @@ func waitForSocket(t *testing.T, path string) {
 
 // ticketFixture returns a minimal valid TicketContent. The title and
 // status are parameterized; everything else gets sensible defaults.
-func ticketFixture(title, status string) ticket.TicketContent {
+func ticketFixture(title string, status ticket.TicketStatus) ticket.TicketContent {
 	return ticket.TicketContent{
 		Version:   ticket.TicketContentVersion,
 		Title:     title,
@@ -294,7 +294,7 @@ func sampleRooms() map[ref.RoomID]*roomState {
 			Version:   1,
 			Title:     "implement login",
 			Body:      "add OAuth support",
-			Status:    "open",
+			Status:    ticket.StatusOpen,
 			Priority:  1,
 			Type:      "feature",
 			Labels:    []string{"auth", "frontend"},
@@ -304,7 +304,7 @@ func sampleRooms() map[ref.RoomID]*roomState {
 		"tkt-2": {
 			Version:   1,
 			Title:     "fix database timeout",
-			Status:    "closed",
+			Status:    ticket.StatusClosed,
 			Priority:  0,
 			Type:      "bug",
 			Labels:    []string{"backend"},
@@ -314,7 +314,7 @@ func sampleRooms() map[ref.RoomID]*roomState {
 		"tkt-3": {
 			Version:   1,
 			Title:     "write tests",
-			Status:    "open",
+			Status:    ticket.StatusOpen,
 			Priority:  2,
 			Type:      "task",
 			Parent:    "tkt-1",
@@ -328,7 +328,7 @@ func sampleRooms() map[ref.RoomID]*roomState {
 			Version:   1,
 			Title:     "deploy service",
 			Body:      "roll out to production",
-			Status:    "open",
+			Status:    ticket.StatusOpen,
 			Priority:  1,
 			Type:      "task",
 			CreatedAt: "2026-01-03T00:00:00Z",
@@ -396,7 +396,7 @@ func TestSchemaContentRoundTripViaCBOR(t *testing.T) {
 		Version:   1,
 		Title:     "round-trip test",
 		Body:      "body text",
-		Status:    "open",
+		Status:    ticket.StatusOpen,
 		Priority:  2,
 		Type:      "task",
 		Labels:    []string{"a", "b"},
@@ -523,7 +523,7 @@ func mutationRooms() map[ref.RoomID]*roomState {
 		"tkt-open": {
 			Version:   1,
 			Title:     "open ticket",
-			Status:    "open",
+			Status:    ticket.StatusOpen,
 			Priority:  2,
 			Type:      "task",
 			CreatedBy: ref.MustParseUserID("@agent/creator:bureau.local"),
@@ -533,7 +533,7 @@ func mutationRooms() map[ref.RoomID]*roomState {
 		"tkt-closed": {
 			Version:     1,
 			Title:       "closed ticket",
-			Status:      "closed",
+			Status:      ticket.StatusClosed,
 			Priority:    2,
 			Type:        "bug",
 			CreatedBy:   ref.MustParseUserID("@agent/creator:bureau.local"),
@@ -545,7 +545,7 @@ func mutationRooms() map[ref.RoomID]*roomState {
 		"tkt-inprog": {
 			Version:   1,
 			Title:     "in-progress ticket",
-			Status:    "in_progress",
+			Status:    ticket.StatusInProgress,
 			Priority:  1,
 			Type:      "feature",
 			Assignee:  ref.MustParseUserID("@agent/worker:bureau.local"),
@@ -556,7 +556,7 @@ func mutationRooms() map[ref.RoomID]*roomState {
 		"tkt-gated": {
 			Version:  1,
 			Title:    "gated ticket",
-			Status:   "open",
+			Status:   ticket.StatusOpen,
 			Priority: 2,
 			Type:     "task",
 			Gates: []ticket.TicketGate{
@@ -582,7 +582,7 @@ func mutationRooms() map[ref.RoomID]*roomState {
 		"tkt-dep": {
 			Version:   1,
 			Title:     "dependency ticket",
-			Status:    "open",
+			Status:    ticket.StatusOpen,
 			Priority:  2,
 			Type:      "task",
 			BlockedBy: []string{"tkt-open"},
@@ -593,7 +593,7 @@ func mutationRooms() map[ref.RoomID]*roomState {
 		"tkt-review": {
 			Version:  ticket.TicketContentVersion,
 			Title:    "ticket in review",
-			Status:   "review",
+			Status:   ticket.StatusReview,
 			Priority: 2,
 			Type:     "task",
 			Assignee: ref.MustParseUserID("@agent/worker:bureau.local"),
@@ -616,7 +616,7 @@ func mutationRooms() map[ref.RoomID]*roomState {
 		"tkt-blocked": {
 			Version:   1,
 			Title:     "blocked ticket",
-			Status:    "blocked",
+			Status:    ticket.StatusBlocked,
 			Priority:  2,
 			Type:      "task",
 			CreatedBy: ref.MustParseUserID("@agent/creator:bureau.local"),

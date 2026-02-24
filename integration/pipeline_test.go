@@ -9,6 +9,7 @@ import (
 
 	"github.com/bureau-foundation/bureau/lib/command"
 	"github.com/bureau-foundation/bureau/lib/schema/pipeline"
+	"github.com/bureau-foundation/bureau/lib/schema/ticket"
 )
 
 // TestPipelineExecution exercises the full pipeline execution lifecycle
@@ -98,8 +99,8 @@ func TestPipelineExecution(t *testing.T) {
 	if err != nil {
 		t.Fatalf("watching pipeline ticket: %v", err)
 	}
-	if final.Status != "closed" {
-		t.Errorf("ticket status = %q, want closed", final.Status)
+	if final.Status != ticket.StatusClosed {
+		t.Errorf("ticket status = %q, want %s", final.Status, ticket.StatusClosed)
 	}
 	if final.Type != "pipeline" {
 		t.Errorf("ticket type = %q, want pipeline", final.Type)
@@ -191,8 +192,8 @@ func TestPipelineExecutionFailure(t *testing.T) {
 	if err != nil {
 		t.Fatalf("watching pipeline ticket: %v", err)
 	}
-	if final.Status != "closed" {
-		t.Errorf("ticket status = %q, want closed", final.Status)
+	if final.Status != ticket.StatusClosed {
+		t.Errorf("ticket status = %q, want %s", final.Status, ticket.StatusClosed)
 	}
 	if final.Pipeline == nil {
 		t.Fatal("ticket has nil pipeline content")
@@ -296,8 +297,8 @@ func TestPipelineParameterPropagation(t *testing.T) {
 	if err != nil {
 		t.Fatalf("watching pipeline ticket: %v", err)
 	}
-	if final.Status != "closed" {
-		t.Errorf("ticket status = %q, want closed", final.Status)
+	if final.Status != ticket.StatusClosed {
+		t.Errorf("ticket status = %q, want %s", final.Status, ticket.StatusClosed)
 	}
 	if final.Pipeline == nil {
 		t.Fatal("ticket has nil pipeline content")

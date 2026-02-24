@@ -57,7 +57,7 @@ func WatchTicket(ctx context.Context, params WatchTicketParams) (*ticket.TicketC
 	existing, err := params.Session.GetStateEvent(ctx, params.RoomID, schema.EventTypeTicket, stateKey)
 	if err == nil {
 		var content ticket.TicketContent
-		if parseErr := json.Unmarshal(existing, &content); parseErr == nil && content.Status == "closed" {
+		if parseErr := json.Unmarshal(existing, &content); parseErr == nil && content.Status == ticket.StatusClosed {
 			return &content, nil
 		}
 	}
@@ -98,7 +98,7 @@ func WatchTicket(ctx context.Context, params WatchTicketParams) (*ticket.TicketC
 		}
 		previous = content
 
-		if content.Status == "closed" {
+		if content.Status == ticket.StatusClosed {
 			return &content, nil
 		}
 	}

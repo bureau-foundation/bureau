@@ -157,7 +157,7 @@ func TestRenderReviewWithGateStatus(t *testing.T) {
 	renderer := NewDetailRenderer(DefaultTheme, 80)
 
 	content := ticket.TicketContent{
-		Status: "review",
+		Status: ticket.StatusReview,
 		Gates: []ticket.TicketGate{
 			{
 				ID:          "stewardship:fleet/gpu",
@@ -193,7 +193,7 @@ func TestRenderReviewSatisfiedGate(t *testing.T) {
 	renderer := NewDetailRenderer(DefaultTheme, 80)
 
 	content := ticket.TicketContent{
-		Status: "review",
+		Status: ticket.StatusReview,
 		Gates: []ticket.TicketGate{
 			{
 				ID:          "stewardship:fleet/gpu",
@@ -220,7 +220,7 @@ func TestRenderReviewSkipsNonReviewGates(t *testing.T) {
 	renderer := NewDetailRenderer(DefaultTheme, 80)
 
 	content := ticket.TicketContent{
-		Status: "open",
+		Status: ticket.StatusOpen,
 		Gates: []ticket.TicketGate{
 			{ID: "ci-pass", Type: "pipeline", Status: "pending"},
 			{ID: "stewardship:fleet/gpu", Type: "review", Status: "pending", Description: "Fleet GPU"},
@@ -248,7 +248,7 @@ func TestRenderReviewClassicFlatDisplay(t *testing.T) {
 	renderer := NewDetailRenderer(DefaultTheme, 80)
 
 	content := ticket.TicketContent{
-		Status: "review",
+		Status: ticket.StatusReview,
 		Review: &ticket.TicketReview{
 			Reviewers: []ticket.ReviewerEntry{
 				{UserID: ref.MustParseUserID("@alice:bureau.local"), Disposition: "approved"},
@@ -275,7 +275,7 @@ func TestRenderReviewWithScope(t *testing.T) {
 	renderer := NewDetailRenderer(DefaultTheme, 80)
 
 	content := ticket.TicketContent{
-		Status: "review",
+		Status: ticket.StatusReview,
 		Review: &ticket.TicketReview{
 			Reviewers: []ticket.ReviewerEntry{
 				{UserID: ref.MustParseUserID("@alice:bureau.local"), Disposition: "pending"},
@@ -327,7 +327,7 @@ func TestRenderBodyIncludesAffects(t *testing.T) {
 	index.Put("tkt-review", ticket.TicketContent{
 		Version: 1,
 		Title:   "Review ticket",
-		Status:  "review",
+		Status:  ticket.StatusReview,
 		Type:    "task",
 		Affects: []string{"fleet/gpu/a100", "workspace/deploy"},
 	})
@@ -339,7 +339,7 @@ func TestRenderBodyIncludesAffects(t *testing.T) {
 		Content: ticket.TicketContent{
 			Version: 1,
 			Title:   "Review ticket",
-			Status:  "review",
+			Status:  ticket.StatusReview,
 			Type:    "task",
 			Affects: []string{"fleet/gpu/a100", "workspace/deploy"},
 		},
@@ -362,7 +362,7 @@ func TestRenderBodyNoAffectsWhenEmpty(t *testing.T) {
 	index.Put("tkt-plain", ticket.TicketContent{
 		Version: 1,
 		Title:   "Plain ticket",
-		Status:  "open",
+		Status:  ticket.StatusOpen,
 		Type:    "task",
 	})
 	source := NewIndexSource(index)
@@ -373,7 +373,7 @@ func TestRenderBodyNoAffectsWhenEmpty(t *testing.T) {
 		Content: ticket.TicketContent{
 			Version: 1,
 			Title:   "Plain ticket",
-			Status:  "open",
+			Status:  ticket.StatusOpen,
 			Type:    "task",
 		},
 	}
@@ -403,7 +403,7 @@ func TestCanReviewFileMode(t *testing.T) {
 	index.Put("tkt-review", ticket.TicketContent{
 		Version: 1,
 		Title:   "Review ticket",
-		Status:  "review",
+		Status:  ticket.StatusReview,
 		Type:    "task",
 		Review: &ticket.TicketReview{
 			Reviewers: []ticket.ReviewerEntry{
@@ -481,7 +481,7 @@ func TestOpenReviewDropdownWrongStatus(t *testing.T) {
 func TestStatusTransitionsReview(t *testing.T) {
 	t.Parallel()
 
-	options := StatusTransitions("review")
+	options := StatusTransitions(string(ticket.StatusReview))
 	if len(options) != 3 {
 		t.Fatalf("expected 3 transitions from review, got %d", len(options))
 	}
@@ -491,7 +491,7 @@ func TestStatusTransitionsReview(t *testing.T) {
 		values[option.Value] = true
 	}
 
-	for _, expected := range []string{"open", "in_progress", "closed"} {
+	for _, expected := range []string{string(ticket.StatusOpen), string(ticket.StatusInProgress), string(ticket.StatusClosed)} {
 		if !values[expected] {
 			t.Errorf("missing transition: %s", expected)
 		}

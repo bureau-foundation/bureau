@@ -21,6 +21,7 @@ import (
 	"github.com/bureau-foundation/bureau/lib/clock"
 	"github.com/bureau-foundation/bureau/lib/codec"
 	"github.com/bureau-foundation/bureau/lib/schema/pipeline"
+	"github.com/bureau-foundation/bureau/lib/schema/ticket"
 	"github.com/bureau-foundation/bureau/lib/service"
 )
 
@@ -184,7 +185,7 @@ type mockTicketCall struct {
 
 func newMockTicketService() *mockTicketService {
 	return &mockTicketService{
-		ticketStatus: "in_progress",
+		ticketStatus: string(ticket.StatusInProgress),
 		failActions:  map[string]bool{},
 	}
 }
@@ -231,7 +232,7 @@ func startMockTicketService(t *testing.T) (string, string, *mockTicketService) {
 		}
 		return map[string]any{
 			"id":      fields["ticket"],
-			"content": map[string]any{"status": "in_progress"},
+			"content": map[string]any{"status": string(ticket.StatusInProgress)},
 		}, nil
 	})
 
@@ -248,7 +249,7 @@ func startMockTicketService(t *testing.T) (string, string, *mockTicketService) {
 		mock.mu.Unlock()
 		return map[string]any{
 			"id":      fields["ticket"],
-			"content": map[string]any{"status": "closed"},
+			"content": map[string]any{"status": string(ticket.StatusClosed)},
 		}, nil
 	})
 
@@ -265,7 +266,7 @@ func startMockTicketService(t *testing.T) (string, string, *mockTicketService) {
 		mock.mu.Unlock()
 		return map[string]any{
 			"id":      fields["ticket"],
-			"content": map[string]any{"status": "in_progress"},
+			"content": map[string]any{"status": string(ticket.StatusInProgress)},
 		}, nil
 	})
 
@@ -359,7 +360,7 @@ func writeTicketTrigger(t *testing.T, pipelineRef string, variables map[string]s
 	content := map[string]any{
 		"version":  1,
 		"title":    "Pipeline: " + pipelineRef,
-		"status":   "open",
+		"status":   string(ticket.StatusOpen),
 		"priority": 2,
 		"type":     "pipeline",
 		"pipeline": map[string]any{
@@ -1318,8 +1319,8 @@ func TestTicketProgressAndCloseOnSuccess(t *testing.T) {
 		t.Fatalf("expected 1 claim, got %d", len(ticketMock.claimCalls))
 	}
 	claimFields := ticketMock.claimCalls[0].Fields
-	if claimFields["status"] != "in_progress" {
-		t.Errorf("claim status = %v, want in_progress", claimFields["status"])
+	if claimFields["status"] != string(ticket.StatusInProgress) {
+		t.Errorf("claim status = %v, want %s", claimFields["status"], ticket.StatusInProgress)
 	}
 
 	// Verify close call includes success message.
@@ -1437,7 +1438,7 @@ func TestNonPipelineTicketTypeRejected(t *testing.T) {
 	triggerPath := writeTrigger(t, map[string]any{
 		"version":  1,
 		"title":    "Not a pipeline",
-		"status":   "open",
+		"status":   string(ticket.StatusOpen),
 		"priority": 2,
 		"type":     "task",
 	})

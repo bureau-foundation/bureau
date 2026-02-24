@@ -1544,7 +1544,7 @@ func TestSetDispositionTriggersEscalation(t *testing.T) {
 	content := ticket.TicketContent{
 		Version:   ticket.TicketContentVersion,
 		Title:     "GPU fleet change",
-		Status:    "review",
+		Status:    ticket.StatusReview,
 		Type:      "task",
 		Priority:  2,
 		CreatedBy: ref.MustParseUserID("@agent/creator:bureau.local"),
@@ -1607,7 +1607,7 @@ func TestSetDispositionNoEscalationWhenNotLastPending(t *testing.T) {
 	content := ticket.TicketContent{
 		Version:   ticket.TicketContentVersion,
 		Title:     "Simple review",
-		Status:    "review",
+		Status:    ticket.StatusReview,
 		Type:      "task",
 		Priority:  2,
 		CreatedBy: ref.MustParseUserID("@agent/creator:bureau.local"),

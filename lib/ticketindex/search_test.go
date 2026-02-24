@@ -14,17 +14,17 @@ func TestSearchBasicTextMatch(t *testing.T) {
 	index.Put("tkt-aa00", ticket.TicketContent{
 		Title:  "Fix authentication token refresh",
 		Body:   "The auth token is not being refreshed properly.",
-		Status: "open",
+		Status: ticket.StatusOpen,
 	})
 	index.Put("tkt-bb00", ticket.TicketContent{
 		Title:  "Add pagination to list view",
 		Body:   "Users need pagination when there are many items.",
-		Status: "open",
+		Status: ticket.StatusOpen,
 	})
 	index.Put("tkt-cc00", ticket.TicketContent{
 		Title:  "Update deployment scripts",
 		Body:   "The authentication middleware needs updating in deploy.",
-		Status: "open",
+		Status: ticket.StatusOpen,
 	})
 
 	results := index.Search("authentication", Filter{}, 0)
@@ -52,12 +52,12 @@ func TestSearchExactIDMatch(t *testing.T) {
 	index.Put("tkt-abcd", ticket.TicketContent{
 		Title:  "Minor cleanup task",
 		Body:   "Just some cleanup.",
-		Status: "open",
+		Status: ticket.StatusOpen,
 	})
 	index.Put("tkt-ef00", ticket.TicketContent{
 		Title:  "Authentication overhaul",
 		Body:   "Major authentication rework needed.",
-		Status: "open",
+		Status: ticket.StatusOpen,
 	})
 
 	// Search for tkt-abcd with additional keyword "authentication".
@@ -80,18 +80,18 @@ func TestSearchGraphExpansionBlockedBy(t *testing.T) {
 	index.Put("tkt-b10c", ticket.TicketContent{
 		Title:  "Infrastructure migration",
 		Body:   "Migrate to new infrastructure.",
-		Status: "open",
+		Status: ticket.StatusOpen,
 	})
 	index.Put("tkt-de0e", ticket.TicketContent{
 		Title:     "Deploy new service",
 		Body:      "Deploy after infra is ready.",
-		Status:    "open",
+		Status:    ticket.StatusOpen,
 		BlockedBy: []string{"tkt-b10c"},
 	})
 	index.Put("tkt-0a0b", ticket.TicketContent{
 		Title:  "Update documentation",
 		Body:   "Documentation update.",
-		Status: "open",
+		Status: ticket.StatusOpen,
 	})
 
 	// Search for the blocker's ID. Should return:
@@ -121,19 +121,19 @@ func TestSearchGraphExpansionChildren(t *testing.T) {
 	index.Put("tkt-e01c", ticket.TicketContent{
 		Title:  "Epic: authentication overhaul",
 		Body:   "Parent epic for all auth work.",
-		Status: "open",
+		Status: ticket.StatusOpen,
 		Type:   "epic",
 	})
 	index.Put("tkt-c001", ticket.TicketContent{
 		Title:  "Implement OAuth provider",
 		Body:   "Add OAuth support.",
-		Status: "open",
+		Status: ticket.StatusOpen,
 		Parent: "tkt-e01c",
 	})
 	index.Put("tkt-c002", ticket.TicketContent{
 		Title:  "Add token rotation",
 		Body:   "Rotate tokens periodically.",
-		Status: "open",
+		Status: ticket.StatusOpen,
 		Parent: "tkt-e01c",
 	})
 
@@ -163,17 +163,17 @@ func TestSearchTextualReference(t *testing.T) {
 	index.Put("tkt-face", ticket.TicketContent{
 		Title:  "Fix memory leak in proxy",
 		Body:   "The proxy leaks memory under load.",
-		Status: "open",
+		Status: ticket.StatusOpen,
 	})
 	index.Put("tkt-bead", ticket.TicketContent{
 		Title:  "Investigate proxy crashes",
 		Body:   "Crashes may be related to the memory leak. See tkt-face for details.",
-		Status: "open",
+		Status: ticket.StatusOpen,
 	})
 	index.Put("tkt-dead", ticket.TicketContent{
 		Title:  "Unrelated database task",
 		Body:   "Optimize database queries.",
-		Status: "open",
+		Status: ticket.StatusOpen,
 	})
 
 	results := index.Search("tkt-face", Filter{}, 0)
@@ -205,13 +205,13 @@ func TestSearchFilterApplied(t *testing.T) {
 	for _, tc := range []struct {
 		id     string
 		title  string
-		status string
+		status ticket.TicketStatus
 	}{
-		{"tkt-aa00", "Authentication bug in proxy", "open"},
-		{"tkt-bb00", "Authentication token issue", "open"},
-		{"tkt-cc00", "Authentication refactor done", "closed"},
-		{"tkt-dd00", "Authentication improvement", "in_progress"},
-		{"tkt-ee00", "Authentication cleanup", "closed"},
+		{"tkt-aa00", "Authentication bug in proxy", ticket.StatusOpen},
+		{"tkt-bb00", "Authentication token issue", ticket.StatusOpen},
+		{"tkt-cc00", "Authentication refactor done", ticket.StatusClosed},
+		{"tkt-dd00", "Authentication improvement", ticket.StatusInProgress},
+		{"tkt-ee00", "Authentication cleanup", ticket.StatusClosed},
 	} {
 		index.Put(tc.id, ticket.TicketContent{
 			Title:  tc.title,
@@ -222,7 +222,7 @@ func TestSearchFilterApplied(t *testing.T) {
 
 	results := index.Search("authentication", Filter{Status: "open"}, 0)
 	for _, result := range results {
-		if result.Content.Status != "open" {
+		if result.Content.Status != ticket.StatusOpen {
 			t.Errorf("expected only open tickets, got %s (status: %s)", result.ID, result.Content.Status)
 		}
 	}
@@ -239,7 +239,7 @@ func TestSearchLimit(t *testing.T) {
 		index.Put(id, ticket.TicketContent{
 			Title:  "Performance optimization task",
 			Body:   "Optimize performance in various areas.",
-			Status: "open",
+			Status: ticket.StatusOpen,
 		})
 	}
 
@@ -254,7 +254,7 @@ func TestSearchDirtyRebuild(t *testing.T) {
 	index.Put("tkt-aa00", ticket.TicketContent{
 		Title:  "Initial ticket about caching",
 		Body:   "Implement caching layer.",
-		Status: "open",
+		Status: ticket.StatusOpen,
 	})
 
 	// First search triggers initial build.
@@ -267,7 +267,7 @@ func TestSearchDirtyRebuild(t *testing.T) {
 	index.Put("tkt-bb00", ticket.TicketContent{
 		Title:  "Cache invalidation strategy",
 		Body:   "Design caching invalidation approach.",
-		Status: "open",
+		Status: ticket.StatusOpen,
 	})
 
 	// Second search should include the new ticket (dirty rebuild).
@@ -294,7 +294,7 @@ func TestSearchEmptyQuery(t *testing.T) {
 	index.Put("tkt-aa00", ticket.TicketContent{
 		Title:  "Some ticket",
 		Body:   "Content.",
-		Status: "open",
+		Status: ticket.StatusOpen,
 	})
 
 	results := index.Search("", Filter{}, 0)
@@ -308,7 +308,7 @@ func TestSearchNoMatch(t *testing.T) {
 	index.Put("tkt-aa00", ticket.TicketContent{
 		Title:  "Fix login page",
 		Body:   "The login page has a rendering bug.",
-		Status: "open",
+		Status: ticket.StatusOpen,
 	})
 
 	results := index.Search("cryptocurrency blockchain", Filter{}, 0)
@@ -322,7 +322,7 @@ func TestSearchArtifactIDReference(t *testing.T) {
 	index.Put("tkt-aa00", ticket.TicketContent{
 		Title:  "Publish build artifact",
 		Body:   "Build and publish the release artifact.",
-		Status: "open",
+		Status: ticket.StatusOpen,
 		Attachments: []ticket.TicketAttachment{
 			{Ref: "art-cafe1234", Label: "release binary", ContentType: "application/octet-stream"},
 		},
@@ -330,7 +330,7 @@ func TestSearchArtifactIDReference(t *testing.T) {
 	index.Put("tkt-bb00", ticket.TicketContent{
 		Title:  "Unrelated ticket",
 		Body:   "Nothing to do with artifacts.",
-		Status: "open",
+		Status: ticket.StatusOpen,
 	})
 
 	results := index.Search("art-cafe1234", Filter{}, 0)
@@ -360,13 +360,13 @@ func TestSearchLabelWeight(t *testing.T) {
 	index.Put("tkt-aa00", ticket.TicketContent{
 		Title:  "Review access controls",
 		Body:   "Review the access control implementation.",
-		Status: "open",
+		Status: ticket.StatusOpen,
 		Labels: []string{"security"},
 	})
 	index.Put("tkt-bb00", ticket.TicketContent{
 		Title:  "Update deployment docs",
 		Body:   "Document the security practices for deployment.",
-		Status: "open",
+		Status: ticket.StatusOpen,
 	})
 
 	results := index.Search("security", Filter{}, 0)
@@ -387,12 +387,12 @@ func TestSearchGateTicketIDReference(t *testing.T) {
 	index.Put("tkt-9a7e", ticket.TicketContent{
 		Title:  "Deploy service A",
 		Body:   "Deploy the service.",
-		Status: "open",
+		Status: ticket.StatusOpen,
 	})
 	index.Put("tkt-9a7d", ticket.TicketContent{
 		Title:  "Deploy service B",
 		Body:   "Deploy after service A is ready.",
-		Status: "open",
+		Status: ticket.StatusOpen,
 		Gates: []ticket.TicketGate{
 			{ID: "wait-for-a", Type: "ticket", TicketID: "tkt-9a7e", Status: "pending"},
 		},
@@ -454,22 +454,22 @@ func TestSearchActiveFilter(t *testing.T) {
 	index.Put("tkt-aa00", ticket.TicketContent{
 		Title:  "Open auth bug",
 		Body:   "Authentication issue.",
-		Status: "open",
+		Status: ticket.StatusOpen,
 	})
 	index.Put("tkt-bb00", ticket.TicketContent{
 		Title:  "In-progress auth fix",
 		Body:   "Working on authentication fix.",
-		Status: "in_progress",
+		Status: ticket.StatusInProgress,
 	})
 	index.Put("tkt-cc00", ticket.TicketContent{
 		Title:  "Closed auth cleanup",
 		Body:   "Authentication cleanup done.",
-		Status: "closed",
+		Status: ticket.StatusClosed,
 	})
 
 	results := index.Search("authentication", Filter{Status: "active"}, 0)
 	for _, result := range results {
-		if result.Content.Status != "open" && result.Content.Status != "in_progress" {
+		if result.Content.Status != ticket.StatusOpen && result.Content.Status != ticket.StatusInProgress {
 			t.Errorf("active filter should match open/in_progress, got %s (status: %s)",
 				result.ID, result.Content.Status)
 		}

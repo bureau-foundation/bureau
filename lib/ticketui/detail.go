@@ -311,8 +311,9 @@ func (renderer DetailRenderer) RenderBody(source Source, entry ticketindex.Entry
 //   - priorityStart: inclusive start column of the priority text
 //   - priorityEnd: exclusive end column of the priority text
 func (renderer DetailRenderer) renderMetaLine(ticketID string, content ticket.TicketContent, score *ticketindex.TicketScore) (line string, statusEnd, priorityStart, priorityEnd int) {
+	status := string(content.Status)
 	statusStyle := lipgloss.NewStyle().
-		Foreground(renderer.theme.StatusColor(content.Status)).
+		Foreground(renderer.theme.StatusColor(status)).
 		Bold(true)
 
 	priorityStyle := lipgloss.NewStyle().
@@ -326,7 +327,7 @@ func (renderer DetailRenderer) renderMetaLine(ticketID string, content ticket.Ti
 		Foreground(renderer.theme.FaintText)
 
 	// Track visible character positions for click targets.
-	statusText := strings.ToUpper(content.Status)
+	statusText := strings.ToUpper(status)
 	statusEnd = len(statusText) // Status text is ASCII, so len == visible width.
 
 	priorityText := fmt.Sprintf("P%d", content.Priority)
@@ -702,16 +703,17 @@ func (renderer DetailRenderer) renderDependencies(title string, ticketIDs []stri
 			continue
 		}
 
+		blockerStatus := string(content.Status)
 		statusStyle := lipgloss.NewStyle().
-			Foreground(renderer.theme.StatusColor(content.Status))
+			Foreground(renderer.theme.StatusColor(blockerStatus))
 		priorityStyle := lipgloss.NewStyle().
 			Foreground(renderer.theme.PriorityColor(content.Priority))
 		idStyle := lipgloss.NewStyle().
-			Foreground(renderer.theme.StatusColor(content.Status))
+			Foreground(renderer.theme.StatusColor(blockerStatus))
 		titleStyle := lipgloss.NewStyle().
 			Foreground(renderer.theme.FaintText)
 
-		icon := statusIconString(content.Status)
+		icon := statusIconString(blockerStatus)
 		if icon == "" {
 			icon = " " // Reserve the column so IDs align.
 		}
@@ -752,16 +754,17 @@ func (renderer DetailRenderer) renderChildren(parentID string, children []ticket
 	var targets []BodyClickTarget
 
 	for _, child := range children {
+		childStatus := string(child.Content.Status)
 		statusStyle := lipgloss.NewStyle().
-			Foreground(renderer.theme.StatusColor(child.Content.Status))
+			Foreground(renderer.theme.StatusColor(childStatus))
 		priorityStyle := lipgloss.NewStyle().
 			Foreground(renderer.theme.PriorityColor(child.Content.Priority))
 		idStyle := lipgloss.NewStyle().
-			Foreground(renderer.theme.StatusColor(child.Content.Status))
+			Foreground(renderer.theme.StatusColor(childStatus))
 		titleStyle := lipgloss.NewStyle().
 			Foreground(renderer.theme.FaintText)
 
-		icon := statusIconString(child.Content.Status)
+		icon := statusIconString(childStatus)
 		if icon == "" {
 			icon = " " // Reserve the column so IDs align.
 		}
@@ -827,7 +830,7 @@ func (renderer DetailRenderer) renderPipelineExecution(content ticket.TicketCont
 	lines = append(lines, labelStyle.Render("ref: ")+contentStyle.Render(pipeline.PipelineRef))
 
 	// Progress bar for active pipelines.
-	if content.Status == "in_progress" && pipeline.TotalSteps > 0 {
+	if content.Status == ticket.StatusInProgress && pipeline.TotalSteps > 0 {
 		barWidth := 20
 		filled := barWidth * pipeline.CurrentStep / pipeline.TotalSteps
 		if filled > barWidth {
@@ -1370,7 +1373,7 @@ func (pane *DetailPane) rerender() {
 // computeScore returns a TicketScore pointer for the given ticket, or
 // nil for closed tickets where scoring is not meaningful.
 func (pane *DetailPane) computeScore(source Source, entry ticketindex.Entry, now time.Time) *ticketindex.TicketScore {
-	if entry.Content.Status == "closed" {
+	if entry.Content.Status == ticket.StatusClosed {
 		return nil
 	}
 	score := source.Score(entry.ID, now)

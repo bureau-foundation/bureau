@@ -15,7 +15,7 @@ import (
 func TestRenderTooltip_BasicContent(testing *testing.T) {
 	content := ticketschema.TicketContent{
 		Title:    "Fix connection pooling leak",
-		Status:   "open",
+		Status:   ticketschema.StatusOpen,
 		Priority: 1,
 		Body:     "The connection pool is leaking under high load.",
 	}
@@ -63,7 +63,7 @@ func TestRenderTooltip_BasicContent(testing *testing.T) {
 func TestRenderTooltip_NoDescription(testing *testing.T) {
 	content := ticketschema.TicketContent{
 		Title:    "Short task",
-		Status:   "closed",
+		Status:   ticketschema.StatusClosed,
 		Priority: 3,
 	}
 
@@ -77,7 +77,7 @@ func TestRenderTooltip_NoDescription(testing *testing.T) {
 
 func TestRenderTooltip_NoTitle(testing *testing.T) {
 	content := ticketschema.TicketContent{
-		Status:   "open",
+		Status:   ticketschema.StatusOpen,
 		Priority: 0,
 	}
 
@@ -92,7 +92,7 @@ func TestRenderTooltip_NoTitle(testing *testing.T) {
 func TestRenderTooltip_LongTitleTruncated(testing *testing.T) {
 	content := ticketschema.TicketContent{
 		Title:    "This is a very long title that definitely exceeds the maximum tooltip width and should be truncated with an ellipsis character",
-		Status:   "open",
+		Status:   ticketschema.StatusOpen,
 		Priority: 2,
 	}
 
@@ -108,7 +108,7 @@ func TestRenderTooltip_LongTitleTruncated(testing *testing.T) {
 func TestRenderTooltip_MultilineDescription(testing *testing.T) {
 	content := ticketschema.TicketContent{
 		Title:    "Task",
-		Status:   "open",
+		Status:   ticketschema.StatusOpen,
 		Priority: 2,
 		Body:     "First line of description.\nSecond line.\nThird line should not appear.",
 	}
@@ -133,7 +133,7 @@ func TestRenderTooltip_MultilineDescription(testing *testing.T) {
 func TestRenderTooltip_DescriptionSkipsBlankLines(testing *testing.T) {
 	content := ticketschema.TicketContent{
 		Title:    "Task",
-		Status:   "open",
+		Status:   ticketschema.StatusOpen,
 		Priority: 2,
 		Body:     "\n\n  \nActual content here.",
 	}
@@ -155,7 +155,7 @@ func TestRenderTooltip_DescriptionSkipsBlankLines(testing *testing.T) {
 func TestRenderTooltip_ConsistentWidth(testing *testing.T) {
 	content := ticketschema.TicketContent{
 		Title:    "Short",
-		Status:   "in_progress",
+		Status:   ticketschema.StatusInProgress,
 		Priority: 0,
 		Body:     "Short desc.",
 	}

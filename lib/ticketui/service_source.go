@@ -257,13 +257,13 @@ func (source *ServiceSource) mutationClient() *service.ServiceClient {
 // When transitioning from "closed", delegates to Reopen.
 func (source *ServiceSource) UpdateStatus(ctx context.Context, ticketID, status, assignee string) error {
 	// Closing and reopening use dedicated actions with separate grants.
-	if status == "closed" {
+	if status == string(ticket.StatusClosed) {
 		return source.CloseTicket(ctx, ticketID, "")
 	}
 
 	// Check if the ticket is currently closed — if so, this is a reopen.
 	currentContent, exists := source.Get(ticketID)
-	if exists && currentContent.Status == "closed" {
+	if exists && currentContent.Status == ticket.StatusClosed {
 		return source.ReopenTicket(ctx, ticketID)
 	}
 
@@ -337,7 +337,7 @@ func (source *ServiceSource) UpdateAssignee(ctx context.Context, ticketID, assig
 		// Unassign: transition to open, server auto-clears assignee.
 		fields := map[string]any{
 			"ticket": ticketID,
-			"status": "open",
+			"status": string(ticket.StatusOpen),
 		}
 		return source.mutationClient().Call(ctx, "update", fields, nil)
 	}
@@ -353,10 +353,10 @@ func (source *ServiceSource) UpdateAssignee(ctx context.Context, ticketID, assig
 		"assignee": assignee,
 	}
 
-	if currentContent.Status != "in_progress" {
+	if currentContent.Status != ticket.StatusInProgress {
 		// Assigning to an open/blocked ticket: must also transition
 		// to in_progress to satisfy the atomicity constraint.
-		fields["status"] = "in_progress"
+		fields["status"] = string(ticket.StatusInProgress)
 	}
 
 	return source.mutationClient().Call(ctx, "update", fields, nil)

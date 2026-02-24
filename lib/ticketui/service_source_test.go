@@ -46,7 +46,7 @@ func awaitSentinel(t *testing.T, conn net.Conn, events <-chan Event, ticketID st
 	writeFrame(t, conn, serviceSubscribeFrame{
 		Type:     "put",
 		TicketID: ticketID,
-		Content:  ticket.TicketContent{Version: 1, Title: "sentinel", Status: "open"},
+		Content:  ticket.TicketContent{Version: 1, Title: "sentinel", Status: ticket.StatusOpen},
 	})
 	event := testutil.RequireReceive(t, events, time.Second, "waiting for sentinel %s", ticketID)
 	if event.TicketID != ticketID {
@@ -69,7 +69,7 @@ func TestProcessFramesPut(t *testing.T) {
 	}()
 
 	content := ticket.TicketContent{
-		Version: 1, Title: "test ticket", Status: "open",
+		Version: 1, Title: "test ticket", Status: ticket.StatusOpen,
 		Type: "task", CreatedAt: "2026-01-01T00:00:00Z",
 		UpdatedAt: "2026-01-01T00:00:00Z",
 	}
@@ -103,7 +103,7 @@ func TestProcessFramesRemove(t *testing.T) {
 	source := newTestServiceSource()
 	// Pre-populate the index.
 	source.index.Put("tkt-1", ticket.TicketContent{
-		Version: 1, Title: "existing", Status: "open",
+		Version: 1, Title: "existing", Status: ticket.StatusOpen,
 	})
 
 	serverConn, clientConn := net.Pipe()
@@ -181,7 +181,7 @@ func TestProcessFramesResyncClearsIndex(t *testing.T) {
 
 	// Pre-populate index.
 	source.index.Put("tkt-1", ticket.TicketContent{
-		Version: 1, Title: "existing", Status: "open",
+		Version: 1, Title: "existing", Status: ticket.StatusOpen,
 	})
 
 	serverConn, clientConn := net.Pipe()
@@ -209,7 +209,7 @@ func TestProcessFramesResyncClearsIndex(t *testing.T) {
 		Type:     "put",
 		TicketID: "tkt-2",
 		Content: ticket.TicketContent{
-			Version: 1, Title: "after resync", Status: "open",
+			Version: 1, Title: "after resync", Status: ticket.StatusOpen,
 		},
 	})
 	event := testutil.RequireReceive(t, events, time.Second, "waiting for tkt-2 event")
@@ -272,7 +272,7 @@ func TestProcessFramesHeartbeatNoOp(t *testing.T) {
 	writeFrame(t, serverConn, serviceSubscribeFrame{
 		Type:     "put",
 		TicketID: "sentinel",
-		Content:  ticket.TicketContent{Version: 1, Title: "sentinel", Status: "open"},
+		Content:  ticket.TicketContent{Version: 1, Title: "sentinel", Status: ticket.StatusOpen},
 	})
 
 	event := testutil.RequireReceive(t, events, time.Second, "waiting for sentinel event")
@@ -309,7 +309,7 @@ func TestProcessFramesFullSnapshot(t *testing.T) {
 		Type:     "put",
 		TicketID: "dep-1",
 		Content: ticket.TicketContent{
-			Version: 1, Title: "closed dep", Status: "closed",
+			Version: 1, Title: "closed dep", Status: ticket.StatusClosed,
 			ClosedAt: "2026-01-02T00:00:00Z",
 		},
 	})
@@ -319,7 +319,7 @@ func TestProcessFramesFullSnapshot(t *testing.T) {
 		Type:     "put",
 		TicketID: "tkt-1",
 		Content: ticket.TicketContent{
-			Version: 1, Title: "open ticket", Status: "open",
+			Version: 1, Title: "open ticket", Status: ticket.StatusOpen,
 			BlockedBy: []string{"dep-1"},
 		},
 	})
@@ -335,7 +335,7 @@ func TestProcessFramesFullSnapshot(t *testing.T) {
 		Type:     "put",
 		TicketID: "old-1",
 		Content: ticket.TicketContent{
-			Version: 1, Title: "old closed", Status: "closed",
+			Version: 1, Title: "old closed", Status: ticket.StatusClosed,
 			ClosedAt: "2025-12-01T00:00:00Z",
 		},
 	})
@@ -353,7 +353,7 @@ func TestProcessFramesFullSnapshot(t *testing.T) {
 		Type:     "put",
 		TicketID: "tkt-2",
 		Content: ticket.TicketContent{
-			Version: 1, Title: "live ticket", Status: "open",
+			Version: 1, Title: "live ticket", Status: ticket.StatusOpen,
 		},
 	})
 
@@ -398,7 +398,7 @@ func TestProcessFramesFullSnapshot(t *testing.T) {
 func TestClearIndex(t *testing.T) {
 	source := newTestServiceSource()
 	source.index.Put("tkt-1", ticket.TicketContent{
-		Version: 1, Title: "existing", Status: "open",
+		Version: 1, Title: "existing", Status: ticket.StatusOpen,
 	})
 
 	if source.index.Len() != 1 {
@@ -413,7 +413,7 @@ func TestClearIndex(t *testing.T) {
 
 	// Verify the index is still usable (new index was allocated).
 	source.index.Put("tkt-2", ticket.TicketContent{
-		Version: 1, Title: "new", Status: "open",
+		Version: 1, Title: "new", Status: ticket.StatusOpen,
 	})
 	if source.index.Len() != 1 {
 		t.Fatalf("expected 1 ticket after put on cleared index, got %d", source.index.Len())

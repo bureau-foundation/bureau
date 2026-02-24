@@ -184,49 +184,49 @@ func (ts *TicketService) synthesizeDeferGate(until, forDuration string) (ticket.
 //   - blocked -> review (resume directly into review)
 //   - blocked -> closed (cancelled while blocked)
 //   - closed -> open (reopen)
-func validateStatusTransition(currentStatus, proposedStatus string, currentAssignee ref.UserID) error {
+func validateStatusTransition(currentStatus, proposedStatus ticket.TicketStatus, currentAssignee ref.UserID) error {
 	if currentStatus == proposedStatus {
 		switch currentStatus {
-		case "in_progress":
+		case ticket.StatusInProgress:
 			return fmt.Errorf("ticket is already in_progress (assigned to %s)", currentAssignee)
-		case "review":
+		case ticket.StatusReview:
 			return fmt.Errorf("ticket is already in review (assigned to %s)", currentAssignee)
 		}
 		return nil
 	}
 
 	switch currentStatus {
-	case "open":
+	case ticket.StatusOpen:
 		switch proposedStatus {
-		case "in_progress", "review", "closed":
+		case ticket.StatusInProgress, ticket.StatusReview, ticket.StatusClosed:
 			return nil
 		default:
 			return fmt.Errorf("invalid status transition: %s → %s", currentStatus, proposedStatus)
 		}
-	case "in_progress":
+	case ticket.StatusInProgress:
 		switch proposedStatus {
-		case "open", "review", "closed", "blocked":
+		case ticket.StatusOpen, ticket.StatusReview, ticket.StatusClosed, ticket.StatusBlocked:
 			return nil
 		default:
 			return fmt.Errorf("invalid status transition: %s → %s", currentStatus, proposedStatus)
 		}
-	case "review":
+	case ticket.StatusReview:
 		switch proposedStatus {
-		case "in_progress", "open", "closed", "blocked":
+		case ticket.StatusInProgress, ticket.StatusOpen, ticket.StatusClosed, ticket.StatusBlocked:
 			return nil
 		default:
 			return fmt.Errorf("invalid status transition: %s → %s", currentStatus, proposedStatus)
 		}
-	case "blocked":
+	case ticket.StatusBlocked:
 		switch proposedStatus {
-		case "open", "in_progress", "review", "closed":
+		case ticket.StatusOpen, ticket.StatusInProgress, ticket.StatusReview, ticket.StatusClosed:
 			return nil
 		default:
 			return fmt.Errorf("invalid status transition: %s → %s", currentStatus, proposedStatus)
 		}
-	case "closed":
+	case ticket.StatusClosed:
 		switch proposedStatus {
-		case "open":
+		case ticket.StatusOpen:
 			return nil
 		default:
 			return fmt.Errorf("invalid status transition: %s → %s", currentStatus, proposedStatus)
@@ -509,7 +509,7 @@ func (ts *TicketService) handleCreate(ctx context.Context, token *servicetoken.T
 		Version:   ticket.TicketContentVersion,
 		Title:     request.Title,
 		Body:      request.Body,
-		Status:    "open",
+		Status:    ticket.StatusOpen,
 		Priority:  request.Priority,
 		Type:      request.Type,
 		Labels:    request.Labels,
@@ -700,7 +700,7 @@ func (ts *TicketService) handleUpdate(ctx context.Context, token *servicetoken.T
 	// current values and applying any requested changes.
 	proposedStatus := content.Status
 	if request.Status != nil {
-		proposedStatus = *request.Status
+		proposedStatus = ticket.TicketStatus(*request.Status)
 	}
 	proposedAssignee := content.Assignee
 	if request.Assignee != nil {
@@ -721,12 +721,12 @@ func (ts *TicketService) handleUpdate(ctx context.Context, token *servicetoken.T
 		// them close or reopen. Without these checks, a caller
 		// could bypass handleClose's ticket/close check by calling
 		// update with status:"closed".
-		if proposedStatus == "closed" && content.Status != "closed" {
+		if proposedStatus == ticket.StatusClosed && content.Status != ticket.StatusClosed {
 			if err := requireGrant(token, "ticket/close"); err != nil {
 				return nil, err
 			}
 		}
-		if content.Status == "closed" && proposedStatus != "closed" {
+		if content.Status == ticket.StatusClosed && proposedStatus != ticket.StatusClosed {
 			if err := requireGrant(token, "ticket/reopen"); err != nil {
 				return nil, err
 			}
@@ -737,7 +737,7 @@ func (ts *TicketService) handleUpdate(ctx context.Context, token *servicetoken.T
 		// pre-populated) with at least one reviewer. The full
 		// validation in Validate() catches this too, but a
 		// specific error message here is more helpful.
-		if proposedStatus == "review" && content.Status != "review" {
+		if proposedStatus == ticket.StatusReview && content.Status != ticket.StatusReview {
 			if content.Review == nil || len(content.Review.Reviewers) == 0 {
 				return nil, errors.New("reviewers are required when entering review status")
 			}
@@ -749,18 +749,18 @@ func (ts *TicketService) handleUpdate(ctx context.Context, token *servicetoken.T
 			// across in_progress ↔ review transitions (the author
 			// stays the same). Cleared when going to open, closed,
 			// or blocked.
-			if content.Status == "in_progress" && proposedStatus != "in_progress" && proposedStatus != "review" {
+			if content.Status == ticket.StatusInProgress && proposedStatus != ticket.StatusInProgress && proposedStatus != ticket.StatusReview {
 				proposedAssignee = ref.UserID{}
 			}
-			if content.Status == "review" && proposedStatus != "in_progress" && proposedStatus != "review" {
+			if content.Status == ticket.StatusReview && proposedStatus != ticket.StatusInProgress && proposedStatus != ticket.StatusReview {
 				proposedAssignee = ref.UserID{}
 			}
 
 			// Auto-manage lifecycle fields for closed transitions.
-			if proposedStatus == "closed" {
+			if proposedStatus == ticket.StatusClosed {
 				content.ClosedAt = now
 			}
-			if content.Status == "closed" && proposedStatus != "closed" {
+			if content.Status == ticket.StatusClosed && proposedStatus != ticket.StatusClosed {
 				content.ClosedAt = ""
 				content.CloseReason = ""
 			}
@@ -771,10 +771,10 @@ func (ts *TicketService) handleUpdate(ctx context.Context, token *servicetoken.T
 	// assignee. Review MAY have an assignee (preserved from
 	// in_progress, or set explicitly) but does not require one.
 	// An assignee is only valid on in_progress or review tickets.
-	if proposedStatus == "in_progress" && proposedAssignee.IsZero() {
+	if proposedStatus == ticket.StatusInProgress && proposedAssignee.IsZero() {
 		return nil, errors.New("assignee is required when status is in_progress")
 	}
-	if !proposedAssignee.IsZero() && proposedStatus != "in_progress" && proposedStatus != "review" {
+	if !proposedAssignee.IsZero() && proposedStatus != ticket.StatusInProgress && proposedStatus != ticket.StatusReview {
 		return nil, fmt.Errorf("assignee can only be set when status is in_progress or review (status is %q)", proposedStatus)
 	}
 
@@ -807,13 +807,13 @@ func (ts *TicketService) handleUpdate(ctx context.Context, token *servicetoken.T
 	// close behavior should be consistent regardless of which
 	// handler processes it. The update handler doesn't expose
 	// EndRecurrence; use the dedicated close handler for that.
-	if content.Status == "closed" && hasRecurringGates(&content) {
+	if content.Status == ticket.StatusClosed && hasRecurringGates(&content) {
 		rearmed, err := rearmRecurringGates(&content, ts.clock.Now())
 		if err != nil {
 			return nil, fmt.Errorf("re-arming recurring gates: %w", err)
 		}
 		if rearmed {
-			content.Status = "open"
+			content.Status = ticket.StatusOpen
 			content.Assignee = ref.UserID{}
 			content.ClosedAt = ""
 			content.CloseReason = ""
@@ -848,7 +848,7 @@ func (ts *TicketService) handleUpdate(ctx context.Context, token *servicetoken.T
 	// If this update closed the ticket, resolve timer targets for
 	// dependents that may have become unblocked. Idempotent with the
 	// sync loop's echo processing.
-	if content.Status == "closed" {
+	if content.Status == ticket.StatusClosed {
 		ts.resolveUnblockedTimerTargets(ctx, roomID, state, []string{ticketID})
 	}
 
@@ -904,7 +904,7 @@ func (ts *TicketService) handleClose(ctx context.Context, token *servicetoken.To
 		return nil, err
 	}
 
-	if err := validateStatusTransition(content.Status, "closed", content.Assignee); err != nil {
+	if err := validateStatusTransition(content.Status, ticket.StatusClosed, content.Assignee); err != nil {
 		return nil, err
 	}
 
@@ -926,7 +926,7 @@ func (ts *TicketService) handleClose(ctx context.Context, token *servicetoken.To
 		}
 		if rearmed {
 			// Ticket reopens with re-armed gates instead of closing.
-			content.Status = "open"
+			content.Status = ticket.StatusOpen
 			content.Assignee = ref.UserID{}
 			content.UpdatedAt = nowStr
 			// Do not set ClosedAt or CloseReason — the ticket is
@@ -954,7 +954,7 @@ func (ts *TicketService) handleClose(ctx context.Context, token *servicetoken.To
 	}
 
 	// Normal close path.
-	content.Status = "closed"
+	content.Status = ticket.StatusClosed
 	content.ClosedAt = nowStr
 	content.CloseReason = request.Reason
 	content.Assignee = ref.UserID{}
@@ -1008,11 +1008,11 @@ func (ts *TicketService) handleReopen(ctx context.Context, token *servicetoken.T
 		return nil, err
 	}
 
-	if content.Status != "closed" {
+	if content.Status != ticket.StatusClosed {
 		return nil, fmt.Errorf("cannot reopen: ticket status is %q, not closed", content.Status)
 	}
 
-	content.Status = "open"
+	content.Status = ticket.StatusOpen
 	content.ClosedAt = ""
 	content.CloseReason = ""
 	content.UpdatedAt = ts.clock.Now().UTC().Format(time.RFC3339)
@@ -1087,7 +1087,7 @@ func (ts *TicketService) handleBatchCreate(ctx context.Context, token *serviceto
 			Version:   ticket.TicketContentVersion,
 			Title:     entry.Title,
 			Body:      entry.Body,
-			Status:    "open",
+			Status:    ticket.StatusOpen,
 			Priority:  entry.Priority,
 			Type:      entry.Type,
 			Labels:    entry.Labels,
@@ -1432,7 +1432,7 @@ func (ts *TicketService) handleSetDisposition(ctx context.Context, token *servic
 		return nil, err
 	}
 
-	if content.Status != "review" {
+	if content.Status != ticket.StatusReview {
 		return nil, fmt.Errorf("ticket is not in review status (status is %q)", content.Status)
 	}
 	if content.Review == nil {

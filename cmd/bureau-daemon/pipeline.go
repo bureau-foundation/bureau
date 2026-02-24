@@ -200,7 +200,7 @@ func (d *Daemon) processPipelineTickets(ctx context.Context, response *messaging
 			if ticketContent.Type != "pipeline" {
 				continue
 			}
-			if ticketContent.Status != "open" {
+			if ticketContent.Status != ticket.StatusOpen {
 				continue
 			}
 			if ticketContent.Pipeline == nil {
@@ -552,7 +552,7 @@ func (d *Daemon) createPipelineTicket(
 	triggerContent := ticket.TicketContent{
 		Version:   ticket.TicketContentVersion,
 		Title:     fmt.Sprintf("Pipeline: %s", pipelineNameFromRef(pipelineRef)),
-		Status:    "open",
+		Status:    ticket.StatusOpen,
 		Priority:  2,
 		Type:      "pipeline",
 		CreatedBy: principal.UserID(),

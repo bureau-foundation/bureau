@@ -274,7 +274,8 @@ func (graph DependencyGraph) labelWidth(node depNode) int {
 	if !node.exists {
 		return lipgloss.Width(node.ticketID + "?")
 	}
-	icon := statusIconString(node.content.Status)
+	status := string(node.content.Status)
+	icon := statusIconString(status)
 	if icon == "" {
 		icon = " "
 	}
@@ -304,17 +305,18 @@ func (graph DependencyGraph) renderLabel(node depNode, targetWidth int) string {
 		return style.Render(text)
 	}
 
-	icon := statusIconString(node.content.Status)
+	status := string(node.content.Status)
+	icon := statusIconString(status)
 	if icon == "" {
 		icon = " "
 	}
 
 	statusStyle := lipgloss.NewStyle().
-		Foreground(graph.theme.StatusColor(node.content.Status))
+		Foreground(graph.theme.StatusColor(status))
 	priorityStyle := lipgloss.NewStyle().
 		Foreground(graph.theme.PriorityColor(node.content.Priority))
 	idStyle := lipgloss.NewStyle().
-		Foreground(graph.theme.StatusColor(node.content.Status))
+		Foreground(graph.theme.StatusColor(status))
 
 	priorityText := fmt.Sprintf("P%d", node.content.Priority)
 	borrowedText := ""

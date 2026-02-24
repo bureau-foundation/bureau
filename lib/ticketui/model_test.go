@@ -22,7 +22,7 @@ func testSource() *IndexSource {
 		Version:   1,
 		Title:     "Fix connection pooling leak",
 		Body:      "The connection pool is leaking under high load.",
-		Status:    "open",
+		Status:    ticket.StatusOpen,
 		Priority:  0,
 		Type:      "bug",
 		Labels:    []string{"infra"},
@@ -34,7 +34,7 @@ func testSource() *IndexSource {
 	index.Put("tkt-002", ticket.TicketContent{
 		Version:   1,
 		Title:     "Implement retry backoff",
-		Status:    "open",
+		Status:    ticket.StatusOpen,
 		Priority:  1,
 		Type:      "task",
 		Labels:    []string{"transport"},
@@ -45,7 +45,7 @@ func testSource() *IndexSource {
 	index.Put("tkt-003", ticket.TicketContent{
 		Version:   1,
 		Title:     "Update CI pipeline config",
-		Status:    "closed",
+		Status:    ticket.StatusClosed,
 		Priority:  2,
 		Type:      "chore",
 		CreatedBy: ref.MustParseUserID("@ben:bureau.local"),
@@ -56,7 +56,7 @@ func testSource() *IndexSource {
 	index.Put("tkt-004", ticket.TicketContent{
 		Version:   1,
 		Title:     "Layout crash on resize",
-		Status:    "in_progress",
+		Status:    ticket.StatusInProgress,
 		Priority:  1,
 		Type:      "bug",
 		Labels:    []string{"observation"},
@@ -77,7 +77,7 @@ func testGroupedSource() *IndexSource {
 	index.Put("epic-1", ticket.TicketContent{
 		Version:   1,
 		Title:     "Migrate to gRPC",
-		Status:    "open",
+		Status:    ticket.StatusOpen,
 		Priority:  1,
 		Type:      "epic",
 		CreatedBy: ref.MustParseUserID("@ben:bureau.local"),
@@ -88,7 +88,7 @@ func testGroupedSource() *IndexSource {
 	index.Put("child-1a", ticket.TicketContent{
 		Version:   1,
 		Title:     "Proto definitions",
-		Status:    "open",
+		Status:    ticket.StatusOpen,
 		Priority:  0,
 		Type:      "task",
 		Parent:    "epic-1",
@@ -99,7 +99,7 @@ func testGroupedSource() *IndexSource {
 	index.Put("child-1b", ticket.TicketContent{
 		Version:   1,
 		Title:     "Server stubs",
-		Status:    "open",
+		Status:    ticket.StatusOpen,
 		Priority:  1,
 		Type:      "task",
 		Parent:    "epic-1",
@@ -110,7 +110,7 @@ func testGroupedSource() *IndexSource {
 	index.Put("child-1c", ticket.TicketContent{
 		Version:   1,
 		Title:     "Client migration",
-		Status:    "closed",
+		Status:    ticket.StatusClosed,
 		Priority:  2,
 		Type:      "task",
 		Parent:    "epic-1",
@@ -124,7 +124,7 @@ func testGroupedSource() *IndexSource {
 	index.Put("epic-2", ticket.TicketContent{
 		Version:   1,
 		Title:     "Security hardening",
-		Status:    "open",
+		Status:    ticket.StatusOpen,
 		Priority:  0,
 		Type:      "epic",
 		CreatedBy: ref.MustParseUserID("@ben:bureau.local"),
@@ -134,7 +134,7 @@ func testGroupedSource() *IndexSource {
 	index.Put("child-2a", ticket.TicketContent{
 		Version:   1,
 		Title:     "Auth middleware",
-		Status:    "open",
+		Status:    ticket.StatusOpen,
 		Priority:  0,
 		Type:      "task",
 		Parent:    "epic-2",
@@ -147,7 +147,7 @@ func testGroupedSource() *IndexSource {
 	index.Put("standalone", ticket.TicketContent{
 		Version:   1,
 		Title:     "Fix typo in docs",
-		Status:    "open",
+		Status:    ticket.StatusOpen,
 		Priority:  3,
 		Type:      "chore",
 		CreatedBy: ref.MustParseUserID("@ben:bureau.local"),
@@ -757,7 +757,7 @@ func testDependencyModelSource() *IndexSource {
 	index.Put("tkt-a", ticket.TicketContent{
 		Version:   1,
 		Title:     "Ticket A",
-		Status:    "open",
+		Status:    ticket.StatusOpen,
 		Priority:  0,
 		Type:      "task",
 		CreatedBy: ref.MustParseUserID("@test:bureau.local"),
@@ -767,7 +767,7 @@ func testDependencyModelSource() *IndexSource {
 	index.Put("tkt-b", ticket.TicketContent{
 		Version:   1,
 		Title:     "Ticket B",
-		Status:    "open",
+		Status:    ticket.StatusOpen,
 		Priority:  1,
 		Type:      "task",
 		BlockedBy: []string{"tkt-a"},
@@ -778,7 +778,7 @@ func testDependencyModelSource() *IndexSource {
 	index.Put("tkt-c", ticket.TicketContent{
 		Version:   1,
 		Title:     "Ticket C",
-		Status:    "closed",
+		Status:    ticket.StatusClosed,
 		Priority:  2,
 		Type:      "task",
 		CreatedBy: ref.MustParseUserID("@test:bureau.local"),
@@ -953,7 +953,7 @@ func testPipelineSource() *IndexSource {
 	index.Put("pip-001", ticket.TicketContent{
 		Version:   1,
 		Title:     "Deploy staging",
-		Status:    "in_progress",
+		Status:    ticket.StatusInProgress,
 		Priority:  2,
 		Type:      "pipeline",
 		Assignee:  ref.MustParseUserID("@executor:bureau.local"),
@@ -972,7 +972,7 @@ func testPipelineSource() *IndexSource {
 	index.Put("pip-002", ticket.TicketContent{
 		Version:   1,
 		Title:     "CI main",
-		Status:    "open",
+		Status:    ticket.StatusOpen,
 		Priority:  1,
 		Type:      "pipeline",
 		CreatedBy: ref.MustParseUserID("@ci:bureau.local"),
@@ -988,7 +988,7 @@ func testPipelineSource() *IndexSource {
 	index.Put("pip-003", ticket.TicketContent{
 		Version:   1,
 		Title:     "Nightly build",
-		Status:    "open",
+		Status:    ticket.StatusOpen,
 		Priority:  3,
 		Type:      "pipeline",
 		CreatedBy: ref.MustParseUserID("@ci:bureau.local"),
@@ -1011,7 +1011,7 @@ func testPipelineSource() *IndexSource {
 	index.Put("pip-006", ticket.TicketContent{
 		Version:   1,
 		Title:     "Weekly cleanup",
-		Status:    "open",
+		Status:    ticket.StatusOpen,
 		Priority:  4,
 		Type:      "pipeline",
 		CreatedBy: ref.MustParseUserID("@ci:bureau.local"),
@@ -1035,7 +1035,7 @@ func testPipelineSource() *IndexSource {
 	index.Put("pip-004", ticket.TicketContent{
 		Version:   1,
 		Title:     "CI main prior run",
-		Status:    "closed",
+		Status:    ticket.StatusClosed,
 		Priority:  1,
 		Type:      "pipeline",
 		CreatedBy: ref.MustParseUserID("@ci:bureau.local"),
@@ -1054,7 +1054,7 @@ func testPipelineSource() *IndexSource {
 	index.Put("pip-005", ticket.TicketContent{
 		Version:   1,
 		Title:     "Deploy staging failed",
-		Status:    "closed",
+		Status:    ticket.StatusClosed,
 		Priority:  2,
 		Type:      "pipeline",
 		CreatedBy: ref.MustParseUserID("@ci:bureau.local"),
@@ -1073,7 +1073,7 @@ func testPipelineSource() *IndexSource {
 	index.Put("tkt-001", ticket.TicketContent{
 		Version:   1,
 		Title:     "Regular task",
-		Status:    "open",
+		Status:    ticket.StatusOpen,
 		Priority:  2,
 		Type:      "task",
 		CreatedBy: ref.MustParseUserID("@ben:bureau.local"),
@@ -1298,7 +1298,7 @@ func TestPipelineNilDefensive(t *testing.T) {
 	index.Put("pip-nil", ticket.TicketContent{
 		Version:   1,
 		Title:     "Broken pipeline ticket",
-		Status:    "open",
+		Status:    ticket.StatusOpen,
 		Priority:  2,
 		Type:      "pipeline",
 		CreatedBy: ref.MustParseUserID("@ci:bureau.local"),
@@ -1334,7 +1334,7 @@ func TestPipelineNilDefensive(t *testing.T) {
 		Content: ticket.TicketContent{
 			Type:     "pipeline",
 			Title:    "Broken pipeline ticket",
-			Status:   "open",
+			Status:   ticket.StatusOpen,
 			Priority: 2,
 		},
 	}
@@ -1444,7 +1444,7 @@ func TestAssigneeClickTarget(t *testing.T) {
 		Content: ticket.TicketContent{
 			Version:   1,
 			Title:     "Test ticket",
-			Status:    "in_progress",
+			Status:    ticket.StatusInProgress,
 			Priority:  1,
 			Type:      "task",
 			Assignee:  ref.MustParseUserID("@alice:bureau.local"),
@@ -1495,7 +1495,7 @@ func TestAssigneeClickTargetUnassigned(t *testing.T) {
 		Content: ticket.TicketContent{
 			Version:   1,
 			Title:     "Unassigned ticket",
-			Status:    "open",
+			Status:    ticket.StatusOpen,
 			Priority:  2,
 			Type:      "task",
 			CreatedBy: ref.MustParseUserID("@ben:bureau.local"),

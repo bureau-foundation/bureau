@@ -7,6 +7,8 @@ import (
 	"os"
 	"path/filepath"
 	"testing"
+
+	"github.com/bureau-foundation/bureau/lib/schema/ticket"
 )
 
 func TestLoadBeadsFile(t *testing.T) {
@@ -65,7 +67,7 @@ func TestLoadBeadsFile(t *testing.T) {
 
 	// Verify every ready entry is either open or in_progress.
 	for _, entry := range readySnapshot.Entries {
-		if entry.Content.Status != "open" && entry.Content.Status != "in_progress" {
+		if entry.Content.Status != ticket.StatusOpen && entry.Content.Status != ticket.StatusInProgress {
 			t.Errorf("ready ticket %s has status %q, expected open or in_progress",
 				entry.ID, entry.Content.Status)
 		}

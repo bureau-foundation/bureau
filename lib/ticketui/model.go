@@ -1411,9 +1411,9 @@ func (model *Model) buildPipelineItems() []ListItem {
 
 	for _, entry := range model.entries {
 		switch entry.Content.Status {
-		case "in_progress":
+		case ticket.StatusInProgress:
 			active = append(active, entry)
-		case "closed":
+		case ticket.StatusClosed:
 			history = append(history, entry)
 		default:
 			if hasPendingTimerGate(entry.Content) {
@@ -1884,7 +1884,7 @@ func (model *Model) handleHeaderClick(field string, screenX, screenY int) tea.Cm
 
 	switch field {
 	case "status":
-		options := StatusTransitions(content.Status)
+		options := StatusTransitions(string(content.Status))
 		if len(options) == 0 {
 			return nil
 		}
@@ -1954,7 +1954,7 @@ func (model *Model) openAssigneeDropdown(screenX, screenY int) tea.Cmd {
 	}
 
 	// Closed tickets cannot have an assignee — status must change first.
-	if content.Status == "closed" {
+	if content.Status == ticket.StatusClosed {
 		return nil
 	}
 
@@ -1996,7 +1996,7 @@ func (model *Model) openReviewDropdown() {
 	}
 
 	content, exists := model.source.Get(model.selectedID)
-	if !exists || content.Status != "review" {
+	if !exists || content.Status != ticket.StatusReview {
 		return
 	}
 
@@ -2052,7 +2052,7 @@ func (model *Model) canReview() bool {
 		return false
 	}
 	content, exists := model.source.Get(model.selectedID)
-	if !exists || content.Status != "review" {
+	if !exists || content.Status != ticket.StatusReview {
 		return false
 	}
 	if content.Review == nil {
@@ -2079,7 +2079,7 @@ func (model Model) handleDropdownSelect(message dropdownSelectMsg) (tea.Model, t
 	switch message.field {
 	case "status":
 		assignee := ""
-		if message.value == "in_progress" {
+		if message.value == string(ticket.StatusInProgress) {
 			assignee = model.operatorUserID
 		}
 		return model, func() tea.Msg {
@@ -2801,9 +2801,9 @@ func (model Model) renderHeader() string {
 
 	// Stats on the right.
 	viewCount := len(model.entries)
-	open := model.stats.ByStatus["open"]
-	inProgress := model.stats.ByStatus["in_progress"]
-	closed := model.stats.ByStatus["closed"]
+	open := model.stats.ByStatus[string(ticket.StatusOpen)]
+	inProgress := model.stats.ByStatus[string(ticket.StatusInProgress)]
+	closed := model.stats.ByStatus[string(ticket.StatusClosed)]
 	statsText := fmt.Sprintf(
 		"%d shown  %d open  %d active  %d closed",
 		viewCount, open, inProgress, closed)
@@ -2832,13 +2832,13 @@ func (model Model) renderHeader() string {
 // so callers can omit the icon entirely rather than reserving space.
 func statusIconString(status string) string {
 	switch status {
-	case "in_progress":
+	case string(ticket.StatusInProgress):
 		return "●"
-	case "review":
+	case string(ticket.StatusReview):
 		return "◎"
-	case "blocked":
+	case string(ticket.StatusBlocked):
 		return "◐"
-	case "closed":
+	case string(ticket.StatusClosed):
 		return "✓"
 	default:
 		return ""
@@ -2856,7 +2856,7 @@ func (model Model) renderHelp() string {
 	// the full structured record.
 	if model.logMessage != nil {
 		levelLabel := "WARN"
-		levelColor := model.theme.StatusColor("blocked")
+		levelColor := model.theme.StatusColor(string(ticket.StatusBlocked))
 		if model.logMessage.Level >= slog.LevelError {
 			levelLabel = "ERROR"
 		}
@@ -2959,7 +2959,7 @@ func (model Model) renderHelp() string {
 		state := stater.LoadingState()
 		if state != "caught_up" {
 			loadingStyle := lipgloss.NewStyle().
-				Foreground(model.theme.StatusColor("in_progress")).
+				Foreground(model.theme.StatusColor(string(ticket.StatusInProgress))).
 				Bold(true)
 			label := loadingStateLabel(state)
 			help += "  " + loadingStyle.Render(label)
@@ -2969,7 +2969,7 @@ func (model Model) renderHelp() string {
 	// Show clipboard feedback when a right-click copy just happened.
 	if model.clipboardNotice != "" {
 		clipStyle := lipgloss.NewStyle().
-			Foreground(model.theme.StatusColor("closed")).
+			Foreground(model.theme.StatusColor(string(ticket.StatusClosed))).
 			Bold(true)
 		help += "  " + clipStyle.Render("Copied: "+model.clipboardNotice)
 	}
@@ -2977,7 +2977,7 @@ func (model Model) renderHelp() string {
 	// Show mutation error when a mutation call failed.
 	if model.mutationError != "" {
 		errorStyle := lipgloss.NewStyle().
-			Foreground(model.theme.StatusColor("blocked")).
+			Foreground(model.theme.StatusColor(string(ticket.StatusBlocked))).
 			Bold(true)
 		help += "  " + errorStyle.Render("Error: "+model.mutationError)
 	}

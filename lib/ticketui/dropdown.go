@@ -5,6 +5,7 @@ package ticketui
 
 import (
 	"github.com/bureau-foundation/bureau/lib/ref"
+	"github.com/bureau-foundation/bureau/lib/schema/ticket"
 	"github.com/bureau-foundation/bureau/lib/tui"
 )
 
@@ -29,32 +30,32 @@ type dropdownSelectMsg struct {
 // value as both label and value.
 func StatusTransitions(currentStatus string) []DropdownOption {
 	switch currentStatus {
-	case "open":
+	case string(ticket.StatusOpen):
 		return []DropdownOption{
-			{Label: "IN_PROGRESS", Value: "in_progress"},
-			{Label: "CLOSED", Value: "closed"},
+			{Label: "IN_PROGRESS", Value: string(ticket.StatusInProgress)},
+			{Label: "CLOSED", Value: string(ticket.StatusClosed)},
 		}
-	case "in_progress":
+	case string(ticket.StatusInProgress):
 		return []DropdownOption{
-			{Label: "OPEN", Value: "open"},
-			{Label: "BLOCKED", Value: "blocked"},
-			{Label: "CLOSED", Value: "closed"},
+			{Label: "OPEN", Value: string(ticket.StatusOpen)},
+			{Label: "BLOCKED", Value: string(ticket.StatusBlocked)},
+			{Label: "CLOSED", Value: string(ticket.StatusClosed)},
 		}
-	case "blocked":
+	case string(ticket.StatusBlocked):
 		return []DropdownOption{
-			{Label: "OPEN", Value: "open"},
-			{Label: "IN_PROGRESS", Value: "in_progress"},
-			{Label: "CLOSED", Value: "closed"},
+			{Label: "OPEN", Value: string(ticket.StatusOpen)},
+			{Label: "IN_PROGRESS", Value: string(ticket.StatusInProgress)},
+			{Label: "CLOSED", Value: string(ticket.StatusClosed)},
 		}
-	case "review":
+	case string(ticket.StatusReview):
 		return []DropdownOption{
-			{Label: "OPEN", Value: "open"},
-			{Label: "IN_PROGRESS", Value: "in_progress"},
-			{Label: "CLOSED", Value: "closed"},
+			{Label: "OPEN", Value: string(ticket.StatusOpen)},
+			{Label: "IN_PROGRESS", Value: string(ticket.StatusInProgress)},
+			{Label: "CLOSED", Value: string(ticket.StatusClosed)},
 		}
-	case "closed":
+	case string(ticket.StatusClosed):
 		return []DropdownOption{
-			{Label: "OPEN", Value: "open"},
+			{Label: "OPEN", Value: string(ticket.StatusOpen)},
 		}
 	default:
 		return nil

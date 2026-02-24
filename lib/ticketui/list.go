@@ -164,7 +164,7 @@ func (renderer ListRenderer) renderUnblockIndicator(count int, selected bool) st
 // in the original title that should be highlighted.
 func (renderer ListRenderer) renderNormalRow(entry ticketindex.Entry, titleLabels string, displayPriorityColor int, matchPositions []int) string {
 	priority := entry.Content.Priority
-	status := entry.Content.Status
+	status := string(entry.Content.Status)
 
 	typePriorityStyle := lipgloss.NewStyle().
 		Foreground(renderer.theme.PriorityColor(displayPriorityColor)).
@@ -224,7 +224,7 @@ func (renderer ListRenderer) renderSelectedRow(entry ticketindex.Entry, titleLab
 
 	typePriorityText := typeIcon(entry.Content.Type) + fmt.Sprintf("P%d", entry.Content.Priority)
 
-	icon := statusIconString(entry.Content.Status)
+	icon := statusIconString(string(entry.Content.Status))
 	var statusPart string
 	if icon != "" {
 		statusPart = " " + baseStyle.Render(icon)
@@ -403,7 +403,7 @@ func (renderer ListRenderer) renderNormalPipelineRow(
 	textWidth, contentWidth int,
 ) string {
 	priority := entry.Content.Priority
-	status := entry.Content.Status
+	status := string(entry.Content.Status)
 
 	typePriorityStyle := lipgloss.NewStyle().
 		Foreground(renderer.theme.PriorityColor(priority)).
@@ -470,7 +470,7 @@ func (renderer ListRenderer) renderSelectedPipelineRow(
 
 	typePriorityText := typeIcon(entry.Content.Type) + fmt.Sprintf("P%d", entry.Content.Priority)
 
-	icon := statusIconString(entry.Content.Status)
+	icon := statusIconString(string(entry.Content.Status))
 	var statusPart string
 	if icon != "" {
 		statusPart = " " + baseStyle.Render(icon)
@@ -537,7 +537,7 @@ func pipelineSuffix(content ticket.TicketContent) string {
 	}
 
 	switch content.Status {
-	case "in_progress":
+	case ticket.StatusInProgress:
 		if pipeline.TotalSteps > 0 && pipeline.CurrentStepName != "" {
 			return fmt.Sprintf("[%d/%d %s]", pipeline.CurrentStep, pipeline.TotalSteps, pipeline.CurrentStepName)
 		}
@@ -546,7 +546,7 @@ func pipelineSuffix(content ticket.TicketContent) string {
 		}
 		return ""
 
-	case "closed":
+	case ticket.StatusClosed:
 		switch pipeline.Conclusion {
 		case "success":
 			return "✓ success"
@@ -578,9 +578,9 @@ func (renderer ListRenderer) pipelineSuffixStyle(content ticket.TicketContent) l
 	}
 
 	switch content.Status {
-	case "in_progress":
+	case ticket.StatusInProgress:
 		return lipgloss.NewStyle().Foreground(renderer.theme.StatusInProgress)
-	case "closed":
+	case ticket.StatusClosed:
 		switch pipeline.Conclusion {
 		case "success":
 			return lipgloss.NewStyle().Foreground(renderer.theme.StatusOpen).Bold(true)

@@ -3,7 +3,11 @@
 
 package tui
 
-import "github.com/charmbracelet/lipgloss"
+import (
+	"github.com/charmbracelet/lipgloss"
+
+	"github.com/bureau-foundation/bureau/lib/schema/ticket"
+)
 
 // Theme defines the color palette and visual properties for Bureau's
 // terminal UIs. All colors use lipgloss ANSI 256-color codes for
@@ -69,15 +73,15 @@ func (theme Theme) PriorityColor(priority int) lipgloss.Color {
 // and returns FaintText for unknown values.
 func (theme Theme) StatusColor(status string) lipgloss.Color {
 	switch status {
-	case "open":
+	case string(ticket.StatusOpen):
 		return theme.StatusOpen
-	case "in_progress":
+	case string(ticket.StatusInProgress):
 		return theme.StatusInProgress
-	case "review":
+	case string(ticket.StatusReview):
 		return theme.StatusReview
-	case "blocked":
+	case string(ticket.StatusBlocked):
 		return theme.StatusBlocked
-	case "closed":
+	case string(ticket.StatusClosed):
 		return theme.StatusClosed
 	default:
 		return theme.FaintText

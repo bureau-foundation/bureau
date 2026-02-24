@@ -116,7 +116,7 @@ func emitWaitResult(logger *slog.Logger, params pipelineWaitParams, ticketID ref
 
 	result := waitResult{
 		TicketID:    ticketID,
-		Status:      content.Status,
+		Status:      string(content.Status),
 		Conclusion:  conclusion,
 		PipelineRef: pipelineRef,
 		StepCount:   stepCount,

@@ -21,7 +21,7 @@ func makeTicket(title string) ticket.TicketContent {
 	return ticket.TicketContent{
 		Version:   1,
 		Title:     title,
-		Status:    "open",
+		Status:    ticket.StatusOpen,
 		Priority:  2,
 		Type:      "task",
 		CreatedBy: ref.MustParseUserID("@test:bureau.local"),
@@ -99,7 +99,7 @@ func TestPutOverwritesExisting(t *testing.T) {
 	idx.Put("tkt-abc1", tc)
 
 	tc.Title = "Updated title"
-	tc.Status = "closed"
+	tc.Status = ticket.StatusClosed
 	idx.Put("tkt-abc1", tc)
 
 	if idx.Len() != 1 {
@@ -109,8 +109,8 @@ func TestPutOverwritesExisting(t *testing.T) {
 	if got.Title != "Updated title" {
 		t.Errorf("Title = %q, want %q", got.Title, "Updated title")
 	}
-	if got.Status != "closed" {
-		t.Errorf("Status = %q, want %q", got.Status, "closed")
+	if got.Status != ticket.StatusClosed {
+		t.Errorf("Status = %q, want %q", got.Status, ticket.StatusClosed)
 	}
 }
 
@@ -197,12 +197,12 @@ func TestReadyBasic(t *testing.T) {
 
 	// Closed → not in Ready.
 	closed := makeTicket("Closed ticket")
-	closed.Status = "closed"
+	closed.Status = ticket.StatusClosed
 	idx.Put("tkt-b", closed)
 
 	// In progress → included in Ready (actionable work).
 	inProgress := makeTicket("In progress")
-	inProgress.Status = "in_progress"
+	inProgress.Status = ticket.StatusInProgress
 	idx.Put("tkt-c", inProgress)
 
 	ready := idx.Ready()
@@ -224,7 +224,7 @@ func TestReadyWithClosedBlockers(t *testing.T) {
 	idx := NewIndex()
 
 	blocker := makeTicket("Blocker")
-	blocker.Status = "closed"
+	blocker.Status = ticket.StatusClosed
 	idx.Put("tkt-blocker", blocker)
 
 	dependent := makeTicket("Dependent")
@@ -396,12 +396,12 @@ func TestBlockedExcludesNonOpen(t *testing.T) {
 	idx := NewIndex()
 
 	inProgress := makeTicket("Working")
-	inProgress.Status = "in_progress"
+	inProgress.Status = ticket.StatusInProgress
 	inProgress.BlockedBy = []string{"tkt-missing"}
 	idx.Put("tkt-ip", inProgress)
 
 	closed := makeTicket("Done")
-	closed.Status = "closed"
+	closed.Status = ticket.StatusClosed
 	idx.Put("tkt-closed", closed)
 
 	blocked := idx.Blocked()
@@ -433,12 +433,12 @@ func TestReadyAndBlockedPartitionOpen(t *testing.T) {
 
 	// Closed → neither.
 	done := makeTicket("Done")
-	done.Status = "closed"
+	done.Status = ticket.StatusClosed
 	idx.Put("tkt-d", done)
 
 	// In progress → Ready (actionable work), not Blocked.
 	working := makeTicket("Working")
-	working.Status = "in_progress"
+	working.Status = ticket.StatusInProgress
 	idx.Put("tkt-e", working)
 
 	ready := idx.Ready()
@@ -496,7 +496,7 @@ func TestListByStatus(t *testing.T) {
 	idx.Put("tkt-open", open)
 
 	closed := makeTicket("Closed")
-	closed.Status = "closed"
+	closed.Status = ticket.StatusClosed
 	idx.Put("tkt-closed", closed)
 
 	entries := idx.List(Filter{Status: "closed"})
@@ -592,19 +592,19 @@ func TestListMultipleFilters(t *testing.T) {
 
 	// Matches both status and type.
 	match := makeTicket("Match")
-	match.Status = "open"
+	match.Status = ticket.StatusOpen
 	match.Type = "bug"
 	idx.Put("tkt-match", match)
 
 	// Matches status but not type.
 	noTypeMatch := makeTicket("Wrong type")
-	noTypeMatch.Status = "open"
+	noTypeMatch.Status = ticket.StatusOpen
 	noTypeMatch.Type = "task"
 	idx.Put("tkt-nomatch1", noTypeMatch)
 
 	// Matches type but not status.
 	noStatusMatch := makeTicket("Wrong status")
-	noStatusMatch.Status = "closed"
+	noStatusMatch.Status = ticket.StatusClosed
 	noStatusMatch.Type = "bug"
 	idx.Put("tkt-nomatch2", noStatusMatch)
 
@@ -716,11 +716,11 @@ func TestGrepWithStatusFilter(t *testing.T) {
 	idx := NewIndex()
 
 	open := makeTicket("Fix auth bug")
-	open.Status = "open"
+	open.Status = ticket.StatusOpen
 	idx.Put("tkt-open", open)
 
 	closed := makeTicket("Fix auth regression")
-	closed.Status = "closed"
+	closed.Status = ticket.StatusClosed
 	idx.Put("tkt-closed", closed)
 
 	// Without filter: both match.
@@ -746,15 +746,15 @@ func TestGrepWithActiveStatus(t *testing.T) {
 	idx := NewIndex()
 
 	open := makeTicket("Deploy fleet controller")
-	open.Status = "open"
+	open.Status = ticket.StatusOpen
 	idx.Put("tkt-open", open)
 
 	inProgress := makeTicket("Deploy fleet agent")
-	inProgress.Status = "in_progress"
+	inProgress.Status = ticket.StatusInProgress
 	idx.Put("tkt-wip", inProgress)
 
 	closed := makeTicket("Deploy fleet monitor")
-	closed.Status = "closed"
+	closed.Status = ticket.StatusClosed
 	idx.Put("tkt-closed", closed)
 
 	entries, err := idx.Grep("fleet", Filter{Status: "active"})
@@ -774,22 +774,22 @@ func TestGrepWithReadyStatus(t *testing.T) {
 
 	// Ready ticket: open, no blockers, no gates.
 	ready := makeTicket("Fix auth bug")
-	ready.Status = "open"
+	ready.Status = ticket.StatusOpen
 	idx.Put("tkt-ready", ready)
 
 	// Blocked ticket: open but has an open blocker.
 	blocker := makeTicket("Prerequisite")
-	blocker.Status = "open"
+	blocker.Status = ticket.StatusOpen
 	idx.Put("tkt-blocker", blocker)
 
 	blocked := makeTicket("Fix auth handler")
-	blocked.Status = "open"
+	blocked.Status = ticket.StatusOpen
 	blocked.BlockedBy = []string{"tkt-blocker"}
 	idx.Put("tkt-blocked", blocked)
 
 	// Closed ticket: not ready.
 	closedTicket := makeTicket("Fix auth config")
-	closedTicket.Status = "closed"
+	closedTicket.Status = ticket.StatusClosed
 	idx.Put("tkt-closed", closedTicket)
 
 	entries, err := idx.Grep("auth|fix", Filter{Status: "ready"})
@@ -826,17 +826,17 @@ func TestGrepWithMultipleFilters(t *testing.T) {
 	idx := NewIndex()
 
 	match := makeTicket("Fix auth bug")
-	match.Status = "open"
+	match.Status = ticket.StatusOpen
 	match.Labels = []string{"security"}
 	idx.Put("tkt-match", match)
 
 	wrongLabel := makeTicket("Fix auth regression")
-	wrongLabel.Status = "open"
+	wrongLabel.Status = ticket.StatusOpen
 	wrongLabel.Labels = []string{"performance"}
 	idx.Put("tkt-wrong-label", wrongLabel)
 
 	wrongStatus := makeTicket("Fix auth config")
-	wrongStatus.Status = "closed"
+	wrongStatus.Status = ticket.StatusClosed
 	wrongStatus.Labels = []string{"security"}
 	idx.Put("tkt-wrong-status", wrongStatus)
 
@@ -853,15 +853,15 @@ func TestListWithActiveStatus(t *testing.T) {
 	idx := NewIndex()
 
 	open := makeTicket("A")
-	open.Status = "open"
+	open.Status = ticket.StatusOpen
 	idx.Put("tkt-open", open)
 
 	inProgress := makeTicket("B")
-	inProgress.Status = "in_progress"
+	inProgress.Status = ticket.StatusInProgress
 	idx.Put("tkt-wip", inProgress)
 
 	closed := makeTicket("C")
-	closed.Status = "closed"
+	closed.Status = ticket.StatusClosed
 	idx.Put("tkt-closed", closed)
 
 	entries := idx.List(Filter{Status: "active"})
@@ -877,17 +877,17 @@ func TestListWithReadyStatus(t *testing.T) {
 	idx := NewIndex()
 
 	ready := makeTicket("A")
-	ready.Status = "open"
+	ready.Status = ticket.StatusOpen
 	idx.Put("tkt-ready", ready)
 
 	// Open but with a pending gate → not ready.
 	gated := makeTicket("B")
-	gated.Status = "open"
+	gated.Status = ticket.StatusOpen
 	gated.Gates = []ticket.TicketGate{{ID: "g-1", Type: "human", Status: "pending"}}
 	idx.Put("tkt-gated", gated)
 
 	closed := makeTicket("C")
-	closed.Status = "closed"
+	closed.Status = ticket.StatusClosed
 	idx.Put("tkt-closed", closed)
 
 	entries := idx.List(Filter{Status: "ready"})
@@ -972,17 +972,17 @@ func TestChildProgress(t *testing.T) {
 
 	child1 := makeTicket("Child 1")
 	child1.Parent = "tkt-epic"
-	child1.Status = "closed"
+	child1.Status = ticket.StatusClosed
 	idx.Put("tkt-c1", child1)
 
 	child2 := makeTicket("Child 2")
 	child2.Parent = "tkt-epic"
-	child2.Status = "open"
+	child2.Status = ticket.StatusOpen
 	idx.Put("tkt-c2", child2)
 
 	child3 := makeTicket("Child 3")
 	child3.Parent = "tkt-epic"
-	child3.Status = "closed"
+	child3.Status = ticket.StatusClosed
 	idx.Put("tkt-c3", child3)
 
 	total, closed := idx.ChildProgress("tkt-epic")
@@ -1607,19 +1607,19 @@ func TestStats(t *testing.T) {
 	idx := NewIndex()
 
 	tc1 := makeTicket("Task 1")
-	tc1.Status = "open"
+	tc1.Status = ticket.StatusOpen
 	tc1.Priority = 2
 	tc1.Type = "task"
 	idx.Put("tkt-a", tc1)
 
 	tc2 := makeTicket("Bug 1")
-	tc2.Status = "open"
+	tc2.Status = ticket.StatusOpen
 	tc2.Priority = 0
 	tc2.Type = "bug"
 	idx.Put("tkt-b", tc2)
 
 	tc3 := makeTicket("Task 2")
-	tc3.Status = "closed"
+	tc3.Status = ticket.StatusClosed
 	tc3.Priority = 2
 	tc3.Type = "task"
 	idx.Put("tkt-c", tc3)
@@ -1885,7 +1885,7 @@ func TestSecondaryIndexesUpdatedOnPut(t *testing.T) {
 	idx := NewIndex()
 
 	tc := makeTicket("Original")
-	tc.Status = "open"
+	tc.Status = ticket.StatusOpen
 	tc.Labels = []string{"frontend"}
 	tc.Assignee = ref.MustParseUserID("@agent1:bureau.local")
 	idx.Put("tkt-a", tc)
@@ -1899,7 +1899,7 @@ func TestSecondaryIndexesUpdatedOnPut(t *testing.T) {
 	}
 
 	// Update: change status, labels, and assignee.
-	tc.Status = "in_progress"
+	tc.Status = ticket.StatusInProgress
 	tc.Labels = []string{"backend"}
 	tc.Assignee = ref.MustParseUserID("@agent2:bureau.local")
 	idx.Put("tkt-a", tc)
@@ -1971,7 +1971,7 @@ func TestReadyRecomputesWhenBlockerCloses(t *testing.T) {
 	}
 
 	// Close the blocker.
-	blocker.Status = "closed"
+	blocker.Status = ticket.StatusClosed
 	idx.Put("tkt-blocker", blocker)
 
 	// Now: dependent should be ready.
@@ -2135,7 +2135,7 @@ func TestUnblockScoreDiamond(t *testing.T) {
 	// Closing B: D still blocked by C → score 0.
 	// Closing C: D still blocked by B → score 0.
 	closedA := makeTicket("A")
-	closedA.Status = "closed"
+	closedA.Status = ticket.StatusClosed
 	closedA.ClosedAt = "2026-02-13T10:00:00Z"
 	idx.Put("tkt-a", closedA)
 
@@ -2164,7 +2164,7 @@ func TestUnblockScoreLastBlocker(t *testing.T) {
 
 	// A (closed) and B (open) both block C. B is the last open blocker.
 	closedA := makeTicket("A")
-	closedA.Status = "closed"
+	closedA.Status = ticket.StatusClosed
 	closedA.ClosedAt = "2026-02-13T10:00:00Z"
 	idx.Put("tkt-a", closedA)
 
@@ -2202,7 +2202,7 @@ func TestUnblockScoreIgnoresClosedDependents(t *testing.T) {
 	idx.Put("tkt-a", makeTicket("A"))
 
 	closedB := makeTicket("B")
-	closedB.Status = "closed"
+	closedB.Status = ticket.StatusClosed
 	closedB.BlockedBy = []string{"tkt-a"}
 	idx.Put("tkt-b", closedB)
 
@@ -2363,7 +2363,7 @@ func TestCriticalDepthIgnoresClosedChildren(t *testing.T) {
 	// A (closed) ← B (open). Only B is open, A is closed → depth 0.
 	closedA := makeTicket("A")
 	closedA.Parent = "tkt-epic"
-	closedA.Status = "closed"
+	closedA.Status = ticket.StatusClosed
 	idx.Put("tkt-a", closedA)
 
 	childB := makeTicket("B")
@@ -2433,20 +2433,20 @@ func TestEpicHealthBasic(t *testing.T) {
 	// 5 children: 2 closed, 2 ready (open, no blockers), 1 blocked.
 	for _, spec := range []struct {
 		id     string
-		status string
+		status ticket.TicketStatus
 		blocks []string
 	}{
-		{"tkt-a", "closed", nil},
-		{"tkt-b", "closed", nil},
-		{"tkt-c", "open", nil},               // ready
-		{"tkt-d", "open", nil},               // ready
-		{"tkt-e", "open", []string{"tkt-c"}}, // blocked by C
+		{"tkt-a", ticket.StatusClosed, nil},
+		{"tkt-b", ticket.StatusClosed, nil},
+		{"tkt-c", ticket.StatusOpen, nil},               // ready
+		{"tkt-d", ticket.StatusOpen, nil},               // ready
+		{"tkt-e", ticket.StatusOpen, []string{"tkt-c"}}, // blocked by C
 	} {
 		child := makeTicket(spec.id)
 		child.Parent = "tkt-epic"
 		child.Status = spec.status
 		child.BlockedBy = spec.blocks
-		if spec.status == "closed" {
+		if spec.status == ticket.StatusClosed {
 			child.ClosedAt = "2026-02-13T10:00:00Z"
 		}
 		idx.Put(spec.id, child)
@@ -2498,7 +2498,7 @@ func TestEpicHealthWithInProgress(t *testing.T) {
 
 	childB := makeTicket("B")
 	childB.Parent = "tkt-epic"
-	childB.Status = "in_progress"
+	childB.Status = ticket.StatusInProgress
 	childB.Assignee = ref.MustParseUserID("@agent:bureau.local")
 	idx.Put("tkt-b", childB) // in_progress
 
@@ -2565,7 +2565,7 @@ func TestScoreDaysSinceReadyFromBlockerClosedAt(t *testing.T) {
 
 	// Blocker closed 1 day ago. Ticket became ready then.
 	closedA := makeTicket("A")
-	closedA.Status = "closed"
+	closedA.Status = ticket.StatusClosed
 	closedA.ClosedAt = "2026-02-14T10:00:00Z" // 1 day before fixedNow
 	idx.Put("tkt-a", closedA)
 
@@ -2675,7 +2675,7 @@ func TestBulkInsertAndQuery(t *testing.T) {
 		tc := makeTicket("Ticket")
 		tc.Priority = i % 5
 		if i%3 == 0 {
-			tc.Status = "closed"
+			tc.Status = ticket.StatusClosed
 		}
 		if i%7 == 0 {
 			tc.Labels = []string{"flagged"}

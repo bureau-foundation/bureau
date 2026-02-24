@@ -157,7 +157,7 @@ func TestHandleListFilterByStatus(t *testing.T) {
 		t.Fatalf("got %d entries, want 2 open tickets", len(result))
 	}
 	for _, entry := range result {
-		if entry.Content.Status != "open" {
+		if entry.Content.Status != ticket.StatusOpen {
 			t.Errorf("ticket %s has status %q, want open", entry.ID, entry.Content.Status)
 		}
 	}
@@ -252,8 +252,8 @@ func TestHandleBlocked(t *testing.T) {
 	// Create a room where tkt-3 is blocked by tkt-1 (which is open).
 	rooms := map[ref.RoomID]*roomState{
 		testRoomID("!room:local"): newTrackedRoom(map[string]ticket.TicketContent{
-			"tkt-1": {Version: 1, Title: "blocker", Status: "open", Priority: 1, CreatedAt: "2026-01-01T00:00:00Z"},
-			"tkt-3": {Version: 1, Title: "blocked", Status: "open", Priority: 2, BlockedBy: []string{"tkt-1"}, CreatedAt: "2026-01-02T00:00:00Z"},
+			"tkt-1": {Version: 1, Title: "blocker", Status: ticket.StatusOpen, Priority: 1, CreatedAt: "2026-01-01T00:00:00Z"},
+			"tkt-3": {Version: 1, Title: "blocked", Status: ticket.StatusOpen, Priority: 2, BlockedBy: []string{"tkt-1"}, CreatedAt: "2026-01-02T00:00:00Z"},
 		}),
 	}
 
@@ -603,7 +603,7 @@ func TestHandleRanked(t *testing.T) {
 			"tkt-blocker": {
 				Version:   1,
 				Title:     "high leverage blocker",
-				Status:    "closed",
+				Status:    ticket.StatusClosed,
 				Priority:  2,
 				Type:      "task",
 				CreatedAt: "2026-01-01T00:00:00Z",
@@ -612,7 +612,7 @@ func TestHandleRanked(t *testing.T) {
 			"tkt-ready-a": {
 				Version:   1,
 				Title:     "ready ticket A",
-				Status:    "open",
+				Status:    ticket.StatusOpen,
 				Priority:  2,
 				Type:      "task",
 				BlockedBy: []string{"tkt-blocker"},
@@ -621,7 +621,7 @@ func TestHandleRanked(t *testing.T) {
 			"tkt-ready-b": {
 				Version:   1,
 				Title:     "ready ticket B unblocks downstream",
-				Status:    "open",
+				Status:    ticket.StatusOpen,
 				Priority:  2,
 				Type:      "task",
 				CreatedAt: "2026-01-01T00:00:00Z",
@@ -629,7 +629,7 @@ func TestHandleRanked(t *testing.T) {
 			"tkt-blocked": {
 				Version:   1,
 				Title:     "blocked by B",
-				Status:    "open",
+				Status:    ticket.StatusOpen,
 				Priority:  0,
 				Type:      "bug",
 				BlockedBy: []string{"tkt-ready-b"},
@@ -674,7 +674,7 @@ func TestHandleRankedEmpty(t *testing.T) {
 			"tkt-closed": {
 				Version:   1,
 				Title:     "all done",
-				Status:    "closed",
+				Status:    ticket.StatusClosed,
 				Priority:  2,
 				Type:      "task",
 				CreatedAt: "2026-01-01T00:00:00Z",
@@ -714,7 +714,7 @@ func TestHandleEpicHealth(t *testing.T) {
 			"tkt-epic": {
 				Version:   1,
 				Title:     "the epic",
-				Status:    "open",
+				Status:    ticket.StatusOpen,
 				Priority:  1,
 				Type:      "epic",
 				CreatedAt: "2026-01-01T00:00:00Z",
@@ -722,7 +722,7 @@ func TestHandleEpicHealth(t *testing.T) {
 			"tkt-done": {
 				Version:   1,
 				Title:     "done child",
-				Status:    "closed",
+				Status:    ticket.StatusClosed,
 				Priority:  2,
 				Type:      "task",
 				Parent:    "tkt-epic",
@@ -732,7 +732,7 @@ func TestHandleEpicHealth(t *testing.T) {
 			"tkt-ready": {
 				Version:   1,
 				Title:     "ready child",
-				Status:    "open",
+				Status:    ticket.StatusOpen,
 				Priority:  2,
 				Type:      "task",
 				Parent:    "tkt-epic",
@@ -741,7 +741,7 @@ func TestHandleEpicHealth(t *testing.T) {
 			"tkt-blocked-child": {
 				Version:   1,
 				Title:     "blocked child",
-				Status:    "open",
+				Status:    ticket.StatusOpen,
 				Priority:  2,
 				Type:      "task",
 				Parent:    "tkt-epic",
@@ -973,7 +973,7 @@ func TestHandleShowIncludesStewardshipContext(t *testing.T) {
 			"tkt-s1": {
 				Version:  1,
 				Title:    "GPU quota increase",
-				Status:   "review",
+				Status:   ticket.StatusReview,
 				Priority: 2,
 				Type:     "task",
 				Affects:  []string{"fleet/gpu/a100"},
@@ -1087,7 +1087,7 @@ func TestListIncludesStewardshipSummary(t *testing.T) {
 			"tkt-s1": {
 				Version:  1,
 				Title:    "with stewardship",
-				Status:   "open",
+				Status:   ticket.StatusOpen,
 				Priority: 2,
 				Type:     "task",
 				Affects:  []string{"fleet/gpu/a100"},
@@ -1107,7 +1107,7 @@ func TestListIncludesStewardshipSummary(t *testing.T) {
 			"tkt-s2": {
 				Version:  1,
 				Title:    "without stewardship",
-				Status:   "open",
+				Status:   ticket.StatusOpen,
 				Priority: 2,
 				Type:     "task",
 			},

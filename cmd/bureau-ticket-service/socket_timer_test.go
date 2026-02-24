@@ -415,7 +415,7 @@ func TestHandleUpcomingGates(t *testing.T) {
 			"tkt-timer1": {
 				Version:   1,
 				Title:     "scheduled check",
-				Status:    "open",
+				Status:    ticket.StatusOpen,
 				Priority:  2,
 				Type:      "chore",
 				CreatedBy: ref.MustParseUserID("@agent/creator:bureau.local"),
@@ -434,7 +434,7 @@ func TestHandleUpcomingGates(t *testing.T) {
 			"tkt-timer2": {
 				Version:   1,
 				Title:     "interval poll",
-				Status:    "open",
+				Status:    ticket.StatusOpen,
 				Priority:  3,
 				Type:      "chore",
 				CreatedBy: ref.MustParseUserID("@agent/creator:bureau.local"),
@@ -453,7 +453,7 @@ func TestHandleUpcomingGates(t *testing.T) {
 			"tkt-satisfied": {
 				Version:   1,
 				Title:     "already fired",
-				Status:    "open",
+				Status:    ticket.StatusOpen,
 				Priority:  2,
 				Type:      "task",
 				CreatedBy: ref.MustParseUserID("@agent/creator:bureau.local"),
@@ -523,7 +523,7 @@ func TestHandleUpcomingGatesRoomFilter(t *testing.T) {
 	rooms := map[ref.RoomID]*roomState{
 		testRoomID("!room1:bureau.local"): newTrackedRoom(map[string]ticket.TicketContent{
 			"tkt-a": {
-				Version: 1, Title: "room1 task", Status: "open",
+				Version: 1, Title: "room1 task", Status: ticket.StatusOpen,
 				Priority: 2, Type: "chore",
 				CreatedBy: ref.MustParseUserID("@agent/creator:bureau.local"),
 				CreatedAt: "2026-01-01T00:00:00Z",
@@ -535,7 +535,7 @@ func TestHandleUpcomingGatesRoomFilter(t *testing.T) {
 		}),
 		testRoomID("!room2:bureau.local"): newTrackedRoom(map[string]ticket.TicketContent{
 			"tkt-b": {
-				Version: 1, Title: "room2 task", Status: "open",
+				Version: 1, Title: "room2 task", Status: ticket.StatusOpen,
 				Priority: 2, Type: "chore",
 				CreatedBy: ref.MustParseUserID("@agent/creator:bureau.local"),
 				CreatedAt: "2026-01-01T00:00:00Z",
@@ -676,7 +676,7 @@ func TestTimerLifecycleScheduleFireAndRearm(t *testing.T) {
 	}
 
 	// After rearm, status should be "open" (not "closed").
-	if closeResult.Content.Status != "open" {
+	if closeResult.Content.Status != ticket.StatusOpen {
 		t.Fatalf("status after rearm: got %q, want 'open'", closeResult.Content.Status)
 	}
 	rearmedGate := closeResult.Content.Gates[0]
@@ -710,7 +710,7 @@ func TestTimerLifecycleScheduleFireAndRearm(t *testing.T) {
 	if err != nil {
 		t.Fatalf("close with end_recurrence: %v", err)
 	}
-	if endResult.Content.Status != "closed" {
+	if endResult.Content.Status != ticket.StatusClosed {
 		t.Errorf("status after end-recurrence: got %q, want 'closed'", endResult.Content.Status)
 	}
 	// Recurring gates should be stripped.
@@ -761,7 +761,7 @@ func TestTimerLifecycleIntervalFireAndRearm(t *testing.T) {
 		t.Fatalf("close: %v", err)
 	}
 
-	if closeResult.Content.Status != "open" {
+	if closeResult.Content.Status != ticket.StatusOpen {
 		t.Fatalf("status after rearm: got %q, want 'open'", closeResult.Content.Status)
 	}
 	rearmedGate := closeResult.Content.Gates[0]
@@ -779,7 +779,7 @@ func TestTimerLifecycleMaxOccurrences(t *testing.T) {
 			"tkt-max": {
 				Version:   1,
 				Title:     "limited recurring",
-				Status:    "open",
+				Status:    ticket.StatusOpen,
 				Priority:  2,
 				Type:      "chore",
 				CreatedBy: ref.MustParseUserID("@agent/creator:bureau.local"),
@@ -819,7 +819,7 @@ func TestTimerLifecycleMaxOccurrences(t *testing.T) {
 	if err != nil {
 		t.Fatalf("first close: %v", err)
 	}
-	if closeResult.Content.Status != "open" {
+	if closeResult.Content.Status != ticket.StatusOpen {
 		t.Fatalf("expected rearm after first fire, got status %q", closeResult.Content.Status)
 	}
 
@@ -835,7 +835,7 @@ func TestTimerLifecycleMaxOccurrences(t *testing.T) {
 	if err != nil {
 		t.Fatalf("second close: %v", err)
 	}
-	if closeResult.Content.Status != "closed" {
+	if closeResult.Content.Status != ticket.StatusClosed {
 		t.Fatalf("expected closed after max occurrences, got status %q", closeResult.Content.Status)
 	}
 }
@@ -920,7 +920,7 @@ func TestDeadlineCRUD(t *testing.T) {
 
 	t.Run("UpdateSetDeadline", func(t *testing.T) {
 		rooms := map[ref.RoomID]*roomState{testRoomID(room): newTrackedRoom(map[string]ticket.TicketContent{
-			"tkt-1": ticketFixture("No deadline yet", "open"),
+			"tkt-1": ticketFixture("No deadline yet", ticket.StatusOpen),
 		})}
 		env := testMutationServer(t, rooms)
 		defer env.cleanup()
@@ -938,7 +938,7 @@ func TestDeadlineCRUD(t *testing.T) {
 	})
 
 	t.Run("UpdateClearDeadline", func(t *testing.T) {
-		fixture := ticketFixture("Has deadline", "open")
+		fixture := ticketFixture("Has deadline", ticket.StatusOpen)
 		fixture.Deadline = "2026-04-01T00:00:00Z"
 		rooms := map[ref.RoomID]*roomState{testRoomID(room): newTrackedRoom(map[string]ticket.TicketContent{
 			"tkt-1": fixture,

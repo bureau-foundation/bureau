@@ -266,7 +266,7 @@ invalid, none are imported.`,
 
 			if params.ResetStatus {
 				for i := range entries {
-					entries[i].Content.Status = "open"
+					entries[i].Content.Status = ticketschema.StatusOpen
 					entries[i].Content.Assignee = ref.UserID{}
 					entries[i].Content.ClosedAt = ""
 					entries[i].Content.CloseReason = ""

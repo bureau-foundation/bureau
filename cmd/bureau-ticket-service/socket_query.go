@@ -527,7 +527,7 @@ func (ts *TicketService) handleShow(ctx context.Context, token *servicetoken.Tok
 	// is meaningless (it cannot be assigned) and would produce
 	// confusing results.
 	var score *ticketindex.TicketScore
-	if content.Status != "closed" {
+	if content.Status != ticket.StatusClosed {
 		ticketScore := state.index.Score(ticketID, ts.clock.Now(), ticketindex.DefaultRankWeights())
 		score = &ticketScore
 	}
@@ -869,7 +869,7 @@ func (ts *TicketService) handleUpcomingGates(ctx context.Context, token *service
 					LastFiredAt: gate.LastFiredAt,
 					TicketID:    pending.ID,
 					Title:       pending.Content.Title,
-					Status:      pending.Content.Status,
+					Status:      string(pending.Content.Status),
 					Assignee:    pending.Content.Assignee.String(),
 					Room:        roomID.String(),
 					UntilFire:   untilFireStr,

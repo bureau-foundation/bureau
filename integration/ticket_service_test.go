@@ -106,8 +106,8 @@ func TestTicketServiceAgent(t *testing.T) {
 	// Read it the same way a production observer would.
 	ticketID, ticketContent := waitForTicket(t, &projectWatch, "Agent-created ticket")
 
-	if ticketContent.Status != "open" {
-		t.Errorf("status = %q, want open", ticketContent.Status)
+	if ticketContent.Status != ticket.StatusOpen {
+		t.Errorf("status = %q, want %s", ticketContent.Status, ticket.StatusOpen)
 	}
 	if ticketContent.Type != "task" {
 		t.Errorf("type = %q, want task", ticketContent.Type)
@@ -348,8 +348,8 @@ func TestTicketLifecycleAgent(t *testing.T) {
 		}}, "Create lifecycle ticket")
 
 		ticketID, content := waitForTicket(t, &projectWatch, "Lifecycle ticket")
-		if content.Status != "open" {
-			t.Errorf("after create: status = %q, want open", content.Status)
+		if content.Status != ticket.StatusOpen {
+			t.Errorf("after create: status = %q, want %s", content.Status, ticket.StatusOpen)
 		}
 		t.Logf("created %s", ticketID)
 
@@ -368,8 +368,8 @@ func TestTicketLifecycleAgent(t *testing.T) {
 		}}, "Claim ticket")
 
 		content = readTicketState(t, admin, roomAlphaID, ticketID)
-		if content.Status != "in_progress" {
-			t.Errorf("after claim: status = %q, want in_progress", content.Status)
+		if content.Status != ticket.StatusInProgress {
+			t.Errorf("after claim: status = %q, want %s", content.Status, ticket.StatusInProgress)
 		}
 		if content.Assignee != pmUserID {
 			t.Errorf("after claim: assignee = %s, want %s", content.Assignee, pmUserID)
@@ -388,8 +388,8 @@ func TestTicketLifecycleAgent(t *testing.T) {
 		}}, "Close ticket")
 
 		content = readTicketState(t, admin, roomAlphaID, ticketID)
-		if content.Status != "closed" {
-			t.Errorf("after close: status = %q, want closed", content.Status)
+		if content.Status != ticket.StatusClosed {
+			t.Errorf("after close: status = %q, want %s", content.Status, ticket.StatusClosed)
 		}
 		if content.CloseReason != "completed" {
 			t.Errorf("after close: reason = %q, want completed", content.CloseReason)
@@ -407,8 +407,8 @@ func TestTicketLifecycleAgent(t *testing.T) {
 		}}, "Reopen ticket")
 
 		content = readTicketState(t, admin, roomAlphaID, ticketID)
-		if content.Status != "open" {
-			t.Errorf("after reopen: status = %q, want open", content.Status)
+		if content.Status != ticket.StatusOpen {
+			t.Errorf("after reopen: status = %q, want %s", content.Status, ticket.StatusOpen)
 		}
 		if content.ClosedAt != "" {
 			t.Errorf("after reopen: closed_at should be cleared, got %q", content.ClosedAt)
@@ -452,8 +452,8 @@ func TestTicketLifecycleAgent(t *testing.T) {
 		}}, "Worker: claim ticket")
 
 		content := readTicketState(t, admin, roomAlphaID, ticketID)
-		if content.Status != "in_progress" {
-			t.Errorf("after worker claim: status = %q, want in_progress", content.Status)
+		if content.Status != ticket.StatusInProgress {
+			t.Errorf("after worker claim: status = %q, want %s", content.Status, ticket.StatusInProgress)
 		}
 
 		// Worker tries to close — service rejects (no ticket/close grant).
@@ -469,8 +469,8 @@ func TestTicketLifecycleAgent(t *testing.T) {
 		}}, "Worker: close ticket")
 
 		content = readTicketState(t, admin, roomAlphaID, ticketID)
-		if content.Status != "in_progress" {
-			t.Errorf("after worker close attempt: status = %q, want in_progress (close should be denied)", content.Status)
+		if content.Status != ticket.StatusInProgress {
+			t.Errorf("after worker close attempt: status = %q, want %s (close should be denied)", content.Status, ticket.StatusInProgress)
 		}
 		t.Log("worker close correctly denied by service")
 
@@ -489,8 +489,8 @@ func TestTicketLifecycleAgent(t *testing.T) {
 		}}, "PM: close ticket")
 
 		content = readTicketState(t, admin, roomAlphaID, ticketID)
-		if content.Status != "closed" {
-			t.Errorf("after PM close: status = %q, want closed", content.Status)
+		if content.Status != ticket.StatusClosed {
+			t.Errorf("after PM close: status = %q, want %s", content.Status, ticket.StatusClosed)
 		}
 
 		// Switch back to worker — reopen should fail.
@@ -507,8 +507,8 @@ func TestTicketLifecycleAgent(t *testing.T) {
 		}}, "Worker: reopen ticket")
 
 		content = readTicketState(t, admin, roomAlphaID, ticketID)
-		if content.Status != "closed" {
-			t.Errorf("after worker reopen attempt: status = %q, want closed (reopen should be denied)", content.Status)
+		if content.Status != ticket.StatusClosed {
+			t.Errorf("after worker reopen attempt: status = %q, want %s (reopen should be denied)", content.Status, ticket.StatusClosed)
 		}
 		t.Log("worker reopen correctly denied by service")
 
@@ -526,8 +526,8 @@ func TestTicketLifecycleAgent(t *testing.T) {
 		}}, "PM: reopen ticket")
 
 		content = readTicketState(t, admin, roomAlphaID, ticketID)
-		if content.Status != "open" {
-			t.Errorf("after PM reopen: status = %q, want open", content.Status)
+		if content.Status != ticket.StatusOpen {
+			t.Errorf("after PM reopen: status = %q, want %s", content.Status, ticket.StatusOpen)
 		}
 
 		t.Logf("asymmetric permissions verified for %s", ticketID)
@@ -770,7 +770,7 @@ func TestStewardship(t *testing.T) {
 		if err := client.Call(ctx, "update", map[string]any{
 			"room":   projectRoomID.String(),
 			"ticket": createResult.ID,
-			"status": "review",
+			"status": string(ticket.StatusReview),
 		}, nil); err != nil {
 			t.Fatalf("transition to review: %v", err)
 		}

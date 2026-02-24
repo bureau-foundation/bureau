@@ -18,23 +18,23 @@ func autolinkTestSource() *IndexSource {
 	index := ticketindex.NewIndex()
 	index.Put("tkt-001", ticket.TicketContent{
 		Title:    "First ticket",
-		Status:   "open",
+		Status:   ticket.StatusOpen,
 		Priority: 1,
 	})
 	index.Put("tkt-002", ticket.TicketContent{
 		Title:    "Second ticket",
-		Status:   "closed",
+		Status:   ticket.StatusClosed,
 		Priority: 2,
 	})
 	index.Put("epic-1", ticket.TicketContent{
 		Title:    "Epic one",
-		Status:   "open",
+		Status:   ticket.StatusOpen,
 		Priority: 0,
 		Type:     "epic",
 	})
 	index.Put("tkt-3abc", ticket.TicketContent{
 		Title:    "Hex-suffix ticket",
-		Status:   "in_progress",
+		Status:   ticket.StatusInProgress,
 		Priority: 2,
 	})
 	return NewIndexSource(index)

@@ -76,7 +76,7 @@ func (filter *FilterModel) MatchesEntry(entry ticketindex.Entry, source Source) 
 	}
 
 	// Match against status.
-	if strings.Contains(strings.ToLower(entry.Content.Status), query) {
+	if strings.Contains(strings.ToLower(string(entry.Content.Status)), query) {
 		return true
 	}
 
@@ -176,7 +176,7 @@ func searchableFields(entry ticketindex.Entry, source Source) []string {
 		strings.Join(entry.Content.Labels, " "),
 		entry.Content.Assignee.String(),
 		entry.Content.Type,
-		entry.Content.Status,
+		string(entry.Content.Status),
 	}
 
 	if entry.Content.Parent != "" {

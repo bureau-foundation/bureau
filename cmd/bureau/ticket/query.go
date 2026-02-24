@@ -12,6 +12,7 @@ import (
 	"text/tabwriter"
 
 	"github.com/bureau-foundation/bureau/cmd/bureau/cli"
+	ticketschema "github.com/bureau-foundation/bureau/lib/schema/ticket"
 	"github.com/bureau-foundation/bureau/lib/ticketindex"
 )
 
@@ -601,7 +602,13 @@ for a room.`,
 
 			if len(stats.ByStatus) > 0 {
 				fmt.Println("By Status:")
-				for _, status := range []string{"open", "in_progress", "blocked", "closed"} {
+				for _, status := range []string{
+					string(ticketschema.StatusOpen),
+					string(ticketschema.StatusInProgress),
+					string(ticketschema.StatusReview),
+					string(ticketschema.StatusBlocked),
+					string(ticketschema.StatusClosed),
+				} {
 					if count, ok := stats.ByStatus[status]; ok {
 						fmt.Printf("  %-14s %d\n", status, count)
 					}
@@ -678,15 +685,16 @@ total tickets, and per-room summaries. Requires authentication.`,
 			if len(info.RoomDetails) > 0 {
 				fmt.Println()
 				writer := tabwriter.NewWriter(os.Stdout, 2, 0, 3, ' ', 0)
-				fmt.Fprintf(writer, "ROOM\tTICKETS\tOPEN\tIN PROGRESS\tBLOCKED\tCLOSED\n")
+				fmt.Fprintf(writer, "ROOM\tTICKETS\tOPEN\tIN PROGRESS\tREVIEW\tBLOCKED\tCLOSED\n")
 				for _, room := range info.RoomDetails {
-					fmt.Fprintf(writer, "%s\t%d\t%d\t%d\t%d\t%d\n",
+					fmt.Fprintf(writer, "%s\t%d\t%d\t%d\t%d\t%d\t%d\n",
 						room.RoomID,
 						room.Tickets,
-						room.ByStatus["open"],
-						room.ByStatus["in_progress"],
-						room.ByStatus["blocked"],
-						room.ByStatus["closed"],
+						room.ByStatus[string(ticketschema.StatusOpen)],
+						room.ByStatus[string(ticketschema.StatusInProgress)],
+						room.ByStatus[string(ticketschema.StatusReview)],
+						room.ByStatus[string(ticketschema.StatusBlocked)],
+						room.ByStatus[string(ticketschema.StatusClosed)],
 					)
 				}
 				writer.Flush()

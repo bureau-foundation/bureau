@@ -134,12 +134,12 @@ func TestApplyFuzzySortedByScore(t *testing.T) {
 	index := ticketindex.NewIndex()
 	index.Put("tkt-exact", ticket.TicketContent{
 		Title:  "pooling is great",
-		Status: "open",
+		Status: ticket.StatusOpen,
 		Type:   "task",
 	})
 	index.Put("tkt-fuzzy", ticket.TicketContent{
 		Title:  "p-something o-other l-long i-inner n-nope g-gone",
-		Status: "open",
+		Status: ticket.StatusOpen,
 		Type:   "task",
 	})
 	source := NewIndexSource(index)
@@ -161,7 +161,7 @@ func TestApplyFuzzyTitlePositions(t *testing.T) {
 	index := ticketindex.NewIndex()
 	index.Put("tkt-001", ticket.TicketContent{
 		Title:  "hello world",
-		Status: "open",
+		Status: ticket.StatusOpen,
 		Type:   "task",
 	})
 	source := NewIndexSource(index)

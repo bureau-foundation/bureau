@@ -252,7 +252,7 @@ func collectSnapshot(state *roomState) roomSnapshot {
 	closedByID := make(map[string]ticketindex.Entry)
 
 	for _, entry := range allTickets {
-		if entry.Content.Status == "closed" {
+		if entry.Content.Status == ticket.StatusClosed {
 			closedByID[entry.ID] = entry
 		} else {
 			openTickets = append(openTickets, entry)

@@ -377,7 +377,7 @@ func (idx *Index) Get(ticketID string) (ticket.TicketContent, bool) {
 func (idx *Index) Ready() []Entry {
 	var result []Entry
 	for id, content := range idx.tickets {
-		if idx.isReady(&content) || content.Status == "in_progress" || content.Status == "review" {
+		if idx.isReady(&content) || content.Status == ticket.StatusInProgress || content.Status == ticket.StatusReview {
 			result = append(result, Entry{ID: id, Content: content})
 		}
 	}
@@ -391,7 +391,7 @@ func (idx *Index) Ready() []Entry {
 func (idx *Index) Blocked() []Entry {
 	var result []Entry
 	for id, content := range idx.tickets {
-		if content.Status != "open" {
+		if content.Status != ticket.StatusOpen {
 			continue
 		}
 		if !idx.AllBlockersClosed(&content) || !allGatesSatisfied(&content) {
@@ -478,7 +478,7 @@ func (idx *Index) ChildProgress(parentID string) (total, closed int) {
 			continue
 		}
 		total++
-		if content.Status == "closed" {
+		if content.Status == ticket.StatusClosed {
 			closed++
 		}
 	}
@@ -693,7 +693,7 @@ func (idx *Index) Stats() Stats {
 		ByType:     make(map[string]int),
 	}
 	for _, content := range idx.tickets {
-		stats.ByStatus[content.Status]++
+		stats.ByStatus[string(content.Status)]++
 		stats.ByPriority[content.Priority]++
 		stats.ByType[content.Type]++
 	}
@@ -716,7 +716,7 @@ func (idx *Index) UnblockScore(ticketID string) int {
 	count := 0
 	for dependentID := range dependents {
 		dependent, exists := idx.tickets[dependentID]
-		if !exists || dependent.Status != "open" {
+		if !exists || dependent.Status != ticket.StatusOpen {
 			continue
 		}
 		if !allGatesSatisfied(&dependent) {
@@ -730,7 +730,7 @@ func (idx *Index) UnblockScore(ticketID string) int {
 				continue
 			}
 			blocker, exists := idx.tickets[blockerID]
-			if !exists || blocker.Status != "closed" {
+			if !exists || blocker.Status != ticket.StatusClosed {
 				otherOpenBlockers = true
 				break
 			}
@@ -813,7 +813,7 @@ func (idx *Index) CriticalDepth(epicID string) int {
 	openChildren := make(map[string]struct{})
 	for childID := range childIDs {
 		content, exists := idx.tickets[childID]
-		if exists && content.Status != "closed" {
+		if exists && content.Status != ticket.StatusClosed {
 			openChildren[childID] = struct{}{}
 		}
 	}
@@ -880,9 +880,9 @@ func (idx *Index) EpicHealth(epicID string) EpicHealthStats {
 		}
 		stats.TotalChildren++
 		switch content.Status {
-		case "closed":
+		case ticket.StatusClosed:
 			stats.ClosedChildren++
-		case "in_progress":
+		case ticket.StatusInProgress:
 			// Counted in active fraction below.
 		}
 		if idx.isReady(&content) {
@@ -896,7 +896,7 @@ func (idx *Index) EpicHealth(epicID string) EpicHealthStats {
 		inProgressCount := 0
 		for childID := range childIDs {
 			content, exists := idx.tickets[childID]
-			if exists && content.Status == "in_progress" {
+			if exists && content.Status == ticket.StatusInProgress {
 				inProgressCount++
 			}
 		}
@@ -1079,7 +1079,7 @@ func (idx *Index) updateIndexes(
 	stringOp func(map[string]map[string]struct{}, string, string),
 	intOp func(map[int]map[string]struct{}, int, string),
 ) {
-	stringOp(idx.byStatus, content.Status, ticketID)
+	stringOp(idx.byStatus, string(content.Status), ticketID)
 	intOp(idx.byPriority, content.Priority, ticketID)
 	stringOp(idx.byType, content.Type, ticketID)
 
@@ -1102,7 +1102,7 @@ func (idx *Index) updateIndexes(
 
 // isReady returns true if the ticket is available to be picked up.
 func (idx *Index) isReady(content *ticket.TicketContent) bool {
-	return content.Status == "open" &&
+	return content.Status == ticket.StatusOpen &&
 		idx.AllBlockersClosed(content) &&
 		allGatesSatisfied(content)
 }
@@ -1114,7 +1114,7 @@ func (idx *Index) isReady(content *ticket.TicketContent) bool {
 func (idx *Index) AllBlockersClosed(content *ticket.TicketContent) bool {
 	for _, blockerID := range content.BlockedBy {
 		blocker, exists := idx.tickets[blockerID]
-		if !exists || blocker.Status != "closed" {
+		if !exists || blocker.Status != ticket.StatusClosed {
 			return false
 		}
 	}
@@ -1141,7 +1141,7 @@ func (idx *Index) matchesFilter(content *ticket.TicketContent, filter *Filter) b
 	if filter.Status != "" {
 		switch filter.Status {
 		case "active":
-			if content.Status != "open" && content.Status != "in_progress" {
+			if content.Status != ticket.StatusOpen && content.Status != ticket.StatusInProgress {
 				return false
 			}
 		case "ready":
@@ -1149,7 +1149,7 @@ func (idx *Index) matchesFilter(content *ticket.TicketContent, filter *Filter) b
 				return false
 			}
 		default:
-			if content.Status != filter.Status {
+			if string(content.Status) != filter.Status {
 				return false
 			}
 		}

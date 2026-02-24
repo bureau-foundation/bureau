@@ -62,15 +62,16 @@ func renderTooltip(ticketID string, content ticketschema.TicketContent, theme Th
 		Background(theme.TooltipBackground)
 
 	// Line 1: status + priority + ticket ID.
+	status := string(content.Status)
 	statusStyle := lipgloss.NewStyle().
-		Foreground(theme.StatusColor(content.Status)).
+		Foreground(theme.StatusColor(status)).
 		Background(theme.TooltipBackground).
 		Bold(true)
 	priorityStyle := lipgloss.NewStyle().
 		Foreground(theme.PriorityColor(content.Priority)).
 		Background(theme.TooltipBackground)
 
-	statusText := strings.ToUpper(content.Status)
+	statusText := strings.ToUpper(status)
 	priorityText := fmt.Sprintf("P%d", content.Priority)
 	separator := backgroundStyle.Render("  ")
 	metaContent := statusStyle.Render(statusText) + separator +

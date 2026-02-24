@@ -31,6 +31,44 @@ const (
 // loop, not a scheduled ticket.
 const MinTimerRecurrence = 30 * time.Second
 
+// TicketStatus represents the lifecycle state of a ticket.
+type TicketStatus string
+
+const (
+	// StatusOpen means the ticket is available for work.
+	StatusOpen TicketStatus = "open"
+
+	// StatusInProgress means an agent or human has claimed the ticket
+	// and is actively working on it.
+	StatusInProgress TicketStatus = "in_progress"
+
+	// StatusReview means the ticket is waiting for reviewer feedback.
+	// The ticket must have a non-nil Review field with at least one
+	// reviewer to enter this status.
+	StatusReview TicketStatus = "review"
+
+	// StatusBlocked means the ticket is explicitly blocked. This is
+	// distinct from derived blockedness (open dependencies / unsatisfied
+	// gates) — agents set this to signal blockage on things not tracked
+	// as ticket dependencies.
+	StatusBlocked TicketStatus = "blocked"
+
+	// StatusClosed means the ticket is resolved.
+	StatusClosed TicketStatus = "closed"
+)
+
+// IsKnown reports whether this is a status value understood by this
+// version of the code. Unknown statuses may appear in events written
+// by newer service versions and are safe to read but not to use in
+// state machine transitions.
+func (s TicketStatus) IsKnown() bool {
+	switch s {
+	case StatusOpen, StatusInProgress, StatusReview, StatusBlocked, StatusClosed:
+		return true
+	}
+	return false
+}
+
 // TicketContent is the content of an EventTypeTicket state event. Each
 // ticket is a work item tracked in a room. The ticket service maintains
 // an indexed cache of these events for fast queries via its unix socket
@@ -78,7 +116,7 @@ type TicketContent struct {
 	// reviewer to enter this status. The assignee (author) is
 	// preserved from in_progress → review and review → in_progress
 	// transitions. See TicketReview for the review model.
-	Status string `json:"status"`
+	Status TicketStatus `json:"status"`
 
 	// Priority is 0-4: 0=critical, 1=high, 2=medium, 3=low,
 	// 4=backlog.
@@ -207,12 +245,10 @@ func (t *TicketContent) Validate() error {
 	if t.Title == "" {
 		return errors.New("ticket content: title is required")
 	}
-	switch t.Status {
-	case "open", "in_progress", "review", "blocked", "closed":
-		// Valid.
-	case "":
+	if t.Status == "" {
 		return errors.New("ticket content: status is required")
-	default:
+	}
+	if !t.Status.IsKnown() {
 		return fmt.Errorf("ticket content: unknown status %q", t.Status)
 	}
 	if t.Priority < 0 || t.Priority > 4 {
@@ -246,7 +282,7 @@ func (t *TicketContent) Validate() error {
 			return fmt.Errorf("ticket content: affects[%d]: resource identifier cannot be empty", i)
 		}
 	}
-	if t.Status == "review" && (t.Review == nil || len(t.Review.Reviewers) == 0) {
+	if t.Status == StatusReview && (t.Review == nil || len(t.Review.Reviewers) == 0) {
 		return errors.New("ticket content: review with at least one reviewer is required when status is \"review\"")
 	}
 	if t.Review != nil {

@@ -51,7 +51,7 @@ func claimTicket(ctx context.Context, client *service.ServiceClient, ticketID, r
 	fields := map[string]any{
 		"ticket":   ticketID,
 		"room":     roomID,
-		"status":   "in_progress",
+		"status":   string(ticket.StatusInProgress),
 		"assignee": assignee,
 	}
 	return client.Call(ctx, "update", fields, nil)
@@ -154,13 +154,13 @@ type ticketShowResult struct {
 }
 
 type ticketShowContent struct {
-	Status string
+	Status ticket.TicketStatus
 }
 
 // showTicketStatus calls the "show" action and returns the ticket's
 // current status. Used by the cancellation watcher to detect external
 // cancellation (ticket closed while the pipeline is running).
-func showTicketStatus(ctx context.Context, client *service.ServiceClient, ticketID, roomID string) (string, error) {
+func showTicketStatus(ctx context.Context, client *service.ServiceClient, ticketID, roomID string) (ticket.TicketStatus, error) {
 	fields := map[string]any{
 		"ticket": ticketID,
 		"room":   roomID,
@@ -196,7 +196,7 @@ func watchForCancellation(stepContext context.Context, clk clock.Clock, client *
 				logger.Warn("cancellation watcher poll failed", "error", err)
 				continue
 			}
-			if status == "closed" {
+			if status == ticket.StatusClosed {
 				logger.Info("ticket closed externally, cancelling execution")
 				cancelled.Store(true)
 				cancelSteps()

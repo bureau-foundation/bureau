@@ -33,7 +33,7 @@ func validTicketContent() TicketContent {
 	return TicketContent{
 		Version:   TicketContentVersion,
 		Title:     "Fix authentication bug in login flow",
-		Status:    "open",
+		Status:    StatusOpen,
 		Priority:  2,
 		Type:      "bug",
 		CreatedBy: ref.MustParseUserID("@iree/amdgpu/pm:bureau.local"),
@@ -47,7 +47,7 @@ func TestTicketContentRoundTrip(t *testing.T) {
 		Version:   TicketContentVersion,
 		Title:     "Implement AMDGPU inference pipeline",
 		Body:      "Set up the full inference pipeline for AMDGPU targets.",
-		Status:    "in_progress",
+		Status:    StatusInProgress,
 		Priority:  1,
 		Type:      "feature",
 		Labels:    []string{"amdgpu", "inference", "p1"},
@@ -407,28 +407,28 @@ func TestTicketContentValidate(t *testing.T) {
 		},
 		{
 			name:    "status_open",
-			modify:  func(tc *TicketContent) { tc.Status = "open" },
+			modify:  func(tc *TicketContent) { tc.Status = StatusOpen },
 			wantErr: "",
 		},
 		{
 			name:    "status_in_progress",
-			modify:  func(tc *TicketContent) { tc.Status = "in_progress" },
+			modify:  func(tc *TicketContent) { tc.Status = StatusInProgress },
 			wantErr: "",
 		},
 		{
 			name:    "status_blocked",
-			modify:  func(tc *TicketContent) { tc.Status = "blocked" },
+			modify:  func(tc *TicketContent) { tc.Status = StatusBlocked },
 			wantErr: "",
 		},
 		{
 			name:    "status_closed",
-			modify:  func(tc *TicketContent) { tc.Status = "closed" },
+			modify:  func(tc *TicketContent) { tc.Status = StatusClosed },
 			wantErr: "",
 		},
 		{
 			name: "status_review_with_valid_review",
 			modify: func(tc *TicketContent) {
-				tc.Status = "review"
+				tc.Status = StatusReview
 				tc.Review = &TicketReview{
 					Reviewers: []ReviewerEntry{
 						{UserID: ref.MustParseUserID("@reviewer:bureau.local"), Disposition: "pending"},
@@ -439,13 +439,13 @@ func TestTicketContentValidate(t *testing.T) {
 		},
 		{
 			name:    "review_status_without_review",
-			modify:  func(tc *TicketContent) { tc.Status = "review" },
+			modify:  func(tc *TicketContent) { tc.Status = StatusReview },
 			wantErr: "review with at least one reviewer is required when status is \"review\"",
 		},
 		{
 			name: "review_status_with_empty_reviewers",
 			modify: func(tc *TicketContent) {
-				tc.Status = "review"
+				tc.Status = StatusReview
 				tc.Review = &TicketReview{Reviewers: []ReviewerEntry{}}
 			},
 			wantErr: "review with at least one reviewer is required when status is \"review\"",
@@ -453,7 +453,7 @@ func TestTicketContentValidate(t *testing.T) {
 		{
 			name: "review_on_non_review_status",
 			modify: func(tc *TicketContent) {
-				tc.Status = "open"
+				tc.Status = StatusOpen
 				tc.Review = &TicketReview{
 					Reviewers: []ReviewerEntry{
 						{UserID: ref.MustParseUserID("@reviewer:bureau.local"), Disposition: "pending"},
@@ -465,7 +465,7 @@ func TestTicketContentValidate(t *testing.T) {
 		{
 			name: "review_with_invalid_reviewer",
 			modify: func(tc *TicketContent) {
-				tc.Status = "review"
+				tc.Status = StatusReview
 				tc.Review = &TicketReview{
 					Reviewers: []ReviewerEntry{
 						{UserID: ref.UserID{}, Disposition: "pending"},
@@ -477,7 +477,7 @@ func TestTicketContentValidate(t *testing.T) {
 		{
 			name: "review_with_invalid_disposition",
 			modify: func(tc *TicketContent) {
-				tc.Status = "review"
+				tc.Status = StatusReview
 				tc.Review = &TicketReview{
 					Reviewers: []ReviewerEntry{
 						{UserID: ref.MustParseUserID("@reviewer:bureau.local"), Disposition: "rejected"},

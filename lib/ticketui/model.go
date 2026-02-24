@@ -2500,7 +2500,7 @@ func (model Model) renderListPane() string {
 
 	contentStyle := lipgloss.NewStyle().
 		Width(rowWidth).
-		Height(visible)
+		Height(visible).MaxHeight(visible)
 
 	return lipgloss.JoinHorizontal(lipgloss.Top,
 		contentStyle.Render(strings.Join(rows, "\n")),
@@ -2529,7 +2529,7 @@ func (model Model) renderDivider() string {
 		lines[index] = "│"
 	}
 
-	return dividerStyle.Width(1).Height(visible).Render(strings.Join(lines, "\n"))
+	return dividerStyle.Width(1).Height(visible).MaxHeight(visible).Render(strings.Join(lines, "\n"))
 }
 
 // visibleHeight returns the number of list rows that fit between the

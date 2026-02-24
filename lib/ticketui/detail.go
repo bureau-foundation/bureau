@@ -1260,7 +1260,7 @@ func (pane DetailPane) View(focused bool) string {
 		contentStyle := lipgloss.NewStyle().
 			PaddingLeft(1).
 			Width(pane.width - 1).
-			Height(pane.height)
+			Height(pane.height).MaxHeight(pane.height)
 
 		content := contentStyle.Render(
 			lipgloss.Place(
@@ -1285,16 +1285,26 @@ func (pane DetailPane) View(focused bool) string {
 		PaddingLeft(1).
 		Width(pane.width - 1)
 
-	headerView := paddingStyle.Height(detailHeaderLines).Render(pane.header)
+	// MaxHeight is required in addition to Height because lipgloss
+	// Height only pads shorter content — it does not truncate taller
+	// content. Without MaxHeight, a header that overflows (e.g. a
+	// title wrapping to 3 lines instead of 2) would push the total
+	// past pane.height and cause the terminal to scroll.
+	headerView := paddingStyle.
+		Height(detailHeaderLines).MaxHeight(detailHeaderLines).
+		Render(pane.header)
 
 	bodyHeight := pane.bodyHeight()
 	searchBarView := ""
 	if pane.searchBarVisible() {
-		searchBarView = "\n" + paddingStyle.Height(1).Render(
-			pane.search.View(pane.theme, contentWidth))
+		searchBarView = "\n" + paddingStyle.
+			Height(1).MaxHeight(1).
+			Render(pane.search.View(pane.theme, contentWidth))
 	}
 
-	bodyView := paddingStyle.Height(bodyHeight).Render(pane.viewport.View())
+	bodyView := paddingStyle.
+		Height(bodyHeight).MaxHeight(bodyHeight).
+		Render(pane.viewport.View())
 	content := headerView + "\n" + bodyView + searchBarView
 
 	// Scrollbar: blank column for the header rows, actual scrollbar
@@ -1302,7 +1312,7 @@ func (pane DetailPane) View(focused bool) string {
 	// region it actually scrolls.
 	headerColumn := lipgloss.NewStyle().
 		Width(1).
-		Height(detailHeaderLines).
+		Height(detailHeaderLines).MaxHeight(detailHeaderLines).
 		Render("")
 	totalLines := pane.viewport.TotalLineCount()
 	scrollbarHeight := bodyHeight

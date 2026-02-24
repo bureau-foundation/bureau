@@ -7,6 +7,7 @@ import (
 	"context"
 	"encoding/base64"
 	"fmt"
+	"log/slog"
 	"os"
 	"slices"
 	"strconv"
@@ -266,6 +267,12 @@ type Model struct {
 	titleEditID     string           // Ticket ID being title-edited.
 	noteModal       *NoteModal       // Non-nil when the note input modal is visible.
 
+	// Log message display. When a background slog record (warn/error)
+	// arrives, the status bar temporarily shows the message instead of
+	// keyboard help. Fades back after logRecordFadeDelay.
+	logMessage    *logRecordMsg // Non-nil when a log message is visible in the status bar.
+	logStructured string        // Full JSON for clipboard copy on click.
+
 	// Live update animation.
 	heatTracker  *HeatTracker // Tracks recently-changed tickets for glow animation.
 	eventChannel <-chan Event // Source event subscription; nil if no live updates.
@@ -486,6 +493,16 @@ func (model Model) Update(message tea.Msg) (tea.Model, tea.Cmd) {
 	case mutationErrorFadeMsg:
 		model.mutationError = ""
 
+	case logRecordMsg:
+		model.logMessage = &message
+		model.logStructured = message.Structured
+		return model, tea.Tick(logRecordFadeDelay, func(time.Time) tea.Msg {
+			return logRecordFadeMsg{}
+		})
+
+	case logRecordFadeMsg:
+		model.logMessage = nil
+
 	case tea.WindowSizeMsg:
 		model.width = message.Width
 		model.height = message.Height
@@ -609,6 +626,11 @@ func (model *Model) handleMouse(message tea.MouseMsg) tea.Cmd {
 				}
 			}
 			return nil
+		}
+		// Status bar click: copy structured log message to clipboard.
+		if message.Y == model.height-1 && model.logMessage != nil {
+			model.clipboardNotice = "log record"
+			return copyToClipboard(model.logStructured)
 		}
 		if !inContentArea {
 			return nil
@@ -2646,7 +2668,42 @@ func statusIconString(status string) string {
 }
 
 // renderHelp renders the bottom help bar with key hints and position.
+// When a log message is active (warn/error from background operations),
+// the entire bar is temporarily replaced with the log message. Clicking
+// the bar during this state copies the full structured JSON to the
+// clipboard.
 func (model Model) renderHelp() string {
+	// Log message takeover: replace the entire help bar with the
+	// log message, styled by severity. The user can click to copy
+	// the full structured record.
+	if model.logMessage != nil {
+		levelLabel := "WARN"
+		levelColor := model.theme.StatusColor("blocked")
+		if model.logMessage.Level >= slog.LevelError {
+			levelLabel = "ERROR"
+		}
+
+		labelStyle := lipgloss.NewStyle().
+			Foreground(levelColor).
+			Bold(true)
+		messageStyle := lipgloss.NewStyle().
+			Foreground(model.theme.HelpText)
+
+		logLine := " " + labelStyle.Render(levelLabel) + " " + messageStyle.Render(model.logMessage.Summary)
+		clickHint := lipgloss.NewStyle().
+			Foreground(model.theme.BorderColor).
+			Render("  (click to copy)")
+
+		// Truncate to fit the terminal width, leaving room for
+		// the click hint.
+		maxMessageWidth := model.width - ansi.StringWidth(clickHint) - 1
+		if ansi.StringWidth(logLine) > maxMessageWidth {
+			logLine = ansi.Truncate(logLine, maxMessageWidth, "…")
+		}
+
+		return logLine + clickHint
+	}
+
 	style := lipgloss.NewStyle().Foreground(model.theme.HelpText)
 
 	focusIndicator := "LIST"

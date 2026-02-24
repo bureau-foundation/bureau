@@ -24,6 +24,7 @@ func ViewerCommand() *cli.Command {
 	var connection TicketConnection
 	var filePath string
 	var roomFlag string
+	var logOutput string
 
 	return &cli.Command{
 		Name:    "viewer",
@@ -63,6 +64,7 @@ available rooms.`,
 			flagSet.StringVar(&filePath, "file", "", "path to beads JSONL file (default: .beads/issues.jsonl)")
 			connection.AddFlags(flagSet)
 			flagSet.StringVar(&roomFlag, "room", "", "room alias or ID (skip room selector when using --service)")
+			flagSet.StringVar(&logOutput, "log-output", "", "write JSON log records to this file (in addition to TUI display)")
 			return flagSet
 		},
 		Run: func(ctx context.Context, args []string, logger *slog.Logger) error {
@@ -71,7 +73,7 @@ available rooms.`,
 			}
 
 			if connection.ServiceMode {
-				return runServiceViewer(ctx, logger, &connection, roomFlag)
+				return runServiceViewer(ctx, logger, &connection, roomFlag, logOutput)
 			}
 
 			if filePath == "" {
@@ -95,7 +97,13 @@ available rooms.`,
 // service token via the shared TicketConnection, resolves the room to
 // subscribe to, and runs the TUI backed by a ServiceSource with live
 // updates and automatic token refresh.
-func runServiceViewer(ctx context.Context, logger *slog.Logger, connection *TicketConnection, roomFlag string) error {
+//
+// Background logging (from the service source and token refresh) is
+// routed through a TUILogHandler that displays warnings and errors in
+// the status bar instead of writing to stderr (which would corrupt
+// the alt-screen display). An optional file logger captures all
+// records to a JSONL file for post-mortem debugging.
+func runServiceViewer(ctx context.Context, logger *slog.Logger, connection *TicketConnection, roomFlag string, logOutput string) error {
 	// Mint initial service token via the daemon.
 	mintResult, err := connection.MintServiceToken()
 	if err != nil {
@@ -110,14 +118,34 @@ func runServiceViewer(ctx context.Context, logger *slog.Logger, connection *Tick
 
 	// Resolve which room to subscribe to. If --room was specified, use
 	// it directly. Otherwise, query the service for available rooms and
-	// let the user pick.
+	// let the user pick. This happens before the TUI starts, so the
+	// original stderr logger is appropriate here.
 	roomID, err := resolveViewerRoom(ctx, logger, mintResult.SocketPath, mintResult.TokenBytes, roomFlag)
 	if err != nil {
 		return err
 	}
 
+	// Build the TUI-routed logger for background operations. The TUI
+	// handler shows WARN and above in the status bar; INFO-level
+	// records (like "token refreshed") are suppressed to avoid
+	// cluttering the display.
+	tuiHandler := ticketui.NewTUILogHandler(slog.LevelWarn)
+
+	var backgroundLogger *slog.Logger
+	if logOutput != "" {
+		// Also write all records to the file at DEBUG level.
+		fileHandler, fileCloser, fileErr := openFileLogHandler(logOutput)
+		if fileErr != nil {
+			return cli.Internal("open log file %s: %w", logOutput, fileErr)
+		}
+		defer fileCloser()
+		backgroundLogger = slog.New(fanoutHandler{tuiHandler, fileHandler})
+	} else {
+		backgroundLogger = slog.New(tuiHandler)
+	}
+
 	// Create the service source — starts connecting immediately.
-	source := ticketui.NewServiceSource(mintResult.SocketPath, mintResult.TokenBytes, roomID, logger)
+	source := ticketui.NewServiceSource(mintResult.SocketPath, mintResult.TokenBytes, roomID, backgroundLogger)
 	defer source.Close()
 
 	// Start background token refresh at 80% of TTL. The refresh
@@ -125,11 +153,20 @@ func runServiceViewer(ctx context.Context, logger *slog.Logger, connection *Tick
 	// token expires and updates the source atomically.
 	refreshContext, refreshCancel := context.WithCancel(context.Background())
 	defer refreshCancel()
-	go refreshServiceToken(refreshContext, source, connection, mintResult.TTLSeconds, logger)
+	go refreshServiceToken(refreshContext, source, connection, mintResult.TTLSeconds, backgroundLogger)
 
 	model := ticketui.NewModel(source)
 	model.SetOperatorID(operatorSession.UserID)
 	program := tea.NewProgram(model, tea.WithAltScreen(), tea.WithMouseAllMotion())
+
+	// Wire the TUI handler to the program so log records flow into
+	// bubbletea's message loop. This must happen after NewProgram
+	// (which creates the program) but before Run returns (which
+	// processes messages). Records arriving between NewServiceSource
+	// and this call are silently dropped — acceptable because the TUI
+	// isn't rendering yet.
+	tuiHandler.SetProgram(program)
+
 	_, err = program.Run()
 	return err
 }
@@ -236,4 +273,57 @@ func refreshServiceToken(
 			"next_refresh", refreshInterval,
 		)
 	}
+}
+
+// openFileLogHandler creates a slog.JSONHandler that writes to the
+// given file path. Returns the handler, a cleanup function to close
+// the file, and any error. The file is created or truncated.
+func openFileLogHandler(path string) (slog.Handler, func(), error) {
+	file, err := os.Create(path)
+	if err != nil {
+		return nil, nil, err
+	}
+	handler := slog.NewJSONHandler(file, &slog.HandlerOptions{Level: slog.LevelDebug})
+	return handler, func() { file.Close() }, nil
+}
+
+// fanoutHandler is a slog.Handler that sends each record to multiple
+// underlying handlers. A record is enabled if any sub-handler is
+// enabled for that level.
+type fanoutHandler []slog.Handler
+
+func (handlers fanoutHandler) Enabled(ctx context.Context, level slog.Level) bool {
+	for _, handler := range handlers {
+		if handler.Enabled(ctx, level) {
+			return true
+		}
+	}
+	return false
+}
+
+func (handlers fanoutHandler) Handle(ctx context.Context, record slog.Record) error {
+	for _, handler := range handlers {
+		if handler.Enabled(ctx, record.Level) {
+			if err := handler.Handle(ctx, record); err != nil {
+				return err
+			}
+		}
+	}
+	return nil
+}
+
+func (handlers fanoutHandler) WithAttrs(attrs []slog.Attr) slog.Handler {
+	derived := make(fanoutHandler, len(handlers))
+	for index, handler := range handlers {
+		derived[index] = handler.WithAttrs(attrs)
+	}
+	return derived
+}
+
+func (handlers fanoutHandler) WithGroup(name string) slog.Handler {
+	derived := make(fanoutHandler, len(handlers))
+	for index, handler := range handlers {
+		derived[index] = handler.WithGroup(name)
+	}
+	return derived
 }

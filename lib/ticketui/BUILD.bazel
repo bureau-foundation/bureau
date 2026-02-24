@@ -17,6 +17,7 @@ go_library(
         "fuzzy.go",
         "keys.go",
         "list.go",
+        "log_handler.go",
         "markdown.go",
         "model.go",
         "note_modal.go",

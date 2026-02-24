@@ -184,10 +184,19 @@ func matchTicketGate(gate *ticket.TicketGate, event messaging.Event) bool {
 // evaluating the ticket's current state in the index. The gate is
 // satisfied when both conditions hold:
 //
-//   - All reviewers have disposition "approved" (at least one reviewer
-//     is required — a review with no reviewers cannot be complete).
+//   - Reviewer approval requirements are met. When TierThresholds is
+//     absent, all reviewers must have disposition "approved" (legacy
+//     behavior). When TierThresholds is present, reviewers are grouped
+//     by their Tier field and each tier is checked independently
+//     against its threshold: nil means all must approve, a numeric
+//     threshold means at least that many approvals are needed. The
+//     overall reviewer condition is satisfied when every tier with at
+//     least one reviewer meets its threshold.
 //   - All review_finding children are status "closed" (zero findings
 //     is acceptable — no findings means nothing blocking).
+//
+// At least one reviewer is required — a review with no reviewers
+// cannot be complete.
 //
 // The triggering event is not inspected; all evaluation is index-based
 // so that both reviewer disposition changes (parent ticket event) and
@@ -201,15 +210,73 @@ func matchReviewGate(index *ticketindex.Index, ticketID string) bool {
 	if content.Review == nil || len(content.Review.Reviewers) == 0 {
 		return false
 	}
-	for _, reviewer := range content.Review.Reviewers {
-		if reviewer.Disposition != "approved" {
-			return false
-		}
+
+	if !reviewersApproved(content.Review) {
+		return false
 	}
 
 	for _, child := range index.Children(ticketID) {
 		if child.Content.Type == "review_finding" && child.Content.Status != "closed" {
 			return false
+		}
+	}
+
+	return true
+}
+
+// reviewersApproved checks whether the review's approval requirements
+// are met. When TierThresholds is absent (pre-stewardship behavior),
+// every reviewer must have disposition "approved". When TierThresholds
+// is present, reviewers are grouped by Tier and each tier is checked
+// independently against its threshold.
+func reviewersApproved(review *ticket.TicketReview) bool {
+	if len(review.TierThresholds) == 0 {
+		// Legacy mode: all reviewers must approve.
+		for _, reviewer := range review.Reviewers {
+			if reviewer.Disposition != "approved" {
+				return false
+			}
+		}
+		return true
+	}
+
+	// Tier-aware mode: build a threshold lookup and count approvals
+	// per tier.
+	thresholdByTier := make(map[int]*int, len(review.TierThresholds))
+	for i := range review.TierThresholds {
+		thresholdByTier[review.TierThresholds[i].Tier] = review.TierThresholds[i].Threshold
+	}
+
+	type tierCounts struct {
+		total    int
+		approved int
+	}
+	countsByTier := make(map[int]*tierCounts)
+
+	for _, reviewer := range review.Reviewers {
+		counts := countsByTier[reviewer.Tier]
+		if counts == nil {
+			counts = &tierCounts{}
+			countsByTier[reviewer.Tier] = counts
+		}
+		counts.total++
+		if reviewer.Disposition == "approved" {
+			counts.approved++
+		}
+	}
+
+	// Check each tier that has reviewers against its threshold.
+	for tier, counts := range countsByTier {
+		threshold, hasThreshold := thresholdByTier[tier]
+		if !hasThreshold || threshold == nil {
+			// No threshold entry or nil threshold: all must approve.
+			if counts.approved < counts.total {
+				return false
+			}
+		} else {
+			if counts.approved < *threshold {
+				return false
+			}
 		}
 	}
 

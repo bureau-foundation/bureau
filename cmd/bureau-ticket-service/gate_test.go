@@ -3662,3 +3662,185 @@ func TestMatchReviewGateNonFindingChildrenIgnored(t *testing.T) {
 		t.Fatal("review gate should ignore non-review_finding children")
 	}
 }
+
+// --- Tier-aware matchReviewGate tests ---
+
+func TestMatchReviewGateThresholdTwoOfThreeApproved(t *testing.T) {
+	threshold := 2
+	index, _ := reviewGateIndex(&ticket.TicketReview{
+		Reviewers: []ticket.ReviewerEntry{
+			{UserID: ref.MustParseUserID("@alice:bureau.local"), Disposition: "approved", Tier: 0},
+			{UserID: ref.MustParseUserID("@bob:bureau.local"), Disposition: "approved", Tier: 0},
+			{UserID: ref.MustParseUserID("@carol:bureau.local"), Disposition: "pending", Tier: 0},
+		},
+		TierThresholds: []ticket.TierThreshold{
+			{Tier: 0, Threshold: &threshold},
+		},
+	}, nil)
+
+	if !matchReviewGate(index, "tkt-review") {
+		t.Fatal("review gate should match: 2 of 3 approved meets threshold of 2")
+	}
+}
+
+func TestMatchReviewGateThresholdTwoOfThreeOnlyOneApproved(t *testing.T) {
+	threshold := 2
+	index, _ := reviewGateIndex(&ticket.TicketReview{
+		Reviewers: []ticket.ReviewerEntry{
+			{UserID: ref.MustParseUserID("@alice:bureau.local"), Disposition: "approved", Tier: 0},
+			{UserID: ref.MustParseUserID("@bob:bureau.local"), Disposition: "pending", Tier: 0},
+			{UserID: ref.MustParseUserID("@carol:bureau.local"), Disposition: "pending", Tier: 0},
+		},
+		TierThresholds: []ticket.TierThreshold{
+			{Tier: 0, Threshold: &threshold},
+		},
+	}, nil)
+
+	if matchReviewGate(index, "tkt-review") {
+		t.Fatal("review gate should not match: only 1 of 3 approved, threshold is 2")
+	}
+}
+
+func TestMatchReviewGateMultiTierMixed(t *testing.T) {
+	// Tier 0: threshold 1, two reviewers (one approved) — satisfied.
+	// Tier 1: nil threshold (all must approve), one reviewer pending — not satisfied.
+	threshold1 := 1
+	index, _ := reviewGateIndex(&ticket.TicketReview{
+		Reviewers: []ticket.ReviewerEntry{
+			{UserID: ref.MustParseUserID("@alice:bureau.local"), Disposition: "approved", Tier: 0},
+			{UserID: ref.MustParseUserID("@bob:bureau.local"), Disposition: "pending", Tier: 0},
+			{UserID: ref.MustParseUserID("@lead:bureau.local"), Disposition: "pending", Tier: 1},
+		},
+		TierThresholds: []ticket.TierThreshold{
+			{Tier: 0, Threshold: &threshold1},
+			{Tier: 1, Threshold: nil},
+		},
+	}, nil)
+
+	if matchReviewGate(index, "tkt-review") {
+		t.Fatal("review gate should not match: tier 1 (all-must-approve) has pending reviewer")
+	}
+}
+
+func TestMatchReviewGateMultiTierAllSatisfied(t *testing.T) {
+	threshold1 := 1
+	index, _ := reviewGateIndex(&ticket.TicketReview{
+		Reviewers: []ticket.ReviewerEntry{
+			{UserID: ref.MustParseUserID("@alice:bureau.local"), Disposition: "approved", Tier: 0},
+			{UserID: ref.MustParseUserID("@bob:bureau.local"), Disposition: "pending", Tier: 0},
+			{UserID: ref.MustParseUserID("@lead:bureau.local"), Disposition: "approved", Tier: 1},
+		},
+		TierThresholds: []ticket.TierThreshold{
+			{Tier: 0, Threshold: &threshold1},
+			{Tier: 1, Threshold: nil},
+		},
+	}, nil)
+
+	if !matchReviewGate(index, "tkt-review") {
+		t.Fatal("review gate should match: tier 0 (1-of-2 approved) and tier 1 (all approved)")
+	}
+}
+
+func TestMatchReviewGateNilThresholdAllMustApprove(t *testing.T) {
+	// Tier with nil threshold requires all reviewers to approve.
+	index, _ := reviewGateIndex(&ticket.TicketReview{
+		Reviewers: []ticket.ReviewerEntry{
+			{UserID: ref.MustParseUserID("@alice:bureau.local"), Disposition: "approved", Tier: 0},
+			{UserID: ref.MustParseUserID("@bob:bureau.local"), Disposition: "changes_requested", Tier: 0},
+		},
+		TierThresholds: []ticket.TierThreshold{
+			{Tier: 0, Threshold: nil},
+		},
+	}, nil)
+
+	if matchReviewGate(index, "tkt-review") {
+		t.Fatal("review gate should not match: nil threshold means all must approve")
+	}
+}
+
+func TestMatchReviewGateBackwardCompatNoThresholds(t *testing.T) {
+	// No TierThresholds → legacy behavior: all must approve, ignoring Tier field.
+	index, _ := reviewGateIndex(&ticket.TicketReview{
+		Reviewers: []ticket.ReviewerEntry{
+			{UserID: ref.MustParseUserID("@alice:bureau.local"), Disposition: "approved", Tier: 0},
+			{UserID: ref.MustParseUserID("@bob:bureau.local"), Disposition: "approved", Tier: 1},
+		},
+	}, nil)
+
+	if !matchReviewGate(index, "tkt-review") {
+		t.Fatal("review gate should match in legacy mode: all approved")
+	}
+}
+
+func TestMatchReviewGateBackwardCompatNoThresholdsOnePending(t *testing.T) {
+	index, _ := reviewGateIndex(&ticket.TicketReview{
+		Reviewers: []ticket.ReviewerEntry{
+			{UserID: ref.MustParseUserID("@alice:bureau.local"), Disposition: "approved", Tier: 0},
+			{UserID: ref.MustParseUserID("@bob:bureau.local"), Disposition: "pending", Tier: 1},
+		},
+	}, nil)
+
+	if matchReviewGate(index, "tkt-review") {
+		t.Fatal("review gate should not match in legacy mode: one pending")
+	}
+}
+
+func TestMatchReviewGateThresholdWithOpenFinding(t *testing.T) {
+	// Tier threshold met but review_finding child is still open.
+	threshold := 1
+	finding := testTicket("Fix typo")
+	finding.Type = "review_finding"
+	finding.Status = "open"
+
+	index, _ := reviewGateIndex(&ticket.TicketReview{
+		Reviewers: []ticket.ReviewerEntry{
+			{UserID: ref.MustParseUserID("@alice:bureau.local"), Disposition: "approved", Tier: 0},
+		},
+		TierThresholds: []ticket.TierThreshold{
+			{Tier: 0, Threshold: &threshold},
+		},
+	}, []ticket.TicketContent{finding})
+
+	if matchReviewGate(index, "tkt-review") {
+		t.Fatal("review gate should not match: threshold met but open finding")
+	}
+}
+
+func TestMatchReviewGateThresholdExactlyMet(t *testing.T) {
+	// Exactly threshold number of approvals.
+	threshold := 3
+	index, _ := reviewGateIndex(&ticket.TicketReview{
+		Reviewers: []ticket.ReviewerEntry{
+			{UserID: ref.MustParseUserID("@alice:bureau.local"), Disposition: "approved", Tier: 0},
+			{UserID: ref.MustParseUserID("@bob:bureau.local"), Disposition: "approved", Tier: 0},
+			{UserID: ref.MustParseUserID("@carol:bureau.local"), Disposition: "approved", Tier: 0},
+		},
+		TierThresholds: []ticket.TierThreshold{
+			{Tier: 0, Threshold: &threshold},
+		},
+	}, nil)
+
+	if !matchReviewGate(index, "tkt-review") {
+		t.Fatal("review gate should match: exactly 3 approvals meeting threshold of 3")
+	}
+}
+
+func TestMatchReviewGateReviewersInTierWithoutThreshold(t *testing.T) {
+	// Reviewers exist in tier 2 but no TierThreshold entry for tier 2.
+	// Should default to all-must-approve for that tier.
+	threshold := 1
+	index, _ := reviewGateIndex(&ticket.TicketReview{
+		Reviewers: []ticket.ReviewerEntry{
+			{UserID: ref.MustParseUserID("@alice:bureau.local"), Disposition: "approved", Tier: 0},
+			{UserID: ref.MustParseUserID("@lead:bureau.local"), Disposition: "pending", Tier: 2},
+		},
+		TierThresholds: []ticket.TierThreshold{
+			{Tier: 0, Threshold: &threshold},
+			// No entry for tier 2.
+		},
+	}, nil)
+
+	if matchReviewGate(index, "tkt-review") {
+		t.Fatal("review gate should not match: tier 2 has no threshold entry, defaults to all-must-approve")
+	}
+}

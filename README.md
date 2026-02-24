@@ -1,6 +1,13 @@
 # Bureau
 
-Infrastructure for running organizations that include AI agents.
+A workshop for software: organizational infrastructure that lets
+individuals direct AI agent teams — with coordination, quality gates,
+workstream management, and structural guardrails — on their own
+machines. The barrier to entry is craft, not capital.
+
+**[Build Your Own Workshop — why this exists and what it means](docs/manifesto.md)**
+
+---
 
 Bureau provides isolation, identity, communication, observation, and
 persistence for autonomous processes — the same primitives an operating

@@ -127,6 +127,12 @@ type Mutator interface {
 	//   - Unassign (empty): transitions to open, which auto-clears
 	//     the assignee
 	UpdateAssignee(ctx context.Context, ticketID, assignee string) error
+
+	// SetDisposition sets the calling reviewer's disposition on a
+	// ticket in review status. The gateID identifies which review
+	// gate the disposition applies to. Valid dispositions are
+	// "approved", "changes_requested", and "commented".
+	SetDisposition(ctx context.Context, ticketID, gateID, disposition string) error
 }
 
 // MemberInfo describes a joined member of a tracked room, enriched

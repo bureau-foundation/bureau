@@ -251,7 +251,12 @@ func (renderer DetailRenderer) RenderBody(source Source, entry ticketindex.Entry
 		}
 	}
 
-	// Review: reviewer dispositions and scope.
+	// Affects: resource identifiers this ticket impacts.
+	if len(entry.Content.Affects) > 0 {
+		addSection(renderer.renderAffects(entry.Content.Affects), nil)
+	}
+
+	// Review: gate status, reviewer dispositions, and scope.
 	if entry.Content.Review != nil && len(entry.Content.Review.Reviewers) > 0 {
 		reviewSection := renderer.renderReview(entry.Content)
 		if reviewSection != "" {
@@ -938,8 +943,31 @@ func (renderer DetailRenderer) renderPipelineSchedule(content ticket.TicketConte
 	return headerStyle.Render("Schedule") + "\n" + strings.Join(lines, "\n")
 }
 
-// renderReview renders the review section: reviewer list with
-// color-coded dispositions, and scope details when present.
+// renderAffects renders the list of resource identifiers that a
+// ticket impacts. Stewardship declarations match against these
+// identifiers to auto-configure review gates.
+func (renderer DetailRenderer) renderAffects(affects []string) string {
+	headerStyle := lipgloss.NewStyle().
+		Bold(true).
+		Foreground(renderer.theme.NormalText)
+	contentStyle := lipgloss.NewStyle().
+		Foreground(renderer.theme.FaintText)
+
+	var lines []string
+	for _, resource := range affects {
+		line := "  " + resource
+		if lipgloss.Width(line) > renderer.width {
+			line = truncateString(line, renderer.width-1) + "…"
+		}
+		lines = append(lines, contentStyle.Render(line))
+	}
+
+	return headerStyle.Render("Affects") + "\n" + strings.Join(lines, "\n")
+}
+
+// renderReview renders the review section: review gate status,
+// reviewer dispositions (grouped by tier when stewardship tier
+// thresholds are configured), and scope details.
 func (renderer DetailRenderer) renderReview(content ticket.TicketContent) string {
 	review := content.Review
 	if review == nil {
@@ -954,19 +982,37 @@ func (renderer DetailRenderer) renderReview(content ticket.TicketContent) string
 
 	var lines []string
 
-	// Reviewer entries with disposition indicators.
-	for _, entry := range review.Reviewers {
-		dot, dotColor := dispositionIndicator(entry.Disposition)
-		dotStyle := lipgloss.NewStyle().Foreground(dotColor(renderer.theme))
-		userStyle := lipgloss.NewStyle().Foreground(renderer.theme.NormalText)
-		dispStyle := lipgloss.NewStyle().Foreground(dotColor(renderer.theme))
-
-		line := dotStyle.Render(dot) + " " + userStyle.Render(entry.UserID.String()) +
-			" " + dispStyle.Render(entry.Disposition)
-		if entry.UpdatedAt != "" {
-			line += " " + labelStyle.Render(shortenTimestamp(entry.UpdatedAt))
+	// Review gate status: show each review-type gate with its
+	// satisfaction state. Gives context before individual dispositions.
+	for index := range content.Gates {
+		gate := &content.Gates[index]
+		if gate.Type != "review" {
+			continue
 		}
-		lines = append(lines, line)
+		indicator := "⏳"
+		indicatorColor := renderer.theme.StatusInProgress
+		if gate.Status == "satisfied" {
+			indicator = "✓"
+			indicatorColor = renderer.theme.StatusOpen
+		}
+		indicatorStyle := lipgloss.NewStyle().Foreground(indicatorColor)
+		gateLabel := gate.ID
+		if gate.Description != "" {
+			gateLabel = gate.Description
+		}
+		contentStyle := lipgloss.NewStyle().Foreground(renderer.theme.NormalText)
+		lines = append(lines, indicatorStyle.Render(indicator+" "+gate.Status)+
+			"  "+contentStyle.Render(gateLabel))
+	}
+
+	// Reviewer dispositions: grouped by tier when stewardship tier
+	// thresholds are configured, flat list otherwise.
+	if len(review.TierThresholds) > 0 {
+		lines = append(lines, renderer.renderTieredReviewers(review)...)
+	} else {
+		for _, entry := range review.Reviewers {
+			lines = append(lines, renderer.renderReviewerLine(entry))
+		}
 	}
 
 	// Scope details.
@@ -1000,6 +1046,95 @@ func (renderer DetailRenderer) renderReview(content ticket.TicketContent) string
 	}
 
 	return headerStyle.Render("Review") + "\n" + strings.Join(lines, "\n")
+}
+
+// renderReviewerLine renders a single reviewer entry with disposition
+// indicator, user ID, disposition text, and optional timestamp.
+func (renderer DetailRenderer) renderReviewerLine(entry ticket.ReviewerEntry) string {
+	labelStyle := lipgloss.NewStyle().
+		Foreground(renderer.theme.FaintText)
+	dot, dotColor := dispositionIndicator(entry.Disposition)
+	dotStyle := lipgloss.NewStyle().Foreground(dotColor(renderer.theme))
+	userStyle := lipgloss.NewStyle().Foreground(renderer.theme.NormalText)
+	dispStyle := lipgloss.NewStyle().Foreground(dotColor(renderer.theme))
+
+	line := dotStyle.Render(dot) + " " + userStyle.Render(entry.UserID.String()) +
+		" " + dispStyle.Render(entry.Disposition)
+	if entry.UpdatedAt != "" {
+		line += " " + labelStyle.Render(shortenTimestamp(entry.UpdatedAt))
+	}
+	return line
+}
+
+// renderTieredReviewers groups reviewers by their Tier field and
+// renders per-tier headers with approval progress alongside their
+// threshold requirements. Returns lines to append to the review section.
+func (renderer DetailRenderer) renderTieredReviewers(review *ticket.TicketReview) []string {
+	tierHeaderStyle := lipgloss.NewStyle().
+		Foreground(renderer.theme.NormalText).
+		Bold(true)
+	progressStyle := lipgloss.NewStyle().
+		Foreground(renderer.theme.FaintText)
+
+	// Build tier → reviewers map.
+	tierReviewers := make(map[int][]ticket.ReviewerEntry)
+	for _, entry := range review.Reviewers {
+		tierReviewers[entry.Tier] = append(tierReviewers[entry.Tier], entry)
+	}
+
+	// Build tier → threshold for lookup.
+	tierThreshold := make(map[int]ticket.TierThreshold)
+	for _, threshold := range review.TierThresholds {
+		tierThreshold[threshold.Tier] = threshold
+	}
+
+	// Display order: TierThresholds order first, then any extra tiers.
+	seen := make(map[int]bool)
+	var orderedTiers []int
+	for _, threshold := range review.TierThresholds {
+		if !seen[threshold.Tier] {
+			orderedTiers = append(orderedTiers, threshold.Tier)
+			seen[threshold.Tier] = true
+		}
+	}
+	var extraTiers []int
+	for tier := range tierReviewers {
+		if !seen[tier] {
+			extraTiers = append(extraTiers, tier)
+		}
+	}
+	slices.Sort(extraTiers)
+	orderedTiers = append(orderedTiers, extraTiers...)
+
+	var lines []string
+	for _, tier := range orderedTiers {
+		reviewers := tierReviewers[tier]
+		approved := 0
+		for _, entry := range reviewers {
+			if entry.Disposition == "approved" {
+				approved++
+			}
+		}
+
+		progressText := fmt.Sprintf("%d/%d approved", approved, len(reviewers))
+		if thresholdEntry, hasEntry := tierThreshold[tier]; hasEntry {
+			if thresholdEntry.Threshold != nil {
+				progressText += fmt.Sprintf(", need %d", *thresholdEntry.Threshold)
+			} else {
+				progressText += ", need all"
+			}
+		}
+
+		tierHeader := tierHeaderStyle.Render(fmt.Sprintf("Tier %d", tier)) + " " +
+			progressStyle.Render("("+progressText+")")
+		lines = append(lines, tierHeader)
+
+		for _, entry := range reviewers {
+			lines = append(lines, "  "+renderer.renderReviewerLine(entry))
+		}
+	}
+
+	return lines
 }
 
 // dispositionIndicator returns a dot character and a color function

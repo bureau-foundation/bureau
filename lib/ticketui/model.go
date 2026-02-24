@@ -267,6 +267,7 @@ type Model struct {
 	titleEditCursor int              // Cursor position within titleEditBuffer.
 	titleEditID     string           // Ticket ID being title-edited.
 	noteModal       *NoteModal       // Non-nil when the note input modal is visible.
+	reviewGateID    string           // Gate ID for the active review disposition dropdown.
 
 	// Log message display. When a background slog record (warn/error)
 	// arrives, the status bar temporarily shows the message instead of
@@ -1736,6 +1737,11 @@ func (model *Model) handleDetailKeys(message tea.KeyMsg) {
 	case key.Matches(message, model.keys.Assign):
 		model.openAssigneeDropdown(0, 0)
 
+	// Review disposition: 'r' opens the disposition dropdown when
+	// the ticket is in review status and the operator is a reviewer.
+	case key.Matches(message, model.keys.Review):
+		model.openReviewDropdown()
+
 	// Search match navigation: only active when there's a search query.
 	// When no search is active, 'n' opens the note modal (if the source
 	// supports mutations).
@@ -1802,6 +1808,7 @@ func (model Model) handleDropdownKeys(message tea.KeyMsg) (tea.Model, tea.Cmd) {
 // keyboard focus to the detail pane.
 func (model *Model) dismissDropdown() {
 	model.activeDropdown = nil
+	model.reviewGateID = ""
 	model.focusRegion = FocusDetail
 }
 
@@ -1976,6 +1983,89 @@ func (model *Model) openAssigneeDropdown(screenX, screenY int) tea.Cmd {
 	return nil
 }
 
+// openReviewDropdown opens the disposition dropdown if the current
+// ticket is in review status and the operator is in the reviewer list.
+// Does nothing when these conditions are not met.
+func (model *Model) openReviewDropdown() {
+	if _, ok := model.source.(Mutator); !ok {
+		return
+	}
+
+	if model.selectedID == "" || model.operatorUserID == "" {
+		return
+	}
+
+	content, exists := model.source.Get(model.selectedID)
+	if !exists || content.Status != "review" {
+		return
+	}
+
+	if content.Review == nil {
+		return
+	}
+
+	// Check if operator is a reviewer.
+	isReviewer := false
+	for _, reviewer := range content.Review.Reviewers {
+		if reviewer.UserID.String() == model.operatorUserID {
+			isReviewer = true
+			break
+		}
+	}
+	if !isReviewer {
+		return
+	}
+
+	// Find the first pending review gate.
+	gateID := ""
+	for _, gate := range content.Gates {
+		if gate.Type == "review" && gate.Status == "pending" {
+			gateID = gate.ID
+			break
+		}
+	}
+	if gateID == "" {
+		return
+	}
+
+	model.reviewGateID = gateID
+	model.activeDropdown = &DropdownOverlay{
+		Options: DispositionOptions(),
+		Cursor:  0,
+		AnchorX: model.listWidth() + 2,
+		AnchorY: 2,
+		Field:   "disposition",
+		ItemID:  model.selectedID,
+	}
+	model.focusRegion = FocusDropdown
+}
+
+// canReview returns true when the currently selected ticket is in
+// review status, the source supports mutations, and the operator
+// appears in the reviewer list. Used to conditionally show the
+// review keybinding hint in the help bar.
+func (model *Model) canReview() bool {
+	if _, ok := model.source.(Mutator); !ok {
+		return false
+	}
+	if model.selectedID == "" || model.operatorUserID == "" {
+		return false
+	}
+	content, exists := model.source.Get(model.selectedID)
+	if !exists || content.Status != "review" {
+		return false
+	}
+	if content.Review == nil {
+		return false
+	}
+	for _, reviewer := range content.Review.Reviewers {
+		if reviewer.UserID.String() == model.operatorUserID {
+			return true
+		}
+	}
+	return false
+}
+
 // handleDropdownSelect dispatches the mutation for a dropdown selection.
 // The mutation runs in a background goroutine; results arrive as a
 // mutationResultMsg. On success, the subscribe stream updates the
@@ -2013,6 +2103,15 @@ func (model Model) handleDropdownSelect(message dropdownSelectMsg) (tea.Model, t
 		assignee := message.value
 		return model, func() tea.Msg {
 			err := mutator.UpdateAssignee(context.Background(), message.ticketID, assignee)
+			return mutationResultMsg{err: err}
+		}
+
+	case "disposition":
+		disposition := message.value
+		gateID := model.reviewGateID
+		model.reviewGateID = ""
+		return model, func() tea.Msg {
+			err := mutator.SetDisposition(context.Background(), message.ticketID, gateID, disposition)
 			return mutationResultMsg{err: err}
 		}
 	}
@@ -2817,6 +2916,12 @@ func (model Model) renderHelp() string {
 		} else {
 			help += "  (no matches)"
 		}
+	}
+
+	// Show review disposition hint when the operator can review
+	// the selected ticket.
+	if model.focusRegion == FocusDetail && model.canReview() {
+		help += "  r review"
 	}
 
 	totalItems := 0

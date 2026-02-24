@@ -52,6 +52,7 @@ go_test(
         "autolink_test.go",
         "beads_test.go",
         "dependency_test.go",
+        "detail_test.go",
         "filter_test.go",
         "fuzzy_test.go",
         "markdown_test.go",

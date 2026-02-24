@@ -40,6 +40,7 @@ type KeyMap struct {
 
 	// Mutations.
 	Assign key.Binding // Open the assignee dropdown (detail pane).
+	Review key.Binding // Open the review disposition dropdown (detail pane).
 
 	// Detail search (active when the detail pane has a search query).
 	SearchNext     key.Binding // Jump to next match in detail search.
@@ -118,6 +119,10 @@ var DefaultKeyMap = KeyMap{
 	Assign: key.NewBinding(
 		key.WithKeys("a"),
 		key.WithHelp("a", "assign"),
+	),
+	Review: key.NewBinding(
+		key.WithKeys("r"),
+		key.WithHelp("r", "review"),
 	),
 	FilterActivate: key.NewBinding(
 		key.WithKeys("/"),

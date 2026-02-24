@@ -46,6 +46,12 @@ func StatusTransitions(currentStatus string) []DropdownOption {
 			{Label: "IN_PROGRESS", Value: "in_progress"},
 			{Label: "CLOSED", Value: "closed"},
 		}
+	case "review":
+		return []DropdownOption{
+			{Label: "OPEN", Value: "open"},
+			{Label: "IN_PROGRESS", Value: "in_progress"},
+			{Label: "CLOSED", Value: "closed"},
+		}
 	case "closed":
 		return []DropdownOption{
 			{Label: "OPEN", Value: "open"},
@@ -114,4 +120,15 @@ func AssigneeOptions(members []MemberInfo, currentAssignee ref.UserID) (options 
 	}
 
 	return options, cursor
+}
+
+// DispositionOptions returns dropdown options for setting a review
+// disposition. The labels use Unicode indicators matching the detail
+// pane's disposition rendering.
+func DispositionOptions() []DropdownOption {
+	return []DropdownOption{
+		{Label: "● Approve", Value: "approved"},
+		{Label: "● Request Changes", Value: "changes_requested"},
+		{Label: "● Comment", Value: "commented"},
+	}
 }

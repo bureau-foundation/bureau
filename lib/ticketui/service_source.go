@@ -362,6 +362,19 @@ func (source *ServiceSource) UpdateAssignee(ctx context.Context, ticketID, assig
 	return source.mutationClient().Call(ctx, "update", fields, nil)
 }
 
+// SetDisposition sets the calling reviewer's disposition on a ticket's
+// review gate. The ticket must be in "review" status and the caller
+// (identified by the service token subject) must be in the reviewer
+// list. Valid dispositions: "approved", "changes_requested", "commented".
+func (source *ServiceSource) SetDisposition(ctx context.Context, ticketID, gateID, disposition string) error {
+	fields := map[string]any{
+		"ticket":      ticketID,
+		"gate_id":     gateID,
+		"disposition": disposition,
+	}
+	return source.mutationClient().Call(ctx, "set-disposition", fields, nil)
+}
+
 // --- Member list ---
 
 // Members returns the cached list of joined room members, sorted by

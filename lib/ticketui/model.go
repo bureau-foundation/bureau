@@ -549,6 +549,13 @@ func (model *Model) handleMouse(message tea.MouseMsg) tea.Cmd {
 	inDetailPane := message.X > dividerX && message.X < detailScrollX
 	onDetailScroll := message.X == detailScrollX
 
+	// When a dropdown is active, all mouse events are routed to the
+	// dropdown handler first. Clicks inside select; clicks outside
+	// dismiss; hover motion updates the cursor highlight.
+	if model.activeDropdown != nil {
+		return model.handleDropdownMouse(message)
+	}
+
 	// Motion events with no button held: update hover tooltip.
 	// This fires before drag handling because drags also produce
 	// motion events (with a button held), and those should continue
@@ -558,13 +565,9 @@ func (model *Model) handleMouse(message tea.MouseMsg) tea.Cmd {
 		return nil
 	}
 
-	// Any non-motion interaction dismisses the tooltip, dropdown,
-	// and title edit.
+	// Any non-motion interaction dismisses the tooltip and title edit.
 	if model.tooltip != nil {
 		model.tooltip = nil
-	}
-	if model.activeDropdown != nil {
-		model.dismissDropdown()
 	}
 	if model.focusRegion == FocusTitleEdit {
 		model.cancelTitleEdit()
@@ -1800,6 +1803,57 @@ func (model Model) handleDropdownKeys(message tea.KeyMsg) (tea.Model, tea.Cmd) {
 func (model *Model) dismissDropdown() {
 	model.activeDropdown = nil
 	model.focusRegion = FocusDetail
+}
+
+// handleDropdownMouse routes all mouse events when a dropdown overlay
+// is active. The dropdown captures all mouse input:
+//   - Motion inside the dropdown: highlights the option under the cursor
+//   - Click inside the dropdown: selects the option and dismisses
+//   - Any interaction outside the dropdown: dismisses without selecting
+//   - Scroll wheel: ignored (dropdown is short enough not to need it)
+func (model *Model) handleDropdownMouse(message tea.MouseMsg) tea.Cmd {
+	// Motion with no button: highlight the hovered option.
+	if message.Action == tea.MouseActionMotion && message.Button == tea.MouseButtonNone {
+		if optionIndex := model.activeDropdown.OptionAtY(message.Y); optionIndex >= 0 {
+			if model.activeDropdown.Contains(message.X, message.Y) {
+				model.activeDropdown.Cursor = optionIndex
+			}
+		}
+		return nil
+	}
+
+	// Scroll wheel: consume without action to prevent the underlying
+	// panes from scrolling while a dropdown is open.
+	switch message.Button {
+	case tea.MouseButtonWheelUp, tea.MouseButtonWheelDown:
+		return nil
+	}
+
+	// Non-motion, non-scroll: only left-click press matters.
+	if message.Button != tea.MouseButtonLeft || message.Action != tea.MouseActionPress {
+		// Release events, right-clicks, etc.: consume without action.
+		return nil
+	}
+
+	// Click inside the dropdown: select the option.
+	if model.activeDropdown.Contains(message.X, message.Y) {
+		if optionIndex := model.activeDropdown.OptionAtY(message.Y); optionIndex >= 0 {
+			model.activeDropdown.Cursor = optionIndex
+			selected := model.activeDropdown.Selected()
+			msg := dropdownSelectMsg{
+				field:    model.activeDropdown.Field,
+				ticketID: model.activeDropdown.ItemID,
+				value:    selected.Value,
+			}
+			model.dismissDropdown()
+			_, cmd := model.handleDropdownSelect(msg)
+			return cmd
+		}
+	}
+
+	// Click outside the dropdown: dismiss.
+	model.dismissDropdown()
+	return nil
 }
 
 // handleHeaderClick processes a click on a header field (status,

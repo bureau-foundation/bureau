@@ -50,12 +50,10 @@ func (dropdown *DropdownOverlay) Selected() DropdownOption {
 	return dropdown.Options[dropdown.Cursor]
 }
 
-// Render produces the dropdown lines for overlay splicing. Each line
-// has the same visible width (including left/right padding) and a
-// solid background for visual separation from the underlying content.
-// The currently highlighted option uses a contrasting background.
-func (dropdown *DropdownOverlay) Render(theme Theme) []string {
-	// Compute the width: longest label + cursor marker + padding.
+// Width returns the total visible width of the rendered dropdown in
+// columns. This matches the width used by Render and is needed for
+// mouse hit-testing.
+func (dropdown *DropdownOverlay) Width() int {
 	maxLabelWidth := 0
 	for _, option := range dropdown.Options {
 		labelWidth := ansi.StringWidth(option.Label)
@@ -64,9 +62,39 @@ func (dropdown *DropdownOverlay) Render(theme Theme) []string {
 		}
 	}
 	// Layout: " > LABEL  " — 3 chars prefix (space + marker + space),
-	// then label, then right padding to fill.
-	innerWidth := 3 + maxLabelWidth
-	totalWidth := innerWidth + 2 // 1 char padding on each side.
+	// then label, then 1 char padding on each side.
+	return 3 + maxLabelWidth + 2
+}
+
+// Contains returns true if the screen coordinate (x, y) falls within
+// the dropdown's bounding rectangle.
+func (dropdown *DropdownOverlay) Contains(x, y int) bool {
+	if y < dropdown.AnchorY || y >= dropdown.AnchorY+len(dropdown.Options) {
+		return false
+	}
+	width := dropdown.Width()
+	return x >= dropdown.AnchorX && x < dropdown.AnchorX+width
+}
+
+// OptionAtY returns the option index corresponding to the given
+// screen Y coordinate, or -1 if the Y coordinate is outside the
+// dropdown's vertical range.
+func (dropdown *DropdownOverlay) OptionAtY(y int) int {
+	index := y - dropdown.AnchorY
+	if index < 0 || index >= len(dropdown.Options) {
+		return -1
+	}
+	return index
+}
+
+// Render produces the dropdown lines for overlay splicing. Each line
+// has the same visible width (including left/right padding) and a
+// solid background for visual separation from the underlying content.
+// The currently highlighted option uses a contrasting background.
+func (dropdown *DropdownOverlay) Render(theme Theme) []string {
+	totalWidth := dropdown.Width()
+	// Inner width is total minus 1 char padding on each side.
+	innerWidth := totalWidth - 2
 
 	backgroundStyle := lipgloss.NewStyle().
 		Background(theme.TooltipBackground)

@@ -99,6 +99,7 @@ go_test(
         "//lib/schema/agent",
         "//lib/schema/fleet",
         "//lib/schema/pipeline",
+        "//lib/schema/stewardship",
         "//lib/schema/ticket",
         "//lib/schema/workspace",
         "//lib/secret",

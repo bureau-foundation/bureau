@@ -1467,3 +1467,38 @@ func mintTestServiceToken(t *testing.T, machine *testMachine, principal ref.Enti
 	}
 	return tokenBytes
 }
+
+// mintTestServiceTokenForUser mints a service token with an arbitrary
+// ref.UserID as the subject. Unlike mintTestServiceToken which takes a
+// fleet Entity, this variant accepts a bare UserID — useful for minting
+// tokens that represent non-fleet principals (e.g., an admin user acting
+// as a reviewer in the stewardship flow).
+func mintTestServiceTokenForUser(t *testing.T, machine *testMachine, subject ref.UserID, serviceRole string, grants []servicetoken.Grant) []byte {
+	t.Helper()
+
+	_, privateKey, err := servicetoken.LoadKeypair(machine.StateDir)
+	if err != nil {
+		t.Fatalf("load machine signing keypair from %s: %v", machine.StateDir, err)
+	}
+
+	tokenID := make([]byte, 16)
+	if _, err := rand.Read(tokenID); err != nil {
+		t.Fatalf("generate token ID: %v", err)
+	}
+
+	token := &servicetoken.Token{
+		Subject:   subject,
+		Machine:   machine.Ref,
+		Audience:  serviceRole,
+		Grants:    grants,
+		ID:        hex.EncodeToString(tokenID),
+		IssuedAt:  1735689600, // 2025-01-01T00:00:00Z
+		ExpiresAt: 4070908800, // 2099-01-01T00:00:00Z
+	}
+
+	tokenBytes, err := servicetoken.Mint(privateKey, token)
+	if err != nil {
+		t.Fatalf("mint %s token for %s: %v", serviceRole, subject, err)
+	}
+	return tokenBytes
+}

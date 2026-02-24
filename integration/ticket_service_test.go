@@ -6,12 +6,16 @@ package integration_test
 import (
 	"encoding/json"
 	"log/slog"
+	"strings"
 	"testing"
 
 	ticketcmd "github.com/bureau-foundation/bureau/cmd/bureau/ticket"
 	"github.com/bureau-foundation/bureau/lib/ref"
 	"github.com/bureau-foundation/bureau/lib/schema"
+	"github.com/bureau-foundation/bureau/lib/schema/stewardship"
 	"github.com/bureau-foundation/bureau/lib/schema/ticket"
+	"github.com/bureau-foundation/bureau/lib/service"
+	"github.com/bureau-foundation/bureau/lib/servicetoken"
 	"github.com/bureau-foundation/bureau/lib/templatedef"
 	"github.com/bureau-foundation/bureau/lib/testutil"
 	"github.com/bureau-foundation/bureau/messaging"
@@ -592,13 +596,423 @@ func TestTicketLifecycleAgent(t *testing.T) {
 	})
 }
 
+// TestStewardship exercises the stewardship governance flow end-to-end:
+// publishing stewardship declarations, creating tickets with affected
+// resources, verifying auto-configured review gates and reviewers,
+// approving reviews via set-disposition, and confirming gate
+// satisfaction. Uses direct service socket calls (minted test tokens)
+// for ticket operations and admin Matrix state events for stewardship
+// declarations.
+func TestStewardship(t *testing.T) {
+	t.Parallel()
+
+	ctx := t.Context()
+	admin := adminSession(t)
+	defer admin.Close()
+
+	fleet := createTestFleet(t, admin)
+
+	// Boot a machine.
+	machine := newTestMachine(t, fleet, "stewardship")
+	startMachine(t, admin, machine, machineOptions{
+		LauncherBinary: resolvedBinary(t, "LAUNCHER_BINARY"),
+		DaemonBinary:   resolvedBinary(t, "DAEMON_BINARY"),
+		ProxyBinary:    resolvedBinary(t, "PROXY_BINARY"),
+		Fleet:          fleet,
+	})
+
+	// Deploy ticket service with socket access.
+	ticketSvc := deployTicketService(t, admin, fleet, machine, "stewardship")
+
+	// Mint a service token for direct socket calls. The subject is a
+	// synthetic entity — the service validates the token signature and
+	// grants, not the subject's existence.
+	operatorEntity, err := ref.NewEntityFromAccountLocalpart(fleet.Ref, "agent/stewardship-test")
+	if err != nil {
+		t.Fatalf("construct operator entity: %v", err)
+	}
+	token := mintTestServiceToken(t, machine, operatorEntity, "ticket",
+		[]servicetoken.Grant{{Actions: []string{"ticket/**"}}})
+	client := service.NewServiceClientFromToken(ticketSvc.SocketPath, token)
+
+	adminUserID := admin.UserID()
+
+	// publishStewardshipRoom creates a project room with a pre-loaded
+	// stewardship declaration. The declaration is published BEFORE enabling
+	// tickets (which invites the service), so it's in the room state when
+	// the service joins. The service indexes stewardship events during
+	// processRoomState, then announces readiness — the WaitForEvent on
+	// m.bureau.service_ready is an event-driven proof that the stewardship
+	// index is populated.
+	publishStewardshipRoom := func(
+		t *testing.T,
+		name string,
+		stateKey string,
+		declaration stewardship.StewardshipContent,
+		ticketPrefix string,
+	) ref.RoomID {
+		t.Helper()
+
+		room, err := admin.CreateRoom(ctx, messaging.CreateRoomRequest{
+			Name:   name,
+			Invite: []string{machine.UserID.String()},
+		})
+		if err != nil {
+			t.Fatalf("create room %s: %v", name, err)
+		}
+
+		// Publish stewardship declaration before inviting the service.
+		if _, err := admin.SendStateEvent(ctx, room.RoomID,
+			schema.EventTypeStewardship, stateKey, declaration); err != nil {
+			t.Fatalf("publish stewardship in %s: %v", name, err)
+		}
+
+		// Enable tickets — invites the service, which joins, processes
+		// room state (including stewardship), and announces readiness.
+		roomWatch := watchRoom(t, admin, room.RoomID)
+		enableTicketsInRoom(t, admin, room.RoomID, ticketSvc, ticketPrefix, nil)
+
+		roomWatch.WaitForEvent(t, func(event messaging.Event) bool {
+			return event.Type == schema.EventTypeServiceReady &&
+				event.Sender == ticketSvc.Account.UserID
+		}, "ticket service ready in "+name)
+
+		return room.RoomID
+	}
+
+	// --- Shared project room for core stewardship tests ---
+	//
+	// Single-tier declaration: gate_types=["task"], pattern fleet/gpu/**,
+	// principals matching admin-*:test.bureau.local (the per-test admin
+	// created by adminSession), threshold 1.
+	tierThreshold := 1
+	projectRoomID := publishStewardshipRoom(t,
+		"stewardship-project", "fleet/gpu",
+		stewardship.StewardshipContent{
+			Version:          1,
+			ResourcePatterns: []string{"fleet/gpu/**"},
+			GateTypes:        []string{"task"},
+			Tiers: []stewardship.StewardshipTier{{
+				Principals: []string{"admin-*:" + testServerName},
+				Threshold:  &tierThreshold,
+			}},
+		},
+		"stw",
+	)
+
+	t.Run("Review", func(t *testing.T) {
+		// Create a ticket with matching affects and type.
+		var createResult struct {
+			ID   string `json:"id"`
+			Room string `json:"room"`
+		}
+		if err := client.Call(ctx, "create", map[string]any{
+			"room":     projectRoomID.String(),
+			"title":    "GPU quota increase",
+			"type":     "task",
+			"priority": 2,
+			"affects":  []string{"fleet/gpu/a100"},
+		}, &createResult); err != nil {
+			t.Fatalf("create ticket: %v", err)
+		}
+
+		// Read ticket and verify stewardship-derived review gate.
+		content := readTicketState(t, admin, projectRoomID, createResult.ID)
+
+		var stewardshipGate *ticket.TicketGate
+		for i := range content.Gates {
+			if strings.HasPrefix(content.Gates[i].ID, "stewardship:") {
+				stewardshipGate = &content.Gates[i]
+				break
+			}
+		}
+		if stewardshipGate == nil {
+			t.Fatalf("no stewardship review gate; gates = %v", content.Gates)
+		}
+		if stewardshipGate.Type != "review" {
+			t.Errorf("gate type = %q, want review", stewardshipGate.Type)
+		}
+
+		// Verify reviewers include the admin (matched by admin-*:test.bureau.local).
+		if content.Review == nil {
+			t.Fatal("no review section")
+		}
+		if len(content.Review.Reviewers) == 0 {
+			t.Fatal("no reviewers")
+		}
+
+		var adminReviewer *ticket.ReviewerEntry
+		for i := range content.Review.Reviewers {
+			if content.Review.Reviewers[i].UserID == adminUserID {
+				adminReviewer = &content.Review.Reviewers[i]
+				break
+			}
+		}
+		if adminReviewer == nil {
+			t.Fatalf("admin %s not in reviewers: %v", adminUserID, content.Review.Reviewers)
+		}
+		if adminReviewer.Disposition != "pending" {
+			t.Errorf("admin disposition = %q, want pending", adminReviewer.Disposition)
+		}
+		if adminReviewer.Tier != 0 {
+			t.Errorf("admin tier = %d, want 0", adminReviewer.Tier)
+		}
+
+		// Verify tier thresholds.
+		if len(content.Review.TierThresholds) == 0 {
+			t.Fatal("no tier thresholds")
+		}
+		if content.Review.TierThresholds[0].Threshold == nil || *content.Review.TierThresholds[0].Threshold != 1 {
+			t.Errorf("tier 0 threshold = %v, want 1", content.Review.TierThresholds[0].Threshold)
+		}
+
+		// Transition to review status (required before set-disposition).
+		if err := client.Call(ctx, "update", map[string]any{
+			"room":   projectRoomID.String(),
+			"ticket": createResult.ID,
+			"status": "review",
+		}, nil); err != nil {
+			t.Fatalf("transition to review: %v", err)
+		}
+
+		// Approve the review as the admin (who is the stewardship-
+		// resolved reviewer). set-disposition uses token.Subject to
+		// identify the caller, so we mint a token with the admin's
+		// UserID as subject.
+		adminToken := mintTestServiceTokenForUser(t, machine, adminUserID, "ticket",
+			[]servicetoken.Grant{{Actions: []string{"ticket/**"}}})
+		adminClient := service.NewServiceClientFromToken(ticketSvc.SocketPath, adminToken)
+
+		// Watch for the gate satisfaction write. The set-disposition
+		// handler writes the disposition change; the sync loop then
+		// picks up the echo, evaluates gates, and writes a second
+		// state event with the gate satisfied. We must wait for that
+		// second write rather than reading immediately after the
+		// disposition call returns.
+		gateWatch := watchRoom(t, admin, projectRoomID)
+
+		if err := adminClient.Call(ctx, "set-disposition", map[string]any{
+			"room":        projectRoomID.String(),
+			"ticket":      createResult.ID,
+			"gate_id":     stewardshipGate.ID,
+			"reviewer_id": adminUserID.String(),
+			"disposition": "approved",
+		}, nil); err != nil {
+			t.Fatalf("set disposition: %v", err)
+		}
+
+		// Wait for the gate satisfaction write. The set-disposition
+		// handler writes E1 (disposition change); the sync loop
+		// then evaluates gates and writes E2 (gate satisfied). We
+		// match on the gate's status field inside the event content.
+		gateWatch.WaitForEvent(t, func(event messaging.Event) bool {
+			if event.Type != schema.EventTypeTicket {
+				return false
+			}
+			if event.StateKey == nil || *event.StateKey != createResult.ID {
+				return false
+			}
+			gates, _ := event.Content["gates"].([]any)
+			for _, g := range gates {
+				gateMap, _ := g.(map[string]any)
+				if gateMap["id"] == stewardshipGate.ID && gateMap["status"] == "satisfied" {
+					return true
+				}
+			}
+			return false
+		}, "stewardship gate satisfied")
+
+		content = readTicketState(t, admin, projectRoomID, createResult.ID)
+
+		for _, reviewer := range content.Review.Reviewers {
+			if reviewer.UserID == adminUserID {
+				if reviewer.Disposition != "approved" {
+					t.Errorf("after approval: disposition = %q, want approved", reviewer.Disposition)
+				}
+				break
+			}
+		}
+		for _, gate := range content.Gates {
+			if gate.ID == stewardshipGate.ID {
+				if gate.Status != "satisfied" {
+					t.Errorf("stewardship gate status = %q, want satisfied", gate.Status)
+				}
+				break
+			}
+		}
+
+		t.Logf("stewardship review verified: gate=%s, reviewers=%d",
+			stewardshipGate.ID, len(content.Review.Reviewers))
+	})
+
+	t.Run("NoMatchingType", func(t *testing.T) {
+		// Stewardship gates "task" tickets. A "bug" ticket with matching
+		// affects should NOT get stewardship gates.
+		var createResult struct {
+			ID   string `json:"id"`
+			Room string `json:"room"`
+		}
+		if err := client.Call(ctx, "create", map[string]any{
+			"room":     projectRoomID.String(),
+			"title":    "GPU driver crash",
+			"type":     "bug",
+			"priority": 2,
+			"affects":  []string{"fleet/gpu/a100"},
+		}, &createResult); err != nil {
+			t.Fatalf("create ticket: %v", err)
+		}
+
+		content := readTicketState(t, admin, projectRoomID, createResult.ID)
+		for _, gate := range content.Gates {
+			if strings.HasPrefix(gate.ID, "stewardship:") {
+				t.Errorf("unexpected stewardship gate %q for non-matching ticket type", gate.ID)
+			}
+		}
+		t.Log("no stewardship gate for non-matching type confirmed")
+	})
+
+	t.Run("NoAffects", func(t *testing.T) {
+		// A "task" ticket without affects should NOT get stewardship gates,
+		// even though the room has a matching stewardship declaration.
+		var createResult struct {
+			ID   string `json:"id"`
+			Room string `json:"room"`
+		}
+		if err := client.Call(ctx, "create", map[string]any{
+			"room":     projectRoomID.String(),
+			"title":    "Unrelated task",
+			"type":     "task",
+			"priority": 2,
+		}, &createResult); err != nil {
+			t.Fatalf("create ticket: %v", err)
+		}
+
+		content := readTicketState(t, admin, projectRoomID, createResult.ID)
+		for _, gate := range content.Gates {
+			if strings.HasPrefix(gate.ID, "stewardship:") {
+				t.Errorf("unexpected stewardship gate %q for ticket without affects", gate.ID)
+			}
+		}
+		t.Log("no stewardship gate without affects confirmed")
+	})
+
+	t.Run("NoMatchingResource", func(t *testing.T) {
+		// Affects that don't match any stewardship declaration pattern
+		// should produce no stewardship gates.
+		var createResult struct {
+			ID   string `json:"id"`
+			Room string `json:"room"`
+		}
+		if err := client.Call(ctx, "create", map[string]any{
+			"room":     projectRoomID.String(),
+			"title":    "Network task",
+			"type":     "task",
+			"priority": 2,
+			"affects":  []string{"network/switch/core-01"},
+		}, &createResult); err != nil {
+			t.Fatalf("create ticket: %v", err)
+		}
+
+		content := readTicketState(t, admin, projectRoomID, createResult.ID)
+		for _, gate := range content.Gates {
+			if strings.HasPrefix(gate.ID, "stewardship:") {
+				t.Errorf("unexpected stewardship gate %q for non-matching resource", gate.ID)
+			}
+		}
+		t.Log("no stewardship gate for non-matching resource confirmed")
+	})
+
+	t.Run("StewardshipResolve", func(t *testing.T) {
+		// The stewardship-resolve action is a dry-run preview. Verify it
+		// returns the expected matches without creating a ticket.
+		var resolveResult struct {
+			Gates     []ticket.TicketGate    `json:"gates"`
+			Reviewers []ticket.ReviewerEntry `json:"reviewers"`
+			Matches   []struct {
+				MatchedPattern  string `json:"matched_pattern"`
+				MatchedResource string `json:"matched_resource"`
+			} `json:"matches"`
+		}
+		if err := client.Call(ctx, "stewardship-resolve", map[string]any{
+			"affects":     []string{"fleet/gpu/a100"},
+			"ticket_type": "task",
+		}, &resolveResult); err != nil {
+			t.Fatalf("stewardship-resolve: %v", err)
+		}
+
+		if len(resolveResult.Matches) == 0 {
+			t.Fatal("no matches from stewardship-resolve")
+		}
+		if resolveResult.Matches[0].MatchedPattern != "fleet/gpu/**" {
+			t.Errorf("matched pattern = %q, want fleet/gpu/**", resolveResult.Matches[0].MatchedPattern)
+		}
+		if len(resolveResult.Gates) == 0 {
+			t.Fatal("no gates from stewardship-resolve")
+		}
+		if len(resolveResult.Reviewers) == 0 {
+			t.Fatal("no reviewers from stewardship-resolve")
+		}
+
+		// Verify admin is in the resolved reviewers.
+		var foundAdmin bool
+		for _, reviewer := range resolveResult.Reviewers {
+			if reviewer.UserID == adminUserID {
+				foundAdmin = true
+				break
+			}
+		}
+		if !foundAdmin {
+			t.Errorf("admin %s not in resolved reviewers: %v", adminUserID, resolveResult.Reviewers)
+		}
+
+		t.Logf("stewardship-resolve: %d matches, %d gates, %d reviewers",
+			len(resolveResult.Matches), len(resolveResult.Gates), len(resolveResult.Reviewers))
+	})
+
+	t.Run("StewardshipList", func(t *testing.T) {
+		// The stewardship-list action returns all known declarations.
+		var listResult []struct {
+			RoomID           ref.RoomID `json:"room_id"`
+			StateKey         string     `json:"state_key"`
+			ResourcePatterns []string   `json:"resource_patterns"`
+			GateTypes        []string   `json:"gate_types"`
+		}
+		if err := client.Call(ctx, "stewardship-list", nil, &listResult); err != nil {
+			t.Fatalf("stewardship-list: %v", err)
+		}
+
+		// Find the declaration we published.
+		var found bool
+		for _, entry := range listResult {
+			if entry.RoomID == projectRoomID && entry.StateKey == "fleet/gpu" {
+				found = true
+				if len(entry.ResourcePatterns) != 1 || entry.ResourcePatterns[0] != "fleet/gpu/**" {
+					t.Errorf("patterns = %v, want [fleet/gpu/**]", entry.ResourcePatterns)
+				}
+				if len(entry.GateTypes) != 1 || entry.GateTypes[0] != "task" {
+					t.Errorf("gate_types = %v, want [task]", entry.GateTypes)
+				}
+				break
+			}
+		}
+		if !found {
+			t.Errorf("declaration fleet/gpu in room %s not found in list (got %d entries)", projectRoomID, len(listResult))
+		}
+
+		t.Logf("stewardship-list: %d declarations", len(listResult))
+	})
+}
+
 // --- Shared helpers for ticket service deployment ---
 
 // ticketServiceDeployment holds the result of deploying a ticket service
 // on a test machine. Tests use Entity to configure rooms with service
-// bindings, and the daemon uses the socket for ticket operations.
+// bindings, the socket path for direct service calls, and the account
+// for room membership and principal pattern matching.
 type ticketServiceDeployment struct {
-	Entity ref.Entity // fleet-scoped entity ref for service bindings
+	Entity     ref.Entity       // fleet-scoped entity ref for service bindings
+	Account    principalAccount // service account (UserID, Localpart, Token)
+	SocketPath string           // path to the service CBOR socket
 }
 
 // deployTicketService deploys a ticket service using the production
@@ -617,7 +1031,11 @@ func deployTicketService(t *testing.T, admin *messaging.DirectSession, fleet *te
 			AllowJoin: true,
 		},
 	})
-	return ticketServiceDeployment{Entity: svc.Entity}
+	return ticketServiceDeployment{
+		Entity:     svc.Entity,
+		Account:    svc.Account,
+		SocketPath: svc.SocketPath,
+	}
 }
 
 // enableTicketsInRoom configures an existing room for ticket management

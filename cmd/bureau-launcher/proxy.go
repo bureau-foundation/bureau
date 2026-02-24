@@ -464,11 +464,11 @@ func (l *Launcher) buildSandboxCommand(principalLocalpart string, spec *schema.S
 		}
 	}
 
-	// Write the sandbox script. The script runs bwrap, captures its exit
-	// code to a file (read by the session watcher), and exits with the
-	// same code.
-	exitCodePath := filepath.Join(sb.configDir, "exit-code")
-	scriptPath, err := writeSandboxScript(sb.configDir, bwrapPath, bwrapArgs, exitCodePath)
+	// Write the sandbox script. The script exec's bureau-log-relay
+	// wrapping bwrap. The log relay holds the outer PTY open until it
+	// collects the child's exit code, eliminating the tmux 3.4+ race
+	// between PTY EOF and SIGCHLD that causes exit codes to be lost.
+	scriptPath, err := writeSandboxScript(sb.configDir, l.logRelayBinaryPath, bwrapPath, bwrapArgs)
 	if err != nil {
 		return nil, fmt.Errorf("writing sandbox script: %w", err)
 	}

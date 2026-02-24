@@ -1,0 +1,26 @@
+# Copyright 2026 The Bureau Authors
+# SPDX-License-Identifier: Apache-2.0
+
+load("@rules_go//go:def.bzl", "go_binary", "go_library", "go_test")
+
+go_library(
+    name = "bureau-log-relay_lib",
+    srcs = [
+        "doc.go",
+        "main.go",
+    ],
+    importpath = "github.com/bureau-foundation/bureau/cmd/bureau-log-relay",
+    visibility = ["//visibility:private"],
+)
+
+go_binary(
+    name = "bureau-log-relay",
+    embed = [":bureau-log-relay_lib"],
+    visibility = ["//visibility:public"],
+)
+
+go_test(
+    name = "bureau-log-relay_test",
+    srcs = ["main_test.go"],
+    embed = [":bureau-log-relay_lib"],
+)

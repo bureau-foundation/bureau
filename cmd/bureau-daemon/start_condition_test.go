@@ -10,9 +10,12 @@ import (
 	"net/http/httptest"
 	"os"
 	"path/filepath"
+	"runtime"
 	"sync"
 	"testing"
+	"time"
 
+	"github.com/bureau-foundation/bureau/lib/clock"
 	"github.com/bureau-foundation/bureau/lib/principal"
 	"github.com/bureau-foundation/bureau/lib/ref"
 	"github.com/bureau-foundation/bureau/lib/schema"
@@ -20,6 +23,29 @@ import (
 	"github.com/bureau-foundation/bureau/lib/testutil"
 	"github.com/bureau-foundation/bureau/messaging"
 )
+
+// waitForDrainComplete advances the daemon's fake clock past the drain
+// grace period and waits for the force-kill goroutine to complete. The
+// principal should be in d.draining after reconcile; this helper triggers
+// the force-kill path and waits for the principal to leave d.running.
+func waitForDrainComplete(t *testing.T, daemon *Daemon, principal ref.Entity) {
+	t.Helper()
+
+	fakeClock := daemon.clock.(*clock.FakeClock)
+	fakeClock.WaitForTimers(1)
+	fakeClock.Advance(defaultDrainGracePeriod + time.Second)
+
+	for i := 0; i < 100; i++ {
+		runtime.Gosched()
+		daemon.reconcileMu.Lock()
+		running := daemon.running[principal]
+		daemon.reconcileMu.Unlock()
+		if !running {
+			return
+		}
+	}
+	t.Fatalf("principal %v still running after drain grace period", principal)
+}
 
 // TestReconcile_StartConditionMet verifies that a principal with a
 // satisfied StartCondition launches normally.
@@ -888,19 +914,31 @@ func TestReconcile_RunningPrincipalStoppedWhenConditionFails(t *testing.T) {
 		UpdatedAt: "2026-02-10T02:00:00Z",
 	})
 
-	// Second reconcile: condition no longer met → principal stopped.
+	// Second reconcile: condition no longer met → principal is drained
+	// (SIGTERM sent, grace period started). Not destroyed immediately.
 	if err := daemon.reconcile(context.Background()); err != nil {
 		t.Fatalf("second reconcile() error: %v", err)
 	}
 
 	tracker.mu.Lock()
+	if len(tracker.signaled) != 1 || tracker.signaled[0] != "iree/amdgpu/pm" {
+		t.Errorf("second reconcile: expected signal-sandbox for iree/amdgpu/pm, got signaled=%v", tracker.signaled)
+	}
+	tracker.mu.Unlock()
+
+	// Advance the fake clock past the drain grace period to trigger
+	// the force-kill.
+	pmEntity := testEntity(t, fleet, "iree/amdgpu/pm")
+	waitForDrainComplete(t, daemon, pmEntity)
+
+	tracker.mu.Lock()
 	defer tracker.mu.Unlock()
 
 	if len(tracker.destroyed) != 1 || tracker.destroyed[0] != "iree/amdgpu/pm" {
-		t.Errorf("second reconcile: expected destroy-sandbox for iree/amdgpu/pm, got %v", tracker.destroyed)
+		t.Errorf("after drain: expected destroy-sandbox for iree/amdgpu/pm, got %v", tracker.destroyed)
 	}
-	if daemon.running[testEntity(t, fleet, "iree/amdgpu/pm")] {
-		t.Error("second reconcile: principal should no longer be running")
+	if daemon.running[pmEntity] {
+		t.Error("principal should no longer be running after drain completed")
 	}
 }
 
@@ -986,19 +1024,29 @@ func TestReconcile_ConditionFalseDoesNotStopUnconditionedPrincipal(t *testing.T)
 		UpdatedAt: "2026-02-10T02:00:00Z",
 	})
 
-	// Second reconcile: conditioned principal stops, unconditioned survives.
+	// Second reconcile: conditioned principal is drained, unconditioned survives.
 	if err := daemon.reconcile(context.Background()); err != nil {
 		t.Fatalf("second reconcile() error: %v", err)
 	}
 
 	tracker.mu.Lock()
+	if len(tracker.signaled) != 1 || tracker.signaled[0] != "iree/amdgpu/pm" {
+		t.Errorf("second reconcile: expected signal-sandbox for iree/amdgpu/pm only, got signaled=%v", tracker.signaled)
+	}
+	tracker.mu.Unlock()
+
+	// Advance past drain grace period to force-kill the drained principal.
+	pmEntity := testEntity(t, fleet, "iree/amdgpu/pm")
+	waitForDrainComplete(t, daemon, pmEntity)
+
+	tracker.mu.Lock()
 	defer tracker.mu.Unlock()
 
 	if len(tracker.destroyed) != 1 || tracker.destroyed[0] != "iree/amdgpu/pm" {
-		t.Errorf("second reconcile: expected destroy-sandbox for iree/amdgpu/pm only, got %v", tracker.destroyed)
+		t.Errorf("after drain: expected destroy-sandbox for iree/amdgpu/pm only, got %v", tracker.destroyed)
 	}
-	if daemon.running[testEntity(t, fleet, "iree/amdgpu/pm")] {
-		t.Error("conditioned principal should have been stopped")
+	if daemon.running[pmEntity] {
+		t.Error("conditioned principal should have been stopped after drain")
 	}
 	if !daemon.running[testEntity(t, fleet, "sysadmin/test")] {
 		t.Error("unconditioned principal should still be running")
@@ -1549,19 +1597,28 @@ func TestReconcile_ArrayContainmentRunningPrincipalStopped(t *testing.T) {
 		"tags":  []any{"done", "sprint-42"},
 	})
 
-	// Second reconcile: "active" is no longer in the tags → principal stopped.
+	// Second reconcile: "active" is no longer in the tags → principal drained.
 	if err := daemon.reconcile(context.Background()); err != nil {
 		t.Fatalf("second reconcile() error: %v", err)
 	}
 
 	tracker.mu.Lock()
+	if len(tracker.signaled) != 1 || tracker.signaled[0] != "agent/worker" {
+		t.Errorf("second reconcile: expected signal-sandbox for agent/worker, got signaled=%v", tracker.signaled)
+	}
+	tracker.mu.Unlock()
+
+	workerEntity := testEntity(t, fleet, "agent/worker")
+	waitForDrainComplete(t, daemon, workerEntity)
+
+	tracker.mu.Lock()
 	defer tracker.mu.Unlock()
 
 	if len(tracker.destroyed) != 1 || tracker.destroyed[0] != "agent/worker" {
-		t.Errorf("second reconcile: expected destroy-sandbox for agent/worker, got %v", tracker.destroyed)
+		t.Errorf("after drain: expected destroy-sandbox for agent/worker, got %v", tracker.destroyed)
 	}
-	if daemon.running[testEntity(t, fleet, "agent/worker")] {
-		t.Error("second reconcile: agent/worker should not be running after array no longer contains value")
+	if daemon.running[workerEntity] {
+		t.Error("agent/worker should not be running after drain completed")
 	}
 }
 
@@ -1764,6 +1821,9 @@ func TestReconcile_ArrayContainmentFieldTypeChangesToArray(t *testing.T) {
 	tracker.mu.Lock()
 	defer tracker.mu.Unlock()
 
+	if len(tracker.signaled) != 0 {
+		t.Errorf("second reconcile: should not signal (condition still met via array), signaled %v", tracker.signaled)
+	}
 	if len(tracker.destroyed) != 0 {
 		t.Errorf("second reconcile: should not destroy (condition still met via array), destroyed %v", tracker.destroyed)
 	}
@@ -1780,6 +1840,7 @@ type principalTracker struct {
 	mu        sync.Mutex
 	created   []string
 	destroyed []string
+	signaled  []string // principals that received signal-sandbox
 }
 
 // newStartConditionTestState creates a mock Matrix state with a base template.
@@ -1830,6 +1891,9 @@ func newStartConditionTestDaemon(t *testing.T, matrixState *mockMatrixState, con
 		case "destroy-sandbox":
 			tracker.destroyed = append(tracker.destroyed, request.Principal)
 			return launcherIPCResponse{OK: true}
+		case "signal-sandbox":
+			tracker.signaled = append(tracker.signaled, request.Principal)
+			return launcherIPCResponse{OK: true}
 		default:
 			return launcherIPCResponse{OK: true}
 		}
@@ -1851,6 +1915,12 @@ func newStartConditionTestDaemon(t *testing.T, matrixState *mockMatrixState, con
 	}
 
 	cleanup := func() {
+		// Cancel any in-flight drain goroutines so they don't leak
+		// after the test's mock launcher socket is closed.
+		for principal, cancel := range daemon.draining {
+			cancel()
+			delete(daemon.draining, principal)
+		}
 		daemon.stopAllHealthMonitors()
 		daemon.stopAllLayoutWatchers()
 		listener.Close()

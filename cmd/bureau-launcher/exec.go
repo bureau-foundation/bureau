@@ -160,7 +160,7 @@ func (l *Launcher) handleExecUpdate(ctx context.Context, request *IPCRequest) IP
 	// Guard: we need our own path for the watchdog's PreviousBinary
 	// field. Without it, the startup watchdog check cannot determine
 	// whether the exec succeeded or the old binary was restarted.
-	if l.binaryPath == "" {
+	if l.launcherBinaryPath == "" {
 		return IPCResponse{OK: false, Error: "launcher binary path unknown, cannot write watchdog for exec"}
 	}
 
@@ -174,7 +174,7 @@ func (l *Launcher) handleExecUpdate(ctx context.Context, request *IPCRequest) IP
 	// exec transition succeeded or failed.
 	watchdogState := watchdog.State{
 		Component:      "launcher",
-		PreviousBinary: l.binaryPath,
+		PreviousBinary: l.launcherBinaryPath,
 		NewBinary:      request.BinaryPath,
 		Timestamp:      time.Now(),
 	}
@@ -184,7 +184,7 @@ func (l *Launcher) handleExecUpdate(ctx context.Context, request *IPCRequest) IP
 	}
 
 	l.logger.Info("exec-update prepared",
-		"previous", l.binaryPath,
+		"previous", l.launcherBinaryPath,
 		"new", request.BinaryPath,
 		"sandboxes", len(l.sandboxes),
 	)
@@ -198,7 +198,7 @@ func (l *Launcher) handleExecUpdate(ctx context.Context, request *IPCRequest) IP
 // caller can continue serving.
 func (l *Launcher) performExec(newBinaryPath string) {
 	l.logger.Info("exec()'ing new launcher binary",
-		"previous", l.binaryPath,
+		"previous", l.launcherBinaryPath,
 		"new", newBinaryPath,
 	)
 

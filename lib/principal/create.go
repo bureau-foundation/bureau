@@ -66,9 +66,9 @@ type CreateParams struct {
 	// StartCondition gates this principal's launch on the existence of a
 	// specific state event. When set, the daemon only starts the sandbox
 	// if the referenced event exists and matches the content criteria.
-	// Use this for one-shot principals that should not restart after
-	// completing their work (the principal changes the gated state as
-	// its last action, making the condition false on next evaluation).
+	// Use this for lifecycle orchestration (e.g., workspace state
+	// transitions). For one-shot principals that should not restart
+	// after completing their work, use RestartPolicy "on-failure" instead.
 	StartCondition *schema.StartCondition
 
 	// ExtraCredentials are additional key-value pairs included in the
@@ -105,6 +105,10 @@ type CreateParams struct {
 	// services this principal can discover via GET /v1/services. An
 	// empty or nil list means the principal cannot see any services.
 	ServiceVisibility []string
+
+	// RestartPolicy controls what happens when a sandbox exits.
+	// See schema.PrincipalAssignment.RestartPolicy for valid values.
+	RestartPolicy string
 }
 
 // CreateResult holds the result of a successful principal creation.
@@ -393,6 +397,7 @@ func assignPrincipals(ctx context.Context, session messaging.Session, configRoom
 			Template:                  p.TemplateRef.String(),
 			AutoStart:                 p.AutoStart,
 			StartCondition:            p.StartCondition,
+			RestartPolicy:             p.RestartPolicy,
 			Labels:                    p.Labels,
 			MatrixPolicy:              p.MatrixPolicy,
 			ServiceVisibility:         p.ServiceVisibility,

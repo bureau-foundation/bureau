@@ -131,6 +131,28 @@ type PrincipalAssignment struct {
 	//
 	// When nil, the principal starts normally (subject to AutoStart).
 	StartCondition *StartCondition `json:"start_condition,omitempty"`
+
+	// RestartPolicy controls what happens when a sandbox exits.
+	//
+	// "" or "always": restart on any exit, subject to crash backoff for
+	// non-zero exit codes. This is the default for long-running agents
+	// that should survive transient failures.
+	//
+	// "on-failure": restart only on non-zero exit codes. A clean exit
+	// (code 0) is final — the principal completed its work. Use this
+	// for bounded tasks: pipeline executors, one-shot analyses,
+	// migration scripts.
+	//
+	// "never": never restart regardless of exit code. Use for principals
+	// that must run at most once per daemon lifecycle.
+	//
+	// RestartPolicy governs within-lifetime restart behavior. For
+	// cross-restart durability (preventing restart after daemon reboot),
+	// combine with StartCondition: the principal publishes a state
+	// change that makes its condition false, and RestartPolicy prevents
+	// the within-lifetime race where the daemon kills the principal
+	// before it finishes posting that state change.
+	RestartPolicy string `json:"restart_policy,omitempty"`
 }
 
 // StartCondition specifies a state event that must exist (and optionally

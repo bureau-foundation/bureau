@@ -18,7 +18,10 @@ import (
 	"context"
 	"fmt"
 	"os/exec"
+	"strconv"
 	"strings"
+	"syscall"
+	"time"
 )
 
 // Server represents a tmux server identified by its Unix socket path.
@@ -191,6 +194,159 @@ func (s *Server) CapturePane(sessionName string, maxLines int) (string, error) {
 	}
 
 	return tailString(output, maxLines), nil
+}
+
+// PaneStatus returns whether the pane's command has exited and, if so,
+// its exit code. This requires remain-on-exit to be enabled on the
+// session (which Bureau always configures): when the command exits, the
+// pane stays alive with #{pane_dead} set to 1.
+//
+// The exit code is derived from two tmux format variables:
+//   - #{pane_dead_status}: the WEXITSTATUS value (valid for normal exits)
+//   - #{pane_dead_signal}: the signal number (valid for signal deaths)
+//
+// When the process was killed by a signal, the exit code follows the
+// shell convention: 128 + signal number (e.g., SIGTERM=15 → 143).
+// This matches what a shell wrapper would report and allows callers
+// to distinguish normal exits from signal deaths.
+//
+// Returns dead=false when the pane process is still running. The
+// exitCode value is only meaningful when dead=true.
+func (s *Server) PaneStatus(sessionName string) (dead bool, exitCode int, err error) {
+	return s.parsePaneStatus(sessionName)
+}
+
+// paneStatusRetryDelay is the delay between retries when tmux reports
+// dead=1 but hasn't yet populated the exit status fields.
+const paneStatusRetryDelay = 50 * time.Millisecond
+
+// paneStatusMaxRetries is the number of times to re-query tmux when
+// pane_dead=1 but both pane_dead_status and pane_dead_signal are empty.
+// Tmux 3.4+ has a race window between setting pane_dead and populating
+// the exit status fields. Under heavy parallel test load, the tmux
+// event loop can take longer than a single retry to finish recording
+// the exit status. 5 retries × 50ms = 250ms maximum wait, which is
+// within the session watcher's 250ms poll interval.
+const paneStatusMaxRetries = 5
+
+func (s *Server) parsePaneStatus(sessionName string) (dead bool, exitCode int, err error) {
+	for attempt := 0; ; attempt++ {
+		output, queryErr := s.Run("display-message", "-t", sessionName, "-p",
+			"#{pane_dead} #{pane_dead_status} #{pane_dead_signal}")
+		if queryErr != nil {
+			return false, 0, queryErr
+		}
+
+		// tmux outputs three space-separated values. Empty values collapse:
+		//   "0"           (running — no status or signal)
+		//   "1 42"        (exit 42 — no signal)
+		//   "1  15"       (SIGTERM — empty status, signal 15)
+		//   "1"           (status not yet populated — race window)
+		//
+		// #{pane_dead_signal} is best-effort: tmux sometimes doesn't
+		// populate it for signal deaths, and the behavior varies across
+		// tmux versions. When available, the exit code follows the shell
+		// convention (128 + signal number). When unavailable, signal
+		// deaths are reported as exit code 0. The daemon tracks drain
+		// state independently and does not rely on signal-specific exit
+		// codes for correctness.
+		trimmed := strings.TrimRight(output, "\n")
+		parts := strings.SplitN(trimmed, " ", 3)
+		if len(parts) == 0 || parts[0] == "" {
+			return false, 0, fmt.Errorf("empty pane status output")
+		}
+
+		deadValue, parseErr := strconv.Atoi(parts[0])
+		if parseErr != nil {
+			return false, 0, fmt.Errorf("parsing pane_dead %q: %w", parts[0], parseErr)
+		}
+
+		if deadValue == 0 {
+			return false, 0, nil
+		}
+
+		// Process is dead. Check signal first (takes precedence over
+		// pane_dead_status, which is the WEXITSTATUS value and undefined
+		// for signal deaths).
+		hasStatus := len(parts) >= 2 && parts[1] != ""
+		hasSignal := len(parts) >= 3 && parts[2] != ""
+
+		if hasSignal {
+			signalNumber, parseErr := strconv.Atoi(parts[2])
+			if parseErr != nil {
+				return true, -1, fmt.Errorf("parsing pane_dead_signal %q: %w", parts[2], parseErr)
+			}
+			return true, 128 + signalNumber, nil
+		}
+
+		if hasStatus {
+			status, parseErr := strconv.Atoi(parts[1])
+			if parseErr != nil {
+				return true, -1, fmt.Errorf("parsing pane_dead_status %q: %w", parts[1], parseErr)
+			}
+			return true, status, nil
+		}
+
+		// Both fields empty. Tmux 3.4+ has a race window between
+		// setting pane_dead=1 and populating the status fields. Retry
+		// to give the tmux event loop time to finish recording the
+		// exit status. After all retries exhausted, treat as exit
+		// code 0 (some tmux versions don't set pane_dead_status for
+		// code 0).
+		if attempt >= paneStatusMaxRetries {
+			return true, 0, nil
+		}
+		time.Sleep(paneStatusRetryDelay)
+	}
+}
+
+// PanePID returns the process ID of the command running in the named
+// session's active pane. With remain-on-exit enabled, this value is
+// available even after the process has exited — it's the PID that was
+// originally assigned when tmux launched the pane's command.
+//
+// The session watcher uses this to wait for the pane process to actually
+// exit (via kill(pid, 0) polling), resolving the tmux 3.4+ race between
+// PTY EOF detection and SIGCHLD processing that makes #{pane_dead_status}
+// unreliable in the immediate aftermath of pane death.
+func (s *Server) PanePID(sessionName string) (int, error) {
+	output, err := s.Run("display-message", "-t", sessionName, "-p", "#{pane_pid}")
+	if err != nil {
+		return 0, fmt.Errorf("getting pane PID: %w", err)
+	}
+
+	pid, parseErr := strconv.Atoi(strings.TrimSpace(output))
+	if parseErr != nil {
+		return 0, fmt.Errorf("parsing pane PID %q: %w", strings.TrimSpace(output), parseErr)
+	}
+
+	return pid, nil
+}
+
+// SignalPane sends a signal to the process running in the named
+// session's active pane. The pane must be alive (the command must still
+// be running). Uses #{pane_pid} to discover the process ID, then sends
+// the signal directly via syscall.Kill.
+//
+// This is the mechanism for graceful drain: the daemon sends SIGTERM to
+// a sandbox's pane process (bwrap), which forwards the signal to the
+// agent inside the namespace.
+func (s *Server) SignalPane(sessionName string, signal syscall.Signal) error {
+	output, err := s.Run("display-message", "-t", sessionName, "-p", "#{pane_pid}")
+	if err != nil {
+		return fmt.Errorf("getting pane PID: %w", err)
+	}
+
+	pid, parseErr := strconv.Atoi(strings.TrimSpace(output))
+	if parseErr != nil {
+		return fmt.Errorf("parsing pane PID %q: %w", strings.TrimSpace(output), parseErr)
+	}
+
+	if err := syscall.Kill(pid, signal); err != nil {
+		return fmt.Errorf("signaling PID %d with %v: %w", pid, signal, err)
+	}
+
+	return nil
 }
 
 // tailString returns the last n lines of s, matching tail -n semantics:

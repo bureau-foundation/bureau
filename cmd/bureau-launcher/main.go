@@ -47,6 +47,7 @@ func run() error {
 		runDir                string
 		stateDir              string
 		proxyBinaryPath       string
+		logRelayBinaryPath    string
 		workspaceRoot         string
 		cacheRoot             string
 		showVersion           bool
@@ -62,6 +63,7 @@ func run() error {
 	flag.StringVar(&runDir, "run-dir", principal.DefaultRunDir, "runtime directory for sockets and ephemeral state (all socket paths derive from this)")
 	flag.StringVar(&stateDir, "state-dir", principal.DefaultStateDir, "directory for persistent state (keypair, session)")
 	flag.StringVar(&proxyBinaryPath, "proxy-binary", "", "path to bureau-proxy binary (auto-detected if empty)")
+	flag.StringVar(&logRelayBinaryPath, "log-relay-binary", "", "path to bureau-log-relay binary (auto-detected if empty)")
 	flag.StringVar(&workspaceRoot, "workspace-root", principal.DefaultWorkspaceRoot, "root directory for project workspaces")
 	flag.StringVar(&cacheRoot, "cache-root", principal.DefaultCacheRoot, "root directory for machine-level tool and model cache")
 	flag.BoolVar(&showVersion, "version", false, "print version information and exit")
@@ -180,6 +182,18 @@ func run() error {
 	}
 	logger.Info("proxy binary validated", "path", proxyBinaryPath)
 
+	// Find and validate the log relay binary. The log relay wraps sandbox
+	// commands, holding the outer PTY open until the child exits. This
+	// eliminates the tmux 3.4+ race between PTY EOF and SIGCHLD that
+	// causes exit codes to be lost.
+	if logRelayBinaryPath == "" {
+		logRelayBinaryPath = findSiblingBinary("bureau-log-relay", logger)
+	}
+	if err := validateBinary(logRelayBinaryPath, "bureau-log-relay"); err != nil {
+		return fmt.Errorf("bureau-log-relay: %w\n  Install bureau-log-relay or set --log-relay-binary to its path", err)
+	}
+	logger.Info("log relay binary validated", "path", logRelayBinaryPath)
+
 	// Validate bwrap is available. Every sandboxed principal requires it.
 	bwrapPath, err := sandbox.BwrapPath()
 	if err != nil {
@@ -211,20 +225,21 @@ func run() error {
 
 	// Start the IPC socket for daemon communication.
 	launcher := &Launcher{
-		session:         session,
-		keypair:         keypair,
-		machine:         machine,
-		homeserverURL:   homeserverURL,
-		runDir:          runDir,
-		fleetRunDir:     machine.Fleet().RunDir(runDir),
-		stateDir:        stateDir,
-		proxyBinaryPath: proxyBinaryPath,
-		workspaceRoot:   workspaceRoot,
-		cacheRoot:       cacheRoot,
-		tmuxServer:      tmux.NewServer(principal.TmuxSocketPath(runDir), writeTmuxConfig(runDir)),
-		sandboxes:       make(map[string]*managedSandbox),
-		failedExecPaths: make(map[string]bool),
-		logger:          logger,
+		session:            session,
+		keypair:            keypair,
+		machine:            machine,
+		homeserverURL:      homeserverURL,
+		runDir:             runDir,
+		fleetRunDir:        machine.Fleet().RunDir(runDir),
+		stateDir:           stateDir,
+		proxyBinaryPath:    proxyBinaryPath,
+		logRelayBinaryPath: logRelayBinaryPath,
+		workspaceRoot:      workspaceRoot,
+		cacheRoot:          cacheRoot,
+		tmuxServer:         tmux.NewServer(principal.TmuxSocketPath(runDir), writeTmuxConfig(runDir)),
+		sandboxes:          make(map[string]*managedSandbox),
+		failedExecPaths:    make(map[string]bool),
+		logger:             logger,
 	}
 
 	// Resolve the launcher's own binary path and hash. The path is
@@ -232,12 +247,12 @@ func run() error {
 	// is queried by the daemon via "status" IPC to determine whether
 	// the launcher binary needs updating.
 	if executablePath, execErr := os.Executable(); execErr == nil {
-		launcher.binaryPath = executablePath
+		launcher.launcherBinaryPath = executablePath
 		if digest, hashErr := binhash.HashFile(executablePath); hashErr == nil {
-			launcher.binaryHash = binhash.FormatDigest(digest)
+			launcher.launcherBinaryHash = binhash.FormatDigest(digest)
 			logger.Info("launcher binary identity resolved",
-				"path", launcher.binaryPath,
-				"hash", launcher.binaryHash)
+				"path", launcher.launcherBinaryPath,
+				"hash", launcher.launcherBinaryHash)
 		} else {
 			logger.Warn("failed to hash launcher binary", "error", hashErr)
 		}
@@ -259,7 +274,7 @@ func run() error {
 	// broken binary that the system reverted from.
 	if failedPath := checkLauncherWatchdog(
 		launcher.launcherWatchdogPath(),
-		launcher.binaryPath,
+		launcher.launcherBinaryPath,
 		logger,
 	); failedPath != "" {
 		launcher.failedExecPaths[failedPath] = true
@@ -392,20 +407,29 @@ func listenSocket(socketPath string) (net.Listener, error) {
 // binary, then on PATH. Returns an empty string if not found; the caller
 // validates the result with validateBinary before proceeding.
 func findProxyBinary(logger *slog.Logger) string {
-	// Check next to the launcher binary.
+	return findSiblingBinary("bureau-proxy", logger)
+}
+
+// findSiblingBinary looks for a Bureau binary by name, first next to the
+// launcher binary (the standard Nix co-deployment layout), then on PATH.
+// Returns an empty string if not found; the caller validates the result
+// with validateBinary before proceeding.
+func findSiblingBinary(name string, logger *slog.Logger) string {
+	// Check next to the launcher binary. In production Nix deployments,
+	// all Bureau binaries are co-located in the same store path.
 	executable, err := os.Executable()
 	if err == nil {
-		candidate := filepath.Join(filepath.Dir(executable), "bureau-proxy")
+		candidate := filepath.Join(filepath.Dir(executable), name)
 		if _, err := os.Stat(candidate); err == nil {
-			logger.Info("found proxy binary next to launcher", "path", candidate)
+			logger.Info("found binary next to launcher", "name", name, "path", candidate)
 			return candidate
 		}
 	}
 
 	// Check PATH.
-	path, err := exec.LookPath("bureau-proxy")
+	path, err := exec.LookPath(name)
 	if err == nil {
-		logger.Info("found proxy binary on PATH", "path", path)
+		logger.Info("found binary on PATH", "name", name, "path", path)
 		return path
 	}
 

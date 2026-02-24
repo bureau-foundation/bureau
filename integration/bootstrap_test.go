@@ -48,6 +48,7 @@ func TestBootstrapScript(t *testing.T) {
 	launcherBinary := resolvedBinary(t, "LAUNCHER_BINARY")
 	daemonBinary := resolvedBinary(t, "DAEMON_BINARY")
 	proxyBinary := resolvedBinary(t, "PROXY_BINARY")
+	logRelayBinary := resolvedBinary(t, "LOG_RELAY_BINARY")
 
 	ctx := t.Context()
 	admin := adminSession(t)
@@ -85,6 +86,7 @@ func TestBootstrapScript(t *testing.T) {
 	copyBinary(t, launcherBinary, filepath.Join(binaryDir, "bureau-launcher"))
 	copyBinary(t, daemonBinary, filepath.Join(binaryDir, "bureau-daemon"))
 	copyBinary(t, proxyBinary, filepath.Join(binaryDir, "bureau-proxy"))
+	copyBinary(t, logRelayBinary, filepath.Join(binaryDir, "bureau-log-relay"))
 
 	// --- Start the container ---
 	containerID := startContainer(t, bootstrapImageName, bootstrapContainerName,

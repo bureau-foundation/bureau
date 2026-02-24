@@ -8,6 +8,7 @@ import (
 	"path/filepath"
 	"runtime"
 	"strings"
+	"syscall"
 	"testing"
 
 	"github.com/bureau-foundation/bureau/lib/testutil"
@@ -276,6 +277,158 @@ func TestCapturePaneWithMaxLines(t *testing.T) {
 	lines := strings.Split(strings.TrimRight(captured, "\n"), "\n")
 	if len(lines) > 3 {
 		t.Errorf("expected at most 3 lines, got %d: %v", len(lines), lines)
+	}
+}
+
+func TestPaneStatusRunning(t *testing.T) {
+	server := tmux.NewTestServer(t)
+
+	if err := server.SetOption("", "remain-on-exit", "on"); err != nil {
+		t.Fatalf("SetOption remain-on-exit: %v", err)
+	}
+
+	if err := server.NewSession("status-running", "sleep", "infinity"); err != nil {
+		t.Fatalf("NewSession: %v", err)
+	}
+
+	dead, _, err := server.PaneStatus("status-running")
+	if err != nil {
+		t.Fatalf("PaneStatus: %v", err)
+	}
+	if dead {
+		t.Fatal("PaneStatus reported dead for a running process")
+	}
+}
+
+func TestPaneStatusExitSuccess(t *testing.T) {
+	server := tmux.NewTestServer(t)
+
+	if err := server.SetOption("", "remain-on-exit", "on"); err != nil {
+		t.Fatalf("SetOption remain-on-exit: %v", err)
+	}
+
+	if err := server.NewSession("status-exit-0", "true"); err != nil {
+		t.Fatalf("NewSession: %v", err)
+	}
+
+	// Wait for the pane to become dead.
+	for {
+		dead, exitCode, err := server.PaneStatus("status-exit-0")
+		if err != nil {
+			t.Fatalf("PaneStatus: %v", err)
+		}
+		if dead {
+			if exitCode != 0 {
+				t.Errorf("exit code = %d, want 0", exitCode)
+			}
+			return
+		}
+		if t.Context().Err() != nil {
+			t.Fatal("timed out waiting for pane to become dead")
+		}
+		runtime.Gosched()
+	}
+}
+
+func TestPaneStatusExitFailure(t *testing.T) {
+	server := tmux.NewTestServer(t)
+
+	if err := server.SetOption("", "remain-on-exit", "on"); err != nil {
+		t.Fatalf("SetOption remain-on-exit: %v", err)
+	}
+
+	if err := server.NewSession("status-exit-42", "sh", "-c", "exit 42"); err != nil {
+		t.Fatalf("NewSession: %v", err)
+	}
+
+	for {
+		dead, exitCode, err := server.PaneStatus("status-exit-42")
+		if err != nil {
+			t.Fatalf("PaneStatus: %v", err)
+		}
+		if dead {
+			if exitCode != 42 {
+				t.Errorf("exit code = %d, want 42", exitCode)
+			}
+			return
+		}
+		if t.Context().Err() != nil {
+			t.Fatal("timed out waiting for pane to become dead")
+		}
+		runtime.Gosched()
+	}
+}
+
+// TestSignalPane verifies that SignalPane delivers a signal to the pane
+// process and the process exits with a known exit code. Uses a trap handler
+// to convert SIGTERM into a specific exit code (42), which is reliably
+// detected via #{pane_dead_status}. This avoids depending on
+// #{pane_dead_signal}, which is not reliably populated across tmux versions
+// (tmux 3.4 doesn't set it at all; tmux 3.6a sets it intermittently).
+func TestSignalPane(t *testing.T) {
+	server := tmux.NewTestServer(t)
+
+	if err := server.SetOption("", "remain-on-exit", "on"); err != nil {
+		t.Fatalf("SetOption remain-on-exit: %v", err)
+	}
+
+	// Run a command that traps SIGTERM, prints a sentinel, and exits with
+	// code 42. The sentinel in pane output is the primary verification
+	// that the signal was received and handled — exit code detection via
+	// #{pane_dead_status} is best-effort: tmux sometimes doesn't
+	// populate it for signal-triggered exits (observed on both 3.4 and
+	// 3.6a ~20% of the time). This mirrors how Bureau agents handle
+	// SIGTERM: the signal handler triggers graceful shutdown, and the
+	// process exits cleanly.
+	if err := server.NewSession("signal-test", "sh", "-c",
+		"trap 'echo SIGTERM-RECEIVED; exit 42' TERM; while true; do sleep 1; done"); err != nil {
+		t.Fatalf("NewSession: %v", err)
+	}
+
+	// Verify the process is running.
+	dead, _, err := server.PaneStatus("signal-test")
+	if err != nil {
+		t.Fatalf("PaneStatus before signal: %v", err)
+	}
+	if dead {
+		t.Fatal("pane dead before signal was sent")
+	}
+
+	// Send SIGTERM to the pane process.
+	if err := server.SignalPane("signal-test", syscall.SIGTERM); err != nil {
+		t.Fatalf("SignalPane: %v", err)
+	}
+
+	// Wait for the pane to become dead. The trap handler converts
+	// SIGTERM into exit(42), which is reliably reported by
+	// #{pane_dead_status}.
+	for {
+		dead, exitCode, err := server.PaneStatus("signal-test")
+		if err != nil {
+			t.Fatalf("PaneStatus after signal: %v", err)
+		}
+		if dead {
+			if exitCode != 42 && exitCode != 0 {
+				t.Errorf("exit code = %d, want 42 (or 0 when tmux omits pane_dead_status)", exitCode)
+			}
+
+			// The authoritative check: capture pane output and verify
+			// the trap handler's sentinel was printed. This proves the
+			// signal was delivered and the handler ran, regardless of
+			// what tmux reports for pane_dead_status.
+			captured, captureErr := server.CapturePane("signal-test", 0)
+			if captureErr != nil {
+				t.Fatalf("CapturePane: %v", captureErr)
+			}
+			if !strings.Contains(captured, "SIGTERM-RECEIVED") {
+				t.Errorf("pane output missing SIGTERM-RECEIVED sentinel, got: %q", captured)
+			}
+			return
+		}
+		if t.Context().Err() != nil {
+			t.Fatal("timed out waiting for pane to die after SIGTERM")
+		}
+		runtime.Gosched()
 	}
 }
 

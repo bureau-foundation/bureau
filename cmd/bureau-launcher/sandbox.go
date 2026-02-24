@@ -169,32 +169,39 @@ func writeTriggerFile(configDir string, content []byte) (string, error) {
 	return triggerPath, nil
 }
 
-// writeSandboxScript writes a shell script that runs the bwrap command and
-// captures its exit code. Using a script avoids shell escaping issues when
-// passing bwrap args through tmux's new-session command parser.
+// writeSandboxScript writes a shell script that exec's bureau-log-relay
+// wrapping the bwrap command. Using a script avoids shell escaping issues
+// when passing bwrap args through tmux's new-session command parser.
 //
-// The script runs the command (not via exec — it needs to survive to record
-// the exit code), writes the numeric exit code to exitCodePath, then exits
-// with the same code. The session watcher reads exitCodePath to report the
-// command's exit code through the sandbox's done channel.
+// The exec replaces the shell with bureau-log-relay, making it the tmux
+// pane process (visible via #{pane_pid}). The log relay runs bwrap as its
+// child, holding the outer PTY file descriptors open until it collects
+// the child's exit code via waitpid. This eliminates the tmux 3.4+ race
+// between PTY EOF detection and SIGCHLD processing that causes exit codes
+// to be lost when bwrap is exec'd directly.
+//
+// Process tree:
+//
+//	tmux pane → bureau-log-relay (holds PTY fds) → bwrap → sandboxed process
+//
+// Signal delivery: SIGTERM sent to the pane PID reaches bureau-log-relay,
+// which forwards it to bwrap, which forwards it to the sandboxed process
+// through its PID-1 signal helper. This is the signal path for graceful drain.
 //
 // Returns the script path.
-func writeSandboxScript(configDir string, bwrapPath string, bwrapArgs []string, exitCodePath string) (string, error) {
+func writeSandboxScript(configDir string, logRelayPath string, bwrapPath string, bwrapArgs []string) (string, error) {
 	scriptPath := filepath.Join(configDir, "sandbox.sh")
 
 	var script strings.Builder
-	script.WriteString("#!/bin/sh\n")
+	script.WriteString("#!/bin/sh\nexec ")
+	script.WriteString(shellQuote(logRelayPath))
+	script.WriteString(" -- ")
 	script.WriteString(shellQuote(bwrapPath))
 	for _, arg := range bwrapArgs {
 		script.WriteString(" ")
 		script.WriteString(shellQuote(arg))
 	}
 	script.WriteString("\n")
-	script.WriteString("_exit_code=$?\n")
-	script.WriteString("echo $_exit_code > ")
-	script.WriteString(shellQuote(exitCodePath))
-	script.WriteString("\n")
-	script.WriteString("exit $_exit_code\n")
 
 	if err := os.WriteFile(scriptPath, []byte(script.String()), 0755); err != nil {
 		return "", fmt.Errorf("writing sandbox script: %w", err)

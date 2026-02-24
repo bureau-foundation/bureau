@@ -311,6 +311,7 @@ func (d *Daemon) processSyncResponse(ctx context.Context, response *messaging.Sy
 		// credentials provisioned, template updated, config changed, etc.).
 		d.reconcileMu.Lock()
 		d.clearStartFailures()
+		clear(d.completed)
 		d.reconcileMu.Unlock()
 		if err := d.reconcile(ctx); err != nil {
 			d.logger.Error("reconciliation failed", "error", err)

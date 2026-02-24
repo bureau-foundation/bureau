@@ -12,6 +12,7 @@ import (
 	"net/http/httptest"
 	"os"
 	"path/filepath"
+	"runtime"
 	"strings"
 	"sync"
 	"sync/atomic"
@@ -814,10 +815,11 @@ func TestReconcileStopsHealthMonitorOnDestroy(t *testing.T) {
 
 	const configRoomID = "!config:test.local"
 
-	daemon, _ := newTestDaemon(t)
+	daemon, fakeClock2 := newTestDaemon(t)
 	daemon.machine, daemon.fleet = testMachineSetup(t, "test", "test.local")
 	machineName := daemon.machine.Localpart()
 	serverName := daemon.machine.Server().String()
+	_ = fakeClock2
 
 	// Config with NO principals — the running one should be destroyed.
 	state := newMockMatrixState()
@@ -848,7 +850,14 @@ func TestReconcileStopsHealthMonitorOnDestroy(t *testing.T) {
 	socketDir := testutil.SocketDir(t)
 	launcherSocket := filepath.Join(socketDir, "launcher.sock")
 
+	destroySandboxReceived := make(chan struct{}, 1)
 	listener := startMockLauncher(t, launcherSocket, func(request launcherIPCRequest) launcherIPCResponse {
+		if request.Action == "destroy-sandbox" {
+			select {
+			case destroySandboxReceived <- struct{}{}:
+			default:
+			}
+		}
 		return launcherIPCResponse{OK: true}
 	})
 	t.Cleanup(func() { listener.Close() })
@@ -878,13 +887,42 @@ func TestReconcileStopsHealthMonitorOnDestroy(t *testing.T) {
 	}
 	daemon.healthMonitorsMu.Unlock()
 
-	// Reconcile: principal removed from config → destroy → health monitor stopped.
+	// Reconcile: principal removed from config → drain (SIGTERM) → grace
+	// period → force-kill → health monitor stopped.
 	if err := daemon.reconcile(ctx); err != nil {
 		t.Fatalf("reconcile() error: %v", err)
 	}
 
-	if daemon.running[fleetEntity] {
-		t.Error("principal should not be running after removal from config")
+	// Principal should be draining, not yet destroyed.
+	if _, draining := daemon.draining[fleetEntity]; !draining {
+		t.Error("principal should be draining after removal from config")
+	}
+
+	// Wait for the drain goroutine to register its timer, then advance
+	// past the grace period. The health monitor also has timers, so we
+	// need to wait for at least 2 (health monitor + drain).
+	fakeClock2.WaitForTimers(2)
+	fakeClock2.Advance(defaultDrainGracePeriod + time.Second)
+
+	// Wait for the drain goroutine to call destroyPrincipal, which
+	// sends "destroy-sandbox" IPC to the mock launcher.
+	select {
+	case <-destroySandboxReceived:
+	case <-t.Context().Done():
+		t.Fatal("timed out waiting for destroy-sandbox after drain grace period")
+	}
+
+	// The mock handler signaled when it received the destroy-sandbox
+	// request, but the drain goroutine still holds reconcileMu while
+	// finishing destroyPrincipal (processing the IPC response, cleaning
+	// up state). Acquire the lock to synchronize — this blocks until
+	// the goroutine completes.
+	daemon.reconcileMu.Lock()
+	running := daemon.running[fleetEntity]
+	daemon.reconcileMu.Unlock()
+
+	if running {
+		t.Error("principal should not be running after drain grace period expired")
 	}
 
 	daemon.healthMonitorsMu.Lock()
@@ -1363,7 +1401,7 @@ func TestDestroyExtrasCleansPreviousSpecs(t *testing.T) {
 
 	const configRoomID = "!config:test.local"
 
-	daemon, _ := newTestDaemon(t)
+	daemon, fakeClock := newTestDaemon(t)
 	daemon.machine, daemon.fleet = testMachineSetup(t, "test", "test.local")
 	machineName := daemon.machine.Localpart()
 	serverName := daemon.machine.Server().String()
@@ -1420,12 +1458,39 @@ func TestDestroyExtrasCleansPreviousSpecs(t *testing.T) {
 	t.Cleanup(daemon.stopAllLayoutWatchers)
 	t.Cleanup(daemon.stopAllHealthMonitors)
 
-	if err := daemon.reconcile(context.Background()); err != nil {
+	ctx := context.Background()
+	if err := daemon.reconcile(ctx); err != nil {
 		t.Fatalf("reconcile() error: %v", err)
 	}
 
+	// After reconcile, the principal should be draining (SIGTERM sent,
+	// grace period in progress), not yet destroyed.
+	if _, draining := daemon.draining[fleetEntity]; !draining {
+		t.Error("principal should be draining after removal from config")
+	}
+	if !daemon.running[fleetEntity] {
+		t.Error("principal should still be running while draining")
+	}
+
+	// Advance the fake clock past the drain grace period to trigger
+	// the force-kill goroutine.
+	fakeClock.WaitForTimers(1)
+	fakeClock.Advance(defaultDrainGracePeriod + time.Second)
+
+	// Give the goroutine time to acquire reconcileMu and call
+	// destroyPrincipal.
+	for i := 0; i < 100; i++ {
+		runtime.Gosched()
+		daemon.reconcileMu.Lock()
+		running := daemon.running[fleetEntity]
+		daemon.reconcileMu.Unlock()
+		if !running {
+			break
+		}
+	}
+
 	if daemon.running[fleetEntity] {
-		t.Error("principal should not be running after removal from config")
+		t.Error("principal should not be running after drain grace period expired")
 	}
 	if daemon.lastSpecs[fleetEntity] != nil {
 		t.Error("lastSpecs should be cleaned up when principal is destroyed")

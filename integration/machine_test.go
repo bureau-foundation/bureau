@@ -113,9 +113,11 @@ type machineOptions struct {
 	DaemonBinary           string     // required
 	Fleet                  *testFleet // required: fleet-scoped rooms for this machine
 	ProxyBinary            string     // defaults to PROXY_BINARY from Bazel runfiles
+	LogRelayBinary         string     // defaults to LOG_RELAY_BINARY from Bazel runfiles
 	ObserveRelayBinary     string     // optional: daemon --observe-relay-binary
 	StatusInterval         string     // optional: daemon --status-interval (default "2s")
 	HABaseDelay            string     // optional: daemon --ha-base-delay (default "0s" for tests)
+	DrainGracePeriod       string     // optional: daemon --drain-grace-period (default "1s" for tests)
 	PipelineExecutorBinary string     // optional: daemon --pipeline-executor-binary
 	PipelineEnvironment    string     // optional: daemon --pipeline-environment (Nix store path)
 	AdminLocalpart         string     // optional: daemon --admin-user (default: derived from admin session)
@@ -141,6 +143,7 @@ type principalSpec struct {
 	Authorization             *schema.AuthorizationPolicy // optional: full authorization policy (overrides shorthand fields)
 	Labels                    map[string]string           // optional: key-value labels for the principal assignment
 	StartCondition            *schema.StartCondition      // optional: condition that must be true before the principal starts
+	RestartPolicy             string                      // optional: restart policy ("", "always", "on-failure", "never")
 	ExtraEnvironmentVariables map[string]string           // optional: extra env vars merged into the PrincipalAssignment
 }
 
@@ -232,11 +235,16 @@ func startMachineLauncher(t *testing.T, admin *messaging.DirectSession, machine 
 		t.Fatal("machineOptions.Fleet is required")
 	}
 
-	// In production, bureau-proxy is always co-deployed with the launcher.
-	// Resolve it from Bazel runfiles when the caller doesn't override.
+	// In production, bureau-proxy and bureau-log-relay are always
+	// co-deployed with the launcher. Resolve from Bazel runfiles when
+	// the caller doesn't override.
 	proxyBinary := options.ProxyBinary
 	if proxyBinary == "" {
 		proxyBinary = resolvedBinary(t, "PROXY_BINARY")
+	}
+	logRelayBinary := options.LogRelayBinary
+	if logRelayBinary == "" {
+		logRelayBinary = resolvedBinary(t, "LOG_RELAY_BINARY")
 	}
 
 	// Provision the machine via the production API. This registers the
@@ -264,6 +272,7 @@ func startMachineLauncher(t *testing.T, admin *messaging.DirectSession, machine 
 		"--workspace-root", machine.WorkspaceRoot,
 		"--cache-root", machine.CacheRoot,
 		"--proxy-binary", proxyBinary,
+		"--log-relay-binary", logRelayBinary,
 	}
 
 	keyWatch := watchRoom(t, admin, options.Fleet.MachineRoomID)
@@ -298,6 +307,10 @@ func buildDaemonArgs(machine *testMachine, options machineOptions) []string {
 	if haBaseDelay == "" {
 		haBaseDelay = "0s"
 	}
+	drainGracePeriod := options.DrainGracePeriod
+	if drainGracePeriod == "" {
+		drainGracePeriod = "1s"
+	}
 	adminLocalpart := options.AdminLocalpart
 	if adminLocalpart == "" {
 		adminLocalpart = "bureau-admin"
@@ -313,6 +326,7 @@ func buildDaemonArgs(machine *testMachine, options machineOptions) []string {
 		"--admin-user", adminLocalpart,
 		"--status-interval", statusInterval,
 		"--ha-base-delay", haBaseDelay,
+		"--drain-grace-period", drainGracePeriod,
 	}
 	if options.ObserveRelayBinary != "" {
 		daemonArgs = append(daemonArgs, "--observe-relay-binary", options.ObserveRelayBinary)
@@ -682,6 +696,7 @@ func pushMachineConfig(t *testing.T, admin *messaging.DirectSession, machine *te
 			Authorization:             spec.Authorization,
 			Labels:                    spec.Labels,
 			StartCondition:            spec.StartCondition,
+			RestartPolicy:             spec.RestartPolicy,
 			ExtraEnvironmentVariables: spec.ExtraEnvironmentVariables,
 		}
 	}
@@ -789,6 +804,7 @@ func deployPrincipals(t *testing.T, admin *messaging.DirectSession, machine *tes
 			Authorization:     spec.Authorization,
 			Labels:            spec.Labels,
 			StartCondition:    spec.StartCondition,
+			RestartPolicy:     spec.RestartPolicy,
 		}
 	}
 
@@ -849,6 +865,10 @@ type agentOptions struct {
 	// specific state event. When set, the daemon only starts the sandbox
 	// if the referenced event exists and matches the content criteria.
 	StartCondition *schema.StartCondition
+
+	// RestartPolicy controls what happens when a sandbox exits. See
+	// schema.PrincipalAssignment.RestartPolicy for valid values.
+	RestartPolicy string
 
 	// SkipWaitForReady skips waiting for "agent-ready" after deployment.
 	// Set to true for agents expected to exit/fail before posting ready.
@@ -994,6 +1014,7 @@ func deployAgent(t *testing.T, admin *messaging.DirectSession, machine *testMach
 		HomeserverURL:  testHomeserverURL,
 		AutoStart:      true,
 		StartCondition: options.StartCondition,
+		RestartPolicy:  options.RestartPolicy,
 		MachineRoomID:  machine.MachineRoomID,
 		Payload:        options.Payload,
 		Authorization:  options.Authorization,

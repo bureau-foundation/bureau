@@ -48,6 +48,7 @@ go_test(
         "exec_test.go",
         "main_test.go",
         "sandbox_test.go",
+        "tmux_test.go",
     ],
     data = ["//cmd/bureau-proxy"],
     embed = [":bureau-launcher_lib"],

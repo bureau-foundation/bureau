@@ -413,13 +413,13 @@ func TestHandleExecUpdate(t *testing.T) {
 	}
 
 	launcher := &Launcher{
-		runDir:          runDir,
-		stateDir:        stateDir,
-		binaryPath:      "/current/launcher",
-		proxyBinaryPath: "/proxy/binary",
-		sandboxes:       make(map[string]*managedSandbox),
-		failedExecPaths: make(map[string]bool),
-		logger:          slog.New(slog.NewJSONHandler(os.Stderr, nil)),
+		runDir:             runDir,
+		stateDir:           stateDir,
+		launcherBinaryPath: "/current/launcher",
+		proxyBinaryPath:    "/proxy/binary",
+		sandboxes:          make(map[string]*managedSandbox),
+		failedExecPaths:    make(map[string]bool),
+		logger:             slog.New(slog.NewJSONHandler(os.Stderr, nil)),
 	}
 
 	request := &IPCRequest{
@@ -458,10 +458,10 @@ func TestHandleExecUpdateFailedPath(t *testing.T) {
 	binaryPath := "/some/failed/binary"
 
 	launcher := &Launcher{
-		runDir:     runDir,
-		stateDir:   t.TempDir(),
-		binaryPath: "/current/launcher",
-		sandboxes:  make(map[string]*managedSandbox),
+		runDir:             runDir,
+		stateDir:           t.TempDir(),
+		launcherBinaryPath: "/current/launcher",
+		sandboxes:          make(map[string]*managedSandbox),
 		failedExecPaths: map[string]bool{
 			binaryPath: true,
 		},
@@ -490,12 +490,12 @@ func TestHandleExecUpdateFailedPath(t *testing.T) {
 func TestHandleExecUpdateBadBinary(t *testing.T) {
 	runDir := testutil.SocketDir(t)
 	launcher := &Launcher{
-		runDir:          runDir,
-		stateDir:        t.TempDir(),
-		binaryPath:      "/current/launcher",
-		sandboxes:       make(map[string]*managedSandbox),
-		failedExecPaths: make(map[string]bool),
-		logger:          slog.New(slog.NewJSONHandler(os.Stderr, nil)),
+		runDir:             runDir,
+		stateDir:           t.TempDir(),
+		launcherBinaryPath: "/current/launcher",
+		sandboxes:          make(map[string]*managedSandbox),
+		failedExecPaths:    make(map[string]bool),
+		logger:             slog.New(slog.NewJSONHandler(os.Stderr, nil)),
 	}
 
 	t.Run("nonexistent binary", func(t *testing.T) {
@@ -515,7 +515,7 @@ func TestHandleExecUpdateBadBinary(t *testing.T) {
 	})
 
 	t.Run("unknown launcher path", func(t *testing.T) {
-		launcher.binaryPath = ""
+		launcher.launcherBinaryPath = ""
 		binaryPath := filepath.Join(t.TempDir(), "binary")
 		os.WriteFile(binaryPath, []byte("test"), 0755)
 		request := &IPCRequest{BinaryPath: binaryPath}
@@ -543,12 +543,12 @@ func TestPerformExecFailure(t *testing.T) {
 
 	execCallCount := 0
 	launcher := &Launcher{
-		runDir:          runDir,
-		stateDir:        stateDir,
-		binaryPath:      "/current/launcher",
-		sandboxes:       make(map[string]*managedSandbox),
-		failedExecPaths: make(map[string]bool),
-		logger:          slog.New(slog.NewJSONHandler(os.Stderr, nil)),
+		runDir:             runDir,
+		stateDir:           stateDir,
+		launcherBinaryPath: "/current/launcher",
+		sandboxes:          make(map[string]*managedSandbox),
+		failedExecPaths:    make(map[string]bool),
+		logger:             slog.New(slog.NewJSONHandler(os.Stderr, nil)),
 		execFunc: func(argv0 string, argv []string, envv []string) error {
 			execCallCount++
 			return fmt.Errorf("exec not permitted in test")
@@ -585,12 +585,12 @@ func TestPerformExecCallsExecWithCorrectArgs(t *testing.T) {
 	var capturedArgv []string
 
 	launcher := &Launcher{
-		runDir:          runDir,
-		stateDir:        t.TempDir(),
-		binaryPath:      "/current/launcher",
-		sandboxes:       make(map[string]*managedSandbox),
-		failedExecPaths: make(map[string]bool),
-		logger:          slog.New(slog.NewJSONHandler(os.Stderr, nil)),
+		runDir:             runDir,
+		stateDir:           t.TempDir(),
+		launcherBinaryPath: "/current/launcher",
+		sandboxes:          make(map[string]*managedSandbox),
+		failedExecPaths:    make(map[string]bool),
+		logger:             slog.New(slog.NewJSONHandler(os.Stderr, nil)),
 		execFunc: func(argv0 string, argv []string, envv []string) error {
 			capturedArgv0 = argv0
 			capturedArgv = argv

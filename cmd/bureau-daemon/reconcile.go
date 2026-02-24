@@ -16,6 +16,7 @@ import (
 	"reflect"
 	"strconv"
 	"strings"
+	"syscall"
 	"time"
 
 	"github.com/bureau-foundation/bureau/lib/authorization"
@@ -70,6 +71,14 @@ func (d *Daemon) reconcile(ctx context.Context) error {
 			continue
 		}
 		principal := assignment.Principal
+
+		// Skip principals that completed their work and should not
+		// be restarted (RestartPolicy "on-failure" with exit 0, or
+		// "never" with any exit).
+		if d.completed[principal] {
+			continue
+		}
+
 		satisfied, triggerContent, conditionRoomID := d.evaluateStartCondition(ctx, principal, assignment.StartCondition)
 		if !satisfied {
 			continue
@@ -220,7 +229,7 @@ func (d *Daemon) reconcile(ctx context.Context) error {
 		if !d.running[principal] {
 			continue
 		}
-		if d.pipelineExecutors[principal] {
+		if d.dynamicPrincipals[principal] {
 			continue
 		}
 		d.reconcileRunningPrincipal(ctx, principal, assignment)
@@ -312,7 +321,7 @@ func (d *Daemon) reconcile(ctx context.Context) error {
 			)
 
 			if d.applyPipelineExecutorOverlay(sandboxSpec) {
-				d.pipelineExecutors[principal] = true
+				d.dynamicPrincipals[principal] = true
 				d.logger.Info("applied pipeline executor overlay",
 					"principal", principal,
 					"template", assignment.Template,
@@ -744,30 +753,55 @@ func (d *Daemon) reconcile(ctx context.Context) error {
 		}
 	}
 
-	// Destroy sandboxes for principals that should not be running.
-	// Pipeline executor principals are exempt: they manage their own
-	// lifecycle (run steps, publish results, exit). Killing them when
-	// their start condition becomes unsatisfied races with the pipeline
-	// itself — the pipeline may publish the state change that
-	// invalidated its condition (e.g., teardown sets workspace status
-	// to "archived", making the "destroying" start condition false).
-	// The daemon will clean up pipeline executors when their sandbox
-	// exits via watchSandboxExit.
+	// Drain sandboxes for principals that should not be running.
+	// Dynamic principals (pipeline executors) are exempt: they manage
+	// their own lifecycle (run steps, publish results, exit). Killing
+	// them when their start condition becomes unsatisfied races with
+	// the pipeline itself — the pipeline may publish the state change
+	// that invalidated its condition (e.g., teardown sets workspace
+	// status to "archived", making the "destroying" start condition
+	// false). The daemon cleans up dynamic principals when their
+	// sandbox exits via watchSandboxExit.
+	//
+	// Non-dynamic principals get graceful drain: SIGTERM followed by
+	// a grace period, then force-kill. This gives agents time to
+	// finish their current turn, write checkpoints, and post
+	// agent-complete before the sandbox is destroyed.
 	for principal := range d.running {
 		if _, shouldRun := desired[principal]; shouldRun {
 			continue
 		}
-		if d.pipelineExecutors[principal] {
+		if d.dynamicPrincipals[principal] {
+			continue
+		}
+		if _, isDraining := d.draining[principal]; isDraining {
+			continue // Grace period already in progress.
+		}
+
+		// Proxy-only principals (no sandbox spec) don't have a running
+		// workload — just a proxy and an empty tmux session. Skip drain
+		// and destroy immediately: there's no agent to gracefully shut
+		// down, and the empty tmux shell ignores SIGTERM (interactive
+		// shells mask SIGTERM by default).
+		if d.lastSpecs[principal] == nil {
+			d.logger.Info("stopping proxy-only principal", "principal", principal)
+			if err := d.destroyPrincipal(ctx, principal); err != nil {
+				d.logger.Error("failed to destroy proxy-only principal",
+					"principal", principal, "error", err)
+			}
 			continue
 		}
 
-		d.logger.Info("stopping principal", "principal", principal)
+		d.logger.Info("draining principal", "principal", principal)
 
-		if err := d.destroyPrincipal(ctx, principal); err != nil {
-			d.logger.Error("failed to destroy sandbox", "principal", principal, "error", err)
-			continue
+		if err := d.drainPrincipal(ctx, principal); err != nil {
+			d.logger.Error("drain signal failed, force destroying",
+				"principal", principal, "error", err)
+			if destroyErr := d.destroyPrincipal(ctx, principal); destroyErr != nil {
+				d.logger.Error("force destroy after drain failure also failed",
+					"principal", principal, "error", destroyErr)
+			}
 		}
-		d.logger.Info("principal stopped", "principal", principal)
 	}
 
 	return nil
@@ -1780,7 +1814,7 @@ func (d *Daemon) destroyPrincipal(ctx context.Context, principal ref.Entity) err
 	d.revokeAndCleanupTokens(ctx, principal)
 	delete(d.running, principal)
 	d.notifyStatusChange()
-	delete(d.pipelineExecutors, principal)
+	delete(d.dynamicPrincipals, principal)
 	d.removePipelineTicketByPrincipal(principal)
 	delete(d.exitWatchers, principal)
 	delete(d.proxyExitWatchers, principal)
@@ -1793,18 +1827,34 @@ func (d *Daemon) destroyPrincipal(ctx context.Context, principal ref.Entity) err
 	delete(d.lastObserveAllowances, principal)
 	d.lastActivityAt = d.clock.Now()
 
+	// Cancel the drain grace period timer if this principal was
+	// being drained (e.g., force-kill after grace period expired,
+	// or daemon shutdown while draining).
+	if drainCancel, draining := d.draining[principal]; draining {
+		drainCancel()
+		delete(d.draining, principal)
+	}
+
 	return destroyError
 }
 
 // watchSandboxExit blocks until the named sandbox's process exits, then clears
-// the daemon's running state and triggers re-reconciliation. This enables the
-// daemon to detect one-shot principals (setup/teardown) that complete their work
-// and exit, as well as unexpected agent crashes that need restart.
+// the daemon's running state, applies RestartPolicy, and triggers
+// re-reconciliation. This enables the daemon to detect sandbox exits and
+// decide whether to restart based on the principal's restart policy.
 //
-// The re-reconciliation re-evaluates StartConditions for all principals:
-//   - One-shot principals (setup/teardown) won't restart because their condition
-//     became false after they published a state change (e.g., "pending" → "active").
-//   - Long-running agents restart automatically if their condition is still met.
+// Restart behavior after exit:
+//   - RestartPolicy "" or "always": restart on any exit (crash backoff for
+//     non-zero exit codes).
+//   - RestartPolicy "on-failure": restart only on non-zero exit. Clean exit
+//     (code 0) marks the principal as completed — it won't restart until the
+//     next config change.
+//   - RestartPolicy "never": never restart regardless of exit code.
+//   - Dynamic principals (pipeline executors): default to "on-failure".
+//
+// If the principal was being drained (SIGTERM sent, grace period in progress),
+// the drain timer is cancelled — the graceful exit made the force-kill
+// unnecessary.
 //
 // Must be called as a goroutine. Uses reconcileMu to safely modify shared state.
 func (d *Daemon) watchSandboxExit(ctx context.Context, principal ref.Entity) {
@@ -1843,7 +1893,7 @@ func (d *Daemon) watchSandboxExit(ctx context.Context, principal ref.Entity) {
 		d.revokeAndCleanupTokens(ctx, principal)
 		delete(d.running, principal)
 		d.notifyStatusChange()
-		delete(d.pipelineExecutors, principal)
+		delete(d.dynamicPrincipals, principal)
 		d.removePipelineTicketByPrincipal(principal)
 		delete(d.exitWatchers, principal)
 		delete(d.proxyExitWatchers, principal)
@@ -1857,30 +1907,97 @@ func (d *Daemon) watchSandboxExit(ctx context.Context, principal ref.Entity) {
 		d.lastActivityAt = d.clock.Now()
 	}
 
-	// For normal exits (code 0), clear any stale start failure so
-	// reconcile can immediately re-evaluate StartConditions. One-shot
-	// principals (setup/teardown) exit 0 after completing their work;
-	// their conditions will have changed so they won't restart.
+	// Cancel the drain grace period timer if this principal was being
+	// drained. The graceful exit means we don't need the force-kill.
+	// Track whether draining so we can destroy the proxy after
+	// releasing the lock — the sandbox is dead but the proxy is
+	// still alive and must be cleaned up via destroy-sandbox IPC.
+	wasDraining := false
+	if drainCancel, draining := d.draining[principal]; draining {
+		wasDraining = true
+		drainCancel()
+		delete(d.draining, principal)
+	}
+
+	// Determine restart policy. Dynamic principals (pipeline executors)
+	// default to "on-failure" — they run a bounded task and exit 0 on
+	// success. Config-driven principals read from their assignment;
+	// the default (empty string) means "always".
+	restartPolicy := ""
+	if d.dynamicPrincipals[principal] {
+		restartPolicy = "on-failure"
+	} else if assignment, found := d.findPrincipalAssignment(principal); found {
+		restartPolicy = assignment.RestartPolicy
+	}
+
+	// Apply restart policy and crash backoff.
 	//
-	// For abnormal exits (code != 0), record a crash failure with
-	// exponential backoff to prevent a retry storm. Without this, a
-	// sandbox that starts successfully but immediately crashes causes
-	// an infinite zero-delay restart loop: watchSandboxExit fires,
-	// reconcile restarts the sandbox, it crashes again, repeat.
+	// For normal exits (code 0): clear any stale start failure so
+	// reconcile can immediately re-evaluate. If the restart policy
+	// says not to restart on success ("on-failure" or "never"), mark
+	// the principal as completed.
+	//
+	// For abnormal exits (code != 0): record a crash failure with
+	// exponential backoff to prevent a retry storm. If the restart
+	// policy is "never", mark as completed regardless. Drained
+	// principals are exempt from crash recording — the daemon sent
+	// SIGTERM intentionally, so exit code 143 is expected, not a
+	// crash.
 	var crashBackoff time.Duration
-	if exitCode == 0 {
+	if wasDraining {
 		d.clearStartFailure(principal)
-	} else {
-		d.recordStartFailure(principal, failureCategorySandboxCrash, exitDescription)
-		crashBackoff = time.Until(d.startFailures[principal].nextRetryAt)
-		d.logger.Warn("sandbox crash, backing off before retry",
+		d.logger.Info("drained principal exited",
 			"principal", principal,
 			"exit_code", exitCode,
-			"attempts", d.startFailures[principal].attempts,
-			"retry_at", d.startFailures[principal].nextRetryAt,
 		)
+	} else if exitCode == 0 {
+		d.clearStartFailure(principal)
+		if restartPolicy == "on-failure" || restartPolicy == "never" {
+			d.completed[principal] = true
+			d.logger.Info("principal completed (restart policy prevents restart)",
+				"principal", principal,
+				"restart_policy", restartPolicy,
+			)
+		}
+	} else {
+		if restartPolicy == "never" {
+			d.completed[principal] = true
+			d.logger.Info("principal failed but restart policy prevents restart",
+				"principal", principal,
+				"exit_code", exitCode,
+				"restart_policy", restartPolicy,
+			)
+		} else {
+			d.recordStartFailure(principal, failureCategorySandboxCrash, exitDescription)
+			crashBackoff = time.Until(d.startFailures[principal].nextRetryAt)
+			d.logger.Warn("sandbox crash, backing off before retry",
+				"principal", principal,
+				"exit_code", exitCode,
+				"attempts", d.startFailures[principal].attempts,
+				"retry_at", d.startFailures[principal].nextRetryAt,
+			)
+		}
 	}
 	d.reconcileMu.Unlock()
+
+	// When the sandbox exited during drain, the proxy is still alive.
+	// Call destroy-sandbox to kill the proxy process and remove the
+	// proxy socket. The sandbox tmux session is already dead, so this
+	// only cleans up the proxy. Must happen after releasing reconcileMu
+	// because the launcher IPC call blocks.
+	if wasDraining {
+		response, err := d.launcherRequest(ctx, launcherIPCRequest{
+			Action:    "destroy-sandbox",
+			Principal: principal.AccountLocalpart(),
+		})
+		if err != nil {
+			d.logger.Error("failed to destroy proxy after drain",
+				"principal", principal, "error", err)
+		} else if !response.OK {
+			d.logger.Error("destroy proxy after drain rejected",
+				"principal", principal, "error", response.Error)
+		}
+	}
 
 	// Post exit notification to config room. On failure, include the
 	// captured terminal output so operators can diagnose the problem
@@ -1933,6 +2050,88 @@ func (d *Daemon) watchSandboxExit(ctx context.Context, principal ref.Entity) {
 			}
 		}()
 	}
+}
+
+// defaultDrainGracePeriod is the default time between sending SIGTERM to a
+// sandbox and force-killing it. 10 seconds is generous for the agent's
+// interrupt path: first SIGTERM cancels the context via agentdriver's signal
+// handler, the agent finishes its current turn, posts agent-complete, and
+// exits. Override via the --drain-grace-period daemon flag.
+const defaultDrainGracePeriod = 10 * time.Second
+
+// drainPrincipal initiates graceful shutdown of a running principal by
+// sending SIGTERM via the launcher's signal-sandbox IPC, then scheduling
+// a force-kill after d.drainGracePeriod. If the principal exits before the
+// grace period (detected by watchSandboxExit), the timer is cancelled.
+//
+// Caller must hold reconcileMu.
+func (d *Daemon) drainPrincipal(ctx context.Context, principal ref.Entity) error {
+	// Send SIGTERM to the sandbox process.
+	response, err := d.launcherRequest(ctx, launcherIPCRequest{
+		Action:    "signal-sandbox",
+		Principal: principal.AccountLocalpart(),
+		Signal:    int(syscall.SIGTERM),
+	})
+	if err != nil {
+		return fmt.Errorf("signal-sandbox IPC: %w", err)
+	}
+	if !response.OK {
+		return fmt.Errorf("signal-sandbox rejected: %s", response.Error)
+	}
+
+	// Start the grace period timer. If the principal doesn't exit
+	// within d.drainGracePeriod, force-kill it via destroyPrincipal.
+	// Uses the caller's context as parent: in production this is
+	// shutdownCtx (cancelled on daemon shutdown), in tests it's the
+	// test context.
+	drainCtx, drainCancel := context.WithCancel(ctx)
+	d.draining[principal] = drainCancel
+
+	go func() {
+		select {
+		case <-drainCtx.Done():
+			// Either the principal exited gracefully (watchSandboxExit
+			// cancelled the drain) or the daemon is shutting down.
+			return
+		case <-d.clock.After(d.drainGracePeriod):
+		}
+
+		d.reconcileMu.Lock()
+		defer d.reconcileMu.Unlock()
+
+		// Check if still draining — watchSandboxExit may have already
+		// cleaned up.
+		if _, stillDraining := d.draining[principal]; !stillDraining {
+			return
+		}
+
+		d.logger.Warn("drain grace period expired, force-killing",
+			"principal", principal,
+			"grace_period", d.drainGracePeriod,
+		)
+		if err := d.destroyPrincipal(ctx, principal); err != nil {
+			d.logger.Error("force-kill after drain timeout failed",
+				"principal", principal, "error", err)
+		}
+	}()
+
+	return nil
+}
+
+// findPrincipalAssignment looks up the PrincipalAssignment for a principal
+// from the daemon's last-seen MachineConfig. Returns the assignment and
+// true if found, zero value and false if the principal is not in the config
+// (e.g., it's a dynamic principal or was removed between config syncs).
+func (d *Daemon) findPrincipalAssignment(principal ref.Entity) (schema.PrincipalAssignment, bool) {
+	if d.lastConfig == nil {
+		return schema.PrincipalAssignment{}, false
+	}
+	for _, assignment := range d.lastConfig.Principals {
+		if assignment.Principal == principal {
+			return assignment, true
+		}
+	}
+	return schema.PrincipalAssignment{}, false
 }
 
 // Type aliases for the shared IPC types. The canonical definitions live

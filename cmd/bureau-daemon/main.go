@@ -61,6 +61,7 @@ func run() error {
 		pipelineEnvironment    string
 		statusInterval         time.Duration
 		haBaseDelay            time.Duration
+		drainGracePeriod       time.Duration
 		showVersion            bool
 	)
 
@@ -77,6 +78,7 @@ func run() error {
 	flag.StringVar(&pipelineEnvironment, "pipeline-environment", "", "Nix store path providing pipeline executor's toolchain (e.g., /nix/store/...-runner-env)")
 	flag.DurationVar(&statusInterval, "status-interval", 60*time.Second, "how often to publish machine status")
 	flag.DurationVar(&haBaseDelay, "ha-base-delay", 1*time.Second, "base unit for HA acquisition timing (all backoff ranges and verification scale from this; 0 for instant acquisition in tests)")
+	flag.DurationVar(&drainGracePeriod, "drain-grace-period", 10*time.Second, "time to wait after SIGTERM before force-killing a drained sandbox (agents should finish cleanup within this window)")
 	flag.BoolVar(&showVersion, "version", false, "print version information and exit")
 	flag.Parse()
 
@@ -322,6 +324,7 @@ func run() error {
 		fleetRunDir:            fleet.RunDir(runDir),
 		launcherSocket:         principal.LauncherSocketPath(runDir),
 		statusInterval:         statusInterval,
+		drainGracePeriod:       drainGracePeriod,
 		daemonBinaryHash:       daemonBinaryHash,
 		daemonBinaryPath:       daemonBinaryPath,
 		stateDir:               stateDir,
@@ -333,7 +336,9 @@ func run() error {
 		startFailures:         make(map[ref.Entity]*startFailure),
 		running:               make(map[ref.Entity]bool),
 		statusNotify:          make(chan struct{}, 1),
-		pipelineExecutors:     make(map[ref.Entity]bool),
+		dynamicPrincipals:     make(map[ref.Entity]bool),
+		completed:             make(map[ref.Entity]bool),
+		draining:              make(map[ref.Entity]context.CancelFunc),
 		pipelineTickets:       make(map[string]ref.Entity),
 		exitWatchers:          make(map[ref.Entity]context.CancelFunc),
 		proxyExitWatchers:     make(map[ref.Entity]context.CancelFunc),
@@ -517,19 +522,20 @@ type Daemon struct {
 	// error message.
 	machinePublicKey string
 
-	machine        ref.Machine
-	fleet          ref.Fleet
-	adminUser      string // admin account localpart (for fleet controller PL grants)
-	systemRoomID   ref.RoomID
-	configRoomID   ref.RoomID
-	machineRoomID  ref.RoomID
-	serviceRoomID  ref.RoomID
-	fleetRoomID    ref.RoomID // fleet room for HA leases, service definitions, and alerts
-	syncFilter     string     // inline Matrix /sync filter JSON (room- and type-scoped)
-	runDir         string     // base runtime directory (e.g., /run/bureau)
-	fleetRunDir    string     // fleet-scoped runtime directory (e.g., /run/bureau/fleet/prod)
-	launcherSocket string
-	statusInterval time.Duration
+	machine          ref.Machine
+	fleet            ref.Fleet
+	adminUser        string // admin account localpart (for fleet controller PL grants)
+	systemRoomID     ref.RoomID
+	configRoomID     ref.RoomID
+	machineRoomID    ref.RoomID
+	serviceRoomID    ref.RoomID
+	fleetRoomID      ref.RoomID // fleet room for HA leases, service definitions, and alerts
+	syncFilter       string     // inline Matrix /sync filter JSON (room- and type-scoped)
+	runDir           string     // base runtime directory (e.g., /run/bureau)
+	fleetRunDir      string     // fleet-scoped runtime directory (e.g., /run/bureau/fleet/prod)
+	launcherSocket   string
+	statusInterval   time.Duration
+	drainGracePeriod time.Duration
 
 	// daemonBinaryHash is the SHA256 hex digest of the currently running
 	// daemon binary, computed once at startup via os.Executable(). Used
@@ -602,20 +608,36 @@ type Daemon struct {
 	// ephemeral sandboxes don't survive daemon restarts.
 	ephemeralCounter atomic.Uint64
 
-	// pipelineExecutors tracks running principals that are pipeline
-	// executor sandboxes (created via applyPipelineExecutorOverlay or
-	// processPipelineTickets). These principals manage their own
-	// lifecycle: they run a pipeline, publish results, and exit. The
-	// reconcile loop must NOT kill them when their start condition
+	// dynamicPrincipals tracks running principals that were created
+	// dynamically by the daemon (not from MachineConfig principal
+	// assignments). Pipeline executors are the current dynamic
+	// sandbox type: they run a pipeline, publish results, and exit.
+	// The reconcile loop must NOT kill them when their start condition
 	// becomes unsatisfied, because the pipeline itself may have
 	// published the state change that invalidated the condition (e.g.,
 	// a teardown pipeline sets workspace status to "archived", which
 	// makes the teardown's "destroying" start condition false). Killing
 	// a pipeline executor mid-execution leaves the workspace in a
-	// stuck state with no pipeline_result event. Pipeline executors
+	// stuck state with no pipeline_result event. Dynamic principals
 	// are removed from this set when their sandbox exits (in
-	// watchSandboxExit).
-	pipelineExecutors map[ref.Entity]bool
+	// watchSandboxExit) and default to RestartPolicy "on-failure".
+	dynamicPrincipals map[ref.Entity]bool
+
+	// completed tracks principals that exited cleanly and should not
+	// be restarted (based on their RestartPolicy). Principals with
+	// policy "on-failure" that exit 0, or "never" that exit at all,
+	// are added here. Entries are removed when the principal is removed
+	// from the config or when the daemon restarts (in-memory only).
+	completed map[ref.Entity]bool
+
+	// draining tracks principals that have been sent SIGTERM and are
+	// in their grace period before force-kill. The reconcile loop
+	// skips draining principals in the "destroy unneeded" pass. Each
+	// entry holds a cancel function that aborts the grace period
+	// timer goroutine. Entries are cleaned up by destroyPrincipal
+	// (force-kill after grace period) or watchSandboxExit (graceful
+	// exit during drain).
+	draining map[ref.Entity]context.CancelFunc
 
 	// pipelineTickets maps pip- ticket state keys (e.g., "pip-a3f9")
 	// to the principal entity running the executor for that ticket.

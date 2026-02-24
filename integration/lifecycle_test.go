@@ -39,6 +39,7 @@ func TestMachineLifecycle(t *testing.T) {
 	launcherBinary := resolvedBinary(t, "LAUNCHER_BINARY")
 	daemonBinary := resolvedBinary(t, "DAEMON_BINARY")
 	proxyBinary := resolvedBinary(t, "PROXY_BINARY")
+	logRelayBinary := resolvedBinary(t, "LOG_RELAY_BINARY")
 
 	ctx := t.Context()
 	admin := adminSession(t)
@@ -169,6 +170,7 @@ func TestMachineLifecycle(t *testing.T) {
 			"--workspace-root", workspaceRoot,
 			"--cache-root", cacheRoot,
 			"--proxy-binary", proxyBinary,
+			"--log-relay-binary", logRelayBinary,
 		)
 		waitForFile(t, launcherSocket)
 
@@ -239,6 +241,7 @@ func TestMachineLifecycle(t *testing.T) {
 			"--workspace-root", workspaceRoot,
 			"--cache-root", cacheRoot,
 			"--proxy-binary", proxyBinary,
+			"--log-relay-binary", logRelayBinary,
 		)
 		waitForFile(t, launcherSocket)
 
@@ -305,6 +308,7 @@ func TestTwoMachineFleet(t *testing.T) {
 	launcherBinary := resolvedBinary(t, "LAUNCHER_BINARY")
 	daemonBinary := resolvedBinary(t, "DAEMON_BINARY")
 	proxyBinary := resolvedBinary(t, "PROXY_BINARY")
+	logRelayBinary := resolvedBinary(t, "LOG_RELAY_BINARY")
 
 	ctx := t.Context()
 	admin := adminSession(t)
@@ -321,6 +325,7 @@ func TestTwoMachineFleet(t *testing.T) {
 		LauncherBinary: launcherBinary,
 		DaemonBinary:   daemonBinary,
 		ProxyBinary:    proxyBinary,
+		LogRelayBinary: logRelayBinary,
 	}
 	startMachine(t, admin, machineA, options)
 	startMachine(t, admin, machineB, options)

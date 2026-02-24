@@ -380,13 +380,12 @@ func TestWriteSandboxScript(t *testing.T) {
 	t.Parallel()
 
 	directory := t.TempDir()
-	exitCodePath := filepath.Join(directory, "exit-code")
 
-	path, err := writeSandboxScript(directory, "/usr/bin/bwrap", []string{
+	path, err := writeSandboxScript(directory, "/usr/bin/bureau-log-relay", "/usr/bin/bwrap", []string{
 		"--unshare-pid",
 		"--bind", "/workspace", "/workspace",
 		"--", "/bin/bash",
-	}, exitCodePath)
+	})
 	if err != nil {
 		t.Fatalf("writeSandboxScript: %v", err)
 	}
@@ -410,10 +409,16 @@ func TestWriteSandboxScript(t *testing.T) {
 		t.Errorf("expected shebang, got %q", content[:min(len(content), 20)])
 	}
 
-	// Should contain the bwrap command (without exec — the shell must
-	// survive to capture the exit code).
-	if !strings.Contains(content, "/usr/bin/bwrap") {
-		t.Errorf("expected '/usr/bin/bwrap' in script, got:\n%s", content)
+	// Should use exec to replace the shell with bureau-log-relay, which
+	// wraps bwrap. The relay holds the outer PTY file descriptors open
+	// until bwrap exits, ensuring tmux sees PTY EOF and SIGCHLD
+	// simultaneously. The "--" separator separates relay args from the
+	// bwrap command.
+	if !strings.Contains(content, "\nexec ") {
+		t.Errorf("script should use exec to replace shell with log relay, got:\n%s", content)
+	}
+	if !strings.Contains(content, "exec /usr/bin/bureau-log-relay -- /usr/bin/bwrap") {
+		t.Errorf("expected 'exec /usr/bin/bureau-log-relay -- /usr/bin/bwrap' in script, got:\n%s", content)
 	}
 
 	// Should contain the arguments.
@@ -422,14 +427,6 @@ func TestWriteSandboxScript(t *testing.T) {
 	}
 	if !strings.Contains(content, "--bind /workspace /workspace") {
 		t.Error("missing bind arguments in script")
-	}
-
-	// Should capture exit code.
-	if !strings.Contains(content, "_exit_code=$?") {
-		t.Error("missing exit code capture in script")
-	}
-	if !strings.Contains(content, exitCodePath) {
-		t.Errorf("exit code path %q not found in script", exitCodePath)
 	}
 
 	// Should be executable.

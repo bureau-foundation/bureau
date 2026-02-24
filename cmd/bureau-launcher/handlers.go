@@ -13,6 +13,7 @@ import (
 	"path/filepath"
 	"sort"
 	"sync"
+	"syscall"
 	"time"
 
 	"github.com/bureau-foundation/bureau/lib/codec"
@@ -48,22 +49,23 @@ type managedSandbox struct {
 // connections concurrently (each handleConnection runs in its own goroutine),
 // so all mutable state is protected by mu. Immutable-after-startup fields
 // (session, keypair, machine, homeserverURL, runDir, stateDir, workspaceRoot,
-// cacheRoot, binaryHash, binaryPath) are set before the listener starts and
-// are safe to read without the lock.
+// cacheRoot, launcherBinaryHash, launcherBinaryPath) are set before the
+// listener starts and are safe to read without the lock.
 type Launcher struct {
-	session       *messaging.DirectSession
-	keypair       *sealed.Keypair
-	machine       ref.Machine
-	homeserverURL string
-	runDir        string       // base runtime directory (e.g., /run/bureau)
-	fleetRunDir   string       // fleet-scoped runtime directory (e.g., /run/bureau/fleet/prod), computed from machine.Fleet().RunDir(runDir)
-	stateDir      string       // persistent state directory (e.g., /var/lib/bureau)
-	workspaceRoot string       // root directory for project workspaces; the launcher ensures this and its .cache/ subdirectory exist
-	cacheRoot     string       // root directory for machine-level tool/model cache; sysadmin has rw, agents get ro subdirectory mounts
-	binaryHash    string       // SHA256 hex digest of the launcher binary, computed at startup
-	binaryPath    string       // absolute filesystem path of the running binary (for watchdog PreviousBinary)
-	tmuxServer    *tmux.Server // Bureau's dedicated tmux server (socket at <runDir>/tmux.sock, -f /dev/null)
-	logger        *slog.Logger
+	session            *messaging.DirectSession
+	keypair            *sealed.Keypair
+	machine            ref.Machine
+	homeserverURL      string
+	runDir             string       // base runtime directory (e.g., /run/bureau)
+	fleetRunDir        string       // fleet-scoped runtime directory (e.g., /run/bureau/fleet/prod), computed from machine.Fleet().RunDir(runDir)
+	stateDir           string       // persistent state directory (e.g., /var/lib/bureau)
+	workspaceRoot      string       // root directory for project workspaces; the launcher ensures this and its .cache/ subdirectory exist
+	cacheRoot          string       // root directory for machine-level tool/model cache; sysadmin has rw, agents get ro subdirectory mounts
+	launcherBinaryHash string       // SHA256 hex digest of the launcher binary, computed at startup for version management
+	launcherBinaryPath string       // absolute filesystem path of the running launcher binary (for watchdog PreviousBinary)
+	logRelayBinaryPath string       // path to bureau-log-relay binary; wraps sandbox commands to hold the outer PTY open until exit code is collected
+	tmuxServer         *tmux.Server // Bureau's dedicated tmux server (socket at <runDir>/tmux.sock, -f /dev/null)
+	logger             *slog.Logger
 
 	// mu serializes access to mutable state: sandboxes, failedExecPaths,
 	// and proxyBinaryPath. Acquired at the top of handleConnection (after
@@ -153,7 +155,7 @@ func (l *Launcher) handleConnection(ctx context.Context, conn net.Conn) {
 	case "status":
 		response = IPCResponse{
 			OK:              true,
-			BinaryHash:      l.binaryHash,
+			BinaryHash:      l.launcherBinaryHash,
 			ProxyBinaryPath: l.proxyBinaryPath,
 		}
 
@@ -165,6 +167,9 @@ func (l *Launcher) handleConnection(ctx context.Context, conn net.Conn) {
 
 	case "destroy-sandbox":
 		response = l.handleDestroySandbox(ctx, &request)
+
+	case "signal-sandbox":
+		response = l.handleSignalSandbox(&request)
 
 	case "update-payload":
 		response = l.handleUpdatePayload(ctx, &request)
@@ -365,6 +370,55 @@ func (l *Launcher) handleDestroySandbox(ctx context.Context, request *IPCRequest
 	l.cleanupSandbox(request.Principal)
 
 	l.logger.Info("sandbox destroyed", "principal", request.Principal)
+	return IPCResponse{OK: true}
+}
+
+// handleSignalSandbox sends a signal to a running sandbox's process. The
+// daemon uses this for graceful drain: send SIGTERM to give the agent time
+// to post agent-complete and write checkpoints before force-killing via
+// destroy-sandbox after the grace period.
+//
+// The signal is delivered to the pane PID (which is the bwrap process,
+// thanks to the exec in sandbox.sh). Bwrap forwards SIGTERM to the
+// sandboxed process via its PID-1 signal helper.
+func (l *Launcher) handleSignalSandbox(request *IPCRequest) IPCResponse {
+	if request.Principal == "" {
+		return IPCResponse{OK: false, Error: "principal is required"}
+	}
+
+	if err := principal.ValidateLocalpart(request.Principal); err != nil {
+		return IPCResponse{OK: false, Error: fmt.Sprintf("invalid principal: %v", err)}
+	}
+
+	if request.Signal == 0 {
+		return IPCResponse{OK: false, Error: "signal is required (e.g., 15 for SIGTERM)"}
+	}
+
+	sb, exists := l.sandboxes[request.Principal]
+	if !exists {
+		return IPCResponse{OK: false, Error: fmt.Sprintf("no sandbox running for principal %q", request.Principal)}
+	}
+
+	// Check if the sandbox has already exited.
+	select {
+	case <-sb.done:
+		return IPCResponse{OK: false, Error: fmt.Sprintf("sandbox for %q has already exited", request.Principal)}
+	default:
+	}
+
+	sessionName := tmuxSessionName(request.Principal)
+	signal := syscall.Signal(request.Signal)
+
+	if err := l.tmuxServer.SignalPane(sessionName, signal); err != nil {
+		return IPCResponse{OK: false, Error: fmt.Sprintf("signaling sandbox %q: %v", request.Principal, err)}
+	}
+
+	l.logger.Info("signal sent to sandbox",
+		"principal", request.Principal,
+		"signal", request.Signal,
+		"session", sessionName,
+	)
+
 	return IPCResponse{OK: true}
 }
 

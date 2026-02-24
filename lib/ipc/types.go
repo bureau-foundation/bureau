@@ -9,8 +9,9 @@ import "github.com/bureau-foundation/bureau/lib/schema"
 // sent over the launcher's Unix IPC socket.
 type Request struct {
 	// Action is the request type: "create-sandbox", "destroy-sandbox",
-	// "update-payload", "update-proxy-binary", "list-sandboxes",
-	// "wait-sandbox", "wait-proxy", "provision-credential", or "status".
+	// "signal-sandbox", "update-payload", "update-proxy-binary",
+	// "list-sandboxes", "wait-sandbox", "wait-proxy",
+	// "provision-credential", or "status".
 	Action string `cbor:"action"`
 
 	// Principal is the localpart of the principal to operate on.
@@ -105,6 +106,13 @@ type Request struct {
 	// The daemon resolves these from the machine's public key file and
 	// any configured escrow keys before sending the IPC request.
 	RecipientKeys []string `cbor:"recipient_keys,omitempty"`
+
+	// Signal is the signal number to send to the sandbox process (for
+	// "signal-sandbox"). Uses raw signal numbers (e.g., 15 for SIGTERM,
+	// 9 for SIGKILL) rather than signal names for wire-format simplicity.
+	// The launcher converts to syscall.Signal before delivery via
+	// tmux.Server.SignalPane.
+	Signal int `cbor:"signal,omitempty"`
 }
 
 // ServiceMount describes a service socket to bind-mount into a sandbox.

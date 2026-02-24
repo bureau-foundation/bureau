@@ -85,7 +85,9 @@ type TicketContent struct {
 	Priority int `json:"priority"`
 
 	// Type categorizes the work: "task", "bug", "feature",
-	// "epic", "chore", "docs", "question", or "pipeline".
+	// "epic", "chore", "docs", "question", "pipeline",
+	// "review_finding", "review", "resource_request",
+	// "access_request", "deployment", or "credential_rotation".
 	// Pipeline tickets represent pipeline executions and carry
 	// type-specific content in the Pipeline field.
 	Type string `json:"type"`
@@ -207,7 +209,9 @@ func (t *TicketContent) Validate() error {
 		return fmt.Errorf("ticket content: priority must be 0-4, got %d", t.Priority)
 	}
 	switch t.Type {
-	case "task", "bug", "feature", "epic", "chore", "docs", "question", "pipeline", "review_finding":
+	case "task", "bug", "feature", "epic", "chore", "docs", "question",
+		"pipeline", "review_finding", "review", "resource_request",
+		"access_request", "deployment", "credential_rotation":
 		// Valid.
 	case "":
 		return errors.New("ticket content: type is required")
@@ -851,15 +855,20 @@ func (p *PipelineExecutionContent) Validate() error {
 // validTicketTypes is the set of recognized ticket types. Used for
 // validation in both TicketContent and TicketConfigContent.AllowedTypes.
 var validTicketTypes = map[string]bool{
-	"task":           true,
-	"bug":            true,
-	"feature":        true,
-	"epic":           true,
-	"chore":          true,
-	"docs":           true,
-	"question":       true,
-	"pipeline":       true,
-	"review_finding": true,
+	"task":                true,
+	"bug":                 true,
+	"feature":             true,
+	"epic":                true,
+	"chore":               true,
+	"docs":                true,
+	"question":            true,
+	"pipeline":            true,
+	"review_finding":      true,
+	"review":              true,
+	"resource_request":    true,
+	"access_request":      true,
+	"deployment":          true,
+	"credential_rotation": true,
 }
 
 // IsValidType reports whether the given string is a recognized ticket type.

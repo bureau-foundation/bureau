@@ -224,6 +224,17 @@ const (
 	// Room: any room that wants ticket management
 	EventTypeTicketConfig ref.EventType = "m.bureau.ticket_config"
 
+	// EventTypeStewardship declares resource governance in a room.
+	// Each stewardship declaration maps resource patterns to
+	// responsible principals with tiered review escalation. The
+	// ticket service resolves these declarations against tickets'
+	// affects fields to auto-configure review gates or queue
+	// notifications.
+	//
+	// State key: resource identifier (e.g., "fleet/gpu", "workspace/lib/schema")
+	// Room: any room the ticket service is a member of
+	EventTypeStewardship ref.EventType = "m.bureau.stewardship"
+
 	// EventTypeArtifactScope configures artifact integration for a
 	// room. Declares which artifact service principal manages this
 	// room's artifacts and which tag patterns the room subscribes to

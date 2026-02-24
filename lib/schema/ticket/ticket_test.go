@@ -1694,7 +1694,11 @@ func TestPrefixForType(t *testing.T) {
 }
 
 func TestIsValidType(t *testing.T) {
-	validTypes := []string{"task", "bug", "feature", "epic", "chore", "docs", "question", "pipeline", "review_finding"}
+	validTypes := []string{
+		"task", "bug", "feature", "epic", "chore", "docs", "question",
+		"pipeline", "review_finding", "review", "resource_request",
+		"access_request", "deployment", "credential_rotation",
+	}
 	for _, typeName := range validTypes {
 		if !IsValidType(typeName) {
 			t.Errorf("IsValidType(%q) = false, want true", typeName)

@@ -166,12 +166,16 @@ A stewardship declaration for GPU fleet resources in
     "notify_types": ["bug", "question"],
     "tiers": [
       {
-        "principals": ["iree/amdgpu/pm", "other-project/pm", "bureau/dev/tpm"],
+        "principals": [
+          "iree/amdgpu/pm:bureau.local",
+          "other-project/pm:bureau.local",
+          "bureau/dev/tpm:bureau.local"
+        ],
         "threshold": 2,
         "escalation": "immediate"
       },
       {
-        "principals": ["ben"],
+        "principals": ["ben:bureau.local"],
         "threshold": 1,
         "escalation": "last_pending"
       }
@@ -256,12 +260,15 @@ ticket service's scope determines the governance scope.
 A stewardship declaration's `Tiers` field is an ordered list of
 reviewer groups. Each tier defines:
 
-- **Principals** -- localpart patterns identifying the reviewers in
-  this tier. Patterns match against principal localparts using the
-  standard glob syntax. `bureau/dev/*/tpm` matches all TPMs across
-  dev teams. `ben` matches the operator. The ticket service resolves
-  patterns to concrete principal user IDs at gate configuration time
-  by matching against known principals in shared rooms.
+- **Principals** -- user ID patterns identifying the reviewers in
+  this tier. Patterns use the `"localpart_pattern:server_pattern"`
+  format, the same format as authorization grant targets. Bureau is
+  a federated system: bare localpart patterns are ambiguous across
+  servers and rejected by the matching engine.
+  `bureau/dev/*/tpm:bureau.local` matches all TPMs across dev teams
+  on `bureau.local`. `ben:bureau.local` matches the operator. The
+  ticket service resolves patterns to concrete user IDs at gate
+  configuration time by matching against room membership.
 
 - **Threshold** -- the number of approvals required from this tier.
   An integer means "at least N of the listed principals must approve."
@@ -589,7 +596,7 @@ A workspace room declares path stewardship:
     "notify_types": ["bug", "question"],
     "tiers": [
       {
-        "principals": ["bureau/dev/senior-dev", "bureau/dev/tpm"],
+        "principals": ["bureau/dev/senior-dev:bureau.local", "bureau/dev/tpm:bureau.local"],
         "threshold": 1,
         "escalation": "immediate"
       }

@@ -1,0 +1,21 @@
+# Copyright 2026 The Bureau Authors
+# SPDX-License-Identifier: Apache-2.0
+
+load("@rules_go//go:def.bzl", "go_library", "go_test")
+
+go_library(
+    name = "stewardship",
+    srcs = [
+        "doc.go",
+        "stewardship.go",
+    ],
+    importpath = "github.com/bureau-foundation/bureau/lib/schema/stewardship",
+    visibility = ["//visibility:public"],
+    deps = ["//lib/schema/ticket"],
+)
+
+go_test(
+    name = "stewardship_test",
+    srcs = ["stewardship_test.go"],
+    embed = [":stewardship"],
+)

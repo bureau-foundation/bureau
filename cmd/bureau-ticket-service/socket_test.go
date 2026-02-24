@@ -22,6 +22,7 @@ import (
 	"github.com/bureau-foundation/bureau/lib/schema/ticket"
 	"github.com/bureau-foundation/bureau/lib/service"
 	"github.com/bureau-foundation/bureau/lib/servicetoken"
+	"github.com/bureau-foundation/bureau/lib/stewardshipindex"
 )
 
 // testClockEpoch is the fixed time used by the fake clock in ticket
@@ -80,14 +81,16 @@ func newTestServer(t *testing.T, rooms map[ref.RoomID]*roomState, opts testServe
 	testServiceRef := mustParseService(t, "@bureau/fleet/prod/service/ticket/test:bureau.local")
 	testMachineRef := mustParseMachine(t, "@bureau/fleet/prod/machine/test:bureau.local")
 	ts := &TicketService{
-		writer:      writer,
-		clock:       testClock,
-		startedAt:   time.Date(2026, 1, 1, 12, 0, 0, 0, time.UTC),
-		service:     testServiceRef,
-		machine:     testMachineRef,
-		rooms:       rooms,
-		subscribers: make(map[ref.RoomID][]*subscriber),
-		logger:      logger,
+		writer:           writer,
+		clock:            testClock,
+		startedAt:        time.Date(2026, 1, 1, 12, 0, 0, 0, time.UTC),
+		service:          testServiceRef,
+		machine:          testMachineRef,
+		rooms:            rooms,
+		membersByRoom:    make(map[ref.RoomID]map[ref.UserID]roomMember),
+		stewardshipIndex: stewardshipindex.NewIndex(),
+		subscribers:      make(map[ref.RoomID][]*subscriber),
+		logger:           logger,
 	}
 	if opts.withTimers {
 		ts.timerNotify = make(chan struct{}, 1)

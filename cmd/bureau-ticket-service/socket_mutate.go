@@ -9,6 +9,7 @@ import (
 	"encoding/hex"
 	"errors"
 	"fmt"
+	"strings"
 	"time"
 
 	"github.com/bureau-foundation/bureau/lib/codec"
@@ -256,6 +257,7 @@ type createRequest struct {
 	Parent    string                           `cbor:"parent,omitempty"`
 	BlockedBy []string                         `cbor:"blocked_by,omitempty"`
 	Gates     []ticket.TicketGate              `cbor:"gates,omitempty"`
+	Affects   []string                         `cbor:"affects,omitempty"`
 	Origin    *ticket.TicketOrigin             `cbor:"origin,omitempty"`
 	Pipeline  *ticket.PipelineExecutionContent `cbor:"pipeline,omitempty"`
 
@@ -301,6 +303,7 @@ type updateRequest struct {
 	Assignee  *ref.UserID `cbor:"assignee,omitempty"`
 	Parent    *string     `cbor:"parent,omitempty"`
 	BlockedBy *[]string   `cbor:"blocked_by,omitempty"`
+	Affects   *[]string   `cbor:"affects,omitempty"`
 	Deadline  *string     `cbor:"deadline,omitempty"`
 
 	// Review replaces the ticket's review content. When provided,
@@ -356,6 +359,7 @@ type batchCreateEntry struct {
 	Labels    []string                         `cbor:"labels,omitempty"`
 	Parent    string                           `cbor:"parent,omitempty"`
 	BlockedBy []string                         `cbor:"blocked_by,omitempty"`
+	Affects   []string                         `cbor:"affects,omitempty"`
 	Gates     []ticket.TicketGate              `cbor:"gates,omitempty"`
 	Origin    *ticket.TicketOrigin             `cbor:"origin,omitempty"`
 	Pipeline  *ticket.PipelineExecutionContent `cbor:"pipeline,omitempty"`
@@ -509,6 +513,7 @@ func (ts *TicketService) handleCreate(ctx context.Context, token *servicetoken.T
 		Priority:  request.Priority,
 		Type:      request.Type,
 		Labels:    request.Labels,
+		Affects:   request.Affects,
 		Parent:    request.Parent,
 		BlockedBy: request.BlockedBy,
 		Gates:     request.Gates,
@@ -518,6 +523,23 @@ func (ts *TicketService) handleCreate(ctx context.Context, token *servicetoken.T
 		CreatedBy: token.Subject,
 		CreatedAt: now,
 		UpdatedAt: now,
+	}
+
+	// Auto-configure stewardship review gates from matching
+	// declarations. This resolves principal patterns against room
+	// membership and appends review gates before timestamp
+	// enrichment so stewardship gates get CreatedAt populated by
+	// the same loop as explicit gates.
+	if len(content.Affects) > 0 {
+		stewardship := ts.resolveStewardshipGates(content.Affects, content.Type)
+		content.Gates = append(content.Gates, stewardship.gates...)
+		if len(stewardship.reviewers) > 0 {
+			if content.Review == nil {
+				content.Review = &ticket.TicketReview{}
+			}
+			content.Review.Reviewers = append(content.Review.Reviewers, stewardship.reviewers...)
+			content.Review.TierThresholds = stewardship.thresholds
+		}
 	}
 
 	// Enrich gates with creation timestamps.
@@ -645,6 +667,33 @@ func (ts *TicketService) handleUpdate(ctx context.Context, token *servicetoken.T
 	}
 	if request.Pipeline != nil {
 		content.Pipeline = request.Pipeline
+	}
+	if request.Affects != nil {
+		content.Affects = *request.Affects
+	}
+
+	// Re-resolve stewardship if Affects or Type changed. The old
+	// stewardship gates are removed and replaced with gates
+	// derived from the updated Affects and Type. Manual reviewers
+	// (those not produced by stewardship resolution) are preserved.
+	if request.Affects != nil || request.Type != nil {
+		content.Gates = removeStewardshipGates(content.Gates)
+		if len(content.Affects) > 0 {
+			stewardship := ts.resolveStewardshipGates(content.Affects, content.Type)
+			content.Gates = append(content.Gates, stewardship.gates...)
+			mergeStewardshipReview(&content, stewardship.reviewers, stewardship.thresholds)
+		} else {
+			// Affects cleared — remove stewardship reviewers by
+			// merging with an empty set.
+			mergeStewardshipReview(&content, nil, nil)
+		}
+
+		// Enrich stewardship gate timestamps.
+		for i := range content.Gates {
+			if strings.HasPrefix(content.Gates[i].ID, "stewardship:") && content.Gates[i].CreatedAt == "" {
+				content.Gates[i].CreatedAt = now
+			}
+		}
 	}
 
 	// Determine the proposed status and assignee, starting from
@@ -1042,6 +1091,7 @@ func (ts *TicketService) handleBatchCreate(ctx context.Context, token *serviceto
 			Priority:  entry.Priority,
 			Type:      entry.Type,
 			Labels:    entry.Labels,
+			Affects:   entry.Affects,
 			Parent:    entry.Parent,
 			BlockedBy: entry.BlockedBy,
 			Gates:     entry.Gates,
@@ -1050,6 +1100,19 @@ func (ts *TicketService) handleBatchCreate(ctx context.Context, token *serviceto
 			CreatedBy: token.Subject,
 			CreatedAt: now,
 			UpdatedAt: now,
+		}
+
+		// Auto-configure stewardship review gates.
+		if len(entry.Affects) > 0 {
+			stewardship := ts.resolveStewardshipGates(entry.Affects, entry.Type)
+			content.Gates = append(content.Gates, stewardship.gates...)
+			if len(stewardship.reviewers) > 0 {
+				if content.Review == nil {
+					content.Review = &ticket.TicketReview{}
+				}
+				content.Review.Reviewers = append(content.Review.Reviewers, stewardship.reviewers...)
+				content.Review.TierThresholds = stewardship.thresholds
+			}
 		}
 
 		for j := range content.Gates {

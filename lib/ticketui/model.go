@@ -233,6 +233,7 @@ type Model struct {
 	draggingListScroll   bool      // True while dragging the list scrollbar thumb.
 	draggingDetailScroll bool      // True while dragging the detail scrollbar thumb.
 	lastSplitterClick    time.Time // For double-click detection on the divider.
+	lastHeaderClick      time.Time // For double-click detection on epic headers.
 
 	// Tab bar click regions. Each entry maps a tab to its X range in
 	// the header line so mouse clicks on Y=0 can switch tabs.
@@ -910,8 +911,9 @@ func (model *Model) scrollListDown(count int) {
 }
 
 // handleListClick processes a mouse click at the given row offset
-// within the content area. Selects the clicked item, or toggles
-// collapse on headers.
+// within the content area. Single-click selects the item (including
+// epic headers, which show the epic in the detail pane). Double-click
+// on an epic header toggles collapse/expand.
 func (model *Model) handleListClick(rowOffset int) {
 	// Clicking anywhere in the list pane focuses it, even on empty
 	// space below the last item.
@@ -924,12 +926,20 @@ func (model *Model) handleListClick(rowOffset int) {
 
 	item := model.items[itemIndex]
 	if item.IsHeader {
-		// Click on header toggles collapse.
-		if item.EpicID != "" {
+		now := time.Now()
+		if item.EpicID != "" && now.Sub(model.lastHeaderClick) <= doubleClickThreshold {
+			// Double-click: toggle collapse.
 			model.collapsedEpics[item.EpicID] = !model.collapsedEpics[item.EpicID]
 			model.rebuildItems()
 			model.restoreSelection()
+			model.lastHeaderClick = time.Time{} // Reset to prevent triple-click.
+			return
 		}
+		model.lastHeaderClick = now
+
+		// Single-click: select the header (shows epic in detail pane).
+		model.cursor = itemIndex
+		model.syncDetailPane()
 		return
 	}
 
@@ -2210,16 +2220,31 @@ func (model *Model) syncDetailPane() {
 // handleSourceEvent processes a live event from the source (ticket
 // created, updated, or removed). Refreshes the snapshot, ignites the
 // heat tracker, and schedules the animation tick if not already running.
+//
+// Heat animation is suppressed until the source has reached "caught_up"
+// state. During the initial snapshot load, every ticket arrives as a
+// "put" event — animating all of them would light up the entire list
+// with no informational value. Only changes arriving after the initial
+// load represent genuine live updates worth highlighting.
 func (model Model) handleSourceEvent(message sourceEventMsg) (tea.Model, tea.Cmd) {
 	event := message.event
 	now := time.Now()
 
-	// Ignite heat for the changed ticket.
-	kind := HeatPut
-	if event.Kind == "remove" {
-		kind = HeatRemove
+	// Only animate heat for live changes, not the initial snapshot.
+	// Sources that don't implement LoadingStater (e.g., file-backed)
+	// are always considered caught up.
+	caughtUp := true
+	if stater, ok := model.source.(LoadingStater); ok {
+		caughtUp = stater.LoadingState() == "caught_up"
 	}
-	model.heatTracker.Ignite(event.TicketID, kind, now)
+
+	if caughtUp {
+		kind := HeatPut
+		if event.Kind == "remove" {
+			kind = HeatRemove
+		}
+		model.heatTracker.Ignite(event.TicketID, kind, now)
+	}
 
 	// Refresh the view from the source (which already has the update
 	// applied — Put/Remove on IndexSource update the index before

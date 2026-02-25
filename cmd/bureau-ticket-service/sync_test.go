@@ -44,6 +44,7 @@ func newTestService() *TicketService {
 		rooms:            make(map[ref.RoomID]*roomState),
 		membersByRoom:    make(map[ref.RoomID]map[ref.UserID]roomMember),
 		stewardshipIndex: stewardshipindex.NewIndex(),
+		digestTimers:     make(map[digestKey]*digestEntry),
 		subscribers:      make(map[ref.RoomID][]*subscriber),
 		logger:           slog.New(slog.NewTextHandler(io.Discard, nil)),
 	}
@@ -326,7 +327,7 @@ func TestHandleRoomTombstoneExtractsReplacementRoom(t *testing.T) {
 		},
 	}
 
-	ts.handleRoomTombstone(testRoomID("!room:local"), event)
+	ts.handleRoomTombstone(context.Background(), testRoomID("!room:local"), event)
 
 	if _, exists := ts.rooms[testRoomID("!room:local")]; exists {
 		t.Fatal("room should have been removed after tombstone")
@@ -345,7 +346,7 @@ func TestHandleRoomTombstoneNoReplacementRoom(t *testing.T) {
 	}
 
 	// Should not panic when replacement_room is missing.
-	ts.handleRoomTombstone(testRoomID("!room:local"), event)
+	ts.handleRoomTombstone(context.Background(), testRoomID("!room:local"), event)
 
 	if _, exists := ts.rooms[testRoomID("!room:local")]; exists {
 		t.Fatal("room should have been removed after tombstone")
@@ -938,7 +939,7 @@ func TestIndexStewardshipEventPut(t *testing.T) {
 	ts := newTestService()
 	roomID := testRoomID("!room:local")
 
-	ts.indexStewardshipEvent(roomID, messaging.Event{
+	ts.indexStewardshipEvent(context.Background(), roomID, messaging.Event{
 		Type:     schema.EventTypeStewardship,
 		StateKey: stringPtr("fleet/gpu"),
 		Content:  makeStewardshipContentMap(t, "fleet/gpu/**"),
@@ -959,14 +960,14 @@ func TestIndexStewardshipEventRemoveOnEmpty(t *testing.T) {
 	roomID := testRoomID("!room:local")
 
 	// Add a declaration.
-	ts.indexStewardshipEvent(roomID, messaging.Event{
+	ts.indexStewardshipEvent(context.Background(), roomID, messaging.Event{
 		Type:     schema.EventTypeStewardship,
 		StateKey: stringPtr("fleet/gpu"),
 		Content:  makeStewardshipContentMap(t, "fleet/gpu/**"),
 	})
 
 	// Empty content removes it.
-	ts.indexStewardshipEvent(roomID, messaging.Event{
+	ts.indexStewardshipEvent(context.Background(), roomID, messaging.Event{
 		Type:     schema.EventTypeStewardship,
 		StateKey: stringPtr("fleet/gpu"),
 		Content:  map[string]any{},
@@ -982,7 +983,7 @@ func TestIndexStewardshipEventNilStateKey(t *testing.T) {
 	roomID := testRoomID("!room:local")
 
 	// Should not panic.
-	ts.indexStewardshipEvent(roomID, messaging.Event{
+	ts.indexStewardshipEvent(context.Background(), roomID, messaging.Event{
 		Type:    schema.EventTypeStewardship,
 		Content: makeStewardshipContentMap(t, "fleet/**"),
 	})
@@ -1173,7 +1174,7 @@ func TestHandleRoomTombstoneCleansMembersAndStewardship(t *testing.T) {
 		},
 	}
 
-	ts.handleRoomTombstone(roomID, event)
+	ts.handleRoomTombstone(context.Background(), roomID, event)
 
 	if _, exists := ts.membersByRoom[roomID]; exists {
 		t.Fatal("members should have been cleaned up after tombstone")
@@ -1199,7 +1200,7 @@ func TestHandleRoomTombstoneCleansMembersEvenForUntrackedRoom(t *testing.T) {
 		},
 	}
 
-	ts.handleRoomTombstone(roomID, event)
+	ts.handleRoomTombstone(context.Background(), roomID, event)
 
 	if _, exists := ts.membersByRoom[roomID]; exists {
 		t.Fatal("members should have been cleaned up even for untracked room")

@@ -92,6 +92,8 @@ func newTestServer(t *testing.T, rooms map[ref.RoomID]*roomState, opts testServe
 		rooms:            rooms,
 		membersByRoom:    make(map[ref.RoomID]map[ref.UserID]roomMember),
 		stewardshipIndex: stewardshipindex.NewIndex(),
+		digestTimers:     make(map[digestKey]*digestEntry),
+		digestNotify:     make(chan struct{}, 1),
 		subscribers:      make(map[ref.RoomID][]*subscriber),
 		logger:           logger,
 	}
@@ -475,10 +477,13 @@ func (f *fakeWriter) SendStateEvent(_ context.Context, roomID ref.RoomID, eventT
 }
 
 // fakeMessenger records messages sent via SendMessage for test
-// verification. Thread-safe.
+// verification. Thread-safe. When notify is non-nil, a signal is
+// sent after each message for test synchronization with async
+// goroutines (e.g. digest loop).
 type fakeMessenger struct {
 	mu       sync.Mutex
 	messages []sentMessage
+	notify   chan struct{}
 }
 
 type sentMessage struct {
@@ -493,6 +498,12 @@ func (f *fakeMessenger) SendMessage(_ context.Context, roomID ref.RoomID, conten
 		Content: content,
 	})
 	f.mu.Unlock()
+	if f.notify != nil {
+		select {
+		case f.notify <- struct{}{}:
+		default:
+		}
+	}
 	return ref.MustParseEventID("$msg-1"), nil
 }
 

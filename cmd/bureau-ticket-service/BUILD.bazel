@@ -9,6 +9,7 @@ go_library(
         "doc.go",
         "gate.go",
         "main.go",
+        "notification.go",
         "socket.go",
         "socket_mutate.go",
         "socket_query.go",
@@ -48,6 +49,7 @@ go_test(
     name = "bureau-ticket-service_test",
     srcs = [
         "gate_test.go",
+        "notification_test.go",
         "socket_mutate_test.go",
         "socket_query_test.go",
         "socket_test.go",

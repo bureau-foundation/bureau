@@ -68,6 +68,8 @@ func run() error {
 		aliasCache:       make(map[ref.RoomAlias]ref.RoomID),
 		subscribers:      make(map[ref.RoomID][]*subscriber),
 		timerNotify:      make(chan struct{}, 1),
+		digestTimers:     make(map[digestKey]*digestEntry),
+		digestNotify:     make(chan struct{}, 1),
 		serviceType:      "ticket",
 		membersByRoom:    make(map[ref.RoomID]map[ref.UserID]roomMember),
 		stewardshipIndex: stewardshipindex.NewIndex(),
@@ -105,6 +107,11 @@ func run() error {
 	// Start the timer loop. Timer gates fire at precise target
 	// times via a min-heap and AfterFunc, rather than polling.
 	go ticketService.startTimerLoop(ctx)
+
+	// Start the digest notification loop. Stewardship declarations
+	// with NotifyTypes accumulate tickets in per-declaration digests
+	// and flush them on the declaration's configured interval.
+	go ticketService.startDigestLoop(ctx)
 
 	boot.Logger.Info("ticket service running",
 		"principal", boot.PrincipalName,
@@ -204,6 +211,19 @@ type TicketService struct {
 	// room can affect tickets in other rooms.
 	// Protected by mu.
 	stewardshipIndex *stewardshipindex.Index
+
+	// digestTimers maps stewardship declarations to their active
+	// digest accumulators. When a ticket matches a declaration's
+	// NotifyTypes and the declaration has a DigestInterval, the
+	// ticket is buffered here until the interval expires. Protected
+	// by mu.
+	digestTimers map[digestKey]*digestEntry
+
+	// digestNotify signals the digest loop that a digest entry is
+	// ready to flush. Buffered with capacity 1 (same pattern as
+	// timerNotify). The AfterFunc callback sends to this channel
+	// without holding ts.mu.
+	digestNotify chan struct{}
 
 	// presence caches the latest m.presence event content for each
 	// user, populated from the /sync presence section. Used by

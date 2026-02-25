@@ -164,14 +164,16 @@ func (ts *TicketService) indexMemberEvent(roomID ref.RoomID, event messaging.Eve
 // Called for ALL rooms (not just ticket-configured rooms) because
 // stewardship declarations in any room can affect tickets in other
 // rooms.
-func (ts *TicketService) indexStewardshipEvent(roomID ref.RoomID, event messaging.Event) {
+func (ts *TicketService) indexStewardshipEvent(ctx context.Context, roomID ref.RoomID, event messaging.Event) {
 	if event.StateKey == nil {
 		return
 	}
 	stateKey := *event.StateKey
 
 	// Empty content means the stewardship declaration was removed.
+	// Flush any pending digest notifications before removing.
 	if len(event.Content) == 0 {
+		ts.flushAndRemoveDigest(ctx, digestKey{roomID: roomID, stateKey: stateKey})
 		ts.stewardshipIndex.Remove(roomID, stateKey)
 		return
 	}
@@ -202,8 +204,9 @@ func (ts *TicketService) indexStewardshipEvent(roomID ref.RoomID, event messagin
 // removeStewardshipForRoom removes all stewardship declarations for
 // the given room from the stewardship index. Called during room leave
 // and tombstone cleanup.
-func (ts *TicketService) removeStewardshipForRoom(roomID ref.RoomID) {
+func (ts *TicketService) removeStewardshipForRoom(ctx context.Context, roomID ref.RoomID) {
 	for _, declaration := range ts.stewardshipIndex.DeclarationsInRoom(roomID) {
+		ts.flushAndRemoveDigest(ctx, digestKey{roomID: roomID, stateKey: declaration.StateKey})
 		ts.stewardshipIndex.Remove(roomID, declaration.StateKey)
 	}
 }
@@ -319,7 +322,7 @@ func (ts *TicketService) processRoomState(ctx context.Context, roomID ref.RoomID
 			ts.indexMemberEvent(roomID, event)
 		}
 		if event.Type == schema.EventTypeStewardship && event.StateKey != nil {
-			ts.indexStewardshipEvent(roomID, event)
+			ts.indexStewardshipEvent(ctx, roomID, event)
 		}
 	}
 	for _, event := range timelineEvents {
@@ -327,7 +330,7 @@ func (ts *TicketService) processRoomState(ctx context.Context, roomID ref.RoomID
 			ts.indexMemberEvent(roomID, event)
 		}
 		if event.Type == schema.EventTypeStewardship && event.StateKey != nil {
-			ts.indexStewardshipEvent(roomID, event)
+			ts.indexStewardshipEvent(ctx, roomID, event)
 		}
 	}
 
@@ -424,7 +427,7 @@ func (ts *TicketService) handleSync(ctx context.Context, response *messaging.Syn
 	// in Leave, including rooms that were never ticket-configured.
 	for roomID := range response.Rooms.Leave {
 		delete(ts.membersByRoom, roomID)
-		ts.removeStewardshipForRoom(roomID)
+		ts.removeStewardshipForRoom(ctx, roomID)
 
 		state, exists := ts.rooms[roomID]
 		if !exists {
@@ -470,7 +473,7 @@ func (ts *TicketService) processRoomSync(ctx context.Context, roomID ref.RoomID,
 	// config or ticket events for a decommissioned room.
 	for _, event := range stateEvents {
 		if event.Type == schema.MatrixEventTypeTombstone {
-			ts.handleRoomTombstone(roomID, event)
+			ts.handleRoomTombstone(ctx, roomID, event)
 			return
 		}
 	}
@@ -484,7 +487,7 @@ func (ts *TicketService) processRoomSync(ctx context.Context, roomID ref.RoomID,
 			ts.indexMemberEvent(roomID, event)
 		}
 		if event.Type == schema.EventTypeStewardship && event.StateKey != nil {
-			ts.indexStewardshipEvent(roomID, event)
+			ts.indexStewardshipEvent(ctx, roomID, event)
 		}
 		if event.Type == schema.EventTypeTicketConfig {
 			ts.handleTicketConfigChange(ctx, roomID, event)
@@ -541,7 +544,7 @@ func (ts *TicketService) processRoomSync(ctx context.Context, roomID ref.RoomID,
 // logged for operator visibility but the service does not auto-follow
 // the replacement (the replacement room needs its own ticket_config
 // and service invitation).
-func (ts *TicketService) handleRoomTombstone(roomID ref.RoomID, event messaging.Event) {
+func (ts *TicketService) handleRoomTombstone(ctx context.Context, roomID ref.RoomID, event messaging.Event) {
 	replacementRoom := ""
 	if body, ok := event.Content["replacement_room"]; ok {
 		if replacement, ok := body.(string); ok {
@@ -552,7 +555,7 @@ func (ts *TicketService) handleRoomTombstone(roomID ref.RoomID, event messaging.
 	// Clean up membership and stewardship data regardless of
 	// whether this room had ticket management.
 	delete(ts.membersByRoom, roomID)
-	ts.removeStewardshipForRoom(roomID)
+	ts.removeStewardshipForRoom(ctx, roomID)
 
 	state, exists := ts.rooms[roomID]
 	if !exists {

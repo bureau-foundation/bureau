@@ -592,6 +592,16 @@ func (ts *TicketService) handleCreate(ctx context.Context, token *servicetoken.T
 	// Push a deadline monitoring entry if set.
 	ts.pushDeadlineEntry(roomID, ticketID, &content)
 
+	// Queue stewardship notifications for declarations matching
+	// NotifyTypes. Runs after putWithEcho so the ticket exists in
+	// Matrix before any notification references it.
+	if len(content.Affects) > 0 {
+		notifyDeclarations := ts.resolveStewardshipNotifications(content.Affects, content.Type)
+		if len(notifyDeclarations) > 0 {
+			ts.queueStewardshipNotifications(ctx, roomID, ticketID, content, notifyDeclarations)
+		}
+	}
+
 	return createResponse{
 		ID:   ticketID,
 		Room: request.Room,
@@ -679,7 +689,8 @@ func (ts *TicketService) handleUpdate(ctx context.Context, token *servicetoken.T
 	// stewardship gates are removed and replaced with gates
 	// derived from the updated Affects and Type. Manual reviewers
 	// (those not produced by stewardship resolution) are preserved.
-	if request.Affects != nil || request.Type != nil {
+	stewardshipChanged := request.Affects != nil || request.Type != nil
+	if stewardshipChanged {
 		content.Gates = removeStewardshipGates(content.Gates)
 		if len(content.Affects) > 0 {
 			stewardship := ts.resolveStewardshipGates(content.Affects, content.Type, content.Priority)
@@ -860,6 +871,14 @@ func (ts *TicketService) handleUpdate(ctx context.Context, token *servicetoken.T
 	// deletion in fireExpiredTimersLocked.
 	if request.Deadline != nil {
 		ts.pushDeadlineEntry(roomID, ticketID, &content)
+	}
+
+	// Queue stewardship notifications when Affects or Type changed.
+	if stewardshipChanged && len(content.Affects) > 0 {
+		notifyDeclarations := ts.resolveStewardshipNotifications(content.Affects, content.Type)
+		if len(notifyDeclarations) > 0 {
+			ts.queueStewardshipNotifications(ctx, roomID, ticketID, content, notifyDeclarations)
+		}
 	}
 
 	return mutationResponse{
@@ -1171,6 +1190,19 @@ func (ts *TicketService) handleBatchCreate(ctx context.Context, token *serviceto
 			return nil, fmt.Errorf("writing ticket %s to Matrix: %w", tickets[i].id, err)
 		}
 		ts.pushTimerGates(roomID, tickets[i].id, &tickets[i].content)
+	}
+
+	// Phase 5: Queue stewardship notifications for tickets with
+	// affects matching NotifyTypes declarations.
+	for i := range tickets {
+		if len(tickets[i].content.Affects) > 0 {
+			notifyDeclarations := ts.resolveStewardshipNotifications(
+				tickets[i].content.Affects, tickets[i].content.Type)
+			if len(notifyDeclarations) > 0 {
+				ts.queueStewardshipNotifications(
+					ctx, roomID, tickets[i].id, tickets[i].content, notifyDeclarations)
+			}
+		}
 	}
 
 	return batchCreateResponse{

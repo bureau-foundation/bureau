@@ -45,10 +45,31 @@ var bootstrapContainerName = fmt.Sprintf("bureau-bootstrap-test-%d", os.Getpid()
 func TestBootstrapScript(t *testing.T) {
 	t.Parallel()
 
-	launcherBinary := resolvedBinary(t, "LAUNCHER_BINARY")
-	daemonBinary := resolvedBinary(t, "DAEMON_BINARY")
-	proxyBinary := resolvedBinary(t, "PROXY_BINARY")
-	logRelayBinary := resolvedBinary(t, "LOG_RELAY_BINARY")
+	// All host binaries that bootstrap-machine expects. This list must
+	// match the HOST_BINARIES array in script/bootstrap-machine and
+	// expectedHostBinaries in cmd/bureau/machine/doctor.go.
+	hostBinaries := []struct {
+		envVar     string
+		binaryName string
+	}{
+		{"BUREAU_BINARY", "bureau"},
+		{"LAUNCHER_BINARY", "bureau-launcher"},
+		{"DAEMON_BINARY", "bureau-daemon"},
+		{"PROXY_BINARY", "bureau-proxy"},
+		{"LOG_RELAY_BINARY", "bureau-log-relay"},
+		{"OBSERVE_RELAY_BINARY", "bureau-observe-relay"},
+		{"BRIDGE_BINARY", "bureau-bridge"},
+		{"SANDBOX_BINARY", "bureau-sandbox"},
+		{"CREDENTIALS_BINARY", "bureau-credentials"},
+		{"AGENT_SERVICE_BINARY", "bureau-agent-service"},
+		{"ARTIFACT_SERVICE_BINARY", "bureau-artifact-service"},
+		{"TICKET_SERVICE_BINARY", "bureau-ticket-service"},
+	}
+
+	resolvedHostBinaries := make(map[string]string)
+	for _, binary := range hostBinaries {
+		resolvedHostBinaries[binary.binaryName] = resolvedBinary(t, binary.envVar)
+	}
 
 	ctx := t.Context()
 	admin := adminSession(t)
@@ -78,15 +99,13 @@ func TestBootstrapScript(t *testing.T) {
 	buildImage(t, bootstrapImageName, dockerfilePath)
 
 	// --- Prepare a binary directory ---
-	// The bootstrap script expects bureau-launcher, bureau-daemon, and
-	// bureau-proxy in the --binary-dir. Create a directory with copies
-	// (not symlinks — symlinks to Bazel runfiles may not resolve inside
-	// the container).
+	// The bootstrap script expects all host binaries in --binary-dir.
+	// Create a directory with copies (not symlinks — symlinks to Bazel
+	// runfiles may not resolve inside the container).
 	binaryDir := t.TempDir()
-	copyBinary(t, launcherBinary, filepath.Join(binaryDir, "bureau-launcher"))
-	copyBinary(t, daemonBinary, filepath.Join(binaryDir, "bureau-daemon"))
-	copyBinary(t, proxyBinary, filepath.Join(binaryDir, "bureau-proxy"))
-	copyBinary(t, logRelayBinary, filepath.Join(binaryDir, "bureau-log-relay"))
+	for _, binary := range hostBinaries {
+		copyBinary(t, resolvedHostBinaries[binary.binaryName], filepath.Join(binaryDir, binary.binaryName))
+	}
 
 	// --- Start the container ---
 	containerID := startContainer(t, bootstrapImageName, bootstrapContainerName,

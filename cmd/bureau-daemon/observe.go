@@ -19,6 +19,7 @@ import (
 	"bytes"
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"net"
 	"net/http"
@@ -203,9 +204,23 @@ func (d *Daemon) startObserveListener(ctx context.Context) error {
 	// Set group ownership to bureau-operators so operators in the group
 	// can connect. The observe socket is the primary operator interface
 	// for observation, token minting, and CLI access.
+	//
+	// In production, the daemon runs as the bureau user (member of
+	// bureau-operators), so chown succeeds. In development/test
+	// environments, the daemon runs as the developer user who may not
+	// have permission to chown to a system group. Warn rather than fail
+	// — the socket is still usable by the process owner and `bureau
+	// machine doctor --fix` handles production socket permissions.
 	if err := principal.SetOperatorGroupOwnership(d.observeSocketPath, d.operatorsGID); err != nil {
-		listener.Close()
-		return fmt.Errorf("setting observe socket group ownership: %w", err)
+		if errors.Is(err, syscall.EPERM) || errors.Is(err, syscall.EACCES) {
+			d.logger.Warn("cannot set observe socket group ownership (non-fatal in development)",
+				"socket", d.observeSocketPath,
+				"error", err,
+			)
+		} else {
+			listener.Close()
+			return fmt.Errorf("setting observe socket group ownership: %w", err)
+		}
 	}
 
 	d.logger.Info("observe listener started", "socket", d.observeSocketPath)

@@ -172,7 +172,7 @@ func TestFleetServiceContentWithScheduling(t *testing.T) {
 			Class:       "batch",
 			Preemptible: true,
 			PreferredWindows: []TimeWindow{
-				{Days: []string{"mon", "tue", "wed", "thu", "fri"}, StartHour: 22, EndHour: 6},
+				{Days: []DayOfWeek{Monday, Tuesday, Wednesday, Thursday, Friday}, StartHour: 22, EndHour: 6},
 				{StartHour: 0, EndHour: 24},
 			},
 			CheckpointSignal:  "SIGUSR1",

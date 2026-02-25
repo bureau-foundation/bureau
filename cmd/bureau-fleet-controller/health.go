@@ -128,7 +128,7 @@ func (fc *FleetController) executeFailover(ctx context.Context, machineLocalpart
 		}
 
 		fc.publishFleetAlert(ctx, fleet.FleetAlertContent{
-			AlertType: "failover",
+			AlertType: fleet.AlertFailover,
 			Fleet:     fc.principalName,
 			Service:   serviceLocalpart,
 			Machine:   machineLocalpart,
@@ -136,7 +136,7 @@ func (fc *FleetController) executeFailover(ctx context.Context, machineLocalpart
 				machineLocalpart, serviceLocalpart),
 			ProposedActions: []fleet.ProposedAction{
 				{
-					Action:      "place",
+					Action:      fleet.ActionPlace,
 					Service:     serviceLocalpart,
 					FromMachine: machineLocalpart,
 				},
@@ -165,7 +165,7 @@ func (fc *FleetController) publishFleetAlert(ctx context.Context, alert fleet.Fl
 // alertStateKey constructs a unique state key for a fleet alert from
 // its type, service, and machine.
 func alertStateKey(alert fleet.FleetAlertContent) string {
-	key := alert.AlertType
+	key := string(alert.AlertType)
 	if alert.Service != "" {
 		key += "/" + alert.Service
 	}

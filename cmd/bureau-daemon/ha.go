@@ -114,7 +114,7 @@ func (w *haWatchdog) syncFleetState(ctx context.Context) {
 					"state_key", stateKey, "error", err)
 				continue
 			}
-			if definition.HAClass == "critical" {
+			if definition.HAClass == fleet.HAClassCritical {
 				newCriticalServices[stateKey] = &definition
 			}
 

@@ -199,7 +199,7 @@ func (fc *FleetController) handleListServices(ctx context.Context, token *servic
 		if serviceState.definition != nil {
 			summary.Template = serviceState.definition.Template
 			summary.Replicas = serviceState.definition.Replicas.Min
-			summary.Failover = serviceState.definition.Failover
+			summary.Failover = string(serviceState.definition.Failover)
 			summary.Priority = serviceState.definition.Priority
 		}
 

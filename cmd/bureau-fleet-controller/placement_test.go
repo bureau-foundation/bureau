@@ -496,13 +496,13 @@ func TestInTimeWindow(t *testing.T) {
 		{
 			name:   "day-of-week match",
 			now:    time.Date(2026, 1, 14, 14, 0, 0, 0, time.UTC), // Wednesday
-			window: fleet.TimeWindow{Days: []string{"wed"}, StartHour: 9, EndHour: 17},
+			window: fleet.TimeWindow{Days: []fleet.DayOfWeek{fleet.Wednesday}, StartHour: 9, EndHour: 17},
 			want:   true,
 		},
 		{
 			name:   "day-of-week mismatch",
 			now:    time.Date(2026, 1, 14, 14, 0, 0, 0, time.UTC), // Wednesday
-			window: fleet.TimeWindow{Days: []string{"mon", "fri"}, StartHour: 9, EndHour: 17},
+			window: fleet.TimeWindow{Days: []fleet.DayOfWeek{fleet.Monday, fleet.Friday}, StartHour: 9, EndHour: 17},
 			want:   false,
 		},
 		{

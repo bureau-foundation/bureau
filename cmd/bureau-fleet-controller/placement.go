@@ -221,7 +221,7 @@ func (fc *FleetController) scoreMachine(machineLocalpart string, service *fleet.
 
 	// Time-of-day scaling for batch services.
 	if service.Scheduling != nil &&
-		service.Scheduling.Class == "batch" &&
+		service.Scheduling.Class == fleet.SchedulingBatch &&
 		len(service.Scheduling.PreferredWindows) > 0 {
 		now := fc.clock.Now()
 		inWindow := false
@@ -277,7 +277,7 @@ func inTimeWindow(now time.Time, window fleet.TimeWindow) bool {
 		dayAbbreviation := strings.ToLower(now.Weekday().String()[:3])
 		dayMatches := false
 		for _, day := range window.Days {
-			if strings.ToLower(day) == dayAbbreviation {
+			if strings.ToLower(string(day)) == dayAbbreviation {
 				dayMatches = true
 				break
 			}

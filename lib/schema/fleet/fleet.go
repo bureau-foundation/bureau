@@ -93,6 +93,56 @@ func NewFleetPresenceChangedMessage(machine, previous, current string) FleetPres
 	}
 }
 
+// FailoverStrategy controls what happens when a machine hosting a
+// fleet-managed service goes offline.
+type FailoverStrategy string
+
+const (
+	// FailoverMigrate causes the fleet controller to re-place the service
+	// on another machine that satisfies placement constraints.
+	FailoverMigrate FailoverStrategy = "migrate"
+
+	// FailoverAlert causes the fleet controller to publish an alert event
+	// but not auto-move; a human or sysadmin agent decides.
+	FailoverAlert FailoverStrategy = "alert"
+
+	// FailoverNone means the service is pinned to its machine with no
+	// automatic failover action.
+	FailoverNone FailoverStrategy = "none"
+)
+
+// IsKnown reports whether f is one of the defined FailoverStrategy values.
+func (f FailoverStrategy) IsKnown() bool {
+	switch f {
+	case FailoverMigrate, FailoverAlert, FailoverNone:
+		return true
+	}
+	return false
+}
+
+// HAClass marks services that get daemon-level failover independent of the
+// fleet controller. "critical" enables the daemon watchdog protocol. Empty
+// means normal fleet-controller-managed failover.
+type HAClass string
+
+const (
+	// HAClassCritical enables the daemon HA watchdog protocol: daemons
+	// compete to acquire leases and host the service when the current
+	// holder goes offline.
+	HAClassCritical HAClass = "critical"
+)
+
+// IsKnown reports whether h is one of the defined HAClass values.
+// An empty HAClass is valid (means normal failover) but is not "known"
+// in the enum sense — callers should check for empty separately.
+func (h HAClass) IsKnown() bool {
+	switch h {
+	case HAClassCritical:
+		return true
+	}
+	return false
+}
+
 // FleetServiceContent defines a service that the fleet controller manages.
 // The fleet controller reads these, evaluates placement constraints against
 // available machines, and writes PrincipalAssignment events to the chosen
@@ -116,18 +166,12 @@ type FleetServiceContent struct {
 
 	// Failover controls what happens when a machine hosting this service
 	// goes offline.
-	//
-	//   "migrate" — fleet controller re-places on another machine that
-	//               satisfies constraints
-	//   "alert"   — fleet controller publishes an alert event but does
-	//               not auto-move; a human or sysadmin agent decides
-	//   "none"    — pinned to this machine, no automatic action
-	Failover string `json:"failover"`
+	Failover FailoverStrategy `json:"failover"`
 
 	// HAClass marks services that get daemon-level failover independent
 	// of the fleet controller. "critical" enables the daemon watchdog
 	// protocol. Empty means normal fleet-controller-managed failover.
-	HAClass string `json:"ha_class,omitempty"`
+	HAClass HAClass `json:"ha_class,omitempty"`
 
 	// ServiceRooms is a list of room alias glob patterns. The fleet
 	// controller ensures the service is bound (via m.bureau.service_binding
@@ -253,17 +297,37 @@ type PlacementConstraints struct {
 	CoLocateWith []string `json:"co_locate_with,omitempty"`
 }
 
+// SchedulingClass categorizes the scheduling behavior for a fleet service.
+type SchedulingClass string
+
+const (
+	// SchedulingAlways means the service runs continuously (default if
+	// Scheduling is nil on the FleetServiceContent).
+	SchedulingAlways SchedulingClass = "always"
+
+	// SchedulingBatch means the service can be deferred to preferred
+	// time windows and can be preempted by higher-priority work.
+	SchedulingBatch SchedulingClass = "batch"
+
+	// SchedulingTriggered means the service only runs in response to an
+	// event (uses StartCondition on the generated PrincipalAssignment).
+	SchedulingTriggered SchedulingClass = "triggered"
+)
+
+// IsKnown reports whether s is one of the defined SchedulingClass values.
+func (s SchedulingClass) IsKnown() bool {
+	switch s {
+	case SchedulingAlways, SchedulingBatch, SchedulingTriggered:
+		return true
+	}
+	return false
+}
+
 // SchedulingSpec controls when a service should run. Used for batch
 // workloads, training jobs, and cost-sensitive tasks.
 type SchedulingSpec struct {
 	// Class categorizes the scheduling behavior.
-	//
-	//   "always"    — run continuously (default if Scheduling is nil)
-	//   "batch"     — can be deferred to preferred windows, can be
-	//                 preempted by higher-priority work
-	//   "triggered" — only runs in response to an event (uses
-	//                 StartCondition on the generated PrincipalAssignment)
-	Class string `json:"class"`
+	Class SchedulingClass `json:"class"`
 
 	// Preemptible means higher-priority services can displace this one.
 	// The fleet controller sends CheckpointSignal, waits
@@ -287,11 +351,33 @@ type SchedulingSpec struct {
 	DrainGraceSeconds int `json:"drain_grace_seconds,omitempty"`
 }
 
+// DayOfWeek is a three-letter lowercase day abbreviation for time window
+// scheduling.
+type DayOfWeek string
+
+const (
+	Monday    DayOfWeek = "mon"
+	Tuesday   DayOfWeek = "tue"
+	Wednesday DayOfWeek = "wed"
+	Thursday  DayOfWeek = "thu"
+	Friday    DayOfWeek = "fri"
+	Saturday  DayOfWeek = "sat"
+	Sunday    DayOfWeek = "sun"
+)
+
+// IsKnown reports whether d is one of the defined DayOfWeek values.
+func (d DayOfWeek) IsKnown() bool {
+	switch d {
+	case Monday, Tuesday, Wednesday, Thursday, Friday, Saturday, Sunday:
+		return true
+	}
+	return false
+}
+
 // TimeWindow defines a recurring time window for batch scheduling.
 type TimeWindow struct {
-	// Days is a list of day abbreviations: "mon", "tue", "wed", "thu",
-	// "fri", "sat", "sun". If empty, applies to all days.
-	Days []string `json:"days,omitempty"`
+	// Days is a list of day abbreviations. If empty, applies to all days.
+	Days []DayOfWeek `json:"days,omitempty"`
 
 	// StartHour is the start of the window (0-23, local time of the
 	// machine).
@@ -303,6 +389,37 @@ type TimeWindow struct {
 	EndHour int `json:"end_hour"`
 }
 
+// MachineProvider identifies how a machine is provisioned.
+type MachineProvider string
+
+const (
+	// ProviderLocal is a physical machine on the local network, woken
+	// via wake-on-LAN or powered on manually.
+	ProviderLocal MachineProvider = "local"
+
+	// ProviderGCloud is a Google Cloud Compute Engine instance.
+	ProviderGCloud MachineProvider = "gcloud"
+
+	// ProviderAWS is an Amazon EC2 instance.
+	ProviderAWS MachineProvider = "aws"
+
+	// ProviderAzure is an Azure Virtual Machine.
+	ProviderAzure MachineProvider = "azure"
+
+	// ProviderManual means provisioning is done by a human or sysadmin
+	// agent (fleet controller publishes a capacity request).
+	ProviderManual MachineProvider = "manual"
+)
+
+// IsKnown reports whether p is one of the defined MachineProvider values.
+func (p MachineProvider) IsKnown() bool {
+	switch p {
+	case ProviderLocal, ProviderGCloud, ProviderAWS, ProviderAzure, ProviderManual:
+		return true
+	}
+	return false
+}
+
 // MachineDefinitionContent defines a provisionable machine or machine pool.
 // The fleet controller reads these to determine what machines it can bring
 // online when existing capacity is insufficient.
@@ -312,15 +429,7 @@ type TimeWindow struct {
 // represents one physical machine.
 type MachineDefinitionContent struct {
 	// Provider identifies how this machine is provisioned.
-	//
-	//   "local"  — physical machine on the local network, woken via
-	//              wake-on-LAN or powered on manually
-	//   "gcloud" — Google Cloud Compute Engine instance
-	//   "aws"    — Amazon EC2 instance
-	//   "azure"  — Azure Virtual Machine
-	//   "manual" — provisioned by a human or sysadmin agent (fleet
-	//              controller publishes a capacity request)
-	Provider string `json:"provider"`
+	Provider MachineProvider `json:"provider"`
 
 	// Labels are the labels that instances from this definition will
 	// have when they register. The fleet controller uses these to
@@ -426,48 +535,134 @@ type ScalingConfig struct {
 	MaxInstances int `json:"max_instances"`
 }
 
+// ProvisionPolicy controls when the fleet controller brings a machine
+// online.
+type ProvisionPolicy string
+
+const (
+	// ProvisionOnDemand means the machine is provisioned when a service
+	// needs placement and no existing machine satisfies constraints.
+	ProvisionOnDemand ProvisionPolicy = "demand"
+
+	// ProvisionAlways means MinInstances are kept running at all times.
+	ProvisionAlways ProvisionPolicy = "always"
+
+	// ProvisionManual means the fleet controller never auto-provisions;
+	// it publishes a capacity request and waits for a human or sysadmin
+	// agent.
+	ProvisionManual ProvisionPolicy = "manual"
+)
+
+// IsKnown reports whether p is one of the defined ProvisionPolicy values.
+func (p ProvisionPolicy) IsKnown() bool {
+	switch p {
+	case ProvisionOnDemand, ProvisionAlways, ProvisionManual:
+		return true
+	}
+	return false
+}
+
+// DeprovisionPolicy controls when the fleet controller takes a machine
+// offline.
+type DeprovisionPolicy string
+
+const (
+	// DeprovisionOnIdle means the machine is deprovisioned after
+	// IdleTimeoutSeconds with no fleet-managed services running.
+	DeprovisionOnIdle DeprovisionPolicy = "idle"
+
+	// DeprovisionManual means the fleet controller never
+	// auto-deprovisions.
+	DeprovisionManual DeprovisionPolicy = "manual"
+
+	// DeprovisionNever means the machine stays on (same as omitting
+	// the lifecycle config).
+	DeprovisionNever DeprovisionPolicy = "never"
+)
+
+// IsKnown reports whether d is one of the defined DeprovisionPolicy values.
+func (d DeprovisionPolicy) IsKnown() bool {
+	switch d {
+	case DeprovisionOnIdle, DeprovisionManual, DeprovisionNever:
+		return true
+	}
+	return false
+}
+
+// WakeMethod controls how to bring a local machine online.
+type WakeMethod string
+
+const (
+	// WakeWOL wakes the machine via a wake-on-LAN magic packet.
+	WakeWOL WakeMethod = "wol"
+
+	// WakeSSH wakes the machine via an SSH command (machine is
+	// suspended, not off).
+	WakeSSH WakeMethod = "ssh"
+
+	// WakeAPI wakes the machine via a cloud provider API call.
+	WakeAPI WakeMethod = "api"
+
+	// WakeManual requires human intervention to bring the machine
+	// online.
+	WakeManual WakeMethod = "manual"
+)
+
+// IsKnown reports whether w is one of the defined WakeMethod values.
+func (w WakeMethod) IsKnown() bool {
+	switch w {
+	case WakeWOL, WakeSSH, WakeAPI, WakeManual:
+		return true
+	}
+	return false
+}
+
+// SuspendMethod controls how to put a local machine to sleep.
+type SuspendMethod string
+
+const (
+	// SuspendSSHCommand sends a command via SSH or Matrix command to
+	// suspend the machine.
+	SuspendSSHCommand SuspendMethod = "ssh_command"
+
+	// SuspendAPI suspends the machine via a cloud provider API call
+	// (terminate/stop).
+	SuspendAPI SuspendMethod = "api"
+
+	// SuspendManual requires human intervention to suspend the machine.
+	SuspendManual SuspendMethod = "manual"
+)
+
+// IsKnown reports whether s is one of the defined SuspendMethod values.
+func (s SuspendMethod) IsKnown() bool {
+	switch s {
+	case SuspendSSHCommand, SuspendAPI, SuspendManual:
+		return true
+	}
+	return false
+}
+
 // MachineLifecycleConfig controls when machines are provisioned and
 // deprovisioned.
 type MachineLifecycleConfig struct {
 	// ProvisionOn controls when the fleet controller brings this
 	// machine online.
-	//
-	//   "demand"  — provision when a service needs placement and no
-	//               existing machine satisfies constraints
-	//   "always"  — keep MinInstances running at all times
-	//   "manual"  — never auto-provision; fleet controller publishes
-	//               a capacity request and waits for a human or
-	//               sysadmin agent
-	ProvisionOn string `json:"provision_on"`
+	ProvisionOn ProvisionPolicy `json:"provision_on"`
 
 	// DeprovisionOn controls when the fleet controller takes this
 	// machine offline.
-	//
-	//   "idle"   — deprovision after IdleTimeoutSeconds with no
-	//              fleet-managed services running
-	//   "manual" — never auto-deprovision
-	//   "never"  — machine stays on (same as omitting lifecycle)
-	DeprovisionOn string `json:"deprovision_on,omitempty"`
+	DeprovisionOn DeprovisionPolicy `json:"deprovision_on,omitempty"`
 
 	// IdleTimeoutSeconds is how long a machine must be idle before
 	// the fleet controller deprovisions it. Only applies when
-	// DeprovisionOn is "idle".
+	// DeprovisionOn is DeprovisionOnIdle.
 	IdleTimeoutSeconds int `json:"idle_timeout_seconds,omitempty"`
 
 	// WakeMethod is how to bring a local machine online.
-	//
-	//   "wol"    — wake-on-LAN magic packet
-	//   "ssh"    — SSH command (machine is suspended, not off)
-	//   "api"    — cloud provider API call
-	//   "manual" — human intervention required
-	WakeMethod string `json:"wake_method,omitempty"`
+	WakeMethod WakeMethod `json:"wake_method,omitempty"`
 
 	// SuspendMethod is how to put a local machine to sleep.
-	//
-	//   "ssh_command" — send a command via SSH or Matrix command
-	//   "api"        — cloud provider API call (terminate/stop)
-	//   "manual"     — human intervention required
-	SuspendMethod string `json:"suspend_method,omitempty"`
+	SuspendMethod SuspendMethod `json:"suspend_method,omitempty"`
 
 	// SuspendCommand is the command to execute for ssh_command suspend
 	// method (e.g., "systemctl suspend").
@@ -480,16 +675,34 @@ type MachineLifecycleConfig struct {
 	WakeLatencySeconds int `json:"wake_latency_seconds,omitempty"`
 }
 
+// RebalancePolicy controls how the fleet controller responds to
+// resource pressure.
+type RebalancePolicy string
+
+const (
+	// RebalanceAuto means the fleet controller moves services
+	// automatically when pressure thresholds are exceeded.
+	RebalanceAuto RebalancePolicy = "auto"
+
+	// RebalanceAlert means the fleet controller publishes an alert but
+	// waits for human or sysadmin agent approval before moving services.
+	RebalanceAlert RebalancePolicy = "alert"
+)
+
+// IsKnown reports whether r is one of the defined RebalancePolicy values.
+func (r RebalancePolicy) IsKnown() bool {
+	switch r {
+	case RebalanceAuto, RebalanceAlert:
+		return true
+	}
+	return false
+}
+
 // FleetConfigContent defines global settings for a fleet controller.
 type FleetConfigContent struct {
 	// RebalancePolicy controls how the fleet controller responds to
 	// resource pressure.
-	//
-	//   "auto"  — fleet controller moves services automatically when
-	//             pressure thresholds are exceeded
-	//   "alert" — fleet controller publishes an alert but waits for
-	//             human or sysadmin agent approval before moving
-	RebalancePolicy string `json:"rebalance_policy"`
+	RebalancePolicy RebalancePolicy `json:"rebalance_policy"`
 
 	// PressureThresholdCPU is the sustained CPU utilization percentage
 	// that triggers rebalancing evaluation. Default: 85.
@@ -569,18 +782,49 @@ type ServiceStatusContent struct {
 	Healthy bool `json:"healthy"`
 }
 
+// AlertType categorizes a fleet alert.
+type AlertType string
+
+const (
+	// AlertFailover means a machine is down and a service needs
+	// re-placement.
+	AlertFailover AlertType = "failover"
+
+	// AlertRebalanceProposal means resource pressure was detected and
+	// the fleet controller is proposing to move services.
+	AlertRebalanceProposal AlertType = "rebalance_proposal"
+
+	// AlertCapacityRequest means no existing machine can satisfy
+	// placement constraints.
+	AlertCapacityRequest AlertType = "capacity_request"
+
+	// AlertPreemptionRequest means a higher-priority fleet needs
+	// resources currently held by lower-priority services.
+	AlertPreemptionRequest AlertType = "preemption_request"
+
+	// AlertPreemptionAck means the lower-priority fleet acknowledged
+	// a preemption request.
+	AlertPreemptionAck AlertType = "preemption_ack"
+
+	// AlertRollback means a health check failure triggered a rollback.
+	AlertRollback AlertType = "rollback"
+)
+
+// IsKnown reports whether a is one of the defined AlertType values.
+func (a AlertType) IsKnown() bool {
+	switch a {
+	case AlertFailover, AlertRebalanceProposal, AlertCapacityRequest,
+		AlertPreemptionRequest, AlertPreemptionAck, AlertRollback:
+		return true
+	}
+	return false
+}
+
 // FleetAlertContent is the content of an EventTypeFleetAlert event.
 // Published by the fleet controller for events requiring attention.
 type FleetAlertContent struct {
 	// AlertType categorizes the alert.
-	//
-	//   "failover"           — machine down, service needs re-placement
-	//   "rebalance_proposal" — pressure detected, rebalancing proposed
-	//   "capacity_request"   — no machine can satisfy placement constraints
-	//   "preemption_request" — higher-priority fleet needs resources
-	//   "preemption_ack"     — lower-priority fleet acknowledged preemption
-	//   "rollback"           — health check failure triggered rollback
-	AlertType string `json:"alert_type"`
+	AlertType AlertType `json:"alert_type"`
 
 	// Fleet is the localpart of the fleet controller that published
 	// this alert.
@@ -600,11 +844,38 @@ type FleetAlertContent struct {
 	ProposedActions []ProposedAction `json:"proposed_actions,omitempty"`
 }
 
+// ProposedActionType identifies the operation type in a fleet alert's
+// proposed action list.
+type ProposedActionType string
+
+const (
+	// ActionPlace means placing a service on a machine.
+	ActionPlace ProposedActionType = "place"
+
+	// ActionRemove means removing a service from a machine.
+	ActionRemove ProposedActionType = "remove"
+
+	// ActionMove means moving a service from one machine to another.
+	ActionMove ProposedActionType = "move"
+
+	// ActionProvision means provisioning a new machine.
+	ActionProvision ProposedActionType = "provision"
+)
+
+// IsKnown reports whether a is one of the defined ProposedActionType values.
+func (a ProposedActionType) IsKnown() bool {
+	switch a {
+	case ActionPlace, ActionRemove, ActionMove, ActionProvision:
+		return true
+	}
+	return false
+}
+
 // ProposedAction describes one action in a fleet alert that requires
 // approval (e.g., a rebalancing move or failover placement).
 type ProposedAction struct {
-	// Action is the operation type: "place", "remove", "move", "provision".
-	Action string `json:"action"`
+	// Action is the operation type.
+	Action ProposedActionType `json:"action"`
 
 	// Service is the target fleet service localpart.
 	Service string `json:"service"`

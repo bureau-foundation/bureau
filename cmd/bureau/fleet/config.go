@@ -165,7 +165,7 @@ func runConfig(ctx context.Context, logger *slog.Logger, fleetLocalpart string, 
 
 		writer := tabwriter.NewWriter(os.Stdout, 0, 4, 2, ' ', 0)
 		fmt.Fprintf(writer, "Fleet Config: %s (key: %s)\n\n", fleet.Localpart(), stateKey)
-		fmt.Fprintf(writer, "  Rebalance Policy:\t%s\n", defaultString(config.RebalancePolicy, "(not set)"))
+		fmt.Fprintf(writer, "  Rebalance Policy:\t%s\n", defaultString(string(config.RebalancePolicy), "(not set)"))
 		fmt.Fprintf(writer, "  Heartbeat Interval:\t%s\n", formatOptionalSeconds(config.HeartbeatIntervalSeconds, 30))
 		fmt.Fprintf(writer, "  Pressure CPU:\t%s\n", formatOptionalPercent(config.PressureThresholdCPU, 85))
 		fmt.Fprintf(writer, "  Pressure Memory:\t%s\n", formatOptionalPercent(config.PressureThresholdMemory, 90))
@@ -178,10 +178,11 @@ func runConfig(ctx context.Context, logger *slog.Logger, fleetLocalpart string, 
 
 	// Write mode: merge updates and publish.
 	if params.RebalancePolicy != "" {
-		if params.RebalancePolicy != "auto" && params.RebalancePolicy != "alert" {
+		policy := fleetschema.RebalancePolicy(params.RebalancePolicy)
+		if !policy.IsKnown() {
 			return cli.Validation("--rebalance-policy must be 'auto' or 'alert', got %q", params.RebalancePolicy)
 		}
-		config.RebalancePolicy = params.RebalancePolicy
+		config.RebalancePolicy = policy
 	}
 	if params.HeartbeatIntervalSeconds != 0 {
 		config.HeartbeatIntervalSeconds = params.HeartbeatIntervalSeconds

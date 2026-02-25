@@ -1419,7 +1419,7 @@ func (ts *TicketService) handleSetDisposition(ctx context.Context, token *servic
 	if request.Disposition == "" {
 		return nil, errors.New("missing required field: disposition")
 	}
-	if !ticket.IsValidDisposition(request.Disposition) {
+	if !ticket.ReviewDisposition(request.Disposition).IsKnown() {
 		return nil, fmt.Errorf("invalid disposition %q: must be approved, changes_requested, or commented", request.Disposition)
 	}
 	// "pending" is valid in the schema but not as a set-disposition

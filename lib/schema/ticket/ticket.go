@@ -901,16 +901,6 @@ func (d ReviewDisposition) IsKnown() bool {
 	}
 }
 
-// IsValidDisposition reports whether the given string is a recognized
-// reviewer disposition.
-//
-// Deprecated: use ReviewDisposition.IsKnown() instead. This function
-// exists for callers that receive dispositions as untyped strings from
-// wire formats.
-func IsValidDisposition(disposition string) bool {
-	return ReviewDisposition(disposition).IsKnown()
-}
-
 // ReviewerEntry tracks a single reviewer's feedback on a ticket.
 type ReviewerEntry struct {
 	// UserID is the Matrix user ID of the reviewer

@@ -16,6 +16,7 @@ go_library(
         "//lib/cron",
         "//lib/ref",
         "//lib/schema",
+        "//lib/schema/pipeline",
     ],
 )
 
@@ -29,5 +30,6 @@ go_test(
     deps = [
         "//lib/ref",
         "//lib/schema",
+        "//lib/schema/pipeline",
     ],
 )

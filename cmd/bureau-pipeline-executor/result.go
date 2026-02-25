@@ -11,6 +11,7 @@ import (
 	"time"
 
 	"github.com/bureau-foundation/bureau/lib/ref"
+	"github.com/bureau-foundation/bureau/lib/schema/pipeline"
 )
 
 // resultLog writes structured JSONL to a file during pipeline execution.
@@ -68,7 +69,7 @@ func (r *resultLog) writeStart(pipeline string, stepCount int) {
 }
 
 // writeStep records the outcome of a single step.
-func (r *resultLog) writeStep(index int, name, status string, durationMS int64, stepError string, outputs map[string]string) {
+func (r *resultLog) writeStep(index int, name string, status pipeline.StepResultStatus, durationMS int64, stepError string, outputs map[string]string) {
 	if r == nil {
 		return
 	}
@@ -155,13 +156,13 @@ type resultStartEntry struct {
 
 // resultStepEntry is written after each step completes (or is skipped).
 type resultStepEntry struct {
-	Type       string            `json:"type"`
-	Index      int               `json:"index"`
-	Name       string            `json:"name"`
-	Status     string            `json:"status"`
-	DurationMS int64             `json:"duration_ms"`
-	Error      string            `json:"error,omitempty"`
-	Outputs    map[string]string `json:"outputs,omitempty"`
+	Type       string                    `json:"type"`
+	Index      int                       `json:"index"`
+	Name       string                    `json:"name"`
+	Status     pipeline.StepResultStatus `json:"status"`
+	DurationMS int64                     `json:"duration_ms"`
+	Error      string                    `json:"error,omitempty"`
+	Outputs    map[string]string         `json:"outputs,omitempty"`
 }
 
 // resultCompleteEntry is the last line on successful pipeline completion.

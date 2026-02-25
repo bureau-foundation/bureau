@@ -14,6 +14,7 @@ import (
 	"github.com/bureau-foundation/bureau/lib/clock"
 	"github.com/bureau-foundation/bureau/lib/ref"
 	"github.com/bureau-foundation/bureau/lib/schema"
+	"github.com/bureau-foundation/bureau/lib/schema/pipeline"
 	"github.com/bureau-foundation/bureau/lib/schema/ticket"
 	"github.com/bureau-foundation/bureau/lib/ticketindex"
 	"github.com/bureau-foundation/bureau/messaging"
@@ -42,7 +43,7 @@ func TestMatchPipelineGateMatches(t *testing.T) {
 		Type:        ticket.GatePipeline,
 		Status:      ticket.GatePending,
 		PipelineRef: "dev-workspace-init",
-		Conclusion:  "success",
+		Conclusion:  pipeline.ConclusionSuccess,
 	}
 
 	event := messaging.Event{
@@ -65,7 +66,7 @@ func TestMatchPipelineGateWrongRef(t *testing.T) {
 		Type:        ticket.GatePipeline,
 		Status:      ticket.GatePending,
 		PipelineRef: "dev-workspace-init",
-		Conclusion:  "success",
+		Conclusion:  pipeline.ConclusionSuccess,
 	}
 
 	event := messaging.Event{
@@ -88,7 +89,7 @@ func TestMatchPipelineGateWrongConclusion(t *testing.T) {
 		Type:        ticket.GatePipeline,
 		Status:      ticket.GatePending,
 		PipelineRef: "dev-workspace-init",
-		Conclusion:  "success",
+		Conclusion:  pipeline.ConclusionSuccess,
 	}
 
 	event := messaging.Event{
@@ -1025,7 +1026,7 @@ func TestEvaluateGatesForEventsPipelineGate(t *testing.T) {
 					Type:        ticket.GatePipeline,
 					Status:      ticket.GatePending,
 					PipelineRef: "build-check",
-					Conclusion:  "success",
+					Conclusion:  pipeline.ConclusionSuccess,
 					CreatedAt:   "2026-01-01T00:00:00Z",
 				},
 			},
@@ -1128,7 +1129,7 @@ func TestEvaluateGatesForEventsMultipleGatesOnOneTicket(t *testing.T) {
 					Type:        ticket.GatePipeline,
 					Status:      ticket.GatePending,
 					PipelineRef: "build-check",
-					Conclusion:  "success",
+					Conclusion:  pipeline.ConclusionSuccess,
 					CreatedAt:   "2026-01-01T00:00:00Z",
 				},
 				{
@@ -1136,7 +1137,7 @@ func TestEvaluateGatesForEventsMultipleGatesOnOneTicket(t *testing.T) {
 					Type:        ticket.GatePipeline,
 					Status:      ticket.GatePending,
 					PipelineRef: "lint-check",
-					Conclusion:  "success",
+					Conclusion:  pipeline.ConclusionSuccess,
 					CreatedAt:   "2026-01-01T00:00:00Z",
 				},
 			},
@@ -1186,7 +1187,7 @@ func TestEvaluateGatesForEventsBothGatesSatisfiedByBatchEvents(t *testing.T) {
 					Type:        ticket.GatePipeline,
 					Status:      ticket.GatePending,
 					PipelineRef: "build-check",
-					Conclusion:  "success",
+					Conclusion:  pipeline.ConclusionSuccess,
 					CreatedAt:   "2026-01-01T00:00:00Z",
 				},
 				{
@@ -1194,7 +1195,7 @@ func TestEvaluateGatesForEventsBothGatesSatisfiedByBatchEvents(t *testing.T) {
 					Type:        ticket.GatePipeline,
 					Status:      ticket.GatePending,
 					PipelineRef: "lint-check",
-					Conclusion:  "success",
+					Conclusion:  pipeline.ConclusionSuccess,
 					CreatedAt:   "2026-01-01T00:00:00Z",
 				},
 			},
@@ -1305,7 +1306,7 @@ func TestEvaluateGatesNoMatchDoesNotWrite(t *testing.T) {
 					Type:        ticket.GatePipeline,
 					Status:      ticket.GatePending,
 					PipelineRef: "build-check",
-					Conclusion:  "success",
+					Conclusion:  pipeline.ConclusionSuccess,
 					CreatedAt:   "2026-01-01T00:00:00Z",
 				},
 			},
@@ -1354,7 +1355,7 @@ func TestProcessRoomSyncTriggersGateEvaluation(t *testing.T) {
 					Type:        ticket.GatePipeline,
 					Status:      ticket.GatePending,
 					PipelineRef: "build-check",
-					Conclusion:  "success",
+					Conclusion:  pipeline.ConclusionSuccess,
 					CreatedAt:   "2026-01-01T00:00:00Z",
 				},
 			},

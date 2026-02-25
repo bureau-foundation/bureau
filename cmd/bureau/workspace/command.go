@@ -708,7 +708,7 @@ func runWorktreeAdd(ctx context.Context, logger *slog.Logger, alias, branch stri
 			return watchError
 		}
 		if final.Pipeline != nil {
-			conclusion = final.Pipeline.Conclusion
+			conclusion = string(final.Pipeline.Conclusion)
 		}
 	}
 
@@ -863,7 +863,7 @@ func runWorktreeRemove(ctx context.Context, logger *slog.Logger, alias, mode str
 			return watchError
 		}
 		if final.Pipeline != nil {
-			conclusion = final.Pipeline.Conclusion
+			conclusion = string(final.Pipeline.Conclusion)
 		}
 	}
 

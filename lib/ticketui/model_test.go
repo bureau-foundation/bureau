@@ -10,6 +10,7 @@ import (
 	tea "github.com/charmbracelet/bubbletea"
 
 	"github.com/bureau-foundation/bureau/lib/ref"
+	"github.com/bureau-foundation/bureau/lib/schema/pipeline"
 	"github.com/bureau-foundation/bureau/lib/schema/ticket"
 	"github.com/bureau-foundation/bureau/lib/ticketindex"
 )
@@ -1046,7 +1047,7 @@ func testPipelineSource() *IndexSource {
 			PipelineRef: "ci/main",
 			TotalSteps:  5,
 			CurrentStep: 5,
-			Conclusion:  "success",
+			Conclusion:  pipeline.ConclusionSuccess,
 		},
 	})
 
@@ -1065,7 +1066,7 @@ func testPipelineSource() *IndexSource {
 			PipelineRef: "deploy/staging",
 			TotalSteps:  10,
 			CurrentStep: 3,
-			Conclusion:  "failure",
+			Conclusion:  pipeline.ConclusionFailure,
 		},
 	})
 

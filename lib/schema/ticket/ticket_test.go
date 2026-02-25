@@ -12,6 +12,7 @@ import (
 
 	"github.com/bureau-foundation/bureau/lib/ref"
 	"github.com/bureau-foundation/bureau/lib/schema"
+	"github.com/bureau-foundation/bureau/lib/schema/pipeline"
 )
 
 // assertField checks that a JSON object has a field with the expected value.
@@ -62,7 +63,7 @@ func TestTicketContentRoundTrip(t *testing.T) {
 				Status:      GatePending,
 				Description: "CI pipeline must pass",
 				PipelineRef: "ci/amdgpu-tests",
-				Conclusion:  "success",
+				Conclusion:  pipeline.ConclusionSuccess,
 				CreatedAt:   "2026-02-12T10:00:00Z",
 			},
 			{
@@ -794,7 +795,7 @@ func TestTicketGateRoundTrip(t *testing.T) {
 				Status:      GatePending,
 				Description: "CI must pass",
 				PipelineRef: "ci/build-test",
-				Conclusion:  "success",
+				Conclusion:  pipeline.ConclusionSuccess,
 				CreatedAt:   "2026-02-12T10:00:00Z",
 			},
 			checks: map[string]any{
@@ -1594,7 +1595,7 @@ func TestPipelineExecutionContentValidate(t *testing.T) {
 				PipelineRef: "ci-pipeline",
 				TotalSteps:  3,
 				CurrentStep: 3,
-				Conclusion:  "success",
+				Conclusion:  pipeline.ConclusionSuccess,
 			},
 			wantErr: "",
 		},
@@ -1626,35 +1627,35 @@ func TestPipelineExecutionContentValidate(t *testing.T) {
 		{
 			name: "conclusion_success",
 			content: PipelineExecutionContent{
-				PipelineRef: "ci-pipeline", TotalSteps: 3, Conclusion: "success",
+				PipelineRef: "ci-pipeline", TotalSteps: 3, Conclusion: pipeline.ConclusionSuccess,
 			},
 			wantErr: "",
 		},
 		{
 			name: "conclusion_failure",
 			content: PipelineExecutionContent{
-				PipelineRef: "ci-pipeline", TotalSteps: 3, Conclusion: "failure",
+				PipelineRef: "ci-pipeline", TotalSteps: 3, Conclusion: pipeline.ConclusionFailure,
 			},
 			wantErr: "",
 		},
 		{
 			name: "conclusion_aborted",
 			content: PipelineExecutionContent{
-				PipelineRef: "ci-pipeline", TotalSteps: 3, Conclusion: "aborted",
+				PipelineRef: "ci-pipeline", TotalSteps: 3, Conclusion: pipeline.ConclusionAborted,
 			},
 			wantErr: "",
 		},
 		{
 			name: "conclusion_cancelled",
 			content: PipelineExecutionContent{
-				PipelineRef: "ci-pipeline", TotalSteps: 3, Conclusion: "cancelled",
+				PipelineRef: "ci-pipeline", TotalSteps: 3, Conclusion: pipeline.ConclusionCancelled,
 			},
 			wantErr: "",
 		},
 		{
 			name: "conclusion_invalid",
 			content: PipelineExecutionContent{
-				PipelineRef: "ci-pipeline", TotalSteps: 3, Conclusion: "timeout",
+				PipelineRef: "ci-pipeline", TotalSteps: 3, Conclusion: pipeline.PipelineConclusion("timeout"),
 			},
 			wantErr: `unknown conclusion "timeout"`,
 		},

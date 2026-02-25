@@ -12,6 +12,7 @@ import (
 	"github.com/bureau-foundation/bureau/lib/cron"
 	"github.com/bureau-foundation/bureau/lib/ref"
 	"github.com/bureau-foundation/bureau/lib/schema"
+	"github.com/bureau-foundation/bureau/lib/schema/pipeline"
 	"github.com/bureau-foundation/bureau/lib/schema/ticket"
 	"github.com/bureau-foundation/bureau/lib/ticketindex"
 	"github.com/bureau-foundation/bureau/messaging"
@@ -157,7 +158,7 @@ func matchPipelineGate(gate *ticket.TicketGate, event messaging.Event) bool {
 	// An empty Conclusion means "any completed result satisfies."
 	if gate.Conclusion != "" {
 		conclusion, _ := event.Content["conclusion"].(string)
-		if conclusion != gate.Conclusion {
+		if pipeline.PipelineConclusion(conclusion) != gate.Conclusion {
 			return false
 		}
 	}

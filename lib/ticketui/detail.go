@@ -13,6 +13,7 @@ import (
 	"github.com/charmbracelet/lipgloss"
 
 	"github.com/bureau-foundation/bureau/lib/ref"
+	"github.com/bureau-foundation/bureau/lib/schema/pipeline"
 	"github.com/bureau-foundation/bureau/lib/schema/ticket"
 	"github.com/bureau-foundation/bureau/lib/ticketindex"
 )
@@ -850,7 +851,7 @@ func (renderer DetailRenderer) renderPipelineExecution(content ticket.TicketCont
 
 	// Conclusion badge for completed pipelines.
 	if pipeline.Conclusion != "" {
-		conclusionRendered := renderer.conclusionStyle(pipeline.Conclusion).Render(pipeline.Conclusion)
+		conclusionRendered := renderer.conclusionStyle(pipeline.Conclusion).Render(string(pipeline.Conclusion))
 		lines = append(lines, labelStyle.Render("conclusion: ")+conclusionRendered)
 	}
 
@@ -1159,13 +1160,13 @@ func dispositionIndicator(disposition string) (string, func(Theme) lipgloss.Colo
 // conclusionStyle returns a lipgloss style for rendering a pipeline
 // conclusion badge. Success is green, failure is red/bold, and
 // aborted/cancelled use the high-priority color.
-func (renderer DetailRenderer) conclusionStyle(conclusion string) lipgloss.Style {
+func (renderer DetailRenderer) conclusionStyle(conclusion pipeline.PipelineConclusion) lipgloss.Style {
 	switch conclusion {
-	case "success":
+	case pipeline.ConclusionSuccess:
 		return lipgloss.NewStyle().Foreground(renderer.theme.StatusOpen).Bold(true)
-	case "failure":
+	case pipeline.ConclusionFailure:
 		return lipgloss.NewStyle().Foreground(renderer.theme.PriorityColor(0)).Bold(true)
-	case "aborted", "cancelled":
+	case pipeline.ConclusionAborted, pipeline.ConclusionCancelled:
 		return lipgloss.NewStyle().Foreground(renderer.theme.PriorityColor(1))
 	default:
 		return lipgloss.NewStyle().Foreground(renderer.theme.FaintText)

@@ -12,6 +12,7 @@ import (
 	"github.com/bureau-foundation/bureau/lib/command"
 	"github.com/bureau-foundation/bureau/lib/ref"
 	"github.com/bureau-foundation/bureau/lib/schema"
+	"github.com/bureau-foundation/bureau/lib/schema/pipeline"
 	"github.com/bureau-foundation/bureau/lib/schema/workspace"
 	"github.com/bureau-foundation/bureau/lib/templatedef"
 	"github.com/bureau-foundation/bureau/messaging"
@@ -687,7 +688,7 @@ func TestWorkspaceWorktreeLifecycle(t *testing.T) {
 	// --- Phase 2: Wait for setup pipeline → workspace active ---
 	t.Log("phase 2: waiting for setup pipeline to publish 'active' status")
 	waitForWorkspaceStatus(t, admin, workspaceRoomID, "active")
-	verifyPipelineResult(t, admin, workspaceRoomID, "dev-workspace-init", "success")
+	verifyPipelineResult(t, admin, workspaceRoomID, "dev-workspace-init", pipeline.ConclusionSuccess)
 	t.Log("workspace is active — setup pipeline completed")
 
 	// --- Phase 3: Agent starts ---
@@ -741,12 +742,12 @@ func TestWorkspaceWorktreeLifecycle(t *testing.T) {
 	if err != nil {
 		t.Fatalf("watching worktree add ticket %s: %v", addResult.TicketID, err)
 	}
-	if addFinal.Pipeline == nil || addFinal.Pipeline.Conclusion != "success" {
-		conclusion := ""
+	if addFinal.Pipeline == nil || addFinal.Pipeline.Conclusion != pipeline.ConclusionSuccess {
+		conclusion := pipeline.PipelineConclusion("")
 		if addFinal.Pipeline != nil {
 			conclusion = addFinal.Pipeline.Conclusion
 		}
-		t.Fatalf("worktree add pipeline conclusion = %q, want \"success\"", conclusion)
+		t.Fatalf("worktree add pipeline conclusion = %q, want %s", conclusion, pipeline.ConclusionSuccess)
 	}
 	t.Logf("worktree add pipeline completed: %s", addFinal.Pipeline.Conclusion)
 
@@ -800,12 +801,12 @@ func TestWorkspaceWorktreeLifecycle(t *testing.T) {
 	if err != nil {
 		t.Fatalf("watching worktree remove ticket %s: %v", removeResult.TicketID, err)
 	}
-	if removeFinal.Pipeline == nil || removeFinal.Pipeline.Conclusion != "success" {
-		conclusion := ""
+	if removeFinal.Pipeline == nil || removeFinal.Pipeline.Conclusion != pipeline.ConclusionSuccess {
+		conclusion := pipeline.PipelineConclusion("")
 		if removeFinal.Pipeline != nil {
 			conclusion = removeFinal.Pipeline.Conclusion
 		}
-		t.Fatalf("worktree remove pipeline conclusion = %q, want \"success\"", conclusion)
+		t.Fatalf("worktree remove pipeline conclusion = %q, want %s", conclusion, pipeline.ConclusionSuccess)
 	}
 	t.Logf("worktree remove pipeline completed: %s", removeFinal.Pipeline.Conclusion)
 
@@ -823,7 +824,7 @@ func TestWorkspaceWorktreeLifecycle(t *testing.T) {
 	t.Log("agent proxy socket disappeared after workspace entered teardown")
 
 	waitForWorkspaceStatus(t, admin, workspaceRoomID, "archived")
-	verifyPipelineResult(t, admin, workspaceRoomID, "dev-workspace-deinit", "success")
+	verifyPipelineResult(t, admin, workspaceRoomID, "dev-workspace-deinit", pipeline.ConclusionSuccess)
 	t.Log("workspace lifecycle complete: create → active → worktree add → worktree remove → destroy → archived")
 }
 

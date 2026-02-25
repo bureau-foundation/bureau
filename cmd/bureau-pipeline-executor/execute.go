@@ -34,7 +34,7 @@ const maxInlineOutputSize = 64 * 1024
 
 // stepResult captures the outcome of executing a single pipeline step.
 type stepResult struct {
-	status   string // "ok", "failed", "skipped", "aborted"
+	status   pipeline.StepResultStatus
 	duration time.Duration
 	err      error
 	outputs  map[string]string
@@ -56,7 +56,7 @@ func executeStep(ctx context.Context, step pipeline.PipelineStep, index, total i
 		if err != nil {
 			// Validate should have caught this, but fail loud if not.
 			return stepResult{
-				status:   "failed",
+				status:   pipeline.StepFailed,
 				duration: time.Since(startTime),
 				err:      fmt.Errorf("invalid timeout %q: %w", step.Timeout, err),
 			}
@@ -71,7 +71,7 @@ func executeStep(ctx context.Context, step pipeline.PipelineStep, index, total i
 		if err != nil {
 			// Validate should have caught this, but fail loud if not.
 			return stepResult{
-				status:   "failed",
+				status:   pipeline.StepFailed,
 				duration: time.Since(startTime),
 				err:      fmt.Errorf("invalid grace_period %q: %w", step.GracePeriod, err),
 			}
@@ -85,7 +85,7 @@ func executeStep(ctx context.Context, step pipeline.PipelineStep, index, total i
 	// Interactive steps are deferred from the MVP — fail with a clear message.
 	if step.Interactive {
 		return stepResult{
-			status:   "failed",
+			status:   pipeline.StepFailed,
 			duration: time.Since(startTime),
 			err:      fmt.Errorf("interactive steps are not yet supported (step %q)", step.Name),
 		}
@@ -97,7 +97,7 @@ func executeStep(ctx context.Context, step pipeline.PipelineStep, index, total i
 		exitCode, err := runShellCommand(stepContext, step.When, step.Env, 0)
 		if err != nil {
 			return stepResult{
-				status:   "failed",
+				status:   pipeline.StepFailed,
 				duration: time.Since(startTime),
 				err:      fmt.Errorf("when guard: %w", err),
 			}
@@ -105,8 +105,8 @@ func executeStep(ctx context.Context, step pipeline.PipelineStep, index, total i
 		if exitCode != 0 {
 			duration := time.Since(startTime)
 			logger.Info("step skipped", "step", index+1, "total", total, "name", step.Name, "reason", "guard condition not met")
-			threadLog.logStep(ctx, index, total, step.Name, "skipped", duration)
-			return stepResult{status: "skipped", duration: duration}
+			threadLog.logStep(ctx, index, total, step.Name, pipeline.StepSkipped, duration)
+			return stepResult{status: pipeline.StepSkipped, duration: duration}
 		}
 	}
 
@@ -115,14 +115,14 @@ func executeStep(ctx context.Context, step pipeline.PipelineStep, index, total i
 		exitCode, err := runShellCommand(stepContext, step.Run, step.Env, gracePeriod)
 		if err != nil {
 			return stepResult{
-				status:   "failed",
+				status:   pipeline.StepFailed,
 				duration: time.Since(startTime),
 				err:      fmt.Errorf("run: %w", err),
 			}
 		}
 		if exitCode != 0 {
 			return stepResult{
-				status:   "failed",
+				status:   pipeline.StepFailed,
 				duration: time.Since(startTime),
 				err:      fmt.Errorf("run: exit code %d", exitCode),
 			}
@@ -134,14 +134,14 @@ func executeStep(ctx context.Context, step pipeline.PipelineStep, index, total i
 			checkExitCode, err := runShellCommand(stepContext, step.Check, step.Env, 0)
 			if err != nil {
 				return stepResult{
-					status:   "failed",
+					status:   pipeline.StepFailed,
 					duration: time.Since(startTime),
 					err:      fmt.Errorf("check: %w", err),
 				}
 			}
 			if checkExitCode != 0 {
 				return stepResult{
-					status:   "failed",
+					status:   pipeline.StepFailed,
 					duration: time.Since(startTime),
 					err:      fmt.Errorf("check: exit code %d", checkExitCode),
 				}
@@ -151,7 +151,7 @@ func executeStep(ctx context.Context, step pipeline.PipelineStep, index, total i
 		publishRoomID, err := ref.ParseRoomID(step.Publish.Room)
 		if err != nil {
 			return stepResult{
-				status:   "failed",
+				status:   pipeline.StepFailed,
 				duration: time.Since(startTime),
 				err:      fmt.Errorf("publish: invalid room ID %q: %w", step.Publish.Room, err),
 			}
@@ -159,7 +159,7 @@ func executeStep(ctx context.Context, step pipeline.PipelineStep, index, total i
 		_, err = session.SendStateEvent(stepContext, publishRoomID, step.Publish.EventType, step.Publish.StateKey, step.Publish.Content)
 		if err != nil {
 			return stepResult{
-				status:   "failed",
+				status:   pipeline.StepFailed,
 				duration: time.Since(startTime),
 				err:      fmt.Errorf("publish: %w", err),
 			}
@@ -183,7 +183,7 @@ func executeStep(ctx context.Context, step pipeline.PipelineStep, index, total i
 		parsed, err := pipeline.ParseStepOutputs(step.Outputs)
 		if err != nil {
 			return stepResult{
-				status:   "failed",
+				status:   pipeline.StepFailed,
 				duration: time.Since(startTime),
 				err:      fmt.Errorf("parsing output declarations: %w", err),
 			}
@@ -191,7 +191,7 @@ func executeStep(ctx context.Context, step pipeline.PipelineStep, index, total i
 		outputs, err = captureStepOutputs(stepContext, parsed, artifacts)
 		if err != nil {
 			return stepResult{
-				status:   "failed",
+				status:   pipeline.StepFailed,
 				duration: time.Since(startTime),
 				err:      fmt.Errorf("capturing outputs: %w", err),
 			}
@@ -200,15 +200,15 @@ func executeStep(ctx context.Context, step pipeline.PipelineStep, index, total i
 
 	duration := time.Since(startTime)
 	logger.Info("step completed", "step", index+1, "total", total, "name", step.Name, "duration", formatDuration(duration))
-	threadLog.logStep(ctx, index, total, step.Name, "ok", duration)
-	return stepResult{status: "ok", duration: duration, outputs: outputs}
+	threadLog.logStep(ctx, index, total, step.Name, pipeline.StepOK, duration)
+	return stepResult{status: pipeline.StepOK, duration: duration, outputs: outputs}
 }
 
 // executeAssertState reads a Matrix state event and checks a condition against
-// a field value. Returns a result with status "ok" on match, or "failed" /
-// "aborted" on mismatch depending on the OnMismatch setting.
+// a field value. Returns a result with StepOK on match, or StepFailed /
+// StepAborted on mismatch depending on the OnMismatch setting.
 //
-// The "abort" status is semantically different from "fail": abort means the
+// StepAborted is semantically different from StepFailed: abort means the
 // pipeline's precondition is no longer valid (e.g., the resource state changed
 // between when the pipeline was queued and when it started executing). The
 // pipeline exits cleanly with no error — there is nothing broken, the work
@@ -221,7 +221,7 @@ func executeAssertState(ctx context.Context, assertion *pipeline.PipelineAssertS
 	assertRoomID, err := ref.ParseRoomID(assertion.Room)
 	if err != nil {
 		return stepResult{
-			status: "failed",
+			status: pipeline.StepFailed,
 			err:    fmt.Errorf("assert_state: invalid room ID %q: %w", assertion.Room, err),
 		}
 	}
@@ -230,7 +230,7 @@ func executeAssertState(ctx context.Context, assertion *pipeline.PipelineAssertS
 	rawContent, err := session.GetStateEvent(ctx, assertRoomID, assertion.EventType, assertion.StateKey)
 	if err != nil {
 		return stepResult{
-			status: "failed",
+			status: pipeline.StepFailed,
 			err:    fmt.Errorf("assert_state: reading state event %s/%s in %s: %w", assertion.EventType, assertion.StateKey, assertion.Room, err),
 		}
 	}
@@ -239,7 +239,7 @@ func executeAssertState(ctx context.Context, assertion *pipeline.PipelineAssertS
 	var content map[string]any
 	if err := json.Unmarshal(rawContent, &content); err != nil {
 		return stepResult{
-			status: "failed",
+			status: pipeline.StepFailed,
 			err:    fmt.Errorf("assert_state: parsing state event content: %w", err),
 		}
 	}
@@ -247,7 +247,7 @@ func executeAssertState(ctx context.Context, assertion *pipeline.PipelineAssertS
 	rawFieldValue, exists := content[assertion.Field]
 	if !exists {
 		return stepResult{
-			status: "failed",
+			status: pipeline.StepFailed,
 			err:    fmt.Errorf("assert_state: field %q not found in state event content", assertion.Field),
 		}
 	}
@@ -289,13 +289,13 @@ func executeAssertState(ctx context.Context, assertion *pipeline.PipelineAssertS
 	}
 
 	if matched {
-		return stepResult{status: "ok"}
+		return stepResult{status: pipeline.StepOK}
 	}
 
 	// Determine the mismatch behavior.
-	status := "failed"
+	status := pipeline.StepFailed
 	if assertion.OnMismatch == "abort" {
-		status = "aborted"
+		status = pipeline.StepAborted
 	}
 
 	message := assertion.Message

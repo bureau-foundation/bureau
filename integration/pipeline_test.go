@@ -108,8 +108,8 @@ func TestPipelineExecution(t *testing.T) {
 	if final.Pipeline == nil {
 		t.Fatal("ticket has nil pipeline content")
 	}
-	if final.Pipeline.Conclusion != "success" {
-		t.Errorf("pipeline conclusion = %q, want success", final.Pipeline.Conclusion)
+	if final.Pipeline.Conclusion != pipeline.ConclusionSuccess {
+		t.Errorf("pipeline conclusion = %q, want %s", final.Pipeline.Conclusion, pipeline.ConclusionSuccess)
 	}
 
 	t.Log("pipeline execution lifecycle verified: command -> accepted -> ticket -> sandbox -> executor -> ticket closed")
@@ -198,8 +198,8 @@ func TestPipelineExecutionFailure(t *testing.T) {
 	if final.Pipeline == nil {
 		t.Fatal("ticket has nil pipeline content")
 	}
-	if final.Pipeline.Conclusion != "failure" {
-		t.Errorf("pipeline conclusion = %q, want failure", final.Pipeline.Conclusion)
+	if final.Pipeline.Conclusion != pipeline.ConclusionFailure {
+		t.Errorf("pipeline conclusion = %q, want %s", final.Pipeline.Conclusion, pipeline.ConclusionFailure)
 	}
 
 	t.Log("pipeline failure reporting verified: failing step produces closed ticket with failure conclusion")
@@ -303,9 +303,9 @@ func TestPipelineParameterPropagation(t *testing.T) {
 	if final.Pipeline == nil {
 		t.Fatal("ticket has nil pipeline content")
 	}
-	if final.Pipeline.Conclusion != "success" {
-		t.Errorf("pipeline conclusion = %q, want success (PROJECT variable not propagated)",
-			final.Pipeline.Conclusion)
+	if final.Pipeline.Conclusion != pipeline.ConclusionSuccess {
+		t.Errorf("pipeline conclusion = %q, want %s (PROJECT variable not propagated)",
+			final.Pipeline.Conclusion, pipeline.ConclusionSuccess)
 	}
 
 	t.Log("parameter propagation verified: command parameters flow through daemon -> ticket -> executor -> shell")

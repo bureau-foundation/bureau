@@ -380,6 +380,66 @@ type PipelineLog struct {
 	Room string `json:"room"`
 }
 
+// PipelineConclusion is the terminal outcome of a pipeline execution.
+// Values are self-describing strings that serialize directly to JSON/CBOR.
+type PipelineConclusion string
+
+const (
+	// ConclusionSuccess means all steps completed without error.
+	ConclusionSuccess PipelineConclusion = "success"
+
+	// ConclusionFailure means a required step failed.
+	ConclusionFailure PipelineConclusion = "failure"
+
+	// ConclusionAborted means the pipeline stopped itself cleanly — an
+	// assert_state step with on_mismatch "abort" determined the work was
+	// not needed.
+	ConclusionAborted PipelineConclusion = "aborted"
+
+	// ConclusionCancelled means external cancellation: the ticket was
+	// closed before or during execution and the executor was told to stop.
+	ConclusionCancelled PipelineConclusion = "cancelled"
+)
+
+// IsKnown reports whether c is one of the defined PipelineConclusion values.
+func (c PipelineConclusion) IsKnown() bool {
+	switch c {
+	case ConclusionSuccess, ConclusionFailure, ConclusionAborted, ConclusionCancelled:
+		return true
+	}
+	return false
+}
+
+// StepResultStatus is the outcome of a single pipeline step.
+// Values are self-describing strings that serialize directly to JSON/CBOR.
+type StepResultStatus string
+
+const (
+	// StepOK means the step completed successfully.
+	StepOK StepResultStatus = "ok"
+
+	// StepFailed means the step failed and (unless optional) halted the pipeline.
+	StepFailed StepResultStatus = "failed"
+
+	// StepFailedOptional means an optional step failed but execution continued.
+	StepFailedOptional StepResultStatus = "failed (optional)"
+
+	// StepSkipped means the step was not executed (guard condition not met).
+	StepSkipped StepResultStatus = "skipped"
+
+	// StepAborted means the step triggered a clean abort (assert_state mismatch).
+	StepAborted StepResultStatus = "aborted"
+)
+
+// IsKnown reports whether s is one of the defined StepResultStatus values.
+func (s StepResultStatus) IsKnown() bool {
+	switch s {
+	case StepOK, StepFailed, StepFailedOptional, StepSkipped, StepAborted:
+		return true
+	}
+	return false
+}
+
 // PipelineResultContent is the content of an EventTypePipelineResult state
 // event. Published by the pipeline executor when execution finishes. This
 // is the Matrix-native public format; the JSONL result log
@@ -412,7 +472,7 @@ type PipelineResultContent struct {
 	// decided to stop itself. "cancelled" means external
 	// cancellation: the ticket was closed before or during execution
 	// and the executor was told to stop.
-	Conclusion string `json:"conclusion"`
+	Conclusion PipelineConclusion `json:"conclusion"`
 
 	// TicketID is the ticket that initiated this execution (e.g.,
 	// "pip-a3f9"). Links the machine-readable result event back to
@@ -474,7 +534,7 @@ type PipelineStepResult struct {
 	// Status is the step outcome: "ok", "failed", "skipped", or
 	// "aborted". "failed (optional)" is recorded when an optional
 	// step fails but execution continues.
-	Status string `json:"status"`
+	Status StepResultStatus `json:"status"`
 
 	// DurationMS is the step execution wall-clock time in milliseconds.
 	DurationMS int64 `json:"duration_ms"`
@@ -500,12 +560,10 @@ func (p *PipelineResultContent) Validate() error {
 	if p.PipelineRef == "" {
 		return errors.New("pipeline result: pipeline_ref is required")
 	}
-	switch p.Conclusion {
-	case "success", "failure", "aborted", "cancelled":
-		// Valid.
-	case "":
+	if p.Conclusion == "" {
 		return errors.New("pipeline result: conclusion is required")
-	default:
+	}
+	if !p.Conclusion.IsKnown() {
 		return fmt.Errorf("pipeline result: unknown conclusion %q", p.Conclusion)
 	}
 	if p.StartedAt == "" {
@@ -550,12 +608,10 @@ func (s *PipelineStepResult) Validate() error {
 	if s.Name == "" {
 		return errors.New("step result: name is required")
 	}
-	switch s.Status {
-	case "ok", "failed", "failed (optional)", "skipped", "aborted":
-		// Valid.
-	case "":
+	if s.Status == "" {
 		return errors.New("step result: status is required")
-	default:
+	}
+	if !s.Status.IsKnown() {
 		return fmt.Errorf("step result: unknown status %q", s.Status)
 	}
 	return nil

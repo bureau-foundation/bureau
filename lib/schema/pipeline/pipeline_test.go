@@ -497,15 +497,15 @@ func validPipelineResultContent() PipelineResultContent {
 	return PipelineResultContent{
 		Version:     1,
 		PipelineRef: "dev-workspace-init",
-		Conclusion:  "success",
+		Conclusion:  ConclusionSuccess,
 		StartedAt:   "2026-02-12T10:00:00Z",
 		CompletedAt: "2026-02-12T10:01:30Z",
 		DurationMS:  90000,
 		StepCount:   3,
 		StepResults: []PipelineStepResult{
-			{Name: "clone-repo", Status: "ok", DurationMS: 30000},
-			{Name: "install-deps", Status: "ok", DurationMS: 45000},
-			{Name: "publish-ready", Status: "ok", DurationMS: 200},
+			{Name: "clone-repo", Status: StepOK, DurationMS: 30000},
+			{Name: "install-deps", Status: StepOK, DurationMS: 45000},
+			{Name: "publish-ready", Status: StepOK, DurationMS: 200},
 		},
 		LogEventID: ref.MustParseEventID("$abc123:bureau.local"),
 	}
@@ -572,7 +572,7 @@ func TestPipelineResultContentOmitsEmptyOptionals(t *testing.T) {
 	content := PipelineResultContent{
 		Version:     1,
 		PipelineRef: "dev-init",
-		Conclusion:  "success",
+		Conclusion:  ConclusionSuccess,
 		StartedAt:   "2026-02-12T10:00:00Z",
 		CompletedAt: "2026-02-12T10:01:00Z",
 		DurationMS:  60000,
@@ -601,14 +601,14 @@ func TestPipelineResultContentFailure(t *testing.T) {
 	content := PipelineResultContent{
 		Version:     1,
 		PipelineRef: "ci-pipeline",
-		Conclusion:  "failure",
+		Conclusion:  ConclusionFailure,
 		StartedAt:   "2026-02-12T10:00:00Z",
 		CompletedAt: "2026-02-12T10:00:45Z",
 		DurationMS:  45000,
 		StepCount:   3,
 		StepResults: []PipelineStepResult{
-			{Name: "build", Status: "ok", DurationMS: 30000},
-			{Name: "test", Status: "failed", DurationMS: 15000, Error: "exit code 1"},
+			{Name: "build", Status: StepOK, DurationMS: 30000},
+			{Name: "test", Status: StepFailed, DurationMS: 15000, Error: "exit code 1"},
 		},
 		FailedStep:   "test",
 		ErrorMessage: "exit code 1",
@@ -693,8 +693,8 @@ func TestPipelineResultContentForwardCompatibility(t *testing.T) {
 	if content.PipelineRef != "dev-init" {
 		t.Errorf("PipelineRef = %q, want %q", content.PipelineRef, "dev-init")
 	}
-	if content.Conclusion != "success" {
-		t.Errorf("Conclusion = %q, want %q", content.Conclusion, "success")
+	if content.Conclusion != ConclusionSuccess {
+		t.Errorf("Conclusion = %q, want %q", content.Conclusion, ConclusionSuccess)
 	}
 
 	// CanModify should refuse modification (version > current).
@@ -736,7 +736,7 @@ func TestPipelineResultContentValidate(t *testing.T) {
 		},
 		{
 			name:    "conclusion_cancelled",
-			modify:  func(p *PipelineResultContent) { p.Conclusion = "cancelled" },
+			modify:  func(p *PipelineResultContent) { p.Conclusion = ConclusionCancelled },
 			wantErr: "",
 		},
 		{
@@ -746,17 +746,17 @@ func TestPipelineResultContentValidate(t *testing.T) {
 		},
 		{
 			name:    "conclusion_success",
-			modify:  func(p *PipelineResultContent) { p.Conclusion = "success" },
+			modify:  func(p *PipelineResultContent) { p.Conclusion = ConclusionSuccess },
 			wantErr: "",
 		},
 		{
 			name:    "conclusion_failure",
-			modify:  func(p *PipelineResultContent) { p.Conclusion = "failure" },
+			modify:  func(p *PipelineResultContent) { p.Conclusion = ConclusionFailure },
 			wantErr: "",
 		},
 		{
 			name:    "conclusion_aborted",
-			modify:  func(p *PipelineResultContent) { p.Conclusion = "aborted" },
+			modify:  func(p *PipelineResultContent) { p.Conclusion = ConclusionAborted },
 			wantErr: "",
 		},
 		{
@@ -778,7 +778,7 @@ func TestPipelineResultContentValidate(t *testing.T) {
 			name: "step_result_invalid",
 			modify: func(p *PipelineResultContent) {
 				p.StepResults = []PipelineStepResult{
-					{Name: "", Status: "ok"},
+					{Name: "", Status: StepOK},
 				}
 			},
 			wantErr: "step_results[0]: step result: name is required",
@@ -857,32 +857,32 @@ func TestPipelineStepResultValidate(t *testing.T) {
 	}{
 		{
 			name:    "valid_ok",
-			step:    PipelineStepResult{Name: "build", Status: "ok", DurationMS: 1000},
+			step:    PipelineStepResult{Name: "build", Status: StepOK, DurationMS: 1000},
 			wantErr: "",
 		},
 		{
 			name:    "valid_failed",
-			step:    PipelineStepResult{Name: "test", Status: "failed", DurationMS: 500, Error: "exit 1"},
+			step:    PipelineStepResult{Name: "test", Status: StepFailed, DurationMS: 500, Error: "exit 1"},
 			wantErr: "",
 		},
 		{
 			name:    "valid_failed_optional",
-			step:    PipelineStepResult{Name: "lint", Status: "failed (optional)", DurationMS: 200},
+			step:    PipelineStepResult{Name: "lint", Status: StepFailedOptional, DurationMS: 200},
 			wantErr: "",
 		},
 		{
 			name:    "valid_skipped",
-			step:    PipelineStepResult{Name: "deploy", Status: "skipped"},
+			step:    PipelineStepResult{Name: "deploy", Status: StepSkipped},
 			wantErr: "",
 		},
 		{
 			name:    "valid_aborted",
-			step:    PipelineStepResult{Name: "check", Status: "aborted"},
+			step:    PipelineStepResult{Name: "check", Status: StepAborted},
 			wantErr: "",
 		},
 		{
 			name:    "name_empty",
-			step:    PipelineStepResult{Name: "", Status: "ok"},
+			step:    PipelineStepResult{Name: "", Status: StepOK},
 			wantErr: "name is required",
 		},
 		{

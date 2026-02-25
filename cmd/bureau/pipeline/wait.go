@@ -110,7 +110,7 @@ func emitWaitResult(logger *slog.Logger, params pipelineWaitParams, ticketID ref
 	stepCount := 0
 	if content.Pipeline != nil {
 		pipelineRef = content.Pipeline.PipelineRef
-		conclusion = content.Pipeline.Conclusion
+		conclusion = string(content.Pipeline.Conclusion)
 		stepCount = content.Pipeline.TotalSteps
 	}
 

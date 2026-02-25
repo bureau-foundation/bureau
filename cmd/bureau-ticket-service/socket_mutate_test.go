@@ -9,6 +9,7 @@ import (
 	"testing"
 
 	"github.com/bureau-foundation/bureau/lib/ref"
+	"github.com/bureau-foundation/bureau/lib/schema/pipeline"
 	"github.com/bureau-foundation/bureau/lib/schema/ticket"
 	"github.com/bureau-foundation/bureau/lib/servicetoken"
 )
@@ -1218,7 +1219,7 @@ func TestHandleUpdateTypeFromPipelineAutoClearsPipelineContent(t *testing.T) {
 			Pipeline: &ticket.PipelineExecutionContent{
 				PipelineRef: "pipelines/deploy",
 				TotalSteps:  3,
-				Conclusion:  "failure",
+				Conclusion:  pipeline.ConclusionFailure,
 			},
 			CreatedBy: ref.MustParseUserID("@agent/creator:bureau.local"),
 			CreatedAt: "2026-01-01T00:00:00Z",

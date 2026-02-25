@@ -284,13 +284,13 @@ func run() error {
 				totalDuration.Milliseconds(), threadLog.logEventID())
 			threadLog.logFailed(ctx, name, step.Name, err)
 
-			pipelineExecution.Conclusion = "failure"
+			pipelineExecution.Conclusion = pipeline.ConclusionFailure
 			updateTicketConclusion(ctx, ticketClient, ticketID, ticketRoom, pipelineExecution, logger)
 			closeTicketBestEffort(ctx, clk, ticketClient, ticketID, ticketRoom,
 				fmt.Sprintf("Step %q failed: variable expansion: %v", step.Name, err), logger)
 
 			publishPipelineResult(ctx, session, threadLog, name, ticketID, len(content.Steps),
-				"failure", pipelineStart, totalDuration, stepResults, nil,
+				pipeline.ConclusionFailure, pipelineStart, totalDuration, stepResults, nil,
 				step.Name, err.Error(), logger)
 			return fmt.Errorf("expanding step %q: %w", step.Name, err)
 		}
@@ -304,43 +304,43 @@ func run() error {
 		}
 
 		switch result.status {
-		case "aborted":
+		case pipeline.StepAborted:
 			logger.Info("pipeline aborted", "step", expandedStep.Name, "error", result.err)
 			threadLog.logAborted(ctx, name, expandedStep.Name, result.err)
-			results.writeStep(index, expandedStep.Name, "aborted",
+			results.writeStep(index, expandedStep.Name, pipeline.StepAborted,
 				result.duration.Milliseconds(), result.err.Error(), nil)
 			results.writeAborted(expandedStep.Name, result.err.Error(),
 				time.Since(pipelineStart).Milliseconds(), threadLog.logEventID())
 			stepResults = append(stepResults, pipeline.PipelineStepResult{
 				Name:       expandedStep.Name,
-				Status:     "aborted",
+				Status:     pipeline.StepAborted,
 				DurationMS: result.duration.Milliseconds(),
 				Error:      result.err.Error(),
 			})
 			totalDuration := time.Since(pipelineStart)
 
-			pipelineExecution.Conclusion = "aborted"
+			pipelineExecution.Conclusion = pipeline.ConclusionAborted
 			updateTicketConclusion(ctx, ticketClient, ticketID, ticketRoom, pipelineExecution, logger)
 			closeTicketBestEffort(ctx, clk, ticketClient, ticketID, ticketRoom,
 				fmt.Sprintf("Pipeline aborted at step %q: %v", expandedStep.Name, result.err), logger)
 
 			publishPipelineResult(ctx, session, threadLog, name, ticketID, len(content.Steps),
-				"aborted", pipelineStart, totalDuration, stepResults, nil,
+				pipeline.ConclusionAborted, pipelineStart, totalDuration, stepResults, nil,
 				expandedStep.Name, result.err.Error(), logger)
 			return nil
 
-		case "failed":
+		case pipeline.StepFailed:
 			if expandedStep.Optional {
 				logger.Warn("optional step failed, continuing",
 					"step", index+1, "total", len(content.Steps),
 					"name", expandedStep.Name, "error", result.err)
 				threadLog.logStep(ctx, index, len(content.Steps), expandedStep.Name,
-					"failed (optional)", result.duration)
-				results.writeStep(index, expandedStep.Name, "failed (optional)",
+					pipeline.StepFailedOptional, result.duration)
+				results.writeStep(index, expandedStep.Name, pipeline.StepFailedOptional,
 					result.duration.Milliseconds(), result.err.Error(), nil)
 				stepResults = append(stepResults, pipeline.PipelineStepResult{
 					Name:       expandedStep.Name,
-					Status:     "failed (optional)",
+					Status:     pipeline.StepFailedOptional,
 					DurationMS: result.duration.Milliseconds(),
 					Error:      result.err.Error(),
 				})
@@ -349,11 +349,11 @@ func run() error {
 					"step", index+1, "total", len(content.Steps),
 					"name", expandedStep.Name, "error", result.err)
 				threadLog.logFailed(ctx, name, expandedStep.Name, result.err)
-				results.writeStep(index, expandedStep.Name, "failed",
+				results.writeStep(index, expandedStep.Name, pipeline.StepFailed,
 					result.duration.Milliseconds(), result.err.Error(), nil)
 				stepResults = append(stepResults, pipeline.PipelineStepResult{
 					Name:       expandedStep.Name,
-					Status:     "failed",
+					Status:     pipeline.StepFailed,
 					DurationMS: result.duration.Milliseconds(),
 					Error:      result.err.Error(),
 				})
@@ -365,13 +365,13 @@ func run() error {
 				results.writeFailed(expandedStep.Name, result.err.Error(),
 					totalDuration.Milliseconds(), threadLog.logEventID())
 
-				pipelineExecution.Conclusion = "failure"
+				pipelineExecution.Conclusion = pipeline.ConclusionFailure
 				updateTicketConclusion(ctx, ticketClient, ticketID, ticketRoom, pipelineExecution, logger)
 				closeTicketBestEffort(ctx, clk, ticketClient, ticketID, ticketRoom,
 					fmt.Sprintf("Step %q failed: %v", expandedStep.Name, result.err), logger)
 
 				publishPipelineResult(ctx, session, threadLog, name, ticketID, len(content.Steps),
-					"failure", pipelineStart, totalDuration, stepResults, nil,
+					pipeline.ConclusionFailure, pipelineStart, totalDuration, stepResults, nil,
 					expandedStep.Name, result.err.Error(), logger)
 				return fmt.Errorf("step %q failed: %w", expandedStep.Name, result.err)
 			}
@@ -404,12 +404,12 @@ func run() error {
 		results.writeAborted("", "ticket closed externally",
 			totalDuration.Milliseconds(), threadLog.logEventID())
 
-		pipelineExecution.Conclusion = "cancelled"
+		pipelineExecution.Conclusion = pipeline.ConclusionCancelled
 		updateTicketConclusion(ctx, ticketClient, ticketID, ticketRoom, pipelineExecution, logger)
 		// Ticket is already closed (that's how we detected cancellation).
 
 		publishPipelineResult(ctx, session, threadLog, name, ticketID, len(content.Steps),
-			"cancelled", pipelineStart, totalDuration, stepResults, nil,
+			pipeline.ConclusionCancelled, pipelineStart, totalDuration, stepResults, nil,
 			"", "ticket closed externally", logger)
 		return nil
 	}
@@ -425,13 +425,13 @@ func run() error {
 				results.writeFailed("", fmt.Sprintf("resolving pipeline output %q: %v", outputName, expandError),
 					totalDuration.Milliseconds(), threadLog.logEventID())
 
-				pipelineExecution.Conclusion = "failure"
+				pipelineExecution.Conclusion = pipeline.ConclusionFailure
 				updateTicketConclusion(ctx, ticketClient, ticketID, ticketRoom, pipelineExecution, logger)
 				closeTicketBestEffort(ctx, clk, ticketClient, ticketID, ticketRoom,
 					fmt.Sprintf("Failed to resolve pipeline output %q: %v", outputName, expandError), logger)
 
 				publishPipelineResult(ctx, session, threadLog, name, ticketID, len(content.Steps),
-					"failure", pipelineStart, totalDuration, stepResults, nil,
+					pipeline.ConclusionFailure, pipelineStart, totalDuration, stepResults, nil,
 					"", fmt.Sprintf("resolving pipeline output %q: %v", outputName, expandError), logger)
 				return fmt.Errorf("resolving pipeline output %q: %w", outputName, expandError)
 			}
@@ -444,13 +444,13 @@ func run() error {
 	threadLog.logComplete(ctx, name, totalDuration)
 	results.writeComplete(totalDuration.Milliseconds(), threadLog.logEventID(), pipelineOutputs)
 
-	pipelineExecution.Conclusion = "success"
+	pipelineExecution.Conclusion = pipeline.ConclusionSuccess
 	updateTicketConclusion(ctx, ticketClient, ticketID, ticketRoom, pipelineExecution, logger)
 	closeTicketBestEffort(ctx, clk, ticketClient, ticketID, ticketRoom,
 		fmt.Sprintf("Pipeline completed successfully in %s", formatDuration(totalDuration)), logger)
 
 	publishPipelineResult(ctx, session, threadLog, name, ticketID, len(content.Steps),
-		"success", pipelineStart, totalDuration, stepResults, pipelineOutputs,
+		pipeline.ConclusionSuccess, pipelineStart, totalDuration, stepResults, pipelineOutputs,
 		"", "", logger)
 	return nil
 }
@@ -482,13 +482,13 @@ func closeTicketBestEffort(ctx context.Context, clk clock.Clock, client *service
 // for the ticket. The format matches the thread log step format.
 func formatStepNote(index, total int, name string, result stepResult) string {
 	switch result.status {
-	case "ok":
+	case pipeline.StepOK:
 		return fmt.Sprintf("step %d/%d: %s... ok (%s)", index+1, total, name, formatDuration(result.duration))
-	case "skipped":
+	case pipeline.StepSkipped:
 		return fmt.Sprintf("step %d/%d: %s... skipped", index+1, total, name)
-	case "failed":
+	case pipeline.StepFailed:
 		return fmt.Sprintf("step %d/%d: %s... failed (%s): %v", index+1, total, name, formatDuration(result.duration), result.err)
-	case "aborted":
+	case pipeline.StepAborted:
 		return fmt.Sprintf("step %d/%d: %s... aborted: %v", index+1, total, name, result.err)
 	default:
 		return fmt.Sprintf("step %d/%d: %s... %s (%s)", index+1, total, name, result.status, formatDuration(result.duration))
@@ -509,7 +509,7 @@ func publishPipelineResult(
 	pipelineName string,
 	ticketID string,
 	stepCount int,
-	conclusion string,
+	conclusion pipeline.PipelineConclusion,
 	startedAt time.Time,
 	totalDuration time.Duration,
 	stepResults []pipeline.PipelineStepResult,
@@ -591,11 +591,11 @@ func runOnFailureSteps(
 		result := executeStep(ctx, expandedStep, index, len(steps), session, artifacts, threadLog, logger)
 
 		switch result.status {
-		case "ok", "skipped":
+		case pipeline.StepOK, pipeline.StepSkipped:
 			logger.Info("on_failure step completed", "index", index, "name", expandedStep.Name, "status", result.status)
-		case "failed":
+		case pipeline.StepFailed:
 			logger.Warn("on_failure step failed, continuing", "index", index, "name", expandedStep.Name, "error", result.err)
-		case "aborted":
+		case pipeline.StepAborted:
 			logger.Warn("on_failure step aborted, continuing", "index", index, "name", expandedStep.Name, "error", result.err)
 		}
 

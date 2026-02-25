@@ -358,7 +358,7 @@ func TestWorkspaceCLILifecycle(t *testing.T) {
 	// Verify the pipeline published a structured result. This catches
 	// pipelines that change status but fail partway through — the result
 	// event records the conclusion and per-step outcomes.
-	verifyPipelineResult(t, admin, workspaceRoomID, "dev-workspace-init", "success")
+	verifyPipelineResult(t, admin, workspaceRoomID, "dev-workspace-init", pipeline.ConclusionSuccess)
 
 	// Verify the workspace state event contains the expected content.
 	// The pipeline publishes this via Matrix (not filesystem), so reading
@@ -410,7 +410,7 @@ func TestWorkspaceCLILifecycle(t *testing.T) {
 	t.Log("workspace status is 'archived' — teardown pipeline completed")
 
 	// Verify teardown pipeline published a successful result.
-	verifyPipelineResult(t, admin, workspaceRoomID, "dev-workspace-deinit", "success")
+	verifyPipelineResult(t, admin, workspaceRoomID, "dev-workspace-deinit", pipeline.ConclusionSuccess)
 
 	t.Log("workspace lifecycle verified: create → active → destroy → archived")
 }
@@ -504,7 +504,7 @@ func waitForWorkspaceStatus(t *testing.T, session *messaging.DirectSession, room
 // published AFTER the pipeline's own publish steps (e.g., workspace status
 // "active"), so it may not exist yet when the workspace status watch returns.
 // Uses the same watch-then-check pattern as waitForWorkspaceStatus.
-func verifyPipelineResult(t *testing.T, session *messaging.DirectSession, roomID ref.RoomID, pipelineName, expectedConclusion string) {
+func verifyPipelineResult(t *testing.T, session *messaging.DirectSession, roomID ref.RoomID, pipelineName string, expectedConclusion pipeline.PipelineConclusion) {
 	t.Helper()
 
 	// Set up watch before checking current state, same as waitForWorkspaceStatus.
@@ -525,7 +525,7 @@ func verifyPipelineResult(t *testing.T, session *messaging.DirectSession, roomID
 // checkPipelineResultContent unmarshals and verifies the pipeline result
 // content. Separated from verifyPipelineResult so both the immediate-check
 // and sync-wait paths share the same validation logic.
-func checkPipelineResultContent(t *testing.T, content json.RawMessage, pipelineName, expectedConclusion string) {
+func checkPipelineResultContent(t *testing.T, content json.RawMessage, pipelineName string, expectedConclusion pipeline.PipelineConclusion) {
 	t.Helper()
 
 	var result pipeline.PipelineResultContent

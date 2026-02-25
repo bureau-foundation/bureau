@@ -13,6 +13,7 @@ import (
 	"github.com/bureau-foundation/bureau/lib/cron"
 	"github.com/bureau-foundation/bureau/lib/ref"
 	"github.com/bureau-foundation/bureau/lib/schema"
+	"github.com/bureau-foundation/bureau/lib/schema/pipeline"
 )
 
 const (
@@ -529,7 +530,7 @@ type TicketGate struct {
 	// Conclusion is the required pipeline result (type
 	// "pipeline"). Typically "success". If empty, any completed
 	// result satisfies the gate.
-	Conclusion string `json:"conclusion,omitempty"`
+	Conclusion pipeline.PipelineConclusion `json:"conclusion,omitempty"`
 
 	// EventType is the Matrix state event type to watch (type
 	// "state_event"). Same semantics as StartCondition.EventType.
@@ -1073,7 +1074,7 @@ type PipelineExecutionContent struct {
 	// "success", "failure", "aborted", or "cancelled". Empty while
 	// the pipeline is still running. Mirrors the conclusion in the
 	// companion m.bureau.pipeline_result event.
-	Conclusion string `json:"conclusion,omitempty"`
+	Conclusion pipeline.PipelineConclusion `json:"conclusion,omitempty"`
 }
 
 // Validate checks that all required fields are present and well-formed.
@@ -1090,10 +1091,7 @@ func (p *PipelineExecutionContent) Validate() error {
 	if p.CurrentStep > p.TotalSteps {
 		return fmt.Errorf("current_step (%d) exceeds total_steps (%d)", p.CurrentStep, p.TotalSteps)
 	}
-	switch p.Conclusion {
-	case "", "success", "failure", "aborted", "cancelled":
-		// Valid. Empty means still running.
-	default:
+	if p.Conclusion != "" && !p.Conclusion.IsKnown() {
 		return fmt.Errorf("unknown conclusion %q", p.Conclusion)
 	}
 	return nil

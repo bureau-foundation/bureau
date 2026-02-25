@@ -10,6 +10,7 @@ import (
 	"time"
 
 	"github.com/bureau-foundation/bureau/lib/ref"
+	"github.com/bureau-foundation/bureau/lib/schema/pipeline"
 	"github.com/bureau-foundation/bureau/messaging"
 )
 
@@ -90,7 +91,7 @@ func (l *threadLogger) logRoomID() ref.RoomID {
 }
 
 // logStep posts a step status update as a thread reply.
-func (l *threadLogger) logStep(ctx context.Context, index, total int, name, status string, duration time.Duration) {
+func (l *threadLogger) logStep(ctx context.Context, index, total int, name string, status pipeline.StepResultStatus, duration time.Duration) {
 	if l == nil {
 		return
 	}

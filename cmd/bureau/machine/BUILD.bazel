@@ -9,6 +9,7 @@ go_library(
         "command.go",
         "decommission.go",
         "doc.go",
+        "doctor.go",
         "list.go",
         "provision.go",
         "revoke.go",
@@ -19,7 +20,10 @@ go_library(
     visibility = ["//visibility:public"],
     deps = [
         "//cmd/bureau/cli",
+        "//cmd/bureau/cli/doctor",
         "//lib/bootstrap",
+        "//lib/content",
+        "//lib/principal",
         "//lib/ref",
         "//lib/schema",
         "//lib/secret",
@@ -29,7 +33,14 @@ go_library(
 
 go_test(
     name = "machine_test",
-    srcs = ["upgrade_test.go"],
+    srcs = [
+        "doctor_test.go",
+        "upgrade_test.go",
+    ],
     embed = [":machine"],
-    deps = ["//lib/ref"],
+    deps = [
+        "//cmd/bureau/cli/doctor",
+        "//lib/principal",
+        "//lib/ref",
+    ],
 )

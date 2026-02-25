@@ -18,6 +18,7 @@ import (
 	"testing"
 
 	"github.com/bureau-foundation/bureau/cmd/bureau/cli"
+	"github.com/bureau-foundation/bureau/cmd/bureau/cli/doctor"
 	"github.com/bureau-foundation/bureau/lib/content"
 	"github.com/bureau-foundation/bureau/lib/ref"
 	"github.com/bureau-foundation/bureau/lib/schema"
@@ -37,6 +38,12 @@ func mustParseUserID(t *testing.T, raw string) ref.UserID {
 		t.Fatalf("ParseUserID(%q): %v", raw, err)
 	}
 	return userID
+}
+
+// isMatrixPermissionDenied classifies Matrix M_FORBIDDEN errors as permission
+// denied, matching the callback used by the matrix doctor's Run function.
+func isMatrixPermissionDenied(err error) bool {
+	return messaging.IsMatrixError(err, messaging.ErrCodeForbidden)
 }
 
 // mockDoctorServer is a configurable Matrix homeserver mock for doctor tests.
@@ -423,10 +430,10 @@ func TestRunDoctor_AllHealthy(t *testing.T) {
 	results := runDoctor(t.Context(), client, session, ref.MustParseServerName("local"), nil, "", testLogger())
 
 	for _, result := range results {
-		if result.Status == statusFail {
+		if result.Status == doctor.StatusFail {
 			t.Errorf("[FAIL] %s: %s", result.Name, result.Message)
 		}
-		if result.Status == statusWarn {
+		if result.Status == doctor.StatusWarn {
 			t.Logf("[WARN] %s: %s", result.Name, result.Message)
 		}
 	}
@@ -508,7 +515,7 @@ func TestRunDoctor_WithCredentials(t *testing.T) {
 	results := runDoctor(t.Context(), client, session, ref.MustParseServerName("local"), credentials, "", testLogger())
 
 	for _, result := range results {
-		if strings.HasSuffix(result.Name, " credential") && result.Status != statusPass {
+		if strings.HasSuffix(result.Name, " credential") && result.Status != doctor.StatusPass {
 			t.Errorf("[%s] %s: %s", result.Status, result.Name, result.Message)
 		}
 	}
@@ -543,7 +550,7 @@ func TestRunDoctor_StaleCredentials(t *testing.T) {
 	for _, result := range results {
 		if result.Name == "system room credential" {
 			found = true
-			if result.Status != statusFail {
+			if result.Status != doctor.StatusFail {
 				t.Errorf("expected system room credential to FAIL, got %s: %s", result.Status, result.Message)
 			}
 			if !strings.Contains(result.Message, "stale") {
@@ -573,12 +580,12 @@ func TestRunDoctor_HomeserverUnreachable(t *testing.T) {
 		t.Fatal("expected at least one result")
 	}
 
-	if results[0].Name != "homeserver" || results[0].Status != statusFail {
+	if results[0].Name != "homeserver" || results[0].Status != doctor.StatusFail {
 		t.Errorf("expected homeserver FAIL, got %s %s", results[0].Name, results[0].Status)
 	}
 
 	for _, result := range results[1:] {
-		if result.Status != statusSkip {
+		if result.Status != doctor.StatusSkip {
 			t.Errorf("expected %s to be skipped after homeserver failure, got %s", result.Name, result.Status)
 		}
 	}
@@ -614,11 +621,11 @@ func TestRunDoctor_AuthFailure(t *testing.T) {
 
 	results := runDoctor(t.Context(), client, session, ref.MustParseServerName("local"), nil, "", testLogger())
 
-	if results[0].Status != statusPass {
+	if results[0].Status != doctor.StatusPass {
 		t.Errorf("expected homeserver PASS, got %s: %s", results[0].Status, results[0].Message)
 	}
 
-	if results[1].Name != "authentication" || results[1].Status != statusFail {
+	if results[1].Name != "authentication" || results[1].Status != doctor.StatusFail {
 		t.Errorf("expected authentication FAIL, got %s %s: %s", results[1].Name, results[1].Status, results[1].Message)
 	}
 	if !strings.Contains(results[1].Message, "invalid or expired") {
@@ -626,7 +633,7 @@ func TestRunDoctor_AuthFailure(t *testing.T) {
 	}
 
 	for _, result := range results[2:] {
-		if result.Status != statusSkip {
+		if result.Status != doctor.StatusSkip {
 			t.Errorf("expected %s to be skipped after auth failure, got %s", result.Name, result.Status)
 		}
 	}
@@ -656,19 +663,19 @@ func TestRunDoctor_FixMissingSpaceChild(t *testing.T) {
 	// Space child checks should fail with fix hints.
 	for _, result := range results {
 		if strings.HasSuffix(result.Name, " in space") {
-			if result.Status != statusFail {
+			if result.Status != doctor.StatusFail {
 				t.Errorf("expected %s to FAIL, got %s", result.Name, result.Status)
 			}
 			if result.FixHint == "" {
 				t.Errorf("expected %s to have a fix hint", result.Name)
 			}
-			if result.fix == nil {
+			if !result.HasFix() {
 				t.Errorf("expected %s to have a fix function", result.Name)
 			}
 		}
 	}
 
-	executeFixes(t.Context(), session, results, false)
+	doctor.ExecuteFixes(t.Context(), results, false, isMatrixPermissionDenied)
 
 	// Verify m.space.child state events were sent.
 	stateEvents := mock.getStateEvents()
@@ -685,7 +692,7 @@ func TestRunDoctor_FixMissingSpaceChild(t *testing.T) {
 	// Verify results updated to fixed.
 	for _, result := range results {
 		if strings.HasSuffix(result.Name, " in space") {
-			if result.Status != statusFixed {
+			if result.Status != doctor.StatusFixed {
 				t.Errorf("expected %s to be FIXED, got %s", result.Name, result.Status)
 			}
 		}
@@ -720,10 +727,10 @@ func TestRunDoctor_FixJoinRules(t *testing.T) {
 		if result.Name == "system room join rules" {
 			systemJoinRulesIndex = i
 			found = true
-			if result.Status != statusFail {
+			if result.Status != doctor.StatusFail {
 				t.Errorf("expected FAIL, got %s: %s", result.Status, result.Message)
 			}
-			if result.fix == nil {
+			if !result.HasFix() {
 				t.Fatal("expected fix function")
 			}
 			break
@@ -736,13 +743,13 @@ func TestRunDoctor_FixJoinRules(t *testing.T) {
 	// Other rooms should still pass.
 	for _, result := range results {
 		if result.Name == "bureau space join rules" || result.Name == "template room join rules" {
-			if result.Status != statusPass {
+			if result.Status != doctor.StatusPass {
 				t.Errorf("expected %s to PASS, got %s", result.Name, result.Status)
 			}
 		}
 	}
 
-	executeFixes(t.Context(), session, results, false)
+	doctor.ExecuteFixes(t.Context(), results, false, isMatrixPermissionDenied)
 
 	// Verify join rules state event was sent.
 	stateEvents := mock.getStateEvents()
@@ -755,7 +762,7 @@ func TestRunDoctor_FixJoinRules(t *testing.T) {
 	if !joinRulesFound {
 		t.Error("expected m.room.join_rules state event for system room")
 	}
-	if results[systemJoinRulesIndex].Status != statusFixed {
+	if results[systemJoinRulesIndex].Status != doctor.StatusFixed {
 		t.Errorf("expected FIXED, got %s", results[systemJoinRulesIndex].Status)
 	}
 }
@@ -792,7 +799,7 @@ func TestRunDoctor_FixPowerLevels(t *testing.T) {
 	for _, result := range results {
 		if result.Name == "system room state_default" {
 			found = true
-			if result.Status != statusFail {
+			if result.Status != doctor.StatusFail {
 				t.Errorf("expected FAIL, got %s: %s", result.Status, result.Message)
 			}
 			if result.FixHint == "" {
@@ -805,7 +812,7 @@ func TestRunDoctor_FixPowerLevels(t *testing.T) {
 		t.Fatal("system room state_default check not found")
 	}
 
-	executeFixes(t.Context(), session, results, false)
+	doctor.ExecuteFixes(t.Context(), results, false, isMatrixPermissionDenied)
 
 	// Verify power levels state event was sent.
 	stateEvents := mock.getStateEvents()
@@ -857,9 +864,9 @@ func TestRunDoctor_FixCredentialFile(t *testing.T) {
 	// System room credential should be FAIL (was !wrong:local, should be !system:local).
 	// Missing keys (machine, service, template, pipeline) should also be FAIL.
 	credentialFailCount := 0
-	var firstCredentialFail *checkResult
+	var firstCredentialFail *doctor.Result
 	for i, result := range results {
-		if strings.HasSuffix(result.Name, " credential") && result.Status == statusFail {
+		if strings.HasSuffix(result.Name, " credential") && result.Status == doctor.StatusFail {
 			credentialFailCount++
 			if firstCredentialFail == nil {
 				firstCredentialFail = &results[i]
@@ -869,7 +876,7 @@ func TestRunDoctor_FixCredentialFile(t *testing.T) {
 	if credentialFailCount == 0 {
 		t.Fatal("expected at least one credential FAIL")
 	}
-	if firstCredentialFail.fix == nil {
+	if !firstCredentialFail.HasFix() {
 		t.Fatal("expected first credential failure to have a fix function")
 	}
 	if firstCredentialFail.FixHint != "update credential file" {
@@ -877,7 +884,7 @@ func TestRunDoctor_FixCredentialFile(t *testing.T) {
 	}
 
 	// Execute the fix.
-	executeFixes(t.Context(), session, results, false)
+	doctor.ExecuteFixes(t.Context(), results, false, isMatrixPermissionDenied)
 
 	// Verify the credential file was updated.
 	updatedCredentials, err := cli.ReadCredentialFile(credentialFile)
@@ -928,8 +935,8 @@ func TestRunDoctor_CredentialWarnWithoutFilePath(t *testing.T) {
 	results := runDoctor(t.Context(), client, session, ref.MustParseServerName("local"), credentials, "", testLogger())
 
 	for _, result := range results {
-		if strings.HasSuffix(result.Name, " credential") && result.Status == statusWarn {
-			if result.fix != nil {
+		if strings.HasSuffix(result.Name, " credential") && result.Status == doctor.StatusWarn {
+			if result.HasFix() {
 				t.Errorf("credential %q has fix function but no file path was provided", result.Name)
 			}
 		}
@@ -955,14 +962,14 @@ func TestRunDoctor_DryRunNoMutations(t *testing.T) {
 
 	results := runDoctor(t.Context(), client, session, ref.MustParseServerName("local"), nil, "", testLogger())
 
-	executeFixes(t.Context(), session, results, true)
+	doctor.ExecuteFixes(t.Context(), results, true, nil)
 
 	if events := mock.getStateEvents(); len(events) != 0 {
 		t.Errorf("expected no state events in dry-run mode, got %d", len(events))
 	}
 
 	for _, result := range results {
-		if result.Status == statusFixed {
+		if result.Status == doctor.StatusFixed {
 			t.Errorf("unexpected FIXED status in dry-run: %s", result.Name)
 		}
 	}
@@ -989,7 +996,7 @@ func TestRunDoctor_FixHintsPresent(t *testing.T) {
 	results := runDoctor(t.Context(), client, session, ref.MustParseServerName("local"), nil, "", testLogger())
 
 	for _, result := range results {
-		if result.Status == statusFail && result.fix != nil && result.FixHint == "" {
+		if result.Status == doctor.StatusFail && result.HasFix() && result.FixHint == "" {
 			t.Errorf("result %q has a fix function but no FixHint", result.Name)
 		}
 	}
@@ -1012,7 +1019,7 @@ func TestCheckServerVersions(t *testing.T) {
 	}
 
 	result := checkServerVersions(t.Context(), client)
-	if result.Status != statusPass {
+	if result.Status != doctor.StatusPass {
 		t.Errorf("expected PASS, got %s: %s", result.Status, result.Message)
 	}
 	if !strings.Contains(result.Message, "v1.1") || !strings.Contains(result.Message, "v1.5") {
@@ -1038,7 +1045,7 @@ func TestCheckAuth_Mismatch(t *testing.T) {
 	defer session.Close()
 
 	result := checkAuth(t.Context(), session)
-	if result.Status != statusWarn {
+	if result.Status != doctor.StatusWarn {
 		t.Errorf("expected WARN for user ID mismatch, got %s: %s", result.Status, result.Message)
 	}
 }
@@ -1100,12 +1107,12 @@ func TestCheckSpaceChild(t *testing.T) {
 	}
 
 	result := checkSpaceChild("room A", "!a:local", children)
-	if result.Status != statusPass {
+	if result.Status != doctor.StatusPass {
 		t.Errorf("expected PASS for known child, got %s", result.Status)
 	}
 
 	result = checkSpaceChild("room C", "!c:local", children)
-	if result.Status != statusFail {
+	if result.Status != doctor.StatusFail {
 		t.Errorf("expected FAIL for missing child, got %s", result.Status)
 	}
 }
@@ -1116,17 +1123,17 @@ func TestCheckCredentialMatch(t *testing.T) {
 	}
 
 	result := checkCredentialMatch("system room", "MATRIX_SYSTEM_ROOM", "!system:local", creds)
-	if result.Status != statusPass {
+	if result.Status != doctor.StatusPass {
 		t.Errorf("expected PASS for matching credential, got %s: %s", result.Status, result.Message)
 	}
 
 	result = checkCredentialMatch("system room", "MATRIX_SYSTEM_ROOM", "!different:local", creds)
-	if result.Status != statusFail {
+	if result.Status != doctor.StatusFail {
 		t.Errorf("expected FAIL for mismatched credential, got %s: %s", result.Status, result.Message)
 	}
 
 	result = checkCredentialMatch("system room", "MATRIX_MISSING_KEY", "!system:local", creds)
-	if result.Status != statusWarn {
+	if result.Status != doctor.StatusWarn {
 		t.Errorf("expected WARN for missing key, got %s: %s", result.Status, result.Message)
 	}
 }
@@ -1191,72 +1198,26 @@ func TestExitError(t *testing.T) {
 	}
 }
 
-func TestExecuteFixes(t *testing.T) {
-	called := false
-	results := []checkResult{
-		pass("check1", "ok"),
-		{
-			Name: "check2", Status: statusFail, Message: "broken",
-			FixHint: "fix it",
-			fix: func(ctx context.Context, session messaging.Session) error {
-				called = true
-				return nil
-			},
-		},
-		fail("check3", "also broken"),
-	}
-
-	outcome := executeFixes(t.Context(), nil, results, false)
-
-	if !called {
-		t.Error("fix function was not called")
-	}
-	if outcome.FixedCount != 1 {
-		t.Errorf("expected FixedCount=1, got %d", outcome.FixedCount)
-	}
-	if outcome.PermissionDenied {
-		t.Error("expected PermissionDenied=false")
-	}
-	if results[0].Status != statusPass {
-		t.Errorf("check1 should still be PASS, got %s", results[0].Status)
-	}
-	if results[1].Status != statusFixed {
-		t.Errorf("check2 should be FIXED, got %s", results[1].Status)
-	}
-	if results[2].Status != statusFail {
-		t.Errorf("check3 should still be FAIL (no fix function), got %s", results[2].Status)
-	}
-}
-
-func TestExecuteFixes_ReturnsZeroOnDryRun(t *testing.T) {
-	results := []checkResult{
-		failWithFix("check1", "broken", "fix it", func(ctx context.Context, session messaging.Session) error {
-			t.Error("fix should not be called in dry-run mode")
-			return nil
-		}),
-	}
-
-	outcome := executeFixes(t.Context(), nil, results, true)
-	if outcome.FixedCount != 0 {
-		t.Errorf("expected FixedCount=0 in dry-run, got %d", outcome.FixedCount)
-	}
-}
-
-func TestExecuteFixes_PermissionDenied(t *testing.T) {
-	results := []checkResult{
-		failWithFix("power levels", "admin has PL 0", "reset power levels", func(ctx context.Context, session messaging.Session) error {
+// TestMatrixPermissionDeniedClassification verifies that the Matrix-specific
+// isPermissionDenied callback correctly classifies M_FORBIDDEN errors when
+// used with doctor.ExecuteFixes. The generic ExecuteFixes behavior is
+// tested in cmd/bureau/cli/doctor/; this test validates the integration
+// with Matrix error types.
+func TestMatrixPermissionDeniedClassification(t *testing.T) {
+	results := []doctor.Result{
+		doctor.FailWithFix("power levels", "admin has PL 0", "reset power levels", func(ctx context.Context) error {
 			return &messaging.MatrixError{
 				Code:       messaging.ErrCodeForbidden,
 				Message:    "You don't have permission to post that to the room",
 				StatusCode: 403,
 			}
 		}),
-		failWithFix("join rules", "wrong join rule", "set join rule", func(ctx context.Context, session messaging.Session) error {
+		doctor.FailWithFix("join rules", "wrong join rule", "set join rule", func(ctx context.Context) error {
 			return nil
 		}),
 	}
 
-	outcome := executeFixes(t.Context(), nil, results, false)
+	outcome := doctor.ExecuteFixes(t.Context(), results, false, isMatrixPermissionDenied)
 
 	if !outcome.PermissionDenied {
 		t.Error("expected PermissionDenied=true")
@@ -1264,28 +1225,13 @@ func TestExecuteFixes_PermissionDenied(t *testing.T) {
 	if outcome.FixedCount != 1 {
 		t.Errorf("expected FixedCount=1 (join rules fixed), got %d", outcome.FixedCount)
 	}
-	if results[0].Status != statusFail {
+	if results[0].Status != doctor.StatusFail {
 		t.Errorf("power levels should remain FAIL, got %s", results[0].Status)
 	}
 	if !strings.Contains(results[0].Message, "insufficient permissions") {
 		t.Errorf("expected 'insufficient permissions' in message, got: %s", results[0].Message)
 	}
-	if results[1].Status != statusFixed {
+	if results[1].Status != doctor.StatusFixed {
 		t.Errorf("join rules should be FIXED, got %s", results[1].Status)
-	}
-}
-
-func TestFailWithFix(t *testing.T) {
-	result := failWithFix("test", "broken", "repair it", func(ctx context.Context, session messaging.Session) error {
-		return nil
-	})
-	if result.Status != statusFail {
-		t.Errorf("expected FAIL, got %s", result.Status)
-	}
-	if result.FixHint != "repair it" {
-		t.Errorf("expected FixHint 'repair it', got %q", result.FixHint)
-	}
-	if result.fix == nil {
-		t.Error("expected non-nil fix function")
 	}
 }

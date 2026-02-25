@@ -24,6 +24,7 @@ go_library(
     visibility = ["//visibility:public"],
     deps = [
         "//cmd/bureau/cli",
+        "//cmd/bureau/cli/doctor",
         "//lib/content",
         "//lib/ref",
         "//lib/schema",
@@ -51,6 +52,7 @@ go_test(
     embed = [":matrix"],
     deps = [
         "//cmd/bureau/cli",
+        "//cmd/bureau/cli/doctor",
         "//lib/content",
         "//lib/ref",
         "//lib/schema",

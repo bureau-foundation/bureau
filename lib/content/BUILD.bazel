@@ -5,12 +5,17 @@ load("@rules_go//go:def.bzl", "go_library", "go_test")
 
 go_library(
     name = "content",
-    srcs = ["content.go"],
+    srcs = [
+        "content.go",
+        "systemd.go",
+    ],
     embedsrcs = [
         "pipeline/dev-workspace-init.jsonc",
         "pipeline/dev-workspace-deinit.jsonc",
         "pipeline/dev-worktree-deinit.jsonc",
         "pipeline/dev-worktree-init.jsonc",
+        "systemd/bureau-daemon.service",
+        "systemd/bureau-launcher.service",
     ],
     importpath = "github.com/bureau-foundation/bureau/lib/content",
     visibility = ["//visibility:public"],

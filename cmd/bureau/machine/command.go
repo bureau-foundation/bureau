@@ -34,6 +34,7 @@ compromised machine. It deactivates the machine's Matrix account (forcing
 the daemon to self-destruct), clears all state, and publishes a
 revocation event for fleet-wide notification.`,
 		Subcommands: []*cli.Command{
+			doctorCommand(),
 			provisionCommand(),
 			listCommand(),
 			upgradeCommand(),

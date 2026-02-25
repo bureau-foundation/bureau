@@ -1,0 +1,23 @@
+# Copyright 2026 The Bureau Authors
+# SPDX-License-Identifier: Apache-2.0
+
+load("@rules_go//go:def.bzl", "go_library", "go_test")
+
+go_library(
+    name = "doctor",
+    srcs = [
+        "doc.go",
+        "doctor.go",
+        "execute.go",
+        "output.go",
+    ],
+    importpath = "github.com/bureau-foundation/bureau/cmd/bureau/cli/doctor",
+    visibility = ["//visibility:public"],
+    deps = ["//cmd/bureau/cli"],
+)
+
+go_test(
+    name = "doctor_test",
+    srcs = ["doctor_test.go"],
+    embed = [":doctor"],
+)

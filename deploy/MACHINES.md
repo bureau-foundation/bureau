@@ -195,9 +195,11 @@ bureau-launcher \
   --first-boot-only
 
 # 5. Install and start systemd services
-sudo cp deploy/systemd/bureau-{launcher,daemon}.service /etc/systemd/system/
-sudo systemctl daemon-reload
-sudo systemctl enable --now bureau-launcher bureau-daemon
+sudo bureau machine doctor --fix
+# Or manually:
+# sudo cp lib/content/systemd/bureau-{launcher,daemon}.service /etc/systemd/system/
+# sudo systemctl daemon-reload
+# sudo systemctl enable --now bureau-launcher bureau-daemon
 ```
 
 After first boot, the one-time password in the bootstrap config has been
@@ -269,5 +271,6 @@ bureau machine decommission machine/worker-01 --credential-file ./bureau-creds
 
 ## Systemd Units
 
-Template service files live in `deploy/systemd/`. See `deploy/systemd/machine.conf.example`
-for the EnvironmentFile format. The bootstrap script installs these automatically.
+Service unit files are embedded in the Bureau binary via `lib/content/systemd/` and
+written to `/etc/systemd/system/` by `bureau machine doctor --fix` or the bootstrap
+script. See `deploy/systemd/machine.conf.example` for the EnvironmentFile format.

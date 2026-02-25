@@ -8,11 +8,11 @@ import (
 	"encoding/json"
 	"fmt"
 	"log/slog"
-	"os"
 	"strings"
 	"time"
 
 	"github.com/bureau-foundation/bureau/cmd/bureau/cli"
+	"github.com/bureau-foundation/bureau/cmd/bureau/cli/doctor"
 	"github.com/bureau-foundation/bureau/lib/content"
 	"github.com/bureau-foundation/bureau/lib/ref"
 	"github.com/bureau-foundation/bureau/lib/schema"
@@ -29,6 +29,15 @@ type doctorParams struct {
 	Fix    bool `json:"fix"    flag:"fix"     desc:"automatically repair fixable issues"`
 	DryRun bool `json:"dry_run" flag:"dry-run" desc:"preview repairs without executing (requires --fix)"`
 }
+
+// matrixPermissionDeniedHint is the guidance printed when Matrix API
+// calls fail with M_FORBIDDEN, indicating the session lacks admin
+// power levels.
+const matrixPermissionDeniedHint = `Some fixes failed due to insufficient permissions. Power level
+and state event changes require admin credentials. Re-run with
+the credential file from "bureau matrix setup":
+
+  bureau matrix doctor --fix --credential-file ./bureau-creds`
 
 // DoctorCommand returns the "doctor" subcommand for checking Bureau Matrix
 // infrastructure health and optionally repairing fixable issues.
@@ -68,7 +77,7 @@ Use --json for machine-readable output suitable for monitoring or CI.`,
 			},
 		},
 		Annotations:    cli.ReadOnly(),
-		Output:         func() any { return &doctorJSONOutput{} },
+		Output:         func() any { return &doctor.JSONOutput{} },
 		Params:         func() any { return &params },
 		RequiredGrants: []string{"command/matrix/doctor"},
 		Run: func(ctx context.Context, args []string, logger *slog.Logger) error {
@@ -115,12 +124,16 @@ Use --json for machine-readable output suitable for monitoring or CI.`,
 			// convergence is 2 iterations.
 			const maxFixIterations = 5
 			repairedNames := make(map[string]bool)
-			permissionDenied := false
-			var results []checkResult
+			var aggregateOutcome doctor.Outcome
+			var results []doctor.Result
 
 			serverName, err := ref.ParseServerName(params.ServerName)
 			if err != nil {
 				return fmt.Errorf("invalid --server-name: %w", err)
+			}
+
+			isMatrixPermissionDenied := func(err error) bool {
+				return messaging.IsMatrixError(err, messaging.ErrCodeForbidden)
 			}
 
 			for iteration := range maxFixIterations {
@@ -138,14 +151,14 @@ Use --json for machine-readable output suitable for monitoring or CI.`,
 				// lets us mark all of them as repaired in the final
 				// output, not just the one that carried the fix closure.
 				for _, r := range results {
-					if r.Status == statusFail {
+					if r.Status == doctor.StatusFail {
 						repairedNames[r.Name] = true
 					}
 				}
 
-				outcome := executeFixes(ctx, sess, results, params.DryRun)
+				outcome := doctor.ExecuteFixes(ctx, results, params.DryRun, isMatrixPermissionDenied)
 				if outcome.PermissionDenied {
-					permissionDenied = true
+					aggregateOutcome.PermissionDenied = true
 				}
 				if outcome.FixedCount == 0 || params.DryRun {
 					break
@@ -164,70 +177,26 @@ Use --json for machine-readable output suitable for monitoring or CI.`,
 			// Mark checks that pass now but were failing in an
 			// earlier iteration — these were repaired by a fix even
 			// if they didn't directly carry the fix closure.
-			for i := range results {
-				if results[i].Status == statusPass && repairedNames[results[i].Name] {
-					results[i].Status = statusFixed
-				}
+			doctor.MarkRepaired(results, repairedNames)
+
+			if aggregateOutcome.PermissionDenied {
+				aggregateOutcome.PermissionDeniedHint = matrixPermissionDeniedHint
 			}
 
-			if done, err := params.EmitJSON(doctorJSON(results, params.DryRun, permissionDenied)); done {
+			if done, err := params.EmitJSON(doctor.BuildJSON(results, params.DryRun, aggregateOutcome)); done {
 				if err != nil {
 					return err
 				}
 				for _, result := range results {
-					if result.Status == statusFail {
+					if result.Status == doctor.StatusFail {
 						return &cli.ExitError{Code: 1}
 					}
 				}
 				return nil
 			}
-			return printChecklist(results, params.Fix, params.DryRun, permissionDenied)
+			return doctor.PrintChecklist(results, params.Fix, params.DryRun, aggregateOutcome)
 		},
 	}
-}
-
-// fixAction is a function that repairs a failed check.
-type fixAction func(ctx context.Context, session messaging.Session) error
-
-// checkStatus is the outcome of a single health check.
-type checkStatus string
-
-const (
-	statusPass  checkStatus = "pass"
-	statusFail  checkStatus = "fail"
-	statusWarn  checkStatus = "warn"
-	statusSkip  checkStatus = "skip"
-	statusFixed checkStatus = "fixed"
-)
-
-// checkResult holds the outcome of a single health check. Fixable failures
-// carry a FixHint (human description) and an unexported fix function.
-type checkResult struct {
-	Name    string      `json:"name"              desc:"health check name"`
-	Status  checkStatus `json:"status"            desc:"check outcome: pass, fail, warn, skip, fixed"`
-	Message string      `json:"message"           desc:"human-readable check result"`
-	FixHint string      `json:"fix_hint,omitempty" desc:"suggested fix command"`
-	fix     fixAction
-}
-
-func pass(name, message string) checkResult {
-	return checkResult{Name: name, Status: statusPass, Message: message}
-}
-
-func fail(name, message string) checkResult {
-	return checkResult{Name: name, Status: statusFail, Message: message}
-}
-
-func failWithFix(name, message, fixHint string, fix fixAction) checkResult {
-	return checkResult{Name: name, Status: statusFail, Message: message, FixHint: fixHint, fix: fix}
-}
-
-func warn(name, message string) checkResult {
-	return checkResult{Name: name, Status: statusWarn, Message: message}
-}
-
-func skip(name, message string) checkResult {
-	return checkResult{Name: name, Status: statusSkip, Message: message}
 }
 
 // standardRoom defines one of the rooms that "bureau matrix setup" creates.
@@ -291,23 +260,23 @@ var standardRooms = []standardRoom{
 }
 
 // runDoctor executes all health checks and returns the results. Fixable
-// failures carry fix closures that executeFixes can invoke.
+// failures carry fix closures that ExecuteFixes can invoke.
 //
 // When credentialFilePath is non-empty, credential mismatches are reported
 // as fixable failures (the fix updates the credential file). When empty,
 // credential mismatches remain warnings since there is no file to update.
-func runDoctor(ctx context.Context, client *messaging.Client, session messaging.Session, serverName ref.ServerName, storedCredentials map[string]string, credentialFilePath string, logger *slog.Logger) []checkResult {
-	var results []checkResult
+func runDoctor(ctx context.Context, client *messaging.Client, session messaging.Session, serverName ref.ServerName, storedCredentials map[string]string, credentialFilePath string, logger *slog.Logger) []doctor.Result {
+	var results []doctor.Result
 
 	// Section 1: Connectivity and authentication.
 	versionsResult := checkServerVersions(ctx, client)
 	results = append(results, versionsResult)
 
-	if versionsResult.Status == statusFail {
-		results = append(results, skip("authentication", "skipped: homeserver unreachable"))
-		results = append(results, skip("bureau space", "skipped: homeserver unreachable"))
+	if versionsResult.Status == doctor.StatusFail {
+		results = append(results, doctor.Skip("authentication", "skipped: homeserver unreachable"))
+		results = append(results, doctor.Skip("bureau space", "skipped: homeserver unreachable"))
 		for _, room := range standardRooms {
-			results = append(results, skip(room.name, "skipped: homeserver unreachable"))
+			results = append(results, doctor.Skip(room.name, "skipped: homeserver unreachable"))
 		}
 		return results
 	}
@@ -315,10 +284,10 @@ func runDoctor(ctx context.Context, client *messaging.Client, session messaging.
 	authResult := checkAuth(ctx, session)
 	results = append(results, authResult)
 
-	if authResult.Status == statusFail {
-		results = append(results, skip("bureau space", "skipped: authentication failed"))
+	if authResult.Status == doctor.StatusFail {
+		results = append(results, doctor.Skip("bureau space", "skipped: authentication failed"))
 		for _, room := range standardRooms {
-			results = append(results, skip(room.name, "skipped: authentication failed"))
+			results = append(results, doctor.Skip(room.name, "skipped: authentication failed"))
 		}
 		return results
 	}
@@ -326,16 +295,17 @@ func runDoctor(ctx context.Context, client *messaging.Client, session messaging.
 	// Section 2: Space and rooms exist.
 	spaceAlias := ref.MustParseRoomAlias(schema.FullRoomAlias("bureau", serverName))
 	spaceResult, spaceRoomID := checkRoomExists(ctx, session, "bureau space", spaceAlias)
-	if spaceResult.Status == statusFail {
+	if spaceResult.Status == doctor.StatusFail {
 		spaceResult.FixHint = "create Bureau space"
-		spaceResult.fix = func(ctx context.Context, session messaging.Session) error {
-			id, err := ensureSpace(ctx, session, serverName, logger)
-			if err != nil {
-				return err
-			}
-			spaceRoomID = id
-			return nil
-		}
+		spaceResult = doctor.FailWithFix(spaceResult.Name, spaceResult.Message, "create Bureau space",
+			func(ctx context.Context) error {
+				id, err := ensureSpace(ctx, session, serverName, logger)
+				if err != nil {
+					return err
+				}
+				spaceRoomID = id
+				return nil
+			})
 	}
 	results = append(results, spaceResult)
 
@@ -344,17 +314,17 @@ func runDoctor(ctx context.Context, client *messaging.Client, session messaging.
 		room := room // capture for closure
 		fullAlias := ref.MustParseRoomAlias(schema.FullRoomAlias(room.alias, serverName))
 		result, roomID := checkRoomExists(ctx, session, room.name, fullAlias)
-		if result.Status == statusFail {
-			result.FixHint = fmt.Sprintf("create %s", room.name)
-			result.fix = func(ctx context.Context, session messaging.Session) error {
-				id, err := ensureRoom(ctx, session, room.alias, room.displayName, room.topic,
-					spaceRoomID, serverName, room.powerLevels(session.UserID()), logger)
-				if err != nil {
-					return err
-				}
-				roomIDs[room.alias] = id
-				return nil
-			}
+		if result.Status == doctor.StatusFail {
+			result = doctor.FailWithFix(result.Name, result.Message, fmt.Sprintf("create %s", room.name),
+				func(ctx context.Context) error {
+					id, err := ensureRoom(ctx, session, room.alias, room.displayName, room.topic,
+						spaceRoomID, serverName, room.powerLevels(session.UserID()), logger)
+					if err != nil {
+						return err
+					}
+					roomIDs[room.alias] = id
+					return nil
+				})
 		}
 		results = append(results, result)
 		if !roomID.IsZero() {
@@ -379,9 +349,9 @@ func runDoctor(ctx context.Context, client *messaging.Client, session messaging.
 			}
 		}
 
-		var credentialFix fixAction
+		var credentialFix doctor.FixAction
 		if credentialFilePath != "" {
-			credentialFix = func(ctx context.Context, session messaging.Session) error {
+			credentialFix = func(ctx context.Context) error {
 				return cli.UpdateCredentialFile(credentialFilePath, correctRoomIDs)
 			}
 		}
@@ -389,11 +359,10 @@ func runDoctor(ctx context.Context, client *messaging.Client, session messaging.
 
 		if !spaceRoomID.IsZero() {
 			result := checkCredentialMatch("bureau space", "MATRIX_SPACE_ROOM", spaceRoomID.String(), storedCredentials)
-			if credentialFix != nil && (result.Status == statusWarn || result.Status == statusFail) {
-				result.Status = statusFail
+			if credentialFix != nil && (result.Status == doctor.StatusWarn || result.Status == doctor.StatusFail) {
+				result.Status = doctor.StatusFail
 				if !fixAttached {
-					result.FixHint = "update credential file"
-					result.fix = credentialFix
+					result = doctor.FailWithFix(result.Name, result.Message, "update credential file", credentialFix)
 					fixAttached = true
 				}
 			}
@@ -402,11 +371,10 @@ func runDoctor(ctx context.Context, client *messaging.Client, session messaging.
 		for _, room := range standardRooms {
 			if roomID, ok := roomIDs[room.alias]; ok {
 				result := checkCredentialMatch(room.name, room.credentialKey, roomID.String(), storedCredentials)
-				if credentialFix != nil && (result.Status == statusWarn || result.Status == statusFail) {
-					result.Status = statusFail
+				if credentialFix != nil && (result.Status == doctor.StatusWarn || result.Status == doctor.StatusFail) {
+					result.Status = doctor.StatusFail
 					if !fixAttached {
-						result.FixHint = "update credential file"
-						result.fix = credentialFix
+						result = doctor.FailWithFix(result.Name, result.Message, "update credential file", credentialFix)
 						fixAttached = true
 					}
 				}
@@ -419,7 +387,7 @@ func runDoctor(ctx context.Context, client *messaging.Client, session messaging.
 	if !spaceRoomID.IsZero() {
 		spaceChildIDs, err := getSpaceChildIDs(ctx, session, spaceRoomID)
 		if err != nil {
-			results = append(results, fail("space hierarchy", fmt.Sprintf("cannot read space state: %v", err)))
+			results = append(results, doctor.Fail("space hierarchy", fmt.Sprintf("cannot read space state: %v", err)))
 		} else {
 			for _, room := range standardRooms {
 				roomID, ok := roomIDs[room.alias]
@@ -427,15 +395,16 @@ func runDoctor(ctx context.Context, client *messaging.Client, session messaging.
 					continue
 				}
 				result := checkSpaceChild(room.name, roomID.String(), spaceChildIDs)
-				if result.Status == statusFail {
+				if result.Status == doctor.StatusFail {
 					capturedRoomID := roomID
 					capturedName := room.name
-					result.FixHint = fmt.Sprintf("add %s as child of Bureau space", capturedName)
-					result.fix = func(ctx context.Context, session messaging.Session) error {
-						_, err := session.SendStateEvent(ctx, spaceRoomID, "m.space.child", capturedRoomID.String(),
-							map[string]any{"via": []string{serverName.String()}})
-						return err
-					}
+					result = doctor.FailWithFix(result.Name, result.Message,
+						fmt.Sprintf("add %s as child of Bureau space", capturedName),
+						func(ctx context.Context) error {
+							_, err := session.SendStateEvent(ctx, spaceRoomID, "m.space.child", capturedRoomID.String(),
+								map[string]any{"via": []string{serverName.String()}})
+							return err
+						})
 				}
 				results = append(results, result)
 			}
@@ -491,55 +460,55 @@ func runDoctor(ctx context.Context, client *messaging.Client, session messaging.
 
 // checkServerVersions verifies the homeserver is reachable by calling the
 // unauthenticated /_matrix/client/versions endpoint.
-func checkServerVersions(ctx context.Context, client *messaging.Client) checkResult {
+func checkServerVersions(ctx context.Context, client *messaging.Client) doctor.Result {
 	versions, err := client.ServerVersions(ctx)
 	if err != nil {
-		return fail("homeserver", fmt.Sprintf("unreachable: %v", err))
+		return doctor.Fail("homeserver", fmt.Sprintf("unreachable: %v", err))
 	}
-	return pass("homeserver", fmt.Sprintf("reachable, versions: %s", strings.Join(versions.Versions, ", ")))
+	return doctor.Pass("homeserver", fmt.Sprintf("reachable, versions: %s", strings.Join(versions.Versions, ", ")))
 }
 
 // checkAuth verifies that the session's access token is valid.
-func checkAuth(ctx context.Context, session messaging.Session) checkResult {
+func checkAuth(ctx context.Context, session messaging.Session) doctor.Result {
 	userID, err := session.WhoAmI(ctx)
 	if err != nil {
 		if messaging.IsMatrixError(err, messaging.ErrCodeUnknownToken) {
-			return fail("authentication", "access token is invalid or expired")
+			return doctor.Fail("authentication", "access token is invalid or expired")
 		}
-		return fail("authentication", fmt.Sprintf("WhoAmI failed: %v", err))
+		return doctor.Fail("authentication", fmt.Sprintf("WhoAmI failed: %v", err))
 	}
 
 	if userID != session.UserID() {
-		return warn("authentication", fmt.Sprintf("token valid but user ID mismatch: WhoAmI returned %q, session has %q", userID, session.UserID()))
+		return doctor.Warn("authentication", fmt.Sprintf("token valid but user ID mismatch: WhoAmI returned %q, session has %q", userID, session.UserID()))
 	}
 
-	return pass("authentication", fmt.Sprintf("authenticated as %s", userID))
+	return doctor.Pass("authentication", fmt.Sprintf("authenticated as %s", userID))
 }
 
 // checkRoomExists resolves a room alias and returns the result plus the room ID
 // (zero value if resolution failed).
-func checkRoomExists(ctx context.Context, session messaging.Session, name string, alias ref.RoomAlias) (checkResult, ref.RoomID) {
+func checkRoomExists(ctx context.Context, session messaging.Session, name string, alias ref.RoomAlias) (doctor.Result, ref.RoomID) {
 	roomID, err := session.ResolveAlias(ctx, alias)
 	if err != nil {
 		if messaging.IsMatrixError(err, messaging.ErrCodeNotFound) {
-			return fail(name, fmt.Sprintf("alias %s not found", alias)), ref.RoomID{}
+			return doctor.Fail(name, fmt.Sprintf("alias %s not found", alias)), ref.RoomID{}
 		}
-		return fail(name, fmt.Sprintf("resolve %s: %v", alias, err)), ref.RoomID{}
+		return doctor.Fail(name, fmt.Sprintf("resolve %s: %v", alias, err)), ref.RoomID{}
 	}
-	return pass(name, fmt.Sprintf("%s → %s", alias, roomID)), roomID
+	return doctor.Pass(name, fmt.Sprintf("%s → %s", alias, roomID)), roomID
 }
 
 // checkCredentialMatch verifies that a resolved room ID matches the value
 // stored in the credential file.
-func checkCredentialMatch(name, credentialKey, resolvedRoomID string, credentials map[string]string) checkResult {
+func checkCredentialMatch(name, credentialKey, resolvedRoomID string, credentials map[string]string) doctor.Result {
 	storedRoomID, ok := credentials[credentialKey]
 	if !ok {
-		return warn(name+" credential", fmt.Sprintf("%s not found in credential file", credentialKey))
+		return doctor.Warn(name+" credential", fmt.Sprintf("%s not found in credential file", credentialKey))
 	}
 	if storedRoomID != resolvedRoomID {
-		return fail(name+" credential", fmt.Sprintf("%s=%s but alias resolves to %s (credential file stale?)", credentialKey, storedRoomID, resolvedRoomID))
+		return doctor.Fail(name+" credential", fmt.Sprintf("%s=%s but alias resolves to %s (credential file stale?)", credentialKey, storedRoomID, resolvedRoomID))
 	}
-	return pass(name+" credential", fmt.Sprintf("%s matches", credentialKey))
+	return doctor.Pass(name+" credential", fmt.Sprintf("%s matches", credentialKey))
 }
 
 // getSpaceChildIDs reads m.space.child state events from a space and returns
@@ -560,11 +529,11 @@ func getSpaceChildIDs(ctx context.Context, session messaging.Session, spaceRoomI
 }
 
 // checkSpaceChild verifies that a room is a child of the Bureau space.
-func checkSpaceChild(name, roomID string, spaceChildren map[string]bool) checkResult {
+func checkSpaceChild(name, roomID string, spaceChildren map[string]bool) doctor.Result {
 	if spaceChildren[roomID] {
-		return pass(name+" in space", "listed as m.space.child")
+		return doctor.Pass(name+" in space", "listed as m.space.child")
 	}
-	return fail(name+" in space", fmt.Sprintf("%s is not a child of the Bureau space", roomID))
+	return doctor.Fail(name+" in space", fmt.Sprintf("%s is not a child of the Bureau space", roomID))
 }
 
 // checkPowerLevels reads the m.room.power_levels state event from a room and
@@ -572,33 +541,33 @@ func checkSpaceChild(name, roomID string, spaceChildren map[string]bool) checkRe
 // event types at power level 0. The first failing sub-check gets a fix closure
 // that resets the entire power levels state to expectedPowerLevels; subsequent
 // sub-checks share that single fix.
-func checkPowerLevels(ctx context.Context, session messaging.Session, name string, roomID ref.RoomID, adminUserID ref.UserID, memberSettableEventTypes []ref.EventType, expectedPowerLevels map[string]any) []checkResult {
-	var results []checkResult
+func checkPowerLevels(ctx context.Context, session messaging.Session, name string, roomID ref.RoomID, adminUserID ref.UserID, memberSettableEventTypes []ref.EventType, expectedPowerLevels map[string]any) []doctor.Result {
+	var results []doctor.Result
 
-	content, err := session.GetStateEvent(ctx, roomID, "m.room.power_levels", "")
+	stateContent, err := session.GetStateEvent(ctx, roomID, "m.room.power_levels", "")
 	if err != nil {
-		results = append(results, fail(name+" power levels", fmt.Sprintf("cannot read: %v", err)))
+		results = append(results, doctor.Fail(name+" power levels", fmt.Sprintf("cannot read: %v", err)))
 		return results
 	}
 
 	var powerLevels map[string]any
-	if err := json.Unmarshal(content, &powerLevels); err != nil {
-		results = append(results, fail(name+" power levels", fmt.Sprintf("invalid JSON: %v", err)))
+	if err := json.Unmarshal(stateContent, &powerLevels); err != nil {
+		results = append(results, doctor.Fail(name+" power levels", fmt.Sprintf("invalid JSON: %v", err)))
 		return results
 	}
 
 	// Build fix closure shared across all PL sub-checks for this room.
 	// Only attached to the first failure — a single PL write fixes all issues.
-	fixPowerLevels := func(ctx context.Context, session messaging.Session) error {
+	fixPowerLevels := func(ctx context.Context) error {
 		_, err := session.SendStateEvent(ctx, roomID, "m.room.power_levels", "",
 			expectedPowerLevels)
 		return err
 	}
 	fixAttached := false
-	attachFix := func(result *checkResult) {
-		if result.Status == statusFail && !fixAttached {
-			result.FixHint = fmt.Sprintf("reset %s power levels", name)
-			result.fix = fixPowerLevels
+	attachFix := func(result *doctor.Result) {
+		if result.Status == doctor.StatusFail && !fixAttached {
+			*result = doctor.FailWithFix(result.Name, result.Message,
+				fmt.Sprintf("reset %s power levels", name), fixPowerLevels)
 			fixAttached = true
 		}
 	}
@@ -606,9 +575,9 @@ func checkPowerLevels(ctx context.Context, session messaging.Session, name strin
 	// Check admin user power level.
 	adminLevel := getUserPowerLevel(powerLevels, adminUserID.String())
 	if adminLevel == 100 {
-		results = append(results, pass(name+" admin power", fmt.Sprintf("%s has power level 100", adminUserID)))
+		results = append(results, doctor.Pass(name+" admin power", fmt.Sprintf("%s has power level 100", adminUserID)))
 	} else {
-		result := fail(name+" admin power", fmt.Sprintf("%s has power level %.0f, expected 100", adminUserID, adminLevel))
+		result := doctor.Fail(name+" admin power", fmt.Sprintf("%s has power level %.0f, expected 100", adminUserID, adminLevel))
 		attachFix(&result)
 		results = append(results, result)
 	}
@@ -616,9 +585,9 @@ func checkPowerLevels(ctx context.Context, session messaging.Session, name strin
 	// Check state_default (should be 100 — only admin can set arbitrary state).
 	stateDefault := getNumericField(powerLevels, "state_default")
 	if stateDefault == 100 {
-		results = append(results, pass(name+" state_default", "state_default is 100"))
+		results = append(results, doctor.Pass(name+" state_default", "state_default is 100"))
 	} else {
-		result := fail(name+" state_default", fmt.Sprintf("state_default is %.0f, expected 100", stateDefault))
+		result := doctor.Fail(name+" state_default", fmt.Sprintf("state_default is %.0f, expected 100", stateDefault))
 		attachFix(&result)
 		results = append(results, result)
 	}
@@ -628,9 +597,9 @@ func checkPowerLevels(ctx context.Context, session messaging.Session, name strin
 		eventTypeString := eventType.String()
 		level := getStateEventPowerLevel(powerLevels, eventTypeString)
 		if level == 0 {
-			results = append(results, pass(name+" "+eventTypeString, fmt.Sprintf("members can set %s (level 0)", eventType)))
+			results = append(results, doctor.Pass(name+" "+eventTypeString, fmt.Sprintf("members can set %s (level 0)", eventType)))
 		} else {
-			result := fail(name+" "+eventTypeString, fmt.Sprintf("%s requires power level %.0f, expected 0", eventType, level))
+			result := doctor.Fail(name+" "+eventTypeString, fmt.Sprintf("%s requires power level %.0f, expected 0", eventType, level))
 			attachFix(&result)
 			results = append(results, result)
 		}
@@ -689,41 +658,41 @@ func getNumericField(data map[string]any, key string) float64 {
 
 // checkJoinRules verifies that a room's join rules are set to "invite"
 // (the required configuration for Bureau rooms).
-func checkJoinRules(ctx context.Context, session messaging.Session, name string, roomID ref.RoomID) checkResult {
-	content, err := session.GetStateEvent(ctx, roomID, "m.room.join_rules", "")
+func checkJoinRules(ctx context.Context, session messaging.Session, name string, roomID ref.RoomID) doctor.Result {
+	joinRulesContent, err := session.GetStateEvent(ctx, roomID, "m.room.join_rules", "")
 	if err != nil {
 		if messaging.IsMatrixError(err, messaging.ErrCodeNotFound) {
 			capturedRoomID := roomID
-			return failWithFix(
+			return doctor.FailWithFix(
 				name+" join rules",
 				"join_rules state not found",
 				fmt.Sprintf("set %s join_rule to invite", name),
-				func(ctx context.Context, session messaging.Session) error {
+				func(ctx context.Context) error {
 					_, err := session.SendStateEvent(ctx, capturedRoomID, "m.room.join_rules", "",
 						map[string]any{"join_rule": "invite"})
 					return err
 				},
 			)
 		}
-		return fail(name+" join rules", fmt.Sprintf("cannot read join rules: %v", err))
+		return doctor.Fail(name+" join rules", fmt.Sprintf("cannot read join rules: %v", err))
 	}
 
 	var joinRules map[string]any
-	if err := json.Unmarshal(content, &joinRules); err != nil {
-		return fail(name+" join rules", fmt.Sprintf("invalid join rules JSON: %v", err))
+	if err := json.Unmarshal(joinRulesContent, &joinRules); err != nil {
+		return doctor.Fail(name+" join rules", fmt.Sprintf("invalid join rules JSON: %v", err))
 	}
 
 	joinRule, _ := joinRules["join_rule"].(string)
 	if joinRule == "invite" {
-		return pass(name+" join rules", "join_rule is invite")
+		return doctor.Pass(name+" join rules", "join_rule is invite")
 	}
 
 	capturedRoomID := roomID
-	return failWithFix(
+	return doctor.FailWithFix(
 		name+" join rules",
 		fmt.Sprintf("join_rule is %q, expected invite", joinRule),
 		fmt.Sprintf("set %s join_rule to invite", name),
-		func(ctx context.Context, session messaging.Session) error {
+		func(ctx context.Context) error {
 			_, err := session.SendStateEvent(ctx, capturedRoomID, "m.room.join_rules", "",
 				map[string]any{"join_rule": "invite"})
 			return err
@@ -740,11 +709,11 @@ func checkJoinRules(ctx context.Context, session messaging.Session, name string,
 // invite-only, so any joined user was deliberately onboarded. Machine
 // accounts (localparts starting with "machine/") are excluded because
 // they are only invited to global rooms during provisioning.
-func checkOperatorMembership(ctx context.Context, session messaging.Session, spaceRoomID ref.RoomID, serverName ref.ServerName, roomIDs map[string]ref.RoomID) []checkResult {
+func checkOperatorMembership(ctx context.Context, session messaging.Session, spaceRoomID ref.RoomID, serverName ref.ServerName, roomIDs map[string]ref.RoomID) []doctor.Result {
 	// Get all joined members of the Bureau space.
 	spaceMembers, err := session.GetRoomMembers(ctx, spaceRoomID)
 	if err != nil {
-		return []checkResult{fail("operator membership", fmt.Sprintf("cannot read space members: %v", err))}
+		return []doctor.Result{doctor.Fail("operator membership", fmt.Sprintf("cannot read space members: %v", err))}
 	}
 
 	adminUserID := session.UserID()
@@ -768,7 +737,7 @@ func checkOperatorMembership(ctx context.Context, session messaging.Session, spa
 		return nil
 	}
 
-	var results []checkResult
+	var results []doctor.Result
 
 	for _, room := range standardRooms {
 		roomID, ok := roomIDs[room.alias]
@@ -778,7 +747,7 @@ func checkOperatorMembership(ctx context.Context, session messaging.Session, spa
 
 		members, err := session.GetRoomMembers(ctx, roomID)
 		if err != nil {
-			results = append(results, fail(room.name+" operator membership", fmt.Sprintf("cannot read members: %v", err)))
+			results = append(results, doctor.Fail(room.name+" operator membership", fmt.Sprintf("cannot read members: %v", err)))
 			continue
 		}
 
@@ -792,15 +761,15 @@ func checkOperatorMembership(ctx context.Context, session messaging.Session, spa
 		for _, operatorUserID := range operators {
 			checkName := fmt.Sprintf("%s in %s", operatorUserID, room.name)
 			if memberSet[operatorUserID] {
-				results = append(results, pass(checkName, "member"))
+				results = append(results, doctor.Pass(checkName, "member"))
 			} else {
 				capturedUserID := operatorUserID
 				capturedRoomID := roomID
-				results = append(results, failWithFix(
+				results = append(results, doctor.FailWithFix(
 					checkName,
 					fmt.Sprintf("operator %s not in %s", capturedUserID, room.name),
 					fmt.Sprintf("invite %s to %s", capturedUserID, room.name),
-					func(ctx context.Context, session messaging.Session) error {
+					func(ctx context.Context) error {
 						return session.InviteUser(ctx, capturedRoomID, capturedUserID)
 					},
 				))
@@ -824,8 +793,8 @@ type stateEventItem struct {
 // checkPublishedStateEvents verifies that each item in the list is present
 // as a state event in the given room. Missing items produce a fixable failure
 // that re-publishes the expected content.
-func checkPublishedStateEvents(ctx context.Context, session messaging.Session, roomID ref.RoomID, items []stateEventItem) []checkResult {
-	var results []checkResult
+func checkPublishedStateEvents(ctx context.Context, session messaging.Session, roomID ref.RoomID, items []stateEventItem) []doctor.Result {
+	var results []doctor.Result
 
 	for _, item := range items {
 		checkName := fmt.Sprintf("%s %q", item.label, item.name)
@@ -834,11 +803,11 @@ func checkPublishedStateEvents(ctx context.Context, session messaging.Session, r
 			if messaging.IsMatrixError(err, messaging.ErrCodeNotFound) {
 				capturedItem := item
 				capturedRoomID := roomID
-				results = append(results, failWithFix(
+				results = append(results, doctor.FailWithFix(
 					checkName,
 					fmt.Sprintf("%s %q not published", item.label, item.name),
 					fmt.Sprintf("publish %s %q", item.label, item.name),
-					func(ctx context.Context, session messaging.Session) error {
+					func(ctx context.Context) error {
 						_, err := session.SendStateEvent(ctx, capturedRoomID, capturedItem.eventType,
 							capturedItem.name, capturedItem.content)
 						return err
@@ -846,10 +815,10 @@ func checkPublishedStateEvents(ctx context.Context, session messaging.Session, r
 				))
 				continue
 			}
-			results = append(results, fail(checkName, fmt.Sprintf("cannot read: %v", err)))
+			results = append(results, doctor.Fail(checkName, fmt.Sprintf("cannot read: %v", err)))
 			continue
 		}
-		results = append(results, pass(checkName, "published"))
+		results = append(results, doctor.Pass(checkName, "published"))
 	}
 
 	return results
@@ -858,7 +827,7 @@ func checkPublishedStateEvents(ctx context.Context, session messaging.Session, r
 // checkBaseTemplates verifies that the standard Bureau templates ("base" and
 // "base-networked") are published as m.bureau.template state events in the
 // template room. Missing templates are fixable by re-publishing them.
-func checkBaseTemplates(ctx context.Context, session messaging.Session, templateRoomID ref.RoomID) []checkResult {
+func checkBaseTemplates(ctx context.Context, session messaging.Session, templateRoomID ref.RoomID) []doctor.Result {
 	var items []stateEventItem
 	for _, template := range baseTemplates() {
 		items = append(items, stateEventItem{
@@ -874,10 +843,10 @@ func checkBaseTemplates(ctx context.Context, session messaging.Session, template
 // checkBasePipelines verifies that the embedded pipeline definitions are
 // published as m.bureau.pipeline state events in the pipeline room. Missing
 // pipelines are fixable by re-publishing them.
-func checkBasePipelines(ctx context.Context, session messaging.Session, pipelineRoomID ref.RoomID) []checkResult {
+func checkBasePipelines(ctx context.Context, session messaging.Session, pipelineRoomID ref.RoomID) []doctor.Result {
 	pipelines, err := content.Pipelines()
 	if err != nil {
-		return []checkResult{fail("pipeline content", fmt.Sprintf("cannot load embedded pipelines: %v", err))}
+		return []doctor.Result{doctor.Fail("pipeline content", fmt.Sprintf("cannot load embedded pipelines: %v", err))}
 	}
 
 	var items []stateEventItem
@@ -890,121 +859,4 @@ func checkBasePipelines(ctx context.Context, session messaging.Session, pipeline
 		})
 	}
 	return checkPublishedStateEvents(ctx, session, pipelineRoomID, items)
-}
-
-// fixOutcome holds the results of a fix pass.
-type fixOutcome struct {
-	// FixedCount is the number of successfully applied fixes.
-	FixedCount int
-	// PermissionDenied is true if any fix failed with M_FORBIDDEN,
-	// indicating that the session lacks sufficient power level to
-	// make the required changes.
-	PermissionDenied bool
-}
-
-// executeFixes runs the fix action for each fixable failure, updating
-// results in place. In dry-run mode, no fixes are executed.
-func executeFixes(ctx context.Context, session messaging.Session, results []checkResult, dryRun bool) fixOutcome {
-	if dryRun {
-		return fixOutcome{}
-	}
-	var outcome fixOutcome
-	for i := range results {
-		if results[i].Status != statusFail || results[i].fix == nil {
-			continue
-		}
-		if err := results[i].fix(ctx, session); err != nil {
-			if messaging.IsMatrixError(err, messaging.ErrCodeForbidden) {
-				outcome.PermissionDenied = true
-				results[i].Message = fmt.Sprintf("%s (insufficient permissions)", results[i].Message)
-			} else {
-				results[i].Message = fmt.Sprintf("%s (fix failed: %v)", results[i].Message, err)
-			}
-		} else {
-			results[i].Status = statusFixed
-			outcome.FixedCount++
-		}
-	}
-	return outcome
-}
-
-// printChecklist prints check results as a human-readable checklist.
-// When permissionDenied is true, an actionable hint about using admin
-// credentials is appended to the summary.
-func printChecklist(results []checkResult, fixMode, dryRun, permissionDenied bool) error {
-	anyFailed := false
-	fixableCount := 0
-	fixedCount := 0
-
-	for _, result := range results {
-		prefix := strings.ToUpper(string(result.Status))
-		fmt.Fprintf(os.Stdout, "[%-5s]  %-40s  %s\n", prefix, result.Name, result.Message)
-
-		switch result.Status {
-		case statusFail:
-			anyFailed = true
-			if result.FixHint != "" {
-				fixableCount++
-				if dryRun {
-					fmt.Fprintf(os.Stdout, "         %-40s  would fix: %s\n", "", result.FixHint)
-				}
-			}
-		case statusFixed:
-			fixedCount++
-		}
-	}
-
-	fmt.Fprintln(os.Stdout)
-
-	if anyFailed {
-		if dryRun && fixableCount > 0 {
-			fmt.Fprintf(os.Stdout, "%d issue(s) would be repaired. Run without --dry-run to apply.\n", fixableCount)
-		} else if !fixMode && fixableCount > 0 {
-			fmt.Fprintf(os.Stdout, "Run with --fix to repair %d issue(s).\n", fixableCount)
-		} else {
-			fmt.Fprintln(os.Stdout, "Some checks failed.")
-		}
-		if permissionDenied {
-			fmt.Fprintln(os.Stdout)
-			fmt.Fprintln(os.Stdout, "Some fixes failed due to insufficient permissions. Power level")
-			fmt.Fprintln(os.Stdout, "and state event changes require admin credentials. Re-run with")
-			fmt.Fprintln(os.Stdout, "the credential file from \"bureau matrix setup\":")
-			fmt.Fprintln(os.Stdout)
-			fmt.Fprintln(os.Stdout, "  bureau matrix doctor --fix --credential-file ./bureau-creds")
-		}
-		return &cli.ExitError{Code: 1}
-	}
-
-	if fixedCount > 0 {
-		fmt.Fprintf(os.Stdout, "%d issue(s) repaired.\n", fixedCount)
-		return nil
-	}
-
-	fmt.Fprintln(os.Stdout, "All checks passed.")
-	return nil
-}
-
-// doctorJSONOutput is the JSON output structure for the doctor command.
-type doctorJSONOutput struct {
-	Checks           []checkResult `json:"checks"                      desc:"list of health check results"`
-	OK               bool          `json:"ok"                          desc:"true if all checks passed"`
-	DryRun           bool          `json:"dry_run,omitempty"           desc:"true if fixes were simulated"`
-	PermissionDenied bool          `json:"permission_denied,omitempty" desc:"true if fixes failed due to insufficient permissions"`
-}
-
-// doctorJSON builds the JSON output struct for doctor results.
-func doctorJSON(results []checkResult, dryRun, permissionDenied bool) doctorJSONOutput {
-	anyFailed := false
-	for _, result := range results {
-		if result.Status == statusFail {
-			anyFailed = true
-			break
-		}
-	}
-	return doctorJSONOutput{
-		Checks:           results,
-		OK:               !anyFailed,
-		DryRun:           dryRun,
-		PermissionDenied: permissionDenied,
-	}
 }

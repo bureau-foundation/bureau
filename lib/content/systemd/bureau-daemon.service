@@ -27,7 +27,7 @@ ExecStart=/usr/local/bin/bureau-daemon \
     --server-name ${BUREAU_SERVER_NAME} \
     --fleet ${BUREAU_FLEET} \
     --state-dir /var/lib/bureau \
-    --launcher-socket /run/bureau/launcher.sock \
+    --run-dir /run/bureau \
     --admin-user bureau-admin
 Restart=on-failure
 RestartSec=5

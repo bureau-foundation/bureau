@@ -21,6 +21,7 @@ Type=simple
 User=bureau
 Group=bureau
 SupplementaryGroups=docker
+Environment=SHELL=/bin/sh
 EnvironmentFile=/etc/bureau/machine.conf
 ExecStart=/usr/local/bin/bureau-launcher \
     --homeserver ${BUREAU_HOMESERVER_URL} \

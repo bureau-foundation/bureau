@@ -398,10 +398,10 @@ A new machine goes from bare Linux to a running Bureau node:
    Bureau binary cache as an extra substituter with its public key.
 3. **Pull Bureau binaries** — `nix build` or `nix-store --realise` for
    the daemon, launcher, and proxy store paths.
-4. **Write systemd units** — `deploy/systemd/bureau-launcher.service`
-   and `deploy/systemd/bureau-daemon.service`, both reading
-   `/etc/bureau/machine.conf` for homeserver URL, machine name, and
-   server name.
+4. **Write systemd units** — `bureau-launcher.service` and
+   `bureau-daemon.service` (embedded in `lib/content/systemd/`), both
+   reading `/etc/bureau/machine.conf` for homeserver URL, machine name,
+   and server name. `bureau machine doctor --fix` installs these.
 5. **Start the launcher** — generates the machine's age keypair,
    registers on Matrix.
 6. **Start the daemon** — connects to Matrix, begins reconciliation.

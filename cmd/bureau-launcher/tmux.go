@@ -56,7 +56,8 @@ func writeTmuxConfig(runDir string) string {
 	config := "set-option -g remain-on-exit on\n" +
 		"set-option -g prefix C-a\n" +
 		"set-option -g mouse on\n" +
-		"set-option -g history-limit 50000\n"
+		"set-option -g history-limit 50000\n" +
+		"set-option -g default-shell /bin/sh\n"
 	if err := os.WriteFile(configPath, []byte(config), 0644); err != nil {
 		// The run directory must be writable — if this fails, the
 		// launcher is misconfigured. Panic is appropriate since we

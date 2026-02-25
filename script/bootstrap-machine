@@ -207,39 +207,48 @@ fi
 if [ -n "$BINARY_DIR" ]; then
     echo "[3/$TOTAL_STEPS] Installing Bureau binaries from $BINARY_DIR..."
 
+    # All host binaries that should be installed. Must match the
+    # expectedHostBinaries list in cmd/bureau/machine/doctor.go and
+    # the hostBinaries list in flake.nix.
+    HOST_BINARIES=(
+        bureau
+        bureau-launcher
+        bureau-daemon
+        bureau-proxy
+        bureau-log-relay
+        bureau-observe-relay
+        bureau-bridge
+        bureau-sandbox
+        bureau-credentials
+        bureau-agent-service
+        bureau-artifact-service
+        bureau-ticket-service
+    )
+
     # Verify all required binaries exist.
-    for binary in bureau-launcher bureau-daemon bureau-proxy; do
+    for binary in "${HOST_BINARIES[@]}"; do
         if [ ! -f "$BINARY_DIR/$binary" ]; then
             echo "Error: $binary not found in $BINARY_DIR" >&2
             exit 1
         fi
     done
 
-    sudo ln -sf "$BINARY_DIR/bureau-launcher" /usr/local/bin/bureau-launcher
-    sudo ln -sf "$BINARY_DIR/bureau-daemon" /usr/local/bin/bureau-daemon
-    sudo ln -sf "$BINARY_DIR/bureau-proxy" /usr/local/bin/bureau-proxy
-
-    echo "  bureau-launcher -> $BINARY_DIR/bureau-launcher"
-    echo "  bureau-daemon   -> $BINARY_DIR/bureau-daemon"
-    echo "  bureau-proxy    -> $BINARY_DIR/bureau-proxy"
+    for binary in "${HOST_BINARIES[@]}"; do
+        sudo ln -sf "$BINARY_DIR/$binary" "/usr/local/bin/$binary"
+        printf "  %-30s -> %s/%s\n" "$binary" "$BINARY_DIR" "$binary"
+    done
 else
     echo "[3/$TOTAL_STEPS] Installing Bureau binaries from $FLAKE_REF..."
-    nix build "${FLAKE_REF}#bureau-launcher" --no-link
-    nix build "${FLAKE_REF}#bureau-daemon" --no-link
-    nix build "${FLAKE_REF}#bureau-proxy" --no-link
+    # Build the combined host environment (all binaries in one store path).
+    echo "  Building bureau-host-env..."
+    HOST_ENV_PATH=$(nix build "${FLAKE_REF}#bureau-host-env" --print-out-paths --no-link)
 
-    # Create symlinks in /usr/local/bin pointing to the Nix store.
-    LAUNCHER_PATH=$(nix build "${FLAKE_REF}#bureau-launcher" --print-out-paths --no-link)/bin/bureau-launcher
-    DAEMON_PATH=$(nix build "${FLAKE_REF}#bureau-daemon" --print-out-paths --no-link)/bin/bureau-daemon
-    PROXY_PATH=$(nix build "${FLAKE_REF}#bureau-proxy" --print-out-paths --no-link)/bin/bureau-proxy
-
-    sudo ln -sf "$LAUNCHER_PATH" /usr/local/bin/bureau-launcher
-    sudo ln -sf "$DAEMON_PATH" /usr/local/bin/bureau-daemon
-    sudo ln -sf "$PROXY_PATH" /usr/local/bin/bureau-proxy
-
-    echo "  bureau-launcher -> $LAUNCHER_PATH"
-    echo "  bureau-daemon   -> $DAEMON_PATH"
-    echo "  bureau-proxy    -> $PROXY_PATH"
+    for binary in bureau-launcher bureau-daemon bureau-proxy bureau-log-relay \
+                  bureau-observe-relay bureau-bridge bureau-sandbox bureau-credentials \
+                  bureau-agent-service bureau-artifact-service bureau-ticket-service bureau; do
+        sudo ln -sf "$HOST_ENV_PATH/bin/$binary" "/usr/local/bin/$binary"
+        printf "  %-30s -> %s/bin/%s\n" "$binary" "$HOST_ENV_PATH" "$binary"
+    done
 fi
 
 # Step 4: Create directories and run first boot.
@@ -266,8 +275,8 @@ BUREAU_SERVER_NAME=$SERVER_NAME
 BUREAU_FLEET=$FLEET_PREFIX
 EOF
 
-# Copy systemd units from the repo (if available) or from a known path.
-SYSTEMD_SRC="$REPO_ROOT/deploy/systemd"
+# Copy systemd units from the repo (canonical source: lib/content/systemd/).
+SYSTEMD_SRC="$REPO_ROOT/lib/content/systemd"
 if [ -d "$SYSTEMD_SRC" ]; then
     sudo cp "$SYSTEMD_SRC/bureau-launcher.service" /etc/systemd/system/
     sudo cp "$SYSTEMD_SRC/bureau-daemon.service" /etc/systemd/system/

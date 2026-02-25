@@ -142,8 +142,8 @@ func validateTemplateContent(content *schema.TemplateContent) []string {
 		if mount.Type != "" && mount.Type != "tmpfs" {
 			issues = append(issues, fmt.Sprintf("filesystem[%d]: unknown type %q (expected \"\" for bind or \"tmpfs\")", index, mount.Type))
 		}
-		if mount.Mode != "" && mount.Mode != "ro" && mount.Mode != "rw" {
-			issues = append(issues, fmt.Sprintf("filesystem[%d]: unknown mode %q (expected \"ro\" or \"rw\")", index, mount.Mode))
+		if mount.Mode != "" && !mount.Mode.IsKnown() {
+			issues = append(issues, fmt.Sprintf("filesystem[%d]: unknown mode %q (expected %q or %q)", index, mount.Mode, schema.MountModeRO, schema.MountModeRW))
 		}
 		if mount.Type == "tmpfs" && mount.Source != "" {
 			issues = append(issues, fmt.Sprintf("filesystem[%d]: tmpfs mounts should not have a source path", index))

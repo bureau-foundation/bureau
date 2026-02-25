@@ -33,7 +33,7 @@ func specToProfile(spec *schema.SandboxSpec, proxySocketPath string) *sandbox.Pr
 			Source:   mount.Source,
 			Dest:     mount.Dest,
 			Type:     mount.Type,
-			Mode:     mount.Mode,
+			Mode:     string(mount.Mode),
 			Options:  mount.Options,
 			Optional: mount.Optional,
 		})

@@ -124,9 +124,9 @@ func TestAgentServiceSessionTracking(t *testing.T) {
 		Binary:           testutil.DataBinary(t, "MOCK_AGENT_BINARY"),
 		Localpart:        agentLocalpart,
 		RequiredServices: []string{"agent"},
-		RestartPolicy:    "on-failure",
+		RestartPolicy:    schema.RestartPolicyOnFailure,
 		ExtraMounts: []schema.TemplateMount{
-			{Source: debugDir, Dest: "/run/bureau/debug", Mode: "rw"},
+			{Source: debugDir, Dest: "/run/bureau/debug", Mode: schema.MountModeRW},
 		},
 	})
 

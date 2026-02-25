@@ -187,7 +187,7 @@ func TestWorktreeConfigOmitsEmptyDescription(t *testing.T) {
 
 func TestWorkspaceStateRoundTrip(t *testing.T) {
 	original := WorkspaceState{
-		Status:        "active",
+		Status:        WorkspaceStatusActive,
 		Project:       "iree",
 		Machine:       "workstation",
 		WorkspacePath: "/var/bureau/workspace/iree",
@@ -223,7 +223,7 @@ func TestWorkspaceStateRoundTrip(t *testing.T) {
 
 func TestWorkspaceStatePendingOmitsWorkspacePath(t *testing.T) {
 	original := WorkspaceState{
-		Status:    "pending",
+		Status:    WorkspaceStatusPending,
 		Project:   "iree",
 		Machine:   "workstation",
 		UpdatedAt: "2026-02-10T12:00:00Z",
@@ -245,7 +245,7 @@ func TestWorkspaceStatePendingOmitsWorkspacePath(t *testing.T) {
 
 func TestWorkspaceStateArchived(t *testing.T) {
 	original := WorkspaceState{
-		Status:      "archived",
+		Status:      WorkspaceStatusArchived,
 		Project:     "iree",
 		Machine:     "workstation",
 		UpdatedAt:   "2026-02-10T14:30:00Z",
@@ -275,7 +275,7 @@ func TestWorkspaceStateArchived(t *testing.T) {
 
 func TestWorktreeStateRoundTrip(t *testing.T) {
 	original := WorktreeState{
-		Status:       "active",
+		Status:       WorktreeStatusActive,
 		Project:      "iree",
 		WorktreePath: "feature/amdgpu",
 		Branch:       "feature/amdgpu-inference",
@@ -311,7 +311,7 @@ func TestWorktreeStateRoundTrip(t *testing.T) {
 
 func TestWorktreeStateOmitsEmptyBranch(t *testing.T) {
 	state := WorktreeState{
-		Status:       "creating",
+		Status:       WorktreeStatusCreating,
 		Project:      "iree",
 		WorktreePath: "detached-work",
 		Machine:      "workstation",

@@ -858,7 +858,7 @@ func TestImpactChangeWithInheritance(t *testing.T) {
 			Command:     []string{"/bin/bash"},
 			Namespaces:  &schema.TemplateNamespaces{PID: true, Net: true},
 			Filesystem: []schema.TemplateMount{
-				{Source: "/usr", Dest: "/usr", Mode: "ro"},
+				{Source: "/usr", Dest: "/usr", Mode: schema.MountModeRO},
 			},
 		},
 	)
@@ -910,7 +910,7 @@ func TestImpactChangeWithInheritance(t *testing.T) {
 		Command:     []string{"/bin/bash"},
 		Namespaces:  &schema.TemplateNamespaces{PID: true, Net: false, IPC: true},
 		Filesystem: []schema.TemplateMount{
-			{Source: "/usr", Dest: "/usr", Mode: "ro"},
+			{Source: "/usr", Dest: "/usr", Mode: schema.MountModeRO},
 		},
 	}
 

@@ -609,9 +609,9 @@ func (d *Daemon) buildPipelineExecutorSpec(
 			// (e.g., Bazel outputs, go install paths). Harmless when it is
 			// under /nix/store since the more-specific mount coexists with
 			// the /nix/store mount.
-			{Source: d.pipelineExecutorBinary, Dest: d.pipelineExecutorBinary, Mode: "ro"},
+			{Source: d.pipelineExecutorBinary, Dest: d.pipelineExecutorBinary, Mode: schema.MountModeRO},
 			// Workspace root: pipeline JSONC references /workspace/${PROJECT}.
-			{Source: d.workspaceRoot, Dest: "/workspace", Mode: "rw"},
+			{Source: d.workspaceRoot, Dest: "/workspace", Mode: schema.MountModeRW},
 		},
 		Namespaces: &schema.TemplateNamespaces{
 			PID: true,
@@ -637,8 +637,8 @@ func (d *Daemon) buildPipelineExecutorSpec(
 	// with a clear error at step capture time.
 	if artifactSocketPath != "" && artifactTokenPath != "" {
 		spec.Filesystem = append(spec.Filesystem,
-			schema.TemplateMount{Source: artifactSocketPath, Dest: "/run/bureau/artifact.sock", Mode: "rw"},
-			schema.TemplateMount{Source: artifactTokenPath, Dest: "/run/bureau/artifact.token", Mode: "ro"},
+			schema.TemplateMount{Source: artifactSocketPath, Dest: "/run/bureau/artifact.sock", Mode: schema.MountModeRW},
+			schema.TemplateMount{Source: artifactTokenPath, Dest: "/run/bureau/artifact.token", Mode: schema.MountModeRO},
 		)
 		spec.EnvironmentVariables["BUREAU_ARTIFACT_SOCKET"] = "/run/bureau/artifact.sock"
 		spec.EnvironmentVariables["BUREAU_ARTIFACT_TOKEN"] = "/run/bureau/artifact.token"
@@ -650,8 +650,8 @@ func (d *Daemon) buildPipelineExecutorSpec(
 	// pipeline's terminal outcome.
 	if ticketSocketPath != "" && ticketTokenPath != "" {
 		spec.Filesystem = append(spec.Filesystem,
-			schema.TemplateMount{Source: ticketSocketPath, Dest: "/run/bureau/service/ticket.sock", Mode: "rw"},
-			schema.TemplateMount{Source: ticketTokenPath, Dest: "/run/bureau/service/token/ticket.token", Mode: "ro"},
+			schema.TemplateMount{Source: ticketSocketPath, Dest: "/run/bureau/service/ticket.sock", Mode: schema.MountModeRW},
+			schema.TemplateMount{Source: ticketTokenPath, Dest: "/run/bureau/service/token/ticket.token", Mode: schema.MountModeRO},
 		)
 	}
 

@@ -84,7 +84,7 @@ func handleWorkspaceWorktreeAdd(ctx context.Context, d *Daemon, roomID ref.RoomI
 	// via StartCondition, and ensures the worktree has a state event
 	// even if the ticket creation fails.
 	if _, err := d.session.SendStateEvent(ctx, roomID, schema.EventTypeWorktree, worktreePath, workspace.WorktreeState{
-		Status:       "creating",
+		Status:       workspace.WorktreeStatusCreating,
 		Project:      project,
 		WorktreePath: worktreePath,
 		Branch:       branch,
@@ -176,7 +176,7 @@ func handleWorkspaceWorktreeRemove(ctx context.Context, d *Daemon, roomID ref.Ro
 	// state still holds at execution time, preventing races where
 	// removal was cancelled between queueing and execution.
 	if _, err := d.session.SendStateEvent(ctx, roomID, schema.EventTypeWorktree, worktreePath, workspace.WorktreeState{
-		Status:       "removing",
+		Status:       workspace.WorktreeStatusRemoving,
 		Project:      project,
 		WorktreePath: worktreePath,
 		Machine:      d.machine.Localpart(),

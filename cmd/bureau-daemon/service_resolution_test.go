@@ -251,7 +251,7 @@ func TestReconcile_ServiceMountsWorkspaceRoom(t *testing.T) {
 
 	// Workspace event so the StartCondition resolves and gives us the workspace room ID.
 	matrixState.setStateEvent(workspaceRoomID, schema.EventTypeWorkspace, "", workspace.WorkspaceState{
-		Status:    "active",
+		Status:    workspace.WorkspaceStatusActive,
 		Project:   "iree",
 		Machine:   machineName,
 		UpdatedAt: "2026-02-10T00:00:00Z",

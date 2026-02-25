@@ -70,24 +70,77 @@ type DirectoryConfig struct {
 	Description string `json:"description,omitempty"`
 }
 
+// WorkspaceStatus represents the lifecycle state of a workspace.
+type WorkspaceStatus string
+
+const (
+	// WorkspaceStatusPending means the room was created but setup has not
+	// yet started or is still in progress.
+	WorkspaceStatusPending WorkspaceStatus = "pending"
+
+	// WorkspaceStatusActive means setup completed and the workspace is usable.
+	WorkspaceStatusActive WorkspaceStatus = "active"
+
+	// WorkspaceStatusTeardown means destroy was requested — agents gated on
+	// "active" stop and the teardown principal starts.
+	WorkspaceStatusTeardown WorkspaceStatus = "teardown"
+
+	// WorkspaceStatusArchived means teardown completed in archive mode.
+	WorkspaceStatusArchived WorkspaceStatus = "archived"
+
+	// WorkspaceStatusRemoved means teardown completed in delete mode.
+	WorkspaceStatusRemoved WorkspaceStatus = "removed"
+
+	// WorkspaceStatusFailed means the init or deinit pipeline failed.
+	WorkspaceStatusFailed WorkspaceStatus = "failed"
+)
+
+// IsKnown reports whether s is one of the defined WorkspaceStatus values.
+func (s WorkspaceStatus) IsKnown() bool {
+	switch s {
+	case WorkspaceStatusPending, WorkspaceStatusActive, WorkspaceStatusTeardown,
+		WorkspaceStatusArchived, WorkspaceStatusRemoved, WorkspaceStatusFailed:
+		return true
+	}
+	return false
+}
+
+// TeardownMode specifies how workspace data is handled during teardown.
+type TeardownMode string
+
+const (
+	// TeardownModeArchive moves the workspace data to .archive/.
+	TeardownModeArchive TeardownMode = "archive"
+
+	// TeardownModeDelete permanently removes the workspace data.
+	TeardownModeDelete TeardownMode = "delete"
+)
+
+// IsKnown reports whether m is one of the defined TeardownMode values.
+func (m TeardownMode) IsKnown() bool {
+	switch m {
+	case TeardownModeArchive, TeardownModeDelete:
+		return true
+	}
+	return false
+}
+
 // WorkspaceState is the content of an EventTypeWorkspace state event.
 // It tracks the full lifecycle of a workspace as a status field that
 // progresses one-directionally:
 //
-//	pending → active → teardown → archived | removed
+//	pending → active | failed
+//	active → teardown
+//	teardown → archived | removed | failed
 //
 // The teardown status triggers continuous enforcement: agent principals
 // gated on "active" stop, and the teardown principal gated on "teardown"
 // starts. The teardown principal performs cleanup (archive or delete)
-// and publishes the final status ("archived" or "removed").
+// and publishes the final status ("archived" or "removed"). If either
+// the init or deinit pipeline fails, the workspace enters "failed".
 type WorkspaceState struct {
-	// Status is the current lifecycle state. Valid values:
-	//   - "pending": room created, setup not yet started or in progress.
-	//   - "active": setup complete, workspace is usable.
-	//   - "teardown": destroy requested, agents stopping, teardown running.
-	//   - "archived": teardown completed in archive mode.
-	//   - "removed": teardown completed in delete mode.
-	Status string `json:"status"`
+	// Status is the current lifecycle state.
+	Status WorkspaceStatus `json:"status"`
 
 	// Project is the project name (first path segment of the workspace
 	// alias). Matches the directory under /var/bureau/workspace/.
@@ -107,9 +160,8 @@ type WorkspaceState struct {
 
 	// TeardownMode specifies how the teardown principal should handle
 	// the workspace data. Set by "bureau workspace destroy --mode".
-	// Valid values: "archive" (move to .archive/), "delete" (remove).
 	// Empty for all statuses other than "teardown".
-	TeardownMode string `json:"teardown_mode,omitempty"`
+	TeardownMode TeardownMode `json:"teardown_mode,omitempty"`
 
 	// UpdatedAt is an ISO 8601 timestamp of the last status transition.
 	UpdatedAt string `json:"updated_at"`
@@ -118,6 +170,42 @@ type WorkspaceState struct {
 	// project was moved when status is "archived". Empty for all other
 	// statuses.
 	ArchivePath string `json:"archive_path,omitempty"`
+}
+
+// WorktreeStatus represents the lifecycle state of an individual git worktree.
+type WorktreeStatus string
+
+const (
+	// WorktreeStatusCreating means the daemon accepted the add request and
+	// the init pipeline is running.
+	WorktreeStatusCreating WorktreeStatus = "creating"
+
+	// WorktreeStatusActive means the init pipeline completed and the
+	// worktree is ready for use.
+	WorktreeStatusActive WorktreeStatus = "active"
+
+	// WorktreeStatusRemoving means the daemon accepted the remove request
+	// and the deinit pipeline is running.
+	WorktreeStatusRemoving WorktreeStatus = "removing"
+
+	// WorktreeStatusArchived means the deinit completed in archive mode.
+	WorktreeStatusArchived WorktreeStatus = "archived"
+
+	// WorktreeStatusRemoved means the deinit completed in delete mode.
+	WorktreeStatusRemoved WorktreeStatus = "removed"
+
+	// WorktreeStatusFailed means the init or deinit pipeline failed.
+	WorktreeStatusFailed WorktreeStatus = "failed"
+)
+
+// IsKnown reports whether s is one of the defined WorktreeStatus values.
+func (s WorktreeStatus) IsKnown() bool {
+	switch s {
+	case WorktreeStatusCreating, WorktreeStatusActive, WorktreeStatusRemoving,
+		WorktreeStatusArchived, WorktreeStatusRemoved, WorktreeStatusFailed:
+		return true
+	}
+	return false
 }
 
 // WorktreeState is the content of an EventTypeWorktree state event.
@@ -130,14 +218,8 @@ type WorkspaceState struct {
 // when it accepts the add request) and don't have a "teardown" stage
 // (removal is a single pipeline, not a multi-phase process).
 type WorktreeState struct {
-	// Status is the current lifecycle state. Valid values:
-	//   - "creating": daemon accepted the add request, init pipeline running.
-	//   - "active": init pipeline completed, worktree is ready for use.
-	//   - "removing": daemon accepted the remove request, deinit pipeline running.
-	//   - "archived": deinit completed in archive mode.
-	//   - "removed": deinit completed in delete mode.
-	//   - "failed": init or deinit pipeline failed.
-	Status string `json:"status"`
+	// Status is the current lifecycle state.
+	Status WorktreeStatus `json:"status"`
 
 	// Project is the project name (first path segment of the workspace alias).
 	Project string `json:"project"`

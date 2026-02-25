@@ -176,8 +176,8 @@ func TestResolveTemplateSimple(t *testing.T) {
 		Description: "Base sandbox template",
 		Command:     []string{"/bin/bash"},
 		Filesystem: []schema.TemplateMount{
-			{Source: "/usr", Dest: "/usr", Mode: "ro"},
-			{Source: "/bin", Dest: "/bin", Mode: "ro"},
+			{Source: "/usr", Dest: "/usr", Mode: schema.MountModeRO},
+			{Source: "/bin", Dest: "/bin", Mode: schema.MountModeRO},
 		},
 		Namespaces: &schema.TemplateNamespaces{PID: true, Net: true},
 		Security:   &schema.TemplateSecurity{NoNewPrivs: true, DieWithParent: true},
@@ -223,8 +223,8 @@ func TestResolveTemplateSingleInheritance(t *testing.T) {
 	state.setTemplate("!template:test", "base", schema.TemplateContent{
 		Description: "Base template",
 		Filesystem: []schema.TemplateMount{
-			{Source: "/usr", Dest: "/usr", Mode: "ro"},
-			{Source: "/bin", Dest: "/bin", Mode: "ro"},
+			{Source: "/usr", Dest: "/usr", Mode: schema.MountModeRO},
+			{Source: "/bin", Dest: "/bin", Mode: schema.MountModeRO},
 			{Type: "tmpfs", Dest: "/tmp", Options: "size=64M"},
 		},
 		Namespaces: &schema.TemplateNamespaces{PID: true, Net: true, IPC: true},
@@ -244,7 +244,7 @@ func TestResolveTemplateSingleInheritance(t *testing.T) {
 		Command:     []string{"/usr/local/bin/claude", "--agent"},
 		Environment: "/nix/store/abc123-agent-env",
 		Filesystem: []schema.TemplateMount{
-			{Source: "${WORKSPACE_ROOT}/${PROJECT}", Dest: "/workspace", Mode: "rw"},
+			{Source: "${WORKSPACE_ROOT}/${PROJECT}", Dest: "/workspace", Mode: schema.MountModeRW},
 		},
 		EnvironmentVariables: map[string]string{
 			"PATH": "/usr/local/bin:/usr/bin:/bin", // Override parent PATH
@@ -328,8 +328,8 @@ func TestResolveTemplateMultiLevelInheritance(t *testing.T) {
 	// Level 0 (root): base
 	state.setTemplate("!template:test", "base", schema.TemplateContent{
 		Filesystem: []schema.TemplateMount{
-			{Source: "/usr", Dest: "/usr", Mode: "ro"},
-			{Source: "/bin", Dest: "/bin", Mode: "ro"},
+			{Source: "/usr", Dest: "/usr", Mode: schema.MountModeRO},
+			{Source: "/bin", Dest: "/bin", Mode: schema.MountModeRO},
 		},
 		Namespaces: &schema.TemplateNamespaces{PID: true, Net: true},
 		Security:   &schema.TemplateSecurity{NoNewPrivs: true},
@@ -355,7 +355,7 @@ func TestResolveTemplateMultiLevelInheritance(t *testing.T) {
 		Description: "AMDGPU developer agent",
 		Inherits:    []string{"bureau/template:llm-agent"},
 		Filesystem: []schema.TemplateMount{
-			{Source: "/dev/kfd", Dest: "/dev/kfd", Mode: "rw"},
+			{Source: "/dev/kfd", Dest: "/dev/kfd", Mode: schema.MountModeRW},
 		},
 		EnvironmentVariables: map[string]string{
 			"HSA_OVERRIDE_GFX_VERSION": "11.0.0",
@@ -508,7 +508,7 @@ func TestResolveInstanceConfigAllOverrides(t *testing.T) {
 		Command:     []string{"/usr/local/bin/claude", "--agent"},
 		Environment: "/nix/store/abc-agent-env",
 		Filesystem: []schema.TemplateMount{
-			{Source: "/usr", Dest: "/usr", Mode: "ro"},
+			{Source: "/usr", Dest: "/usr", Mode: schema.MountModeRO},
 		},
 		Namespaces: &schema.TemplateNamespaces{PID: true},
 		Security:   &schema.TemplateSecurity{NoNewPrivs: true},

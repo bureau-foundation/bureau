@@ -144,7 +144,7 @@ type principalSpec struct {
 	Authorization             *schema.AuthorizationPolicy // optional: full authorization policy (overrides shorthand fields)
 	Labels                    map[string]string           // optional: key-value labels for the principal assignment
 	StartCondition            *schema.StartCondition      // optional: condition that must be true before the principal starts
-	RestartPolicy             string                      // optional: restart policy ("", "always", "on-failure", "never")
+	RestartPolicy             schema.RestartPolicy        // optional: restart policy (empty, RestartPolicyAlways, RestartPolicyOnFailure, RestartPolicyNever)
 	ExtraEnvironmentVariables map[string]string           // optional: extra env vars merged into the PrincipalAssignment
 }
 
@@ -870,7 +870,7 @@ type agentOptions struct {
 
 	// RestartPolicy controls what happens when a sandbox exits. See
 	// schema.PrincipalAssignment.RestartPolicy for valid values.
-	RestartPolicy string
+	RestartPolicy schema.RestartPolicy
 
 	// ExtraMounts adds filesystem mounts beyond the standard base set.
 	// Use for test diagnostics (e.g., bind-mounting a host directory
@@ -922,7 +922,7 @@ func agentTemplateContent(binary string, options agentOptions) schema.TemplateCo
 	}
 
 	filesystem := []schema.TemplateMount{
-		{Source: binary, Dest: binary, Mode: "ro"},
+		{Source: binary, Dest: binary, Mode: schema.MountModeRO},
 		{Dest: "/tmp", Type: "tmpfs"},
 	}
 	filesystem = append(filesystem, options.ExtraMounts...)
@@ -1128,7 +1128,7 @@ func serviceTemplateContent(binary string, command, requiredServices []string, e
 	}
 
 	filesystem := []schema.TemplateMount{
-		{Source: binary, Dest: binary, Mode: "ro"},
+		{Source: binary, Dest: binary, Mode: schema.MountModeRO},
 		{Dest: "/tmp", Type: "tmpfs"},
 	}
 	filesystem = append(filesystem, extraMounts...)

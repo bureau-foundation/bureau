@@ -80,7 +80,7 @@ func TestWorkspaceStartConditionLifecycle(t *testing.T) {
 	// teardown (gated on "teardown") are both deferred.
 	_, err = admin.SendStateEvent(ctx, workspaceRoomID,
 		schema.EventTypeWorkspace, "", workspace.WorkspaceState{
-			Status:    "pending",
+			Status:    workspace.WorkspaceStatusPending,
 			Project:   "wst",
 			Machine:   machine.Name,
 			UpdatedAt: "2026-01-01T00:00:00Z",
@@ -156,7 +156,7 @@ func TestWorkspaceStartConditionLifecycle(t *testing.T) {
 	t.Log("phase 2: publishing 'active' status, expecting agent to start")
 	_, err = admin.SendStateEvent(ctx, workspaceRoomID,
 		schema.EventTypeWorkspace, "", workspace.WorkspaceState{
-			Status:    "active",
+			Status:    workspace.WorkspaceStatusActive,
 			Project:   "wst",
 			Machine:   machine.Name,
 			UpdatedAt: "2026-01-01T00:00:00Z",
@@ -181,8 +181,8 @@ func TestWorkspaceStartConditionLifecycle(t *testing.T) {
 	t.Log("phase 3: publishing 'teardown' status, expecting agent to stop and teardown to start")
 	_, err = admin.SendStateEvent(ctx, workspaceRoomID,
 		schema.EventTypeWorkspace, "", workspace.WorkspaceState{
-			Status:       "teardown",
-			TeardownMode: "archive",
+			Status:       workspace.WorkspaceStatusTeardown,
+			TeardownMode: workspace.TeardownModeArchive,
 			Project:      "wst",
 			Machine:      machine.Name,
 			UpdatedAt:    "2026-01-01T00:00:00Z",
@@ -286,7 +286,7 @@ func TestWorkspaceCLILifecycle(t *testing.T) {
 			// project directories created by the setup pipeline. The
 			// launcher expands ${WORKSPACE_ROOT} to the machine's actual
 			// workspace directory at sandbox creation time.
-			{Source: "${WORKSPACE_ROOT}", Dest: "/workspace", Mode: "ro"},
+			{Source: "${WORKSPACE_ROOT}", Dest: "/workspace", Mode: schema.MountModeRO},
 		},
 		CreateDirs: []string{"/tmp", "/var/tmp", "/run/bureau"},
 		EnvironmentVariables: map[string]string{
@@ -352,7 +352,7 @@ func TestWorkspaceCLILifecycle(t *testing.T) {
 	// sandbox. The executor runs dev-workspace-init: clones the seed repo,
 	// publishes workspace status "active".
 	t.Log("phase 2: waiting for setup pipeline to publish 'active' status")
-	waitForWorkspaceStatus(t, admin, workspaceRoomID, "active")
+	waitForWorkspaceStatus(t, admin, workspaceRoomID, workspace.WorkspaceStatusActive)
 	t.Log("workspace status is 'active' — setup pipeline completed")
 
 	// Verify the pipeline published a structured result. This catches
@@ -406,7 +406,7 @@ func TestWorkspaceCLILifecycle(t *testing.T) {
 	t.Log("agent proxy socket disappeared after workspace entered teardown")
 
 	// Teardown pipeline (dev-workspace-deinit) runs and publishes "archived".
-	waitForWorkspaceStatus(t, admin, workspaceRoomID, "archived")
+	waitForWorkspaceStatus(t, admin, workspaceRoomID, workspace.WorkspaceStatusArchived)
 	t.Log("workspace status is 'archived' — teardown pipeline completed")
 
 	// Verify teardown pipeline published a successful result.
@@ -456,7 +456,7 @@ func createTestWorkspaceRoom(t *testing.T, admin *messaging.DirectSession, alias
 // The watch is created BEFORE checking current state, so events that arrive
 // between the GetStateEvent check and the first /sync are not lost.
 // Bounded by t.Context() (test timeout), not an explicit deadline.
-func waitForWorkspaceStatus(t *testing.T, session *messaging.DirectSession, roomID ref.RoomID, expectedStatus string) {
+func waitForWorkspaceStatus(t *testing.T, session *messaging.DirectSession, roomID ref.RoomID, expectedStatus workspace.WorkspaceStatus) {
 	t.Helper()
 
 	// Create the watch first to capture the sync stream position. Events

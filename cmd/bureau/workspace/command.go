@@ -87,8 +87,8 @@ type DestroyParams struct {
 	// Alias is the workspace alias (e.g., "iree/amdgpu/inference").
 	Alias string
 
-	// Mode is the teardown mode: "archive" or "delete".
-	Mode string
+	// Mode is the teardown mode.
+	Mode workspace.TeardownMode
 
 	// ServerName is the Matrix server name.
 	ServerName ref.ServerName
@@ -140,7 +140,8 @@ Use "bureau matrix room leave" separately to remove the room.`,
 			if len(args) > 1 {
 				return cli.Validation("unexpected argument: %s", args[1])
 			}
-			if params.Mode != "archive" && params.Mode != "delete" {
+			teardownMode := workspace.TeardownMode(params.Mode)
+			if !teardownMode.IsKnown() {
 				return cli.Validation("--mode must be \"archive\" or \"delete\", got %q", params.Mode)
 			}
 
@@ -160,7 +161,7 @@ Use "bureau matrix room leave" separately to remove the room.`,
 
 			err = Destroy(ctx, session, DestroyParams{
 				Alias:      args[0],
-				Mode:       params.Mode,
+				Mode:       teardownMode,
 				ServerName: serverName,
 			})
 			if err != nil {
@@ -207,15 +208,14 @@ func Destroy(ctx context.Context, session messaging.Session, params DestroyParam
 	if err := json.Unmarshal(workspaceContent, &workspaceState); err != nil {
 		return cli.Internal("parsing workspace state: %w", err)
 	}
-	if workspaceState.Status != "active" {
-		return cli.Conflict("workspace %s is in status %q, expected \"active\"", params.Alias, workspaceState.Status)
+	if workspaceState.Status != workspace.WorkspaceStatusActive {
+		return cli.Conflict("workspace %s is in status %q, expected %q", params.Alias, workspaceState.Status, workspace.WorkspaceStatusActive)
 	}
 
-	// Transition the workspace to "teardown" with the requested mode.
+	// Transition the workspace to teardown with the requested mode.
 	// The daemon's continuous enforcement handles the rest: agents gated
-	// on "active" stop, and the teardown principal gated on "teardown"
-	// starts.
-	workspaceState.Status = "teardown"
+	// on active stop, and the teardown principal gated on teardown starts.
+	workspaceState.Status = workspace.WorkspaceStatusTeardown
 	workspaceState.TeardownMode = params.Mode
 	workspaceState.UpdatedAt = time.Now().UTC().Format(time.RFC3339)
 	_, err = session.SendStateEvent(ctx, workspaceRoomID, schema.EventTypeWorkspace, "", workspaceState)
@@ -366,7 +366,7 @@ func extractWorkspaceInfo(ctx context.Context, session messaging.Session, roomID
 
 	status := workspaceStatus
 	if status == "" {
-		status = "pending"
+		status = string(workspace.WorkspaceStatusPending)
 	}
 
 	// Use the canonical alias (stripped of # and :server) for display.
@@ -651,8 +651,8 @@ func runWorktreeAdd(ctx context.Context, logger *slog.Logger, alias, branch stri
 		return err
 	}
 
-	if workspaceState.Status != "active" {
-		return cli.Conflict("workspace %s is in status %q (must be \"active\" to add worktrees)", workspaceAlias, workspaceState.Status)
+	if workspaceState.Status != workspace.WorkspaceStatusActive {
+		return cli.Conflict("workspace %s is in status %q (must be %q to add worktrees)", workspaceAlias, workspaceState.Status, workspace.WorkspaceStatusActive)
 	}
 
 	worktreeSubpath, err := extractSubpath(alias, workspaceAlias)
@@ -783,7 +783,8 @@ to return immediately after acceptance.`,
 			if len(args) > 1 {
 				return cli.Validation("unexpected argument: %s", args[1])
 			}
-			if params.Mode != "archive" && params.Mode != "delete" {
+			teardownMode := workspace.TeardownMode(params.Mode)
+			if !teardownMode.IsKnown() {
 				return cli.Validation("--mode must be \"archive\" or \"delete\", got %q", params.Mode)
 			}
 			serverName, err := ref.ParseServerName(params.ServerName)
@@ -812,8 +813,8 @@ func runWorktreeRemove(ctx context.Context, logger *slog.Logger, alias, mode str
 		return err
 	}
 
-	if workspaceState.Status != "active" {
-		return cli.Conflict("workspace %s is in status %q (must be \"active\" to remove worktrees)", workspaceAlias, workspaceState.Status)
+	if workspaceState.Status != workspace.WorkspaceStatusActive {
+		return cli.Conflict("workspace %s is in status %q (must be %q to remove worktrees)", workspaceAlias, workspaceState.Status, workspace.WorkspaceStatusActive)
 	}
 
 	worktreeSubpath, err := extractSubpath(alias, workspaceAlias)

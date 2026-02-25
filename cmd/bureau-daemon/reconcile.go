@@ -410,7 +410,7 @@ func (d *Daemon) reconcile(ctx context.Context) error {
 
 				// Mount the ticket service socket.
 				sandboxSpec.Filesystem = append(sandboxSpec.Filesystem,
-					schema.TemplateMount{Source: ticketSocketPath, Dest: "/run/bureau/service/ticket.sock", Mode: "rw"},
+					schema.TemplateMount{Source: ticketSocketPath, Dest: "/run/bureau/service/ticket.sock", Mode: schema.MountModeRW},
 				)
 
 				// Mint a ticket token for the executor. This is separate
@@ -1159,10 +1159,10 @@ func (d *Daemon) applyPipelineExecutorOverlay(spec *schema.SandboxSpec) bool {
 		// outputs, go install paths). Harmless when it is under
 		// /nix/store since the more-specific mount coexists with the
 		// /nix/store mount from the environment.
-		schema.TemplateMount{Source: d.pipelineExecutorBinary, Dest: d.pipelineExecutorBinary, Mode: "ro"},
+		schema.TemplateMount{Source: d.pipelineExecutorBinary, Dest: d.pipelineExecutorBinary, Mode: schema.MountModeRO},
 		// Workspace root: pipeline steps reference /workspace/${PROJECT}
 		// for git operations, file creation, etc.
-		schema.TemplateMount{Source: d.workspaceRoot, Dest: "/workspace", Mode: "rw"},
+		schema.TemplateMount{Source: d.workspaceRoot, Dest: "/workspace", Mode: schema.MountModeRW},
 	)
 
 	if spec.EnvironmentVariables == nil {
@@ -1920,12 +1920,12 @@ func (d *Daemon) watchSandboxExit(ctx context.Context, principal ref.Entity) {
 	}
 
 	// Determine restart policy. Dynamic principals (pipeline executors)
-	// default to "on-failure" — they run a bounded task and exit 0 on
+	// default to on-failure — they run a bounded task and exit 0 on
 	// success. Config-driven principals read from their assignment;
-	// the default (empty string) means "always".
-	restartPolicy := ""
+	// the default (empty string) means always.
+	var restartPolicy schema.RestartPolicy
 	if d.dynamicPrincipals[principal] {
-		restartPolicy = "on-failure"
+		restartPolicy = schema.RestartPolicyOnFailure
 	} else if assignment, found := d.findPrincipalAssignment(principal); found {
 		restartPolicy = assignment.RestartPolicy
 	}
@@ -1952,7 +1952,7 @@ func (d *Daemon) watchSandboxExit(ctx context.Context, principal ref.Entity) {
 		)
 	} else if exitCode == 0 {
 		d.clearStartFailure(principal)
-		if restartPolicy == "on-failure" || restartPolicy == "never" {
+		if restartPolicy == schema.RestartPolicyOnFailure || restartPolicy == schema.RestartPolicyNever {
 			d.completed[principal] = true
 			d.logger.Info("principal completed (restart policy prevents restart)",
 				"principal", principal,
@@ -1960,7 +1960,7 @@ func (d *Daemon) watchSandboxExit(ctx context.Context, principal ref.Entity) {
 			)
 		}
 	} else {
-		if restartPolicy == "never" {
+		if restartPolicy == schema.RestartPolicyNever {
 			d.completed[principal] = true
 			d.logger.Info("principal failed but restart policy prevents restart",
 				"principal", principal,
@@ -2777,6 +2777,6 @@ func ensureCommandBinaryMounted(spec *schema.SandboxSpec) {
 	spec.Filesystem = append(spec.Filesystem, schema.TemplateMount{
 		Source: resolvedPath,
 		Dest:   resolvedPath,
-		Mode:   "ro",
+		Mode:   schema.MountModeRO,
 	})
 }

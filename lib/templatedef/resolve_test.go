@@ -183,8 +183,8 @@ func TestResolveSimple(t *testing.T) {
 		Description: "Base sandbox template",
 		Command:     []string{"/bin/bash"},
 		Filesystem: []schema.TemplateMount{
-			{Source: "/usr", Dest: "/usr", Mode: "ro"},
-			{Source: "/bin", Dest: "/bin", Mode: "ro"},
+			{Source: "/usr", Dest: "/usr", Mode: schema.MountModeRO},
+			{Source: "/bin", Dest: "/bin", Mode: schema.MountModeRO},
 		},
 		Namespaces: &schema.TemplateNamespaces{PID: true, Net: true},
 		Security:   &schema.TemplateSecurity{NoNewPrivs: true, DieWithParent: true},
@@ -215,7 +215,7 @@ func TestResolveSingleInheritance(t *testing.T) {
 	state.setTemplate("!template:test", "base", schema.TemplateContent{
 		Description: "Base template",
 		Filesystem: []schema.TemplateMount{
-			{Source: "/usr", Dest: "/usr", Mode: "ro"},
+			{Source: "/usr", Dest: "/usr", Mode: schema.MountModeRO},
 		},
 		Namespaces:           &schema.TemplateNamespaces{PID: true, Net: true},
 		EnvironmentVariables: map[string]string{"PATH": "/usr/bin:/bin"},
@@ -362,7 +362,7 @@ func TestMergeMountDeduplication(t *testing.T) {
 
 	parent := &schema.TemplateContent{
 		Filesystem: []schema.TemplateMount{
-			{Source: "/usr", Dest: "/usr", Mode: "ro"},
+			{Source: "/usr", Dest: "/usr", Mode: schema.MountModeRO},
 			{Type: "tmpfs", Dest: "/tmp", Options: "size=64M"},
 		},
 	}
@@ -370,7 +370,7 @@ func TestMergeMountDeduplication(t *testing.T) {
 	child := &schema.TemplateContent{
 		Filesystem: []schema.TemplateMount{
 			{Type: "tmpfs", Dest: "/tmp", Options: "size=128M"},
-			{Source: "${WORKSPACE_ROOT}/${PROJECT}", Dest: "/workspace", Mode: "rw"},
+			{Source: "${WORKSPACE_ROOT}/${PROJECT}", Dest: "/workspace", Mode: schema.MountModeRW},
 		},
 	}
 
@@ -785,8 +785,8 @@ func TestResolveMultipleParentsSliceMerge(t *testing.T) {
 	state.setTemplate("!template:test", "runtime", schema.TemplateContent{
 		Description: "Runtime parent",
 		Filesystem: []schema.TemplateMount{
-			{Source: "/usr", Dest: "/usr", Mode: "ro"},
-			{Source: "/lib", Dest: "/lib", Mode: "ro"},
+			{Source: "/usr", Dest: "/usr", Mode: schema.MountModeRO},
+			{Source: "/lib", Dest: "/lib", Mode: schema.MountModeRO},
 		},
 		RequiredServices:    []string{"proxy"},
 		RequiredCredentials: []string{"API_KEY"},
@@ -797,7 +797,7 @@ func TestResolveMultipleParentsSliceMerge(t *testing.T) {
 	state.setTemplate("!template:test", "networking", schema.TemplateContent{
 		Description: "Networking parent",
 		Filesystem: []schema.TemplateMount{
-			{Source: "/etc/resolv.conf", Dest: "/etc/resolv.conf", Mode: "ro"},
+			{Source: "/etc/resolv.conf", Dest: "/etc/resolv.conf", Mode: schema.MountModeRO},
 		},
 		RequiredServices:    []string{"bridge"},
 		RequiredCredentials: []string{"TLS_CERT"},
@@ -864,7 +864,7 @@ func TestResolveDiamondInheritance(t *testing.T) {
 			"BASE": "yes",
 		},
 		Filesystem: []schema.TemplateMount{
-			{Source: "/usr", Dest: "/usr", Mode: "ro"},
+			{Source: "/usr", Dest: "/usr", Mode: schema.MountModeRO},
 		},
 	})
 

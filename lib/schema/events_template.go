@@ -5,6 +5,56 @@ package schema
 
 import "github.com/bureau-foundation/bureau/lib/ref"
 
+// RestartPolicy controls what happens when a sandbox exits.
+type RestartPolicy string
+
+const (
+	// RestartPolicyAlways restarts on any exit, subject to crash backoff for
+	// non-zero exit codes. This is the default for long-running agents that
+	// should survive transient failures. The zero value ("") is equivalent.
+	RestartPolicyAlways RestartPolicy = "always"
+
+	// RestartPolicyOnFailure restarts only on non-zero exit codes. A clean
+	// exit (code 0) is final — the principal completed its work. Use this
+	// for bounded tasks: pipeline executors, one-shot analyses, migration
+	// scripts.
+	RestartPolicyOnFailure RestartPolicy = "on-failure"
+
+	// RestartPolicyNever never restarts regardless of exit code. Use for
+	// principals that must run at most once per daemon lifecycle.
+	RestartPolicyNever RestartPolicy = "never"
+)
+
+// IsKnown reports whether p is one of the defined RestartPolicy values.
+func (p RestartPolicy) IsKnown() bool {
+	switch p {
+	case RestartPolicyAlways, RestartPolicyOnFailure, RestartPolicyNever:
+		return true
+	}
+	return false
+}
+
+// MountMode specifies the access mode for a filesystem mount.
+type MountMode string
+
+const (
+	// MountModeRO is read-only access. This is the effective default when
+	// Mode is empty — the sandbox package treats "" as read-only.
+	MountModeRO MountMode = "ro"
+
+	// MountModeRW is read-write access.
+	MountModeRW MountMode = "rw"
+)
+
+// IsKnown reports whether m is one of the defined MountMode values.
+func (m MountMode) IsKnown() bool {
+	switch m {
+	case MountModeRO, MountModeRW:
+		return true
+	}
+	return false
+}
+
 // PrincipalAssignment defines a single principal that should run on a machine.
 type PrincipalAssignment struct {
 	// Principal identifies this principal as a fleet-scoped entity reference.
@@ -133,18 +183,7 @@ type PrincipalAssignment struct {
 	StartCondition *StartCondition `json:"start_condition,omitempty"`
 
 	// RestartPolicy controls what happens when a sandbox exits.
-	//
-	// "" or "always": restart on any exit, subject to crash backoff for
-	// non-zero exit codes. This is the default for long-running agents
-	// that should survive transient failures.
-	//
-	// "on-failure": restart only on non-zero exit codes. A clean exit
-	// (code 0) is final — the principal completed its work. Use this
-	// for bounded tasks: pipeline executors, one-shot analyses,
-	// migration scripts.
-	//
-	// "never": never restart regardless of exit code. Use for principals
-	// that must run at most once per daemon lifecycle.
+	// Empty defaults to RestartPolicyAlways at runtime.
 	//
 	// RestartPolicy governs within-lifetime restart behavior. For
 	// cross-restart durability (preventing restart after daemon reboot),
@@ -152,7 +191,7 @@ type PrincipalAssignment struct {
 	// change that makes its condition false, and RestartPolicy prevents
 	// the within-lifetime race where the daemon kills the principal
 	// before it finishes posting that state change.
-	RestartPolicy string `json:"restart_policy,omitempty"`
+	RestartPolicy RestartPolicy `json:"restart_policy,omitempty"`
 }
 
 // StartCondition specifies a state event that must exist (and optionally
@@ -445,9 +484,9 @@ type TemplateMount struct {
 	// case). Other values: "tmpfs" for a temporary filesystem.
 	Type string `json:"type,omitempty"`
 
-	// Mode is the access mode: "ro" for read-only, "rw" for read-write.
-	// Empty defaults to "ro" in the sandbox package.
-	Mode string `json:"mode,omitempty"`
+	// Mode is the access mode. Empty defaults to MountModeRO in the
+	// sandbox package.
+	Mode MountMode `json:"mode,omitempty"`
 
 	// Options are mount-specific options (e.g., "size=64M" for tmpfs).
 	Options string `json:"options,omitempty"`

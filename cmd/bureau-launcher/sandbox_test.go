@@ -20,8 +20,8 @@ func TestSpecToProfile_Filesystem(t *testing.T) {
 	spec := &schema.SandboxSpec{
 		Command: []string{"/bin/bash"},
 		Filesystem: []schema.TemplateMount{
-			{Source: "/workspace", Dest: "/workspace", Mode: "rw"},
-			{Source: "/usr", Dest: "/usr", Mode: "ro"},
+			{Source: "/workspace", Dest: "/workspace", Mode: schema.MountModeRW},
+			{Source: "/usr", Dest: "/usr", Mode: schema.MountModeRO},
 			{Dest: "/tmp", Type: "tmpfs"},
 		},
 	}
@@ -273,7 +273,7 @@ func TestSpecToProfile_EnvironmentPathSkipsDuplicateNixMount(t *testing.T) {
 		Command:         []string{"/bin/bash"},
 		EnvironmentPath: "/nix/store/abc123-env",
 		Filesystem: []schema.TemplateMount{
-			{Source: "/nix/store", Dest: "/nix/store", Mode: "ro"},
+			{Source: "/nix/store", Dest: "/nix/store", Mode: schema.MountModeRO},
 		},
 	}
 
@@ -318,7 +318,7 @@ func TestSpecToProfile_MountOptionalField(t *testing.T) {
 	spec := &schema.SandboxSpec{
 		Command: []string{"/bin/bash"},
 		Filesystem: []schema.TemplateMount{
-			{Source: "/opt/cuda", Dest: "/opt/cuda", Mode: "ro", Optional: true},
+			{Source: "/opt/cuda", Dest: "/opt/cuda", Mode: schema.MountModeRO, Optional: true},
 		},
 	}
 
@@ -539,22 +539,22 @@ func TestSpecToProfile_WorkspaceVariableExpansion(t *testing.T) {
 			{
 				Source: "/var/bureau/workspace/${PROJECT}/${WORKTREE_PATH}",
 				Dest:   "/workspace",
-				Mode:   "rw",
+				Mode:   schema.MountModeRW,
 			},
 			{
 				Source: "/var/bureau/workspace/${PROJECT}/.bare",
 				Dest:   "/workspace/.bare",
-				Mode:   "rw",
+				Mode:   schema.MountModeRW,
 			},
 			{
 				Source: "${WORKSPACE_ROOT}/${PROJECT}/.shared",
 				Dest:   "/workspace/.shared",
-				Mode:   "rw",
+				Mode:   schema.MountModeRW,
 			},
 			{
 				Source: "${WORKSPACE_ROOT}/.cache",
 				Dest:   "/workspace/.cache",
-				Mode:   "rw",
+				Mode:   schema.MountModeRW,
 			},
 		},
 		EnvironmentVariables: map[string]string{
@@ -655,19 +655,19 @@ func TestSpecToProfile_CacheRootVariableExpansion(t *testing.T) {
 			{
 				Source: "${CACHE_ROOT}",
 				Dest:   "/cache",
-				Mode:   "rw",
+				Mode:   schema.MountModeRW,
 			},
 			// Agent-style: specific subdirectories ro.
 			{
 				Source:   "${CACHE_ROOT}/bin",
 				Dest:     "/usr/local/bin",
-				Mode:     "ro",
+				Mode:     schema.MountModeRO,
 				Optional: true,
 			},
 			{
 				Source:   "${CACHE_ROOT}/hf",
 				Dest:     "/cache/huggingface",
-				Mode:     "ro",
+				Mode:     schema.MountModeRO,
 				Optional: true,
 			},
 		},
@@ -729,7 +729,7 @@ func TestSpecToProfile_NoPayloadLeavesWorkspaceVarsUnexpanded(t *testing.T) {
 			{
 				Source: "/var/bureau/workspace/${PROJECT}/${WORKTREE_PATH}",
 				Dest:   "/workspace",
-				Mode:   "rw",
+				Mode:   schema.MountModeRW,
 			},
 		},
 		// No payload — non-workspace principal.

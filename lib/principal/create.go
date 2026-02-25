@@ -107,8 +107,8 @@ type CreateParams struct {
 	ServiceVisibility []string
 
 	// RestartPolicy controls what happens when a sandbox exits.
-	// See schema.PrincipalAssignment.RestartPolicy for valid values.
-	RestartPolicy string
+	// Empty defaults to RestartPolicyAlways at runtime.
+	RestartPolicy schema.RestartPolicy
 }
 
 // CreateResult holds the result of a successful principal creation.

@@ -2582,7 +2582,7 @@ func TestEnsureCommandBinaryMounted(t *testing.T) {
 		spec := &schema.SandboxSpec{
 			Command: []string{binaryPath},
 			Filesystem: []schema.TemplateMount{
-				{Source: binaryPath, Dest: binaryPath, Mode: "ro"},
+				{Source: binaryPath, Dest: binaryPath, Mode: schema.MountModeRO},
 			},
 		}
 		ensureCommandBinaryMounted(spec)
@@ -2596,7 +2596,7 @@ func TestEnsureCommandBinaryMounted(t *testing.T) {
 		spec := &schema.SandboxSpec{
 			Command: []string{binaryPath},
 			Filesystem: []schema.TemplateMount{
-				{Source: tempDir, Dest: tempDir, Mode: "ro"},
+				{Source: tempDir, Dest: tempDir, Mode: schema.MountModeRO},
 			},
 		}
 		ensureCommandBinaryMounted(spec)

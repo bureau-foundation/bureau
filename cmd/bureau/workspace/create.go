@@ -302,7 +302,7 @@ func Create(ctx context.Context, session messaging.Session, params CreateParams,
 	// it to "teardown" to trigger agent shutdown and teardown principal
 	// launch.
 	_, err = session.SendStateEvent(ctx, workspaceRoomID, schema.EventTypeWorkspace, "", workspace.WorkspaceState{
-		Status:    "pending",
+		Status:    workspace.WorkspaceStatusPending,
 		Project:   project,
 		Machine:   machineRef.Localpart(),
 		UpdatedAt: time.Now().UTC().Format(time.RFC3339),

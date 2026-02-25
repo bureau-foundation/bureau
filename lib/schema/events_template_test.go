@@ -32,9 +32,9 @@ func TestTemplateContentRoundTrip(t *testing.T) {
 			"BUREAU_SANDBOX": "1",
 		},
 		Filesystem: []TemplateMount{
-			{Source: "${WORKSPACE_ROOT}/${PROJECT}", Dest: "/workspace", Mode: "rw"},
+			{Source: "${WORKSPACE_ROOT}/${PROJECT}", Dest: "/workspace", Mode: MountModeRW},
 			{Type: "tmpfs", Dest: "/tmp", Options: "size=64M"},
-			{Source: "/nix", Dest: "/nix", Mode: "ro", Optional: true},
+			{Source: "/nix", Dest: "/nix", Mode: MountModeRO, Optional: true},
 		},
 		Namespaces: &TemplateNamespaces{
 			PID: true,
@@ -404,7 +404,7 @@ func TestTemplateMountOmitsEmptyFields(t *testing.T) {
 	// source (if empty), and optional.
 	mount := TemplateMount{
 		Dest: "/workspace",
-		Mode: "rw",
+		Mode: MountModeRW,
 	}
 
 	data, err := json.Marshal(mount)

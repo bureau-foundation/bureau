@@ -67,7 +67,7 @@ func TestReconcile_StartConditionMet(t *testing.T) {
 	// Set up the workspace room with an active workspace event (condition is met).
 	matrixState.setRoomAlias(ref.MustParseRoomAlias("#iree/amdgpu/inference:test.local"), workspaceRoomID)
 	matrixState.setStateEvent(workspaceRoomID, schema.EventTypeWorkspace, "", workspace.WorkspaceState{
-		Status:    "active",
+		Status:    workspace.WorkspaceStatusActive,
 		Project:   "iree",
 		Machine:   machineName,
 		UpdatedAt: "2026-02-10T00:00:00Z",
@@ -222,7 +222,7 @@ func TestReconcile_StartConditionDeferredThenLaunches(t *testing.T) {
 
 	// Simulate the setup principal publishing workspace active status.
 	matrixState.setStateEvent(workspaceRoomID, schema.EventTypeWorkspace, "", workspace.WorkspaceState{
-		Status:    "active",
+		Status:    workspace.WorkspaceStatusActive,
 		Project:   "iree",
 		Machine:   machineName,
 		UpdatedAt: "2026-02-10T01:00:00Z",
@@ -420,7 +420,7 @@ func TestReconcile_StartConditionContentMismatch(t *testing.T) {
 	// Workspace event exists but with "pending" status (not "active").
 	matrixState.setRoomAlias(ref.MustParseRoomAlias("#iree/amdgpu/inference:test.local"), workspaceRoomID)
 	matrixState.setStateEvent(workspaceRoomID, schema.EventTypeWorkspace, "", workspace.WorkspaceState{
-		Status:    "pending",
+		Status:    workspace.WorkspaceStatusPending,
 		Project:   "iree",
 		Machine:   machineName,
 		UpdatedAt: "2026-02-10T00:00:00Z",
@@ -461,7 +461,7 @@ func TestReconcile_StartConditionContentMismatch(t *testing.T) {
 
 	// Update the workspace event to "active".
 	matrixState.setStateEvent(workspaceRoomID, schema.EventTypeWorkspace, "", workspace.WorkspaceState{
-		Status:    "active",
+		Status:    workspace.WorkspaceStatusActive,
 		Project:   "iree",
 		Machine:   machineName,
 		UpdatedAt: "2026-02-10T01:00:00Z",
@@ -864,7 +864,7 @@ func TestReconcile_RunningPrincipalStoppedWhenConditionFails(t *testing.T) {
 	// Workspace is initially active — condition is met.
 	matrixState.setRoomAlias(ref.MustParseRoomAlias("#iree/amdgpu/inference:test.local"), workspaceRoomID)
 	matrixState.setStateEvent(workspaceRoomID, schema.EventTypeWorkspace, "", workspace.WorkspaceState{
-		Status:    "active",
+		Status:    workspace.WorkspaceStatusActive,
 		Project:   "iree",
 		Machine:   machineName,
 		UpdatedAt: "2026-02-10T00:00:00Z",
@@ -908,7 +908,7 @@ func TestReconcile_RunningPrincipalStoppedWhenConditionFails(t *testing.T) {
 
 	// Simulate workspace transitioning to teardown.
 	matrixState.setStateEvent(workspaceRoomID, schema.EventTypeWorkspace, "", workspace.WorkspaceState{
-		Status:    "teardown",
+		Status:    workspace.WorkspaceStatusTeardown,
 		Project:   "iree",
 		Machine:   machineName,
 		UpdatedAt: "2026-02-10T02:00:00Z",
@@ -964,7 +964,7 @@ func TestReconcile_ConditionFalseDoesNotStopUnconditionedPrincipal(t *testing.T)
 	// Workspace is initially active.
 	matrixState.setRoomAlias(ref.MustParseRoomAlias("#iree/amdgpu/inference:test.local"), workspaceRoomID)
 	matrixState.setStateEvent(workspaceRoomID, schema.EventTypeWorkspace, "", workspace.WorkspaceState{
-		Status:    "active",
+		Status:    workspace.WorkspaceStatusActive,
 		Project:   "iree",
 		Machine:   machineName,
 		UpdatedAt: "2026-02-10T00:00:00Z",
@@ -1018,7 +1018,7 @@ func TestReconcile_ConditionFalseDoesNotStopUnconditionedPrincipal(t *testing.T)
 
 	// Workspace transitions to teardown — conditioned principal loses its condition.
 	matrixState.setStateEvent(workspaceRoomID, schema.EventTypeWorkspace, "", workspace.WorkspaceState{
-		Status:    "teardown",
+		Status:    workspace.WorkspaceStatusTeardown,
 		Project:   "iree",
 		Machine:   machineName,
 		UpdatedAt: "2026-02-10T02:00:00Z",
@@ -1078,8 +1078,8 @@ func TestReconcile_TriggerContentPassedToLauncher(t *testing.T) {
 	// This is the event whose content should flow through as trigger content.
 	matrixState.setRoomAlias(ref.MustParseRoomAlias("#iree/amdgpu/inference:test.local"), workspaceRoomID)
 	matrixState.setStateEvent(workspaceRoomID, schema.EventTypeWorkspace, "", workspace.WorkspaceState{
-		Status:       "teardown",
-		TeardownMode: "archive",
+		Status:       workspace.WorkspaceStatusTeardown,
+		TeardownMode: workspace.TeardownModeArchive,
 		Project:      "iree",
 		Machine:      machineName,
 		UpdatedAt:    "2026-02-10T03:00:00Z",

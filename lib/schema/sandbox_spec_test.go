@@ -14,10 +14,10 @@ func TestSandboxSpecRoundTrip(t *testing.T) {
 	original := SandboxSpec{
 		Command: []string{"/usr/local/bin/claude", "--agent", "--no-tty"},
 		Filesystem: []TemplateMount{
-			{Source: "/home/agent/worktree", Dest: "/workspace", Mode: "rw"},
+			{Source: "/home/agent/worktree", Dest: "/workspace", Mode: MountModeRW},
 			{Type: "tmpfs", Dest: "/tmp", Options: "size=64M"},
-			{Source: "/nix/store/abc123-bureau-agent-env", Dest: "/usr/local", Mode: "ro"},
-			{Source: "/nix", Dest: "/nix", Mode: "ro"},
+			{Source: "/nix/store/abc123-bureau-agent-env", Dest: "/usr/local", Mode: MountModeRO},
+			{Source: "/nix", Dest: "/nix", Mode: MountModeRO},
 		},
 		Namespaces: &TemplateNamespaces{
 			PID: true,
@@ -133,7 +133,7 @@ func TestSandboxSpecRoundTrip(t *testing.T) {
 	if len(decoded.Filesystem) != 4 {
 		t.Fatalf("Filesystem count = %d, want 4", len(decoded.Filesystem))
 	}
-	if decoded.Filesystem[0].Dest != "/workspace" || decoded.Filesystem[0].Mode != "rw" {
+	if decoded.Filesystem[0].Dest != "/workspace" || decoded.Filesystem[0].Mode != MountModeRW {
 		t.Errorf("Filesystem[0]: got dest=%q mode=%q, want /workspace rw",
 			decoded.Filesystem[0].Dest, decoded.Filesystem[0].Mode)
 	}
@@ -228,7 +228,7 @@ func TestSandboxSpecInIPCRequest(t *testing.T) {
 		SandboxSpec: &SandboxSpec{
 			Command: []string{"/usr/local/bin/claude", "--agent"},
 			Filesystem: []TemplateMount{
-				{Source: "/home/agent/worktree", Dest: "/workspace", Mode: "rw"},
+				{Source: "/home/agent/worktree", Dest: "/workspace", Mode: MountModeRW},
 			},
 			Namespaces: &TemplateNamespaces{PID: true, Net: true},
 			Security:   &TemplateSecurity{NoNewPrivs: true, DieWithParent: true},

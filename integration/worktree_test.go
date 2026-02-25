@@ -89,7 +89,7 @@ func TestWorkspaceCommands(t *testing.T) {
 	// Publish workspace state.
 	_, err = admin.SendStateEvent(ctx, workspaceRoomID,
 		schema.EventTypeWorkspace, "", workspace.WorkspaceState{
-			Status:    "active",
+			Status:    workspace.WorkspaceStatusActive,
 			Project:   "testproj",
 			Machine:   machine.Name,
 			UpdatedAt: "2026-01-01T00:00:00Z",
@@ -636,7 +636,7 @@ func TestWorkspaceWorktreeLifecycle(t *testing.T) {
 		},
 		Filesystem: []schema.TemplateMount{
 			{Dest: "/tmp", Type: "tmpfs"},
-			{Source: "${WORKSPACE_ROOT}", Dest: "/workspace", Mode: "ro"},
+			{Source: "${WORKSPACE_ROOT}", Dest: "/workspace", Mode: schema.MountModeRO},
 		},
 		CreateDirs: []string{"/tmp", "/var/tmp", "/run/bureau"},
 		EnvironmentVariables: map[string]string{
@@ -687,7 +687,7 @@ func TestWorkspaceWorktreeLifecycle(t *testing.T) {
 
 	// --- Phase 2: Wait for setup pipeline → workspace active ---
 	t.Log("phase 2: waiting for setup pipeline to publish 'active' status")
-	waitForWorkspaceStatus(t, admin, workspaceRoomID, "active")
+	waitForWorkspaceStatus(t, admin, workspaceRoomID, workspace.WorkspaceStatusActive)
 	verifyPipelineResult(t, admin, workspaceRoomID, "dev-workspace-init", pipeline.ConclusionSuccess)
 	t.Log("workspace is active — setup pipeline completed")
 
@@ -823,7 +823,7 @@ func TestWorkspaceWorktreeLifecycle(t *testing.T) {
 	waitForFileGone(t, agentSocket)
 	t.Log("agent proxy socket disappeared after workspace entered teardown")
 
-	waitForWorkspaceStatus(t, admin, workspaceRoomID, "archived")
+	waitForWorkspaceStatus(t, admin, workspaceRoomID, workspace.WorkspaceStatusArchived)
 	verifyPipelineResult(t, admin, workspaceRoomID, "dev-workspace-deinit", pipeline.ConclusionSuccess)
 	t.Log("workspace lifecycle complete: create → active → worktree add → worktree remove → destroy → archived")
 }

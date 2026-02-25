@@ -109,17 +109,20 @@ user.
 ### Proxy Config Directories
 
 Per-sandbox proxy configuration (config files, listen directories for
-service CBOR sockets) is created under `/run/bureau/sandboxes/` instead
-of `/tmp`. This eliminates the need for `PrivateTmp=false` on the
-launcher — both launcher and daemon use `PrivateTmp=true`.
+service CBOR sockets) is created under the fleet run directory at
+`/run/bureau/fleet/{fleet}/sandbox/` instead of `/tmp`. This
+eliminates the need for `PrivateTmp=false` on the launcher — both
+launcher and daemon use `PrivateTmp=true`. Fleet-scoping prevents
+collisions when multiple fleets share a machine.
 
 The listen directory for a service principal is:
 
-    /run/bureau/sandboxes/{sanitized-localpart}/listen/service.sock
+    /run/bureau/fleet/{fleet}/sandbox/{sanitized-localpart}/listen/service.sock
 
 A symlink from the canonical `ServiceSocketPath()` (under
-`/run/bureau/fleet/...`) points to this location. Both paths are under
-`/run/bureau/`, so no cross-mount-namespace visibility issues arise.
+`/run/bureau/fleet/{fleet}/service/...`) points to this location.
+Both paths are under `/run/bureau/`, so no cross-mount-namespace
+visibility issues arise.
 
 ---
 

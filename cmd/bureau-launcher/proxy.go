@@ -45,10 +45,17 @@ func (l *Launcher) spawnProxy(principalLocalpart string, credentials map[string]
 	proxySocketPath := principalRef.ProxySocketPath(l.fleetRunDir)
 	adminSocketPath := principalRef.ProxyAdminSocketPath(l.fleetRunDir)
 
-	// Create a temp directory for the proxy config file.
+	// Create a config directory for proxy state (config file, service
+	// listen sockets, payload, trigger). Located under the fleet run
+	// directory so everything stays within /run/bureau/ — no /tmp
+	// symlinks, no PrivateTmp visibility issues. Fleet-scoped to avoid
+	// collisions when multiple fleets share a run directory.
 	sanitizedName := strings.ReplaceAll(principalLocalpart, "/", "-")
-	configDir, err := os.MkdirTemp("", "bureau-proxy-"+sanitizedName+"-")
-	if err != nil {
+	configDir := filepath.Join(l.fleetRunDir, "sandbox", sanitizedName)
+	// Remove any stale directory from a previous run that wasn't
+	// cleaned up (e.g., launcher killed before destroy).
+	os.RemoveAll(configDir)
+	if err := os.MkdirAll(configDir, 0750); err != nil {
 		return 0, fmt.Errorf("creating config directory: %w", err)
 	}
 

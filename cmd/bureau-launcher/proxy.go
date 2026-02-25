@@ -15,6 +15,7 @@ import (
 
 	"github.com/bureau-foundation/bureau/lib/codec"
 	"github.com/bureau-foundation/bureau/lib/ipc"
+	"github.com/bureau-foundation/bureau/lib/principal"
 	"github.com/bureau-foundation/bureau/lib/ref"
 	"github.com/bureau-foundation/bureau/lib/schema"
 	"github.com/bureau-foundation/bureau/lib/secret"
@@ -57,6 +58,16 @@ func (l *Launcher) spawnProxy(principalLocalpart string, credentials map[string]
 	os.RemoveAll(configDir)
 	if err := os.MkdirAll(configDir, 0750); err != nil {
 		return 0, fmt.Errorf("creating config directory: %w", err)
+	}
+
+	// The sandbox/ parent directory must be traversable by operators
+	// so they can reach service listen sockets via the canonical
+	// ServiceSocketPath() symlink. The /run/bureau/ top-level
+	// directory gates access (requires bureau-operators group
+	// membership), so making sandbox/ broadly traversable is safe.
+	if err := os.Chmod(filepath.Dir(configDir), 0755); err != nil {
+		os.RemoveAll(configDir)
+		return 0, fmt.Errorf("setting sandbox parent directory mode: %w", err)
 	}
 
 	// Write the proxy config. The services map is empty because the daemon
@@ -406,6 +417,29 @@ func (l *Launcher) buildSandboxCommand(principalLocalpart string, spec *schema.S
 		if err := os.MkdirAll(listenDir, 0755); err != nil {
 			return nil, fmt.Errorf("creating service listen directory: %w", err)
 		}
+
+		// Set up permissions for operator access to the service socket.
+		// Operators in bureau-operators connect to service sockets via
+		// the canonical ServiceSocketPath() symlink, which traverses:
+		//   sandbox/{sanitized}/listen/service.sock
+		//
+		// The configDir is set to 0711 (traverse-only for non-owner)
+		// so operators can reach listen/ without reading proxy configs.
+		// The listen directory gets SGID with bureau-operators group so
+		// the socket created by the proxy inherits operator-accessible
+		// group ownership.
+		if l.operatorsGID >= 0 {
+			if err := os.Chmod(sb.configDir, 0711); err != nil {
+				return nil, fmt.Errorf("setting service configDir traverse mode: %w", err)
+			}
+			if err := principal.SetOperatorGroupOwnership(listenDir, l.operatorsGID); err != nil {
+				return nil, fmt.Errorf("setting listen directory group: %w", err)
+			}
+			if err := os.Chmod(listenDir, 0750|os.ModeSetgid); err != nil {
+				return nil, fmt.Errorf("setting listen directory SGID: %w", err)
+			}
+		}
+
 		sandboxSocketPath := "/run/bureau/listen/service.sock"
 		profile.Filesystem = append(profile.Filesystem, sandbox.Mount{
 			Source: listenDir,

@@ -200,6 +200,14 @@ func (d *Daemon) startObserveListener(ctx context.Context) error {
 		return fmt.Errorf("setting observe socket permissions: %w", err)
 	}
 
+	// Set group ownership to bureau-operators so operators in the group
+	// can connect. The observe socket is the primary operator interface
+	// for observation, token minting, and CLI access.
+	if err := principal.SetOperatorGroupOwnership(d.observeSocketPath, d.operatorsGID); err != nil {
+		listener.Close()
+		return fmt.Errorf("setting observe socket group ownership: %w", err)
+	}
+
 	d.logger.Info("observe listener started", "socket", d.observeSocketPath)
 
 	go d.acceptObserveConnections(ctx)

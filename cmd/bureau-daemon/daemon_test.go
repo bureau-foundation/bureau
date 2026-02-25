@@ -64,6 +64,7 @@ func newTestDaemon(t *testing.T) (*Daemon, *clock.FakeClock) {
 		machine:            machine,
 		fleet:              fleet,
 		authorizationIndex: authorization.NewIndex(),
+		operatorsGID:       -1, // no bureau-operators group in test environments
 		logger:             slog.New(slog.NewJSONHandler(io.Discard, nil)),
 
 		// All map fields — adding a new map to Daemon means adding

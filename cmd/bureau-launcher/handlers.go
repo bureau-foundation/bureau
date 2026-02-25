@@ -66,6 +66,7 @@ type Launcher struct {
 	launcherBinaryPath string       // absolute filesystem path of the running launcher binary (for watchdog PreviousBinary)
 	logRelayBinaryPath string       // path to bureau-log-relay binary; wraps sandbox commands to hold the outer PTY open until exit code is collected
 	tmuxServer         *tmux.Server // Bureau's dedicated tmux server (socket at <runDir>/tmux.sock, -f /dev/null)
+	operatorsGID       int          // GID of bureau-operators group (-1 if not found); used to chown service listen sockets for operator access
 	logger             *slog.Logger
 
 	// mu serializes access to mutable state: sandboxes, failedExecPaths,

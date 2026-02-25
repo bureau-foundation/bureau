@@ -124,6 +124,17 @@ A symlink from the canonical `ServiceSocketPath()` (under
 Both paths are under `/run/bureau/`, so no cross-mount-namespace
 visibility issues arise.
 
+Operator access to service sockets requires traversal through the
+sandbox config directory. The launcher sets directory permissions to
+enable this without exposing proxy configuration:
+
+- `sandbox/` — mode 0755 (traversable; gated by `/run/bureau/` 0750)
+- `{sanitized-localpart}/` — mode 0711 for services (traverse-only,
+  no listing of proxy config files)
+- `listen/` — group `bureau-operators` with SGID bit, so sockets
+  created by the proxy process inherit operator-accessible group
+  ownership
+
 ---
 
 ## Workflows

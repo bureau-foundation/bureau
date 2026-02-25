@@ -18,6 +18,8 @@ Requires=bureau-launcher.service
 
 [Service]
 Type=simple
+User=bureau
+Group=bureau
 EnvironmentFile=/etc/bureau/machine.conf
 ExecStart=/usr/local/bin/bureau-daemon \
     --homeserver ${BUREAU_HOMESERVER_URL} \

@@ -10,6 +10,7 @@ go_library(
         "destroy.go",
         "doc.go",
         "match.go",
+        "permissions.go",
         "principal.go",
         "resolve.go",
     ],

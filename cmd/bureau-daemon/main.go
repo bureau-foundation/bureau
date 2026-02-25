@@ -124,6 +124,18 @@ func run() error {
 		)
 	}
 
+	// Look up the bureau-operators group GID for setting socket group
+	// ownership on operator-facing sockets. In production, the group
+	// is created by "bureau machine doctor --fix". In development,
+	// the group typically doesn't exist and the daemon runs as the
+	// developer's user with full access to all sockets.
+	operatorsGID := principal.LookupOperatorsGID()
+	if operatorsGID < 0 {
+		logger.Warn("bureau-operators group not found (operator socket group ownership will not be set)")
+	} else {
+		logger.Info("bureau-operators group found", "gid", operatorsGID)
+	}
+
 	// Compute the daemon's binary hash and resolve its filesystem path.
 	// Done early since it's pure filesystem I/O with no dependencies.
 	// Both values are stable for the lifetime of this process — the
@@ -325,6 +337,7 @@ func run() error {
 		launcherSocket:         principal.LauncherSocketPath(runDir),
 		statusInterval:         statusInterval,
 		drainGracePeriod:       drainGracePeriod,
+		operatorsGID:           operatorsGID,
 		daemonBinaryHash:       daemonBinaryHash,
 		daemonBinaryPath:       daemonBinaryPath,
 		stateDir:               stateDir,
@@ -556,6 +569,14 @@ type Daemon struct {
 	launcherSocket   string
 	statusInterval   time.Duration
 	drainGracePeriod time.Duration
+
+	// operatorsGID is the numeric GID of the bureau-operators system
+	// group. Operator-facing sockets (observe.sock, service endpoints)
+	// are chown'd to this group so members of bureau-operators can
+	// connect. Set to -1 if the group does not exist (development
+	// environments without "bureau machine doctor" setup), in which
+	// case group ownership changes are skipped.
+	operatorsGID int
 
 	// daemonBinaryHash is the SHA256 hex digest of the currently running
 	// daemon binary, computed once at startup via os.Executable(). Used

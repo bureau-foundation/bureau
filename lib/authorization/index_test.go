@@ -25,10 +25,10 @@ func TestIndex_SetAndRemovePrincipal(t *testing.T) {
 
 	policy := schema.AuthorizationPolicy{
 		Grants: []schema.Grant{
-			{Actions: []string{"observe/**"}, Targets: []string{"bureau/dev/**:bureau.local"}},
+			{Actions: []string{schema.ActionObserveAll}, Targets: []string{"bureau/dev/**:bureau.local"}},
 		},
 		Allowances: []schema.Allowance{
-			{Actions: []string{"observe"}, Actors: []string{"bureau-admin:bureau.local"}},
+			{Actions: []string{schema.ActionObserve}, Actors: []string{"bureau-admin:bureau.local"}},
 		},
 	}
 
@@ -38,8 +38,8 @@ func TestIndex_SetAndRemovePrincipal(t *testing.T) {
 	if len(grants) != 1 {
 		t.Fatalf("Grants length = %d, want 1", len(grants))
 	}
-	if grants[0].Actions[0] != "observe/**" {
-		t.Errorf("grant action = %q, want observe/**", grants[0].Actions[0])
+	if grants[0].Actions[0] != schema.ActionObserveAll {
+		t.Errorf("grant action = %q, want %s", grants[0].Actions[0], schema.ActionObserveAll)
 	}
 
 	allowances := index.Allowances(uid(t, "@bureau/dev/pm:bureau.local"))
@@ -63,13 +63,13 @@ func TestIndex_SetPrincipalPreservesTemporalGrants(t *testing.T) {
 	// Set initial policy.
 	index.SetPrincipal(uid(t, "@agent:bureau.local"), schema.AuthorizationPolicy{
 		Grants: []schema.Grant{
-			{Actions: []string{"ticket/create"}},
+			{Actions: []string{schema.ActionTicketCreate}},
 		},
 	})
 
 	// Add a temporal grant.
 	ok := index.AddTemporalGrant(uid(t, "@agent:bureau.local"), schema.Grant{
-		Actions:   []string{"observe"},
+		Actions:   []string{schema.ActionObserve},
 		Targets:   []string{"service/db/**:bureau.local"},
 		ExpiresAt: "2099-01-01T00:00:00Z",
 		Ticket:    "tkt-test",
@@ -88,7 +88,7 @@ func TestIndex_SetPrincipalPreservesTemporalGrants(t *testing.T) {
 	// The temporal grant should be preserved.
 	index.SetPrincipal(uid(t, "@agent:bureau.local"), schema.AuthorizationPolicy{
 		Grants: []schema.Grant{
-			{Actions: []string{"ticket/create", "ticket/assign"}},
+			{Actions: []string{schema.ActionTicketCreate, "ticket/assign"}},
 		},
 	})
 
@@ -104,7 +104,7 @@ func TestIndex_RemovePrincipalCleansTemporalGrants(t *testing.T) {
 	index.SetPrincipal(uid(t, "@agent:bureau.local"), schema.AuthorizationPolicy{})
 
 	index.AddTemporalGrant(uid(t, "@agent:bureau.local"), schema.Grant{
-		Actions:   []string{"observe"},
+		Actions:   []string{schema.ActionObserve},
 		Targets:   []string{"**:**"},
 		ExpiresAt: "2099-01-01T00:00:00Z",
 		Ticket:    "tkt-1",
@@ -114,7 +114,7 @@ func TestIndex_RemovePrincipalCleansTemporalGrants(t *testing.T) {
 
 	// Re-add the principal: should have no temporal grants.
 	index.SetPrincipal(uid(t, "@agent:bureau.local"), schema.AuthorizationPolicy{
-		Grants: []schema.Grant{{Actions: []string{"ticket/create"}}},
+		Grants: []schema.Grant{{Actions: []string{schema.ActionTicketCreate}}},
 	})
 
 	grants := index.Grants(uid(t, "@agent:bureau.local"))
@@ -129,7 +129,7 @@ func TestIndex_AddTemporalGrant_RequiresExpiryAndTicket(t *testing.T) {
 
 	// No ExpiresAt: should fail.
 	ok := index.AddTemporalGrant(uid(t, "@agent:bureau.local"), schema.Grant{
-		Actions: []string{"observe"},
+		Actions: []string{schema.ActionObserve},
 		Ticket:  "tkt-1",
 	})
 	if ok {
@@ -138,7 +138,7 @@ func TestIndex_AddTemporalGrant_RequiresExpiryAndTicket(t *testing.T) {
 
 	// No Ticket: should fail.
 	ok = index.AddTemporalGrant(uid(t, "@agent:bureau.local"), schema.Grant{
-		Actions:   []string{"observe"},
+		Actions:   []string{schema.ActionObserve},
 		ExpiresAt: "2099-01-01T00:00:00Z",
 	})
 	if ok {
@@ -147,7 +147,7 @@ func TestIndex_AddTemporalGrant_RequiresExpiryAndTicket(t *testing.T) {
 
 	// Invalid ExpiresAt: should fail.
 	ok = index.AddTemporalGrant(uid(t, "@agent:bureau.local"), schema.Grant{
-		Actions:   []string{"observe"},
+		Actions:   []string{schema.ActionObserve},
 		ExpiresAt: "not-a-date",
 		Ticket:    "tkt-1",
 	})
@@ -160,17 +160,17 @@ func TestIndex_RevokeTemporalGrant(t *testing.T) {
 	index := NewIndex()
 
 	index.SetPrincipal(uid(t, "@agent:bureau.local"), schema.AuthorizationPolicy{
-		Grants: []schema.Grant{{Actions: []string{"ticket/create"}}},
+		Grants: []schema.Grant{{Actions: []string{schema.ActionTicketCreate}}},
 	})
 
 	index.AddTemporalGrant(uid(t, "@agent:bureau.local"), schema.Grant{
-		Actions:   []string{"observe"},
+		Actions:   []string{schema.ActionObserve},
 		Targets:   []string{"service/db/**:bureau.local"},
 		ExpiresAt: "2099-01-01T00:00:00Z",
 		Ticket:    "tkt-revoke-me",
 	})
 	index.AddTemporalGrant(uid(t, "@agent:bureau.local"), schema.Grant{
-		Actions:   []string{"interrupt"},
+		Actions:   []string{schema.ActionInterrupt},
 		Targets:   []string{"service/db/**:bureau.local"},
 		ExpiresAt: "2099-01-01T00:00:00Z",
 		Ticket:    "tkt-keep-me",
@@ -214,10 +214,10 @@ func TestIndex_SweepExpired(t *testing.T) {
 	index := NewIndex()
 
 	index.SetPrincipal(uid(t, "@agent-a:bureau.local"), schema.AuthorizationPolicy{
-		Grants: []schema.Grant{{Actions: []string{"ticket/create"}}},
+		Grants: []schema.Grant{{Actions: []string{schema.ActionTicketCreate}}},
 	})
 	index.SetPrincipal(uid(t, "@agent-b:bureau.local"), schema.AuthorizationPolicy{
-		Grants: []schema.Grant{{Actions: []string{"ticket/create"}}},
+		Grants: []schema.Grant{{Actions: []string{schema.ActionTicketCreate}}},
 	})
 
 	// Add temporal grants with different expiry times.
@@ -226,15 +226,15 @@ func TestIndex_SweepExpired(t *testing.T) {
 	t3 := time.Date(2026, 3, 1, 12, 0, 0, 0, time.UTC)
 
 	index.AddTemporalGrant(uid(t, "@agent-a:bureau.local"), schema.Grant{
-		Actions: []string{"observe"}, Targets: []string{"**:**"},
+		Actions: []string{schema.ActionObserve}, Targets: []string{"**:**"},
 		ExpiresAt: t1.Format(time.RFC3339), Ticket: "tkt-1",
 	})
 	index.AddTemporalGrant(uid(t, "@agent-b:bureau.local"), schema.Grant{
-		Actions: []string{"observe"}, Targets: []string{"**:**"},
+		Actions: []string{schema.ActionObserve}, Targets: []string{"**:**"},
 		ExpiresAt: t2.Format(time.RFC3339), Ticket: "tkt-2",
 	})
 	index.AddTemporalGrant(uid(t, "@agent-a:bureau.local"), schema.Grant{
-		Actions: []string{"interrupt"}, Targets: []string{"**:**"},
+		Actions: []string{schema.ActionInterrupt}, Targets: []string{"**:**"},
 		ExpiresAt: t3.Format(time.RFC3339), Ticket: "tkt-3",
 	})
 
@@ -291,7 +291,7 @@ func TestIndex_SweepExpired_NoneExpired(t *testing.T) {
 	index.SetPrincipal(uid(t, "@agent:bureau.local"), schema.AuthorizationPolicy{})
 
 	index.AddTemporalGrant(uid(t, "@agent:bureau.local"), schema.Grant{
-		Actions: []string{"observe"}, Targets: []string{"**:**"},
+		Actions: []string{schema.ActionObserve}, Targets: []string{"**:**"},
 		ExpiresAt: "2099-01-01T00:00:00Z", Ticket: "tkt-1",
 	})
 
@@ -311,13 +311,13 @@ func TestIndex_SweepExpired_PreservesStaticGrants(t *testing.T) {
 	expiry := time.Date(2026, 3, 1, 10, 0, 0, 0, time.UTC)
 	index.SetPrincipal(uid(t, "@agent:bureau.local"), schema.AuthorizationPolicy{
 		Grants: []schema.Grant{
-			{Actions: []string{"ticket/create"}},
-			{Actions: []string{"observe"}, ExpiresAt: expiry.Format(time.RFC3339)},
+			{Actions: []string{schema.ActionTicketCreate}},
+			{Actions: []string{schema.ActionObserve}, ExpiresAt: expiry.Format(time.RFC3339)},
 		},
 	})
 
 	index.AddTemporalGrant(uid(t, "@agent:bureau.local"), schema.Grant{
-		Actions: []string{"interrupt"}, Targets: []string{"**:**"},
+		Actions: []string{schema.ActionInterrupt}, Targets: []string{"**:**"},
 		ExpiresAt: expiry.Format(time.RFC3339), Ticket: "tkt-sweep",
 	})
 
@@ -342,7 +342,7 @@ func TestIndex_SweepExpired_PreservesStaticGrants(t *testing.T) {
 	// Verify the static grant with ExpiresAt was preserved.
 	foundStaticWithExpiry := false
 	for _, grant := range grants {
-		if grant.ExpiresAt == expiry.Format(time.RFC3339) && len(grant.Actions) == 1 && grant.Actions[0] == "observe" {
+		if grant.ExpiresAt == expiry.Format(time.RFC3339) && len(grant.Actions) == 1 && grant.Actions[0] == schema.ActionObserve {
 			foundStaticWithExpiry = true
 		}
 	}
@@ -354,7 +354,7 @@ func TestIndex_SweepExpired_PreservesStaticGrants(t *testing.T) {
 func TestIndex_GrantsCopy(t *testing.T) {
 	index := NewIndex()
 	index.SetPrincipal(uid(t, "@agent:bureau.local"), schema.AuthorizationPolicy{
-		Grants: []schema.Grant{{Actions: []string{"observe"}}},
+		Grants: []schema.Grant{{Actions: []string{schema.ActionObserve}}},
 	})
 
 	// Modifying the returned slice should not affect the index.
@@ -363,7 +363,7 @@ func TestIndex_GrantsCopy(t *testing.T) {
 
 	// Fetch again: should be the original value.
 	grants2 := index.Grants(uid(t, "@agent:bureau.local"))
-	if grants2[0].Actions[0] != "observe" {
+	if grants2[0].Actions[0] != schema.ActionObserve {
 		t.Errorf("Grants returned aliased slice: mutation visible")
 	}
 }
@@ -371,14 +371,14 @@ func TestIndex_GrantsCopy(t *testing.T) {
 func TestIndex_AllowancesCopy(t *testing.T) {
 	index := NewIndex()
 	index.SetPrincipal(uid(t, "@agent:bureau.local"), schema.AuthorizationPolicy{
-		Allowances: []schema.Allowance{{Actions: []string{"observe"}, Actors: []string{"admin:bureau.local"}}},
+		Allowances: []schema.Allowance{{Actions: []string{schema.ActionObserve}, Actors: []string{"admin:bureau.local"}}},
 	})
 
 	allowances := index.Allowances(uid(t, "@agent:bureau.local"))
 	allowances[0].Actions[0] = "mutated"
 
 	allowances2 := index.Allowances(uid(t, "@agent:bureau.local"))
-	if allowances2[0].Actions[0] != "observe" {
+	if allowances2[0].Actions[0] != schema.ActionObserve {
 		t.Errorf("Allowances returned aliased slice: mutation visible")
 	}
 }
@@ -405,11 +405,11 @@ func TestIndex_DenialsAccessor(t *testing.T) {
 
 	policy := schema.AuthorizationPolicy{
 		Grants: []schema.Grant{
-			{Actions: []string{"observe/**"}, Targets: []string{"**:**"}},
+			{Actions: []string{schema.ActionObserveAll}, Targets: []string{"**:**"}},
 		},
 		Denials: []schema.Denial{
-			{Actions: []string{"observe/read-write"}, Targets: []string{"secret/**:bureau.local"}},
-			{Actions: []string{"interrupt/**"}},
+			{Actions: []string{schema.ActionObserveReadWrite}, Targets: []string{"secret/**:bureau.local"}},
+			{Actions: []string{schema.ActionInterruptAll}},
 		},
 	}
 
@@ -419,17 +419,17 @@ func TestIndex_DenialsAccessor(t *testing.T) {
 	if len(denials) != 2 {
 		t.Fatalf("Denials length = %d, want 2", len(denials))
 	}
-	if denials[0].Actions[0] != "observe/read-write" {
-		t.Errorf("denial[0] action = %q, want observe/read-write", denials[0].Actions[0])
+	if denials[0].Actions[0] != schema.ActionObserveReadWrite {
+		t.Errorf("denial[0] action = %q, want %s", denials[0].Actions[0], schema.ActionObserveReadWrite)
 	}
-	if denials[1].Actions[0] != "interrupt/**" {
-		t.Errorf("denial[1] action = %q, want interrupt/**", denials[1].Actions[0])
+	if denials[1].Actions[0] != schema.ActionInterruptAll {
+		t.Errorf("denial[1] action = %q, want %s", denials[1].Actions[0], schema.ActionInterruptAll)
 	}
 
 	// Verify deep copy: mutating the returned slice should not affect the index.
 	denials[0].Actions[0] = "mutated"
 	original := index.Denials(uid(t, "@agent/alpha:bureau.local"))
-	if original[0].Actions[0] != "observe/read-write" {
+	if original[0].Actions[0] != schema.ActionObserveReadWrite {
 		t.Errorf("mutation leaked into index: got %q", original[0].Actions[0])
 	}
 }
@@ -439,10 +439,10 @@ func TestIndex_AllowanceDenialsAccessor(t *testing.T) {
 
 	policy := schema.AuthorizationPolicy{
 		Allowances: []schema.Allowance{
-			{Actions: []string{"observe/**"}, Actors: []string{"**:**"}},
+			{Actions: []string{schema.ActionObserveAll}, Actors: []string{"**:**"}},
 		},
 		AllowanceDenials: []schema.AllowanceDenial{
-			{Actions: []string{"observe/read-write"}, Actors: []string{"untrusted/**:bureau.local"}},
+			{Actions: []string{schema.ActionObserveReadWrite}, Actors: []string{"untrusted/**:bureau.local"}},
 		},
 	}
 
@@ -452,8 +452,8 @@ func TestIndex_AllowanceDenialsAccessor(t *testing.T) {
 	if len(allowanceDenials) != 1 {
 		t.Fatalf("AllowanceDenials length = %d, want 1", len(allowanceDenials))
 	}
-	if allowanceDenials[0].Actions[0] != "observe/read-write" {
-		t.Errorf("allowance denial action = %q, want observe/read-write", allowanceDenials[0].Actions[0])
+	if allowanceDenials[0].Actions[0] != schema.ActionObserveReadWrite {
+		t.Errorf("allowance denial action = %q, want %s", allowanceDenials[0].Actions[0], schema.ActionObserveReadWrite)
 	}
 	if allowanceDenials[0].Actors[0] != "untrusted/**:bureau.local" {
 		t.Errorf("allowance denial actor = %q, want untrusted/**:bureau.local", allowanceDenials[0].Actors[0])
@@ -472,10 +472,10 @@ func TestIndex_DenialsRemovedWithPrincipal(t *testing.T) {
 
 	policy := schema.AuthorizationPolicy{
 		Denials: []schema.Denial{
-			{Actions: []string{"observe/**"}},
+			{Actions: []string{schema.ActionObserveAll}},
 		},
 		AllowanceDenials: []schema.AllowanceDenial{
-			{Actions: []string{"observe/**"}, Actors: []string{"**:**"}},
+			{Actions: []string{schema.ActionObserveAll}, Actors: []string{"**:**"}},
 		},
 	}
 

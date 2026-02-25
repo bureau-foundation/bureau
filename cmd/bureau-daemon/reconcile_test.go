@@ -1090,7 +1090,7 @@ func TestMergeAuthorizationPolicy(t *testing.T) {
 			name:          "only principal policy",
 			defaultPolicy: nil,
 			principalPolicy: &schema.AuthorizationPolicy{
-				Grants:     []schema.Grant{{Actions: []string{"service/discover"}}},
+				Grants:     []schema.Grant{{Actions: []string{schema.ActionServiceDiscover}}},
 				Allowances: []schema.Allowance{{Actions: []string{"observe/attach"}, Actors: []string{"admin/**:**"}}},
 			},
 			wantGrants:     1,
@@ -1102,13 +1102,13 @@ func TestMergeAuthorizationPolicy(t *testing.T) {
 				Grants:           []schema.Grant{{Actions: []string{"observe/*"}}},
 				Denials:          []schema.Denial{{Actions: []string{"admin/*"}}},
 				Allowances:       []schema.Allowance{{Actions: []string{"observe/attach"}, Actors: []string{"**:**"}}},
-				AllowanceDenials: []schema.AllowanceDenial{{Actions: []string{"observe/resize"}, Actors: []string{"untrusted/**:**"}}},
+				AllowanceDenials: []schema.AllowanceDenial{{Actions: []string{schema.ActionObserveResize}, Actors: []string{"untrusted/**:**"}}},
 			},
 			principalPolicy: &schema.AuthorizationPolicy{
-				Grants:           []schema.Grant{{Actions: []string{"service/discover"}}, {Actions: []string{"matrix/join"}}},
-				Denials:          []schema.Denial{{Actions: []string{"service/register"}}},
-				Allowances:       []schema.Allowance{{Actions: []string{"observe/input"}, Actors: []string{"admin/**:**"}}},
-				AllowanceDenials: []schema.AllowanceDenial{{Actions: []string{"observe/input"}, Actors: []string{"untrusted/**:**"}}},
+				Grants:           []schema.Grant{{Actions: []string{schema.ActionServiceDiscover}}, {Actions: []string{schema.ActionMatrixJoin}}},
+				Denials:          []schema.Denial{{Actions: []string{schema.ActionServiceRegister}}},
+				Allowances:       []schema.Allowance{{Actions: []string{schema.ActionObserveInput}, Actors: []string{"admin/**:**"}}},
+				AllowanceDenials: []schema.AllowanceDenial{{Actions: []string{schema.ActionObserveInput}, Actors: []string{"untrusted/**:**"}}},
 			},
 			wantGrants:       3,
 			wantDenials:      2,
@@ -1256,7 +1256,7 @@ func TestRebuildAuthorizationIndex(t *testing.T) {
 				Principal: testEntity(t, daemon.fleet, "agent/alpha"),
 				AutoStart: true,
 				Authorization: &schema.AuthorizationPolicy{
-					Grants: []schema.Grant{{Actions: []string{"service/discover"}}},
+					Grants: []schema.Grant{{Actions: []string{schema.ActionServiceDiscover}}},
 				},
 			},
 			{
@@ -1358,7 +1358,7 @@ func TestRebuildAuthorizationIndex_PreservesTemporalGrants(t *testing.T) {
 
 	// Add a temporal grant between rebuilds.
 	temporalGrant := schema.Grant{
-		Actions:   []string{"service/register"},
+		Actions:   []string{schema.ActionServiceRegister},
 		ExpiresAt: "2099-01-01T00:00:00Z",
 		Ticket:    "test-temporal-grant",
 	}
@@ -1413,7 +1413,7 @@ func TestRebuildAuthorizationIndex_RoomLevelMemberGrants(t *testing.T) {
 		workspaceRoomID: {
 			policy: schema.RoomAuthorizationPolicy{
 				MemberGrants: []schema.Grant{
-					{Actions: []string{"ticket/create"}, Targets: []string{"**:**"}},
+					{Actions: []string{schema.ActionTicketCreate}, Targets: []string{"**:**"}},
 				},
 			},
 		},
@@ -1427,8 +1427,8 @@ func TestRebuildAuthorizationIndex_RoomLevelMemberGrants(t *testing.T) {
 	if len(alphaGrants) != 1 {
 		t.Fatalf("alpha grants = %d, want 1 (room-level MemberGrant)", len(alphaGrants))
 	}
-	if alphaGrants[0].Actions[0] != "ticket/create" {
-		t.Errorf("alpha grant action = %q, want %q", alphaGrants[0].Actions[0], "ticket/create")
+	if alphaGrants[0].Actions[0] != schema.ActionTicketCreate {
+		t.Errorf("alpha grant action = %q, want %q", alphaGrants[0].Actions[0], schema.ActionTicketCreate)
 	}
 	expectedSource := schema.SourceRoom(workspaceRoomID.String())
 	if alphaGrants[0].Source != expectedSource {
@@ -1476,7 +1476,7 @@ func TestRebuildAuthorizationIndex_PowerLevelGrants(t *testing.T) {
 				},
 				PowerLevelGrants: map[string][]schema.Grant{
 					"50": {
-						{Actions: []string{"interrupt"}, Targets: []string{"**:**"}},
+						{Actions: []string{schema.ActionInterrupt}, Targets: []string{"**:**"}},
 					},
 				},
 			},
@@ -1500,8 +1500,8 @@ func TestRebuildAuthorizationIndex_PowerLevelGrants(t *testing.T) {
 		t.Errorf("alpha grants[0] action = %q, want %q", alphaGrants[0].Actions[0], "observe/*")
 	}
 	// Second grant: PowerLevelGrant at PL 50 (interrupt).
-	if alphaGrants[1].Actions[0] != "interrupt" {
-		t.Errorf("alpha grants[1] action = %q, want %q", alphaGrants[1].Actions[0], "interrupt")
+	if alphaGrants[1].Actions[0] != schema.ActionInterrupt {
+		t.Errorf("alpha grants[1] action = %q, want %q", alphaGrants[1].Actions[0], schema.ActionInterrupt)
 	}
 
 	// beta (PL 0, below 50) gets only MemberGrants.
@@ -1525,14 +1525,14 @@ func TestRebuildAuthorizationIndex_RoomGrantsMergeWithPrincipalPolicy(t *testing
 
 	config := &schema.MachineConfig{
 		DefaultPolicy: &schema.AuthorizationPolicy{
-			Grants: []schema.Grant{{Actions: []string{"service/discover"}}},
+			Grants: []schema.Grant{{Actions: []string{schema.ActionServiceDiscover}}},
 		},
 		Principals: []schema.PrincipalAssignment{
 			{
 				Principal: alpha,
 				AutoStart: true,
 				Authorization: &schema.AuthorizationPolicy{
-					Grants: []schema.Grant{{Actions: []string{"matrix/join"}}},
+					Grants: []schema.Grant{{Actions: []string{schema.ActionMatrixJoin}}},
 				},
 			},
 		},
@@ -1623,10 +1623,10 @@ func TestFilterGrantsForService(t *testing.T) {
 	t.Parallel()
 
 	grants := []schema.Grant{
-		{Actions: []string{"ticket/create", "ticket/assign"}},
+		{Actions: []string{schema.ActionTicketCreate, "ticket/assign"}},
 		{Actions: []string{"observe/*"}, Targets: []string{"**:**"}},
 		{Actions: []string{"**"}},
-		{Actions: []string{"artifact/fetch"}},
+		{Actions: []string{schema.ActionArtifactFetch}},
 		{Actions: []string{"ticket/*"}, Targets: []string{"**/iree/**:**"}},
 	}
 
@@ -1640,7 +1640,7 @@ func TestFilterGrantsForService(t *testing.T) {
 			name:       "ticket role matches ticket grants and wildcard",
 			role:       "ticket",
 			wantCount:  3, // ticket/create+assign, **, ticket/*
-			wantAction: "ticket/create",
+			wantAction: schema.ActionTicketCreate,
 		},
 		{
 			name:       "observe role matches observe grant and wildcard",
@@ -1712,7 +1712,7 @@ func TestMintServiceTokens(t *testing.T) {
 	// Set up the principal with grants covering the ticket namespace.
 	daemon.authorizationIndex.SetPrincipal(testEntity(t, daemon.fleet, "agent/alpha").UserID(), schema.AuthorizationPolicy{
 		Grants: []schema.Grant{
-			{Actions: []string{"ticket/create", "ticket/assign"}},
+			{Actions: []string{schema.ActionTicketCreate, "ticket/assign"}},
 			{Actions: []string{"observe/*"}, Targets: []string{"**:**"}},
 		},
 	})
@@ -1827,8 +1827,8 @@ func TestMintServiceTokens_MultipleServices(t *testing.T) {
 
 	daemon.authorizationIndex.SetPrincipal(testEntity(t, daemon.fleet, "agent/alpha").UserID(), schema.AuthorizationPolicy{
 		Grants: []schema.Grant{
-			{Actions: []string{"ticket/**"}},
-			{Actions: []string{"artifact/fetch"}},
+			{Actions: []string{schema.ActionTicketAll}},
+			{Actions: []string{schema.ActionArtifactFetch}},
 		},
 	})
 
@@ -1876,21 +1876,21 @@ func TestSynthesizeGrants(t *testing.T) {
 			name:   "join only",
 			policy: &schema.MatrixPolicy{AllowJoin: true},
 			expected: []schema.Grant{
-				{Actions: []string{"matrix/join"}},
+				{Actions: []string{schema.ActionMatrixJoin}},
 			},
 		},
 		{
 			name:   "invite only",
 			policy: &schema.MatrixPolicy{AllowInvite: true},
 			expected: []schema.Grant{
-				{Actions: []string{"matrix/invite"}},
+				{Actions: []string{schema.ActionMatrixInvite}},
 			},
 		},
 		{
 			name:   "create-room only",
 			policy: &schema.MatrixPolicy{AllowRoomCreate: true},
 			expected: []schema.Grant{
-				{Actions: []string{"matrix/create-room"}},
+				{Actions: []string{schema.ActionMatrixCreateRoom}},
 			},
 		},
 		{
@@ -1901,16 +1901,16 @@ func TestSynthesizeGrants(t *testing.T) {
 				AllowRoomCreate: true,
 			},
 			expected: []schema.Grant{
-				{Actions: []string{"matrix/join"}},
-				{Actions: []string{"matrix/invite"}},
-				{Actions: []string{"matrix/create-room"}},
+				{Actions: []string{schema.ActionMatrixJoin}},
+				{Actions: []string{schema.ActionMatrixInvite}},
+				{Actions: []string{schema.ActionMatrixCreateRoom}},
 			},
 		},
 		{
 			name:       "visibility only",
 			visibility: []string{"service/stt/*:**", "service/embedding/**:**"},
 			expected: []schema.Grant{
-				{Actions: []string{"service/discover"}, Targets: []string{"service/stt/*:**", "service/embedding/**:**"}},
+				{Actions: []string{schema.ActionServiceDiscover}, Targets: []string{"service/stt/*:**", "service/embedding/**:**"}},
 			},
 		},
 		{
@@ -1918,8 +1918,8 @@ func TestSynthesizeGrants(t *testing.T) {
 			policy:     &schema.MatrixPolicy{AllowJoin: true},
 			visibility: []string{"service/**:**"},
 			expected: []schema.Grant{
-				{Actions: []string{"matrix/join"}},
-				{Actions: []string{"service/discover"}, Targets: []string{"service/**:**"}},
+				{Actions: []string{schema.ActionMatrixJoin}},
+				{Actions: []string{schema.ActionServiceDiscover}, Targets: []string{"service/**:**"}},
 			},
 		},
 		{
@@ -2051,7 +2051,7 @@ func TestReconcileAuthorizationGrantsHotReload(t *testing.T) {
 	daemon.lastCredentials[agentTestEntity] = "encrypted-test-credentials"
 	// Old grants differ from what the config now produces.
 	daemon.lastGrants[agentTestEntity] = []schema.Grant{
-		{Actions: []string{"matrix/join"}},
+		{Actions: []string{schema.ActionMatrixJoin}},
 	}
 	daemon.adminSocketPathFunc = func(principal ref.Entity) string {
 		return filepath.Join(socketDir, principal.AccountLocalpart()+".admin.sock")
@@ -2074,9 +2074,9 @@ func TestReconcileAuthorizationGrantsHotReload(t *testing.T) {
 	// The new config has AllowJoin + AllowInvite + ServiceVisibility,
 	// which synthesizes to three grants.
 	expectedGrants := []schema.Grant{
-		{Actions: []string{"matrix/join"}},
-		{Actions: []string{"matrix/invite"}},
-		{Actions: []string{"service/discover"}, Targets: []string{"service/stt/**"}},
+		{Actions: []string{schema.ActionMatrixJoin}},
+		{Actions: []string{schema.ActionMatrixInvite}},
+		{Actions: []string{schema.ActionServiceDiscover}, Targets: []string{"service/stt/**"}},
 	}
 	if len(receivedGrants) != len(expectedGrants) {
 		t.Fatalf("proxy received %d grants, want %d: %v", len(receivedGrants), len(expectedGrants), receivedGrants)

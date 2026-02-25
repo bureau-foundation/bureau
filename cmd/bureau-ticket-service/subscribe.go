@@ -12,6 +12,7 @@ import (
 
 	"github.com/bureau-foundation/bureau/lib/codec"
 	"github.com/bureau-foundation/bureau/lib/ref"
+	"github.com/bureau-foundation/bureau/lib/schema"
 	"github.com/bureau-foundation/bureau/lib/schema/ticket"
 	"github.com/bureau-foundation/bureau/lib/servicetoken"
 	"github.com/bureau-foundation/bureau/lib/ticketindex"
@@ -166,7 +167,7 @@ func (ts *TicketService) handleSubscribe(ctx context.Context, token *servicetoke
 	encoder := codec.NewEncoder(conn)
 
 	// Check grant.
-	if err := requireGrant(token, "ticket/subscribe"); err != nil {
+	if err := requireGrant(token, schema.ActionTicketSubscribe); err != nil {
 		encoder.Encode(subscribeFrame{Type: "error", Message: err.Error()})
 		return
 	}

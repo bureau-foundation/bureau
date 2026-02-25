@@ -273,10 +273,10 @@ func TestBuildAssignmentPropagatesAuthorization(t *testing.T) {
 			AllowJoin:   true,
 			AllowInvite: true,
 		},
-		ServiceVisibility: []string{"service/**"},
+		ServiceVisibility: []string{schema.ActionServiceAll},
 		Authorization: &schema.AuthorizationPolicy{
 			Grants: []schema.Grant{
-				{Actions: []string{"ticket/create", "ticket/update"}},
+				{Actions: []string{schema.ActionTicketCreate, schema.ActionTicketUpdate}},
 			},
 		},
 	}
@@ -296,8 +296,8 @@ func TestBuildAssignmentPropagatesAuthorization(t *testing.T) {
 		t.Error("MatrixPolicy.AllowInvite should be true")
 	}
 
-	if len(assignment.ServiceVisibility) != 1 || assignment.ServiceVisibility[0] != "service/**" {
-		t.Errorf("ServiceVisibility = %v, want [service/**]", assignment.ServiceVisibility)
+	if len(assignment.ServiceVisibility) != 1 || assignment.ServiceVisibility[0] != schema.ActionServiceAll {
+		t.Errorf("ServiceVisibility = %v, want [%s]", assignment.ServiceVisibility, schema.ActionServiceAll)
 	}
 
 	if assignment.Authorization == nil {
@@ -306,8 +306,8 @@ func TestBuildAssignmentPropagatesAuthorization(t *testing.T) {
 	if len(assignment.Authorization.Grants) != 1 {
 		t.Fatalf("expected 1 grant, got %d", len(assignment.Authorization.Grants))
 	}
-	if assignment.Authorization.Grants[0].Actions[0] != "ticket/create" {
-		t.Errorf("grant action = %q, want ticket/create", assignment.Authorization.Grants[0].Actions[0])
+	if assignment.Authorization.Grants[0].Actions[0] != schema.ActionTicketCreate {
+		t.Errorf("grant action = %q, want %s", assignment.Authorization.Grants[0].Actions[0], schema.ActionTicketCreate)
 	}
 }
 

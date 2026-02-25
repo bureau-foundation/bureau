@@ -168,7 +168,7 @@ func TestCredentialService_ProvisionNewKey(t *testing.T) {
 	// Mint a token with credential/provision/key/GITHUB_TOKEN grant targeting agent/builder.
 	tokenBytes := mintToken("connector/github", []servicetoken.Grant{
 		{
-			Actions: []string{"credential/provision/key/GITHUB_TOKEN"},
+			Actions: []string{schema.ActionCredentialProvisionKeyPrefix + "GITHUB_TOKEN"},
 			Targets: []string{"agent/builder"},
 		},
 	})
@@ -279,7 +279,7 @@ func TestCredentialService_ProvisionMergesExistingCredentials(t *testing.T) {
 	// Provision a new GITHUB_TOKEN alongside the existing OPENAI_API_KEY.
 	tokenBytes := mintToken("connector/github", []servicetoken.Grant{
 		{
-			Actions: []string{"credential/provision/key/GITHUB_TOKEN"},
+			Actions: []string{schema.ActionCredentialProvisionKeyPrefix + "GITHUB_TOKEN"},
 			Targets: []string{"agent/builder"},
 		},
 	})
@@ -336,7 +336,7 @@ func TestCredentialService_DeniedWrongKeyGrant(t *testing.T) {
 	// Token grants GITHUB_TOKEN but request asks to provision FORGEJO_TOKEN.
 	tokenBytes := mintToken("connector/github", []servicetoken.Grant{
 		{
-			Actions: []string{"credential/provision/key/GITHUB_TOKEN"},
+			Actions: []string{schema.ActionCredentialProvisionKeyPrefix + "GITHUB_TOKEN"},
 			Targets: []string{"agent/builder"},
 		},
 	})
@@ -380,7 +380,7 @@ func TestCredentialService_DeniedWrongTargetPrincipal(t *testing.T) {
 	// Token targets agent/builder but request targets agent/reviewer.
 	tokenBytes := mintToken("connector/github", []servicetoken.Grant{
 		{
-			Actions: []string{"credential/provision/key/GITHUB_TOKEN"},
+			Actions: []string{schema.ActionCredentialProvisionKeyPrefix + "GITHUB_TOKEN"},
 			Targets: []string{"agent/builder"},
 		},
 	})
@@ -534,14 +534,14 @@ func TestHasCredentialGrants(t *testing.T) {
 		{
 			name: "unrelated grants",
 			grants: []schema.Grant{
-				{Actions: []string{"ticket/create"}, Targets: []string{"**:**"}},
+				{Actions: []string{schema.ActionTicketCreate}, Targets: []string{"**:**"}},
 			},
 			expected: false,
 		},
 		{
 			name: "credential provision grant",
 			grants: []schema.Grant{
-				{Actions: []string{"credential/provision/key/GITHUB_TOKEN"}, Targets: []string{"agent/builder"}},
+				{Actions: []string{schema.ActionCredentialProvisionKeyPrefix + "GITHUB_TOKEN"}, Targets: []string{"agent/builder"}},
 			},
 			expected: true,
 		},
@@ -597,7 +597,7 @@ func TestAppendCredentialServiceMount(t *testing.T) {
 	// Principal with credential grants: mount added.
 	daemon.authorizationIndex.SetPrincipal(testEntity(t, daemon.fleet, "connector/github").UserID(), schema.AuthorizationPolicy{
 		Grants: []schema.Grant{
-			{Actions: []string{"credential/provision/key/GITHUB_TOKEN"}, Targets: []string{"**/agent/**:**"}},
+			{Actions: []string{schema.ActionCredentialProvisionKeyPrefix + "GITHUB_TOKEN"}, Targets: []string{"**/agent/**:**"}},
 		},
 	})
 	result = daemon.appendCredentialServiceMount(testEntity(t, daemon.fleet, "connector/github"), existing)
@@ -628,7 +628,7 @@ func TestCredentialServiceRoles(t *testing.T) {
 	// With credential grants → ["credential"].
 	daemon.authorizationIndex.SetPrincipal(testEntity(t, daemon.fleet, "connector/github").UserID(), schema.AuthorizationPolicy{
 		Grants: []schema.Grant{
-			{Actions: []string{"credential/provision/key/GITHUB_TOKEN"}, Targets: []string{"**/agent/**:**"}},
+			{Actions: []string{schema.ActionCredentialProvisionKeyPrefix + "GITHUB_TOKEN"}, Targets: []string{"**/agent/**:**"}},
 		},
 	})
 	roles = daemon.credentialServiceRoles(testEntity(t, daemon.fleet, "connector/github"))

@@ -32,7 +32,7 @@ func TestSystemPrompt(t *testing.T) {
 		},
 		Grants: []schema.Grant{
 			{Actions: []string{"matrix/send"}, Targets: []string{"bureau/fleet/*/machine/*"}},
-			{Actions: []string{"service/discover"}},
+			{Actions: []string{schema.ActionServiceDiscover}},
 		},
 		Services: []proxyclient.ServiceEntry{
 			{

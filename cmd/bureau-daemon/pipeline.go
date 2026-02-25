@@ -307,7 +307,7 @@ func (d *Daemon) startPipelineExecutor(
 			Subject:   pipelineEntity.UserID(),
 			Machine:   d.machine,
 			Audience:  "artifact",
-			Grants:    []servicetoken.Grant{{Actions: []string{"artifact/store"}}},
+			Grants:    []servicetoken.Grant{{Actions: []string{schema.ActionArtifactStore}}},
 			IssuedAt:  d.clock.Now().Unix(),
 			ExpiresAt: d.clock.Now().Add(1 * time.Hour).Unix(),
 		}

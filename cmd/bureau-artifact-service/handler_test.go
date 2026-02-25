@@ -21,6 +21,7 @@ import (
 	"github.com/bureau-foundation/bureau/lib/artifactstore"
 	"github.com/bureau-foundation/bureau/lib/clock"
 	"github.com/bureau-foundation/bureau/lib/ref"
+	"github.com/bureau-foundation/bureau/lib/schema"
 	"github.com/bureau-foundation/bureau/lib/service"
 	"github.com/bureau-foundation/bureau/lib/servicetoken"
 	"github.com/bureau-foundation/bureau/lib/testutil"
@@ -1829,7 +1830,7 @@ func TestAuthWrongGrant(t *testing.T) {
 
 	// Mint a token with only artifact/fetch grant, then try to store.
 	tokenBytes := mintArtifactToken(t, privateKey, []servicetoken.Grant{
-		{Actions: []string{"artifact/fetch"}},
+		{Actions: []string{schema.ActionArtifactFetch}},
 	})
 
 	conn, wait := startHandler(t, as)
@@ -1874,7 +1875,7 @@ func TestAuthValidToken(t *testing.T) {
 
 	// Mint a token with artifact/fetch grant.
 	tokenBytes := mintArtifactToken(t, privateKey, []servicetoken.Grant{
-		{Actions: []string{"artifact/fetch"}},
+		{Actions: []string{schema.ActionArtifactFetch}},
 	})
 
 	conn, wait := startHandler(t, as)
@@ -1973,20 +1974,20 @@ func TestAuthAllActionsRequireToken(t *testing.T) {
 		action string
 		grant  string
 	}{
-		{"store", "artifact/store"},
-		{"fetch", "artifact/fetch"},
-		{"exists", "artifact/fetch"},
-		{"show", "artifact/fetch"},
-		{"reconstruction", "artifact/fetch"},
-		{"list", "artifact/list"},
-		{"tag", "artifact/tag"},
-		{"resolve", "artifact/fetch"},
-		{"tags", "artifact/fetch"},
-		{"delete-tag", "artifact/tag"},
-		{"pin", "artifact/pin"},
-		{"unpin", "artifact/pin"},
-		{"gc", "artifact/gc"},
-		{"cache-status", "artifact/list"},
+		{"store", schema.ActionArtifactStore},
+		{"fetch", schema.ActionArtifactFetch},
+		{"exists", schema.ActionArtifactFetch},
+		{"show", schema.ActionArtifactFetch},
+		{"reconstruction", schema.ActionArtifactFetch},
+		{"list", schema.ActionArtifactList},
+		{"tag", schema.ActionArtifactTag},
+		{"resolve", schema.ActionArtifactFetch},
+		{"tags", schema.ActionArtifactFetch},
+		{"delete-tag", schema.ActionArtifactTag},
+		{"pin", schema.ActionArtifactPin},
+		{"unpin", schema.ActionArtifactPin},
+		{"gc", schema.ActionArtifactGC},
+		{"cache-status", schema.ActionArtifactList},
 	}
 
 	for _, action := range actions {

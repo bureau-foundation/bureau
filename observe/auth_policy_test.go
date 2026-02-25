@@ -27,11 +27,11 @@ func TestQueryGrants(t *testing.T) {
 		OK:        true,
 		Principal: "iree/amdgpu/pm",
 		Grants: []schema.Grant{
-			{Actions: []string{"observe/**"}, Targets: []string{"iree/**"}},
+			{Actions: []string{schema.ActionObserveAll}, Targets: []string{"iree/**"}},
 			{Actions: []string{"command/pipeline/list"}},
 		},
 		Denials: []schema.Denial{
-			{Actions: []string{"interrupt/**"}},
+			{Actions: []string{schema.ActionInterruptAll}},
 		},
 	}
 
@@ -100,10 +100,10 @@ func TestQueryAllowances(t *testing.T) {
 		OK:        true,
 		Principal: "iree/amdgpu/compiler",
 		Allowances: []schema.Allowance{
-			{Actions: []string{"observe/**"}, Actors: []string{"iree/**"}},
+			{Actions: []string{schema.ActionObserveAll}, Actors: []string{"iree/**"}},
 		},
 		AllowanceDenials: []schema.AllowanceDenial{
-			{Actions: []string{"observe/read-write"}, Actors: []string{"untrusted/**"}},
+			{Actions: []string{schema.ActionObserveReadWrite}, Actors: []string{"untrusted/**"}},
 		},
 	}
 

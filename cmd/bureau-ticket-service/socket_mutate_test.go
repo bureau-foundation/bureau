@@ -9,6 +9,7 @@ import (
 	"testing"
 
 	"github.com/bureau-foundation/bureau/lib/ref"
+	"github.com/bureau-foundation/bureau/lib/schema"
 	"github.com/bureau-foundation/bureau/lib/schema/pipeline"
 	"github.com/bureau-foundation/bureau/lib/schema/ticket"
 	"github.com/bureau-foundation/bureau/lib/servicetoken"
@@ -919,7 +920,7 @@ func TestHandleUpdateGateMissingStatus(t *testing.T) {
 func TestCloseRequiresCloseGrant(t *testing.T) {
 	// Token has ticket/update but NOT ticket/close.
 	env := testMutationServerWithGrants(t, mutationRooms(), []servicetoken.Grant{
-		{Actions: []string{"ticket/update"}},
+		{Actions: []string{schema.ActionTicketUpdate}},
 	})
 	defer env.cleanup()
 
@@ -937,7 +938,7 @@ func TestCloseRequiresCloseGrant(t *testing.T) {
 func TestReopenRequiresReopenGrant(t *testing.T) {
 	// Token has ticket/update but NOT ticket/reopen.
 	env := testMutationServerWithGrants(t, mutationRooms(), []servicetoken.Grant{
-		{Actions: []string{"ticket/update"}},
+		{Actions: []string{schema.ActionTicketUpdate}},
 	})
 	defer env.cleanup()
 
@@ -955,7 +956,7 @@ func TestUpdateToClosedRequiresCloseGrant(t *testing.T) {
 	// Token has ticket/update but NOT ticket/close. Closing via the
 	// update action (status: "closed") should still be denied.
 	env := testMutationServerWithGrants(t, mutationRooms(), []servicetoken.Grant{
-		{Actions: []string{"ticket/update"}},
+		{Actions: []string{schema.ActionTicketUpdate}},
 	})
 	defer env.cleanup()
 
@@ -975,7 +976,7 @@ func TestUpdateFromClosedRequiresReopenGrant(t *testing.T) {
 	// the update action (status: "open" on a closed ticket) should
 	// still be denied.
 	env := testMutationServerWithGrants(t, mutationRooms(), []servicetoken.Grant{
-		{Actions: []string{"ticket/update"}},
+		{Actions: []string{schema.ActionTicketUpdate}},
 	})
 	defer env.cleanup()
 
@@ -993,7 +994,7 @@ func TestUpdateFromClosedRequiresReopenGrant(t *testing.T) {
 func TestCloseAllowedWithCloseGrant(t *testing.T) {
 	// Token has both ticket/update and ticket/close. Close should work.
 	env := testMutationServerWithGrants(t, mutationRooms(), []servicetoken.Grant{
-		{Actions: []string{"ticket/update", "ticket/close"}},
+		{Actions: []string{schema.ActionTicketUpdate, schema.ActionTicketClose}},
 	})
 	defer env.cleanup()
 
@@ -1014,7 +1015,7 @@ func TestCloseAllowedWithCloseGrant(t *testing.T) {
 func TestReopenAllowedWithReopenGrant(t *testing.T) {
 	// Token has both ticket/update and ticket/reopen. Reopen should work.
 	env := testMutationServerWithGrants(t, mutationRooms(), []servicetoken.Grant{
-		{Actions: []string{"ticket/update", "ticket/reopen"}},
+		{Actions: []string{schema.ActionTicketUpdate, schema.ActionTicketReopen}},
 	})
 	defer env.cleanup()
 

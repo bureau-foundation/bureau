@@ -281,10 +281,10 @@ func TestFleetServiceContentWithAuthorization(t *testing.T) {
 			AllowInvite:     true,
 			AllowRoomCreate: false,
 		},
-		ServiceVisibility: []string{"service/**"},
+		ServiceVisibility: []string{schema.ActionServiceAll},
 		Authorization: &schema.AuthorizationPolicy{
 			Grants: []schema.Grant{
-				{Actions: []string{"ticket/create", "ticket/update"}},
+				{Actions: []string{schema.ActionTicketCreate, schema.ActionTicketUpdate}},
 			},
 		},
 	}
@@ -304,7 +304,7 @@ func TestFleetServiceContentWithAuthorization(t *testing.T) {
 	}
 	visibility, ok := raw["service_visibility"].([]any)
 	if !ok || len(visibility) != 1 {
-		t.Errorf("service_visibility = %v, want [service/**]", raw["service_visibility"])
+		t.Errorf("service_visibility = %v, want [%s]", raw["service_visibility"], schema.ActionServiceAll)
 	}
 	if _, exists := raw["authorization"]; !exists {
 		t.Error("authorization should be present in JSON")
@@ -323,8 +323,8 @@ func TestFleetServiceContentWithAuthorization(t *testing.T) {
 	if !decoded.MatrixPolicy.AllowInvite {
 		t.Error("MatrixPolicy.AllowInvite should be true after round-trip")
 	}
-	if len(decoded.ServiceVisibility) != 1 || decoded.ServiceVisibility[0] != "service/**" {
-		t.Errorf("ServiceVisibility = %v, want [service/**]", decoded.ServiceVisibility)
+	if len(decoded.ServiceVisibility) != 1 || decoded.ServiceVisibility[0] != schema.ActionServiceAll {
+		t.Errorf("ServiceVisibility = %v, want [%s]", decoded.ServiceVisibility, schema.ActionServiceAll)
 	}
 	if decoded.Authorization == nil {
 		t.Fatal("Authorization should not be nil after round-trip")

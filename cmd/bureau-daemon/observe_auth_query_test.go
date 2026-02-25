@@ -130,19 +130,19 @@ func TestQueryAuthorizationAllow(t *testing.T) {
 	// Set up actor with observe grant and target with observe allowance.
 	daemon.authorizationIndex.SetPrincipal(testEntity(t, daemon.fleet, "iree/amdgpu/pm").UserID(), schema.AuthorizationPolicy{
 		Grants: []schema.Grant{
-			{Actions: []string{"observe/**"}, Targets: []string{"**/iree/*/*:**"}},
+			{Actions: []string{schema.ActionObserveAll}, Targets: []string{"**/iree/*/*:**"}},
 		},
 	})
 	daemon.authorizationIndex.SetPrincipal(testEntity(t, daemon.fleet, "iree/amdgpu/compiler").UserID(), schema.AuthorizationPolicy{
 		Allowances: []schema.Allowance{
-			{Actions: []string{"observe/**"}, Actors: []string{"**/iree/*/*:**"}},
+			{Actions: []string{schema.ActionObserveAll}, Actors: []string{"**/iree/*/*:**"}},
 		},
 	})
 
 	actorUserID := testEntity(t, daemon.fleet, "iree/amdgpu/pm").UserID().String()
 	targetUserID := testEntity(t, daemon.fleet, "iree/amdgpu/compiler").UserID().String()
 	response := sendAuthorizationQuery(t, daemon.observeSocketPath,
-		actorUserID, "observe", targetUserID)
+		actorUserID, schema.ActionObserve, targetUserID)
 
 	if !response.OK {
 		t.Fatalf("expected OK, got error: %s", response.Error)
@@ -173,7 +173,7 @@ func TestQueryAuthorizationDenyNoGrant(t *testing.T) {
 	actorUserID := testEntity(t, daemon.fleet, "iree/amdgpu/pm").UserID().String()
 	targetUserID := testEntity(t, daemon.fleet, "iree/amdgpu/compiler").UserID().String()
 	response := sendAuthorizationQuery(t, daemon.observeSocketPath,
-		actorUserID, "observe", targetUserID)
+		actorUserID, schema.ActionObserve, targetUserID)
 
 	if !response.OK {
 		t.Fatalf("expected OK, got error: %s", response.Error)
@@ -198,14 +198,14 @@ func TestQueryAuthorizationDenyExplicitDenial(t *testing.T) {
 			{Actions: []string{"**"}, Targets: []string{"**:**"}},
 		},
 		Denials: []schema.Denial{
-			{Actions: []string{"observe/read-write"}, Targets: []string{"**/secret/*:**"}},
+			{Actions: []string{schema.ActionObserveReadWrite}, Targets: []string{"**/secret/*:**"}},
 		},
 	})
 
 	actorUserID := testEntity(t, daemon.fleet, "iree/amdgpu/pm").UserID().String()
 	targetUserID := testEntity(t, daemon.fleet, "secret/database").UserID().String()
 	response := sendAuthorizationQuery(t, daemon.observeSocketPath,
-		actorUserID, "observe/read-write", targetUserID)
+		actorUserID, schema.ActionObserveReadWrite, targetUserID)
 
 	if !response.OK {
 		t.Fatalf("expected OK, got error: %s", response.Error)
@@ -265,7 +265,7 @@ func TestQueryAuthorizationMissingActor(t *testing.T) {
 
 	request := map[string]any{
 		"action":      "query_authorization",
-		"auth_action": "observe",
+		"auth_action": schema.ActionObserve,
 		"observer":    testObserverUserID,
 		"token":       testObserverToken,
 	}
@@ -293,11 +293,11 @@ func TestQueryGrantsReturnsPolicy(t *testing.T) {
 
 	daemon.authorizationIndex.SetPrincipal(testEntity(t, daemon.fleet, "iree/amdgpu/pm").UserID(), schema.AuthorizationPolicy{
 		Grants: []schema.Grant{
-			{Actions: []string{"observe/**"}, Targets: []string{"**/iree/**:**"}},
+			{Actions: []string{schema.ActionObserveAll}, Targets: []string{"**/iree/**:**"}},
 			{Actions: []string{"command/pipeline/list"}},
 		},
 		Denials: []schema.Denial{
-			{Actions: []string{"interrupt/**"}},
+			{Actions: []string{schema.ActionInterruptAll}},
 		},
 	})
 
@@ -325,7 +325,7 @@ func TestQueryGrantsSourceProvenance(t *testing.T) {
 
 	daemon.authorizationIndex.SetPrincipal(testEntity(t, daemon.fleet, "iree/amdgpu/pm").UserID(), schema.AuthorizationPolicy{
 		Grants: []schema.Grant{
-			{Actions: []string{"observe/**"}, Targets: []string{"**/iree/**:**"}, Source: schema.SourceMachineDefault},
+			{Actions: []string{schema.ActionObserveAll}, Targets: []string{"**/iree/**:**"}, Source: schema.SourceMachineDefault},
 			{Actions: []string{"command/pipeline/list"}, Source: schema.SourcePrincipal},
 		},
 		Denials: []schema.Denial{
@@ -413,11 +413,11 @@ func TestQueryAllowancesReturnsPolicy(t *testing.T) {
 
 	daemon.authorizationIndex.SetPrincipal(testEntity(t, daemon.fleet, "iree/amdgpu/compiler").UserID(), schema.AuthorizationPolicy{
 		Allowances: []schema.Allowance{
-			{Actions: []string{"observe/**"}, Actors: []string{"iree/**:**"}},
-			{Actions: []string{"interrupt"}, Actors: []string{"iree/amdgpu/pm:**"}},
+			{Actions: []string{schema.ActionObserveAll}, Actors: []string{"iree/**:**"}},
+			{Actions: []string{schema.ActionInterrupt}, Actors: []string{"iree/amdgpu/pm:**"}},
 		},
 		AllowanceDenials: []schema.AllowanceDenial{
-			{Actions: []string{"observe/read-write"}, Actors: []string{"untrusted/**:**"}},
+			{Actions: []string{schema.ActionObserveReadWrite}, Actors: []string{"untrusted/**:**"}},
 		},
 	})
 

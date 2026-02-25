@@ -27,19 +27,19 @@ func TestQueryAuthorization(t *testing.T) {
 		OK:       true,
 		Decision: "allow",
 		MatchedGrant: &schema.Grant{
-			Actions: []string{"observe/**"},
+			Actions: []string{schema.ActionObserveAll},
 			Targets: []string{"iree/**"},
 		},
 		MatchedAllowance: &schema.Allowance{
-			Actions: []string{"observe/**"},
+			Actions: []string{schema.ActionObserveAll},
 			Actors:  []string{"iree/**"},
 		},
 		ActorGrants: []schema.Grant{
-			{Actions: []string{"observe/**"}, Targets: []string{"iree/**"}},
+			{Actions: []string{schema.ActionObserveAll}, Targets: []string{"iree/**"}},
 		},
 		ActorDenials: []schema.Denial{},
 		TargetAllowances: []schema.Allowance{
-			{Actions: []string{"observe/**"}, Actors: []string{"iree/**"}},
+			{Actions: []string{schema.ActionObserveAll}, Actors: []string{"iree/**"}},
 		},
 		TargetAllowanceDenials: []schema.AllowanceDenial{},
 	}

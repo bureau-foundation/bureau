@@ -609,18 +609,18 @@ func synthesizeGrants(policy *schema.MatrixPolicy, visibility []string) []schema
 	var grants []schema.Grant
 	if policy != nil {
 		if policy.AllowJoin {
-			grants = append(grants, schema.Grant{Actions: []string{"matrix/join"}})
+			grants = append(grants, schema.Grant{Actions: []string{schema.ActionMatrixJoin}})
 		}
 		if policy.AllowInvite {
-			grants = append(grants, schema.Grant{Actions: []string{"matrix/invite"}})
+			grants = append(grants, schema.Grant{Actions: []string{schema.ActionMatrixInvite}})
 		}
 		if policy.AllowRoomCreate {
-			grants = append(grants, schema.Grant{Actions: []string{"matrix/create-room"}})
+			grants = append(grants, schema.Grant{Actions: []string{schema.ActionMatrixCreateRoom}})
 		}
 	}
 	if len(visibility) > 0 {
 		grants = append(grants, schema.Grant{
-			Actions: []string{"service/discover"},
+			Actions: []string{schema.ActionServiceDiscover},
 			Targets: visibility,
 		})
 	}

@@ -102,7 +102,7 @@ func (d *Daemon) handleProvisionCredential(ctx context.Context, token *serviceto
 	// specific key for this specific principal. The target is the
 	// bare account localpart because service token grants use
 	// localpart-level matching (tokens are daemon-scoped via audience).
-	action := "credential/provision/key/" + request.Key
+	action := schema.ActionCredentialProvisionKeyPrefix + request.Key
 	if !servicetoken.GrantsAllow(token.Grants, action, request.Principal) {
 		d.logger.Warn("credential provision denied",
 			"caller", token.Subject,

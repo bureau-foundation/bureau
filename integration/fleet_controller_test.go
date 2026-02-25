@@ -335,7 +335,7 @@ func TestFleetControllerLifecycle(t *testing.T) {
 	controllerName := "service/fleet/lifecycle"
 	fc := startFleetController(t, admin, machine, controllerName, fleet)
 
-	operatorToken := mintFleetToken(t, fleet, machine, []string{"fleet/**"})
+	operatorToken := mintFleetToken(t, fleet, machine, []string{schema.ActionFleetAll})
 
 	ctx := t.Context()
 
@@ -640,7 +640,7 @@ func TestFleetPlaceAndUnplace(t *testing.T) {
 	controllerName := "service/fleet/place-test"
 	fc := startFleetController(t, admin, machine, controllerName, fleet)
 
-	operatorToken := mintFleetToken(t, fleet, machine, []string{"fleet/**"})
+	operatorToken := mintFleetToken(t, fleet, machine, []string{schema.ActionFleetAll})
 	authClient := fleetClient(t, fc, operatorToken)
 	ctx := t.Context()
 
@@ -822,7 +822,7 @@ func TestFleetReconciliation(t *testing.T) {
 	fc := startFleetController(t, admin, machineA, controllerName, fleet)
 	grantFleetControllerConfigAccess(t, admin, fc, machineB)
 
-	operatorToken := mintFleetToken(t, fleet, machineA, []string{"fleet/**"})
+	operatorToken := mintFleetToken(t, fleet, machineA, []string{schema.ActionFleetAll})
 
 	// Wait for the fleet controller to discover both config rooms.
 	waitForFleetConfigRoom(t, &discoverWatch, fc, machineA.Name)
@@ -947,7 +947,7 @@ func TestFleetAuthorizationDenied(t *testing.T) {
 	// Mint tokens with different grant scopes directly. No sandbox
 	// deployment needed — the fleet controller validates the token
 	// signature and grants, not the principal's sandbox state.
-	narrowExactToken := mintFleetToken(t, fleet, machine, []string{"fleet/info"})
+	narrowExactToken := mintFleetToken(t, fleet, machine, []string{schema.ActionFleetInfo})
 	narrowWildcardToken := mintFleetToken(t, fleet, machine, []string{"fleet/list-*"})
 	noFleetGrantsToken := mintFleetToken(t, fleet, machine, nil)
 
@@ -1119,7 +1119,7 @@ func TestFleetEligibilityConstraints(t *testing.T) {
 	fc := startFleetController(t, admin, machineA, controllerName, fleet)
 	grantFleetControllerConfigAccess(t, admin, fc, machineB)
 
-	operatorToken := mintFleetToken(t, fleet, machineA, []string{"fleet/**"})
+	operatorToken := mintFleetToken(t, fleet, machineA, []string{schema.ActionFleetAll})
 	authClient := fleetClient(t, fc, operatorToken)
 
 	// Wait for the fleet controller to discover both config rooms.
@@ -1317,7 +1317,7 @@ func TestFleetPresenceDetection(t *testing.T) {
 	// model and is processing presence events for it.
 	waitForFleetConfigRoom(t, &fleetWatch, fc, machine.Name)
 
-	operatorToken := mintFleetToken(t, fleet, machine, []string{"fleet/**"})
+	operatorToken := mintFleetToken(t, fleet, machine, []string{schema.ActionFleetAll})
 	authClient := fleetClient(t, fc, operatorToken)
 
 	// Verify initial health: machine should be online with a fresh

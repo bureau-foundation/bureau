@@ -64,7 +64,7 @@ func TestNativeAgentEndToEnd(t *testing.T) {
 		},
 		Authorization: &schema.AuthorizationPolicy{
 			Grants: []schema.Grant{
-				{Actions: []string{"command/**"}},
+				{Actions: []string{schema.ActionCommandAll}},
 			},
 		},
 	})
@@ -167,7 +167,7 @@ func TestNativeAgentContextTruncation(t *testing.T) {
 		},
 		Authorization: &schema.AuthorizationPolicy{
 			Grants: []schema.Grant{
-				{Actions: []string{"command/**"}},
+				{Actions: []string{schema.ActionCommandAll}},
 			},
 		},
 	})

@@ -48,7 +48,7 @@ func TestAuthorizeObserveAllowAllObservers(t *testing.T) {
 	daemon.runDir = principal.DefaultRunDir
 	daemon.authorizationIndex.SetPrincipal(testEntity(t, daemon.fleet, "iree/amdgpu/pm").UserID(), schema.AuthorizationPolicy{
 		Allowances: []schema.Allowance{
-			{Actions: []string{"observe"}, Actors: []string{"**:**"}},
+			{Actions: []string{schema.ActionObserve}, Actors: []string{"**:**"}},
 		},
 	})
 	authz := daemon.authorizeObserve(ref.MustParseUserID("@ben:bureau.local"), testEntity(t, daemon.fleet, "iree/amdgpu/pm").UserID(), "readonly")
@@ -68,7 +68,7 @@ func TestAuthorizeObserveSpecificAllowanceOverridesWildcard(t *testing.T) {
 	// Only ops/alice is allowed.
 	daemon.authorizationIndex.SetPrincipal(testEntity(t, daemon.fleet, "iree/amdgpu/pm").UserID(), schema.AuthorizationPolicy{
 		Allowances: []schema.Allowance{
-			{Actions: []string{"observe"}, Actors: []string{"ops/alice:**"}},
+			{Actions: []string{schema.ActionObserve}, Actors: []string{"ops/alice:**"}},
 		},
 	})
 
@@ -92,8 +92,8 @@ func TestAuthorizeObserveModeDowngrade(t *testing.T) {
 	daemon.runDir = principal.DefaultRunDir
 	daemon.authorizationIndex.SetPrincipal(testEntity(t, daemon.fleet, "iree/amdgpu/pm").UserID(), schema.AuthorizationPolicy{
 		Allowances: []schema.Allowance{
-			{Actions: []string{"observe"}, Actors: []string{"**:**"}},
-			{Actions: []string{"observe/read-write"}, Actors: []string{"ops/**:**"}},
+			{Actions: []string{schema.ActionObserve}, Actors: []string{"**:**"}},
+			{Actions: []string{schema.ActionObserveReadWrite}, Actors: []string{"ops/**:**"}},
 		},
 	})
 
@@ -124,8 +124,8 @@ func TestAuthorizeObserveReadonlyNotUpgraded(t *testing.T) {
 	daemon.runDir = principal.DefaultRunDir
 	daemon.authorizationIndex.SetPrincipal(testEntity(t, daemon.fleet, "iree/amdgpu/pm").UserID(), schema.AuthorizationPolicy{
 		Allowances: []schema.Allowance{
-			{Actions: []string{"observe"}, Actors: []string{"**:**"}},
-			{Actions: []string{"observe/read-write"}, Actors: []string{"**:**"}},
+			{Actions: []string{schema.ActionObserve}, Actors: []string{"**:**"}},
+			{Actions: []string{schema.ActionObserveReadWrite}, Actors: []string{"**:**"}},
 		},
 	})
 
@@ -147,7 +147,7 @@ func TestAuthorizeObserveGlobPatterns(t *testing.T) {
 	daemon.runDir = principal.DefaultRunDir
 	daemon.authorizationIndex.SetPrincipal(testEntity(t, daemon.fleet, "iree/amdgpu/pm").UserID(), schema.AuthorizationPolicy{
 		Allowances: []schema.Allowance{
-			{Actions: []string{"observe"}, Actors: []string{"ops/*:**"}},
+			{Actions: []string{schema.ActionObserve}, Actors: []string{"ops/*:**"}},
 		},
 	})
 
@@ -189,10 +189,10 @@ func TestAuthorizeObserveAllowanceDenialOverrides(t *testing.T) {
 	daemon.runDir = principal.DefaultRunDir
 	daemon.authorizationIndex.SetPrincipal(testEntity(t, daemon.fleet, "iree/amdgpu/pm").UserID(), schema.AuthorizationPolicy{
 		Allowances: []schema.Allowance{
-			{Actions: []string{"observe"}, Actors: []string{"ops/**:**"}},
+			{Actions: []string{schema.ActionObserve}, Actors: []string{"ops/**:**"}},
 		},
 		AllowanceDenials: []schema.AllowanceDenial{
-			{Actions: []string{"observe"}, Actors: []string{"ops/untrusted:**"}},
+			{Actions: []string{schema.ActionObserve}, Actors: []string{"ops/untrusted:**"}},
 		},
 	})
 
@@ -216,12 +216,12 @@ func TestAuthorizeListFiltering(t *testing.T) {
 	daemon.runDir = principal.DefaultRunDir
 	daemon.authorizationIndex.SetPrincipal(testEntity(t, daemon.fleet, "iree/amdgpu/pm").UserID(), schema.AuthorizationPolicy{
 		Allowances: []schema.Allowance{
-			{Actions: []string{"observe"}, Actors: []string{"ops/**:**"}},
+			{Actions: []string{schema.ActionObserve}, Actors: []string{"ops/**:**"}},
 		},
 	})
 	daemon.authorizationIndex.SetPrincipal(testEntity(t, daemon.fleet, "iree/amdgpu/builder").UserID(), schema.AuthorizationPolicy{
 		Allowances: []schema.Allowance{
-			{Actions: []string{"observe"}, Actors: []string{"**:**"}},
+			{Actions: []string{schema.ActionObserve}, Actors: []string{"**:**"}},
 		},
 	})
 
@@ -289,7 +289,7 @@ func TestEnforceObserveAllowanceChangeRevoke(t *testing.T) {
 	// ops/bob, who is not in the allowance.
 	daemon.authorizationIndex.SetPrincipal(testEntity(t, daemon.fleet, "iree/amdgpu/pm").UserID(), schema.AuthorizationPolicy{
 		Allowances: []schema.Allowance{
-			{Actions: []string{"observe"}, Actors: []string{"ops/alice:**"}},
+			{Actions: []string{schema.ActionObserve}, Actors: []string{"ops/alice:**"}},
 		},
 	})
 	daemon.observeSessions = []*activeObserveSession{
@@ -319,7 +319,7 @@ func TestEnforceObserveAllowanceChangeRetain(t *testing.T) {
 	// Allowance permits ops/** — ops/bob is still authorized.
 	daemon.authorizationIndex.SetPrincipal(testEntity(t, daemon.fleet, "iree/amdgpu/pm").UserID(), schema.AuthorizationPolicy{
 		Allowances: []schema.Allowance{
-			{Actions: []string{"observe"}, Actors: []string{"ops/**:**"}},
+			{Actions: []string{schema.ActionObserve}, Actors: []string{"ops/**:**"}},
 		},
 	})
 	daemon.observeSessions = []*activeObserveSession{
@@ -351,8 +351,8 @@ func TestEnforceObserveAllowanceChangeModeDowngrade(t *testing.T) {
 	// granted readwrite for ops/bob, who would now only get readonly.
 	daemon.authorizationIndex.SetPrincipal(testEntity(t, daemon.fleet, "iree/amdgpu/pm").UserID(), schema.AuthorizationPolicy{
 		Allowances: []schema.Allowance{
-			{Actions: []string{"observe"}, Actors: []string{"ops/**:**"}},
-			{Actions: []string{"observe/read-write"}, Actors: []string{"ops/alice:**"}},
+			{Actions: []string{schema.ActionObserve}, Actors: []string{"ops/**:**"}},
+			{Actions: []string{schema.ActionObserveReadWrite}, Actors: []string{"ops/alice:**"}},
 		},
 	})
 	daemon.observeSessions = []*activeObserveSession{
@@ -385,7 +385,7 @@ func TestEnforceObserveAllowanceChangeOtherPrincipalUntouched(t *testing.T) {
 	// builder allows ops/**
 	daemon.authorizationIndex.SetPrincipal(testEntity(t, daemon.fleet, "iree/amdgpu/builder").UserID(), schema.AuthorizationPolicy{
 		Allowances: []schema.Allowance{
-			{Actions: []string{"observe"}, Actors: []string{"ops/**:**"}},
+			{Actions: []string{schema.ActionObserve}, Actors: []string{"ops/**:**"}},
 		},
 	})
 	daemon.observeSessions = []*activeObserveSession{

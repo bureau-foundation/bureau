@@ -12,7 +12,7 @@ import (
 
 func TestGrantJSONRoundTrip(t *testing.T) {
 	original := Grant{
-		Actions:   []string{"observe/**", "interrupt"},
+		Actions:   []string{ActionObserveAll, ActionInterrupt},
 		Targets:   []string{"bureau/dev/**"},
 		ExpiresAt: "2026-03-01T00:00:00Z",
 		Ticket:    "tkt-a3f9",
@@ -31,8 +31,8 @@ func TestGrantJSONRoundTrip(t *testing.T) {
 		t.Fatalf("Unmarshal: %v", err)
 	}
 
-	if len(decoded.Actions) != 2 || decoded.Actions[0] != "observe/**" || decoded.Actions[1] != "interrupt" {
-		t.Errorf("Actions = %v, want [observe/** interrupt]", decoded.Actions)
+	if len(decoded.Actions) != 2 || decoded.Actions[0] != ActionObserveAll || decoded.Actions[1] != ActionInterrupt {
+		t.Errorf("Actions = %v, want [%s %s]", decoded.Actions, ActionObserveAll, ActionInterrupt)
 	}
 	if len(decoded.Targets) != 1 || decoded.Targets[0] != "bureau/dev/**" {
 		t.Errorf("Targets = %v, want [bureau/dev/**]", decoded.Targets)
@@ -54,7 +54,7 @@ func TestGrantJSONRoundTrip(t *testing.T) {
 func TestGrantJSONOmitsEmptyFields(t *testing.T) {
 	// A minimal grant with only required fields should omit optional fields.
 	grant := Grant{
-		Actions: []string{"matrix/join"},
+		Actions: []string{ActionMatrixJoin},
 	}
 
 	data, err := json.Marshal(grant)
@@ -88,7 +88,7 @@ func TestGrantJSONOmitsEmptyFields(t *testing.T) {
 
 func TestDenialJSONRoundTrip(t *testing.T) {
 	original := Denial{
-		Actions: []string{"ticket/close", "ticket/reopen"},
+		Actions: []string{ActionTicketClose, ActionTicketReopen},
 		Targets: []string{"bureau/dev/workspace/**"},
 		Source:  SourcePrincipal,
 	}
@@ -116,7 +116,7 @@ func TestDenialJSONRoundTrip(t *testing.T) {
 
 func TestAllowanceJSONRoundTrip(t *testing.T) {
 	original := Allowance{
-		Actions: []string{"observe", "observe/read-write"},
+		Actions: []string{ActionObserve, ActionObserveReadWrite},
 		Actors:  []string{"bureau/dev/pm", "bureau-admin"},
 		Source:  SourceTemporal,
 	}
@@ -153,17 +153,17 @@ func TestSourceRoomHelper(t *testing.T) {
 func TestAuthorizationPolicyJSONRoundTrip(t *testing.T) {
 	original := AuthorizationPolicy{
 		Grants: []Grant{
-			{Actions: []string{"observe/**"}, Targets: []string{"bureau/dev/**"}},
-			{Actions: []string{"matrix/join", "matrix/invite"}},
+			{Actions: []string{ActionObserveAll}, Targets: []string{"bureau/dev/**"}},
+			{Actions: []string{ActionMatrixJoin, ActionMatrixInvite}},
 		},
 		Denials: []Denial{
-			{Actions: []string{"fleet/**"}},
+			{Actions: []string{ActionFleetAll}},
 		},
 		Allowances: []Allowance{
-			{Actions: []string{"observe"}, Actors: []string{"iree/**"}},
+			{Actions: []string{ActionObserve}, Actors: []string{"iree/**"}},
 		},
 		AllowanceDenials: []AllowanceDenial{
-			{Actions: []string{"observe"}, Actors: []string{"iree/secret/**"}},
+			{Actions: []string{ActionObserve}, Actors: []string{"iree/secret/**"}},
 		},
 	}
 
@@ -214,11 +214,11 @@ func TestAuthorizationPolicyJSONOmitsEmpty(t *testing.T) {
 func TestRoomAuthorizationPolicyJSONRoundTrip(t *testing.T) {
 	original := RoomAuthorizationPolicy{
 		MemberGrants: []Grant{
-			{Actions: []string{"ticket/create", "ticket/assign"}},
+			{Actions: []string{ActionTicketCreate, "ticket/assign"}},
 		},
 		PowerLevelGrants: map[string][]Grant{
 			"50": {
-				{Actions: []string{"interrupt", "observe/read-write"}, Targets: []string{"bureau/dev/workspace/**"}},
+				{Actions: []string{ActionInterrupt, ActionObserveReadWrite}, Targets: []string{"bureau/dev/workspace/**"}},
 			},
 			"100": {
 				{Actions: []string{"**"}, Targets: []string{"bureau/dev/workspace/**"}},
@@ -260,7 +260,7 @@ func TestTemporalGrantContentJSONRoundTrip(t *testing.T) {
 	principalID := testUserID(t, "@bureau/fleet/test/agent/coder:bureau.local")
 	original := TemporalGrantContent{
 		Grant: Grant{
-			Actions:   []string{"observe"},
+			Actions:   []string{ActionObserve},
 			Targets:   []string{"service/db/postgres:bureau.local"},
 			ExpiresAt: "2026-02-11T18:30:00Z",
 			Ticket:    "tkt-c4d1",
@@ -324,10 +324,10 @@ func TestPrincipalAssignmentAuthorizationField(t *testing.T) {
 		Template:  "bureau/template:base",
 		Authorization: &AuthorizationPolicy{
 			Grants: []Grant{
-				{Actions: []string{"observe/**"}, Targets: []string{"iree/**"}},
+				{Actions: []string{ActionObserveAll}, Targets: []string{"iree/**"}},
 			},
 			Allowances: []Allowance{
-				{Actions: []string{"observe"}, Actors: []string{"bureau-admin"}},
+				{Actions: []string{ActionObserve}, Actors: []string{"bureau-admin"}},
 			},
 		},
 	}
@@ -360,10 +360,10 @@ func TestMachineConfigDefaultPolicyField(t *testing.T) {
 		},
 		DefaultPolicy: &AuthorizationPolicy{
 			Grants: []Grant{
-				{Actions: []string{"service/discover"}, Targets: []string{"service/**"}},
+				{Actions: []string{ActionServiceDiscover}, Targets: []string{"service/**"}},
 			},
 			Allowances: []Allowance{
-				{Actions: []string{"observe"}, Actors: []string{"bureau-admin"}},
+				{Actions: []string{ActionObserve}, Actors: []string{"bureau-admin"}},
 			},
 		},
 	}

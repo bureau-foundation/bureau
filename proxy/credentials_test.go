@@ -368,8 +368,8 @@ func TestPipeCredentialSource_Grants(t *testing.T) {
 			MatrixToken:         "syt_test",
 			MatrixUserID:        "@test:bureau.local",
 			Grants: []schema.Grant{
-				{Actions: []string{"matrix/join", "matrix/invite"}},
-				{Actions: []string{"service/discover"}, Targets: []string{"service/stt/**"}},
+				{Actions: []string{schema.ActionMatrixJoin, schema.ActionMatrixInvite}},
+				{Actions: []string{schema.ActionServiceDiscover}, Targets: []string{"service/stt/**"}},
 			},
 		}
 		data, err := codec.Marshal(payload)
@@ -386,8 +386,8 @@ func TestPipeCredentialSource_Grants(t *testing.T) {
 		if len(grants) != 2 {
 			t.Fatalf("Grants() returned %d grants, want 2", len(grants))
 		}
-		if grants[0].Actions[0] != "matrix/join" || grants[0].Actions[1] != "matrix/invite" {
-			t.Errorf("grants[0].Actions = %v, want [matrix/join, matrix/invite]", grants[0].Actions)
+		if grants[0].Actions[0] != schema.ActionMatrixJoin || grants[0].Actions[1] != schema.ActionMatrixInvite {
+			t.Errorf("grants[0].Actions = %v, want [%s, %s]", grants[0].Actions, schema.ActionMatrixJoin, schema.ActionMatrixInvite)
 		}
 		if grants[1].Targets[0] != "service/stt/**" {
 			t.Errorf("grants[1].Targets = %v, want [service/stt/**]", grants[1].Targets)

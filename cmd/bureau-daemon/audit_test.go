@@ -7,19 +7,20 @@ import (
 	"testing"
 
 	"github.com/bureau-foundation/bureau/lib/ref"
+	"github.com/bureau-foundation/bureau/lib/schema"
 )
 
 func TestIsSensitiveAction(t *testing.T) {
 	t.Parallel()
 
 	sensitive := []string{
-		"credential/provision/key/FORGEJO_TOKEN",
-		"interrupt",
-		"interrupt/terminate",
-		"fleet/assign",
-		"fleet/provision",
-		"observe/read-write",
-		"grant/approve/observe",
+		schema.ActionCredentialProvisionKeyPrefix + "FORGEJO_TOKEN",
+		schema.ActionInterrupt,
+		schema.ActionInterruptTerminate,
+		schema.ActionFleetAssign,
+		schema.ActionFleetProvision,
+		schema.ActionObserveReadWrite,
+		schema.ActionGrantApprovePrefix + schema.ActionObserve,
 	}
 	for _, action := range sensitive {
 		if !isSensitiveAction(action) {
@@ -28,13 +29,13 @@ func TestIsSensitiveAction(t *testing.T) {
 	}
 
 	notSensitive := []string{
-		"observe",
-		"matrix/join",
-		"matrix/invite",
-		"service/discover",
-		"ticket/create",
+		schema.ActionObserve,
+		schema.ActionMatrixJoin,
+		schema.ActionMatrixInvite,
+		schema.ActionServiceDiscover,
+		schema.ActionTicketCreate,
 		"ticket/assign",
-		"artifact/store",
+		schema.ActionArtifactStore,
 		"command/ticket/list",
 	}
 	for _, action := range notSensitive {
@@ -49,7 +50,7 @@ func TestPostAuditDeny_NoSession(t *testing.T) {
 
 	// Verify postAuditDeny does not panic when session is nil.
 	daemon, _ := newTestDaemon(t)
-	daemon.postAuditDeny(ref.MustParseUserID("@test/actor:bureau.local"), "observe", ref.MustParseUserID("@test/target:bureau.local"),
+	daemon.postAuditDeny(ref.MustParseUserID("@test/actor:bureau.local"), schema.ActionObserve, ref.MustParseUserID("@test/target:bureau.local"),
 		"daemon/observe", 0, nil, nil)
 }
 
@@ -58,6 +59,6 @@ func TestPostAuditAllow_NoSession(t *testing.T) {
 
 	// Verify postAuditAllow does not panic when session is nil.
 	daemon, _ := newTestDaemon(t)
-	daemon.postAuditAllow(ref.MustParseUserID("@test/actor:bureau.local"), "observe/read-write", ref.MustParseUserID("@test/target:bureau.local"),
+	daemon.postAuditAllow(ref.MustParseUserID("@test/actor:bureau.local"), schema.ActionObserveReadWrite, ref.MustParseUserID("@test/target:bureau.local"),
 		"daemon/observe", nil)
 }

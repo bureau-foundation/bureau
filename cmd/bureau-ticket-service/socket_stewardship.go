@@ -44,7 +44,7 @@ type stewardshipListEntry struct {
 // index, optionally scoped to a single room. Results are sorted by
 // room ID then state key for deterministic output.
 func (ts *TicketService) handleStewardshipList(_ context.Context, token *servicetoken.Token, raw []byte) (any, error) {
-	if err := requireGrant(token, "ticket/stewardship-list"); err != nil {
+	if err := requireGrant(token, schema.ActionTicketStewardshipList); err != nil {
 		return nil, err
 	}
 
@@ -126,7 +126,7 @@ type stewardshipMatchEntry struct {
 // modifying any ticket. This lets agents and operators preview
 // stewardship effects before creating or updating tickets.
 func (ts *TicketService) handleStewardshipResolve(_ context.Context, token *servicetoken.Token, raw []byte) (any, error) {
-	if err := requireGrant(token, "ticket/stewardship-resolve"); err != nil {
+	if err := requireGrant(token, schema.ActionTicketStewardshipResolve); err != nil {
 		return nil, err
 	}
 
@@ -192,7 +192,7 @@ type stewardshipSetResponse struct {
 // stewardship index — we don't update the index here to avoid
 // double-processing.
 func (ts *TicketService) handleStewardshipSet(ctx context.Context, token *servicetoken.Token, raw []byte) (any, error) {
-	if err := requireGrant(token, "ticket/stewardship-set"); err != nil {
+	if err := requireGrant(token, schema.ActionTicketStewardshipSet); err != nil {
 		return nil, err
 	}
 

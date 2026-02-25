@@ -13,6 +13,7 @@ import (
 
 	"github.com/bureau-foundation/bureau/lib/codec"
 	"github.com/bureau-foundation/bureau/lib/ref"
+	"github.com/bureau-foundation/bureau/lib/schema"
 	"github.com/bureau-foundation/bureau/lib/schema/ticket"
 	"github.com/bureau-foundation/bureau/lib/servicetoken"
 	"github.com/bureau-foundation/bureau/lib/ticketindex"
@@ -392,7 +393,7 @@ func parseFilterAssignee(raw string) (ref.UserID, error) {
 
 // handleList returns tickets matching a filter within a room.
 func (ts *TicketService) handleList(ctx context.Context, token *servicetoken.Token, raw []byte) (any, error) {
-	if err := requireGrant(token, "ticket/list"); err != nil {
+	if err := requireGrant(token, schema.ActionTicketList); err != nil {
 		return nil, err
 	}
 
@@ -454,13 +455,13 @@ func (ts *TicketService) roomQuery(
 // with all blockers closed and gates satisfied, plus in_progress
 // tickets.
 func (ts *TicketService) handleReady(ctx context.Context, token *servicetoken.Token, raw []byte) (any, error) {
-	return ts.roomQuery(token, raw, "ticket/ready", (*ticketindex.Index).Ready)
+	return ts.roomQuery(token, raw, schema.ActionTicketReady, (*ticketindex.Index).Ready)
 }
 
 // handleBlocked returns open tickets that cannot be started: they
 // have at least one non-closed blocker or unsatisfied gate.
 func (ts *TicketService) handleBlocked(ctx context.Context, token *servicetoken.Token, raw []byte) (any, error) {
-	return ts.roomQuery(token, raw, "ticket/blocked", (*ticketindex.Index).Blocked)
+	return ts.roomQuery(token, raw, schema.ActionTicketBlocked, (*ticketindex.Index).Blocked)
 }
 
 // handleRanked returns ready tickets sorted by composite score
@@ -469,7 +470,7 @@ func (ts *TicketService) handleBlocked(ctx context.Context, token *servicetoken.
 // appear first. The score breakdown is included so agents can
 // explain their assignment decisions.
 func (ts *TicketService) handleRanked(ctx context.Context, token *servicetoken.Token, raw []byte) (any, error) {
-	if err := requireGrant(token, "ticket/ranked"); err != nil {
+	if err := requireGrant(token, schema.ActionTicketRanked); err != nil {
 		return nil, err
 	}
 
@@ -502,7 +503,7 @@ func (ts *TicketService) handleRanked(ctx context.Context, token *servicetoken.T
 // dependency graph (blocks, child progress) alongside the schema
 // content.
 func (ts *TicketService) handleShow(ctx context.Context, token *servicetoken.Token, raw []byte) (any, error) {
-	if err := requireGrant(token, "ticket/show"); err != nil {
+	if err := requireGrant(token, schema.ActionTicketShow); err != nil {
 		return nil, err
 	}
 
@@ -547,7 +548,7 @@ func (ts *TicketService) handleShow(ctx context.Context, token *servicetoken.Tok
 // handleChildren returns the direct children of a parent ticket and
 // a progress summary.
 func (ts *TicketService) handleChildren(ctx context.Context, token *servicetoken.Token, raw []byte) (any, error) {
-	if err := requireGrant(token, "ticket/children"); err != nil {
+	if err := requireGrant(token, schema.ActionTicketChildren); err != nil {
 		return nil, err
 	}
 
@@ -581,7 +582,7 @@ func (ts *TicketService) handleChildren(ctx context.Context, token *servicetoken
 // parent. If a room is specified, searches only that room. Otherwise
 // searches all rooms and includes the room ID in each result.
 func (ts *TicketService) handleGrep(ctx context.Context, token *servicetoken.Token, raw []byte) (any, error) {
-	if err := requireGrant(token, "ticket/grep"); err != nil {
+	if err := requireGrant(token, schema.ActionTicketGrep); err != nil {
 		return nil, err
 	}
 
@@ -651,7 +652,7 @@ func (ts *TicketService) handleGrep(ctx context.Context, token *servicetoken.Tok
 // boosting and graph expansion. If a room is specified, searches only
 // that room. Otherwise searches all rooms and merges results by score.
 func (ts *TicketService) handleSearch(ctx context.Context, token *servicetoken.Token, raw []byte) (any, error) {
-	if err := requireGrant(token, "ticket/search"); err != nil {
+	if err := requireGrant(token, schema.ActionTicketSearch); err != nil {
 		return nil, err
 	}
 
@@ -739,7 +740,7 @@ func (ts *TicketService) handleSearch(ctx context.Context, token *servicetoken.T
 
 // handleStats returns aggregate counts for a room's tickets.
 func (ts *TicketService) handleStats(ctx context.Context, token *servicetoken.Token, raw []byte) (any, error) {
-	if err := requireGrant(token, "ticket/stats"); err != nil {
+	if err := requireGrant(token, schema.ActionTicketStats); err != nil {
 		return nil, err
 	}
 
@@ -758,7 +759,7 @@ func (ts *TicketService) handleStats(ctx context.Context, token *servicetoken.To
 
 // handleDeps returns the transitive dependency closure for a ticket.
 func (ts *TicketService) handleDeps(ctx context.Context, token *servicetoken.Token, raw []byte) (any, error) {
-	if err := requireGrant(token, "ticket/deps"); err != nil {
+	if err := requireGrant(token, schema.ActionTicketDeps); err != nil {
 		return nil, err
 	}
 
@@ -792,7 +793,7 @@ func (ts *TicketService) handleDeps(ctx context.Context, token *servicetoken.Tok
 // fraction, and critical dependency depth. This helps PM agents
 // understand whether an epic is stalling and where to focus.
 func (ts *TicketService) handleEpicHealth(ctx context.Context, token *servicetoken.Token, raw []byte) (any, error) {
-	if err := requireGrant(token, "ticket/epic-health"); err != nil {
+	if err := requireGrant(token, schema.ActionTicketEpicHealth); err != nil {
 		return nil, err
 	}
 
@@ -823,7 +824,7 @@ func (ts *TicketService) handleEpicHealth(ctx context.Context, token *servicetok
 // entry includes the gate metadata, ticket context, and a computed
 // time-until-fire duration.
 func (ts *TicketService) handleUpcomingGates(ctx context.Context, token *servicetoken.Token, raw []byte) (any, error) {
-	if err := requireGrant(token, "ticket/upcoming-gates"); err != nil {
+	if err := requireGrant(token, schema.ActionTicketUpcomingGates); err != nil {
 		return nil, err
 	}
 
@@ -937,7 +938,7 @@ type roomInfo struct {
 // The viewer uses this for room selection when no --room flag is
 // provided.
 func (ts *TicketService) handleListRooms(ctx context.Context, token *servicetoken.Token, raw []byte) (any, error) {
-	if err := requireGrant(token, "ticket/list-rooms"); err != nil {
+	if err := requireGrant(token, schema.ActionTicketListRooms); err != nil {
 		return nil, err
 	}
 
@@ -998,7 +999,7 @@ func presenceRank(presence string) int {
 // state events via /sync. This avoids synchronous HTTP calls to
 // the homeserver while the read lock is held.
 func (ts *TicketService) handleListMembers(_ context.Context, token *servicetoken.Token, raw []byte) (any, error) {
-	if err := requireGrant(token, "ticket/list-members"); err != nil {
+	if err := requireGrant(token, schema.ActionTicketListMembers); err != nil {
 		return nil, err
 	}
 

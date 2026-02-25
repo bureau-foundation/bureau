@@ -9,6 +9,7 @@ import (
 
 	"github.com/bureau-foundation/bureau/lib/authorization"
 	"github.com/bureau-foundation/bureau/lib/ref"
+	"github.com/bureau-foundation/bureau/lib/schema"
 )
 
 // authenticateObserver verifies a Matrix access token and returns the
@@ -53,9 +54,9 @@ type observeAuthorization struct {
 // mode may be downgraded from readwrite to readonly based on allowances.
 func (d *Daemon) authorizeObserve(observer ref.UserID, principal ref.UserID, requestedMode string) observeAuthorization {
 	// All observation requires an "observe" allowance on the target.
-	observeResult := authorization.TargetCheck(d.authorizationIndex, observer, "observe", principal)
+	observeResult := authorization.TargetCheck(d.authorizationIndex, observer, schema.ActionObserve, principal)
 	if !observeResult.Allowed {
-		d.postAuditDeny(observer, "observe", principal,
+		d.postAuditDeny(observer, schema.ActionObserve, principal,
 			"daemon/observe", observeResult.Reason,
 			observeResult.MatchedAllowance, observeResult.MatchedAllowanceDenial)
 		return observeAuthorization{Allowed: false}
@@ -64,12 +65,12 @@ func (d *Daemon) authorizeObserve(observer ref.UserID, principal ref.UserID, req
 	// Determine the granted mode.
 	grantedMode := requestedMode
 	if requestedMode == "readwrite" {
-		rwResult := authorization.TargetCheck(d.authorizationIndex, observer, "observe/read-write", principal)
+		rwResult := authorization.TargetCheck(d.authorizationIndex, observer, schema.ActionObserveReadWrite, principal)
 		if !rwResult.Allowed {
 			grantedMode = "readonly"
 		} else {
 			// observe/read-write is a sensitive action — log the grant.
-			d.postAuditAllow(observer, "observe/read-write", principal,
+			d.postAuditAllow(observer, schema.ActionObserveReadWrite, principal,
 				"daemon/observe", rwResult.MatchedAllowance)
 		}
 	}
@@ -85,5 +86,5 @@ func (d *Daemon) authorizeObserve(observer ref.UserID, principal ref.UserID, req
 // as authorizeObserve — if the target's allowances permit the observer
 // for the "observe" action, the principal appears in the list.
 func (d *Daemon) authorizeList(observer ref.UserID, principal ref.UserID) bool {
-	return authorization.TargetAllows(d.authorizationIndex, observer, "observe", principal)
+	return authorization.TargetAllows(d.authorizationIndex, observer, schema.ActionObserve, principal)
 }

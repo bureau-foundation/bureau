@@ -116,8 +116,8 @@ func TestMachineLayoutAuthFiltering(t *testing.T) {
 	// should return an error.
 	restrictedPolicy := schema.AuthorizationPolicy{
 		Allowances: []schema.Allowance{
-			{Actions: []string{"observe"}, Actors: []string{"iree/**:**"}},
-			{Actions: []string{"observe/read-write"}, Actors: []string{"iree/**:**"}},
+			{Actions: []string{schema.ActionObserve}, Actors: []string{"iree/**:**"}},
+			{Actions: []string{schema.ActionObserveReadWrite}, Actors: []string{"iree/**:**"}},
 		},
 	}
 	for _, localpart := range []string{"iree/amdgpu/pm", "service/stt/whisper", "infra/ci/runner"} {
@@ -148,7 +148,7 @@ func TestMachineLayoutPerPrincipalAuthFiltering(t *testing.T) {
 	daemon.running[secretEntity] = true
 	daemon.authorizationIndex.SetPrincipal(secretEntity.UserID(), schema.AuthorizationPolicy{
 		Allowances: []schema.Allowance{
-			{Actions: []string{"observe"}, Actors: []string{"secret-admin:bureau.local"}},
+			{Actions: []string{schema.ActionObserve}, Actors: []string{"secret-admin:bureau.local"}},
 		},
 	})
 

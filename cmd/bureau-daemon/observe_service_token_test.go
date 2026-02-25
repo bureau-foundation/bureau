@@ -135,7 +135,7 @@ func TestMintServiceTokenSuccess(t *testing.T) {
 	}
 	daemon.authorizationIndex.SetPrincipal(observerUserID, schema.AuthorizationPolicy{
 		Grants: []schema.Grant{
-			{Actions: []string{"ticket/**"}},
+			{Actions: []string{schema.ActionTicketAll}},
 		},
 	})
 
@@ -176,8 +176,8 @@ func TestMintServiceTokenSuccess(t *testing.T) {
 	if len(token.Grants) != 1 {
 		t.Fatalf("Grants = %d, want 1", len(token.Grants))
 	}
-	if token.Grants[0].Actions[0] != "ticket/**" {
-		t.Errorf("Grants[0].Actions[0] = %q, want %q", token.Grants[0].Actions[0], "ticket/**")
+	if token.Grants[0].Actions[0] != schema.ActionTicketAll {
+		t.Errorf("Grants[0].Actions[0] = %q, want %q", token.Grants[0].Actions[0], schema.ActionTicketAll)
 	}
 }
 
@@ -192,8 +192,8 @@ func TestMintServiceTokenFilterGrants(t *testing.T) {
 	}
 	daemon.authorizationIndex.SetPrincipal(observerUserID, schema.AuthorizationPolicy{
 		Grants: []schema.Grant{
-			{Actions: []string{"ticket/create", "ticket/update"}},
-			{Actions: []string{"observe/**"}},
+			{Actions: []string{schema.ActionTicketCreate, schema.ActionTicketUpdate}},
+			{Actions: []string{schema.ActionObserveAll}},
 			{Actions: []string{"artifact/upload"}},
 		},
 	})
@@ -308,7 +308,7 @@ func TestMintServiceTokenSocketPathDerivation(t *testing.T) {
 	}
 	daemon.authorizationIndex.SetPrincipal(observerUserID, schema.AuthorizationPolicy{
 		Grants: []schema.Grant{
-			{Actions: []string{"ticket/**"}},
+			{Actions: []string{schema.ActionTicketAll}},
 		},
 	})
 
@@ -338,7 +338,7 @@ func TestMintServiceTokenClientFunction(t *testing.T) {
 	}
 	daemon.authorizationIndex.SetPrincipal(observerUserID, schema.AuthorizationPolicy{
 		Grants: []schema.Grant{
-			{Actions: []string{"ticket/**"}},
+			{Actions: []string{schema.ActionTicketAll}},
 		},
 	})
 

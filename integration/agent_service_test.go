@@ -90,7 +90,7 @@ func TestAgentServiceSessionTracking(t *testing.T) {
 		RequiredServices: []string{"artifact"},
 		Authorization: &schema.AuthorizationPolicy{
 			Grants: []schema.Grant{
-				{Actions: []string{"artifact/store", "artifact/fetch"}},
+				{Actions: []string{schema.ActionArtifactStore, schema.ActionArtifactFetch}},
 			},
 		},
 	})

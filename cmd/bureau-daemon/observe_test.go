@@ -132,8 +132,8 @@ func writeObserveMessage(t *testing.T, connection net.Conn, messageType byte, pa
 // observation tests: any observer can observe in any mode.
 var permissiveObserveAllowances = schema.AuthorizationPolicy{
 	Allowances: []schema.Allowance{
-		{Actions: []string{"observe"}, Actors: []string{"**:**"}},
-		{Actions: []string{"observe/read-write"}, Actors: []string{"**:**"}},
+		{Actions: []string{schema.ActionObserve}, Actors: []string{"**:**"}},
+		{Actions: []string{schema.ActionObserveReadWrite}, Actors: []string{"**:**"}},
 	},
 }
 

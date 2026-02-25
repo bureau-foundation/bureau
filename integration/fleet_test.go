@@ -172,8 +172,8 @@ func TestOperatorFlow(t *testing.T) {
 		Principals: []principalSpec{{Localpart: "test/observed"}},
 		DefaultPolicy: &schema.AuthorizationPolicy{
 			Allowances: []schema.Allowance{
-				{Actions: []string{"observe"}, Actors: []string{"**:**"}},
-				{Actions: []string{"observe/read-write"}, Actors: []string{admin.UserID().Localpart() + ":**"}},
+				{Actions: []string{schema.ActionObserve}, Actors: []string{"**:**"}},
+				{Actions: []string{schema.ActionObserveReadWrite}, Actors: []string{admin.UserID().Localpart() + ":**"}},
 			},
 		},
 	})
@@ -454,8 +454,8 @@ func TestCrossMachineObservation(t *testing.T) {
 		Principals: []principalSpec{{Localpart: "test/xm-obs"}},
 		DefaultPolicy: &schema.AuthorizationPolicy{
 			Allowances: []schema.Allowance{
-				{Actions: []string{"observe"}, Actors: []string{"**:**"}},
-				{Actions: []string{"observe/read-write"}, Actors: []string{admin.UserID().Localpart() + ":**"}},
+				{Actions: []string{schema.ActionObserve}, Actors: []string{"**:**"}},
+				{Actions: []string{schema.ActionObserveReadWrite}, Actors: []string{admin.UserID().Localpart() + ":**"}},
 			},
 		},
 	})

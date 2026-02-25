@@ -1413,28 +1413,28 @@ func TestCheckMatrixPolicy(t *testing.T) {
 		// matrix/join grant: join unblocked, other actions still blocked.
 		{
 			name:    "join grant unblocks join by alias",
-			grants:  []schema.Grant{{Actions: []string{"matrix/join"}}},
+			grants:  []schema.Grant{{Actions: []string{schema.ActionMatrixJoin}}},
 			method:  "POST",
 			path:    "/_matrix/client/v3/join/%23iree:bureau.local",
 			blocked: false,
 		},
 		{
 			name:    "join grant unblocks rooms/*/join",
-			grants:  []schema.Grant{{Actions: []string{"matrix/join"}}},
+			grants:  []schema.Grant{{Actions: []string{schema.ActionMatrixJoin}}},
 			method:  "POST",
 			path:    "/_matrix/client/v3/rooms/!abc:bureau.local/join",
 			blocked: false,
 		},
 		{
 			name:    "join grant still blocks invite",
-			grants:  []schema.Grant{{Actions: []string{"matrix/join"}}},
+			grants:  []schema.Grant{{Actions: []string{schema.ActionMatrixJoin}}},
 			method:  "POST",
 			path:    "/_matrix/client/v3/rooms/!abc:bureau.local/invite",
 			blocked: true,
 		},
 		{
 			name:    "join grant still blocks createRoom",
-			grants:  []schema.Grant{{Actions: []string{"matrix/join"}}},
+			grants:  []schema.Grant{{Actions: []string{schema.ActionMatrixJoin}}},
 			method:  "POST",
 			path:    "/_matrix/client/v3/createRoom",
 			blocked: true,
@@ -1443,14 +1443,14 @@ func TestCheckMatrixPolicy(t *testing.T) {
 		// matrix/invite grant: invite unblocked, join still blocked.
 		{
 			name:    "invite grant unblocks invite",
-			grants:  []schema.Grant{{Actions: []string{"matrix/invite"}}},
+			grants:  []schema.Grant{{Actions: []string{schema.ActionMatrixInvite}}},
 			method:  "POST",
 			path:    "/_matrix/client/v3/rooms/!abc:bureau.local/invite",
 			blocked: false,
 		},
 		{
 			name:    "invite grant still blocks join",
-			grants:  []schema.Grant{{Actions: []string{"matrix/invite"}}},
+			grants:  []schema.Grant{{Actions: []string{schema.ActionMatrixInvite}}},
 			method:  "POST",
 			path:    "/_matrix/client/v3/join/%23room:bureau.local",
 			blocked: true,
@@ -1459,14 +1459,14 @@ func TestCheckMatrixPolicy(t *testing.T) {
 		// matrix/create-room grant: createRoom unblocked.
 		{
 			name:    "create-room grant unblocks createRoom",
-			grants:  []schema.Grant{{Actions: []string{"matrix/create-room"}}},
+			grants:  []schema.Grant{{Actions: []string{schema.ActionMatrixCreateRoom}}},
 			method:  "POST",
 			path:    "/_matrix/client/v3/createRoom",
 			blocked: false,
 		},
 		{
 			name:    "create-room grant still blocks join",
-			grants:  []schema.Grant{{Actions: []string{"matrix/create-room"}}},
+			grants:  []schema.Grant{{Actions: []string{schema.ActionMatrixCreateRoom}}},
 			method:  "POST",
 			path:    "/_matrix/client/v3/join/%23room:bureau.local",
 			blocked: true,
@@ -1476,7 +1476,7 @@ func TestCheckMatrixPolicy(t *testing.T) {
 		{
 			name: "full grants allows everything",
 			grants: []schema.Grant{{Actions: []string{
-				"matrix/join", "matrix/invite", "matrix/create-room",
+				schema.ActionMatrixJoin, schema.ActionMatrixInvite, schema.ActionMatrixCreateRoom,
 			}}},
 			method:  "POST",
 			path:    "/_matrix/client/v3/createRoom",
@@ -1544,7 +1544,7 @@ func TestServiceDirectory(t *testing.T) {
 
 	// Grant full service discovery so the directory is visible. Tests
 	// specifically for authorization filtering are in TestServiceVisibility.
-	server.SetGrants([]schema.Grant{{Actions: []string{"service/discover"}, Targets: []string{"**"}}})
+	server.SetGrants([]schema.Grant{{Actions: []string{schema.ActionServiceDiscover}, Targets: []string{"**"}}})
 
 	if err := server.Start(); err != nil {
 		t.Fatalf("failed to start server: %v", err)
@@ -1971,7 +1971,7 @@ func TestServiceVisibility(t *testing.T) {
 	}
 
 	discoverGrant := func(targets ...string) []schema.Grant {
-		return []schema.Grant{{Actions: []string{"service/discover"}, Targets: targets}}
+		return []schema.Grant{{Actions: []string{schema.ActionServiceDiscover}, Targets: targets}}
 	}
 
 	t.Run("default-deny: no grants returns empty", func(t *testing.T) {
@@ -2105,7 +2105,7 @@ func TestServiceVisibility(t *testing.T) {
 	})
 
 	t.Run("deep wildcard matches nested paths", func(t *testing.T) {
-		server.SetGrants(discoverGrant("service/**"))
+		server.SetGrants(discoverGrant(schema.ActionServiceAll))
 		services := getServices(t, "")
 		if len(services) != 4 {
 			t.Errorf("expected 4 services with service/** grant, got %d", len(services))
@@ -2159,8 +2159,8 @@ func TestAdminSetAuthorization(t *testing.T) {
 
 	t.Run("push grants via admin endpoint", func(t *testing.T) {
 		grants := []schema.Grant{
-			{Actions: []string{"matrix/join", "matrix/invite"}},
-			{Actions: []string{"service/discover"}, Targets: []string{"service/stt/**"}},
+			{Actions: []string{schema.ActionMatrixJoin, schema.ActionMatrixInvite}},
+			{Actions: []string{schema.ActionServiceDiscover}, Targets: []string{"service/stt/**"}},
 		}
 		body, _ := json.Marshal(grants)
 		req, _ := http.NewRequest("PUT", "http://localhost/v1/admin/authorization", bytes.NewReader(body))
@@ -2255,7 +2255,7 @@ func TestGrantsBasedMatrixPolicy(t *testing.T) {
 
 	// Push grants that allow raw passthrough + join and create-room, but NOT invite.
 	grants := []schema.Grant{
-		{Actions: []string{"matrix/raw-api", "matrix/join", "matrix/create-room"}},
+		{Actions: []string{schema.ActionMatrixRawAPI, schema.ActionMatrixJoin, schema.ActionMatrixCreateRoom}},
 	}
 	body, _ := json.Marshal(grants)
 	req, _ := http.NewRequest("PUT", "http://localhost/v1/admin/authorization", bytes.NewReader(body))
@@ -2325,7 +2325,7 @@ func TestGrantsBasedMatrixPolicy(t *testing.T) {
 	t.Run("room join via rooms endpoint blocked without grant", func(t *testing.T) {
 		// Push grants with raw-api + invite — join should be blocked.
 		grants := []schema.Grant{
-			{Actions: []string{"matrix/raw-api", "matrix/invite"}},
+			{Actions: []string{schema.ActionMatrixRawAPI, schema.ActionMatrixInvite}},
 		}
 		body, _ := json.Marshal(grants)
 		req, _ := http.NewRequest("PUT", "http://localhost/v1/admin/authorization", bytes.NewReader(body))
@@ -2419,7 +2419,7 @@ func TestGrantsBasedServiceDiscovery(t *testing.T) {
 
 	// Push grants that allow discovering only stt services.
 	grants := []schema.Grant{
-		{Actions: []string{"service/discover"}, Targets: []string{"service/stt/**"}},
+		{Actions: []string{schema.ActionServiceDiscover}, Targets: []string{"service/stt/**"}},
 	}
 	body, _ = json.Marshal(grants)
 	req, _ = http.NewRequest("PUT", "http://localhost/v1/admin/authorization", bytes.NewReader(body))
@@ -2463,7 +2463,7 @@ func TestGrantsBasedServiceDiscovery(t *testing.T) {
 
 	t.Run("wildcard grants show all services", func(t *testing.T) {
 		wildcardGrants := []schema.Grant{
-			{Actions: []string{"service/discover"}, Targets: []string{"**"}},
+			{Actions: []string{schema.ActionServiceDiscover}, Targets: []string{"**"}},
 		}
 		body, _ := json.Marshal(wildcardGrants)
 		req, _ := http.NewRequest("PUT", "http://localhost/v1/admin/authorization", bytes.NewReader(body))

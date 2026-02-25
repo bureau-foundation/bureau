@@ -1133,7 +1133,7 @@ func TestMatrixGetDisplayName(t *testing.T) {
 func TestMatrixCreateRoom(t *testing.T) {
 	t.Run("with grant", func(t *testing.T) {
 		grants := []schema.Grant{
-			{Actions: []string{"matrix/create-room"}, Targets: []string{"*"}},
+			{Actions: []string{schema.ActionMatrixCreateRoom}, Targets: []string{"*"}},
 		}
 		client, mock, _ := setupMatrixProxyTestWithGrants(t, grants)
 
@@ -1193,7 +1193,7 @@ func TestMatrixCreateRoom(t *testing.T) {
 func TestMatrixJoinRoom(t *testing.T) {
 	t.Run("with grant", func(t *testing.T) {
 		grants := []schema.Grant{
-			{Actions: []string{"matrix/join"}, Targets: []string{"*"}},
+			{Actions: []string{schema.ActionMatrixJoin}, Targets: []string{"*"}},
 		}
 		client, mock, _ := setupMatrixProxyTestWithGrants(t, grants)
 
@@ -1242,7 +1242,7 @@ func TestMatrixJoinRoom(t *testing.T) {
 
 	t.Run("missing room", func(t *testing.T) {
 		grants := []schema.Grant{
-			{Actions: []string{"matrix/join"}, Targets: []string{"*"}},
+			{Actions: []string{schema.ActionMatrixJoin}, Targets: []string{"*"}},
 		}
 		client, _, _ := setupMatrixProxyTestWithGrants(t, grants)
 
@@ -1262,7 +1262,7 @@ func TestMatrixJoinRoom(t *testing.T) {
 func TestMatrixInviteUser(t *testing.T) {
 	t.Run("with grant", func(t *testing.T) {
 		grants := []schema.Grant{
-			{Actions: []string{"matrix/invite"}, Targets: []string{"*"}},
+			{Actions: []string{schema.ActionMatrixInvite}, Targets: []string{"*"}},
 		}
 		client, mock, _ := setupMatrixProxyTestWithGrants(t, grants)
 
@@ -1318,7 +1318,7 @@ func TestMatrixInviteUser(t *testing.T) {
 
 	t.Run("missing fields", func(t *testing.T) {
 		grants := []schema.Grant{
-			{Actions: []string{"matrix/invite"}, Targets: []string{"*"}},
+			{Actions: []string{schema.ActionMatrixInvite}, Targets: []string{"*"}},
 		}
 		client, _, _ := setupMatrixProxyTestWithGrants(t, grants)
 
@@ -1336,7 +1336,7 @@ func TestMatrixInviteUser(t *testing.T) {
 
 	t.Run("alias resolution", func(t *testing.T) {
 		grants := []schema.Grant{
-			{Actions: []string{"matrix/invite"}, Targets: []string{"*"}},
+			{Actions: []string{schema.ActionMatrixInvite}, Targets: []string{"*"}},
 		}
 		client, mock, _ := setupMatrixProxyTestWithGrants(t, grants)
 

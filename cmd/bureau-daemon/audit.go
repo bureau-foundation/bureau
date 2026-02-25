@@ -19,10 +19,10 @@ import (
 // counts as "sensitive" is a security decision, not an operational knob.
 var sensitiveActionPrefixes = []string{
 	"credential/provision/",
-	"interrupt",
+	schema.ActionInterrupt,
 	"fleet/",
-	"observe/read-write",
-	"grant/approve/",
+	schema.ActionObserveReadWrite,
+	schema.ActionGrantApprovePrefix,
 }
 
 // isSensitiveAction returns true if the action falls within a sensitive

@@ -10,6 +10,7 @@ import (
 	"time"
 
 	"github.com/bureau-foundation/bureau/lib/ref"
+	"github.com/bureau-foundation/bureau/lib/schema"
 )
 
 func testKeypair(t *testing.T) (ed25519.PublicKey, ed25519.PrivateKey) {
@@ -52,8 +53,8 @@ func TestMintAndVerify(t *testing.T) {
 		Machine:  machine,
 		Audience: "ticket",
 		Grants: []Grant{
-			{Actions: []string{"ticket/create", "ticket/assign"}},
-			{Actions: []string{"ticket/close"}, Targets: []string{"iree/**:bureau.local"}},
+			{Actions: []string{schema.ActionTicketCreate, "ticket/assign"}},
+			{Actions: []string{schema.ActionTicketClose}, Targets: []string{"iree/**:bureau.local"}},
 		},
 		ID:        "a1b2c3d4e5f6",
 		IssuedAt:  issuedAt,
@@ -91,8 +92,8 @@ func TestMintAndVerify(t *testing.T) {
 	if len(verified.Grants) != 2 {
 		t.Errorf("Grants length = %d, want 2", len(verified.Grants))
 	}
-	if verified.Grants[0].Actions[0] != "ticket/create" {
-		t.Errorf("Grants[0].Actions[0] = %q, want ticket/create", verified.Grants[0].Actions[0])
+	if verified.Grants[0].Actions[0] != schema.ActionTicketCreate {
+		t.Errorf("Grants[0].Actions[0] = %q, want %s", verified.Grants[0].Actions[0], schema.ActionTicketCreate)
 	}
 }
 
@@ -273,8 +274,8 @@ func TestVerifyForService(t *testing.T) {
 
 func TestGrantsAllow(t *testing.T) {
 	grants := []Grant{
-		{Actions: []string{"ticket/create", "ticket/assign"}},
-		{Actions: []string{"ticket/close"}, Targets: []string{"iree/**"}},
+		{Actions: []string{schema.ActionTicketCreate, "ticket/assign"}},
+		{Actions: []string{schema.ActionTicketClose}, Targets: []string{"iree/**"}},
 	}
 
 	tests := []struct {
@@ -282,13 +283,13 @@ func TestGrantsAllow(t *testing.T) {
 		target string
 		want   bool
 	}{
-		{"ticket/create", "", true},
+		{schema.ActionTicketCreate, "", true},
 		{"ticket/assign", "", true},
-		{"ticket/close", "iree/amdgpu/pm", true},
-		{"ticket/close", "bureau/dev/coder", false},
-		{"ticket/close", "", true}, // self-service check on targeted grant
-		{"fleet/assign", "", false},
-		{"observe", "", false},
+		{schema.ActionTicketClose, "iree/amdgpu/pm", true},
+		{schema.ActionTicketClose, "bureau/dev/coder", false},
+		{schema.ActionTicketClose, "", true}, // self-service check on targeted grant
+		{schema.ActionFleetAssign, "", false},
+		{schema.ActionObserve, "", false},
 	}
 
 	for _, tt := range tests {
@@ -301,8 +302,8 @@ func TestGrantsAllow(t *testing.T) {
 
 func TestGrantsAllow_WildcardPatterns(t *testing.T) {
 	grants := []Grant{
-		{Actions: []string{"command/**"}},
-		{Actions: []string{"observe/**"}, Targets: []string{"**"}},
+		{Actions: []string{schema.ActionCommandAll}},
+		{Actions: []string{schema.ActionObserveAll}, Targets: []string{"**"}},
 	}
 
 	tests := []struct {
@@ -312,9 +313,9 @@ func TestGrantsAllow_WildcardPatterns(t *testing.T) {
 	}{
 		{"command/ticket/create", "", true},
 		{"command/artifact/fetch", "", true},
-		{"observe/read-write", "any/principal", true},
-		{"observe", "any/principal", true},
-		{"interrupt", "", false},
+		{schema.ActionObserveReadWrite, "any/principal", true},
+		{schema.ActionObserve, "any/principal", true},
+		{schema.ActionInterrupt, "", false},
 	}
 
 	for _, tt := range tests {
@@ -326,10 +327,10 @@ func TestGrantsAllow_WildcardPatterns(t *testing.T) {
 }
 
 func TestGrantsAllow_EmptyGrants(t *testing.T) {
-	if GrantsAllow(nil, "ticket/create", "") {
+	if GrantsAllow(nil, schema.ActionTicketCreate, "") {
 		t.Error("nil grants should deny")
 	}
-	if GrantsAllow([]Grant{}, "ticket/create", "") {
+	if GrantsAllow([]Grant{}, schema.ActionTicketCreate, "") {
 		t.Error("empty grants should deny")
 	}
 }
@@ -374,8 +375,8 @@ func TestTokenWireSize(t *testing.T) {
 		Machine:  mustParseMachine(t, "@bureau/fleet/prod/machine/workstation:bureau.local"),
 		Audience: "ticket",
 		Grants: []Grant{
-			{Actions: []string{"ticket/create", "ticket/assign"}},
-			{Actions: []string{"ticket/close"}, Targets: []string{"bureau/dev/workspace/**:bureau.local"}},
+			{Actions: []string{schema.ActionTicketCreate, "ticket/assign"}},
+			{Actions: []string{schema.ActionTicketClose}, Targets: []string{"bureau/dev/workspace/**:bureau.local"}},
 		},
 		ID:        "a1b2c3d4e5f67890",
 		IssuedAt:  1709251200,

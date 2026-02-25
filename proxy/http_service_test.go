@@ -659,7 +659,7 @@ func TestMatrixProxyIntegration(t *testing.T) {
 	// Grant raw Matrix API passthrough access for this test. Without this,
 	// the proxy rejects all /http/matrix/ requests with 403 (agents must
 	// use the structured /v1/matrix/* endpoints by default).
-	server.SetGrants([]schema.Grant{{Actions: []string{"matrix/raw-api"}}})
+	server.SetGrants([]schema.Grant{{Actions: []string{schema.ActionMatrixRawAPI}}})
 
 	if err := server.Start(); err != nil {
 		t.Fatalf("failed to start server: %v", err)

@@ -16,6 +16,7 @@ import (
 
 	"github.com/bureau-foundation/bureau/lib/netutil"
 	"github.com/bureau-foundation/bureau/lib/ref"
+	"github.com/bureau-foundation/bureau/lib/schema"
 	"github.com/bureau-foundation/bureau/messaging"
 )
 
@@ -573,7 +574,7 @@ type MatrixCreateRoomRequest = messaging.CreateRoomRequest
 // HandleMatrixCreateRoom handles POST /v1/matrix/room. Creates a room via
 // POST /_matrix/client/v3/createRoom. Requires the matrix/create-room grant.
 func (h *Handler) HandleMatrixCreateRoom(w http.ResponseWriter, r *http.Request) {
-	if !h.requireGrant(w, "matrix/create-room") {
+	if !h.requireGrant(w, schema.ActionMatrixCreateRoom) {
 		return
 	}
 
@@ -614,7 +615,7 @@ type MatrixJoinRequest struct {
 // HandleMatrixJoinRoom handles POST /v1/matrix/join. Joins a room via
 // POST /_matrix/client/v3/join/{roomIdOrAlias}. Requires the matrix/join grant.
 func (h *Handler) HandleMatrixJoinRoom(w http.ResponseWriter, r *http.Request) {
-	if !h.requireGrant(w, "matrix/join") {
+	if !h.requireGrant(w, schema.ActionMatrixJoin) {
 		return
 	}
 
@@ -664,7 +665,7 @@ type MatrixInviteRequest struct {
 // room via POST /_matrix/client/v3/rooms/{roomId}/invite. Requires the
 // matrix/invite grant.
 func (h *Handler) HandleMatrixInviteUser(w http.ResponseWriter, r *http.Request) {
-	if !h.requireGrant(w, "matrix/invite") {
+	if !h.requireGrant(w, schema.ActionMatrixInvite) {
 		return
 	}
 

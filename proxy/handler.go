@@ -445,7 +445,7 @@ func (h *Handler) HandleHTTPProxy(w http.ResponseWriter, r *http.Request) {
 	// the structured /v1/matrix/* endpoints by default — the passthrough
 	// requires an explicit grant.
 	if serviceName == matrixServiceName {
-		if !h.requireGrant(w, "matrix/raw-api") {
+		if !h.requireGrant(w, schema.ActionMatrixRawAPI) {
 			return
 		}
 		// Additional Matrix-specific policy: block join/invite/create without
@@ -550,12 +550,12 @@ func (h *Handler) checkMatrixPolicy(method, path string) (blocked bool, reason s
 func (h *Handler) matrixAPIAction(apiPath string) string {
 	// POST /_matrix/client/v3/createRoom
 	if apiPath == "createRoom" {
-		return "matrix/create-room"
+		return schema.ActionMatrixCreateRoom
 	}
 
 	// POST /_matrix/client/v3/join/{roomIdOrAlias}
 	if strings.HasPrefix(apiPath, "join/") {
-		return "matrix/join"
+		return schema.ActionMatrixJoin
 	}
 
 	// POST /_matrix/client/v3/rooms/{roomId}/join
@@ -565,9 +565,9 @@ func (h *Handler) matrixAPIAction(apiPath string) string {
 		if len(parts) >= 3 {
 			switch parts[len(parts)-1] {
 			case "join":
-				return "matrix/join"
+				return schema.ActionMatrixJoin
 			case "invite":
-				return "matrix/invite"
+				return schema.ActionMatrixInvite
 			}
 		}
 	}
@@ -725,7 +725,7 @@ func (h *Handler) HandleServiceDirectory(w http.ResponseWriter, r *http.Request)
 	// (e.g., "service/stt/*" matches "service/stt/test"), not full user IDs.
 	visible := make([]ServiceDirectoryEntry, 0, len(directory))
 	for _, entry := range directory {
-		if authorization.GrantsAllowServiceType(grants, "service/discover", entry.Localpart) {
+		if authorization.GrantsAllowServiceType(grants, schema.ActionServiceDiscover, entry.Localpart) {
 			visible = append(visible, entry)
 		}
 	}

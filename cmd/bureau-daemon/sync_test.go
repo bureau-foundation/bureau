@@ -985,7 +985,7 @@ func TestProcessTemporalGrantEvents_AddGrant(t *testing.T) {
 								Content: map[string]any{
 									"principal": agentAlpha.UserID().String(),
 									"grant": map[string]any{
-										"actions":    []any{"service/register"},
+										"actions":    []any{schema.ActionServiceRegister},
 										"expires_at": "2099-01-01T00:00:00Z",
 										"ticket":     "test-grant-ticket",
 									},
@@ -1010,8 +1010,8 @@ func TestProcessTemporalGrantEvents_AddGrant(t *testing.T) {
 	if grants[0].ExpiresAt != "2099-01-01T00:00:00Z" {
 		t.Errorf("grant expires_at = %q, want %q", grants[0].ExpiresAt, "2099-01-01T00:00:00Z")
 	}
-	if len(grants[0].Actions) != 1 || grants[0].Actions[0] != "service/register" {
-		t.Errorf("grant actions = %v, want [service/register]", grants[0].Actions)
+	if len(grants[0].Actions) != 1 || grants[0].Actions[0] != schema.ActionServiceRegister {
+		t.Errorf("grant actions = %v, want [%s]", grants[0].Actions, schema.ActionServiceRegister)
 	}
 	if grants[0].Source != schema.SourceTemporal {
 		t.Errorf("grant source = %q, want %q", grants[0].Source, schema.SourceTemporal)
@@ -1029,7 +1029,7 @@ func TestProcessTemporalGrantEvents_RevokeGrant(t *testing.T) {
 
 	// Pre-add a temporal grant.
 	added := daemon.authorizationIndex.AddTemporalGrant(testEntity(t, daemon.fleet, "agent/alpha").UserID(), schema.Grant{
-		Actions:   []string{"service/register"},
+		Actions:   []string{schema.ActionServiceRegister},
 		ExpiresAt: "2099-01-01T00:00:00Z",
 		Ticket:    "revoke-grant-ticket",
 	})
@@ -1096,7 +1096,7 @@ func TestProcessTemporalGrantEvents_TicketFromStateKey(t *testing.T) {
 								Content: map[string]any{
 									"principal": agentAlpha.UserID().String(),
 									"grant": map[string]any{
-										"actions":    []any{"service/register"},
+										"actions":    []any{schema.ActionServiceRegister},
 										"expires_at": "2099-01-01T00:00:00Z",
 										// No "ticket" field — should be filled from state key.
 									},

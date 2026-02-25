@@ -16,6 +16,7 @@ import (
 
 	"github.com/bureau-foundation/bureau/lib/artifactstore"
 	"github.com/bureau-foundation/bureau/lib/codec"
+	"github.com/bureau-foundation/bureau/lib/schema"
 	"github.com/bureau-foundation/bureau/lib/service"
 	"github.com/bureau-foundation/bureau/lib/servicetoken"
 )
@@ -123,72 +124,72 @@ func (as *ArtifactService) handleConnection(ctx context.Context, conn net.Conn) 
 
 	switch header.Action {
 	case "store":
-		if as.authenticate(conn, raw, "store", "artifact/store") == nil {
+		if as.authenticate(conn, raw, "store", schema.ActionArtifactStore) == nil {
 			return
 		}
 		as.handleStore(ctx, conn, raw)
 	case "fetch":
-		if as.authenticate(conn, raw, "fetch", "artifact/fetch") == nil {
+		if as.authenticate(conn, raw, "fetch", schema.ActionArtifactFetch) == nil {
 			return
 		}
 		as.handleFetch(ctx, conn, raw)
 	case "exists":
-		if as.authenticate(conn, raw, "exists", "artifact/fetch") == nil {
+		if as.authenticate(conn, raw, "exists", schema.ActionArtifactFetch) == nil {
 			return
 		}
 		as.handleExists(ctx, conn, raw)
 	case "show":
-		if as.authenticate(conn, raw, "show", "artifact/fetch") == nil {
+		if as.authenticate(conn, raw, "show", schema.ActionArtifactFetch) == nil {
 			return
 		}
 		as.handleShow(ctx, conn, raw)
 	case "reconstruction":
-		if as.authenticate(conn, raw, "reconstruction", "artifact/fetch") == nil {
+		if as.authenticate(conn, raw, "reconstruction", schema.ActionArtifactFetch) == nil {
 			return
 		}
 		as.handleReconstruction(ctx, conn, raw)
 	case "list":
-		if as.authenticate(conn, raw, "list", "artifact/list") == nil {
+		if as.authenticate(conn, raw, "list", schema.ActionArtifactList) == nil {
 			return
 		}
 		as.handleList(ctx, conn, raw)
 	case "tag":
-		if as.authenticate(conn, raw, "tag", "artifact/tag") == nil {
+		if as.authenticate(conn, raw, "tag", schema.ActionArtifactTag) == nil {
 			return
 		}
 		as.handleTag(ctx, conn, raw)
 	case "resolve":
-		if as.authenticate(conn, raw, "resolve", "artifact/fetch") == nil {
+		if as.authenticate(conn, raw, "resolve", schema.ActionArtifactFetch) == nil {
 			return
 		}
 		as.handleResolve(ctx, conn, raw)
 	case "tags":
-		if as.authenticate(conn, raw, "tags", "artifact/fetch") == nil {
+		if as.authenticate(conn, raw, "tags", schema.ActionArtifactFetch) == nil {
 			return
 		}
 		as.handleTags(ctx, conn, raw)
 	case "delete-tag":
-		if as.authenticate(conn, raw, "delete-tag", "artifact/tag") == nil {
+		if as.authenticate(conn, raw, "delete-tag", schema.ActionArtifactTag) == nil {
 			return
 		}
 		as.handleDeleteTag(ctx, conn, raw)
 	case "pin":
-		if as.authenticate(conn, raw, "pin", "artifact/pin") == nil {
+		if as.authenticate(conn, raw, "pin", schema.ActionArtifactPin) == nil {
 			return
 		}
 		as.handlePin(ctx, conn, raw)
 	case "unpin":
-		if as.authenticate(conn, raw, "unpin", "artifact/pin") == nil {
+		if as.authenticate(conn, raw, "unpin", schema.ActionArtifactPin) == nil {
 			return
 		}
 		as.handleUnpin(ctx, conn, raw)
 	case "gc":
-		if as.authenticate(conn, raw, "gc", "artifact/gc") == nil {
+		if as.authenticate(conn, raw, "gc", schema.ActionArtifactGC) == nil {
 			return
 		}
 		as.handleGC(ctx, conn, raw)
 	case "cache-status":
-		if as.authenticate(conn, raw, "cache-status", "artifact/list") == nil {
+		if as.authenticate(conn, raw, "cache-status", schema.ActionArtifactList) == nil {
 			return
 		}
 		as.handleCacheStatus(ctx, conn, raw)

@@ -8,6 +8,8 @@ import (
 	"path/filepath"
 	"runtime"
 	"testing"
+
+	"github.com/bureau-foundation/bureau/lib/schema"
 )
 
 func TestCPUPercentDelta(t *testing.T) {
@@ -377,43 +379,43 @@ func TestDerivePrincipalStatus(t *testing.T) {
 		name               string
 		cpuPercent         int
 		hasPreviousReading bool
-		expected           string
+		expected           schema.PrincipalRunStatus
 	}{
 		{
 			name:               "running with high cpu",
 			cpuPercent:         50,
 			hasPreviousReading: true,
-			expected:           "running",
+			expected:           schema.PrincipalRunning,
 		},
 		{
 			name:               "running at threshold",
 			cpuPercent:         2,
 			hasPreviousReading: true,
-			expected:           "running",
+			expected:           schema.PrincipalRunning,
 		},
 		{
 			name:               "idle with low cpu",
 			cpuPercent:         1,
 			hasPreviousReading: true,
-			expected:           "idle",
+			expected:           schema.PrincipalIdle,
 		},
 		{
 			name:               "idle with zero cpu",
 			cpuPercent:         0,
 			hasPreviousReading: true,
-			expected:           "idle",
+			expected:           schema.PrincipalIdle,
 		},
 		{
 			name:               "starting without previous reading",
 			cpuPercent:         0,
 			hasPreviousReading: false,
-			expected:           "starting",
+			expected:           schema.PrincipalStarting,
 		},
 		{
 			name:               "starting even with high cpu but no previous",
 			cpuPercent:         80,
 			hasPreviousReading: false,
-			expected:           "starting",
+			expected:           schema.PrincipalStarting,
 		},
 	}
 

@@ -18,6 +18,31 @@ const (
 	StewardshipContentVersion = 1
 )
 
+// OverlapPolicy controls how a stewardship declaration composes with
+// other declarations matching the same ticket.
+// Values are self-describing strings that serialize directly to JSON.
+type OverlapPolicy string
+
+const (
+	// OverlapIndependent means this declaration produces a separate
+	// review gate that must be satisfied regardless of other
+	// declarations. This is the default when OverlapPolicy is empty.
+	OverlapIndependent OverlapPolicy = "independent"
+
+	// OverlapCooperative means this declaration pools reviewers with
+	// other cooperative declarations into a single merged gate.
+	OverlapCooperative OverlapPolicy = "cooperative"
+)
+
+// IsKnown reports whether p is one of the defined OverlapPolicy values.
+func (p OverlapPolicy) IsKnown() bool {
+	switch p {
+	case OverlapIndependent, OverlapCooperative:
+		return true
+	}
+	return false
+}
+
 // StewardshipContent is the content of an m.bureau.stewardship state
 // event. Each stewardship declaration maps resource patterns to
 // responsible principals with tiered review escalation. The ticket
@@ -62,11 +87,12 @@ type StewardshipContent struct {
 	Tiers []StewardshipTier `json:"tiers"`
 
 	// OverlapPolicy controls how this declaration composes with other
-	// declarations matching the same ticket. "independent" (default)
-	// produces a separate review gate that must be satisfied regardless
-	// of other declarations. "cooperative" pools reviewers with other
-	// cooperative declarations into a single merged gate.
-	OverlapPolicy string `json:"overlap_policy,omitempty"`
+	// declarations matching the same ticket. OverlapIndependent (default
+	// when empty) produces a separate review gate that must be satisfied
+	// regardless of other declarations. OverlapCooperative pools
+	// reviewers with other cooperative declarations into a single
+	// merged gate.
+	OverlapPolicy OverlapPolicy `json:"overlap_policy,omitempty"`
 
 	// DigestInterval is the duration between notification digests
 	// (e.g., "1h", "4h", "24h"). Zero or absent means immediate
@@ -111,10 +137,7 @@ func (s *StewardshipContent) Validate() error {
 	if err := validateNoOverlap(s.GateTypes, s.NotifyTypes); err != nil {
 		return err
 	}
-	switch s.OverlapPolicy {
-	case "", "independent", "cooperative":
-		// Valid. Empty defaults to "independent" at runtime.
-	default:
+	if s.OverlapPolicy != "" && !s.OverlapPolicy.IsKnown() {
 		return fmt.Errorf("stewardship: unknown overlap_policy %q (must be \"independent\" or \"cooperative\")", s.OverlapPolicy)
 	}
 	if s.DigestInterval != "" {

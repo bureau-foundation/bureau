@@ -81,7 +81,7 @@ func TestProxyCrashRecovery(t *testing.T) {
 	waitForNotification[schema.ProxyCrashMessage](
 		t, &watch, schema.MsgTypeProxyCrash, machine.UserID,
 		func(m schema.ProxyCrashMessage) bool {
-			return m.Principal == principalLocalpart && m.Status == "recovered"
+			return m.Principal == principalLocalpart && m.Status == schema.ProxyCrashRecovered
 		}, "proxy crash recovery for "+principalLocalpart)
 	t.Log("recovery message found in config room")
 

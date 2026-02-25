@@ -72,6 +72,139 @@ const (
 	MsgTypeBureauVersionUpdate = "m.bureau.bureau_version_update"
 )
 
+// CredRotationStatus is the lifecycle state of a credential rotation.
+// Values are self-describing strings that serialize directly to JSON.
+type CredRotationStatus string
+
+const (
+	// CredRotationRestarting means the principal is being restarted
+	// with updated credentials.
+	CredRotationRestarting CredRotationStatus = "restarting"
+
+	// CredRotationCompleted means the principal was successfully
+	// restarted with new credentials.
+	CredRotationCompleted CredRotationStatus = "completed"
+
+	// CredRotationFailed means the restart after credential rotation
+	// did not succeed.
+	CredRotationFailed CredRotationStatus = "failed"
+)
+
+// IsKnown reports whether s is one of the defined CredRotationStatus values.
+func (s CredRotationStatus) IsKnown() bool {
+	switch s {
+	case CredRotationRestarting, CredRotationCompleted, CredRotationFailed:
+		return true
+	}
+	return false
+}
+
+// ProxyCrashStatus is the lifecycle state of proxy crash recovery.
+// Values are self-describing strings that serialize directly to JSON.
+type ProxyCrashStatus string
+
+const (
+	// ProxyCrashDetected means the proxy process exited unexpectedly
+	// and the daemon is attempting recovery.
+	ProxyCrashDetected ProxyCrashStatus = "detected"
+
+	// ProxyCrashRecovered means the sandbox was successfully recreated
+	// after the proxy crash.
+	ProxyCrashRecovered ProxyCrashStatus = "recovered"
+
+	// ProxyCrashFailed means recovery after the proxy crash was
+	// unsuccessful.
+	ProxyCrashFailed ProxyCrashStatus = "failed"
+
+	// ProxyCrashBackingOff means the immediate reconciliation did not
+	// restore the principal and a deferred retry is scheduled with
+	// exponential backoff.
+	ProxyCrashBackingOff ProxyCrashStatus = "backing_off"
+)
+
+// IsKnown reports whether s is one of the defined ProxyCrashStatus values.
+func (s ProxyCrashStatus) IsKnown() bool {
+	switch s {
+	case ProxyCrashDetected, ProxyCrashRecovered, ProxyCrashFailed, ProxyCrashBackingOff:
+		return true
+	}
+	return false
+}
+
+// HealthCheckOutcome is the result of a health check failure response.
+// Values are self-describing strings that serialize directly to JSON.
+type HealthCheckOutcome string
+
+const (
+	// HealthCheckDestroyed means the principal was destroyed because
+	// no previous working configuration was available for rollback.
+	HealthCheckDestroyed HealthCheckOutcome = "destroyed"
+
+	// HealthCheckRolledBack means the principal was reverted to its
+	// previous working configuration after the health check failure.
+	HealthCheckRolledBack HealthCheckOutcome = "rolled_back"
+
+	// HealthCheckRollbackFailed means the rollback to the previous
+	// configuration was attempted but failed.
+	HealthCheckRollbackFailed HealthCheckOutcome = "rollback_failed"
+)
+
+// IsKnown reports whether o is one of the defined HealthCheckOutcome values.
+func (o HealthCheckOutcome) IsKnown() bool {
+	switch o {
+	case HealthCheckDestroyed, HealthCheckRolledBack, HealthCheckRollbackFailed:
+		return true
+	}
+	return false
+}
+
+// SelfUpdateStatus is the lifecycle state of a daemon binary self-update.
+// Values are self-describing strings that serialize directly to JSON.
+type SelfUpdateStatus string
+
+const (
+	// SelfUpdateInProgress means the daemon is exec()'ing the new binary.
+	SelfUpdateInProgress SelfUpdateStatus = "in_progress"
+
+	// SelfUpdateSucceeded means the new binary started successfully.
+	SelfUpdateSucceeded SelfUpdateStatus = "succeeded"
+
+	// SelfUpdateFailed means the update failed and the daemon reverted.
+	SelfUpdateFailed SelfUpdateStatus = "failed"
+)
+
+// IsKnown reports whether s is one of the defined SelfUpdateStatus values.
+func (s SelfUpdateStatus) IsKnown() bool {
+	switch s {
+	case SelfUpdateInProgress, SelfUpdateSucceeded, SelfUpdateFailed:
+		return true
+	}
+	return false
+}
+
+// VersionUpdateStatus is the outcome of a BureauVersion reconciliation.
+// Values are self-describing strings that serialize directly to JSON.
+type VersionUpdateStatus string
+
+const (
+	// VersionUpdatePrefetchFailed means store path prefetching failed
+	// and will be retried on the next reconciliation cycle.
+	VersionUpdatePrefetchFailed VersionUpdateStatus = "prefetch_failed"
+
+	// VersionUpdateReconciled means the binary updates were
+	// successfully applied.
+	VersionUpdateReconciled VersionUpdateStatus = "reconciled"
+)
+
+// IsKnown reports whether s is one of the defined VersionUpdateStatus values.
+func (s VersionUpdateStatus) IsKnown() bool {
+	switch s {
+	case VersionUpdatePrefetchFailed, VersionUpdateReconciled:
+		return true
+	}
+	return false
+}
+
 // --------------------------------------------------------------------
 // Daemon notification message types
 // --------------------------------------------------------------------
@@ -216,24 +349,24 @@ func NewSandboxExitedMessage(principal string, exitCode int, exitDescription, ca
 // rotation lifecycle: when a principal is being restarted for rotation,
 // when the restart completes, or when it fails.
 type CredentialsRotatedMessage struct {
-	MsgType   string `json:"msgtype"`
-	Body      string `json:"body"`
-	Principal string `json:"principal"`
-	Status    string `json:"status"` // "restarting", "completed", "failed"
-	Error     string `json:"error,omitempty"`
+	MsgType   string             `json:"msgtype"`
+	Body      string             `json:"body"`
+	Principal string             `json:"principal"`
+	Status    CredRotationStatus `json:"status"`
+	Error     string             `json:"error,omitempty"`
 }
 
 // NewCredentialsRotatedMessage constructs a CredentialsRotatedMessage.
-// Status must be "restarting", "completed", or "failed". For "failed"
-// status, pass the error message; for other statuses pass empty string.
-func NewCredentialsRotatedMessage(principal, status, errorMessage string) CredentialsRotatedMessage {
+// For CredRotationFailed, pass the error message; for other statuses
+// pass empty string.
+func NewCredentialsRotatedMessage(principal string, status CredRotationStatus, errorMessage string) CredentialsRotatedMessage {
 	var body string
 	switch status {
-	case "restarting":
+	case CredRotationRestarting:
 		body = fmt.Sprintf("Restarting %s: credentials updated", principal)
-	case "completed":
+	case CredRotationCompleted:
 		body = fmt.Sprintf("Restarted %s with new credentials", principal)
-	case "failed":
+	case CredRotationFailed:
 		body = fmt.Sprintf("FAILED to restart %s after credential rotation: %s", principal, errorMessage)
 	default:
 		body = fmt.Sprintf("Credential rotation for %s: %s", principal, status)
@@ -253,25 +386,26 @@ func NewCredentialsRotatedMessage(principal, status, errorMessage string) Creden
 // detected (proxy crashed), then either recovered (sandbox recreated)
 // or failed (recovery unsuccessful).
 type ProxyCrashMessage struct {
-	MsgType   string `json:"msgtype"`
-	Body      string `json:"body"`
-	Principal string `json:"principal"`
-	ExitCode  int    `json:"exit_code,omitempty"`
-	Status    string `json:"status"` // "detected", "recovered", "failed"
-	Error     string `json:"error,omitempty"`
+	MsgType   string           `json:"msgtype"`
+	Body      string           `json:"body"`
+	Principal string           `json:"principal"`
+	ExitCode  int              `json:"exit_code,omitempty"`
+	Status    ProxyCrashStatus `json:"status"`
+	Error     string           `json:"error,omitempty"`
 }
 
-// NewProxyCrashMessage constructs a ProxyCrashMessage. Status must be
-// "detected", "recovered", or "failed".
-func NewProxyCrashMessage(principal, status string, exitCode int, errorMessage string) ProxyCrashMessage {
+// NewProxyCrashMessage constructs a ProxyCrashMessage.
+func NewProxyCrashMessage(principal string, status ProxyCrashStatus, exitCode int, errorMessage string) ProxyCrashMessage {
 	var body string
 	switch status {
-	case "detected":
+	case ProxyCrashDetected:
 		body = fmt.Sprintf("CRITICAL: Proxy for %s exited unexpectedly (code %d). Sandbox destroyed, re-reconciling.", principal, exitCode)
-	case "recovered":
+	case ProxyCrashRecovered:
 		body = fmt.Sprintf("Recovered %s after proxy crash", principal)
-	case "failed":
+	case ProxyCrashFailed:
 		body = fmt.Sprintf("FAILED to recover %s after proxy crash: %s", principal, errorMessage)
+	case ProxyCrashBackingOff:
+		body = fmt.Sprintf("Proxy crash recovery for %s deferred: %s", principal, errorMessage)
 	default:
 		body = fmt.Sprintf("Proxy crash for %s: %s", principal, status)
 	}
@@ -291,22 +425,22 @@ func NewProxyCrashMessage(principal, status string, exitCode int, errorMessage s
 // available), "rolled_back" (reverted to previous working config),
 // "rollback_failed" (rollback attempted but failed).
 type HealthCheckMessage struct {
-	MsgType   string `json:"msgtype"`
-	Body      string `json:"body"`
-	Principal string `json:"principal"`
-	Outcome   string `json:"outcome"` // "destroyed", "rolled_back", "rollback_failed"
-	Error     string `json:"error,omitempty"`
+	MsgType   string             `json:"msgtype"`
+	Body      string             `json:"body"`
+	Principal string             `json:"principal"`
+	Outcome   HealthCheckOutcome `json:"outcome"`
+	Error     string             `json:"error,omitempty"`
 }
 
 // NewHealthCheckMessage constructs a HealthCheckMessage.
-func NewHealthCheckMessage(principal, outcome, errorMessage string) HealthCheckMessage {
+func NewHealthCheckMessage(principal string, outcome HealthCheckOutcome, errorMessage string) HealthCheckMessage {
 	var body string
 	switch outcome {
-	case "destroyed":
+	case HealthCheckDestroyed:
 		body = fmt.Sprintf("CRITICAL: %s health check failed, no previous working configuration. Principal destroyed.", principal)
-	case "rolled_back":
+	case HealthCheckRolledBack:
 		body = fmt.Sprintf("Rolled back %s to previous working configuration after health check failure.", principal)
-	case "rollback_failed":
+	case HealthCheckRollbackFailed:
 		body = fmt.Sprintf("CRITICAL: %s rollback failed: %s. Principal destroyed.", principal, errorMessage)
 	default:
 		body = fmt.Sprintf("Health check for %s: %s", principal, outcome)
@@ -325,23 +459,23 @@ func NewHealthCheckMessage(principal, outcome, errorMessage string) HealthCheckM
 // self-update: when exec() is initiated, when the new binary starts
 // successfully, or when the update fails and reverts.
 type DaemonSelfUpdateMessage struct {
-	MsgType        string `json:"msgtype"`
-	Body           string `json:"body"`
-	PreviousBinary string `json:"previous_binary"`
-	NewBinary      string `json:"new_binary"`
-	Status         string `json:"status"` // "in_progress", "succeeded", "failed"
-	Error          string `json:"error,omitempty"`
+	MsgType        string           `json:"msgtype"`
+	Body           string           `json:"body"`
+	PreviousBinary string           `json:"previous_binary"`
+	NewBinary      string           `json:"new_binary"`
+	Status         SelfUpdateStatus `json:"status"`
+	Error          string           `json:"error,omitempty"`
 }
 
 // NewDaemonSelfUpdateMessage constructs a DaemonSelfUpdateMessage.
-func NewDaemonSelfUpdateMessage(previousBinary, newBinary, status, errorMessage string) DaemonSelfUpdateMessage {
+func NewDaemonSelfUpdateMessage(previousBinary, newBinary string, status SelfUpdateStatus, errorMessage string) DaemonSelfUpdateMessage {
 	var body string
 	switch status {
-	case "in_progress":
+	case SelfUpdateInProgress:
 		body = fmt.Sprintf("Daemon self-updating: exec() %s (was %s)", newBinary, previousBinary)
-	case "succeeded":
+	case SelfUpdateSucceeded:
 		body = fmt.Sprintf("Daemon self-update succeeded: now running %s (was %s)", newBinary, previousBinary)
-	case "failed":
+	case SelfUpdateFailed:
 		body = fmt.Sprintf("Daemon self-update failed: %s (was %s, continuing with %s)", errorMessage, previousBinary, previousBinary)
 	default:
 		body = fmt.Sprintf("Daemon self-update %s: %s → %s", status, previousBinary, newBinary)
@@ -427,12 +561,12 @@ func NewPrincipalRestartedMessage(principal, template string) PrincipalRestarted
 // indicates store path prefetching failed (retries next cycle). Status
 // "reconciled" summarizes which binary updates were applied.
 type BureauVersionUpdateMessage struct {
-	MsgType         string `json:"msgtype"`
-	Body            string `json:"body"`
-	Status          string `json:"status"` // "prefetch_failed", "reconciled"
-	Error           string `json:"error,omitempty"`
-	ProxyChanged    bool   `json:"proxy_changed,omitempty"`
-	LauncherChanged bool   `json:"launcher_changed,omitempty"`
+	MsgType         string              `json:"msgtype"`
+	Body            string              `json:"body"`
+	Status          VersionUpdateStatus `json:"status"`
+	Error           string              `json:"error,omitempty"`
+	ProxyChanged    bool                `json:"proxy_changed,omitempty"`
+	LauncherChanged bool                `json:"launcher_changed,omitempty"`
 }
 
 // NewBureauVersionPrefetchFailedMessage constructs a BureauVersionUpdateMessage
@@ -441,7 +575,7 @@ func NewBureauVersionPrefetchFailedMessage(errorMessage string) BureauVersionUpd
 	return BureauVersionUpdateMessage{
 		MsgType: MsgTypeBureauVersionUpdate,
 		Body:    fmt.Sprintf("Failed to prefetch BureauVersion store paths: %s (will retry on next reconcile cycle)", errorMessage),
-		Status:  "prefetch_failed",
+		Status:  VersionUpdatePrefetchFailed,
 		Error:   errorMessage,
 	}
 }
@@ -459,7 +593,7 @@ func NewBureauVersionReconciledMessage(proxyChanged, launcherChanged bool) Burea
 	return BureauVersionUpdateMessage{
 		MsgType:         MsgTypeBureauVersionUpdate,
 		Body:            "BureauVersion: " + strings.Join(parts, "; ") + ".",
-		Status:          "reconciled",
+		Status:          VersionUpdateReconciled,
 		ProxyChanged:    proxyChanged,
 		LauncherChanged: launcherChanged,
 	}

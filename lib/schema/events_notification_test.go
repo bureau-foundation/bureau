@@ -226,7 +226,7 @@ func TestSandboxExitedMessageNormalExit(t *testing.T) {
 
 func TestCredentialsRotatedMessageRoundTrip(t *testing.T) {
 	t.Parallel()
-	original := NewCredentialsRotatedMessage("agent/cred-test", "failed", "sandbox creation timed out")
+	original := NewCredentialsRotatedMessage("agent/cred-test", CredRotationFailed, "sandbox creation timed out")
 
 	data, err := json.Marshal(original)
 	if err != nil {
@@ -238,21 +238,21 @@ func TestCredentialsRotatedMessageRoundTrip(t *testing.T) {
 		t.Fatalf("Unmarshal to map: %v", err)
 	}
 	assertField(t, raw, "msgtype", MsgTypeCredentialsRotated)
-	assertField(t, raw, "status", "failed")
+	assertField(t, raw, "status", string(CredRotationFailed))
 	assertField(t, raw, "error", "sandbox creation timed out")
 
 	var decoded CredentialsRotatedMessage
 	if err := json.Unmarshal(data, &decoded); err != nil {
 		t.Fatalf("Unmarshal: %v", err)
 	}
-	if decoded.Status != "failed" {
-		t.Errorf("Status = %q, want %q", decoded.Status, "failed")
+	if decoded.Status != CredRotationFailed {
+		t.Errorf("Status = %q, want %q", decoded.Status, CredRotationFailed)
 	}
 }
 
 func TestCredentialsRotatedMessageRestartingOmitsError(t *testing.T) {
 	t.Parallel()
-	original := NewCredentialsRotatedMessage("agent/cred-test", "restarting", "")
+	original := NewCredentialsRotatedMessage("agent/cred-test", CredRotationRestarting, "")
 
 	data, err := json.Marshal(original)
 	if err != nil {
@@ -270,7 +270,7 @@ func TestCredentialsRotatedMessageRestartingOmitsError(t *testing.T) {
 
 func TestProxyCrashMessageRoundTrip(t *testing.T) {
 	t.Parallel()
-	original := NewProxyCrashMessage("agent/proxy-test", "detected", 137, "")
+	original := NewProxyCrashMessage("agent/proxy-test", ProxyCrashDetected, 137, "")
 
 	data, err := json.Marshal(original)
 	if err != nil {
@@ -282,7 +282,7 @@ func TestProxyCrashMessageRoundTrip(t *testing.T) {
 		t.Fatalf("Unmarshal to map: %v", err)
 	}
 	assertField(t, raw, "msgtype", MsgTypeProxyCrash)
-	assertField(t, raw, "status", "detected")
+	assertField(t, raw, "status", string(ProxyCrashDetected))
 	assertField(t, raw, "exit_code", float64(137))
 
 	var decoded ProxyCrashMessage
@@ -296,7 +296,7 @@ func TestProxyCrashMessageRoundTrip(t *testing.T) {
 
 func TestProxyCrashMessageRecoveredOmitsExitCode(t *testing.T) {
 	t.Parallel()
-	original := NewProxyCrashMessage("agent/proxy-test", "recovered", 0, "")
+	original := NewProxyCrashMessage("agent/proxy-test", ProxyCrashRecovered, 0, "")
 
 	data, err := json.Marshal(original)
 	if err != nil {
@@ -316,7 +316,7 @@ func TestProxyCrashMessageRecoveredOmitsExitCode(t *testing.T) {
 
 func TestHealthCheckMessageRoundTrip(t *testing.T) {
 	t.Parallel()
-	original := NewHealthCheckMessage("agent/health-test", "rollback_failed", "cannot read credentials: permission denied")
+	original := NewHealthCheckMessage("agent/health-test", HealthCheckRollbackFailed, "cannot read credentials: permission denied")
 
 	data, err := json.Marshal(original)
 	if err != nil {
@@ -328,20 +328,20 @@ func TestHealthCheckMessageRoundTrip(t *testing.T) {
 		t.Fatalf("Unmarshal to map: %v", err)
 	}
 	assertField(t, raw, "msgtype", MsgTypeHealthCheck)
-	assertField(t, raw, "outcome", "rollback_failed")
+	assertField(t, raw, "outcome", string(HealthCheckRollbackFailed))
 
 	var decoded HealthCheckMessage
 	if err := json.Unmarshal(data, &decoded); err != nil {
 		t.Fatalf("Unmarshal: %v", err)
 	}
-	if decoded.Outcome != "rollback_failed" {
-		t.Errorf("Outcome = %q, want %q", decoded.Outcome, "rollback_failed")
+	if decoded.Outcome != HealthCheckRollbackFailed {
+		t.Errorf("Outcome = %q, want %q", decoded.Outcome, HealthCheckRollbackFailed)
 	}
 }
 
 func TestHealthCheckMessageDestroyedOmitsError(t *testing.T) {
 	t.Parallel()
-	original := NewHealthCheckMessage("agent/health-test", "destroyed", "")
+	original := NewHealthCheckMessage("agent/health-test", HealthCheckDestroyed, "")
 
 	data, err := json.Marshal(original)
 	if err != nil {
@@ -359,7 +359,7 @@ func TestHealthCheckMessageDestroyedOmitsError(t *testing.T) {
 
 func TestDaemonSelfUpdateMessageRoundTrip(t *testing.T) {
 	t.Parallel()
-	original := NewDaemonSelfUpdateMessage("/nix/store/old-daemon", "/nix/store/new-daemon", "succeeded", "")
+	original := NewDaemonSelfUpdateMessage("/nix/store/old-daemon", "/nix/store/new-daemon", SelfUpdateSucceeded, "")
 
 	data, err := json.Marshal(original)
 	if err != nil {
@@ -373,7 +373,7 @@ func TestDaemonSelfUpdateMessageRoundTrip(t *testing.T) {
 	assertField(t, raw, "msgtype", MsgTypeDaemonSelfUpdate)
 	assertField(t, raw, "previous_binary", "/nix/store/old-daemon")
 	assertField(t, raw, "new_binary", "/nix/store/new-daemon")
-	assertField(t, raw, "status", "succeeded")
+	assertField(t, raw, "status", string(SelfUpdateSucceeded))
 
 	if _, exists := raw["error"]; exists {
 		t.Error("error field should be omitted on success")

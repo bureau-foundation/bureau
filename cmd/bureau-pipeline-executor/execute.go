@@ -294,7 +294,7 @@ func executeAssertState(ctx context.Context, assertion *pipeline.PipelineAssertS
 
 	// Determine the mismatch behavior.
 	status := pipeline.StepFailed
-	if assertion.OnMismatch == "abort" {
+	if assertion.OnMismatch == pipeline.MismatchAbort {
 		status = pipeline.StepAborted
 	}
 

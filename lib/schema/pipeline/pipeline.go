@@ -58,8 +58,8 @@ type PipelineContent struct {
 	// is preserved.
 	//
 	// On_failure steps do NOT run when a pipeline is aborted (an
-	// assert_state step with on_mismatch "abort" triggers a clean
-	// exit, not a failure).
+	// assert_state step with MismatchAbort triggers a clean exit,
+	// not a failure).
 	//
 	// The variables FAILED_STEP (name of the step that failed) and
 	// FAILED_ERROR (error message) are injected into the variable
@@ -318,6 +318,30 @@ type PipelinePublish struct {
 	Content map[string]any `json:"content"`
 }
 
+// AssertMismatch controls behavior when a PipelineAssertState assertion fails.
+// Values are self-describing strings that serialize directly to JSON.
+type AssertMismatch string
+
+const (
+	// MismatchFail means the step fails, the pipeline fails, and
+	// on_failure steps run. This is the default when OnMismatch is empty.
+	MismatchFail AssertMismatch = "fail"
+
+	// MismatchAbort means the pipeline exits cleanly with exit code 0
+	// and on_failure steps do NOT run. Use for benign precondition
+	// mismatches where the work is simply not needed.
+	MismatchAbort AssertMismatch = "abort"
+)
+
+// IsKnown reports whether m is one of the defined AssertMismatch values.
+func (m AssertMismatch) IsKnown() bool {
+	switch m {
+	case MismatchFail, MismatchAbort:
+		return true
+	}
+	return false
+}
+
 // PipelineAssertState describes a state event assertion — a precondition
 // check that reads a Matrix state event and verifies a field matches an
 // expected value. Used in pipeline steps to guard against stale state
@@ -356,13 +380,13 @@ type PipelineAssertState struct {
 	// NotIn asserts the field value is not any of the listed strings.
 	NotIn []string `json:"not_in,omitempty"`
 
-	// OnMismatch controls behavior when the assertion fails:
-	//   - "fail" (default): the step fails, the pipeline fails, and
-	//     on_failure steps run. Use for error conditions.
-	//   - "abort": the pipeline exits cleanly with exit code 0 and
-	//     on_failure steps do NOT run. Use for benign precondition
-	//     mismatches (e.g., "someone else is already handling this").
-	OnMismatch string `json:"on_mismatch,omitempty"`
+	// OnMismatch controls behavior when the assertion fails.
+	// MismatchFail (default when empty): the step fails, the pipeline
+	// fails, and on_failure steps run. Use for error conditions.
+	// MismatchAbort: the pipeline exits cleanly with exit code 0 and
+	// on_failure steps do NOT run. Use for benign precondition
+	// mismatches (e.g., "someone else is already handling this").
+	OnMismatch AssertMismatch `json:"on_mismatch,omitempty"`
 
 	// Message is a human-readable explanation logged when the assertion
 	// fails (e.g., "workspace status is no longer 'teardown'").
@@ -392,8 +416,8 @@ const (
 	ConclusionFailure PipelineConclusion = "failure"
 
 	// ConclusionAborted means the pipeline stopped itself cleanly — an
-	// assert_state step with on_mismatch "abort" determined the work was
-	// not needed.
+	// assert_state step with MismatchAbort determined the work was not
+	// needed.
 	ConclusionAborted PipelineConclusion = "aborted"
 
 	// ConclusionCancelled means external cancellation: the ticket was
@@ -467,9 +491,9 @@ type PipelineResultContent struct {
 	// this field. An empty Conclusion in a gate means "any completed
 	// result".
 	//
-	// "aborted" means the pipeline was stopped cleanly by an
-	// assert_state step with on_mismatch "abort" — the pipeline
-	// decided to stop itself. "cancelled" means external
+	// ConclusionAborted means the pipeline was stopped cleanly by an
+	// assert_state step with MismatchAbort — the pipeline decided to
+	// stop itself. ConclusionCancelled means external
 	// cancellation: the ticket was closed before or during execution
 	// and the executor was told to stop.
 	Conclusion PipelineConclusion `json:"conclusion"`

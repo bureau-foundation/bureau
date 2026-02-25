@@ -391,7 +391,7 @@ func TestCredentialRotation(t *testing.T) {
 	waitForNotification[schema.CredentialsRotatedMessage](
 		t, &watch, schema.MsgTypeCredentialsRotated, machine.UserID,
 		func(m schema.CredentialsRotatedMessage) bool {
-			return m.Principal == agent.Localpart && m.Status == "completed"
+			return m.Principal == agent.Localpart && m.Status == schema.CredRotationCompleted
 		}, "credentials rotation completed for "+agent.Localpart)
 
 	// Verify the restarted proxy serves the correct identity. The new proxy

@@ -3,7 +3,11 @@
 
 package observe
 
-import "testing"
+import (
+	"testing"
+
+	"github.com/bureau-foundation/bureau/lib/schema/observation"
+)
 
 func TestExpandMembersNilLayout(t *testing.T) {
 	t.Parallel()
@@ -22,7 +26,7 @@ func TestExpandMembersNoObserveMembers(t *testing.T) {
 				Name: "main",
 				Panes: []Pane{
 					{Command: "htop"},
-					{Observe: "iree/amdgpu/pm", Split: "horizontal", Size: 50},
+					{Observe: "iree/amdgpu/pm", Split: observation.SplitHorizontal, Size: 50},
 				},
 			},
 		},
@@ -90,15 +94,15 @@ func TestExpandMembersAllMembers(t *testing.T) {
 	if panes[1].Observe != "iree/amdgpu/codegen" {
 		t.Errorf("pane 1 observe = %q, want %q", panes[1].Observe, "iree/amdgpu/codegen")
 	}
-	if panes[1].Split != "vertical" {
-		t.Errorf("pane 1 split = %q, want %q", panes[1].Split, "vertical")
+	if panes[1].Split != observation.SplitVertical {
+		t.Errorf("pane 1 split = %q, want %q", panes[1].Split, observation.SplitVertical)
 	}
 
 	if panes[2].Observe != "iree/amdgpu/test" {
 		t.Errorf("pane 2 observe = %q, want %q", panes[2].Observe, "iree/amdgpu/test")
 	}
-	if panes[2].Split != "vertical" {
-		t.Errorf("pane 2 split = %q, want %q", panes[2].Split, "vertical")
+	if panes[2].Split != observation.SplitVertical {
+		t.Errorf("pane 2 split = %q, want %q", panes[2].Split, observation.SplitVertical)
 	}
 }
 
@@ -111,7 +115,7 @@ func TestExpandMembersFilterByLabel(t *testing.T) {
 				Panes: []Pane{
 					{
 						ObserveMembers: &MemberFilter{Labels: map[string]string{"role": "agent"}},
-						Split:          "horizontal",
+						Split:          observation.SplitHorizontal,
 						Size:           60,
 					},
 				},
@@ -140,8 +144,8 @@ func TestExpandMembersFilterByLabel(t *testing.T) {
 		t.Errorf("pane 0 observe = %q, want %q", panes[0].Observe, "iree/amdgpu/pm")
 	}
 	// First pane inherits the original split and size.
-	if panes[0].Split != "horizontal" {
-		t.Errorf("pane 0 split = %q, want %q", panes[0].Split, "horizontal")
+	if panes[0].Split != observation.SplitHorizontal {
+		t.Errorf("pane 0 split = %q, want %q", panes[0].Split, observation.SplitHorizontal)
 	}
 	if panes[0].Size != 60 {
 		t.Errorf("pane 0 size = %d, want %d", panes[0].Size, 60)
@@ -151,8 +155,8 @@ func TestExpandMembersFilterByLabel(t *testing.T) {
 		t.Errorf("pane 1 observe = %q, want %q", panes[1].Observe, "iree/amdgpu/codegen")
 	}
 	// Subsequent panes get the split direction but no size.
-	if panes[1].Split != "horizontal" {
-		t.Errorf("pane 1 split = %q, want %q", panes[1].Split, "horizontal")
+	if panes[1].Split != observation.SplitHorizontal {
+		t.Errorf("pane 1 split = %q, want %q", panes[1].Split, observation.SplitHorizontal)
 	}
 	if panes[1].Size != 0 {
 		t.Errorf("pane 1 size = %d, want 0 (even split)", panes[1].Size)
@@ -169,7 +173,7 @@ func TestExpandMembersNoMatchRemovesPane(t *testing.T) {
 					{Command: "htop"},
 					{
 						ObserveMembers: &MemberFilter{Labels: map[string]string{"role": "nonexistent"}},
-						Split:          "horizontal",
+						Split:          observation.SplitHorizontal,
 					},
 				},
 			},
@@ -238,7 +242,7 @@ func TestExpandMembersMixedPanes(t *testing.T) {
 					{Command: "htop"},
 					{
 						ObserveMembers: &MemberFilter{},
-						Split:          "horizontal",
+						Split:          observation.SplitHorizontal,
 						Size:           70,
 					},
 				},
@@ -264,13 +268,13 @@ func TestExpandMembersMixedPanes(t *testing.T) {
 	if panes[1].Observe != "a/one" {
 		t.Errorf("pane 1 observe = %q, want %q", panes[1].Observe, "a/one")
 	}
-	if panes[1].Split != "horizontal" || panes[1].Size != 70 {
+	if panes[1].Split != observation.SplitHorizontal || panes[1].Size != 70 {
 		t.Errorf("pane 1 position = split=%q size=%d, want horizontal/70", panes[1].Split, panes[1].Size)
 	}
 	if panes[2].Observe != "a/two" {
 		t.Errorf("pane 2 observe = %q, want %q", panes[2].Observe, "a/two")
 	}
-	if panes[2].Split != "horizontal" || panes[2].Size != 0 {
+	if panes[2].Split != observation.SplitHorizontal || panes[2].Size != 0 {
 		t.Errorf("pane 2 position = split=%q size=%d, want horizontal/0", panes[2].Split, panes[2].Size)
 	}
 }

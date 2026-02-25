@@ -157,7 +157,7 @@ func (d *Daemon) reconcile(ctx context.Context) error {
 		rotatedPrincipals = append(rotatedPrincipals, principal)
 
 		if _, err := d.sendEventRetry(ctx, d.configRoomID, schema.MatrixEventTypeMessage,
-			schema.NewCredentialsRotatedMessage(principal.AccountLocalpart(), "restarting", "")); err != nil {
+			schema.NewCredentialsRotatedMessage(principal.AccountLocalpart(), schema.CredRotationRestarting, "")); err != nil {
 			d.logger.Error("failed to post credential rotation message",
 				"principal", principal, "error", err)
 		}
@@ -740,10 +740,10 @@ func (d *Daemon) reconcile(ctx context.Context) error {
 	// Report credential rotation outcomes. Rotated principals were
 	// destroyed above and should have been recreated by the create loop.
 	for _, principal := range rotatedPrincipals {
-		status := "completed"
+		status := schema.CredRotationCompleted
 		var errorMessage string
 		if !d.running[principal] {
-			status = "failed"
+			status = schema.CredRotationFailed
 			errorMessage = "principal not in desired state after credential rotation"
 		}
 		if _, err := d.sendEventRetry(ctx, d.configRoomID, schema.MatrixEventTypeMessage,
@@ -2534,7 +2534,7 @@ func (d *Daemon) watchProxyExit(ctx context.Context, principal ref.Entity) {
 	d.reconcileMu.Unlock()
 
 	if _, err := d.sendEventRetry(ctx, d.configRoomID, schema.MatrixEventTypeMessage,
-		schema.NewProxyCrashMessage(principal.AccountLocalpart(), "detected", exitCode, "")); err != nil {
+		schema.NewProxyCrashMessage(principal.AccountLocalpart(), schema.ProxyCrashDetected, exitCode, "")); err != nil {
 		d.logger.Error("failed to post proxy crash notification",
 			"principal", principal, "error", err)
 	}
@@ -2547,7 +2547,7 @@ func (d *Daemon) watchProxyExit(ctx context.Context, principal ref.Entity) {
 			"error", err,
 		)
 		if _, sendErr := d.sendEventRetry(ctx, d.configRoomID, schema.MatrixEventTypeMessage,
-			schema.NewProxyCrashMessage(principal.AccountLocalpart(), "failed", exitCode, err.Error())); sendErr != nil {
+			schema.NewProxyCrashMessage(principal.AccountLocalpart(), schema.ProxyCrashFailed, exitCode, err.Error())); sendErr != nil {
 			d.logger.Error("failed to post proxy recovery failure notification",
 				"principal", principal, "error", sendErr)
 		}
@@ -2556,10 +2556,10 @@ func (d *Daemon) watchProxyExit(ctx context.Context, principal ref.Entity) {
 		recovered := d.running[principal]
 		d.reconcileMu.Unlock()
 
-		status := "recovered"
+		status := schema.ProxyCrashRecovered
 		var errorMessage string
 		if !recovered {
-			status = "backing_off"
+			status = schema.ProxyCrashBackingOff
 			errorMessage = "proxy crashed, retry scheduled with exponential backoff"
 		}
 		if _, err := d.sendEventRetry(ctx, d.configRoomID, schema.MatrixEventTypeMessage,
@@ -2593,7 +2593,7 @@ func (d *Daemon) watchProxyExit(ctx context.Context, principal ref.Entity) {
 					if nowRunning {
 						if _, err := d.sendEventRetry(d.shutdownCtx, d.configRoomID,
 							schema.MatrixEventTypeMessage,
-							schema.NewProxyCrashMessage(principal.AccountLocalpart(), "recovered", exitCode, "")); err != nil {
+							schema.NewProxyCrashMessage(principal.AccountLocalpart(), schema.ProxyCrashRecovered, exitCode, "")); err != nil {
 							d.logger.Error("failed to post deferred proxy recovery notification",
 								"principal", principal, "error", err)
 						}

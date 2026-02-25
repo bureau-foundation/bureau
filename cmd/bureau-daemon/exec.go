@@ -72,7 +72,7 @@ func checkDaemonWatchdog(
 		)
 		if session != nil && !configRoomID.IsZero() {
 			session.SendEvent(context.Background(), configRoomID, schema.MatrixEventTypeMessage,
-				schema.NewDaemonSelfUpdateMessage(state.PreviousBinary, state.NewBinary, "succeeded", ""))
+				schema.NewDaemonSelfUpdateMessage(state.PreviousBinary, state.NewBinary, schema.SelfUpdateSucceeded, ""))
 		}
 
 	case state.PreviousBinary:
@@ -85,7 +85,7 @@ func checkDaemonWatchdog(
 		)
 		if session != nil && !configRoomID.IsZero() {
 			session.SendEvent(context.Background(), configRoomID, schema.MatrixEventTypeMessage,
-				schema.NewDaemonSelfUpdateMessage(state.PreviousBinary, state.NewBinary, "failed",
+				schema.NewDaemonSelfUpdateMessage(state.PreviousBinary, state.NewBinary, schema.SelfUpdateFailed,
 					fmt.Sprintf("%s crashed or failed to start", state.NewBinary)))
 		}
 		failedPath = state.NewBinary
@@ -154,7 +154,7 @@ func (d *Daemon) execDaemon(ctx context.Context, newBinaryPath string) error {
 	// last message from the old process. The new process reports success
 	// via checkDaemonWatchdog on startup.
 	if _, err := d.sendEventRetry(ctx, d.configRoomID, schema.MatrixEventTypeMessage,
-		schema.NewDaemonSelfUpdateMessage(d.daemonBinaryPath, newBinaryPath, "in_progress", "")); err != nil {
+		schema.NewDaemonSelfUpdateMessage(d.daemonBinaryPath, newBinaryPath, schema.SelfUpdateInProgress, "")); err != nil {
 		d.logger.Error("failed to post exec notification", "error", err)
 	}
 
@@ -185,7 +185,7 @@ func (d *Daemon) execDaemon(ctx context.Context, newBinaryPath string) error {
 
 	// Report the failure.
 	if _, sendErr := d.sendEventRetry(ctx, d.configRoomID, schema.MatrixEventTypeMessage,
-		schema.NewDaemonSelfUpdateMessage(d.daemonBinaryPath, newBinaryPath, "failed",
+		schema.NewDaemonSelfUpdateMessage(d.daemonBinaryPath, newBinaryPath, schema.SelfUpdateFailed,
 			fmt.Sprintf("exec() %s: %v", newBinaryPath, err))); sendErr != nil {
 		d.logger.Error("failed to post exec failure notification", "error", sendErr)
 	}

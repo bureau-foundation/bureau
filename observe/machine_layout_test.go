@@ -3,7 +3,11 @@
 
 package observe
 
-import "testing"
+import (
+	"testing"
+
+	"github.com/bureau-foundation/bureau/lib/schema/observation"
+)
 
 func TestGenerateMachineLayoutBasic(t *testing.T) {
 	t.Parallel()
@@ -47,11 +51,11 @@ func TestGenerateMachineLayoutBasic(t *testing.T) {
 		t.Errorf("pane 0 split = %q, want empty", window.Panes[0].Split)
 	}
 	// Subsequent panes split vertically.
-	if window.Panes[1].Split != "vertical" {
-		t.Errorf("pane 1 split = %q, want %q", window.Panes[1].Split, "vertical")
+	if window.Panes[1].Split != observation.SplitVertical {
+		t.Errorf("pane 1 split = %q, want %q", window.Panes[1].Split, observation.SplitVertical)
 	}
-	if window.Panes[2].Split != "vertical" {
-		t.Errorf("pane 2 split = %q, want %q", window.Panes[2].Split, "vertical")
+	if window.Panes[2].Split != observation.SplitVertical {
+		t.Errorf("pane 2 split = %q, want %q", window.Panes[2].Split, observation.SplitVertical)
 	}
 }
 

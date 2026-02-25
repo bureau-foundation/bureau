@@ -9,6 +9,8 @@ import (
 	"path/filepath"
 	"strings"
 	"testing"
+
+	"github.com/bureau-foundation/bureau/lib/schema/observation"
 )
 
 // mockDaemonServer creates a unix socket that accepts one connection and
@@ -58,7 +60,7 @@ func TestQueryLayoutSuccess(t *testing.T) {
 				Name: "agents",
 				Panes: []Pane{
 					{Observe: "iree/amdgpu/pm"},
-					{Observe: "iree/amdgpu/compiler", Split: "horizontal"},
+					{Observe: "iree/amdgpu/compiler", Split: observation.SplitHorizontal},
 				},
 			},
 		},

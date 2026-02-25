@@ -87,10 +87,10 @@ func (ts *TicketService) resolveStewardshipGates(affects []string, ticketType ti
 	for _, declaration := range gateDeclarations {
 		policy := declaration.Content.OverlapPolicy
 		if policy == "" {
-			policy = "independent"
+			policy = stewardship.OverlapIndependent
 		}
 		switch policy {
-		case "cooperative":
+		case stewardship.OverlapCooperative:
 			cooperative = append(cooperative, declaration)
 		default:
 			independent = append(independent, declaration)

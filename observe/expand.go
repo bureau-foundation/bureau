@@ -3,6 +3,10 @@
 
 package observe
 
+import (
+	"github.com/bureau-foundation/bureau/lib/schema/observation"
+)
+
 // RoomMember represents a room member for observe_members pane expansion.
 // The daemon populates these from Matrix room membership queries and passes
 // them to ExpandMembers.
@@ -75,7 +79,7 @@ func ExpandMembers(layout *Layout, members []RoomMember) *Layout {
 						// The ObserveMembers pane was the first pane
 						// in the window (no split direction). Default
 						// to vertical stacking for multi-member views.
-						memberPane.Split = "vertical"
+						memberPane.Split = observation.SplitVertical
 					}
 				}
 				expandedWindow.Panes = append(expandedWindow.Panes, memberPane)

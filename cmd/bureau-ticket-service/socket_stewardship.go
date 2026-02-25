@@ -80,7 +80,7 @@ func (ts *TicketService) handleStewardshipList(_ context.Context, token *service
 			ResourcePatterns: declaration.Content.ResourcePatterns,
 			GateTypes:        declaration.Content.GateTypes,
 			NotifyTypes:      declaration.Content.NotifyTypes,
-			OverlapPolicy:    declaration.Content.OverlapPolicy,
+			OverlapPolicy:    string(declaration.Content.OverlapPolicy),
 			Description:      declaration.Content.Description,
 			Tiers:            declaration.Content.Tiers,
 			DigestInterval:   declaration.Content.DigestInterval,
@@ -148,14 +148,14 @@ func (ts *TicketService) handleStewardshipResolve(_ context.Context, token *serv
 	for _, match := range rawMatches {
 		policy := match.Declaration.Content.OverlapPolicy
 		if policy == "" {
-			policy = "independent"
+			policy = stewardship.OverlapIndependent
 		}
 		matchEntries = append(matchEntries, stewardshipMatchEntry{
 			RoomID:          match.Declaration.RoomID,
 			StateKey:        match.Declaration.StateKey,
 			MatchedPattern:  match.MatchedPattern,
 			MatchedResource: match.MatchedResource,
-			OverlapPolicy:   policy,
+			OverlapPolicy:   string(policy),
 			Description:     match.Declaration.Content.Description,
 		})
 	}

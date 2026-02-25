@@ -119,6 +119,34 @@ type GPUStatus struct {
 	MemoryClockMHz int `json:"memory_clock_mhz"`
 }
 
+// PrincipalRunStatus is the lifecycle state of a principal's sandbox.
+// Values are self-describing strings that serialize directly to JSON.
+type PrincipalRunStatus string
+
+const (
+	// PrincipalRunning means the sandbox is actively consuming CPU
+	// (utilization > 1%).
+	PrincipalRunning PrincipalRunStatus = "running"
+
+	// PrincipalIdle means the sandbox is running but consuming minimal
+	// CPU (utilization <= 1%), with at least one prior reading for
+	// baseline comparison.
+	PrincipalIdle PrincipalRunStatus = "idle"
+
+	// PrincipalStarting means the sandbox was recently created and no
+	// baseline CPU reading exists yet for delta computation.
+	PrincipalStarting PrincipalRunStatus = "starting"
+)
+
+// IsKnown reports whether s is one of the defined PrincipalRunStatus values.
+func (s PrincipalRunStatus) IsKnown() bool {
+	switch s {
+	case PrincipalRunning, PrincipalIdle, PrincipalStarting:
+		return true
+	}
+	return false
+}
+
 // PrincipalResourceUsage reports resource consumption for one sandbox.
 // Populated from cgroup v2 statistics by the daemon and included in the
 // enriched MachineStatus heartbeat.
@@ -141,9 +169,9 @@ type PrincipalResourceUsage struct {
 	// Best-effort from per-process NVML stats.
 	GPUMemoryMB int `json:"gpu_memory_mb,omitempty"`
 
-	// Status is the sandbox lifecycle state: "running", "idle", or
-	// "starting". Derived from cgroup state and sandbox lifecycle.
-	Status string `json:"status"`
+	// Status is the sandbox lifecycle state derived from cgroup
+	// statistics and sandbox lifecycle.
+	Status PrincipalRunStatus `json:"status"`
 }
 
 // MachineInfo is the content of an EventTypeMachineInfo state event.

@@ -30,14 +30,14 @@ func TestLayoutContentRoundTrip(t *testing.T) {
 			{
 				Name: "agents",
 				Panes: []LayoutPane{
-					{Observe: "iree/amdgpu/pm", Split: "horizontal", Size: 50},
+					{Observe: "iree/amdgpu/pm", Split: SplitHorizontal, Size: 50},
 					{Observe: "iree/amdgpu/codegen", Size: 50},
 				},
 			},
 			{
 				Name: "tools",
 				Panes: []LayoutPane{
-					{Command: "beads-tui --project iree/amdgpu", Split: "horizontal", Size: 30},
+					{Command: "beads-tui --project iree/amdgpu", Split: SplitHorizontal, Size: 30},
 					{Observe: "iree/amdgpu/ci-runner", Size: 70},
 				},
 			},
@@ -126,7 +126,7 @@ func TestLayoutContentPrincipalLayout(t *testing.T) {
 			{
 				Name: "main",
 				Panes: []LayoutPane{
-					{Role: "agent", Split: "horizontal", Size: 65},
+					{Role: "agent", Split: SplitHorizontal, Size: 65},
 					{Role: "shell", Size: 35},
 				},
 			},
@@ -185,7 +185,7 @@ func TestLayoutContentObserveMembers(t *testing.T) {
 				Panes: []LayoutPane{
 					{
 						ObserveMembers: &LayoutMemberFilter{Labels: map[string]string{"role": "agent"}},
-						Split:          "horizontal",
+						Split:          SplitHorizontal,
 					},
 				},
 			},

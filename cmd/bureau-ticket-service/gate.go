@@ -550,11 +550,11 @@ func enrichTimerTargets(content *ticket.TicketContent, index *ticketindex.Index)
 
 		base := gate.Base
 		if base == "" {
-			base = "created"
+			base = ticket.TimerBaseCreated
 		}
 
 		switch base {
-		case "created":
+		case ticket.TimerBaseCreated:
 			createdAt, err := time.Parse(time.RFC3339, gate.CreatedAt)
 			if err != nil {
 				// CreatedAt was just set by the caller; this shouldn't
@@ -563,7 +563,7 @@ func enrichTimerTargets(content *ticket.TicketContent, index *ticketindex.Index)
 			}
 			_ = computeTimerTarget(gate, createdAt)
 
-		case "unblocked":
+		case ticket.TimerBaseUnblocked:
 			if len(content.BlockedBy) == 0 || index.AllBlockersClosed(content) {
 				// No blockers or all already closed — the ticket is
 				// effectively unblocked at creation time.
@@ -613,7 +613,7 @@ func (ts *TicketService) resolveUnblockedTimerTargets(ctx context.Context, roomI
 				if gate.Type != ticket.GateTimer || gate.Status != ticket.GatePending {
 					continue
 				}
-				if gate.Base != "unblocked" || gate.Target != "" || gate.Duration == "" {
+				if gate.Base != ticket.TimerBaseUnblocked || gate.Target != "" || gate.Duration == "" {
 					continue
 				}
 

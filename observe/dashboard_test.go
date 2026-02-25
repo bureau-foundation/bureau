@@ -8,6 +8,7 @@ import (
 	"strings"
 	"testing"
 
+	"github.com/bureau-foundation/bureau/lib/schema/observation"
 	"github.com/bureau-foundation/bureau/lib/tmux"
 )
 
@@ -21,7 +22,7 @@ func TestDashboardCommandPanes(t *testing.T) {
 				Name: "tools",
 				Panes: []Pane{
 					{Command: "sleep 3600"},
-					{Command: "sleep 3600", Split: "horizontal", Size: 50},
+					{Command: "sleep 3600", Split: observation.SplitHorizontal, Size: 50},
 				},
 			},
 		},
@@ -69,7 +70,7 @@ func TestDashboardObservePanes(t *testing.T) {
 				Name: "agents",
 				Panes: []Pane{
 					{Observe: "iree/amdgpu/pm"},
-					{Observe: "iree/amdgpu/codegen", Split: "horizontal", Size: 50},
+					{Observe: "iree/amdgpu/codegen", Split: observation.SplitHorizontal, Size: 50},
 				},
 			},
 		},
@@ -126,7 +127,7 @@ func TestDashboardMixedPaneTypes(t *testing.T) {
 				Name: "workspace",
 				Panes: []Pane{
 					{Observe: "iree/amdgpu/pm"},
-					{Command: "sleep 3600", Split: "horizontal", Size: 30},
+					{Command: "sleep 3600", Split: observation.SplitHorizontal, Size: 30},
 				},
 			},
 			{
@@ -240,8 +241,8 @@ func TestResolveLayoutPreservesOriginal(t *testing.T) {
 				Name: "agents",
 				Panes: []Pane{
 					{Observe: "iree/amdgpu/pm"},
-					{Command: "htop", Split: "horizontal", Size: 30},
-					{Role: "shell", Split: "vertical", Size: 50},
+					{Command: "htop", Split: observation.SplitHorizontal, Size: 30},
+					{Role: "shell", Split: observation.SplitVertical, Size: 50},
 				},
 			},
 		},
@@ -276,7 +277,7 @@ func TestResolveLayoutPreservesOriginal(t *testing.T) {
 	if resolvedPanes[1].Command != "htop" {
 		t.Errorf("command pane = %q, want %q", resolvedPanes[1].Command, "htop")
 	}
-	if resolvedPanes[1].Split != "horizontal" || resolvedPanes[1].Size != 30 {
+	if resolvedPanes[1].Split != observation.SplitHorizontal || resolvedPanes[1].Size != 30 {
 		t.Error("command pane lost its split/size")
 	}
 
@@ -284,7 +285,7 @@ func TestResolveLayoutPreservesOriginal(t *testing.T) {
 	if !strings.Contains(resolvedPanes[2].Command, "role: shell") {
 		t.Errorf("role pane command = %q, want role echo", resolvedPanes[2].Command)
 	}
-	if resolvedPanes[2].Split != "vertical" || resolvedPanes[2].Size != 50 {
+	if resolvedPanes[2].Split != observation.SplitVertical || resolvedPanes[2].Size != 50 {
 		t.Error("role pane lost its split/size")
 	}
 }

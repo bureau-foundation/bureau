@@ -182,6 +182,30 @@ func (s GateStatus) IsKnown() bool {
 	return false
 }
 
+// TimerBase determines what time a timer gate's Duration is measured from.
+// Values are self-describing strings that serialize directly to JSON.
+type TimerBase string
+
+const (
+	// TimerBaseCreated means Duration is measured from the gate's
+	// CreatedAt timestamp. This is the default when Base is empty.
+	TimerBaseCreated TimerBase = "created"
+
+	// TimerBaseUnblocked means Duration is measured from the time
+	// when all of the ticket's blocked_by dependencies were satisfied.
+	// The timer does not start until blockers clear.
+	TimerBaseUnblocked TimerBase = "unblocked"
+)
+
+// IsKnown reports whether b is one of the defined TimerBase values.
+func (b TimerBase) IsKnown() bool {
+	switch b {
+	case TimerBaseCreated, TimerBaseUnblocked:
+		return true
+	}
+	return false
+}
+
 // IsKnown reports whether this is a type value understood by this
 // version of the code. Unknown types may appear in events written
 // by newer service versions and are safe to read but not to use
@@ -570,12 +594,13 @@ type TicketGate struct {
 	Target string `json:"target,omitempty"`
 
 	// Base determines what time Duration is measured from for timer
-	// gates. "created" (default): the gate's CreatedAt timestamp.
-	// "unblocked": the time when all of the ticket's blocked_by
-	// dependencies were satisfied. When Base is "unblocked" and the
-	// ticket still has open blockers, the timer has not started and
-	// Target remains unset until blockers clear.
-	Base string `json:"base,omitempty"`
+	// gates. TimerBaseCreated (default when empty): the gate's
+	// CreatedAt timestamp. TimerBaseUnblocked: the time when all of
+	// the ticket's blocked_by dependencies were satisfied. When Base
+	// is TimerBaseUnblocked and the ticket still has open blockers,
+	// the timer has not started and Target remains unset until
+	// blockers clear.
+	Base TimerBase `json:"base,omitempty"`
 
 	// Schedule is a cron expression for fixed-calendar recurrence
 	// on timer gates (e.g., "0 7 * * *" for daily at 7am UTC).
@@ -708,10 +733,7 @@ func (g *TicketGate) validateTimer() error {
 			return fmt.Errorf("gate %q: interval must be >= %s", g.ID, MinTimerRecurrence)
 		}
 	}
-	switch g.Base {
-	case "", "created", "unblocked":
-		// Valid. Empty defaults to "created".
-	default:
+	if g.Base != "" && !g.Base.IsKnown() {
 		return fmt.Errorf("gate %q: unknown base %q (must be \"created\" or \"unblocked\")", g.ID, g.Base)
 	}
 	if g.MaxOccurrences < 0 {

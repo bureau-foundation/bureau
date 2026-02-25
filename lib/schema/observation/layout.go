@@ -44,6 +44,29 @@ type LayoutWindow struct {
 	Panes []LayoutPane `json:"panes"`
 }
 
+// LayoutSplit is the direction of a tmux pane split.
+// Values are self-describing strings that serialize directly to JSON.
+type LayoutSplit string
+
+const (
+	// SplitHorizontal splits the window horizontally (panes stack
+	// top-to-bottom).
+	SplitHorizontal LayoutSplit = "horizontal"
+
+	// SplitVertical splits the window vertically (panes sit
+	// side-by-side).
+	SplitVertical LayoutSplit = "vertical"
+)
+
+// IsKnown reports whether s is one of the defined LayoutSplit values.
+func (s LayoutSplit) IsKnown() bool {
+	switch s {
+	case SplitHorizontal, SplitVertical:
+		return true
+	}
+	return false
+}
+
 // LayoutPane describes a single pane within a tmux window. Exactly one of
 // Observe, Command, Role, or ObserveMembers should be set to determine what
 // the pane shows.
@@ -68,10 +91,9 @@ type LayoutPane struct {
 	// the filter. Used in channel layouts for auto-scaling views.
 	ObserveMembers *LayoutMemberFilter `json:"observe_members,omitempty"`
 
-	// Split is the split direction from the previous pane: "horizontal"
-	// or "vertical". Empty for the first pane in a window (which is not
-	// a split).
-	Split string `json:"split,omitempty"`
+	// Split is the split direction from the previous pane. Empty for the
+	// first pane in a window (which is not a split).
+	Split LayoutSplit `json:"split,omitempty"`
 
 	// Size is the pane size as a percentage of the available space
 	// (1-99). Zero means tmux divides evenly.

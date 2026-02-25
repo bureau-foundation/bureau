@@ -70,8 +70,8 @@ func TestReadTmuxLayoutHorizontalSplit(t *testing.T) {
 	}
 
 	// Second pane: horizontal split.
-	if window.Panes[1].Split != "horizontal" {
-		t.Errorf("pane 1 split = %q, want %q", window.Panes[1].Split, "horizontal")
+	if window.Panes[1].Split != observation.SplitHorizontal {
+		t.Errorf("pane 1 split = %q, want %q", window.Panes[1].Split, observation.SplitHorizontal)
 	}
 
 	// The 30% split should be approximately 30% (tmux rounds to cell boundaries).
@@ -99,8 +99,8 @@ func TestReadTmuxLayoutVerticalSplit(t *testing.T) {
 		t.Fatalf("pane count = %d, want 2", len(window.Panes))
 	}
 
-	if window.Panes[1].Split != "vertical" {
-		t.Errorf("pane 1 split = %q, want %q", window.Panes[1].Split, "vertical")
+	if window.Panes[1].Split != observation.SplitVertical {
+		t.Errorf("pane 1 split = %q, want %q", window.Panes[1].Split, observation.SplitVertical)
 	}
 
 	if window.Panes[1].Size < 35 || window.Panes[1].Size > 45 {
@@ -194,7 +194,7 @@ func TestApplyLayoutWithSplits(t *testing.T) {
 				Name: "agents",
 				Panes: []Pane{
 					{Command: "sleep 3600"},
-					{Command: "sleep 3600", Split: "horizontal", Size: 40},
+					{Command: "sleep 3600", Split: observation.SplitHorizontal, Size: 40},
 				},
 			},
 		},
@@ -242,7 +242,7 @@ func TestApplyLayoutMultipleWindows(t *testing.T) {
 				Name: "tools",
 				Panes: []Pane{
 					{Command: "sleep 3600"},
-					{Command: "sleep 3600", Split: "vertical", Size: 50},
+					{Command: "sleep 3600", Split: observation.SplitVertical, Size: 50},
 				},
 			},
 		},
@@ -312,14 +312,14 @@ func TestApplyThenReadRoundTrip(t *testing.T) {
 				Name: "main",
 				Panes: []Pane{
 					{Command: "sleep 3600"},
-					{Command: "sleep 3600", Split: "horizontal", Size: 50},
+					{Command: "sleep 3600", Split: observation.SplitHorizontal, Size: 50},
 				},
 			},
 			{
 				Name: "secondary",
 				Panes: []Pane{
 					{Command: "sleep 3600"},
-					{Command: "sleep 3600", Split: "vertical", Size: 40},
+					{Command: "sleep 3600", Split: observation.SplitVertical, Size: 40},
 				},
 			},
 		},
@@ -519,8 +519,8 @@ func TestInferPaneSplitsHorizontal(t *testing.T) {
 	if len(result) != 2 {
 		t.Fatalf("pane count = %d, want 2", len(result))
 	}
-	if result[1].Split != "horizontal" {
-		t.Errorf("split = %q, want %q", result[1].Split, "horizontal")
+	if result[1].Split != observation.SplitHorizontal {
+		t.Errorf("split = %q, want %q", result[1].Split, observation.SplitHorizontal)
 	}
 	// 80 / (79+80+1) = 50%
 	if result[1].Size != 50 {
@@ -539,8 +539,8 @@ func TestInferPaneSplitsVertical(t *testing.T) {
 	if len(result) != 2 {
 		t.Fatalf("pane count = %d, want 2", len(result))
 	}
-	if result[1].Split != "vertical" {
-		t.Errorf("split = %q, want %q", result[1].Split, "vertical")
+	if result[1].Split != observation.SplitVertical {
+		t.Errorf("split = %q, want %q", result[1].Split, observation.SplitVertical)
 	}
 	// 24 / (23+24+1) = 50%
 	if result[1].Size != 50 {
@@ -577,14 +577,14 @@ func TestLayoutEqualIdentical(t *testing.T) {
 				Name: "agents",
 				Panes: []Pane{
 					{Observe: "iree/amdgpu/pm"},
-					{Observe: "iree/amdgpu/codegen", Split: "horizontal", Size: 50},
+					{Observe: "iree/amdgpu/codegen", Split: observation.SplitHorizontal, Size: 50},
 				},
 			},
 			{
 				Name: "tools",
 				Panes: []Pane{
-					{Command: "beads-tui", Split: "horizontal", Size: 30},
-					{Role: "shell", Split: "vertical", Size: 70},
+					{Command: "beads-tui", Split: observation.SplitHorizontal, Size: 30},
+					{Role: "shell", Split: observation.SplitVertical, Size: 70},
 				},
 			},
 		},
@@ -596,14 +596,14 @@ func TestLayoutEqualIdentical(t *testing.T) {
 				Name: "agents",
 				Panes: []Pane{
 					{Observe: "iree/amdgpu/pm"},
-					{Observe: "iree/amdgpu/codegen", Split: "horizontal", Size: 50},
+					{Observe: "iree/amdgpu/codegen", Split: observation.SplitHorizontal, Size: 50},
 				},
 			},
 			{
 				Name: "tools",
 				Panes: []Pane{
-					{Command: "beads-tui", Split: "horizontal", Size: 30},
-					{Role: "shell", Split: "vertical", Size: 70},
+					{Command: "beads-tui", Split: observation.SplitHorizontal, Size: 30},
+					{Role: "shell", Split: observation.SplitVertical, Size: 70},
 				},
 			},
 		},
@@ -649,7 +649,7 @@ func TestLayoutEqualDifferentPaneFields(t *testing.T) {
 	t.Parallel()
 	base := func() *Layout {
 		return &Layout{Windows: []Window{{Name: "main", Panes: []Pane{
-			{Command: "sleep", Split: "horizontal", Size: 50},
+			{Command: "sleep", Split: observation.SplitHorizontal, Size: 50},
 		}}}}
 	}
 
@@ -664,7 +664,7 @@ func TestLayoutEqualDifferentPaneFields(t *testing.T) {
 	// Different split.
 	a = base()
 	b = base()
-	b.Windows[0].Panes[0].Split = "vertical"
+	b.Windows[0].Panes[0].Split = observation.SplitVertical
 	if LayoutEqual(a, b) {
 		t.Error("layouts with different pane splits should not be equal")
 	}
@@ -729,9 +729,9 @@ func TestLayoutToSchemaAllPaneTypes(t *testing.T) {
 				Name: "mixed",
 				Panes: []Pane{
 					{Observe: "iree/amdgpu/pm"},
-					{Command: "beads-tui", Split: "horizontal", Size: 40},
-					{Role: "agent", Split: "vertical", Size: 60},
-					{ObserveMembers: &MemberFilter{Labels: map[string]string{"role": "agent"}}, Split: "horizontal"},
+					{Command: "beads-tui", Split: observation.SplitHorizontal, Size: 40},
+					{Role: "agent", Split: observation.SplitVertical, Size: 60},
+					{ObserveMembers: &MemberFilter{Labels: map[string]string{"role": "agent"}}, Split: observation.SplitHorizontal},
 				},
 			},
 		},
@@ -766,8 +766,8 @@ func TestLayoutToSchemaAllPaneTypes(t *testing.T) {
 	if window.Panes[1].Command != "beads-tui" {
 		t.Errorf("pane[1].Command = %q, want %q", window.Panes[1].Command, "beads-tui")
 	}
-	if window.Panes[1].Split != "horizontal" {
-		t.Errorf("pane[1].Split = %q, want %q", window.Panes[1].Split, "horizontal")
+	if window.Panes[1].Split != observation.SplitHorizontal {
+		t.Errorf("pane[1].Split = %q, want %q", window.Panes[1].Split, observation.SplitHorizontal)
 	}
 	if window.Panes[1].Size != 40 {
 		t.Errorf("pane[1].Size = %d, want 40", window.Panes[1].Size)
@@ -799,8 +799,8 @@ func TestSchemaToLayoutAllPaneTypes(t *testing.T) {
 				Name: "mixed",
 				Panes: []observation.LayoutPane{
 					{Observe: "iree/amdgpu/pm"},
-					{Command: "htop", Split: "horizontal", Size: 30},
-					{Role: "shell", Split: "vertical", Size: 50},
+					{Command: "htop", Split: observation.SplitHorizontal, Size: 30},
+					{Role: "shell", Split: observation.SplitVertical, Size: 50},
 					{ObserveMembers: &observation.LayoutMemberFilter{Labels: map[string]string{"role": "service"}}},
 				},
 			},
@@ -830,7 +830,7 @@ func TestSchemaToLayoutAllPaneTypes(t *testing.T) {
 	if window.Panes[1].Command != "htop" {
 		t.Errorf("pane[1].Command = %q, want %q", window.Panes[1].Command, "htop")
 	}
-	if window.Panes[1].Split != "horizontal" || window.Panes[1].Size != 30 {
+	if window.Panes[1].Split != observation.SplitHorizontal || window.Panes[1].Size != 30 {
 		t.Errorf("pane[1] Split=%q Size=%d, want horizontal/30",
 			window.Panes[1].Split, window.Panes[1].Size)
 	}
@@ -856,14 +856,14 @@ func TestLayoutSchemaRoundTrip(t *testing.T) {
 				Name: "agents",
 				Panes: []Pane{
 					{Observe: "iree/amdgpu/pm"},
-					{Observe: "iree/amdgpu/codegen", Split: "horizontal", Size: 50},
+					{Observe: "iree/amdgpu/codegen", Split: observation.SplitHorizontal, Size: 50},
 				},
 			},
 			{
 				Name: "tools",
 				Panes: []Pane{
-					{Command: "beads-tui", Split: "horizontal", Size: 30},
-					{Role: "shell", Split: "vertical", Size: 70},
+					{Command: "beads-tui", Split: observation.SplitHorizontal, Size: 30},
+					{Role: "shell", Split: observation.SplitVertical, Size: 70},
 				},
 			},
 			{

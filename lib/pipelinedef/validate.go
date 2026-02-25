@@ -232,7 +232,7 @@ func validateAssertState(assertState *pipeline.PipelineAssertState, prefix strin
 
 	// OnMismatch must be a valid value.
 	switch assertState.OnMismatch {
-	case "", "fail", "abort":
+	case "", pipeline.MismatchFail, pipeline.MismatchAbort:
 		// Valid.
 	default:
 		issues = append(issues, fmt.Sprintf("%s: assert_state.on_mismatch must be \"fail\" or \"abort\", got %q", prefix, assertState.OnMismatch))

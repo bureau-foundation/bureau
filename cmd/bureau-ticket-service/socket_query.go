@@ -294,7 +294,7 @@ func (ts *TicketService) computeStewardshipContext(roomID ref.RoomID, content ti
 		result.Declarations = append(result.Declarations, stewardshipMatchEntry{
 			RoomID:          match.Declaration.RoomID,
 			StateKey:        match.Declaration.StateKey,
-			OverlapPolicy:   match.Declaration.Content.OverlapPolicy,
+			OverlapPolicy:   string(match.Declaration.Content.OverlapPolicy),
 			MatchedResource: match.MatchedResource,
 			MatchedPattern:  match.MatchedPattern,
 			Description:     match.Declaration.Content.Description,

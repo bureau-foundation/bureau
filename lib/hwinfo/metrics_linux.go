@@ -10,6 +10,8 @@ import (
 	"strconv"
 	"strings"
 	"syscall"
+
+	"github.com/bureau-foundation/bureau/lib/schema"
 )
 
 // CPUReading captures cumulative CPU time from /proc/stat for delta
@@ -180,17 +182,17 @@ func CgroupDefaultPath(localpart string) string {
 
 // DerivePrincipalStatus determines the lifecycle status of a principal
 // from its cgroup metrics.
-//   - "running" if CPU > 1% (actively working)
-//   - "idle" if CPU <= 1% and we have a previous reading (has been running
-//     long enough for a delta computation)
-//   - "starting" if no previous CPU reading exists (first heartbeat after
-//     sandbox creation, no baseline for delta)
-func DerivePrincipalStatus(cpuPercent int, hasPreviousReading bool) string {
+//   - PrincipalRunning if CPU > 1% (actively working)
+//   - PrincipalIdle if CPU <= 1% and we have a previous reading (has been
+//     running long enough for a delta computation)
+//   - PrincipalStarting if no previous CPU reading exists (first heartbeat
+//     after sandbox creation, no baseline for delta)
+func DerivePrincipalStatus(cpuPercent int, hasPreviousReading bool) schema.PrincipalRunStatus {
 	if !hasPreviousReading {
-		return "starting"
+		return schema.PrincipalStarting
 	}
 	if cpuPercent > 1 {
-		return "running"
+		return schema.PrincipalRunning
 	}
-	return "idle"
+	return schema.PrincipalIdle
 }

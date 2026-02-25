@@ -253,7 +253,7 @@ func (d *Daemon) rollbackPrincipal(ctx context.Context, principal ref.Entity) {
 		d.logger.Error("health rollback: no previous spec to roll back to",
 			"principal", principal)
 		if _, err := d.sendEventRetry(ctx, d.configRoomID, schema.MatrixEventTypeMessage,
-			schema.NewHealthCheckMessage(principal.AccountLocalpart(), "destroyed", "")); err != nil {
+			schema.NewHealthCheckMessage(principal.AccountLocalpart(), schema.HealthCheckDestroyed, "")); err != nil {
 			d.logger.Error("failed to post health rollback notification",
 				"principal", principal, "error", err)
 		}
@@ -266,7 +266,7 @@ func (d *Daemon) rollbackPrincipal(ctx context.Context, principal ref.Entity) {
 		d.logger.Error("health rollback: cannot read credentials",
 			"principal", principal, "error", err)
 		if _, err := d.sendEventRetry(ctx, d.configRoomID, schema.MatrixEventTypeMessage,
-			schema.NewHealthCheckMessage(principal.AccountLocalpart(), "rollback_failed", fmt.Sprintf("cannot read credentials: %v", err))); err != nil {
+			schema.NewHealthCheckMessage(principal.AccountLocalpart(), schema.HealthCheckRollbackFailed, fmt.Sprintf("cannot read credentials: %v", err))); err != nil {
 			d.logger.Error("failed to post health rollback notification",
 				"principal", principal, "error", err)
 		}
@@ -309,7 +309,7 @@ func (d *Daemon) rollbackPrincipal(ctx context.Context, principal ref.Entity) {
 		d.logger.Error("health rollback: create-sandbox IPC failed",
 			"principal", principal, "error", err)
 		if _, err := d.sendEventRetry(ctx, d.configRoomID, schema.MatrixEventTypeMessage,
-			schema.NewHealthCheckMessage(principal.AccountLocalpart(), "rollback_failed", "create-sandbox IPC failed")); err != nil {
+			schema.NewHealthCheckMessage(principal.AccountLocalpart(), schema.HealthCheckRollbackFailed, "create-sandbox IPC failed")); err != nil {
 			d.logger.Error("failed to post health rollback notification",
 				"principal", principal, "error", err)
 		}
@@ -319,7 +319,7 @@ func (d *Daemon) rollbackPrincipal(ctx context.Context, principal ref.Entity) {
 		d.logger.Error("health rollback: create-sandbox rejected",
 			"principal", principal, "error", response.Error)
 		if _, err := d.sendEventRetry(ctx, d.configRoomID, schema.MatrixEventTypeMessage,
-			schema.NewHealthCheckMessage(principal.AccountLocalpart(), "rollback_failed", response.Error)); err != nil {
+			schema.NewHealthCheckMessage(principal.AccountLocalpart(), schema.HealthCheckRollbackFailed, response.Error)); err != nil {
 			d.logger.Error("failed to post health rollback notification",
 				"principal", principal, "error", err)
 		}
@@ -364,7 +364,7 @@ func (d *Daemon) rollbackPrincipal(ctx context.Context, principal ref.Entity) {
 	}
 
 	if _, err := d.sendEventRetry(ctx, d.configRoomID, schema.MatrixEventTypeMessage,
-		schema.NewHealthCheckMessage(principal.AccountLocalpart(), "rolled_back", "")); err != nil {
+		schema.NewHealthCheckMessage(principal.AccountLocalpart(), schema.HealthCheckRolledBack, "")); err != nil {
 		d.logger.Error("failed to post health rollback notification",
 			"principal", principal, "error", err)
 	}

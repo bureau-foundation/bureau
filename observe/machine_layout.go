@@ -9,6 +9,8 @@ import (
 	"fmt"
 	"net"
 	"sort"
+
+	"github.com/bureau-foundation/bureau/lib/schema/observation"
 )
 
 // MachineLayoutRequest is sent to the daemon's observe socket to request
@@ -100,7 +102,7 @@ func GenerateMachineLayout(machineName string, principals []string) *Layout {
 		// The first pane is the initial tmux pane (no split needed).
 		// Subsequent panes split vertically to stack below.
 		if index > 0 {
-			pane.Split = "vertical"
+			pane.Split = observation.SplitVertical
 		}
 		panes[index] = pane
 	}

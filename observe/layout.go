@@ -59,10 +59,9 @@ type Pane struct {
 	// the filter. Used in channel layouts for auto-scaling views.
 	ObserveMembers *MemberFilter `json:"observe_members,omitempty"`
 
-	// Split is the split direction from the previous pane: "horizontal"
-	// or "vertical". Empty for the first pane in a window (which is not
-	// a split).
-	Split string `json:"split,omitempty"`
+	// Split is the split direction from the previous pane. Empty for the
+	// first pane in a window (which is not a split).
+	Split observation.LayoutSplit `json:"split,omitempty"`
 
 	// Size is the pane size as a percentage of the available space
 	// (1-99). Empty or zero means tmux divides evenly.
@@ -219,7 +218,7 @@ func ApplyLayout(server *tmux.Server, sessionName string, layout *Layout) error 
 			pane := window.Panes[paneIndex]
 
 			splitFlag := "-v" // vertical split (pane below)
-			if pane.Split == "horizontal" {
+			if pane.Split == observation.SplitHorizontal {
 				splitFlag = "-h" // horizontal split (pane to right)
 			}
 
@@ -343,14 +342,14 @@ func inferPaneSplits(rawPanes []tmuxPane) []Pane {
 
 		if current.top == previous.top {
 			// Same row → horizontal split (pane is to the right).
-			pane.Split = "horizontal"
+			pane.Split = observation.SplitHorizontal
 			// Size: this pane's width as percentage of the combined width
 			// (both panes + 1 cell for the tmux separator).
 			totalWidth := previous.width + current.width + 1
 			pane.Size = (current.width * 100) / totalWidth
 		} else if current.left == previous.left {
 			// Same column → vertical split (pane is below).
-			pane.Split = "vertical"
+			pane.Split = observation.SplitVertical
 			// Size: this pane's height as percentage of the combined height.
 			totalHeight := previous.height + current.height + 1
 			pane.Size = (current.height * 100) / totalHeight
@@ -358,7 +357,7 @@ func inferPaneSplits(rawPanes []tmuxPane) []Pane {
 			// Different row AND column — complex nested layout. Use
 			// horizontal as default since it's the more common split for
 			// side-by-side agent views.
-			pane.Split = "horizontal"
+			pane.Split = observation.SplitHorizontal
 			totalWidth := previous.width + current.width + 1
 			pane.Size = (current.width * 100) / totalWidth
 		}

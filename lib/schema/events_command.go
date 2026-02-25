@@ -66,16 +66,43 @@ type CommandMessage struct {
 	Parameters map[string]any `json:"parameters,omitempty"`
 }
 
+// CommandResultStatus indicates the outcome of a command.
+type CommandResultStatus string
+
+const (
+	// CommandResultSuccess means the command completed successfully.
+	// Result contains the command-specific payload.
+	CommandResultSuccess CommandResultStatus = "success"
+
+	// CommandResultError means the command failed. The Error field
+	// contains the error message.
+	CommandResultError CommandResultStatus = "error"
+
+	// CommandResultAccepted means the command was accepted for
+	// asynchronous processing. The Principal field names the ephemeral
+	// executor principal (used by async commands like pipeline.execute).
+	CommandResultAccepted CommandResultStatus = "accepted"
+)
+
+// IsKnown reports whether s is one of the defined CommandResultStatus values.
+func (s CommandResultStatus) IsKnown() bool {
+	switch s {
+	case CommandResultSuccess, CommandResultError, CommandResultAccepted:
+		return true
+	}
+	return false
+}
+
 // CommandResultMessage is the content of an m.room.message event with
 // msgtype MsgTypeCommandResult. The daemon posts these as threaded replies
 // to the original CommandMessage. The union of all fields covers three
 // result shapes:
 //
-//   - Success: Status "success", Result contains command-specific payload
-//   - Error: Status "error", Error contains the error message
-//   - Pipeline result: Status "success"/"error", ExitCode and Steps from
+//   - Success: Status CommandResultSuccess, Result contains command-specific payload
+//   - Error: Status CommandResultError, Error contains the error message
+//   - Pipeline result: Status success/error, ExitCode and Steps from
 //     the pipeline executor, optionally LogEventID for thread logging
-//   - Accepted acknowledgment: Status "accepted", Principal names the
+//   - Accepted acknowledgment: Status CommandResultAccepted, Principal names the
 //     ephemeral executor principal (async commands like pipeline.execute)
 //
 // Fields not relevant to a particular result shape are omitted from JSON
@@ -83,7 +110,7 @@ type CommandMessage struct {
 type CommandResultMessage struct {
 	MsgType    string                        `json:"msgtype"`
 	Body       string                        `json:"body"`
-	Status     string                        `json:"status"`
+	Status     CommandResultStatus           `json:"status"`
 	Result     json.RawMessage               `json:"result,omitempty"`
 	Error      string                        `json:"error,omitempty"`
 	ExitCode   *int                          `json:"exit_code,omitempty"`

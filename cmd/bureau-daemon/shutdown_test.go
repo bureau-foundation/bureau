@@ -14,6 +14,7 @@ import (
 	"testing"
 
 	"github.com/bureau-foundation/bureau/lib/clock"
+	"github.com/bureau-foundation/bureau/lib/ipc"
 	"github.com/bureau-foundation/bureau/lib/ref"
 	"github.com/bureau-foundation/bureau/lib/schema"
 	"github.com/bureau-foundation/bureau/lib/service"
@@ -77,11 +78,11 @@ func TestEmergencyShutdown_DestroysAllSandboxes(t *testing.T) {
 	launcherSocket := filepath.Join(socketDir, "launcher.sock")
 	destroyedPrincipals := make(chan string, 10)
 	listener := startMockLauncher(t, launcherSocket, func(request launcherIPCRequest) launcherIPCResponse {
-		if request.Action == "destroy-sandbox" {
+		if request.Action == ipc.ActionDestroySandbox {
 			destroyedPrincipals <- request.Principal
 			return launcherIPCResponse{OK: true}
 		}
-		return launcherIPCResponse{OK: false, Error: "unexpected action: " + request.Action}
+		return launcherIPCResponse{OK: false, Error: "unexpected action: " + string(request.Action)}
 	})
 	t.Cleanup(func() { listener.Close() })
 	daemon.launcherSocket = launcherSocket

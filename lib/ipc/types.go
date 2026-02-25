@@ -5,14 +5,76 @@ package ipc
 
 import "github.com/bureau-foundation/bureau/lib/schema"
 
+// LauncherAction identifies the type of IPC request from the daemon to the
+// launcher. Using a typed enum gives compile-time checking for typos that
+// would otherwise be silent no-ops (the launcher's handler switch has a
+// default error path, but the daemon constructing a misspelled action
+// would not be caught until runtime).
+type LauncherAction string
+
+const (
+	// ActionStatus returns the launcher's binary hash and current proxy
+	// binary path. Used by the daemon to determine if a self-update is
+	// needed.
+	ActionStatus LauncherAction = "status"
+
+	// ActionListSandboxes lists running sandboxes. Used by the daemon to
+	// discover principals that survived a daemon restart while the launcher
+	// continued running.
+	ActionListSandboxes LauncherAction = "list-sandboxes"
+
+	// ActionCreateSandbox creates a new sandbox for a principal: decrypts
+	// credentials, spawns the proxy, optionally creates a bwrap namespace.
+	ActionCreateSandbox LauncherAction = "create-sandbox"
+
+	// ActionDestroySandbox tears down a running sandbox and its proxy.
+	ActionDestroySandbox LauncherAction = "destroy-sandbox"
+
+	// ActionSignalSandbox sends a signal to a sandbox's process group.
+	ActionSignalSandbox LauncherAction = "signal-sandbox"
+
+	// ActionUpdatePayload atomically rewrites a sandbox's payload file.
+	ActionUpdatePayload LauncherAction = "update-payload"
+
+	// ActionUpdateProxyBinary switches the proxy binary for future sandbox
+	// creation. Existing proxies continue running their current binary.
+	ActionUpdateProxyBinary LauncherAction = "update-proxy-binary"
+
+	// ActionProvisionCredential upserts a key-value pair into a principal's
+	// encrypted credential bundle and returns the re-encrypted ciphertext.
+	ActionProvisionCredential LauncherAction = "provision-credential"
+
+	// ActionExecUpdate replaces the launcher process image with a new
+	// binary. The response is sent before exec() so the daemon knows the
+	// request was accepted.
+	ActionExecUpdate LauncherAction = "exec-update"
+
+	// ActionWaitSandbox blocks until a sandbox exits and returns its exit
+	// code and captured output. Handled before the mutex lock (long-polling).
+	ActionWaitSandbox LauncherAction = "wait-sandbox"
+
+	// ActionWaitProxy blocks until a sandbox's proxy process exits.
+	// Handled before the mutex lock (long-polling).
+	ActionWaitProxy LauncherAction = "wait-proxy"
+)
+
+// IsKnown reports whether a is one of the defined LauncherAction values.
+func (a LauncherAction) IsKnown() bool {
+	switch a {
+	case ActionStatus, ActionListSandboxes, ActionCreateSandbox,
+		ActionDestroySandbox, ActionSignalSandbox, ActionUpdatePayload,
+		ActionUpdateProxyBinary, ActionProvisionCredential, ActionExecUpdate,
+		ActionWaitSandbox, ActionWaitProxy:
+		return true
+	}
+	return false
+}
+
 // Request is a CBOR-encoded request from the daemon to the launcher,
 // sent over the launcher's Unix IPC socket.
 type Request struct {
-	// Action is the request type: "create-sandbox", "destroy-sandbox",
-	// "signal-sandbox", "update-payload", "update-proxy-binary",
-	// "list-sandboxes", "wait-sandbox", "wait-proxy",
-	// "provision-credential", or "status".
-	Action string `cbor:"action"`
+	// Action is the request type.
+	Action LauncherAction `cbor:"action"`
 
 	// Principal is the localpart of the principal to operate on.
 	Principal string `cbor:"principal,omitempty"`

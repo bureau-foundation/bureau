@@ -19,6 +19,7 @@ import (
 	"time"
 
 	"github.com/bureau-foundation/bureau/lib/codec"
+	"github.com/bureau-foundation/bureau/lib/ipc"
 	"github.com/bureau-foundation/bureau/lib/nix"
 	"github.com/bureau-foundation/bureau/lib/principal"
 	"github.com/bureau-foundation/bureau/lib/ref"
@@ -299,7 +300,7 @@ func TestReconcile_PrefetchFailureSkipsPrincipal(t *testing.T) {
 		createdPrincipals []string
 	)
 	listener := startMockLauncher(t, launcherSocket, func(request launcherIPCRequest) launcherIPCResponse {
-		if request.Action == "create-sandbox" {
+		if request.Action == ipc.ActionCreateSandbox {
 			launcherMu.Lock()
 			createdPrincipals = append(createdPrincipals, request.Principal)
 			launcherMu.Unlock()

@@ -22,6 +22,7 @@ import (
 	"net/http"
 	"time"
 
+	"github.com/bureau-foundation/bureau/lib/ipc"
 	"github.com/bureau-foundation/bureau/lib/ref"
 	"github.com/bureau-foundation/bureau/lib/schema"
 )
@@ -298,7 +299,7 @@ func (d *Daemon) rollbackPrincipal(ctx context.Context, principal ref.Entity) {
 
 	// Recreate with the previous working spec.
 	response, err := d.launcherRequest(ctx, launcherIPCRequest{
-		Action:               "create-sandbox",
+		Action:               ipc.ActionCreateSandbox,
 		Principal:            principal.AccountLocalpart(),
 		EncryptedCredentials: credentials.Ciphertext,
 		Grants:               grants,

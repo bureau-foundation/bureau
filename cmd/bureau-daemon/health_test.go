@@ -20,6 +20,7 @@ import (
 	"time"
 
 	"github.com/bureau-foundation/bureau/lib/clock"
+	"github.com/bureau-foundation/bureau/lib/ipc"
 	"github.com/bureau-foundation/bureau/lib/principal"
 	"github.com/bureau-foundation/bureau/lib/ref"
 	"github.com/bureau-foundation/bureau/lib/schema"
@@ -354,11 +355,11 @@ func TestHealthMonitorThresholdTriggersRollback(t *testing.T) {
 	)
 	listener := startMockLauncher(t, launcherSocket, func(request launcherIPCRequest) launcherIPCResponse {
 		launcherMu.Lock()
-		ipcActions = append(ipcActions, request.Action)
+		ipcActions = append(ipcActions, string(request.Action))
 		ipcPrincipals = append(ipcPrincipals, request.Principal)
 		lastSpec = request.SandboxSpec
 		launcherMu.Unlock()
-		if request.Action == "create-sandbox" {
+		if request.Action == ipc.ActionCreateSandbox {
 			select {
 			case rollbackDone <- struct{}{}:
 			default:
@@ -558,7 +559,7 @@ func TestRollbackNoPreviousSpec(t *testing.T) {
 	)
 	listener := startMockLauncher(t, launcherSocket, func(request launcherIPCRequest) launcherIPCResponse {
 		launcherMu.Lock()
-		ipcActions = append(ipcActions, request.Action)
+		ipcActions = append(ipcActions, string(request.Action))
 		launcherMu.Unlock()
 		return launcherIPCResponse{OK: true}
 	})
@@ -852,7 +853,7 @@ func TestReconcileStopsHealthMonitorOnDestroy(t *testing.T) {
 
 	destroySandboxReceived := make(chan struct{}, 1)
 	listener := startMockLauncher(t, launcherSocket, func(request launcherIPCRequest) launcherIPCResponse {
-		if request.Action == "destroy-sandbox" {
+		if request.Action == ipc.ActionDestroySandbox {
 			select {
 			case destroySandboxReceived <- struct{}{}:
 			default:
@@ -1174,12 +1175,12 @@ func TestRollbackLauncherRejectsCreate(t *testing.T) {
 	)
 	listener := startMockLauncher(t, launcherSocket, func(request launcherIPCRequest) launcherIPCResponse {
 		launcherMu.Lock()
-		ipcActions = append(ipcActions, request.Action)
+		ipcActions = append(ipcActions, string(request.Action))
 		launcherMu.Unlock()
 		switch request.Action {
-		case "destroy-sandbox":
+		case ipc.ActionDestroySandbox:
 			return launcherIPCResponse{OK: true}
-		case "create-sandbox":
+		case ipc.ActionCreateSandbox:
 			return launcherIPCResponse{OK: false, Error: "sandbox limit exceeded"}
 		default:
 			return launcherIPCResponse{OK: true}
@@ -1321,7 +1322,7 @@ func TestRollbackCredentialsMissing(t *testing.T) {
 	)
 	listener := startMockLauncher(t, launcherSocket, func(request launcherIPCRequest) launcherIPCResponse {
 		launcherMu.Lock()
-		ipcActions = append(ipcActions, request.Action)
+		ipcActions = append(ipcActions, string(request.Action))
 		launcherMu.Unlock()
 		return launcherIPCResponse{OK: true}
 	})

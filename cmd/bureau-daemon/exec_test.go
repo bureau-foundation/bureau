@@ -19,6 +19,7 @@ import (
 	"time"
 
 	"github.com/bureau-foundation/bureau/lib/binhash"
+	"github.com/bureau-foundation/bureau/lib/ipc"
 	"github.com/bureau-foundation/bureau/lib/principal"
 	"github.com/bureau-foundation/bureau/lib/ref"
 	"github.com/bureau-foundation/bureau/lib/schema"
@@ -509,7 +510,7 @@ func TestReconcileBureauVersion_DaemonChanged_TriggersExec(t *testing.T) {
 	socketDir := testutil.SocketDir(t)
 	launcherSocket := filepath.Join(socketDir, "launcher.sock")
 	listener := startMockLauncher(t, launcherSocket, func(request launcherIPCRequest) launcherIPCResponse {
-		if request.Action == "status" {
+		if request.Action == ipc.ActionStatus {
 			return launcherIPCResponse{
 				OK:         true,
 				BinaryHash: "launcher-hash-irrelevant",

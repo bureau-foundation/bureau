@@ -22,6 +22,7 @@ import (
 
 	"github.com/bureau-foundation/bureau/lib/binhash"
 	"github.com/bureau-foundation/bureau/lib/codec"
+	"github.com/bureau-foundation/bureau/lib/ipc"
 	"github.com/bureau-foundation/bureau/lib/principal"
 	"github.com/bureau-foundation/bureau/lib/ref"
 	"github.com/bureau-foundation/bureau/lib/schema"
@@ -59,16 +60,16 @@ func TestLauncherRequest(t *testing.T) {
 			}
 
 			switch request.Action {
-			case "status":
+			case ipc.ActionStatus:
 				encoder.Encode(launcherIPCResponse{OK: true})
-			case "create-sandbox":
+			case ipc.ActionCreateSandbox:
 				encoder.Encode(launcherIPCResponse{OK: true, ProxyPID: 12345})
-			case "destroy-sandbox":
+			case ipc.ActionDestroySandbox:
 				encoder.Encode(launcherIPCResponse{OK: true})
 			default:
 				encoder.Encode(launcherIPCResponse{
 					OK:    false,
-					Error: "unknown action: " + request.Action,
+					Error: "unknown action: " + string(request.Action),
 				})
 			}
 			conn.Close()
@@ -82,7 +83,7 @@ func TestLauncherRequest(t *testing.T) {
 
 	t.Run("status", func(t *testing.T) {
 		response, err := daemon.launcherRequest(context.Background(), launcherIPCRequest{
-			Action: "status",
+			Action: ipc.ActionStatus,
 		})
 		if err != nil {
 			t.Fatalf("launcherRequest() error: %v", err)
@@ -94,7 +95,7 @@ func TestLauncherRequest(t *testing.T) {
 
 	t.Run("create-sandbox", func(t *testing.T) {
 		response, err := daemon.launcherRequest(context.Background(), launcherIPCRequest{
-			Action:    "create-sandbox",
+			Action:    ipc.ActionCreateSandbox,
 			Principal: "iree/amdgpu/pm",
 		})
 		if err != nil {
@@ -131,7 +132,7 @@ func TestLauncherRequest_ConnectionRefused(t *testing.T) {
 	daemon.logger = slog.New(slog.NewJSONHandler(os.Stderr, nil))
 
 	_, err := daemon.launcherRequest(context.Background(), launcherIPCRequest{
-		Action: "status",
+		Action: ipc.ActionStatus,
 	})
 	if err == nil {
 		t.Error("expected error when launcher socket doesn't exist")
@@ -404,8 +405,8 @@ func TestQueryLauncherStatus(t *testing.T) {
 	socketPath := filepath.Join(socketDir, "launcher.sock")
 
 	listener := startMockLauncher(t, socketPath, func(request launcherIPCRequest) launcherIPCResponse {
-		if request.Action != "status" {
-			return launcherIPCResponse{OK: false, Error: "unexpected action: " + request.Action}
+		if request.Action != ipc.ActionStatus {
+			return launcherIPCResponse{OK: false, Error: "unexpected action: " + string(request.Action)}
 		}
 		return launcherIPCResponse{
 			OK:              true,
@@ -569,13 +570,13 @@ func TestReconcileBureauVersion_ProxyChanged(t *testing.T) {
 	)
 	listener := startMockLauncher(t, launcherSocket, func(request launcherIPCRequest) launcherIPCResponse {
 		switch request.Action {
-		case "status":
+		case ipc.ActionStatus:
 			return launcherIPCResponse{
 				OK:              true,
 				BinaryHash:      "",
 				ProxyBinaryPath: currentProxy,
 			}
-		case "update-proxy-binary":
+		case ipc.ActionUpdateProxyBinary:
 			launcherMu.Lock()
 			updateProxyCalls = append(updateProxyCalls, request.BinaryPath)
 			launcherMu.Unlock()
@@ -710,7 +711,7 @@ func TestReconcileStructuralChangeTriggersRestart(t *testing.T) {
 	)
 	listener := startMockLauncher(t, launcherSocket, func(request launcherIPCRequest) launcherIPCResponse {
 		launcherMu.Lock()
-		ipcActions = append(ipcActions, request.Action)
+		ipcActions = append(ipcActions, string(request.Action))
 		ipcPrincipals = append(ipcPrincipals, request.Principal)
 		launcherMu.Unlock()
 		return launcherIPCResponse{OK: true, ProxyPID: 99999}
@@ -848,7 +849,7 @@ func TestReconcileStructuralChangeOnly(t *testing.T) {
 	)
 	listener := startMockLauncher(t, launcherSocket, func(request launcherIPCRequest) launcherIPCResponse {
 		launcherMu.Lock()
-		ipcActions = append(ipcActions, request.Action)
+		ipcActions = append(ipcActions, string(request.Action))
 		launcherMu.Unlock()
 		return launcherIPCResponse{OK: true, ProxyPID: 99999}
 	})
@@ -949,7 +950,7 @@ func TestReconcilePayloadOnlyChangeHotReloads(t *testing.T) {
 	)
 	listener := startMockLauncher(t, launcherSocket, func(request launcherIPCRequest) launcherIPCResponse {
 		launcherMu.Lock()
-		ipcActions = append(ipcActions, request.Action)
+		ipcActions = append(ipcActions, string(request.Action))
 		launcherMu.Unlock()
 		return launcherIPCResponse{OK: true}
 	})
@@ -1048,7 +1049,7 @@ func TestLauncherRequest_Timeout(t *testing.T) {
 	ctx, cancel := context.WithTimeout(context.Background(), 100*time.Millisecond)
 	defer cancel()
 
-	_, err = daemon.launcherRequest(ctx, launcherIPCRequest{Action: "status"})
+	_, err = daemon.launcherRequest(ctx, launcherIPCRequest{Action: ipc.ActionStatus})
 	if err == nil {
 		t.Error("expected timeout error")
 	}
@@ -2689,7 +2690,7 @@ func TestReconcileCommandBinaryValidationBlocksCreate(t *testing.T) {
 	)
 	listener := startMockLauncher(t, launcherSocket, func(request launcherIPCRequest) launcherIPCResponse {
 		launcherMu.Lock()
-		ipcActions = append(ipcActions, request.Action)
+		ipcActions = append(ipcActions, string(request.Action))
 		launcherMu.Unlock()
 		return launcherIPCResponse{OK: true, ProxyPID: 99999}
 	})

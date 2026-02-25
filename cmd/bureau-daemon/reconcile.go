@@ -641,7 +641,7 @@ func (d *Daemon) reconcile(ctx context.Context) error {
 
 		// Send create-sandbox to the launcher.
 		response, err := d.launcherRequest(ctx, launcherIPCRequest{
-			Action:               "create-sandbox",
+			Action:               ipc.ActionCreateSandbox,
 			Principal:            principal.AccountLocalpart(),
 			EncryptedCredentials: credentials.Ciphertext,
 			Grants:               grants,
@@ -892,7 +892,7 @@ func (d *Daemon) reconcileRunningPrincipal(ctx context.Context, principal ref.En
 			"principal", principal,
 		)
 		response, err := d.launcherRequest(ctx, launcherIPCRequest{
-			Action:    "update-payload",
+			Action:    ipc.ActionUpdatePayload,
 			Principal: principal.AccountLocalpart(),
 			Payload:   newSpec.Payload,
 		})
@@ -1802,7 +1802,7 @@ func (d *Daemon) destroyPrincipal(ctx context.Context, principal ref.Entity) err
 
 	var destroyError error
 	response, err := d.launcherRequest(ctx, launcherIPCRequest{
-		Action:    "destroy-sandbox",
+		Action:    ipc.ActionDestroySandbox,
 		Principal: principal.AccountLocalpart(),
 	})
 	if err != nil {
@@ -1987,7 +1987,7 @@ func (d *Daemon) watchSandboxExit(ctx context.Context, principal ref.Entity) {
 	// because the launcher IPC call blocks.
 	if wasDraining {
 		response, err := d.launcherRequest(ctx, launcherIPCRequest{
-			Action:    "destroy-sandbox",
+			Action:    ipc.ActionDestroySandbox,
 			Principal: principal.AccountLocalpart(),
 		})
 		if err != nil {
@@ -2068,7 +2068,7 @@ const defaultDrainGracePeriod = 10 * time.Second
 func (d *Daemon) drainPrincipal(ctx context.Context, principal ref.Entity) error {
 	// Send SIGTERM to the sandbox process.
 	response, err := d.launcherRequest(ctx, launcherIPCRequest{
-		Action:    "signal-sandbox",
+		Action:    ipc.ActionSignalSandbox,
 		Principal: principal.AccountLocalpart(),
 		Signal:    int(syscall.SIGTERM),
 	})
@@ -2151,7 +2151,7 @@ type (
 // required.
 func (d *Daemon) queryLauncherStatus(ctx context.Context) (launcherHash string, proxyBinaryPath string, err error) {
 	response, err := d.launcherRequest(ctx, launcherIPCRequest{
-		Action: "status",
+		Action: ipc.ActionStatus,
 	})
 	if err != nil {
 		return "", "", fmt.Errorf("launcher status IPC: %w", err)
@@ -2176,7 +2176,7 @@ func (d *Daemon) queryLauncherStatus(ctx context.Context) (launcherHash string, 
 // pass, which detects d.running entries without exit watchers.
 func (d *Daemon) adoptPreExistingSandboxes(ctx context.Context) error {
 	response, err := d.launcherRequest(ctx, launcherIPCRequest{
-		Action: "list-sandboxes",
+		Action: ipc.ActionListSandboxes,
 	})
 	if err != nil {
 		return fmt.Errorf("list-sandboxes IPC: %w", err)
@@ -2255,7 +2255,7 @@ func (d *Daemon) reconcileBureauVersion(ctx context.Context, desired *schema.Bur
 	// current binary until their sandbox is recycled.
 	if diff.ProxyChanged {
 		response, err := d.launcherRequest(ctx, launcherIPCRequest{
-			Action:     "update-proxy-binary",
+			Action:     ipc.ActionUpdateProxyBinary,
 			BinaryPath: desired.ProxyStorePath,
 		})
 		if err != nil {
@@ -2285,7 +2285,7 @@ func (d *Daemon) reconcileBureauVersion(ctx context.Context, desired *schema.Bur
 	// retries for the same path.
 	if diff.LauncherChanged {
 		response, err := d.launcherRequest(ctx, launcherIPCRequest{
-			Action:     "exec-update",
+			Action:     ipc.ActionExecUpdate,
 			BinaryPath: desired.LauncherStorePath,
 		})
 		if err != nil {
@@ -2383,7 +2383,7 @@ func (d *Daemon) launcherWaitSandbox(ctx context.Context, principalLocalpart str
 	// should be fast; only the response blocks for the process lifetime.
 	conn.SetWriteDeadline(time.Now().Add(10 * time.Second))
 	request := launcherIPCRequest{
-		Action:    "wait-sandbox",
+		Action:    ipc.ActionWaitSandbox,
 		Principal: principalLocalpart,
 	}
 	if err := codec.NewEncoder(conn).Encode(request); err != nil {
@@ -2445,7 +2445,7 @@ func (d *Daemon) launcherWaitProxy(ctx context.Context, principalLocalpart strin
 	// should be fast; only the response blocks for the process lifetime.
 	conn.SetWriteDeadline(time.Now().Add(10 * time.Second))
 	request := launcherIPCRequest{
-		Action:    "wait-proxy",
+		Action:    ipc.ActionWaitProxy,
 		Principal: principalLocalpart,
 	}
 	if err := codec.NewEncoder(conn).Encode(request); err != nil {

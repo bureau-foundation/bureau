@@ -22,6 +22,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/bureau-foundation/bureau/lib/ipc"
 	"github.com/bureau-foundation/bureau/lib/ref"
 	"github.com/bureau-foundation/bureau/lib/schema"
 	"github.com/bureau-foundation/bureau/lib/schema/ticket"
@@ -349,7 +350,7 @@ func (d *Daemon) startPipelineExecutor(
 	}
 
 	response, err := d.launcherRequest(ctx, launcherIPCRequest{
-		Action:            "create-sandbox",
+		Action:            ipc.ActionCreateSandbox,
 		Principal:         localpart,
 		DirectCredentials: credentials,
 		SandboxSpec:       spec,
@@ -663,7 +664,7 @@ func (d *Daemon) buildPipelineExecutorSpec(
 // — the result has already been posted by this point.
 func (d *Daemon) destroyPipelineSandbox(ctx context.Context, principal ref.Entity) {
 	response, err := d.launcherRequest(ctx, launcherIPCRequest{
-		Action:    "destroy-sandbox",
+		Action:    ipc.ActionDestroySandbox,
 		Principal: principal.AccountLocalpart(),
 	})
 	if err != nil {

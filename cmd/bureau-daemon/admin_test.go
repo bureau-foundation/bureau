@@ -12,6 +12,7 @@ import (
 	"time"
 
 	"github.com/bureau-foundation/bureau/lib/authorization"
+	"github.com/bureau-foundation/bureau/lib/ipc"
 	"github.com/bureau-foundation/bureau/lib/schema"
 	"github.com/bureau-foundation/bureau/lib/sealed"
 	"github.com/bureau-foundation/bureau/lib/service"
@@ -64,7 +65,7 @@ func newCredentialTestDaemon(t *testing.T) (
 	listener := startMockLauncher(t, daemon.launcherSocket, func(request launcherIPCRequest) launcherIPCResponse {
 		captured <- request
 
-		if request.Action == "provision-credential" {
+		if request.Action == ipc.ActionProvisionCredential {
 			// Decrypt → merge → re-encrypt cycle, mirroring the real launcher.
 			var credentials map[string]string
 			if request.EncryptedCredentials != "" {
@@ -102,7 +103,7 @@ func newCredentialTestDaemon(t *testing.T) (
 			}
 		}
 
-		return launcherIPCResponse{OK: false, Error: "unknown action: " + request.Action}
+		return launcherIPCResponse{OK: false, Error: "unknown action: " + string(request.Action)}
 	})
 	t.Cleanup(func() { listener.Close() })
 

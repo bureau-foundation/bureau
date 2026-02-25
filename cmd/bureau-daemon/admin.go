@@ -10,6 +10,7 @@ import (
 	"time"
 
 	"github.com/bureau-foundation/bureau/lib/codec"
+	"github.com/bureau-foundation/bureau/lib/ipc"
 	"github.com/bureau-foundation/bureau/lib/ref"
 	"github.com/bureau-foundation/bureau/lib/schema"
 	"github.com/bureau-foundation/bureau/lib/service"
@@ -146,7 +147,7 @@ func (d *Daemon) handleProvisionCredential(ctx context.Context, token *serviceto
 	// Delegate the decrypt→merge→re-encrypt to the launcher (which
 	// holds the machine's age private key).
 	response, err := d.launcherRequest(ctx, launcherIPCRequest{
-		Action:               "provision-credential",
+		Action:               ipc.ActionProvisionCredential,
 		Principal:            request.Principal,
 		KeyName:              request.Key,
 		KeyValue:             request.Value,

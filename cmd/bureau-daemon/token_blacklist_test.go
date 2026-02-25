@@ -489,7 +489,7 @@ func mockLauncherServer(t *testing.T) (string, chan string) {
 			}
 
 			response := ipc.Response{OK: true}
-			if request.Action == "destroy-sandbox" {
+			if request.Action == ipc.ActionDestroySandbox {
 				destroyed <- request.Principal
 			}
 			codec.NewEncoder(conn).Encode(response)

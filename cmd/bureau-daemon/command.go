@@ -256,7 +256,7 @@ func (d *Daemon) postCommandResult(ctx context.Context, roomID ref.RoomID, comma
 	message := schema.CommandResultMessage{
 		MsgType:    schema.MsgTypeCommandResult,
 		Body:       fmt.Sprintf("%s: completed in %dms", command.Command, durationMilliseconds),
-		Status:     "success",
+		Status:     schema.CommandResultSuccess,
 		Result:     json.RawMessage(resultJSON),
 		DurationMS: durationMilliseconds,
 		RequestID:  command.RequestID,
@@ -286,7 +286,7 @@ func (d *Daemon) postCommandError(ctx context.Context, roomID ref.RoomID, comman
 	message := schema.CommandResultMessage{
 		MsgType:    schema.MsgTypeCommandResult,
 		Body:       fmt.Sprintf("%s: error: %s", command.Command, errorMessage),
-		Status:     "error",
+		Status:     schema.CommandResultError,
 		Error:      errorMessage,
 		DurationMS: durationMilliseconds,
 		RequestID:  command.RequestID,

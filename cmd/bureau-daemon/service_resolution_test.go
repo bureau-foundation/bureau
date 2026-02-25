@@ -12,6 +12,7 @@ import (
 	"sync"
 	"testing"
 
+	"github.com/bureau-foundation/bureau/lib/ipc"
 	"github.com/bureau-foundation/bureau/lib/principal"
 	"github.com/bureau-foundation/bureau/lib/ref"
 	"github.com/bureau-foundation/bureau/lib/schema"
@@ -92,7 +93,7 @@ func TestReconcile_ServiceMountsResolved(t *testing.T) {
 	listener := startMockLauncher(t, launcherSocket, func(request launcherIPCRequest) launcherIPCResponse {
 		mountsMu.Lock()
 		defer mountsMu.Unlock()
-		if request.Action == "create-sandbox" {
+		if request.Action == ipc.ActionCreateSandbox {
 			capturedMounts = request.ServiceMounts
 			capturedTokenDir = request.TokenDirectory
 		}
@@ -301,7 +302,7 @@ func TestReconcile_ServiceMountsWorkspaceRoom(t *testing.T) {
 	listener := startMockLauncher(t, launcherSocket, func(request launcherIPCRequest) launcherIPCResponse {
 		mountsMu.Lock()
 		defer mountsMu.Unlock()
-		if request.Action == "create-sandbox" {
+		if request.Action == ipc.ActionCreateSandbox {
 			capturedMounts = request.ServiceMounts
 		}
 		return launcherIPCResponse{OK: true, ProxyPID: 99999}
@@ -426,7 +427,7 @@ func TestReconcile_ServiceMountsMultipleServices(t *testing.T) {
 	listener := startMockLauncher(t, launcherSocket, func(request launcherIPCRequest) launcherIPCResponse {
 		mountsMu.Lock()
 		defer mountsMu.Unlock()
-		if request.Action == "create-sandbox" {
+		if request.Action == ipc.ActionCreateSandbox {
 			capturedMounts = request.ServiceMounts
 		}
 		return launcherIPCResponse{OK: true, ProxyPID: 99999}
@@ -609,7 +610,7 @@ func TestReconcile_NoServiceMountsWithoutRequiredServices(t *testing.T) {
 	listener := startMockLauncher(t, launcherSocket, func(request launcherIPCRequest) launcherIPCResponse {
 		mountsMu.Lock()
 		defer mountsMu.Unlock()
-		if request.Action == "create-sandbox" {
+		if request.Action == ipc.ActionCreateSandbox {
 			capturedMounts = request.ServiceMounts
 		}
 		return launcherIPCResponse{OK: true, ProxyPID: 99999}
@@ -683,10 +684,10 @@ func newServiceResolutionTestDaemon(t *testing.T, daemon *Daemon, matrixState *m
 		tracker.mu.Lock()
 		defer tracker.mu.Unlock()
 		switch request.Action {
-		case "create-sandbox":
+		case ipc.ActionCreateSandbox:
 			tracker.created = append(tracker.created, request.Principal)
 			return launcherIPCResponse{OK: true, ProxyPID: 99999}
-		case "destroy-sandbox":
+		case ipc.ActionDestroySandbox:
 			tracker.destroyed = append(tracker.destroyed, request.Principal)
 			return launcherIPCResponse{OK: true}
 		default:

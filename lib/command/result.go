@@ -19,11 +19,10 @@ import (
 // and preserves the raw [messaging.Event] for callers that need event
 // metadata (event ID, sender, timestamp).
 type Result struct {
-	// Status is the command outcome: "success" or "error". The daemon
-	// always posts "success" for commands that completed without error,
-	// even for async commands that return "accepted" in their result
-	// payload.
-	Status string
+	// Status is the command outcome. The daemon posts CommandResultSuccess
+	// for commands that completed without error, CommandResultError for
+	// failures, and CommandResultAccepted for async commands.
+	Status schema.CommandResultStatus
 
 	// ResultData is the command-specific result payload as raw JSON.
 	// For synchronous commands, this contains the full result. For
@@ -85,12 +84,12 @@ func (r *Result) IsAccepted() bool {
 
 // IsSuccess returns true when the command completed successfully.
 func (r *Result) IsSuccess() bool {
-	return r.Status == "success"
+	return r.Status == schema.CommandResultSuccess
 }
 
 // IsError returns true when the command failed.
 func (r *Result) IsError() bool {
-	return r.Status == "error"
+	return r.Status == schema.CommandResultError
 }
 
 // IsPipelineResult returns true when this result contains pipeline
@@ -106,7 +105,7 @@ func (r *Result) IsPipelineResult() bool {
 //
 //	if err := result.Err(); err != nil { return err }
 func (r *Result) Err() error {
-	if r.Status == "error" {
+	if r.Status == schema.CommandResultError {
 		return fmt.Errorf("daemon error: %s", r.Error)
 	}
 	return nil
@@ -176,7 +175,7 @@ func parseResult(event messaging.Event) (*Result, error) {
 	// {status:"accepted", ticket_id:"pip-xxx", room:"!room:server"} as
 	// the result data. Parse these into typed fields so callers don't
 	// need to unmarshal ResultData themselves for the common case.
-	if raw.Status == "success" && len(raw.Result) > 0 {
+	if raw.Status == schema.CommandResultSuccess && len(raw.Result) > 0 {
 		var accepted struct {
 			TicketID string `json:"ticket_id"`
 			Room     string `json:"room"`

@@ -16,6 +16,7 @@ import (
 	"time"
 
 	"github.com/bureau-foundation/bureau/lib/clock"
+	"github.com/bureau-foundation/bureau/lib/ipc"
 	"github.com/bureau-foundation/bureau/lib/principal"
 	"github.com/bureau-foundation/bureau/lib/ref"
 	"github.com/bureau-foundation/bureau/lib/schema"
@@ -1130,7 +1131,7 @@ func TestReconcile_TriggerContentPassedToLauncher(t *testing.T) {
 	listener := startMockLauncher(t, launcherSocket, func(request launcherIPCRequest) launcherIPCResponse {
 		triggerMu.Lock()
 		defer triggerMu.Unlock()
-		if request.Action == "create-sandbox" {
+		if request.Action == ipc.ActionCreateSandbox {
 			capturedTriggerContent = request.TriggerContent
 		}
 		return launcherIPCResponse{OK: true, ProxyPID: 99999}
@@ -1245,7 +1246,7 @@ func TestReconcile_NoTriggerContentForUnconditionedPrincipal(t *testing.T) {
 	listener := startMockLauncher(t, launcherSocket, func(request launcherIPCRequest) launcherIPCResponse {
 		triggerMu.Lock()
 		defer triggerMu.Unlock()
-		if request.Action == "create-sandbox" {
+		if request.Action == ipc.ActionCreateSandbox {
 			capturedTriggerContent = request.TriggerContent
 		}
 		return launcherIPCResponse{OK: true, ProxyPID: 99999}
@@ -1363,7 +1364,7 @@ func TestReconcile_ArrayContainmentTriggerContent(t *testing.T) {
 	listener := startMockLauncher(t, launcherSocket, func(request launcherIPCRequest) launcherIPCResponse {
 		triggerMu.Lock()
 		defer triggerMu.Unlock()
-		if request.Action == "create-sandbox" {
+		if request.Action == ipc.ActionCreateSandbox {
 			capturedTriggerContent = request.TriggerContent
 		}
 		return launcherIPCResponse{OK: true, ProxyPID: 99999}
@@ -1885,13 +1886,13 @@ func newStartConditionTestDaemon(t *testing.T, matrixState *mockMatrixState, con
 		tracker.mu.Lock()
 		defer tracker.mu.Unlock()
 		switch request.Action {
-		case "create-sandbox":
+		case ipc.ActionCreateSandbox:
 			tracker.created = append(tracker.created, request.Principal)
 			return launcherIPCResponse{OK: true, ProxyPID: 99999}
-		case "destroy-sandbox":
+		case ipc.ActionDestroySandbox:
 			tracker.destroyed = append(tracker.destroyed, request.Principal)
 			return launcherIPCResponse{OK: true}
-		case "signal-sandbox":
+		case ipc.ActionSignalSandbox:
 			tracker.signaled = append(tracker.signaled, request.Principal)
 			return launcherIPCResponse{OK: true}
 		default:

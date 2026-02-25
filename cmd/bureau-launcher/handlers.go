@@ -139,11 +139,11 @@ func (l *Launcher) handleConnection(ctx context.Context, conn net.Conn) {
 	// exits, potentially for hours. Handle them before acquiring the
 	// mutex so that other IPC requests (create-sandbox, destroy-sandbox,
 	// status, etc.) are not blocked while a wait is pending.
-	if request.Action == "wait-sandbox" {
+	if request.Action == ipc.ActionWaitSandbox {
 		l.handleWaitSandbox(ctx, conn, encoder, &request)
 		return
 	}
-	if request.Action == "wait-proxy" {
+	if request.Action == ipc.ActionWaitProxy {
 		l.handleWaitProxy(ctx, conn, encoder, &request)
 		return
 	}
@@ -153,35 +153,35 @@ func (l *Launcher) handleConnection(ctx context.Context, conn net.Conn) {
 
 	var response IPCResponse
 	switch request.Action {
-	case "status":
+	case ipc.ActionStatus:
 		response = IPCResponse{
 			OK:              true,
 			BinaryHash:      l.launcherBinaryHash,
 			ProxyBinaryPath: l.proxyBinaryPath,
 		}
 
-	case "list-sandboxes":
+	case ipc.ActionListSandboxes:
 		response = l.handleListSandboxes()
 
-	case "create-sandbox":
+	case ipc.ActionCreateSandbox:
 		response = l.handleCreateSandbox(ctx, &request)
 
-	case "destroy-sandbox":
+	case ipc.ActionDestroySandbox:
 		response = l.handleDestroySandbox(ctx, &request)
 
-	case "signal-sandbox":
+	case ipc.ActionSignalSandbox:
 		response = l.handleSignalSandbox(&request)
 
-	case "update-payload":
+	case ipc.ActionUpdatePayload:
 		response = l.handleUpdatePayload(ctx, &request)
 
-	case "update-proxy-binary":
+	case ipc.ActionUpdateProxyBinary:
 		response = l.handleUpdateProxyBinary(ctx, &request)
 
-	case "provision-credential":
+	case ipc.ActionProvisionCredential:
 		response = l.handleProvisionCredential(&request)
 
-	case "exec-update":
+	case ipc.ActionExecUpdate:
 		response = l.handleExecUpdate(ctx, &request)
 		// Send the response before a potential exec() — the daemon
 		// needs to know the request was accepted before the process

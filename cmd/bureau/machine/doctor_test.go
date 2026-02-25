@@ -23,7 +23,7 @@ func TestCheckSystemUser_BureauUserExists(t *testing.T) {
 	// This test verifies the check produces a result with the correct
 	// name and status type. It can't assert a specific status without
 	// controlling the OS state.
-	results := checkSystemUser()
+	results := checkSystemUser(principal.SystemUserName, principal.OperatorsGroupName)
 
 	// Should always produce at least 3 results: bureau user, group, membership.
 	if len(results) < 3 {
@@ -61,16 +61,12 @@ func TestCheckSystemUser_BureauUserExists(t *testing.T) {
 }
 
 func TestCheckDirectories_NonexistentPath(t *testing.T) {
-	// Override expectedDirectories for testing with a temp path.
-	saved := expectedDirectories
-	defer func() { expectedDirectories = saved }()
-
 	nonexistent := t.TempDir() + "/nonexistent"
-	expectedDirectories = []directorySpec{
+	directories := []directorySpec{
 		{nonexistent, "root:root", 0755},
 	}
 
-	results := checkDirectories()
+	results := checkDirectories(directories)
 	if len(results) != 1 {
 		t.Fatalf("expected 1 result, got %d", len(results))
 	}
@@ -87,9 +83,6 @@ func TestCheckDirectories_NonexistentPath(t *testing.T) {
 }
 
 func TestCheckDirectories_CorrectOwnership(t *testing.T) {
-	saved := expectedDirectories
-	defer func() { expectedDirectories = saved }()
-
 	// Create a temp directory owned by current user.
 	directory := t.TempDir() + "/testdir"
 	if err := os.MkdirAll(directory, 0755); err != nil {
@@ -114,11 +107,11 @@ func TestCheckDirectories_CorrectOwnership(t *testing.T) {
 		t.Fatalf("lookup gid %d: %v", stat.Gid, err)
 	}
 
-	expectedDirectories = []directorySpec{
+	directories := []directorySpec{
 		{directory, actualUser.Username + ":" + actualGroup.Name, 0755},
 	}
 
-	results := checkDirectories()
+	results := checkDirectories(directories)
 	if len(results) != 1 {
 		t.Fatalf("expected 1 result, got %d", len(results))
 	}
@@ -129,9 +122,6 @@ func TestCheckDirectories_CorrectOwnership(t *testing.T) {
 }
 
 func TestCheckDirectories_WrongMode(t *testing.T) {
-	saved := expectedDirectories
-	defer func() { expectedDirectories = saved }()
-
 	directory := t.TempDir() + "/testdir"
 	if err := os.MkdirAll(directory, 0700); err != nil {
 		t.Fatalf("mkdir: %v", err)
@@ -146,11 +136,11 @@ func TestCheckDirectories_WrongMode(t *testing.T) {
 		t.Fatalf("lookup group: %v", err)
 	}
 
-	expectedDirectories = []directorySpec{
+	directories := []directorySpec{
 		{directory, currentUser.Username + ":" + currentGroup.Name, 0755},
 	}
 
-	results := checkDirectories()
+	results := checkDirectories(directories)
 	if len(results) != 1 {
 		t.Fatalf("expected 1 result, got %d", len(results))
 	}
@@ -649,7 +639,7 @@ func TestCheckSockets_NonexistentPath(t *testing.T) {
 	// Socket checks should fail when sockets don't exist.
 	// Can't easily test this without controlling /run/bureau, so verify
 	// that the check function doesn't panic with missing paths.
-	results := checkSockets()
+	results := checkSockets(principal.OperatorsGroupName)
 
 	for _, result := range results {
 		switch result.Status {

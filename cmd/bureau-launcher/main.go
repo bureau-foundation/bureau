@@ -50,6 +50,7 @@ func run() error {
 		logRelayBinaryPath    string
 		workspaceRoot         string
 		cacheRoot             string
+		operatorsGroup        string
 		showVersion           bool
 	)
 
@@ -66,6 +67,7 @@ func run() error {
 	flag.StringVar(&logRelayBinaryPath, "log-relay-binary", "", "path to bureau-log-relay binary (auto-detected if empty)")
 	flag.StringVar(&workspaceRoot, "workspace-root", principal.DefaultWorkspaceRoot, "root directory for project workspaces")
 	flag.StringVar(&cacheRoot, "cache-root", principal.DefaultCacheRoot, "root directory for machine-level tool and model cache")
+	flag.StringVar(&operatorsGroup, "operators-group", principal.OperatorsGroupName, "Unix group for operator socket access (empty to disable)")
 	flag.BoolVar(&showVersion, "version", false, "print version information and exit")
 	flag.Parse()
 
@@ -223,15 +225,19 @@ func run() error {
 	}
 	logger.Info("cache root ready", "path", cacheRoot)
 
-	// Look up the bureau-operators group GID for setting socket group
-	// ownership on operator-facing sockets (service CBOR endpoints).
-	// In production, the group is created by "bureau machine doctor --fix".
-	// In development, the group typically doesn't exist.
-	operatorsGID := principal.LookupOperatorsGID()
-	if operatorsGID < 0 {
-		logger.Warn("bureau-operators group not found (service socket group ownership will not be set)")
+	// Look up the operators group GID for setting socket group ownership
+	// on operator-facing sockets (service CBOR endpoints). In production,
+	// the group is created by "bureau machine doctor --fix". Pass an empty
+	// --operators-group to disable group ownership (integration tests,
+	// development environments without the system group).
+	operatorsGID := principal.LookupOperatorsGID(operatorsGroup)
+	if operatorsGroup == "" {
+		logger.Info("operators group disabled (--operators-group is empty)")
+	} else if operatorsGID < 0 {
+		logger.Warn("operators group not found (service socket group ownership will not be set)",
+			"group", operatorsGroup)
 	} else {
-		logger.Info("bureau-operators group found", "gid", operatorsGID)
+		logger.Info("operators group found", "group", operatorsGroup, "gid", operatorsGID)
 	}
 
 	// Start the IPC socket for daemon communication.

@@ -91,6 +91,7 @@ func TestMachineLifecycle(t *testing.T) {
 		"--state-dir", stateDir,
 		"--workspace-root", workspaceRoot,
 		"--cache-root", cacheRoot,
+		"--operators-group", "",
 	)
 	firstBootCmd.Stdout = os.Stderr
 	firstBootCmd.Stderr = os.Stderr
@@ -171,6 +172,7 @@ func TestMachineLifecycle(t *testing.T) {
 			"--cache-root", cacheRoot,
 			"--proxy-binary", proxyBinary,
 			"--log-relay-binary", logRelayBinary,
+			"--operators-group", "",
 		)
 		waitForFile(t, launcherSocket)
 
@@ -185,6 +187,7 @@ func TestMachineLifecycle(t *testing.T) {
 			"--admin-user", admin.UserID().Localpart(),
 			"--status-interval", "2s",
 			"--fleet", fleet.Prefix,
+			"--operators-group", "",
 		)
 
 		// Wait for MachineStatus heartbeat.
@@ -242,6 +245,7 @@ func TestMachineLifecycle(t *testing.T) {
 			"--cache-root", cacheRoot,
 			"--proxy-binary", proxyBinary,
 			"--log-relay-binary", logRelayBinary,
+			"--operators-group", "",
 		)
 		waitForFile(t, launcherSocket)
 
@@ -256,6 +260,7 @@ func TestMachineLifecycle(t *testing.T) {
 			"--admin-user", admin.UserID().Localpart(),
 			"--status-interval", "2s",
 			"--fleet", fleet.Prefix,
+			"--operators-group", "",
 		)
 
 		// Wait for a fresh MachineStatus heartbeat after restart.

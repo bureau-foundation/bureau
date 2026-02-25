@@ -11,7 +11,6 @@ import (
 	"os/exec"
 	"path/filepath"
 	"strings"
-	"syscall"
 	"time"
 
 	"github.com/bureau-foundation/bureau/lib/codec"
@@ -434,18 +433,10 @@ func (l *Launcher) buildSandboxCommand(principalLocalpart string, spec *schema.S
 				return nil, fmt.Errorf("setting service configDir traverse mode: %w", err)
 			}
 			if err := principal.SetOperatorGroupOwnership(listenDir, l.operatorsGID); err != nil {
-				if errors.Is(err, syscall.EPERM) || errors.Is(err, syscall.EACCES) {
-					l.logger.Warn("cannot set listen directory group ownership (non-fatal in development)",
-						"directory", listenDir,
-						"error", err,
-					)
-				} else {
-					return nil, fmt.Errorf("setting listen directory group: %w", err)
-				}
-			} else {
-				if err := os.Chmod(listenDir, 0750|os.ModeSetgid); err != nil {
-					return nil, fmt.Errorf("setting listen directory SGID: %w", err)
-				}
+				return nil, fmt.Errorf("setting listen directory group: %w", err)
+			}
+			if err := os.Chmod(listenDir, 0750|os.ModeSetgid); err != nil {
+				return nil, fmt.Errorf("setting listen directory SGID: %w", err)
 			}
 		}
 

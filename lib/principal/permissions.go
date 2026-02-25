@@ -23,16 +23,18 @@ const (
 	OperatorsGroupName = "bureau-operators"
 )
 
-// LookupOperatorsGID returns the numeric GID of the bureau-operators
-// system group. Returns -1 if the group does not exist.
+// LookupOperatorsGID returns the numeric GID of the named operators
+// group. Returns -1 if groupName is empty or the group does not exist.
 //
-// Development environments typically lack the bureau-operators group
-// (all processes run as the developer's user). Production environments
-// have it created by "bureau machine doctor --fix". Callers should
-// treat -1 as "skip group ownership changes" and log a warning at
-// startup.
-func LookupOperatorsGID() int {
-	group, err := user.LookupGroup(OperatorsGroupName)
+// Development environments typically lack the operators group (all
+// processes run as the developer's user). Production environments have
+// it created by "bureau machine doctor --fix". Callers should treat -1
+// as "skip group ownership changes" and log a warning at startup.
+func LookupOperatorsGID(groupName string) int {
+	if groupName == "" {
+		return -1
+	}
+	group, err := user.LookupGroup(groupName)
 	if err != nil {
 		return -1
 	}

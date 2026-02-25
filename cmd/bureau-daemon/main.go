@@ -59,6 +59,7 @@ func run() error {
 		workspaceRoot          string
 		pipelineExecutorBinary string
 		pipelineEnvironment    string
+		operatorsGroup         string
 		statusInterval         time.Duration
 		maxIdleInterval        time.Duration
 		haBaseDelay            time.Duration
@@ -81,6 +82,7 @@ func run() error {
 	flag.DurationVar(&maxIdleInterval, "max-idle-interval", defaultMaxIdleInterval, "maximum time between heartbeat publishes when metrics are unchanged (liveness interval)")
 	flag.DurationVar(&haBaseDelay, "ha-base-delay", 1*time.Second, "base unit for HA acquisition timing (all backoff ranges and verification scale from this; 0 for instant acquisition in tests)")
 	flag.DurationVar(&drainGracePeriod, "drain-grace-period", 10*time.Second, "time to wait after SIGTERM before force-killing a drained sandbox (agents should finish cleanup within this window)")
+	flag.StringVar(&operatorsGroup, "operators-group", principal.OperatorsGroupName, "Unix group for operator socket access (empty to disable)")
 	flag.BoolVar(&showVersion, "version", false, "print version information and exit")
 	flag.Parse()
 
@@ -126,16 +128,19 @@ func run() error {
 		)
 	}
 
-	// Look up the bureau-operators group GID for setting socket group
-	// ownership on operator-facing sockets. In production, the group
-	// is created by "bureau machine doctor --fix". In development,
-	// the group typically doesn't exist and the daemon runs as the
-	// developer's user with full access to all sockets.
-	operatorsGID := principal.LookupOperatorsGID()
-	if operatorsGID < 0 {
-		logger.Warn("bureau-operators group not found (operator socket group ownership will not be set)")
+	// Look up the operators group GID for setting socket group ownership
+	// on operator-facing sockets. In production, the group is created by
+	// "bureau machine doctor --fix". Pass an empty --operators-group to
+	// disable group ownership (integration tests, development environments
+	// without the system group).
+	operatorsGID := principal.LookupOperatorsGID(operatorsGroup)
+	if operatorsGroup == "" {
+		logger.Info("operators group disabled (--operators-group is empty)")
+	} else if operatorsGID < 0 {
+		logger.Warn("operators group not found (operator socket group ownership will not be set)",
+			"group", operatorsGroup)
 	} else {
-		logger.Info("bureau-operators group found", "gid", operatorsGID)
+		logger.Info("operators group found", "group", operatorsGroup, "gid", operatorsGID)
 	}
 
 	// Compute the daemon's binary hash and resolve its filesystem path.

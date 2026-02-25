@@ -274,6 +274,7 @@ func startMachineLauncher(t *testing.T, admin *messaging.DirectSession, machine 
 		"--cache-root", machine.CacheRoot,
 		"--proxy-binary", proxyBinary,
 		"--log-relay-binary", logRelayBinary,
+		"--operators-group", "",
 	}
 
 	keyWatch := watchRoom(t, admin, options.Fleet.MachineRoomID)
@@ -328,6 +329,7 @@ func buildDaemonArgs(machine *testMachine, options machineOptions) []string {
 		"--status-interval", statusInterval,
 		"--ha-base-delay", haBaseDelay,
 		"--drain-grace-period", drainGracePeriod,
+		"--operators-group", "",
 	}
 	if options.ObserveRelayBinary != "" {
 		daemonArgs = append(daemonArgs, "--observe-relay-binary", options.ObserveRelayBinary)

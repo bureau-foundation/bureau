@@ -42,6 +42,12 @@ type machineDoctorParams struct {
 	MachineName string `json:"machine_name,omitempty"  flag:"machine-name"  desc:"machine localpart (overrides machine.conf)"`
 	ServerName  string `json:"server_name,omitempty"   flag:"server-name"   desc:"Matrix server name (overrides machine.conf)"`
 	Fleet       string `json:"fleet,omitempty"         flag:"fleet"         desc:"fleet localpart (overrides machine.conf)"`
+
+	// System identity flags — configurable user and group names for
+	// multi-instance deployments (e.g., separate test and prod fleets
+	// on the same machine with different system users).
+	SystemUser     string `json:"system_user,omitempty"     flag:"system-user"     desc:"Unix user for Bureau processes (default: bureau)"`
+	OperatorsGroup string `json:"operators_group,omitempty" flag:"operators-group"  desc:"Unix group for operator socket access (default: bureau-operators)"`
 }
 
 // machineConfig holds validated configuration from /etc/bureau/machine.conf.
@@ -72,13 +78,19 @@ type directorySpec struct {
 	mode  fs.FileMode
 }
 
-// expectedDirectories are the directories that bureau machine doctor validates.
-var expectedDirectories = []directorySpec{
-	{"/etc/bureau", "root:root", 0755},
-	{"/run/bureau", "bureau:bureau-operators", 0750},
-	{"/var/lib/bureau", "bureau:bureau", 0700},
-	{"/var/bureau/workspace", "bureau:bureau", 0755},
-	{"/var/bureau/cache", "bureau:bureau", 0755},
+// buildExpectedDirectories returns the directory specs for the given
+// system user and operators group names. Separating this from a
+// package-level variable allows multi-instance deployments with
+// different system identities (e.g., "bureau-test" user for a test
+// fleet alongside "bureau" for production).
+func buildExpectedDirectories(systemUser, operatorsGroup string) []directorySpec {
+	return []directorySpec{
+		{"/etc/bureau", "root:root", 0755},
+		{"/run/bureau", systemUser + ":" + operatorsGroup, 0750},
+		{"/var/lib/bureau", systemUser + ":" + systemUser, 0700},
+		{"/var/bureau/workspace", systemUser + ":" + systemUser, 0755},
+		{"/var/bureau/cache", systemUser + ":" + systemUser, 0755},
+	}
 }
 
 // systemdUnitSpec describes a systemd unit file to check.
@@ -249,17 +261,40 @@ func runMachineDoctor(ctx context.Context, params machineDoctorParams, logger *s
 func checkMachine(ctx context.Context, params machineDoctorParams, logger *slog.Logger) []doctor.Result {
 	var results []doctor.Result
 
+	// Resolve system identity: CLI flags take priority, then machine.conf,
+	// then the defaults. This lets multi-instance deployments persist
+	// their identity in machine.conf without repeating flags every time.
+	systemUser := params.SystemUser
+	operatorsGroup := params.OperatorsGroup
+	if systemUser == "" || operatorsGroup == "" {
+		if credentials, err := cli.ReadCredentialFile(machineConfPath); err == nil {
+			if systemUser == "" {
+				systemUser = credentials["BUREAU_SYSTEM_USER"]
+			}
+			if operatorsGroup == "" {
+				operatorsGroup = credentials["BUREAU_OPERATORS_GROUP"]
+			}
+		}
+	}
+	if systemUser == "" {
+		systemUser = principal.SystemUserName
+	}
+	if operatorsGroup == "" {
+		operatorsGroup = principal.OperatorsGroupName
+	}
+
 	// Section 1: System prerequisites.
-	results = append(results, checkSystemUser()...)
+	results = append(results, checkSystemUser(systemUser, operatorsGroup)...)
 	bureauUserExists := results[0].Status == doctor.StatusPass
 
-	// Section 2: Directories (skip if bureau user doesn't exist — ownership
+	// Section 2: Directories (skip if system user doesn't exist — ownership
 	// checks need the UID/GID).
+	directories := buildExpectedDirectories(systemUser, operatorsGroup)
 	if bureauUserExists {
-		results = append(results, checkDirectories()...)
+		results = append(results, checkDirectories(directories)...)
 	} else {
-		for _, directory := range expectedDirectories {
-			results = append(results, doctor.Skip(directory.path, "skipped: bureau user does not exist"))
+		for _, directory := range directories {
+			results = append(results, doctor.Skip(directory.path, fmt.Sprintf("skipped: %s user does not exist", systemUser)))
 		}
 	}
 
@@ -278,7 +313,7 @@ func checkMachine(ctx context.Context, params machineDoctorParams, logger *slog.
 	// Section 6: Sockets (skip if services are not running).
 	servicesRunning := areServicesRunning()
 	if servicesRunning {
-		results = append(results, checkSockets()...)
+		results = append(results, checkSockets(operatorsGroup)...)
 	} else {
 		results = append(results, doctor.Skip("launcher.sock", "skipped: services not running"))
 		results = append(results, doctor.Skip("observe.sock", "skipped: services not running"))
@@ -298,40 +333,40 @@ func checkMachine(ctx context.Context, params machineDoctorParams, logger *slog.
 
 // --- Section 1: System prerequisites ---
 
-func checkSystemUser() []doctor.Result {
+func checkSystemUser(systemUser, operatorsGroupName string) []doctor.Result {
 	var results []doctor.Result
 
-	// Check bureau user.
-	bureauUser, err := user.Lookup(principal.SystemUserName)
+	// Check system user.
+	bureauUser, err := user.Lookup(systemUser)
 	if err != nil {
 		results = append(results, doctor.FailElevated(
-			"bureau user",
-			fmt.Sprintf("user %q does not exist", principal.SystemUserName),
-			fmt.Sprintf("useradd --system --no-create-home --shell /usr/sbin/nologin %s", principal.SystemUserName),
+			systemUser+" user",
+			fmt.Sprintf("user %q does not exist", systemUser),
+			fmt.Sprintf("useradd --system --no-create-home --shell /usr/sbin/nologin %s", systemUser),
 			func(ctx context.Context) error {
-				return runCommand("useradd", "--system", "--no-create-home", "--shell", "/usr/sbin/nologin", principal.SystemUserName)
+				return runCommand("useradd", "--system", "--no-create-home", "--shell", "/usr/sbin/nologin", systemUser)
 			},
 		))
 	} else {
-		results = append(results, doctor.Pass("bureau user", fmt.Sprintf("uid=%s", bureauUser.Uid)))
+		results = append(results, doctor.Pass(systemUser+" user", fmt.Sprintf("uid=%s", bureauUser.Uid)))
 	}
 
-	// Check bureau-operators group.
-	operatorsGroup, err := user.LookupGroup(principal.OperatorsGroupName)
+	// Check operators group.
+	operatorsGroup, err := user.LookupGroup(operatorsGroupName)
 	if err != nil {
 		results = append(results, doctor.FailElevated(
-			"bureau-operators group",
-			fmt.Sprintf("group %q does not exist", principal.OperatorsGroupName),
-			fmt.Sprintf("groupadd --system %s && usermod -aG %s %s", principal.OperatorsGroupName, principal.OperatorsGroupName, principal.SystemUserName),
+			operatorsGroupName+" group",
+			fmt.Sprintf("group %q does not exist", operatorsGroupName),
+			fmt.Sprintf("groupadd --system %s && usermod -aG %s %s", operatorsGroupName, operatorsGroupName, systemUser),
 			func(ctx context.Context) error {
-				if err := runCommand("groupadd", "--system", principal.OperatorsGroupName); err != nil {
+				if err := runCommand("groupadd", "--system", operatorsGroupName); err != nil {
 					return err
 				}
-				return runCommand("usermod", "-aG", principal.OperatorsGroupName, principal.SystemUserName)
+				return runCommand("usermod", "-aG", operatorsGroupName, systemUser)
 			},
 		))
 	} else {
-		results = append(results, doctor.Pass("bureau-operators group", fmt.Sprintf("gid=%s", operatorsGroup.Gid)))
+		results = append(results, doctor.Pass(operatorsGroupName+" group", fmt.Sprintf("gid=%s", operatorsGroup.Gid)))
 	}
 
 	// Check operator group membership. When running as root via sudo, check
@@ -359,23 +394,23 @@ func checkSystemUser() []doctor.Result {
 				results = append(results, doctor.Fail("operator group membership", fmt.Sprintf("cannot read group membership: %v", err)))
 			} else {
 				inGroup := false
-				if operatorsGroup, lookupErr := user.LookupGroup(principal.OperatorsGroupName); lookupErr == nil {
+				if resolvedGroup, lookupErr := user.LookupGroup(operatorsGroupName); lookupErr == nil {
 					for _, groupID := range groupIDs {
-						if groupID == operatorsGroup.Gid {
+						if groupID == resolvedGroup.Gid {
 							inGroup = true
 							break
 						}
 					}
 				}
 				if inGroup {
-					results = append(results, doctor.Pass("operator group membership", fmt.Sprintf("%s is in %s", operatorUsername, principal.OperatorsGroupName)))
+					results = append(results, doctor.Pass("operator group membership", fmt.Sprintf("%s is in %s", operatorUsername, operatorsGroupName)))
 				} else {
 					results = append(results, doctor.FailElevated(
 						"operator group membership",
-						fmt.Sprintf("%s is not in %s group", operatorUsername, principal.OperatorsGroupName),
-						fmt.Sprintf("usermod -aG %s %s", principal.OperatorsGroupName, operatorUsername),
+						fmt.Sprintf("%s is not in %s group", operatorUsername, operatorsGroupName),
+						fmt.Sprintf("usermod -aG %s %s", operatorsGroupName, operatorUsername),
 						func(ctx context.Context) error {
-							return runCommand("usermod", "-aG", principal.OperatorsGroupName, operatorUsername)
+							return runCommand("usermod", "-aG", operatorsGroupName, operatorUsername)
 						},
 					))
 				}
@@ -392,10 +427,10 @@ func checkSystemUser() []doctor.Result {
 
 // --- Section 2: Directories ---
 
-func checkDirectories() []doctor.Result {
+func checkDirectories(directories []directorySpec) []doctor.Result {
 	var results []doctor.Result
 
-	for _, directory := range expectedDirectories {
+	for _, directory := range directories {
 		directory := directory // capture for closure
 		info, err := os.Stat(directory.path)
 		if err != nil {
@@ -847,10 +882,10 @@ func areServicesRunning() bool {
 	return status == "active" || status == "activating"
 }
 
-func checkSockets() []doctor.Result {
+func checkSockets(operatorsGroupName string) []doctor.Result {
 	var results []doctor.Result
 
-	operatorsGID := principal.LookupOperatorsGID()
+	operatorsGID := principal.LookupOperatorsGID(operatorsGroupName)
 
 	sockets := []struct {
 		name string
@@ -892,7 +927,7 @@ func checkSockets() []doctor.Result {
 				results = append(results, doctor.FailElevated(
 					socket.name,
 					detail,
-					fmt.Sprintf("chgrp %s %s && chmod 0660 %s", principal.OperatorsGroupName, socketPath, socketPath),
+					fmt.Sprintf("chgrp %s %s && chmod 0660 %s", operatorsGroupName, socketPath, socketPath),
 					func(ctx context.Context) error {
 						if err := principal.SetOperatorGroupOwnership(socketPath, gid); err != nil {
 							return fmt.Errorf("chgrp %s: %w", socketPath, err)
@@ -938,7 +973,7 @@ func checkSockets() []doctor.Result {
 					socketPath := socket.path
 					results = append(results, doctor.FailElevated(
 						socket.name,
-						fmt.Sprintf("connectable, but %s session lacks %s group (re-login needed without fix)", sudoUser, principal.OperatorsGroupName),
+						fmt.Sprintf("connectable, but %s session lacks %s group (re-login needed without fix)", sudoUser, operatorsGroupName),
 						fmt.Sprintf("setfacl -m u:%s:rw %s", sudoUser, socketPath),
 						func(ctx context.Context) error {
 							return runCommand("setfacl", "-m", fmt.Sprintf("u:%s:rw", sudoUser), socketPath)
@@ -948,7 +983,7 @@ func checkSockets() []doctor.Result {
 				}
 
 				results = append(results, doctor.Pass(socket.name,
-					fmt.Sprintf("connectable (verified %s has %s)", sudoUser, principal.OperatorsGroupName)))
+					fmt.Sprintf("connectable (verified %s has %s)", sudoUser, operatorsGroupName)))
 				continue
 			}
 		}
@@ -1165,7 +1200,7 @@ func fixDirectoryOwnership(directory directorySpec, uid, gid uint32) error {
 
 // writeMachineConf writes machine.conf from bootstrap flag values.
 func writeMachineConf(params machineDoctorParams) error {
-	content := fmt.Sprintf(
+	fileContent := fmt.Sprintf(
 		"# Bureau machine configuration.\n"+
 			"# Written by bureau machine doctor --fix.\n"+
 			"\n"+
@@ -1179,13 +1214,22 @@ func writeMachineConf(params machineDoctorParams) error {
 		params.Fleet,
 	)
 
+	// Include non-default identity configuration so machine.conf is
+	// self-documenting about what user/group this instance uses.
+	if params.SystemUser != "" && params.SystemUser != principal.SystemUserName {
+		fileContent += fmt.Sprintf("BUREAU_SYSTEM_USER=%s\n", params.SystemUser)
+	}
+	if params.OperatorsGroup != "" && params.OperatorsGroup != principal.OperatorsGroupName {
+		fileContent += fmt.Sprintf("BUREAU_OPERATORS_GROUP=%s\n", params.OperatorsGroup)
+	}
+
 	// Ensure parent directory exists.
 	parentDirectory := filepath.Dir(machineConfPath)
 	if err := os.MkdirAll(parentDirectory, 0755); err != nil {
 		return fmt.Errorf("mkdir %s: %w", parentDirectory, err)
 	}
 
-	return os.WriteFile(machineConfPath, []byte(content), 0644)
+	return os.WriteFile(machineConfPath, []byte(fileContent), 0644)
 }
 
 // callerSessionHasGroup checks whether the operator's login session

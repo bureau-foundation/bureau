@@ -11,6 +11,7 @@ import (
 
 	"github.com/bureau-foundation/bureau/lib/schema"
 	agentschema "github.com/bureau-foundation/bureau/lib/schema/agent"
+	"github.com/bureau-foundation/bureau/lib/schema/artifact"
 	"github.com/bureau-foundation/bureau/lib/testutil"
 )
 
@@ -90,7 +91,7 @@ func TestAgentServiceSessionTracking(t *testing.T) {
 		RequiredServices: []string{"artifact"},
 		Authorization: &schema.AuthorizationPolicy{
 			Grants: []schema.Grant{
-				{Actions: []string{schema.ActionArtifactStore, schema.ActionArtifactFetch}},
+				{Actions: []string{artifact.ActionStore, artifact.ActionFetch}},
 			},
 		},
 	})

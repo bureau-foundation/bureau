@@ -13,6 +13,7 @@ import (
 
 	"github.com/bureau-foundation/bureau/lib/clock"
 	"github.com/bureau-foundation/bureau/lib/schema"
+	"github.com/bureau-foundation/bureau/lib/schema/ticket"
 	"github.com/bureau-foundation/bureau/lib/servicetoken"
 )
 
@@ -46,7 +47,7 @@ func TestRefreshTokens_RefreshesAtThreshold(t *testing.T) {
 
 	daemon.authorizationIndex.SetPrincipal(alpha.UserID(), schema.AuthorizationPolicy{
 		Grants: []schema.Grant{
-			{Actions: []string{schema.ActionTicketCreate, "ticket/read"}},
+			{Actions: []string{ticket.ActionCreate, "ticket/read"}},
 		},
 	})
 	daemon.running[alpha] = true
@@ -121,7 +122,7 @@ func TestRefreshTokens_SweepsExpiredTemporalGrants(t *testing.T) {
 	// Add a temporal grant that expires in 3 minutes.
 	temporalExpiry := startTime.Add(3 * time.Minute)
 	temporalGrant := schema.Grant{
-		Actions:   []string{schema.ActionTicketCreate},
+		Actions:   []string{ticket.ActionCreate},
 		ExpiresAt: temporalExpiry.Format(time.RFC3339),
 		Ticket:    "tkt-test-temporal",
 	}
@@ -274,7 +275,7 @@ func TestRefreshTokens_GrantChangeTriggersRemint(t *testing.T) {
 	daemon.authorizationIndex.SetPrincipal(alpha.UserID(), schema.AuthorizationPolicy{
 		Grants: []schema.Grant{
 			{Actions: []string{"ticket/read"}},
-			{Actions: []string{schema.ActionTicketCreate, schema.ActionTicketClose}},
+			{Actions: []string{ticket.ActionCreate, ticket.ActionClose}},
 		},
 	})
 	daemon.lastTokenMint[alpha] = time.Time{} // force re-mint

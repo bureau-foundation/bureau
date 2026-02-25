@@ -10,6 +10,7 @@ import (
 	"testing"
 
 	"github.com/bureau-foundation/bureau/lib/schema"
+	"github.com/bureau-foundation/bureau/lib/schema/observation"
 )
 
 func TestQueryAuthorization(t *testing.T) {
@@ -27,19 +28,19 @@ func TestQueryAuthorization(t *testing.T) {
 		OK:       true,
 		Decision: "allow",
 		MatchedGrant: &schema.Grant{
-			Actions: []string{schema.ActionObserveAll},
+			Actions: []string{observation.ActionAll},
 			Targets: []string{"iree/**"},
 		},
 		MatchedAllowance: &schema.Allowance{
-			Actions: []string{schema.ActionObserveAll},
+			Actions: []string{observation.ActionAll},
 			Actors:  []string{"iree/**"},
 		},
 		ActorGrants: []schema.Grant{
-			{Actions: []string{schema.ActionObserveAll}, Targets: []string{"iree/**"}},
+			{Actions: []string{observation.ActionAll}, Targets: []string{"iree/**"}},
 		},
 		ActorDenials: []schema.Denial{},
 		TargetAllowances: []schema.Allowance{
-			{Actions: []string{schema.ActionObserveAll}, Actors: []string{"iree/**"}},
+			{Actions: []string{observation.ActionAll}, Actors: []string{"iree/**"}},
 		},
 		TargetAllowanceDenials: []schema.AllowanceDenial{},
 	}

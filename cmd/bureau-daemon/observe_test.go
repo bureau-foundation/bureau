@@ -22,6 +22,7 @@ import (
 	"github.com/bureau-foundation/bureau/lib/clock"
 	"github.com/bureau-foundation/bureau/lib/principal"
 	"github.com/bureau-foundation/bureau/lib/schema"
+	"github.com/bureau-foundation/bureau/lib/schema/observation"
 	"github.com/bureau-foundation/bureau/lib/testutil"
 	"github.com/bureau-foundation/bureau/lib/tmux"
 	"github.com/bureau-foundation/bureau/messaging"
@@ -132,8 +133,8 @@ func writeObserveMessage(t *testing.T, connection net.Conn, messageType byte, pa
 // observation tests: any observer can observe in any mode.
 var permissiveObserveAllowances = schema.AuthorizationPolicy{
 	Allowances: []schema.Allowance{
-		{Actions: []string{schema.ActionObserve}, Actors: []string{"**:**"}},
-		{Actions: []string{schema.ActionObserveReadWrite}, Actors: []string{"**:**"}},
+		{Actions: []string{observation.ActionObserve}, Actors: []string{"**:**"}},
+		{Actions: []string{observation.ActionReadWrite}, Actors: []string{"**:**"}},
 	},
 }
 

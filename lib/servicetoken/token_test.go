@@ -11,6 +11,9 @@ import (
 
 	"github.com/bureau-foundation/bureau/lib/ref"
 	"github.com/bureau-foundation/bureau/lib/schema"
+	"github.com/bureau-foundation/bureau/lib/schema/fleet"
+	"github.com/bureau-foundation/bureau/lib/schema/observation"
+	"github.com/bureau-foundation/bureau/lib/schema/ticket"
 )
 
 func testKeypair(t *testing.T) (ed25519.PublicKey, ed25519.PrivateKey) {
@@ -53,8 +56,8 @@ func TestMintAndVerify(t *testing.T) {
 		Machine:  machine,
 		Audience: "ticket",
 		Grants: []Grant{
-			{Actions: []string{schema.ActionTicketCreate, "ticket/assign"}},
-			{Actions: []string{schema.ActionTicketClose}, Targets: []string{"iree/**:bureau.local"}},
+			{Actions: []string{ticket.ActionCreate, "ticket/assign"}},
+			{Actions: []string{ticket.ActionClose}, Targets: []string{"iree/**:bureau.local"}},
 		},
 		ID:        "a1b2c3d4e5f6",
 		IssuedAt:  issuedAt,
@@ -92,8 +95,8 @@ func TestMintAndVerify(t *testing.T) {
 	if len(verified.Grants) != 2 {
 		t.Errorf("Grants length = %d, want 2", len(verified.Grants))
 	}
-	if verified.Grants[0].Actions[0] != schema.ActionTicketCreate {
-		t.Errorf("Grants[0].Actions[0] = %q, want %s", verified.Grants[0].Actions[0], schema.ActionTicketCreate)
+	if verified.Grants[0].Actions[0] != ticket.ActionCreate {
+		t.Errorf("Grants[0].Actions[0] = %q, want %s", verified.Grants[0].Actions[0], ticket.ActionCreate)
 	}
 }
 
@@ -274,8 +277,8 @@ func TestVerifyForService(t *testing.T) {
 
 func TestGrantsAllow(t *testing.T) {
 	grants := []Grant{
-		{Actions: []string{schema.ActionTicketCreate, "ticket/assign"}},
-		{Actions: []string{schema.ActionTicketClose}, Targets: []string{"iree/**"}},
+		{Actions: []string{ticket.ActionCreate, "ticket/assign"}},
+		{Actions: []string{ticket.ActionClose}, Targets: []string{"iree/**"}},
 	}
 
 	tests := []struct {
@@ -283,13 +286,13 @@ func TestGrantsAllow(t *testing.T) {
 		target string
 		want   bool
 	}{
-		{schema.ActionTicketCreate, "", true},
+		{ticket.ActionCreate, "", true},
 		{"ticket/assign", "", true},
-		{schema.ActionTicketClose, "iree/amdgpu/pm", true},
-		{schema.ActionTicketClose, "bureau/dev/coder", false},
-		{schema.ActionTicketClose, "", true}, // self-service check on targeted grant
-		{schema.ActionFleetAssign, "", false},
-		{schema.ActionObserve, "", false},
+		{ticket.ActionClose, "iree/amdgpu/pm", true},
+		{ticket.ActionClose, "bureau/dev/coder", false},
+		{ticket.ActionClose, "", true}, // self-service check on targeted grant
+		{fleet.ActionAssign, "", false},
+		{observation.ActionObserve, "", false},
 	}
 
 	for _, tt := range tests {
@@ -303,7 +306,7 @@ func TestGrantsAllow(t *testing.T) {
 func TestGrantsAllow_WildcardPatterns(t *testing.T) {
 	grants := []Grant{
 		{Actions: []string{schema.ActionCommandAll}},
-		{Actions: []string{schema.ActionObserveAll}, Targets: []string{"**"}},
+		{Actions: []string{observation.ActionAll}, Targets: []string{"**"}},
 	}
 
 	tests := []struct {
@@ -313,8 +316,8 @@ func TestGrantsAllow_WildcardPatterns(t *testing.T) {
 	}{
 		{"command/ticket/create", "", true},
 		{"command/artifact/fetch", "", true},
-		{schema.ActionObserveReadWrite, "any/principal", true},
-		{schema.ActionObserve, "any/principal", true},
+		{observation.ActionReadWrite, "any/principal", true},
+		{observation.ActionObserve, "any/principal", true},
 		{schema.ActionInterrupt, "", false},
 	}
 
@@ -327,10 +330,10 @@ func TestGrantsAllow_WildcardPatterns(t *testing.T) {
 }
 
 func TestGrantsAllow_EmptyGrants(t *testing.T) {
-	if GrantsAllow(nil, schema.ActionTicketCreate, "") {
+	if GrantsAllow(nil, ticket.ActionCreate, "") {
 		t.Error("nil grants should deny")
 	}
-	if GrantsAllow([]Grant{}, schema.ActionTicketCreate, "") {
+	if GrantsAllow([]Grant{}, ticket.ActionCreate, "") {
 		t.Error("empty grants should deny")
 	}
 }
@@ -375,8 +378,8 @@ func TestTokenWireSize(t *testing.T) {
 		Machine:  mustParseMachine(t, "@bureau/fleet/prod/machine/workstation:bureau.local"),
 		Audience: "ticket",
 		Grants: []Grant{
-			{Actions: []string{schema.ActionTicketCreate, "ticket/assign"}},
-			{Actions: []string{schema.ActionTicketClose}, Targets: []string{"bureau/dev/workspace/**:bureau.local"}},
+			{Actions: []string{ticket.ActionCreate, "ticket/assign"}},
+			{Actions: []string{ticket.ActionClose}, Targets: []string{"bureau/dev/workspace/**:bureau.local"}},
 		},
 		ID:        "a1b2c3d4e5f67890",
 		IssuedAt:  1709251200,

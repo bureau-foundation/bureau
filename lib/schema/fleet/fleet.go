@@ -849,23 +849,23 @@ type FleetAlertContent struct {
 type ProposedActionType string
 
 const (
-	// ActionPlace means placing a service on a machine.
-	ActionPlace ProposedActionType = "place"
+	// ProposedPlace means placing a service on a machine.
+	ProposedPlace ProposedActionType = "place"
 
-	// ActionRemove means removing a service from a machine.
-	ActionRemove ProposedActionType = "remove"
+	// ProposedRemove means removing a service from a machine.
+	ProposedRemove ProposedActionType = "remove"
 
-	// ActionMove means moving a service from one machine to another.
-	ActionMove ProposedActionType = "move"
+	// ProposedMove means moving a service from one machine to another.
+	ProposedMove ProposedActionType = "move"
 
-	// ActionProvision means provisioning a new machine.
-	ActionProvision ProposedActionType = "provision"
+	// ProposedProvision means provisioning a new machine.
+	ProposedProvision ProposedActionType = "provision"
 )
 
 // IsKnown reports whether a is one of the defined ProposedActionType values.
 func (a ProposedActionType) IsKnown() bool {
 	switch a {
-	case ActionPlace, ActionRemove, ActionMove, ActionProvision:
+	case ProposedPlace, ProposedRemove, ProposedMove, ProposedProvision:
 		return true
 	}
 	return false

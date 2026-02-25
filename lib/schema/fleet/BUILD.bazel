@@ -6,6 +6,7 @@ load("@rules_go//go:def.bzl", "go_library", "go_test")
 go_library(
     name = "fleet",
     srcs = [
+        "action.go",
         "doc.go",
         "fleet.go",
     ],
@@ -18,5 +19,8 @@ go_test(
     name = "fleet_test",
     srcs = ["fleet_test.go"],
     embed = [":fleet"],
-    deps = ["//lib/schema"],
+    deps = [
+        "//lib/schema",
+        "//lib/schema/ticket",
+    ],
 )

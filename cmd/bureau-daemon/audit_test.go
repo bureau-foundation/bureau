@@ -8,6 +8,10 @@ import (
 
 	"github.com/bureau-foundation/bureau/lib/ref"
 	"github.com/bureau-foundation/bureau/lib/schema"
+	"github.com/bureau-foundation/bureau/lib/schema/artifact"
+	"github.com/bureau-foundation/bureau/lib/schema/fleet"
+	"github.com/bureau-foundation/bureau/lib/schema/observation"
+	"github.com/bureau-foundation/bureau/lib/schema/ticket"
 )
 
 func TestIsSensitiveAction(t *testing.T) {
@@ -17,10 +21,10 @@ func TestIsSensitiveAction(t *testing.T) {
 		schema.ActionCredentialProvisionKeyPrefix + "FORGEJO_TOKEN",
 		schema.ActionInterrupt,
 		schema.ActionInterruptTerminate,
-		schema.ActionFleetAssign,
-		schema.ActionFleetProvision,
-		schema.ActionObserveReadWrite,
-		schema.ActionGrantApprovePrefix + schema.ActionObserve,
+		fleet.ActionAssign,
+		fleet.ActionProvision,
+		observation.ActionReadWrite,
+		schema.ActionGrantApprovePrefix + observation.ActionObserve,
 	}
 	for _, action := range sensitive {
 		if !isSensitiveAction(action) {
@@ -29,13 +33,13 @@ func TestIsSensitiveAction(t *testing.T) {
 	}
 
 	notSensitive := []string{
-		schema.ActionObserve,
+		observation.ActionObserve,
 		schema.ActionMatrixJoin,
 		schema.ActionMatrixInvite,
 		schema.ActionServiceDiscover,
-		schema.ActionTicketCreate,
+		ticket.ActionCreate,
 		"ticket/assign",
-		schema.ActionArtifactStore,
+		artifact.ActionStore,
 		"command/ticket/list",
 	}
 	for _, action := range notSensitive {
@@ -50,7 +54,7 @@ func TestPostAuditDeny_NoSession(t *testing.T) {
 
 	// Verify postAuditDeny does not panic when session is nil.
 	daemon, _ := newTestDaemon(t)
-	daemon.postAuditDeny(ref.MustParseUserID("@test/actor:bureau.local"), schema.ActionObserve, ref.MustParseUserID("@test/target:bureau.local"),
+	daemon.postAuditDeny(ref.MustParseUserID("@test/actor:bureau.local"), observation.ActionObserve, ref.MustParseUserID("@test/target:bureau.local"),
 		"daemon/observe", 0, nil, nil)
 }
 
@@ -59,6 +63,6 @@ func TestPostAuditAllow_NoSession(t *testing.T) {
 
 	// Verify postAuditAllow does not panic when session is nil.
 	daemon, _ := newTestDaemon(t)
-	daemon.postAuditAllow(ref.MustParseUserID("@test/actor:bureau.local"), schema.ActionObserveReadWrite, ref.MustParseUserID("@test/target:bureau.local"),
+	daemon.postAuditAllow(ref.MustParseUserID("@test/actor:bureau.local"), observation.ActionReadWrite, ref.MustParseUserID("@test/target:bureau.local"),
 		"daemon/observe", nil)
 }

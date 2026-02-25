@@ -21,7 +21,7 @@ import (
 	"github.com/bureau-foundation/bureau/lib/artifactstore"
 	"github.com/bureau-foundation/bureau/lib/clock"
 	"github.com/bureau-foundation/bureau/lib/ref"
-	"github.com/bureau-foundation/bureau/lib/schema"
+	"github.com/bureau-foundation/bureau/lib/schema/artifact"
 	"github.com/bureau-foundation/bureau/lib/service"
 	"github.com/bureau-foundation/bureau/lib/servicetoken"
 	"github.com/bureau-foundation/bureau/lib/testutil"
@@ -1830,7 +1830,7 @@ func TestAuthWrongGrant(t *testing.T) {
 
 	// Mint a token with only artifact/fetch grant, then try to store.
 	tokenBytes := mintArtifactToken(t, privateKey, []servicetoken.Grant{
-		{Actions: []string{schema.ActionArtifactFetch}},
+		{Actions: []string{artifact.ActionFetch}},
 	})
 
 	conn, wait := startHandler(t, as)
@@ -1875,7 +1875,7 @@ func TestAuthValidToken(t *testing.T) {
 
 	// Mint a token with artifact/fetch grant.
 	tokenBytes := mintArtifactToken(t, privateKey, []servicetoken.Grant{
-		{Actions: []string{schema.ActionArtifactFetch}},
+		{Actions: []string{artifact.ActionFetch}},
 	})
 
 	conn, wait := startHandler(t, as)
@@ -1974,20 +1974,20 @@ func TestAuthAllActionsRequireToken(t *testing.T) {
 		action string
 		grant  string
 	}{
-		{"store", schema.ActionArtifactStore},
-		{"fetch", schema.ActionArtifactFetch},
-		{"exists", schema.ActionArtifactFetch},
-		{"show", schema.ActionArtifactFetch},
-		{"reconstruction", schema.ActionArtifactFetch},
-		{"list", schema.ActionArtifactList},
-		{"tag", schema.ActionArtifactTag},
-		{"resolve", schema.ActionArtifactFetch},
-		{"tags", schema.ActionArtifactFetch},
-		{"delete-tag", schema.ActionArtifactTag},
-		{"pin", schema.ActionArtifactPin},
-		{"unpin", schema.ActionArtifactPin},
-		{"gc", schema.ActionArtifactGC},
-		{"cache-status", schema.ActionArtifactList},
+		{"store", artifact.ActionStore},
+		{"fetch", artifact.ActionFetch},
+		{"exists", artifact.ActionFetch},
+		{"show", artifact.ActionFetch},
+		{"reconstruction", artifact.ActionFetch},
+		{"list", artifact.ActionList},
+		{"tag", artifact.ActionTag},
+		{"resolve", artifact.ActionFetch},
+		{"tags", artifact.ActionFetch},
+		{"delete-tag", artifact.ActionTag},
+		{"pin", artifact.ActionPin},
+		{"unpin", artifact.ActionPin},
+		{"gc", artifact.ActionGC},
+		{"cache-status", artifact.ActionList},
 	}
 
 	for _, action := range actions {

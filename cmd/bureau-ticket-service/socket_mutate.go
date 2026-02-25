@@ -15,7 +15,6 @@ import (
 	"github.com/bureau-foundation/bureau/lib/codec"
 	"github.com/bureau-foundation/bureau/lib/cron"
 	"github.com/bureau-foundation/bureau/lib/ref"
-	"github.com/bureau-foundation/bureau/lib/schema"
 	"github.com/bureau-foundation/bureau/lib/schema/ticket"
 	"github.com/bureau-foundation/bureau/lib/servicetoken"
 )
@@ -462,7 +461,7 @@ type mutationResponse struct {
 // status "open" and the ID is derived from the room, timestamp, and
 // title.
 func (ts *TicketService) handleCreate(ctx context.Context, token *servicetoken.Token, raw []byte) (any, error) {
-	if err := requireGrant(token, schema.ActionTicketCreate); err != nil {
+	if err := requireGrant(token, ticket.ActionCreate); err != nil {
 		return nil, err
 	}
 
@@ -604,7 +603,7 @@ func (ts *TicketService) handleCreate(ctx context.Context, token *servicetoken.T
 // validated and lifecycle fields (closed_at, assignee) are managed
 // automatically.
 func (ts *TicketService) handleUpdate(ctx context.Context, token *servicetoken.Token, raw []byte) (any, error) {
-	if err := requireGrant(token, schema.ActionTicketUpdate); err != nil {
+	if err := requireGrant(token, ticket.ActionUpdate); err != nil {
 		return nil, err
 	}
 
@@ -726,12 +725,12 @@ func (ts *TicketService) handleUpdate(ctx context.Context, token *servicetoken.T
 		// could bypass handleClose's ticket/close check by calling
 		// update with status:"closed".
 		if proposedStatus == ticket.StatusClosed && content.Status != ticket.StatusClosed {
-			if err := requireGrant(token, schema.ActionTicketClose); err != nil {
+			if err := requireGrant(token, ticket.ActionClose); err != nil {
 				return nil, err
 			}
 		}
 		if content.Status == ticket.StatusClosed && proposedStatus != ticket.StatusClosed {
-			if err := requireGrant(token, schema.ActionTicketReopen); err != nil {
+			if err := requireGrant(token, ticket.ActionReopen); err != nil {
 				return nil, err
 			}
 		}
@@ -886,7 +885,7 @@ func (ts *TicketService) handleUpdate(ctx context.Context, token *servicetoken.T
 // when true, recurring gates are removed and the ticket closes
 // permanently regardless of schedule.
 func (ts *TicketService) handleClose(ctx context.Context, token *servicetoken.Token, raw []byte) (any, error) {
-	if err := requireGrant(token, schema.ActionTicketClose); err != nil {
+	if err := requireGrant(token, ticket.ActionClose); err != nil {
 		return nil, err
 	}
 
@@ -990,7 +989,7 @@ func (ts *TicketService) handleClose(ctx context.Context, token *servicetoken.To
 // handleReopen transitions a ticket from "closed" back to "open",
 // clearing the close timestamp and reason.
 func (ts *TicketService) handleReopen(ctx context.Context, token *servicetoken.Token, raw []byte) (any, error) {
-	if err := requireGrant(token, schema.ActionTicketReopen); err != nil {
+	if err := requireGrant(token, ticket.ActionReopen); err != nil {
 		return nil, err
 	}
 
@@ -1041,7 +1040,7 @@ func (ts *TicketService) handleReopen(ctx context.Context, token *servicetoken.T
 // before any are written; if any ticket is invalid, no state events
 // are sent.
 func (ts *TicketService) handleBatchCreate(ctx context.Context, token *servicetoken.Token, raw []byte) (any, error) {
-	if err := requireGrant(token, schema.ActionTicketCreate); err != nil {
+	if err := requireGrant(token, ticket.ActionCreate); err != nil {
 		return nil, err
 	}
 
@@ -1194,7 +1193,7 @@ func (ts *TicketService) handleBatchCreate(ctx context.Context, token *serviceto
 // state events are written. Importing into the same room as the source
 // is an upsert (Matrix state events are idempotent on type + state_key).
 func (ts *TicketService) handleImport(ctx context.Context, token *servicetoken.Token, raw []byte) (any, error) {
-	if err := requireGrant(token, schema.ActionTicketImport); err != nil {
+	if err := requireGrant(token, ticket.ActionImport); err != nil {
 		return nil, err
 	}
 
@@ -1274,7 +1273,7 @@ func (ts *TicketService) handleImport(ctx context.Context, token *servicetoken.T
 // Only "human" gates can be resolved manually — programmatic gates
 // are satisfied by the sync loop or via the update-gate action.
 func (ts *TicketService) handleResolveGate(ctx context.Context, token *servicetoken.Token, raw []byte) (any, error) {
-	if err := requireGrant(token, schema.ActionTicketUpdate); err != nil {
+	if err := requireGrant(token, ticket.ActionUpdate); err != nil {
 		return nil, err
 	}
 
@@ -1338,7 +1337,7 @@ func (ts *TicketService) handleResolveGate(ctx context.Context, token *serviceto
 // on any gate type. This is the entry point for external systems (CI,
 // pipelines) to report gate satisfaction.
 func (ts *TicketService) handleUpdateGate(ctx context.Context, token *servicetoken.Token, raw []byte) (any, error) {
-	if err := requireGrant(token, schema.ActionTicketUpdate); err != nil {
+	if err := requireGrant(token, ticket.ActionUpdate); err != nil {
 		return nil, err
 	}
 
@@ -1405,7 +1404,7 @@ func (ts *TicketService) handleUpdateGate(ctx context.Context, token *servicetok
 // ticket should be able to set review dispositions, and not every
 // reviewer should be able to edit the ticket.
 func (ts *TicketService) handleSetDisposition(ctx context.Context, token *servicetoken.Token, raw []byte) (any, error) {
-	if err := requireGrant(token, schema.ActionTicketReview); err != nil {
+	if err := requireGrant(token, ticket.ActionReview); err != nil {
 		return nil, err
 	}
 
@@ -1491,7 +1490,7 @@ func (ts *TicketService) handleSetDisposition(ctx context.Context, token *servic
 // warnings, references. The note ID is assigned sequentially
 // ("n-1", "n-2", ...) and the author is taken from the token subject.
 func (ts *TicketService) handleAddNote(ctx context.Context, token *servicetoken.Token, raw []byte) (any, error) {
-	if err := requireGrant(token, schema.ActionTicketUpdate); err != nil {
+	if err := requireGrant(token, ticket.ActionUpdate); err != nil {
 		return nil, err
 	}
 
@@ -1547,7 +1546,7 @@ func (ts *TicketService) handleAddNote(ctx context.Context, token *servicetoken.
 // has a gate with ID "defer", its Target is updated in-place.
 // Otherwise a new pending timer gate is appended.
 func (ts *TicketService) handleDefer(ctx context.Context, token *servicetoken.Token, raw []byte) (any, error) {
-	if err := requireGrant(token, schema.ActionTicketUpdate); err != nil {
+	if err := requireGrant(token, ticket.ActionUpdate); err != nil {
 		return nil, err
 	}
 

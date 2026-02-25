@@ -14,6 +14,7 @@ import (
 
 	"github.com/bureau-foundation/bureau/lib/ref"
 	"github.com/bureau-foundation/bureau/lib/schema"
+	"github.com/bureau-foundation/bureau/lib/schema/observation"
 	"github.com/bureau-foundation/bureau/observe"
 )
 
@@ -172,8 +173,8 @@ func TestOperatorFlow(t *testing.T) {
 		Principals: []principalSpec{{Localpart: "test/observed"}},
 		DefaultPolicy: &schema.AuthorizationPolicy{
 			Allowances: []schema.Allowance{
-				{Actions: []string{schema.ActionObserve}, Actors: []string{"**:**"}},
-				{Actions: []string{schema.ActionObserveReadWrite}, Actors: []string{admin.UserID().Localpart() + ":**"}},
+				{Actions: []string{observation.ActionObserve}, Actors: []string{"**:**"}},
+				{Actions: []string{observation.ActionReadWrite}, Actors: []string{admin.UserID().Localpart() + ":**"}},
 			},
 		},
 	})
@@ -454,8 +455,8 @@ func TestCrossMachineObservation(t *testing.T) {
 		Principals: []principalSpec{{Localpart: "test/xm-obs"}},
 		DefaultPolicy: &schema.AuthorizationPolicy{
 			Allowances: []schema.Allowance{
-				{Actions: []string{schema.ActionObserve}, Actors: []string{"**:**"}},
-				{Actions: []string{schema.ActionObserveReadWrite}, Actors: []string{admin.UserID().Localpart() + ":**"}},
+				{Actions: []string{observation.ActionObserve}, Actors: []string{"**:**"}},
+				{Actions: []string{observation.ActionReadWrite}, Actors: []string{admin.UserID().Localpart() + ":**"}},
 			},
 		},
 	})

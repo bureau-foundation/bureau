@@ -12,6 +12,8 @@ import (
 
 	"github.com/bureau-foundation/bureau/lib/ref"
 	"github.com/bureau-foundation/bureau/lib/schema"
+	"github.com/bureau-foundation/bureau/lib/schema/observation"
+	"github.com/bureau-foundation/bureau/lib/schema/ticket"
 	"github.com/bureau-foundation/bureau/lib/servicetoken"
 	"github.com/bureau-foundation/bureau/observe"
 )
@@ -135,7 +137,7 @@ func TestMintServiceTokenSuccess(t *testing.T) {
 	}
 	daemon.authorizationIndex.SetPrincipal(observerUserID, schema.AuthorizationPolicy{
 		Grants: []schema.Grant{
-			{Actions: []string{schema.ActionTicketAll}},
+			{Actions: []string{ticket.ActionAll}},
 		},
 	})
 
@@ -176,8 +178,8 @@ func TestMintServiceTokenSuccess(t *testing.T) {
 	if len(token.Grants) != 1 {
 		t.Fatalf("Grants = %d, want 1", len(token.Grants))
 	}
-	if token.Grants[0].Actions[0] != schema.ActionTicketAll {
-		t.Errorf("Grants[0].Actions[0] = %q, want %q", token.Grants[0].Actions[0], schema.ActionTicketAll)
+	if token.Grants[0].Actions[0] != ticket.ActionAll {
+		t.Errorf("Grants[0].Actions[0] = %q, want %q", token.Grants[0].Actions[0], ticket.ActionAll)
 	}
 }
 
@@ -192,8 +194,8 @@ func TestMintServiceTokenFilterGrants(t *testing.T) {
 	}
 	daemon.authorizationIndex.SetPrincipal(observerUserID, schema.AuthorizationPolicy{
 		Grants: []schema.Grant{
-			{Actions: []string{schema.ActionTicketCreate, schema.ActionTicketUpdate}},
-			{Actions: []string{schema.ActionObserveAll}},
+			{Actions: []string{ticket.ActionCreate, ticket.ActionUpdate}},
+			{Actions: []string{observation.ActionAll}},
 			{Actions: []string{"artifact/upload"}},
 		},
 	})
@@ -308,7 +310,7 @@ func TestMintServiceTokenSocketPathDerivation(t *testing.T) {
 	}
 	daemon.authorizationIndex.SetPrincipal(observerUserID, schema.AuthorizationPolicy{
 		Grants: []schema.Grant{
-			{Actions: []string{schema.ActionTicketAll}},
+			{Actions: []string{ticket.ActionAll}},
 		},
 	})
 
@@ -338,7 +340,7 @@ func TestMintServiceTokenClientFunction(t *testing.T) {
 	}
 	daemon.authorizationIndex.SetPrincipal(observerUserID, schema.AuthorizationPolicy{
 		Grants: []schema.Grant{
-			{Actions: []string{schema.ActionTicketAll}},
+			{Actions: []string{ticket.ActionAll}},
 		},
 	})
 

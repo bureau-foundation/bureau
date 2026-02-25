@@ -80,7 +80,7 @@ type infoResponse struct {
 // the "fleet/info" grant — model counts are operational metadata that
 // should not be disclosed to unprivileged callers.
 func (fc *FleetController) handleInfo(ctx context.Context, token *servicetoken.Token, raw []byte) (any, error) {
-	if err := requireGrant(token, schema.ActionFleetInfo); err != nil {
+	if err := requireGrant(token, fleet.ActionInfo); err != nil {
 		return nil, err
 	}
 
@@ -124,7 +124,7 @@ type machineSummary struct {
 // Machines with incomplete state (nil info or status) are included
 // with zero values for the missing fields. Requires "fleet/list-machines".
 func (fc *FleetController) handleListMachines(ctx context.Context, token *servicetoken.Token, raw []byte) (any, error) {
-	if err := requireGrant(token, schema.ActionFleetListMachines); err != nil {
+	if err := requireGrant(token, fleet.ActionListMachines); err != nil {
 		return nil, err
 	}
 
@@ -182,7 +182,7 @@ type serviceSummary struct {
 // handleListServices returns a sorted list of all fleet-managed services.
 // Requires "fleet/list-services".
 func (fc *FleetController) handleListServices(ctx context.Context, token *servicetoken.Token, raw []byte) (any, error) {
-	if err := requireGrant(token, schema.ActionFleetListServices); err != nil {
+	if err := requireGrant(token, fleet.ActionListServices); err != nil {
 		return nil, err
 	}
 
@@ -233,7 +233,7 @@ type showMachineResponse struct {
 // Requires "fleet/show-machine". Returns an error if the machine
 // is not tracked.
 func (fc *FleetController) handleShowMachine(ctx context.Context, token *servicetoken.Token, raw []byte) (any, error) {
-	if err := requireGrant(token, schema.ActionFleetShowMachine); err != nil {
+	if err := requireGrant(token, fleet.ActionShowMachine); err != nil {
 		return nil, err
 	}
 
@@ -296,7 +296,7 @@ type serviceInstance struct {
 // Requires "fleet/show-service". Returns an error if the service
 // is not tracked.
 func (fc *FleetController) handleShowService(ctx context.Context, token *servicetoken.Token, raw []byte) (any, error) {
-	if err := requireGrant(token, schema.ActionFleetShowService); err != nil {
+	if err := requireGrant(token, fleet.ActionShowService); err != nil {
 		return nil, err
 	}
 
@@ -357,7 +357,7 @@ type placeResponse struct {
 // Manual placement (with a machine specified) bypasses scoring but
 // still validates eligibility. Requires "fleet/place".
 func (fc *FleetController) handlePlace(ctx context.Context, token *servicetoken.Token, raw []byte) (any, error) {
-	if err := requireGrant(token, schema.ActionFleetPlace); err != nil {
+	if err := requireGrant(token, fleet.ActionPlace); err != nil {
 		return nil, err
 	}
 
@@ -431,7 +431,7 @@ type unplaceResponse struct {
 // handleUnplace removes a fleet-managed service from a machine.
 // Requires "fleet/unplace".
 func (fc *FleetController) handleUnplace(ctx context.Context, token *servicetoken.Token, raw []byte) (any, error) {
-	if err := requireGrant(token, schema.ActionFleetUnplace); err != nil {
+	if err := requireGrant(token, fleet.ActionUnplace); err != nil {
 		return nil, err
 	}
 
@@ -483,7 +483,7 @@ type planCandidate struct {
 // machines with their scores, plus the current placement. No state
 // is modified. Requires "fleet/plan".
 func (fc *FleetController) handlePlan(ctx context.Context, token *servicetoken.Token, raw []byte) (any, error) {
-	if err := requireGrant(token, schema.ActionFleetPlan); err != nil {
+	if err := requireGrant(token, fleet.ActionPlan); err != nil {
 		return nil, err
 	}
 
@@ -556,7 +556,7 @@ type machineHealthEntry struct {
 // If a specific machine is requested, returns only that machine.
 // Requires "fleet/machine-health".
 func (fc *FleetController) handleMachineHealth(ctx context.Context, token *servicetoken.Token, raw []byte) (any, error) {
-	if err := requireGrant(token, schema.ActionFleetMachineHealth); err != nil {
+	if err := requireGrant(token, fleet.ActionMachineHealth); err != nil {
 		return nil, err
 	}
 

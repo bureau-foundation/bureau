@@ -72,7 +72,7 @@ func TestTicketServiceAgent(t *testing.T) {
 		Payload: map[string]any{"WORKSPACE_ROOM_ID": projectRoomID},
 		Authorization: &schema.AuthorizationPolicy{
 			Grants: []schema.Grant{
-				{Actions: []string{schema.ActionCommandTicketAll, schema.ActionTicketAll}},
+				{Actions: []string{schema.ActionCommandTicketAll, ticket.ActionAll}},
 			},
 		},
 	})
@@ -205,22 +205,22 @@ func TestTicketLifecycleAgent(t *testing.T) {
 	pushCredentials(t, admin, machine, workerAccount)
 	joinConfigRoom(t, admin, machine.ConfigRoomID, workerAccount)
 
-	pmGrants := []string{schema.ActionCommandTicketAll, schema.ActionTicketAll}
+	pmGrants := []string{schema.ActionCommandTicketAll, ticket.ActionAll}
 	workerGrants := []string{
 		schema.ActionCommandTicketAll,
-		schema.ActionTicketCreate,
-		schema.ActionTicketUpdate,
-		schema.ActionTicketList,
-		schema.ActionTicketReady,
-		schema.ActionTicketShow,
-		schema.ActionTicketBlocked,
-		schema.ActionTicketStats,
-		schema.ActionTicketGrep,
-		schema.ActionTicketDeps,
-		schema.ActionTicketRanked,
-		schema.ActionTicketChildren,
-		schema.ActionTicketEpicHealth,
-		schema.ActionTicketInfo,
+		ticket.ActionCreate,
+		ticket.ActionUpdate,
+		ticket.ActionList,
+		ticket.ActionReady,
+		ticket.ActionShow,
+		ticket.ActionBlocked,
+		ticket.ActionStats,
+		ticket.ActionGrep,
+		ticket.ActionDeps,
+		ticket.ActionRanked,
+		ticket.ActionChildren,
+		ticket.ActionEpicHealth,
+		ticket.ActionInfo,
 	}
 
 	templateRef := "bureau/template:ticket-lifecycle-agent"
@@ -632,7 +632,7 @@ func TestStewardship(t *testing.T) {
 		t.Fatalf("construct operator entity: %v", err)
 	}
 	token := mintTestServiceToken(t, machine, operatorEntity, "ticket",
-		[]servicetoken.Grant{{Actions: []string{schema.ActionTicketAll}}})
+		[]servicetoken.Grant{{Actions: []string{ticket.ActionAll}}})
 	client := service.NewServiceClientFromToken(ticketSvc.SocketPath, token)
 
 	adminUserID := admin.UserID()
@@ -780,7 +780,7 @@ func TestStewardship(t *testing.T) {
 		// identify the caller, so we mint a token with the admin's
 		// UserID as subject.
 		adminToken := mintTestServiceTokenForUser(t, machine, adminUserID, "ticket",
-			[]servicetoken.Grant{{Actions: []string{schema.ActionTicketAll}}})
+			[]servicetoken.Grant{{Actions: []string{ticket.ActionAll}}})
 		adminClient := service.NewServiceClientFromToken(ticketSvc.SocketPath, adminToken)
 
 		// Watch for the gate satisfaction write. The set-disposition

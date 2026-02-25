@@ -13,6 +13,7 @@ import (
 	"github.com/bureau-foundation/bureau/lib/ref"
 	"github.com/bureau-foundation/bureau/lib/schema"
 	"github.com/bureau-foundation/bureau/lib/schema/fleet"
+	"github.com/bureau-foundation/bureau/lib/schema/ticket"
 	"github.com/bureau-foundation/bureau/messaging"
 )
 
@@ -276,7 +277,7 @@ func TestBuildAssignmentPropagatesAuthorization(t *testing.T) {
 		ServiceVisibility: []string{schema.ActionServiceAll},
 		Authorization: &schema.AuthorizationPolicy{
 			Grants: []schema.Grant{
-				{Actions: []string{schema.ActionTicketCreate, schema.ActionTicketUpdate}},
+				{Actions: []string{ticket.ActionCreate, ticket.ActionUpdate}},
 			},
 		},
 	}
@@ -306,8 +307,8 @@ func TestBuildAssignmentPropagatesAuthorization(t *testing.T) {
 	if len(assignment.Authorization.Grants) != 1 {
 		t.Fatalf("expected 1 grant, got %d", len(assignment.Authorization.Grants))
 	}
-	if assignment.Authorization.Grants[0].Actions[0] != schema.ActionTicketCreate {
-		t.Errorf("grant action = %q, want %s", assignment.Authorization.Grants[0].Actions[0], schema.ActionTicketCreate)
+	if assignment.Authorization.Grants[0].Actions[0] != ticket.ActionCreate {
+		t.Errorf("grant action = %q, want %s", assignment.Authorization.Grants[0].Actions[0], ticket.ActionCreate)
 	}
 }
 

@@ -50,6 +50,7 @@ go_test(
         "//lib/ref",
         "//lib/schema",
         "//lib/schema/fleet",
+        "//lib/schema/ticket",
         "//lib/service",
         "//lib/servicetoken",
         "//messaging",

@@ -11,6 +11,7 @@ import (
 	"time"
 
 	"github.com/bureau-foundation/bureau/lib/schema"
+	"github.com/bureau-foundation/bureau/lib/schema/observation"
 	"github.com/bureau-foundation/bureau/observe"
 )
 
@@ -116,8 +117,8 @@ func TestMachineLayoutAuthFiltering(t *testing.T) {
 	// should return an error.
 	restrictedPolicy := schema.AuthorizationPolicy{
 		Allowances: []schema.Allowance{
-			{Actions: []string{schema.ActionObserve}, Actors: []string{"iree/**:**"}},
-			{Actions: []string{schema.ActionObserveReadWrite}, Actors: []string{"iree/**:**"}},
+			{Actions: []string{observation.ActionObserve}, Actors: []string{"iree/**:**"}},
+			{Actions: []string{observation.ActionReadWrite}, Actors: []string{"iree/**:**"}},
 		},
 	}
 	for _, localpart := range []string{"iree/amdgpu/pm", "service/stt/whisper", "infra/ci/runner"} {
@@ -148,7 +149,7 @@ func TestMachineLayoutPerPrincipalAuthFiltering(t *testing.T) {
 	daemon.running[secretEntity] = true
 	daemon.authorizationIndex.SetPrincipal(secretEntity.UserID(), schema.AuthorizationPolicy{
 		Allowances: []schema.Allowance{
-			{Actions: []string{schema.ActionObserve}, Actors: []string{"secret-admin:bureau.local"}},
+			{Actions: []string{observation.ActionObserve}, Actors: []string{"secret-admin:bureau.local"}},
 		},
 	})
 

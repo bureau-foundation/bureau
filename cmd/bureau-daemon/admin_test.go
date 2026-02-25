@@ -14,6 +14,7 @@ import (
 	"github.com/bureau-foundation/bureau/lib/authorization"
 	"github.com/bureau-foundation/bureau/lib/ipc"
 	"github.com/bureau-foundation/bureau/lib/schema"
+	"github.com/bureau-foundation/bureau/lib/schema/ticket"
 	"github.com/bureau-foundation/bureau/lib/sealed"
 	"github.com/bureau-foundation/bureau/lib/service"
 	"github.com/bureau-foundation/bureau/lib/servicetoken"
@@ -534,7 +535,7 @@ func TestHasCredentialGrants(t *testing.T) {
 		{
 			name: "unrelated grants",
 			grants: []schema.Grant{
-				{Actions: []string{schema.ActionTicketCreate}, Targets: []string{"**:**"}},
+				{Actions: []string{ticket.ActionCreate}, Targets: []string{"**:**"}},
 			},
 			expected: false,
 		},

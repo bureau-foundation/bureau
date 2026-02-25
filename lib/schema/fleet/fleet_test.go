@@ -9,6 +9,7 @@ import (
 	"testing"
 
 	"github.com/bureau-foundation/bureau/lib/schema"
+	"github.com/bureau-foundation/bureau/lib/schema/ticket"
 )
 
 // assertField checks that a JSON object has a field with the expected value.
@@ -284,7 +285,7 @@ func TestFleetServiceContentWithAuthorization(t *testing.T) {
 		ServiceVisibility: []string{schema.ActionServiceAll},
 		Authorization: &schema.AuthorizationPolicy{
 			Grants: []schema.Grant{
-				{Actions: []string{schema.ActionTicketCreate, schema.ActionTicketUpdate}},
+				{Actions: []string{ticket.ActionCreate, ticket.ActionUpdate}},
 			},
 		},
 	}

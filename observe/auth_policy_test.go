@@ -10,6 +10,7 @@ import (
 	"testing"
 
 	"github.com/bureau-foundation/bureau/lib/schema"
+	"github.com/bureau-foundation/bureau/lib/schema/observation"
 )
 
 func TestQueryGrants(t *testing.T) {
@@ -27,7 +28,7 @@ func TestQueryGrants(t *testing.T) {
 		OK:        true,
 		Principal: "iree/amdgpu/pm",
 		Grants: []schema.Grant{
-			{Actions: []string{schema.ActionObserveAll}, Targets: []string{"iree/**"}},
+			{Actions: []string{observation.ActionAll}, Targets: []string{"iree/**"}},
 			{Actions: []string{"command/pipeline/list"}},
 		},
 		Denials: []schema.Denial{
@@ -100,10 +101,10 @@ func TestQueryAllowances(t *testing.T) {
 		OK:        true,
 		Principal: "iree/amdgpu/compiler",
 		Allowances: []schema.Allowance{
-			{Actions: []string{schema.ActionObserveAll}, Actors: []string{"iree/**"}},
+			{Actions: []string{observation.ActionAll}, Actors: []string{"iree/**"}},
 		},
 		AllowanceDenials: []schema.AllowanceDenial{
-			{Actions: []string{schema.ActionObserveReadWrite}, Actors: []string{"untrusted/**"}},
+			{Actions: []string{observation.ActionReadWrite}, Actors: []string{"untrusted/**"}},
 		},
 	}
 

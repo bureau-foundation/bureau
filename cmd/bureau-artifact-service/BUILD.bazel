@@ -43,7 +43,7 @@ go_test(
         "//lib/artifactstore",
         "//lib/clock",
         "//lib/ref",
-        "//lib/schema",
+        "//lib/schema/artifact",
         "//lib/service",
         "//lib/servicetoken",
         "//lib/testutil",

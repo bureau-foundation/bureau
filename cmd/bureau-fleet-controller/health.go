@@ -136,7 +136,7 @@ func (fc *FleetController) executeFailover(ctx context.Context, machineLocalpart
 				machineLocalpart, serviceLocalpart),
 			ProposedActions: []fleet.ProposedAction{
 				{
-					Action:      fleet.ActionPlace,
+					Action:      fleet.ProposedPlace,
 					Service:     serviceLocalpart,
 					FromMachine: machineLocalpart,
 				},

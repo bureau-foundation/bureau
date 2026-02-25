@@ -11,6 +11,7 @@ import (
 	"github.com/bureau-foundation/bureau/lib/authorization"
 	"github.com/bureau-foundation/bureau/lib/ref"
 	"github.com/bureau-foundation/bureau/lib/schema"
+	"github.com/bureau-foundation/bureau/lib/schema/observation"
 )
 
 // sensitiveActionPrefixes defines which action namespaces are considered
@@ -21,7 +22,7 @@ var sensitiveActionPrefixes = []string{
 	"credential/provision/",
 	schema.ActionInterrupt,
 	"fleet/",
-	schema.ActionObserveReadWrite,
+	observation.ActionReadWrite,
 	schema.ActionGrantApprovePrefix,
 }
 

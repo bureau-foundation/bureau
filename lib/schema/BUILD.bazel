@@ -56,6 +56,7 @@ go_test(
     deps = [
         "//lib/ref",
         "//lib/schema/artifact",
+        "//lib/schema/observation",
         "//lib/schema/pipeline",
     ],
 )

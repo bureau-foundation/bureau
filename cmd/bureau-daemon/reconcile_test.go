@@ -26,6 +26,9 @@ import (
 	"github.com/bureau-foundation/bureau/lib/principal"
 	"github.com/bureau-foundation/bureau/lib/ref"
 	"github.com/bureau-foundation/bureau/lib/schema"
+	"github.com/bureau-foundation/bureau/lib/schema/artifact"
+	"github.com/bureau-foundation/bureau/lib/schema/observation"
+	"github.com/bureau-foundation/bureau/lib/schema/ticket"
 	"github.com/bureau-foundation/bureau/lib/servicetoken"
 	"github.com/bureau-foundation/bureau/lib/testutil"
 	"github.com/bureau-foundation/bureau/messaging"
@@ -1102,13 +1105,13 @@ func TestMergeAuthorizationPolicy(t *testing.T) {
 				Grants:           []schema.Grant{{Actions: []string{"observe/*"}}},
 				Denials:          []schema.Denial{{Actions: []string{"admin/*"}}},
 				Allowances:       []schema.Allowance{{Actions: []string{"observe/attach"}, Actors: []string{"**:**"}}},
-				AllowanceDenials: []schema.AllowanceDenial{{Actions: []string{schema.ActionObserveResize}, Actors: []string{"untrusted/**:**"}}},
+				AllowanceDenials: []schema.AllowanceDenial{{Actions: []string{observation.ActionResize}, Actors: []string{"untrusted/**:**"}}},
 			},
 			principalPolicy: &schema.AuthorizationPolicy{
 				Grants:           []schema.Grant{{Actions: []string{schema.ActionServiceDiscover}}, {Actions: []string{schema.ActionMatrixJoin}}},
 				Denials:          []schema.Denial{{Actions: []string{schema.ActionServiceRegister}}},
-				Allowances:       []schema.Allowance{{Actions: []string{schema.ActionObserveInput}, Actors: []string{"admin/**:**"}}},
-				AllowanceDenials: []schema.AllowanceDenial{{Actions: []string{schema.ActionObserveInput}, Actors: []string{"untrusted/**:**"}}},
+				Allowances:       []schema.Allowance{{Actions: []string{observation.ActionInput}, Actors: []string{"admin/**:**"}}},
+				AllowanceDenials: []schema.AllowanceDenial{{Actions: []string{observation.ActionInput}, Actors: []string{"untrusted/**:**"}}},
 			},
 			wantGrants:       3,
 			wantDenials:      2,
@@ -1413,7 +1416,7 @@ func TestRebuildAuthorizationIndex_RoomLevelMemberGrants(t *testing.T) {
 		workspaceRoomID: {
 			policy: schema.RoomAuthorizationPolicy{
 				MemberGrants: []schema.Grant{
-					{Actions: []string{schema.ActionTicketCreate}, Targets: []string{"**:**"}},
+					{Actions: []string{ticket.ActionCreate}, Targets: []string{"**:**"}},
 				},
 			},
 		},
@@ -1427,8 +1430,8 @@ func TestRebuildAuthorizationIndex_RoomLevelMemberGrants(t *testing.T) {
 	if len(alphaGrants) != 1 {
 		t.Fatalf("alpha grants = %d, want 1 (room-level MemberGrant)", len(alphaGrants))
 	}
-	if alphaGrants[0].Actions[0] != schema.ActionTicketCreate {
-		t.Errorf("alpha grant action = %q, want %q", alphaGrants[0].Actions[0], schema.ActionTicketCreate)
+	if alphaGrants[0].Actions[0] != ticket.ActionCreate {
+		t.Errorf("alpha grant action = %q, want %q", alphaGrants[0].Actions[0], ticket.ActionCreate)
 	}
 	expectedSource := schema.SourceRoom(workspaceRoomID.String())
 	if alphaGrants[0].Source != expectedSource {
@@ -1623,10 +1626,10 @@ func TestFilterGrantsForService(t *testing.T) {
 	t.Parallel()
 
 	grants := []schema.Grant{
-		{Actions: []string{schema.ActionTicketCreate, "ticket/assign"}},
+		{Actions: []string{ticket.ActionCreate, "ticket/assign"}},
 		{Actions: []string{"observe/*"}, Targets: []string{"**:**"}},
 		{Actions: []string{"**"}},
-		{Actions: []string{schema.ActionArtifactFetch}},
+		{Actions: []string{artifact.ActionFetch}},
 		{Actions: []string{"ticket/*"}, Targets: []string{"**/iree/**:**"}},
 	}
 
@@ -1640,7 +1643,7 @@ func TestFilterGrantsForService(t *testing.T) {
 			name:       "ticket role matches ticket grants and wildcard",
 			role:       "ticket",
 			wantCount:  3, // ticket/create+assign, **, ticket/*
-			wantAction: schema.ActionTicketCreate,
+			wantAction: ticket.ActionCreate,
 		},
 		{
 			name:       "observe role matches observe grant and wildcard",
@@ -1712,7 +1715,7 @@ func TestMintServiceTokens(t *testing.T) {
 	// Set up the principal with grants covering the ticket namespace.
 	daemon.authorizationIndex.SetPrincipal(testEntity(t, daemon.fleet, "agent/alpha").UserID(), schema.AuthorizationPolicy{
 		Grants: []schema.Grant{
-			{Actions: []string{schema.ActionTicketCreate, "ticket/assign"}},
+			{Actions: []string{ticket.ActionCreate, "ticket/assign"}},
 			{Actions: []string{"observe/*"}, Targets: []string{"**:**"}},
 		},
 	})
@@ -1827,8 +1830,8 @@ func TestMintServiceTokens_MultipleServices(t *testing.T) {
 
 	daemon.authorizationIndex.SetPrincipal(testEntity(t, daemon.fleet, "agent/alpha").UserID(), schema.AuthorizationPolicy{
 		Grants: []schema.Grant{
-			{Actions: []string{schema.ActionTicketAll}},
-			{Actions: []string{schema.ActionArtifactFetch}},
+			{Actions: []string{ticket.ActionAll}},
+			{Actions: []string{artifact.ActionFetch}},
 		},
 	})
 

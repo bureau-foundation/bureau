@@ -9,6 +9,9 @@ import (
 
 	"github.com/bureau-foundation/bureau/lib/ref"
 	"github.com/bureau-foundation/bureau/lib/schema"
+	"github.com/bureau-foundation/bureau/lib/schema/fleet"
+	"github.com/bureau-foundation/bureau/lib/schema/observation"
+	"github.com/bureau-foundation/bureau/lib/schema/ticket"
 )
 
 // setupIndex creates a test index with a standard scenario:
@@ -26,7 +29,7 @@ func setupIndex(t *testing.T) *Index {
 	// PM grants and denials.
 	index.SetPrincipal(uid(t, "@bureau/dev/pm:bureau.local"), schema.AuthorizationPolicy{
 		Grants: []schema.Grant{
-			{Actions: []string{schema.ActionObserveAll, schema.ActionInterrupt}, Targets: []string{"bureau/dev/**:bureau.local"}},
+			{Actions: []string{observation.ActionAll, schema.ActionInterrupt}, Targets: []string{"bureau/dev/**:bureau.local"}},
 			{Actions: []string{schema.ActionMatrixJoin, schema.ActionMatrixInvite}},
 			{Actions: []string{schema.ActionServiceDiscover}, Targets: []string{"service/**:bureau.local"}},
 		},
@@ -35,19 +38,19 @@ func setupIndex(t *testing.T) *Index {
 	// Coder grants and denials.
 	index.SetPrincipal(uid(t, "@bureau/dev/workspace/coder/0:bureau.local"), schema.AuthorizationPolicy{
 		Grants: []schema.Grant{
-			{Actions: []string{schema.ActionTicketCreate, "ticket/assign"}},
+			{Actions: []string{ticket.ActionCreate, "ticket/assign"}},
 			{Actions: []string{"command/ticket/*", "command/artifact/*"}},
 		},
 		Denials: []schema.Denial{
-			{Actions: []string{schema.ActionFleetAll}},
+			{Actions: []string{fleet.ActionAll}},
 		},
 		// Coder allows observation from PM and admin.
 		Allowances: []schema.Allowance{
-			{Actions: []string{schema.ActionObserve, schema.ActionObserveReadWrite}, Actors: []string{"bureau/dev/pm:bureau.local", "bureau-admin:bureau.local"}},
-			{Actions: []string{schema.ActionObserve}, Actors: []string{"bureau/dev/**:bureau.local"}},
+			{Actions: []string{observation.ActionObserve, observation.ActionReadWrite}, Actors: []string{"bureau/dev/pm:bureau.local", "bureau-admin:bureau.local"}},
+			{Actions: []string{observation.ActionObserve}, Actors: []string{"bureau/dev/**:bureau.local"}},
 		},
 		AllowanceDenials: []schema.AllowanceDenial{
-			{Actions: []string{schema.ActionObserveAll}, Actors: []string{"bureau/dev/secret/**:bureau.local"}},
+			{Actions: []string{observation.ActionAll}, Actors: []string{"bureau/dev/secret/**:bureau.local"}},
 		},
 	})
 
@@ -94,7 +97,7 @@ func TestAuthorized_CrossPrincipal_FullChain(t *testing.T) {
 	index := setupIndex(t)
 
 	// PM observes coder: PM has grant + coder has allowance → allow.
-	result := Authorized(index, uid(t, "@bureau/dev/pm:bureau.local"), schema.ActionObserve, uid(t, "@bureau/dev/workspace/coder/0:bureau.local"))
+	result := Authorized(index, uid(t, "@bureau/dev/pm:bureau.local"), observation.ActionObserve, uid(t, "@bureau/dev/workspace/coder/0:bureau.local"))
 	if result.Decision != Allow {
 		t.Errorf("PM observe coder: got %v (%v), want allow", result.Decision, result.Reason)
 	}
@@ -111,7 +114,7 @@ func TestAuthorized_CrossPrincipal_ReadWriteUpgrade(t *testing.T) {
 
 	// PM observes coder with readwrite: PM has observe/** grant, coder
 	// allows observe/read-write from PM → allow.
-	result := Authorized(index, uid(t, "@bureau/dev/pm:bureau.local"), schema.ActionObserveReadWrite, uid(t, "@bureau/dev/workspace/coder/0:bureau.local"))
+	result := Authorized(index, uid(t, "@bureau/dev/pm:bureau.local"), observation.ActionReadWrite, uid(t, "@bureau/dev/workspace/coder/0:bureau.local"))
 	if result.Decision != Allow {
 		t.Errorf("PM observe/read-write coder: got %v (%v), want allow", result.Decision, result.Reason)
 	}
@@ -125,7 +128,7 @@ func TestAuthorized_CrossPrincipal_NoAllowance(t *testing.T) {
 	// has no allowance for the PM.
 	index.SetPrincipal(uid(t, "@bureau/dev/workspace/worker/0:bureau.local"), schema.AuthorizationPolicy{})
 
-	result := Authorized(index, uid(t, "@bureau/dev/pm:bureau.local"), schema.ActionObserve, uid(t, "@bureau/dev/workspace/worker/0:bureau.local"))
+	result := Authorized(index, uid(t, "@bureau/dev/pm:bureau.local"), observation.ActionObserve, uid(t, "@bureau/dev/workspace/worker/0:bureau.local"))
 	if result.Decision != Deny {
 		t.Errorf("PM observe worker with no allowances: got %v, want deny", result.Decision)
 	}
@@ -139,7 +142,7 @@ func TestAuthorized_SubjectDenial(t *testing.T) {
 
 	// Coder tries fleet operation: has no grant anyway, but also has a
 	// denial. Should deny at the grant stage.
-	result := Authorized(index, uid(t, "@bureau/dev/workspace/coder/0:bureau.local"), schema.ActionFleetAssign, ref.UserID{})
+	result := Authorized(index, uid(t, "@bureau/dev/workspace/coder/0:bureau.local"), fleet.ActionAssign, ref.UserID{})
 	if result.Decision != Deny {
 		t.Errorf("coder fleet/assign: got %v, want deny", result.Decision)
 	}
@@ -154,14 +157,14 @@ func TestAuthorized_SubjectDenialOverridesGrant(t *testing.T) {
 	// Give coder a fleet grant, but the denial should override it.
 	index.SetPrincipal(uid(t, "@bureau/dev/workspace/coder/0:bureau.local"), schema.AuthorizationPolicy{
 		Grants: []schema.Grant{
-			{Actions: []string{schema.ActionFleetAll}},
+			{Actions: []string{fleet.ActionAll}},
 		},
 		Denials: []schema.Denial{
-			{Actions: []string{schema.ActionFleetAll}},
+			{Actions: []string{fleet.ActionAll}},
 		},
 	})
 
-	result := Authorized(index, uid(t, "@bureau/dev/workspace/coder/0:bureau.local"), schema.ActionFleetAssign, ref.UserID{})
+	result := Authorized(index, uid(t, "@bureau/dev/workspace/coder/0:bureau.local"), fleet.ActionAssign, ref.UserID{})
 	if result.Decision != Deny {
 		t.Errorf("coder fleet/assign (denied): got %v, want deny", result.Decision)
 	}
@@ -180,11 +183,11 @@ func TestAuthorized_AllowanceDenial(t *testing.T) {
 	// allowance denial blocks observation from secret agents.
 	index.SetPrincipal(uid(t, "@bureau/dev/secret/agent/0:bureau.local"), schema.AuthorizationPolicy{
 		Grants: []schema.Grant{
-			{Actions: []string{schema.ActionObserve}, Targets: []string{"bureau/dev/**:bureau.local"}},
+			{Actions: []string{observation.ActionObserve}, Targets: []string{"bureau/dev/**:bureau.local"}},
 		},
 	})
 
-	result := Authorized(index, uid(t, "@bureau/dev/secret/agent/0:bureau.local"), schema.ActionObserve, uid(t, "@bureau/dev/workspace/coder/0:bureau.local"))
+	result := Authorized(index, uid(t, "@bureau/dev/secret/agent/0:bureau.local"), observation.ActionObserve, uid(t, "@bureau/dev/workspace/coder/0:bureau.local"))
 	if result.Decision != Deny {
 		t.Errorf("secret agent observe coder: got %v, want deny", result.Decision)
 	}
@@ -200,7 +203,7 @@ func TestAuthorized_UnknownPrincipal(t *testing.T) {
 	index := setupIndex(t)
 
 	// A principal not in the index has no grants → deny.
-	result := Authorized(index, uid(t, "@unknown/agent:bureau.local"), schema.ActionObserve, uid(t, "@bureau/dev/workspace/coder/0:bureau.local"))
+	result := Authorized(index, uid(t, "@unknown/agent:bureau.local"), observation.ActionObserve, uid(t, "@bureau/dev/workspace/coder/0:bureau.local"))
 	if result.Decision != Deny {
 		t.Errorf("unknown agent: got %v, want deny", result.Decision)
 	}
@@ -231,17 +234,17 @@ func TestAuthorized_ExpiredGrant(t *testing.T) {
 
 	index.SetPrincipal(uid(t, "@agent:bureau.local"), schema.AuthorizationPolicy{
 		Grants: []schema.Grant{
-			{Actions: []string{schema.ActionObserve}, Targets: []string{"**:**"}, ExpiresAt: "2020-01-01T00:00:00Z"},
+			{Actions: []string{observation.ActionObserve}, Targets: []string{"**:**"}, ExpiresAt: "2020-01-01T00:00:00Z"},
 		},
 	})
 	index.SetPrincipal(uid(t, "@target:bureau.local"), schema.AuthorizationPolicy{
 		Allowances: []schema.Allowance{
-			{Actions: []string{schema.ActionObserve}, Actors: []string{"agent:bureau.local"}},
+			{Actions: []string{observation.ActionObserve}, Actors: []string{"agent:bureau.local"}},
 		},
 	})
 
 	checkTime := time.Date(2026, 3, 1, 12, 0, 0, 0, time.UTC)
-	result := AuthorizedAt(index, uid(t, "@agent:bureau.local"), schema.ActionObserve, uid(t, "@target:bureau.local"), checkTime)
+	result := AuthorizedAt(index, uid(t, "@agent:bureau.local"), observation.ActionObserve, uid(t, "@target:bureau.local"), checkTime)
 	if result.Decision != Deny {
 		t.Errorf("expired grant: got %v, want deny", result.Decision)
 	}
@@ -255,17 +258,17 @@ func TestAuthorized_FutureGrantValid(t *testing.T) {
 
 	index.SetPrincipal(uid(t, "@agent:bureau.local"), schema.AuthorizationPolicy{
 		Grants: []schema.Grant{
-			{Actions: []string{schema.ActionObserve}, Targets: []string{"**:**"}, ExpiresAt: "2099-01-01T00:00:00Z"},
+			{Actions: []string{observation.ActionObserve}, Targets: []string{"**:**"}, ExpiresAt: "2099-01-01T00:00:00Z"},
 		},
 	})
 	index.SetPrincipal(uid(t, "@target:bureau.local"), schema.AuthorizationPolicy{
 		Allowances: []schema.Allowance{
-			{Actions: []string{schema.ActionObserve}, Actors: []string{"agent:bureau.local"}},
+			{Actions: []string{observation.ActionObserve}, Actors: []string{"agent:bureau.local"}},
 		},
 	})
 
 	checkTime := time.Date(2026, 3, 1, 12, 0, 0, 0, time.UTC)
-	result := AuthorizedAt(index, uid(t, "@agent:bureau.local"), schema.ActionObserve, uid(t, "@target:bureau.local"), checkTime)
+	result := AuthorizedAt(index, uid(t, "@agent:bureau.local"), observation.ActionObserve, uid(t, "@target:bureau.local"), checkTime)
 	if result.Decision != Allow {
 		t.Errorf("future grant: got %v (%v), want allow", result.Decision, result.Reason)
 	}
@@ -277,31 +280,31 @@ func TestAuthorizedAt_Deterministic(t *testing.T) {
 	expiresAt := time.Date(2026, 3, 1, 0, 0, 0, 0, time.UTC)
 	index.SetPrincipal(uid(t, "@agent:bureau.local"), schema.AuthorizationPolicy{
 		Grants: []schema.Grant{
-			{Actions: []string{schema.ActionObserve}, Targets: []string{"**:**"}, ExpiresAt: expiresAt.Format(time.RFC3339)},
+			{Actions: []string{observation.ActionObserve}, Targets: []string{"**:**"}, ExpiresAt: expiresAt.Format(time.RFC3339)},
 		},
 	})
 	index.SetPrincipal(uid(t, "@target:bureau.local"), schema.AuthorizationPolicy{
 		Allowances: []schema.Allowance{
-			{Actions: []string{schema.ActionObserve}, Actors: []string{"agent:bureau.local"}},
+			{Actions: []string{observation.ActionObserve}, Actors: []string{"agent:bureau.local"}},
 		},
 	})
 
 	// Before expiry: allowed.
 	before := expiresAt.Add(-time.Second)
-	result := AuthorizedAt(index, uid(t, "@agent:bureau.local"), schema.ActionObserve, uid(t, "@target:bureau.local"), before)
+	result := AuthorizedAt(index, uid(t, "@agent:bureau.local"), observation.ActionObserve, uid(t, "@target:bureau.local"), before)
 	if result.Decision != Allow {
 		t.Errorf("before expiry: got %v (%v), want allow", result.Decision, result.Reason)
 	}
 
 	// At expiry: denied (not strictly before).
-	result = AuthorizedAt(index, uid(t, "@agent:bureau.local"), schema.ActionObserve, uid(t, "@target:bureau.local"), expiresAt)
+	result = AuthorizedAt(index, uid(t, "@agent:bureau.local"), observation.ActionObserve, uid(t, "@target:bureau.local"), expiresAt)
 	if result.Decision != Deny {
 		t.Errorf("at expiry: got %v, want deny", result.Decision)
 	}
 
 	// After expiry: denied.
 	after := expiresAt.Add(time.Second)
-	result = AuthorizedAt(index, uid(t, "@agent:bureau.local"), schema.ActionObserve, uid(t, "@target:bureau.local"), after)
+	result = AuthorizedAt(index, uid(t, "@agent:bureau.local"), observation.ActionObserve, uid(t, "@target:bureau.local"), after)
 	if result.Decision != Deny {
 		t.Errorf("after expiry: got %v, want deny", result.Decision)
 	}
@@ -312,11 +315,11 @@ func TestTargetAllows_BasicAllow(t *testing.T) {
 
 	index.SetPrincipal(uid(t, "@agent/alpha:bureau.local"), schema.AuthorizationPolicy{
 		Allowances: []schema.Allowance{
-			{Actions: []string{schema.ActionObserve}, Actors: []string{"ops/**:bureau.local"}},
+			{Actions: []string{observation.ActionObserve}, Actors: []string{"ops/**:bureau.local"}},
 		},
 	})
 
-	if !TargetAllows(index, uid(t, "@ops/alice:bureau.local"), schema.ActionObserve, uid(t, "@agent/alpha:bureau.local")) {
+	if !TargetAllows(index, uid(t, "@ops/alice:bureau.local"), observation.ActionObserve, uid(t, "@agent/alpha:bureau.local")) {
 		t.Error("ops/alice should be allowed to observe agent/alpha")
 	}
 }
@@ -327,7 +330,7 @@ func TestTargetAllows_NoAllowance(t *testing.T) {
 	// Target has no allowances at all.
 	index.SetPrincipal(uid(t, "@agent/alpha:bureau.local"), schema.AuthorizationPolicy{})
 
-	if TargetAllows(index, uid(t, "@ops/alice:bureau.local"), schema.ActionObserve, uid(t, "@agent/alpha:bureau.local")) {
+	if TargetAllows(index, uid(t, "@ops/alice:bureau.local"), observation.ActionObserve, uid(t, "@agent/alpha:bureau.local")) {
 		t.Error("should deny when target has no allowances")
 	}
 }
@@ -337,11 +340,11 @@ func TestTargetAllows_ActorDoesNotMatch(t *testing.T) {
 
 	index.SetPrincipal(uid(t, "@agent/alpha:bureau.local"), schema.AuthorizationPolicy{
 		Allowances: []schema.Allowance{
-			{Actions: []string{schema.ActionObserve}, Actors: []string{"ops/alice:bureau.local"}},
+			{Actions: []string{observation.ActionObserve}, Actors: []string{"ops/alice:bureau.local"}},
 		},
 	})
 
-	if TargetAllows(index, uid(t, "@ops/bob:bureau.local"), schema.ActionObserve, uid(t, "@agent/alpha:bureau.local")) {
+	if TargetAllows(index, uid(t, "@ops/bob:bureau.local"), observation.ActionObserve, uid(t, "@agent/alpha:bureau.local")) {
 		t.Error("ops/bob should not match allowance for ops/alice")
 	}
 }
@@ -351,11 +354,11 @@ func TestTargetAllows_ActionDoesNotMatch(t *testing.T) {
 
 	index.SetPrincipal(uid(t, "@agent/alpha:bureau.local"), schema.AuthorizationPolicy{
 		Allowances: []schema.Allowance{
-			{Actions: []string{schema.ActionObserve}, Actors: []string{"ops/**:bureau.local"}},
+			{Actions: []string{observation.ActionObserve}, Actors: []string{"ops/**:bureau.local"}},
 		},
 	})
 
-	if TargetAllows(index, uid(t, "@ops/alice:bureau.local"), schema.ActionObserveReadWrite, uid(t, "@agent/alpha:bureau.local")) {
+	if TargetAllows(index, uid(t, "@ops/alice:bureau.local"), observation.ActionReadWrite, uid(t, "@agent/alpha:bureau.local")) {
 		t.Error("observe/read-write should not match allowance for observe")
 	}
 }
@@ -365,20 +368,20 @@ func TestTargetAllows_AllowanceDenialOverrides(t *testing.T) {
 
 	index.SetPrincipal(uid(t, "@agent/alpha:bureau.local"), schema.AuthorizationPolicy{
 		Allowances: []schema.Allowance{
-			{Actions: []string{schema.ActionObserve}, Actors: []string{"ops/**:bureau.local"}},
+			{Actions: []string{observation.ActionObserve}, Actors: []string{"ops/**:bureau.local"}},
 		},
 		AllowanceDenials: []schema.AllowanceDenial{
-			{Actions: []string{schema.ActionObserve}, Actors: []string{"ops/untrusted:bureau.local"}},
+			{Actions: []string{observation.ActionObserve}, Actors: []string{"ops/untrusted:bureau.local"}},
 		},
 	})
 
 	// ops/alice passes: matches allowance, no denial.
-	if !TargetAllows(index, uid(t, "@ops/alice:bureau.local"), schema.ActionObserve, uid(t, "@agent/alpha:bureau.local")) {
+	if !TargetAllows(index, uid(t, "@ops/alice:bureau.local"), observation.ActionObserve, uid(t, "@agent/alpha:bureau.local")) {
 		t.Error("ops/alice should be allowed")
 	}
 
 	// ops/untrusted blocked: matches allowance but also matches denial.
-	if TargetAllows(index, uid(t, "@ops/untrusted:bureau.local"), schema.ActionObserve, uid(t, "@agent/alpha:bureau.local")) {
+	if TargetAllows(index, uid(t, "@ops/untrusted:bureau.local"), observation.ActionObserve, uid(t, "@agent/alpha:bureau.local")) {
 		t.Error("ops/untrusted should be denied by allowance denial")
 	}
 }
@@ -388,17 +391,17 @@ func TestTargetAllows_GlobPatterns(t *testing.T) {
 
 	index.SetPrincipal(uid(t, "@agent/alpha:bureau.local"), schema.AuthorizationPolicy{
 		Allowances: []schema.Allowance{
-			{Actions: []string{schema.ActionObserve}, Actors: []string{"ops/*:bureau.local"}},
+			{Actions: []string{observation.ActionObserve}, Actors: []string{"ops/*:bureau.local"}},
 		},
 	})
 
 	// ops/alice matches ops/* (single segment).
-	if !TargetAllows(index, uid(t, "@ops/alice:bureau.local"), schema.ActionObserve, uid(t, "@agent/alpha:bureau.local")) {
+	if !TargetAllows(index, uid(t, "@ops/alice:bureau.local"), observation.ActionObserve, uid(t, "@agent/alpha:bureau.local")) {
 		t.Error("ops/alice should match ops/*")
 	}
 
 	// ops/team/lead does NOT match ops/* (multi-segment).
-	if TargetAllows(index, uid(t, "@ops/team/lead:bureau.local"), schema.ActionObserve, uid(t, "@agent/alpha:bureau.local")) {
+	if TargetAllows(index, uid(t, "@ops/team/lead:bureau.local"), observation.ActionObserve, uid(t, "@agent/alpha:bureau.local")) {
 		t.Error("ops/team/lead should not match ops/* (single segment only)")
 	}
 }
@@ -407,7 +410,7 @@ func TestTargetAllows_TargetNotInIndex(t *testing.T) {
 	index := NewIndex()
 
 	// Target not in index at all — should deny.
-	if TargetAllows(index, uid(t, "@ops/alice:bureau.local"), schema.ActionObserve, uid(t, "@unknown/principal:bureau.local")) {
+	if TargetAllows(index, uid(t, "@ops/alice:bureau.local"), observation.ActionObserve, uid(t, "@unknown/principal:bureau.local")) {
 		t.Error("should deny when target is not in the index")
 	}
 }
@@ -417,26 +420,26 @@ func TestTargetAllows_MultipleAllowances(t *testing.T) {
 
 	index.SetPrincipal(uid(t, "@agent/alpha:bureau.local"), schema.AuthorizationPolicy{
 		Allowances: []schema.Allowance{
-			{Actions: []string{schema.ActionObserve}, Actors: []string{"ops/**:bureau.local"}},
-			{Actions: []string{schema.ActionObserveReadWrite}, Actors: []string{"ops/alice:bureau.local"}},
+			{Actions: []string{observation.ActionObserve}, Actors: []string{"ops/**:bureau.local"}},
+			{Actions: []string{observation.ActionReadWrite}, Actors: []string{"ops/alice:bureau.local"}},
 		},
 	})
 
 	// ops/alice gets observe (first allowance).
-	if !TargetAllows(index, uid(t, "@ops/alice:bureau.local"), schema.ActionObserve, uid(t, "@agent/alpha:bureau.local")) {
+	if !TargetAllows(index, uid(t, "@ops/alice:bureau.local"), observation.ActionObserve, uid(t, "@agent/alpha:bureau.local")) {
 		t.Error("ops/alice should be allowed to observe")
 	}
 
 	// ops/alice gets observe/read-write (second allowance).
-	if !TargetAllows(index, uid(t, "@ops/alice:bureau.local"), schema.ActionObserveReadWrite, uid(t, "@agent/alpha:bureau.local")) {
+	if !TargetAllows(index, uid(t, "@ops/alice:bureau.local"), observation.ActionReadWrite, uid(t, "@agent/alpha:bureau.local")) {
 		t.Error("ops/alice should be allowed observe/read-write")
 	}
 
 	// ops/bob gets observe but not observe/read-write.
-	if !TargetAllows(index, uid(t, "@ops/bob:bureau.local"), schema.ActionObserve, uid(t, "@agent/alpha:bureau.local")) {
+	if !TargetAllows(index, uid(t, "@ops/bob:bureau.local"), observation.ActionObserve, uid(t, "@agent/alpha:bureau.local")) {
 		t.Error("ops/bob should be allowed to observe")
 	}
-	if TargetAllows(index, uid(t, "@ops/bob:bureau.local"), schema.ActionObserveReadWrite, uid(t, "@agent/alpha:bureau.local")) {
+	if TargetAllows(index, uid(t, "@ops/bob:bureau.local"), observation.ActionReadWrite, uid(t, "@agent/alpha:bureau.local")) {
 		t.Error("ops/bob should not be allowed observe/read-write")
 	}
 }
@@ -450,19 +453,19 @@ func TestTargetAllows_ActorNotInIndex(t *testing.T) {
 	// actors (humans, cross-machine principals) work without index entries.
 	index.SetPrincipal(uid(t, "@agent/alpha:bureau.local"), schema.AuthorizationPolicy{
 		Allowances: []schema.Allowance{
-			{Actions: []string{schema.ActionObserve}, Actors: []string{"ben:bureau.local"}},
+			{Actions: []string{observation.ActionObserve}, Actors: []string{"ben:bureau.local"}},
 		},
 	})
 
-	if !TargetAllows(index, uid(t, "@ben:bureau.local"), schema.ActionObserve, uid(t, "@agent/alpha:bureau.local")) {
+	if !TargetAllows(index, uid(t, "@ben:bureau.local"), observation.ActionObserve, uid(t, "@agent/alpha:bureau.local")) {
 		t.Error("external actor 'ben' should be allowed by target's allowance")
 	}
 }
 
 func TestGrantsAllow(t *testing.T) {
 	grants := []schema.Grant{
-		{Actions: []string{schema.ActionTicketCreate, "ticket/assign"}},
-		{Actions: []string{schema.ActionObserve}, Targets: []string{"bureau/dev/**:bureau.local"}},
+		{Actions: []string{ticket.ActionCreate, "ticket/assign"}},
+		{Actions: []string{observation.ActionObserve}, Targets: []string{"bureau/dev/**:bureau.local"}},
 	}
 
 	tests := []struct {
@@ -470,12 +473,12 @@ func TestGrantsAllow(t *testing.T) {
 		target ref.UserID
 		want   bool
 	}{
-		{schema.ActionTicketCreate, ref.UserID{}, true},
+		{ticket.ActionCreate, ref.UserID{}, true},
 		{"ticket/assign", ref.UserID{}, true},
-		{schema.ActionTicketClose, ref.UserID{}, false},
-		{schema.ActionObserve, uid(t, "@bureau/dev/coder/0:bureau.local"), true},
-		{schema.ActionObserve, uid(t, "@iree/agent:bureau.local"), false},
-		{schema.ActionObserve, ref.UserID{}, true}, // self-service check on targeted grant
+		{ticket.ActionClose, ref.UserID{}, false},
+		{observation.ActionObserve, uid(t, "@bureau/dev/coder/0:bureau.local"), true},
+		{observation.ActionObserve, uid(t, "@iree/agent:bureau.local"), false},
+		{observation.ActionObserve, ref.UserID{}, true}, // self-service check on targeted grant
 	}
 
 	for _, tt := range tests {
@@ -488,11 +491,11 @@ func TestGrantsAllow(t *testing.T) {
 
 func TestGrantsAllow_ExpiredGrant(t *testing.T) {
 	grants := []schema.Grant{
-		{Actions: []string{schema.ActionTicketCreate}, ExpiresAt: "2020-01-01T00:00:00Z"},
+		{Actions: []string{ticket.ActionCreate}, ExpiresAt: "2020-01-01T00:00:00Z"},
 	}
 
 	checkTime := time.Date(2026, 3, 1, 12, 0, 0, 0, time.UTC)
-	if GrantsAllowAt(grants, schema.ActionTicketCreate, ref.UserID{}, checkTime) {
+	if GrantsAllowAt(grants, ticket.ActionCreate, ref.UserID{}, checkTime) {
 		t.Error("expired grant should not match")
 	}
 }
@@ -500,15 +503,15 @@ func TestGrantsAllow_ExpiredGrant(t *testing.T) {
 func TestGrantsAllowAt_Deterministic(t *testing.T) {
 	expiresAt := time.Date(2026, 3, 1, 0, 0, 0, 0, time.UTC)
 	grants := []schema.Grant{
-		{Actions: []string{schema.ActionTicketCreate}, ExpiresAt: expiresAt.Format(time.RFC3339)},
+		{Actions: []string{ticket.ActionCreate}, ExpiresAt: expiresAt.Format(time.RFC3339)},
 	}
 
 	before := expiresAt.Add(-time.Second)
-	if !GrantsAllowAt(grants, schema.ActionTicketCreate, ref.UserID{}, before) {
+	if !GrantsAllowAt(grants, ticket.ActionCreate, ref.UserID{}, before) {
 		t.Error("before expiry should match")
 	}
 
-	if GrantsAllowAt(grants, schema.ActionTicketCreate, ref.UserID{}, expiresAt) {
+	if GrantsAllowAt(grants, ticket.ActionCreate, ref.UserID{}, expiresAt) {
 		t.Error("at expiry should not match")
 	}
 }
@@ -545,11 +548,11 @@ func TestTargetCheck_Allow(t *testing.T) {
 	index := NewIndex()
 	index.SetPrincipal(uid(t, "@agent/alpha:bureau.local"), schema.AuthorizationPolicy{
 		Allowances: []schema.Allowance{
-			{Actions: []string{schema.ActionObserve}, Actors: []string{"ops/**:bureau.local"}},
+			{Actions: []string{observation.ActionObserve}, Actors: []string{"ops/**:bureau.local"}},
 		},
 	})
 
-	result := TargetCheck(index, uid(t, "@ops/alice:bureau.local"), schema.ActionObserve, uid(t, "@agent/alpha:bureau.local"))
+	result := TargetCheck(index, uid(t, "@ops/alice:bureau.local"), observation.ActionObserve, uid(t, "@agent/alpha:bureau.local"))
 	if !result.Allowed {
 		t.Errorf("got denied (%v), want allowed", result.Reason)
 	}
@@ -562,7 +565,7 @@ func TestTargetCheck_NoAllowance(t *testing.T) {
 	index := NewIndex()
 	index.SetPrincipal(uid(t, "@agent/alpha:bureau.local"), schema.AuthorizationPolicy{})
 
-	result := TargetCheck(index, uid(t, "@ops/alice:bureau.local"), schema.ActionObserve, uid(t, "@agent/alpha:bureau.local"))
+	result := TargetCheck(index, uid(t, "@ops/alice:bureau.local"), observation.ActionObserve, uid(t, "@agent/alpha:bureau.local"))
 	if result.Allowed {
 		t.Error("got allowed, want denied")
 	}
@@ -575,14 +578,14 @@ func TestTargetCheck_AllowanceDenial(t *testing.T) {
 	index := NewIndex()
 	index.SetPrincipal(uid(t, "@agent/alpha:bureau.local"), schema.AuthorizationPolicy{
 		Allowances: []schema.Allowance{
-			{Actions: []string{schema.ActionObserve}, Actors: []string{"ops/**:bureau.local"}},
+			{Actions: []string{observation.ActionObserve}, Actors: []string{"ops/**:bureau.local"}},
 		},
 		AllowanceDenials: []schema.AllowanceDenial{
-			{Actions: []string{schema.ActionObserve}, Actors: []string{"ops/untrusted:bureau.local"}},
+			{Actions: []string{observation.ActionObserve}, Actors: []string{"ops/untrusted:bureau.local"}},
 		},
 	})
 
-	result := TargetCheck(index, uid(t, "@ops/untrusted:bureau.local"), schema.ActionObserve, uid(t, "@agent/alpha:bureau.local"))
+	result := TargetCheck(index, uid(t, "@ops/untrusted:bureau.local"), observation.ActionObserve, uid(t, "@agent/alpha:bureau.local"))
 	if result.Allowed {
 		t.Error("got allowed, want denied")
 	}
@@ -602,11 +605,11 @@ func TestTargetCheck_ConsistentWithTargetAllows(t *testing.T) {
 	index := NewIndex()
 	index.SetPrincipal(uid(t, "@agent/alpha:bureau.local"), schema.AuthorizationPolicy{
 		Allowances: []schema.Allowance{
-			{Actions: []string{schema.ActionObserve}, Actors: []string{"ops/**:bureau.local"}},
-			{Actions: []string{schema.ActionObserveReadWrite}, Actors: []string{"ops/alice:bureau.local"}},
+			{Actions: []string{observation.ActionObserve}, Actors: []string{"ops/**:bureau.local"}},
+			{Actions: []string{observation.ActionReadWrite}, Actors: []string{"ops/alice:bureau.local"}},
 		},
 		AllowanceDenials: []schema.AllowanceDenial{
-			{Actions: []string{schema.ActionObserve}, Actors: []string{"ops/untrusted:bureau.local"}},
+			{Actions: []string{observation.ActionObserve}, Actors: []string{"ops/untrusted:bureau.local"}},
 		},
 	})
 
@@ -614,12 +617,12 @@ func TestTargetCheck_ConsistentWithTargetAllows(t *testing.T) {
 		actor  ref.UserID
 		action string
 	}{
-		{uid(t, "@ops/alice:bureau.local"), schema.ActionObserve},
-		{uid(t, "@ops/alice:bureau.local"), schema.ActionObserveReadWrite},
-		{uid(t, "@ops/bob:bureau.local"), schema.ActionObserve},
-		{uid(t, "@ops/bob:bureau.local"), schema.ActionObserveReadWrite},
-		{uid(t, "@ops/untrusted:bureau.local"), schema.ActionObserve},
-		{uid(t, "@dev/coder:bureau.local"), schema.ActionObserve},
+		{uid(t, "@ops/alice:bureau.local"), observation.ActionObserve},
+		{uid(t, "@ops/alice:bureau.local"), observation.ActionReadWrite},
+		{uid(t, "@ops/bob:bureau.local"), observation.ActionObserve},
+		{uid(t, "@ops/bob:bureau.local"), observation.ActionReadWrite},
+		{uid(t, "@ops/untrusted:bureau.local"), observation.ActionObserve},
+		{uid(t, "@dev/coder:bureau.local"), observation.ActionObserve},
 	}
 
 	target := uid(t, "@agent/alpha:bureau.local")
@@ -635,11 +638,11 @@ func TestTargetCheck_ConsistentWithTargetAllows(t *testing.T) {
 
 func TestGrantsCheck_Allow(t *testing.T) {
 	grants := []schema.Grant{
-		{Actions: []string{schema.ActionTicketCreate, "ticket/assign"}},
-		{Actions: []string{schema.ActionObserve}, Targets: []string{"bureau/dev/**:bureau.local"}},
+		{Actions: []string{ticket.ActionCreate, "ticket/assign"}},
+		{Actions: []string{observation.ActionObserve}, Targets: []string{"bureau/dev/**:bureau.local"}},
 	}
 
-	result := GrantsCheck(grants, schema.ActionTicketCreate, ref.UserID{})
+	result := GrantsCheck(grants, ticket.ActionCreate, ref.UserID{})
 	if !result.Allowed {
 		t.Error("got denied, want allowed")
 	}
@@ -650,10 +653,10 @@ func TestGrantsCheck_Allow(t *testing.T) {
 
 func TestGrantsCheck_Deny(t *testing.T) {
 	grants := []schema.Grant{
-		{Actions: []string{schema.ActionTicketCreate}},
+		{Actions: []string{ticket.ActionCreate}},
 	}
 
-	result := GrantsCheck(grants, schema.ActionFleetAssign, ref.UserID{})
+	result := GrantsCheck(grants, fleet.ActionAssign, ref.UserID{})
 	if result.Allowed {
 		t.Error("got allowed, want denied")
 	}
@@ -664,19 +667,19 @@ func TestGrantsCheck_Deny(t *testing.T) {
 
 func TestGrantsCheck_ConsistentWithGrantsAllow(t *testing.T) {
 	grants := []schema.Grant{
-		{Actions: []string{schema.ActionTicketCreate, "ticket/assign"}},
-		{Actions: []string{schema.ActionObserve}, Targets: []string{"bureau/dev/**:bureau.local"}},
+		{Actions: []string{ticket.ActionCreate, "ticket/assign"}},
+		{Actions: []string{observation.ActionObserve}, Targets: []string{"bureau/dev/**:bureau.local"}},
 	}
 
 	cases := []struct {
 		action string
 		target ref.UserID
 	}{
-		{schema.ActionTicketCreate, ref.UserID{}},
-		{schema.ActionTicketClose, ref.UserID{}},
-		{schema.ActionObserve, uid(t, "@bureau/dev/coder/0:bureau.local")},
-		{schema.ActionObserve, uid(t, "@iree/agent:bureau.local")},
-		{schema.ActionFleetAssign, ref.UserID{}},
+		{ticket.ActionCreate, ref.UserID{}},
+		{ticket.ActionClose, ref.UserID{}},
+		{observation.ActionObserve, uid(t, "@bureau/dev/coder/0:bureau.local")},
+		{observation.ActionObserve, uid(t, "@iree/agent:bureau.local")},
+		{fleet.ActionAssign, ref.UserID{}},
 	}
 
 	for _, tt := range cases {
@@ -691,11 +694,11 @@ func TestGrantsCheck_ConsistentWithGrantsAllow(t *testing.T) {
 
 func TestGrantsCheckAt_Expired(t *testing.T) {
 	grants := []schema.Grant{
-		{Actions: []string{schema.ActionTicketCreate}, ExpiresAt: "2020-01-01T00:00:00Z"},
+		{Actions: []string{ticket.ActionCreate}, ExpiresAt: "2020-01-01T00:00:00Z"},
 	}
 
 	checkTime := time.Date(2026, 3, 1, 12, 0, 0, 0, time.UTC)
-	result := GrantsCheckAt(grants, schema.ActionTicketCreate, ref.UserID{}, checkTime)
+	result := GrantsCheckAt(grants, ticket.ActionCreate, ref.UserID{}, checkTime)
 	if result.Allowed {
 		t.Error("expired grant should not match")
 	}

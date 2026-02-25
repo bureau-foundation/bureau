@@ -25,6 +25,7 @@ import (
 	"github.com/bureau-foundation/bureau/lib/ipc"
 	"github.com/bureau-foundation/bureau/lib/ref"
 	"github.com/bureau-foundation/bureau/lib/schema"
+	"github.com/bureau-foundation/bureau/lib/schema/artifact"
 	"github.com/bureau-foundation/bureau/lib/schema/ticket"
 	"github.com/bureau-foundation/bureau/lib/service"
 	"github.com/bureau-foundation/bureau/lib/servicetoken"
@@ -307,7 +308,7 @@ func (d *Daemon) startPipelineExecutor(
 			Subject:   pipelineEntity.UserID(),
 			Machine:   d.machine,
 			Audience:  "artifact",
-			Grants:    []servicetoken.Grant{{Actions: []string{schema.ActionArtifactStore}}},
+			Grants:    []servicetoken.Grant{{Actions: []string{artifact.ActionStore}}},
 			IssuedAt:  d.clock.Now().Unix(),
 			ExpiresAt: d.clock.Now().Add(1 * time.Hour).Unix(),
 		}

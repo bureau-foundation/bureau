@@ -7,6 +7,9 @@ import (
 	"testing"
 
 	"github.com/bureau-foundation/bureau/lib/schema"
+	"github.com/bureau-foundation/bureau/lib/schema/fleet"
+	"github.com/bureau-foundation/bureau/lib/schema/observation"
+	"github.com/bureau-foundation/bureau/lib/schema/ticket"
 )
 
 func TestMatchAction(t *testing.T) {
@@ -16,23 +19,23 @@ func TestMatchAction(t *testing.T) {
 		want    bool
 	}{
 		// Exact match.
-		{schema.ActionObserve, schema.ActionObserve, true},
-		{schema.ActionObserve, schema.ActionInterrupt, false},
-		{schema.ActionObserveReadWrite, schema.ActionObserveReadWrite, true},
-		{schema.ActionObserveReadWrite, schema.ActionObserve, false},
+		{observation.ActionObserve, observation.ActionObserve, true},
+		{observation.ActionObserve, schema.ActionInterrupt, false},
+		{observation.ActionReadWrite, observation.ActionReadWrite, true},
+		{observation.ActionReadWrite, observation.ActionObserve, false},
 
 		// Single-segment wildcard.
-		{"ticket/*", schema.ActionTicketCreate, true},
+		{"ticket/*", ticket.ActionCreate, true},
 		{"ticket/*", "ticket/assign", true},
-		{"ticket/*", schema.ActionTicketClose, true},
+		{"ticket/*", ticket.ActionClose, true},
 		{"ticket/*", "ticket", false},
 		{"ticket/*", "ticket/a/b", false},
 
 		// Recursive wildcard.
-		{schema.ActionTicketAll, schema.ActionTicketCreate, true},
-		{schema.ActionTicketAll, "ticket/a/b", true},
-		{schema.ActionObserveAll, schema.ActionObserveReadWrite, true},
-		{schema.ActionObserveAll, schema.ActionObserve, true},
+		{ticket.ActionAll, ticket.ActionCreate, true},
+		{ticket.ActionAll, "ticket/a/b", true},
+		{observation.ActionAll, observation.ActionReadWrite, true},
+		{observation.ActionAll, observation.ActionObserve, true},
 		{schema.ActionCommandAll, "command/ticket/create", true},
 		{schema.ActionCommandAll, "command", true},
 
@@ -45,8 +48,8 @@ func TestMatchAction(t *testing.T) {
 		{"grant/approve/**", "grant/approve/credential/provision", true},
 
 		// No match.
-		{schema.ActionObserve, schema.ActionObserveReadWrite, false},
-		{"ticket/*", schema.ActionFleetAssign, false},
+		{observation.ActionObserve, observation.ActionReadWrite, false},
+		{"ticket/*", fleet.ActionAssign, false},
 	}
 
 	for _, tt := range tests {
@@ -81,36 +84,36 @@ func TestGrantMatches(t *testing.T) {
 		},
 		{
 			name:     "cross-principal action matches",
-			grant:    schema.Grant{Actions: []string{schema.ActionObserveAll}, Targets: []string{"bureau/dev/**:bureau.local"}},
-			action:   schema.ActionObserveReadWrite,
+			grant:    schema.Grant{Actions: []string{observation.ActionAll}, Targets: []string{"bureau/dev/**:bureau.local"}},
+			action:   observation.ActionReadWrite,
 			targetID: "@bureau/dev/workspace/coder/0:bureau.local",
 			want:     true,
 		},
 		{
 			name:     "cross-principal target no match",
-			grant:    schema.Grant{Actions: []string{schema.ActionObserveAll}, Targets: []string{"bureau/dev/**:bureau.local"}},
-			action:   schema.ActionObserve,
+			grant:    schema.Grant{Actions: []string{observation.ActionAll}, Targets: []string{"bureau/dev/**:bureau.local"}},
+			action:   observation.ActionObserve,
 			targetID: "@service/db/postgres:bureau.local",
 			want:     false,
 		},
 		{
 			name:     "cross-principal grant without targets rejects",
-			grant:    schema.Grant{Actions: []string{schema.ActionObserveAll}},
-			action:   schema.ActionObserve,
+			grant:    schema.Grant{Actions: []string{observation.ActionAll}},
+			action:   observation.ActionObserve,
 			targetID: "@bureau/dev/coder/0:bureau.local",
 			want:     false,
 		},
 		{
 			name:     "targeted grant still matches self-service",
-			grant:    schema.Grant{Actions: []string{schema.ActionObserveAll}, Targets: []string{"bureau/dev/**:bureau.local"}},
-			action:   schema.ActionObserve,
+			grant:    schema.Grant{Actions: []string{observation.ActionAll}, Targets: []string{"bureau/dev/**:bureau.local"}},
+			action:   observation.ActionObserve,
 			targetID: "",
 			want:     true,
 		},
 		{
 			name:     "wildcard action and target",
 			grant:    schema.Grant{Actions: []string{"**"}, Targets: []string{"**:**"}},
-			action:   schema.ActionFleetProvision,
+			action:   fleet.ActionProvision,
 			targetID: "@machine/gpu-01:bureau.local",
 			want:     true,
 		},
@@ -136,29 +139,29 @@ func TestDenialMatches(t *testing.T) {
 	}{
 		{
 			name:     "self-service denial matches",
-			denial:   schema.Denial{Actions: []string{schema.ActionFleetAll}},
-			action:   schema.ActionFleetAssign,
+			denial:   schema.Denial{Actions: []string{fleet.ActionAll}},
+			action:   fleet.ActionAssign,
 			targetID: "",
 			want:     true,
 		},
 		{
 			name:     "targeted denial matches",
-			denial:   schema.Denial{Actions: []string{schema.ActionTicketClose}, Targets: []string{"bureau/dev/**:bureau.local"}},
-			action:   schema.ActionTicketClose,
+			denial:   schema.Denial{Actions: []string{ticket.ActionClose}, Targets: []string{"bureau/dev/**:bureau.local"}},
+			action:   ticket.ActionClose,
 			targetID: "@bureau/dev/workspace/coder/0:bureau.local",
 			want:     true,
 		},
 		{
 			name:     "targeted denial wrong target",
-			denial:   schema.Denial{Actions: []string{schema.ActionTicketClose}, Targets: []string{"bureau/dev/**:bureau.local"}},
-			action:   schema.ActionTicketClose,
+			denial:   schema.Denial{Actions: []string{ticket.ActionClose}, Targets: []string{"bureau/dev/**:bureau.local"}},
+			action:   ticket.ActionClose,
 			targetID: "@iree/amdgpu/pm:bureau.local",
 			want:     false,
 		},
 		{
 			name:     "denial without targets does not match cross-principal",
-			denial:   schema.Denial{Actions: []string{schema.ActionTicketClose}},
-			action:   schema.ActionTicketClose,
+			denial:   schema.Denial{Actions: []string{ticket.ActionClose}},
+			action:   ticket.ActionClose,
 			targetID: "@bureau/dev/workspace/coder/0:bureau.local",
 			want:     false,
 		},
@@ -184,29 +187,29 @@ func TestAllowanceMatches(t *testing.T) {
 	}{
 		{
 			name:      "exact match",
-			allowance: schema.Allowance{Actions: []string{schema.ActionObserve}, Actors: []string{"bureau/dev/pm:bureau.local"}},
-			action:    schema.ActionObserve,
+			allowance: schema.Allowance{Actions: []string{observation.ActionObserve}, Actors: []string{"bureau/dev/pm:bureau.local"}},
+			action:    observation.ActionObserve,
 			actorID:   "@bureau/dev/pm:bureau.local",
 			want:      true,
 		},
 		{
 			name:      "glob actor match",
-			allowance: schema.Allowance{Actions: []string{schema.ActionObserve}, Actors: []string{"iree/**:bureau.local"}},
-			action:    schema.ActionObserve,
+			allowance: schema.Allowance{Actions: []string{observation.ActionObserve}, Actors: []string{"iree/**:bureau.local"}},
+			action:    observation.ActionObserve,
 			actorID:   "@iree/amdgpu/pm:bureau.local",
 			want:      true,
 		},
 		{
 			name:      "wrong action",
-			allowance: schema.Allowance{Actions: []string{schema.ActionObserve}, Actors: []string{"iree/**:bureau.local"}},
+			allowance: schema.Allowance{Actions: []string{observation.ActionObserve}, Actors: []string{"iree/**:bureau.local"}},
 			action:    schema.ActionInterrupt,
 			actorID:   "@iree/amdgpu/pm:bureau.local",
 			want:      false,
 		},
 		{
 			name:      "wrong actor",
-			allowance: schema.Allowance{Actions: []string{schema.ActionObserve}, Actors: []string{"iree/**:bureau.local"}},
-			action:    schema.ActionObserve,
+			allowance: schema.Allowance{Actions: []string{observation.ActionObserve}, Actors: []string{"iree/**:bureau.local"}},
+			action:    observation.ActionObserve,
 			actorID:   "@bureau/dev/coder/0:bureau.local",
 			want:      false,
 		},

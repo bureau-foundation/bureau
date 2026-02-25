@@ -751,7 +751,7 @@ func TestStewardship(t *testing.T) {
 		if adminReviewer == nil {
 			t.Fatalf("admin %s not in reviewers: %v", adminUserID, content.Review.Reviewers)
 		}
-		if adminReviewer.Disposition != "pending" {
+		if adminReviewer.Disposition != ticket.DispositionPending {
 			t.Errorf("admin disposition = %q, want pending", adminReviewer.Disposition)
 		}
 		if adminReviewer.Tier != 0 {
@@ -826,7 +826,7 @@ func TestStewardship(t *testing.T) {
 
 		for _, reviewer := range content.Review.Reviewers {
 			if reviewer.UserID == adminUserID {
-				if reviewer.Disposition != "approved" {
+				if reviewer.Disposition != ticket.DispositionApproved {
 					t.Errorf("after approval: disposition = %q, want approved", reviewer.Disposition)
 				}
 				break

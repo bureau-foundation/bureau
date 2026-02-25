@@ -234,7 +234,7 @@ func reviewersApproved(review *ticket.TicketReview) bool {
 	if len(review.TierThresholds) == 0 {
 		// Legacy mode: all reviewers must approve.
 		for _, reviewer := range review.Reviewers {
-			if reviewer.Disposition != "approved" {
+			if reviewer.Disposition != ticket.DispositionApproved {
 				return false
 			}
 		}
@@ -261,7 +261,7 @@ func reviewersApproved(review *ticket.TicketReview) bool {
 			countsByTier[reviewer.Tier] = counts
 		}
 		counts.total++
-		if reviewer.Disposition == "approved" {
+		if reviewer.Disposition == ticket.DispositionApproved {
 			counts.approved++
 		}
 	}

@@ -3490,8 +3490,8 @@ func reviewGateIndex(ticketReview *ticket.TicketReview, children []ticket.Ticket
 func TestMatchReviewGateAllApproved(t *testing.T) {
 	index, _ := reviewGateIndex(&ticket.TicketReview{
 		Reviewers: []ticket.ReviewerEntry{
-			{UserID: ref.MustParseUserID("@alice:bureau.local"), Disposition: "approved"},
-			{UserID: ref.MustParseUserID("@bob:bureau.local"), Disposition: "approved"},
+			{UserID: ref.MustParseUserID("@alice:bureau.local"), Disposition: ticket.DispositionApproved},
+			{UserID: ref.MustParseUserID("@bob:bureau.local"), Disposition: ticket.DispositionApproved},
 		},
 	}, nil)
 
@@ -3503,8 +3503,8 @@ func TestMatchReviewGateAllApproved(t *testing.T) {
 func TestMatchReviewGatePendingReviewer(t *testing.T) {
 	index, _ := reviewGateIndex(&ticket.TicketReview{
 		Reviewers: []ticket.ReviewerEntry{
-			{UserID: ref.MustParseUserID("@alice:bureau.local"), Disposition: "approved"},
-			{UserID: ref.MustParseUserID("@bob:bureau.local"), Disposition: "pending"},
+			{UserID: ref.MustParseUserID("@alice:bureau.local"), Disposition: ticket.DispositionApproved},
+			{UserID: ref.MustParseUserID("@bob:bureau.local"), Disposition: ticket.DispositionPending},
 		},
 	}, nil)
 
@@ -3516,8 +3516,8 @@ func TestMatchReviewGatePendingReviewer(t *testing.T) {
 func TestMatchReviewGateChangesRequested(t *testing.T) {
 	index, _ := reviewGateIndex(&ticket.TicketReview{
 		Reviewers: []ticket.ReviewerEntry{
-			{UserID: ref.MustParseUserID("@alice:bureau.local"), Disposition: "approved"},
-			{UserID: ref.MustParseUserID("@bob:bureau.local"), Disposition: "changes_requested"},
+			{UserID: ref.MustParseUserID("@alice:bureau.local"), Disposition: ticket.DispositionApproved},
+			{UserID: ref.MustParseUserID("@bob:bureau.local"), Disposition: ticket.DispositionChangesRequested},
 		},
 	}, nil)
 
@@ -3555,7 +3555,7 @@ func TestMatchReviewGateTicketNotInIndex(t *testing.T) {
 func TestMatchReviewGateSingleReviewerApproved(t *testing.T) {
 	index, _ := reviewGateIndex(&ticket.TicketReview{
 		Reviewers: []ticket.ReviewerEntry{
-			{UserID: ref.MustParseUserID("@alice:bureau.local"), Disposition: "approved"},
+			{UserID: ref.MustParseUserID("@alice:bureau.local"), Disposition: ticket.DispositionApproved},
 		},
 	}, nil)
 
@@ -3567,8 +3567,8 @@ func TestMatchReviewGateSingleReviewerApproved(t *testing.T) {
 func TestMatchReviewGateCommented(t *testing.T) {
 	index, _ := reviewGateIndex(&ticket.TicketReview{
 		Reviewers: []ticket.ReviewerEntry{
-			{UserID: ref.MustParseUserID("@alice:bureau.local"), Disposition: "approved"},
-			{UserID: ref.MustParseUserID("@bob:bureau.local"), Disposition: "commented"},
+			{UserID: ref.MustParseUserID("@alice:bureau.local"), Disposition: ticket.DispositionApproved},
+			{UserID: ref.MustParseUserID("@bob:bureau.local"), Disposition: ticket.DispositionCommented},
 		},
 	}, nil)
 
@@ -3590,7 +3590,7 @@ func TestMatchReviewGateAllApprovedWithClosedFindings(t *testing.T) {
 
 	index, _ := reviewGateIndex(&ticket.TicketReview{
 		Reviewers: []ticket.ReviewerEntry{
-			{UserID: ref.MustParseUserID("@alice:bureau.local"), Disposition: "approved"},
+			{UserID: ref.MustParseUserID("@alice:bureau.local"), Disposition: ticket.DispositionApproved},
 		},
 	}, []ticket.TicketContent{finding1, finding2})
 
@@ -3610,7 +3610,7 @@ func TestMatchReviewGateAllApprovedWithOpenFinding(t *testing.T) {
 
 	index, _ := reviewGateIndex(&ticket.TicketReview{
 		Reviewers: []ticket.ReviewerEntry{
-			{UserID: ref.MustParseUserID("@alice:bureau.local"), Disposition: "approved"},
+			{UserID: ref.MustParseUserID("@alice:bureau.local"), Disposition: ticket.DispositionApproved},
 		},
 	}, []ticket.TicketContent{finding1, finding2})
 
@@ -3626,7 +3626,7 @@ func TestMatchReviewGatePendingReviewerWithClosedFindings(t *testing.T) {
 
 	index, _ := reviewGateIndex(&ticket.TicketReview{
 		Reviewers: []ticket.ReviewerEntry{
-			{UserID: ref.MustParseUserID("@alice:bureau.local"), Disposition: "pending"},
+			{UserID: ref.MustParseUserID("@alice:bureau.local"), Disposition: ticket.DispositionPending},
 		},
 	}, []ticket.TicketContent{finding})
 
@@ -3638,7 +3638,7 @@ func TestMatchReviewGatePendingReviewerWithClosedFindings(t *testing.T) {
 func TestMatchReviewGateNoFindingsNoChange(t *testing.T) {
 	index, _ := reviewGateIndex(&ticket.TicketReview{
 		Reviewers: []ticket.ReviewerEntry{
-			{UserID: ref.MustParseUserID("@alice:bureau.local"), Disposition: "approved"},
+			{UserID: ref.MustParseUserID("@alice:bureau.local"), Disposition: ticket.DispositionApproved},
 		},
 	}, nil)
 
@@ -3655,7 +3655,7 @@ func TestMatchReviewGateNonFindingChildrenIgnored(t *testing.T) {
 
 	index, _ := reviewGateIndex(&ticket.TicketReview{
 		Reviewers: []ticket.ReviewerEntry{
-			{UserID: ref.MustParseUserID("@alice:bureau.local"), Disposition: "approved"},
+			{UserID: ref.MustParseUserID("@alice:bureau.local"), Disposition: ticket.DispositionApproved},
 		},
 	}, []ticket.TicketContent{subtask})
 
@@ -3670,9 +3670,9 @@ func TestMatchReviewGateThresholdTwoOfThreeApproved(t *testing.T) {
 	threshold := 2
 	index, _ := reviewGateIndex(&ticket.TicketReview{
 		Reviewers: []ticket.ReviewerEntry{
-			{UserID: ref.MustParseUserID("@alice:bureau.local"), Disposition: "approved", Tier: 0},
-			{UserID: ref.MustParseUserID("@bob:bureau.local"), Disposition: "approved", Tier: 0},
-			{UserID: ref.MustParseUserID("@carol:bureau.local"), Disposition: "pending", Tier: 0},
+			{UserID: ref.MustParseUserID("@alice:bureau.local"), Disposition: ticket.DispositionApproved, Tier: 0},
+			{UserID: ref.MustParseUserID("@bob:bureau.local"), Disposition: ticket.DispositionApproved, Tier: 0},
+			{UserID: ref.MustParseUserID("@carol:bureau.local"), Disposition: ticket.DispositionPending, Tier: 0},
 		},
 		TierThresholds: []ticket.TierThreshold{
 			{Tier: 0, Threshold: &threshold},
@@ -3688,9 +3688,9 @@ func TestMatchReviewGateThresholdTwoOfThreeOnlyOneApproved(t *testing.T) {
 	threshold := 2
 	index, _ := reviewGateIndex(&ticket.TicketReview{
 		Reviewers: []ticket.ReviewerEntry{
-			{UserID: ref.MustParseUserID("@alice:bureau.local"), Disposition: "approved", Tier: 0},
-			{UserID: ref.MustParseUserID("@bob:bureau.local"), Disposition: "pending", Tier: 0},
-			{UserID: ref.MustParseUserID("@carol:bureau.local"), Disposition: "pending", Tier: 0},
+			{UserID: ref.MustParseUserID("@alice:bureau.local"), Disposition: ticket.DispositionApproved, Tier: 0},
+			{UserID: ref.MustParseUserID("@bob:bureau.local"), Disposition: ticket.DispositionPending, Tier: 0},
+			{UserID: ref.MustParseUserID("@carol:bureau.local"), Disposition: ticket.DispositionPending, Tier: 0},
 		},
 		TierThresholds: []ticket.TierThreshold{
 			{Tier: 0, Threshold: &threshold},
@@ -3708,9 +3708,9 @@ func TestMatchReviewGateMultiTierMixed(t *testing.T) {
 	threshold1 := 1
 	index, _ := reviewGateIndex(&ticket.TicketReview{
 		Reviewers: []ticket.ReviewerEntry{
-			{UserID: ref.MustParseUserID("@alice:bureau.local"), Disposition: "approved", Tier: 0},
-			{UserID: ref.MustParseUserID("@bob:bureau.local"), Disposition: "pending", Tier: 0},
-			{UserID: ref.MustParseUserID("@lead:bureau.local"), Disposition: "pending", Tier: 1},
+			{UserID: ref.MustParseUserID("@alice:bureau.local"), Disposition: ticket.DispositionApproved, Tier: 0},
+			{UserID: ref.MustParseUserID("@bob:bureau.local"), Disposition: ticket.DispositionPending, Tier: 0},
+			{UserID: ref.MustParseUserID("@lead:bureau.local"), Disposition: ticket.DispositionPending, Tier: 1},
 		},
 		TierThresholds: []ticket.TierThreshold{
 			{Tier: 0, Threshold: &threshold1},
@@ -3727,9 +3727,9 @@ func TestMatchReviewGateMultiTierAllSatisfied(t *testing.T) {
 	threshold1 := 1
 	index, _ := reviewGateIndex(&ticket.TicketReview{
 		Reviewers: []ticket.ReviewerEntry{
-			{UserID: ref.MustParseUserID("@alice:bureau.local"), Disposition: "approved", Tier: 0},
-			{UserID: ref.MustParseUserID("@bob:bureau.local"), Disposition: "pending", Tier: 0},
-			{UserID: ref.MustParseUserID("@lead:bureau.local"), Disposition: "approved", Tier: 1},
+			{UserID: ref.MustParseUserID("@alice:bureau.local"), Disposition: ticket.DispositionApproved, Tier: 0},
+			{UserID: ref.MustParseUserID("@bob:bureau.local"), Disposition: ticket.DispositionPending, Tier: 0},
+			{UserID: ref.MustParseUserID("@lead:bureau.local"), Disposition: ticket.DispositionApproved, Tier: 1},
 		},
 		TierThresholds: []ticket.TierThreshold{
 			{Tier: 0, Threshold: &threshold1},
@@ -3746,8 +3746,8 @@ func TestMatchReviewGateNilThresholdAllMustApprove(t *testing.T) {
 	// Tier with nil threshold requires all reviewers to approve.
 	index, _ := reviewGateIndex(&ticket.TicketReview{
 		Reviewers: []ticket.ReviewerEntry{
-			{UserID: ref.MustParseUserID("@alice:bureau.local"), Disposition: "approved", Tier: 0},
-			{UserID: ref.MustParseUserID("@bob:bureau.local"), Disposition: "changes_requested", Tier: 0},
+			{UserID: ref.MustParseUserID("@alice:bureau.local"), Disposition: ticket.DispositionApproved, Tier: 0},
+			{UserID: ref.MustParseUserID("@bob:bureau.local"), Disposition: ticket.DispositionChangesRequested, Tier: 0},
 		},
 		TierThresholds: []ticket.TierThreshold{
 			{Tier: 0, Threshold: nil},
@@ -3763,8 +3763,8 @@ func TestMatchReviewGateBackwardCompatNoThresholds(t *testing.T) {
 	// No TierThresholds → legacy behavior: all must approve, ignoring Tier field.
 	index, _ := reviewGateIndex(&ticket.TicketReview{
 		Reviewers: []ticket.ReviewerEntry{
-			{UserID: ref.MustParseUserID("@alice:bureau.local"), Disposition: "approved", Tier: 0},
-			{UserID: ref.MustParseUserID("@bob:bureau.local"), Disposition: "approved", Tier: 1},
+			{UserID: ref.MustParseUserID("@alice:bureau.local"), Disposition: ticket.DispositionApproved, Tier: 0},
+			{UserID: ref.MustParseUserID("@bob:bureau.local"), Disposition: ticket.DispositionApproved, Tier: 1},
 		},
 	}, nil)
 
@@ -3776,8 +3776,8 @@ func TestMatchReviewGateBackwardCompatNoThresholds(t *testing.T) {
 func TestMatchReviewGateBackwardCompatNoThresholdsOnePending(t *testing.T) {
 	index, _ := reviewGateIndex(&ticket.TicketReview{
 		Reviewers: []ticket.ReviewerEntry{
-			{UserID: ref.MustParseUserID("@alice:bureau.local"), Disposition: "approved", Tier: 0},
-			{UserID: ref.MustParseUserID("@bob:bureau.local"), Disposition: "pending", Tier: 1},
+			{UserID: ref.MustParseUserID("@alice:bureau.local"), Disposition: ticket.DispositionApproved, Tier: 0},
+			{UserID: ref.MustParseUserID("@bob:bureau.local"), Disposition: ticket.DispositionPending, Tier: 1},
 		},
 	}, nil)
 
@@ -3795,7 +3795,7 @@ func TestMatchReviewGateThresholdWithOpenFinding(t *testing.T) {
 
 	index, _ := reviewGateIndex(&ticket.TicketReview{
 		Reviewers: []ticket.ReviewerEntry{
-			{UserID: ref.MustParseUserID("@alice:bureau.local"), Disposition: "approved", Tier: 0},
+			{UserID: ref.MustParseUserID("@alice:bureau.local"), Disposition: ticket.DispositionApproved, Tier: 0},
 		},
 		TierThresholds: []ticket.TierThreshold{
 			{Tier: 0, Threshold: &threshold},
@@ -3812,9 +3812,9 @@ func TestMatchReviewGateThresholdExactlyMet(t *testing.T) {
 	threshold := 3
 	index, _ := reviewGateIndex(&ticket.TicketReview{
 		Reviewers: []ticket.ReviewerEntry{
-			{UserID: ref.MustParseUserID("@alice:bureau.local"), Disposition: "approved", Tier: 0},
-			{UserID: ref.MustParseUserID("@bob:bureau.local"), Disposition: "approved", Tier: 0},
-			{UserID: ref.MustParseUserID("@carol:bureau.local"), Disposition: "approved", Tier: 0},
+			{UserID: ref.MustParseUserID("@alice:bureau.local"), Disposition: ticket.DispositionApproved, Tier: 0},
+			{UserID: ref.MustParseUserID("@bob:bureau.local"), Disposition: ticket.DispositionApproved, Tier: 0},
+			{UserID: ref.MustParseUserID("@carol:bureau.local"), Disposition: ticket.DispositionApproved, Tier: 0},
 		},
 		TierThresholds: []ticket.TierThreshold{
 			{Tier: 0, Threshold: &threshold},
@@ -3832,8 +3832,8 @@ func TestMatchReviewGateReviewersInTierWithoutThreshold(t *testing.T) {
 	threshold := 1
 	index, _ := reviewGateIndex(&ticket.TicketReview{
 		Reviewers: []ticket.ReviewerEntry{
-			{UserID: ref.MustParseUserID("@alice:bureau.local"), Disposition: "approved", Tier: 0},
-			{UserID: ref.MustParseUserID("@lead:bureau.local"), Disposition: "pending", Tier: 2},
+			{UserID: ref.MustParseUserID("@alice:bureau.local"), Disposition: ticket.DispositionApproved, Tier: 0},
+			{UserID: ref.MustParseUserID("@lead:bureau.local"), Disposition: ticket.DispositionPending, Tier: 2},
 		},
 		TierThresholds: []ticket.TierThreshold{
 			{Tier: 0, Threshold: &threshold},

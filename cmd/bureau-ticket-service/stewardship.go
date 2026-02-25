@@ -134,7 +134,7 @@ func (ts *TicketService) resolveStewardshipGates(affects []string, ticketType ti
 	// tier is notified at gate creation time.
 	if priority == 0 {
 		for i := range result.thresholds {
-			result.thresholds[i].Escalation = "immediate"
+			result.thresholds[i].Escalation = ticket.EscalationImmediate
 		}
 	}
 
@@ -203,7 +203,7 @@ func (ts *TicketService) buildCooperativeGate(
 		// Escalation merging: "immediate" wins over "last_pending".
 		// Only when all declarations agree on "last_pending" does the
 		// merged tier use "last_pending". Empty defaults to "immediate".
-		mergedEscalation := "last_pending"
+		mergedEscalation := ticket.EscalationLastPending
 		declarationsWithTier := 0
 
 		for _, declaration := range declarations {
@@ -242,16 +242,16 @@ func (ts *TicketService) buildCooperativeGate(
 			// is "immediate".
 			escalation := tier.Escalation
 			if escalation == "" {
-				escalation = "immediate"
+				escalation = ticket.EscalationImmediate
 			}
-			if escalation == "immediate" {
-				mergedEscalation = "immediate"
+			if escalation == ticket.EscalationImmediate {
+				mergedEscalation = ticket.EscalationImmediate
 			}
 		}
 
 		// If no declarations had this tier, default to "immediate".
 		if declarationsWithTier == 0 {
-			mergedEscalation = "immediate"
+			mergedEscalation = ticket.EscalationImmediate
 		}
 
 		allThresholds = append(allThresholds, ticket.TierThreshold{
@@ -299,7 +299,7 @@ func (ts *TicketService) resolveReviewersForTier(
 				seen[userID] = true
 				reviewers = append(reviewers, ticket.ReviewerEntry{
 					UserID:      userID,
-					Disposition: "pending",
+					Disposition: ticket.DispositionPending,
 					Tier:        remappedTierNumber,
 				})
 			}
@@ -356,7 +356,7 @@ func mergeStewardshipReview(
 	// the new stewardship set. Keep manual reviewers (those not in
 	// the new set) as-is.
 	var merged []ticket.ReviewerEntry
-	preservedDispositions := make(map[ref.UserID]string)
+	preservedDispositions := make(map[ref.UserID]ticket.ReviewDisposition)
 
 	for _, existing := range content.Review.Reviewers {
 		if _, inNew := newByUserID[existing.UserID]; inNew {
@@ -449,7 +449,7 @@ func tierSatisfied(review *ticket.TicketReview, tier int) bool {
 	for _, reviewer := range review.Reviewers {
 		if reviewer.Tier == tier {
 			total++
-			if reviewer.Disposition == "approved" {
+			if reviewer.Disposition == ticket.DispositionApproved {
 				approved++
 			}
 		}
@@ -486,7 +486,7 @@ func activatedLastPendingTiers(oldReview, newReview *ticket.TicketReview) []int 
 	// Collect last_pending tiers sorted by tier number.
 	var lastPendingTiers []int
 	for _, threshold := range newReview.TierThresholds {
-		if threshold.Escalation == "last_pending" {
+		if threshold.Escalation == ticket.EscalationLastPending {
 			lastPendingTiers = append(lastPendingTiers, threshold.Tier)
 		}
 	}
@@ -575,7 +575,7 @@ func escalationMessage(ticketID string, content ticket.TicketContent, activatedT
 	// Earlier tier summary.
 	builder.WriteString("\nEarlier tiers satisfied:")
 	for _, reviewer := range content.Review.Reviewers {
-		if reviewer.Tier < activatedTier && reviewer.Disposition == "approved" {
+		if reviewer.Tier < activatedTier && reviewer.Disposition == ticket.DispositionApproved {
 			fmt.Fprintf(&builder, "\n  - %s (tier %d, approved)", reviewer.UserID, reviewer.Tier)
 		}
 	}

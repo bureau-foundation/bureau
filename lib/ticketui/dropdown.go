@@ -128,8 +128,8 @@ func AssigneeOptions(members []MemberInfo, currentAssignee ref.UserID) (options 
 // pane's disposition rendering.
 func DispositionOptions() []DropdownOption {
 	return []DropdownOption{
-		{Label: "● Approve", Value: "approved"},
-		{Label: "● Request Changes", Value: "changes_requested"},
-		{Label: "● Comment", Value: "commented"},
+		{Label: "● Approve", Value: string(ticket.DispositionApproved)},
+		{Label: "● Request Changes", Value: string(ticket.DispositionChangesRequested)},
+		{Label: "● Comment", Value: string(ticket.DispositionCommented)},
 	}
 }

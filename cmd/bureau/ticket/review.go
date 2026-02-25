@@ -8,6 +8,7 @@ import (
 	"log/slog"
 
 	"github.com/bureau-foundation/bureau/cmd/bureau/cli"
+	ticketschema "github.com/bureau-foundation/bureau/lib/schema/ticket"
 )
 
 // reviewCommand returns the "review" subcommand for setting a reviewer's
@@ -126,10 +127,10 @@ func resolveDisposition(approve, requestChanges, comment bool) (string, error) {
 
 	switch {
 	case approve:
-		return "approved", nil
+		return string(ticketschema.DispositionApproved), nil
 	case requestChanges:
-		return "changes_requested", nil
+		return string(ticketschema.DispositionChangesRequested), nil
 	default:
-		return "commented", nil
+		return string(ticketschema.DispositionCommented), nil
 	}
 }

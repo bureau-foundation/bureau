@@ -40,7 +40,7 @@ func validStewardshipContent() StewardshipContent {
 		Tiers: []StewardshipTier{
 			{
 				Principals: []string{"iree/amdgpu/pm:bureau.local"},
-				Escalation: "immediate",
+				Escalation: ticket.EscalationImmediate,
 			},
 		},
 	}
@@ -57,12 +57,12 @@ func TestStewardshipContentRoundTrip(t *testing.T) {
 			{
 				Principals: []string{"iree/amdgpu/pm:bureau.local", "other-project/pm:bureau.local"},
 				Threshold:  intPointer(2),
-				Escalation: "immediate",
+				Escalation: ticket.EscalationImmediate,
 			},
 			{
 				Principals: []string{"ben:bureau.local"},
 				Threshold:  intPointer(1),
-				Escalation: "last_pending",
+				Escalation: ticket.EscalationLastPending,
 			},
 		},
 		OverlapPolicy:  "independent",
@@ -293,7 +293,7 @@ func TestStewardshipContentValidate(t *testing.T) {
 		{
 			name: "valid_escalation_last_pending",
 			modify: func(s *StewardshipContent) {
-				s.Tiers[0].Escalation = "last_pending"
+				s.Tiers[0].Escalation = ticket.EscalationLastPending
 			},
 			wantErr: "",
 		},
@@ -339,12 +339,12 @@ func TestStewardshipContentValidate(t *testing.T) {
 					{
 						Principals: []string{"iree/amdgpu/pm:bureau.local", "other-project/pm:bureau.local"},
 						Threshold:  intPointer(2),
-						Escalation: "immediate",
+						Escalation: ticket.EscalationImmediate,
 					},
 					{
 						Principals: []string{"ben:bureau.local"},
 						Threshold:  intPointer(1),
-						Escalation: "last_pending",
+						Escalation: ticket.EscalationLastPending,
 					},
 				}
 			},

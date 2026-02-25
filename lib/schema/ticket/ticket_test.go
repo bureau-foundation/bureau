@@ -432,7 +432,7 @@ func TestTicketContentValidate(t *testing.T) {
 				tc.Status = StatusReview
 				tc.Review = &TicketReview{
 					Reviewers: []ReviewerEntry{
-						{UserID: ref.MustParseUserID("@reviewer:bureau.local"), Disposition: "pending"},
+						{UserID: ref.MustParseUserID("@reviewer:bureau.local"), Disposition: DispositionPending},
 					},
 				}
 			},
@@ -457,7 +457,7 @@ func TestTicketContentValidate(t *testing.T) {
 				tc.Status = StatusOpen
 				tc.Review = &TicketReview{
 					Reviewers: []ReviewerEntry{
-						{UserID: ref.MustParseUserID("@reviewer:bureau.local"), Disposition: "pending"},
+						{UserID: ref.MustParseUserID("@reviewer:bureau.local"), Disposition: DispositionPending},
 					},
 				}
 			},
@@ -469,7 +469,7 @@ func TestTicketContentValidate(t *testing.T) {
 				tc.Status = StatusReview
 				tc.Review = &TicketReview{
 					Reviewers: []ReviewerEntry{
-						{UserID: ref.UserID{}, Disposition: "pending"},
+						{UserID: ref.UserID{}, Disposition: DispositionPending},
 					},
 				}
 			},
@@ -481,7 +481,7 @@ func TestTicketContentValidate(t *testing.T) {
 				tc.Status = StatusReview
 				tc.Review = &TicketReview{
 					Reviewers: []ReviewerEntry{
-						{UserID: ref.MustParseUserID("@reviewer:bureau.local"), Disposition: "rejected"},
+						{UserID: ref.MustParseUserID("@reviewer:bureau.local"), Disposition: ReviewDisposition("rejected")},
 					},
 				}
 			},
@@ -670,7 +670,7 @@ func TestTicketContentValidate(t *testing.T) {
 			modify: func(tc *TicketContent) {
 				tc.Review = &TicketReview{
 					Reviewers: []ReviewerEntry{
-						{UserID: ref.MustParseUserID("@reviewer:bureau.local"), Disposition: "pending"},
+						{UserID: ref.MustParseUserID("@reviewer:bureau.local"), Disposition: DispositionPending},
 					},
 					TierThresholds: []TierThreshold{
 						{Tier: -1},
@@ -685,7 +685,7 @@ func TestTicketContentValidate(t *testing.T) {
 				threshold := 2
 				tc.Review = &TicketReview{
 					Reviewers: []ReviewerEntry{
-						{UserID: ref.MustParseUserID("@reviewer:bureau.local"), Disposition: "pending", Tier: 1},
+						{UserID: ref.MustParseUserID("@reviewer:bureau.local"), Disposition: DispositionPending, Tier: 1},
 					},
 					TierThresholds: []TierThreshold{
 						{Tier: 0},
@@ -2120,12 +2120,12 @@ func TestTicketReviewRoundTrip(t *testing.T) {
 		Reviewers: []ReviewerEntry{
 			{
 				UserID:      ref.MustParseUserID("@iree/amdgpu/engineer:bureau.local"),
-				Disposition: "approved",
+				Disposition: DispositionApproved,
 				UpdatedAt:   "2026-02-20T14:30:00Z",
 			},
 			{
 				UserID:      ref.MustParseUserID("@iree/amdgpu/pm:bureau.local"),
-				Disposition: "pending",
+				Disposition: DispositionPending,
 			},
 		},
 		Scope: &ReviewScope{
@@ -2195,7 +2195,7 @@ func TestTicketReviewRoundTrip(t *testing.T) {
 func TestTicketReviewOmitsEmptyScope(t *testing.T) {
 	review := TicketReview{
 		Reviewers: []ReviewerEntry{
-			{UserID: ref.MustParseUserID("@a:b.c"), Disposition: "pending"},
+			{UserID: ref.MustParseUserID("@a:b.c"), Disposition: DispositionPending},
 		},
 	}
 
@@ -2224,7 +2224,7 @@ func TestTicketReviewValidate(t *testing.T) {
 			name: "valid_single_reviewer",
 			review: TicketReview{
 				Reviewers: []ReviewerEntry{
-					{UserID: ref.MustParseUserID("@a:b.c"), Disposition: "pending"},
+					{UserID: ref.MustParseUserID("@a:b.c"), Disposition: DispositionPending},
 				},
 			},
 			wantErr: "",
@@ -2233,9 +2233,9 @@ func TestTicketReviewValidate(t *testing.T) {
 			name: "valid_multiple_reviewers",
 			review: TicketReview{
 				Reviewers: []ReviewerEntry{
-					{UserID: ref.MustParseUserID("@a:b.c"), Disposition: "approved"},
-					{UserID: ref.MustParseUserID("@b:b.c"), Disposition: "changes_requested"},
-					{UserID: ref.MustParseUserID("@c:b.c"), Disposition: "commented"},
+					{UserID: ref.MustParseUserID("@a:b.c"), Disposition: DispositionApproved},
+					{UserID: ref.MustParseUserID("@b:b.c"), Disposition: DispositionChangesRequested},
+					{UserID: ref.MustParseUserID("@c:b.c"), Disposition: DispositionCommented},
 				},
 			},
 			wantErr: "",
@@ -2244,7 +2244,7 @@ func TestTicketReviewValidate(t *testing.T) {
 			name: "valid_with_scope",
 			review: TicketReview{
 				Reviewers: []ReviewerEntry{
-					{UserID: ref.MustParseUserID("@a:b.c"), Disposition: "pending"},
+					{UserID: ref.MustParseUserID("@a:b.c"), Disposition: DispositionPending},
 				},
 				Scope: &ReviewScope{
 					Base: "abc123",
@@ -2267,7 +2267,7 @@ func TestTicketReviewValidate(t *testing.T) {
 			name: "invalid_reviewer_user_id",
 			review: TicketReview{
 				Reviewers: []ReviewerEntry{
-					{UserID: ref.UserID{}, Disposition: "pending"},
+					{UserID: ref.UserID{}, Disposition: DispositionPending},
 				},
 			},
 			wantErr: "reviewers[0]: user_id is required",
@@ -2276,7 +2276,7 @@ func TestTicketReviewValidate(t *testing.T) {
 			name: "invalid_reviewer_disposition",
 			review: TicketReview{
 				Reviewers: []ReviewerEntry{
-					{UserID: ref.MustParseUserID("@a:b.c"), Disposition: "rejected"},
+					{UserID: ref.MustParseUserID("@a:b.c"), Disposition: ReviewDisposition("rejected")},
 				},
 			},
 			wantErr: `reviewers[0]: unknown disposition "rejected"`,
@@ -2285,8 +2285,8 @@ func TestTicketReviewValidate(t *testing.T) {
 			name: "valid_with_tier_thresholds",
 			review: TicketReview{
 				Reviewers: []ReviewerEntry{
-					{UserID: ref.MustParseUserID("@a:b.c"), Disposition: "pending", Tier: 0},
-					{UserID: ref.MustParseUserID("@b:b.c"), Disposition: "pending", Tier: 1},
+					{UserID: ref.MustParseUserID("@a:b.c"), Disposition: DispositionPending, Tier: 0},
+					{UserID: ref.MustParseUserID("@b:b.c"), Disposition: DispositionPending, Tier: 1},
 				},
 				TierThresholds: []TierThreshold{
 					{Tier: 0},
@@ -2299,7 +2299,7 @@ func TestTicketReviewValidate(t *testing.T) {
 			name: "invalid_tier_threshold",
 			review: TicketReview{
 				Reviewers: []ReviewerEntry{
-					{UserID: ref.MustParseUserID("@a:b.c"), Disposition: "pending"},
+					{UserID: ref.MustParseUserID("@a:b.c"), Disposition: DispositionPending},
 				},
 				TierThresholds: []TierThreshold{
 					{Tier: 0, Threshold: func() *int { v := 0; return &v }()},
@@ -2311,7 +2311,7 @@ func TestTicketReviewValidate(t *testing.T) {
 			name: "invalid_reviewer_tier",
 			review: TicketReview{
 				Reviewers: []ReviewerEntry{
-					{UserID: ref.MustParseUserID("@a:b.c"), Disposition: "pending", Tier: -1},
+					{UserID: ref.MustParseUserID("@a:b.c"), Disposition: DispositionPending, Tier: -1},
 				},
 			},
 			wantErr: "reviewers[0]: tier must be >= 0",
@@ -2345,52 +2345,52 @@ func TestReviewerEntryValidate(t *testing.T) {
 	}{
 		{
 			name:    "valid_pending",
-			entry:   ReviewerEntry{UserID: ref.MustParseUserID("@a:b.c"), Disposition: "pending"},
+			entry:   ReviewerEntry{UserID: ref.MustParseUserID("@a:b.c"), Disposition: DispositionPending},
 			wantErr: "",
 		},
 		{
 			name:    "valid_approved",
-			entry:   ReviewerEntry{UserID: ref.MustParseUserID("@a:b.c"), Disposition: "approved"},
+			entry:   ReviewerEntry{UserID: ref.MustParseUserID("@a:b.c"), Disposition: DispositionApproved},
 			wantErr: "",
 		},
 		{
 			name:    "valid_changes_requested",
-			entry:   ReviewerEntry{UserID: ref.MustParseUserID("@a:b.c"), Disposition: "changes_requested"},
+			entry:   ReviewerEntry{UserID: ref.MustParseUserID("@a:b.c"), Disposition: DispositionChangesRequested},
 			wantErr: "",
 		},
 		{
 			name:    "valid_commented",
-			entry:   ReviewerEntry{UserID: ref.MustParseUserID("@a:b.c"), Disposition: "commented"},
+			entry:   ReviewerEntry{UserID: ref.MustParseUserID("@a:b.c"), Disposition: DispositionCommented},
 			wantErr: "",
 		},
 		{
 			name:    "missing_user_id",
-			entry:   ReviewerEntry{UserID: ref.UserID{}, Disposition: "pending"},
+			entry:   ReviewerEntry{UserID: ref.UserID{}, Disposition: DispositionPending},
 			wantErr: "user_id is required",
 		},
 		{
 			name:    "empty_disposition",
-			entry:   ReviewerEntry{UserID: ref.MustParseUserID("@a:b.c"), Disposition: ""},
+			entry:   ReviewerEntry{UserID: ref.MustParseUserID("@a:b.c"), Disposition: ReviewDisposition("")},
 			wantErr: `unknown disposition ""`,
 		},
 		{
 			name:    "invalid_disposition",
-			entry:   ReviewerEntry{UserID: ref.MustParseUserID("@a:b.c"), Disposition: "lgtm"},
+			entry:   ReviewerEntry{UserID: ref.MustParseUserID("@a:b.c"), Disposition: ReviewDisposition("lgtm")},
 			wantErr: `unknown disposition "lgtm"`,
 		},
 		{
 			name:    "valid_tier_zero",
-			entry:   ReviewerEntry{UserID: ref.MustParseUserID("@a:b.c"), Disposition: "pending", Tier: 0},
+			entry:   ReviewerEntry{UserID: ref.MustParseUserID("@a:b.c"), Disposition: DispositionPending, Tier: 0},
 			wantErr: "",
 		},
 		{
 			name:    "valid_tier_two",
-			entry:   ReviewerEntry{UserID: ref.MustParseUserID("@a:b.c"), Disposition: "pending", Tier: 2},
+			entry:   ReviewerEntry{UserID: ref.MustParseUserID("@a:b.c"), Disposition: DispositionPending, Tier: 2},
 			wantErr: "",
 		},
 		{
 			name:    "negative_tier",
-			entry:   ReviewerEntry{UserID: ref.MustParseUserID("@a:b.c"), Disposition: "pending", Tier: -1},
+			entry:   ReviewerEntry{UserID: ref.MustParseUserID("@a:b.c"), Disposition: DispositionPending, Tier: -1},
 			wantErr: "tier must be >= 0",
 		},
 	}
@@ -2414,18 +2414,26 @@ func TestReviewerEntryValidate(t *testing.T) {
 	}
 }
 
-func TestIsValidDisposition(t *testing.T) {
-	valid := []string{"pending", "approved", "changes_requested", "commented"}
-	for _, disposition := range valid {
-		if !IsValidDisposition(disposition) {
-			t.Errorf("IsValidDisposition(%q) = false, want true", disposition)
+func TestReviewDispositionIsKnown(t *testing.T) {
+	known := []ReviewDisposition{
+		DispositionPending, DispositionApproved,
+		DispositionChangesRequested, DispositionCommented,
+	}
+	for _, disposition := range known {
+		if !disposition.IsKnown() {
+			t.Errorf("ReviewDisposition(%q).IsKnown() = false, want true", disposition)
 		}
 	}
 
-	invalid := []string{"", "rejected", "lgtm", "wontfix"}
-	for _, disposition := range invalid {
-		if IsValidDisposition(disposition) {
-			t.Errorf("IsValidDisposition(%q) = true, want false", disposition)
+	unknown := []ReviewDisposition{
+		ReviewDisposition(""),
+		ReviewDisposition("rejected"),
+		ReviewDisposition("lgtm"),
+		ReviewDisposition("wontfix"),
+	}
+	for _, disposition := range unknown {
+		if disposition.IsKnown() {
+			t.Errorf("ReviewDisposition(%q).IsKnown() = true, want false", disposition)
 		}
 	}
 }
@@ -2527,12 +2535,12 @@ func TestReviewTicketRoundTrip(t *testing.T) {
 		Reviewers: []ReviewerEntry{
 			{
 				UserID:      ref.MustParseUserID("@iree/amdgpu/pm:bureau.local"),
-				Disposition: "approved",
+				Disposition: DispositionApproved,
 				UpdatedAt:   "2026-02-20T15:00:00Z",
 			},
 			{
 				UserID:      ref.MustParseUserID("@iree/amdgpu/lead:bureau.local"),
-				Disposition: "changes_requested",
+				Disposition: DispositionChangesRequested,
 				UpdatedAt:   "2026-02-20T15:30:00Z",
 			},
 		},
@@ -2688,7 +2696,7 @@ func TestReviewerEntryTierRoundTrip(t *testing.T) {
 	// Tier 0 should be omitted from JSON (omitempty with zero value).
 	tierZero := ReviewerEntry{
 		UserID:      ref.MustParseUserID("@reviewer:bureau.local"),
-		Disposition: "pending",
+		Disposition: DispositionPending,
 		Tier:        0,
 	}
 	data, err := json.Marshal(tierZero)
@@ -2706,7 +2714,7 @@ func TestReviewerEntryTierRoundTrip(t *testing.T) {
 	// Tier 2 should be present.
 	tierTwo := ReviewerEntry{
 		UserID:      ref.MustParseUserID("@reviewer:bureau.local"),
-		Disposition: "pending",
+		Disposition: DispositionPending,
 		Tier:        2,
 	}
 	data, err = json.Marshal(tierTwo)
@@ -2736,13 +2744,13 @@ func TestTicketReviewWithTierThresholdsRoundTrip(t *testing.T) {
 		Reviewers: []ReviewerEntry{
 			{
 				UserID:      ref.MustParseUserID("@iree/amdgpu/engineer:bureau.local"),
-				Disposition: "approved",
+				Disposition: DispositionApproved,
 				UpdatedAt:   "2026-02-20T14:30:00Z",
 				Tier:        0,
 			},
 			{
 				UserID:      ref.MustParseUserID("@ben:bureau.local"),
-				Disposition: "pending",
+				Disposition: DispositionPending,
 				Tier:        1,
 			},
 		},
@@ -2782,7 +2790,7 @@ func TestTicketReviewWithTierThresholdsRoundTrip(t *testing.T) {
 	// TierThresholds absent — should be omitted.
 	noThresholds := TicketReview{
 		Reviewers: []ReviewerEntry{
-			{UserID: ref.MustParseUserID("@a:b.c"), Disposition: "pending"},
+			{UserID: ref.MustParseUserID("@a:b.c"), Disposition: DispositionPending},
 		},
 	}
 	data, err = json.Marshal(noThresholds)

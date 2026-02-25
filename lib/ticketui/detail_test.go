@@ -47,7 +47,7 @@ func TestRenderReviewerLine(t *testing.T) {
 
 	line := renderer.renderReviewerLine(ticket.ReviewerEntry{
 		UserID:      ref.MustParseUserID("@alice:bureau.local"),
-		Disposition: "approved",
+		Disposition: ticket.DispositionApproved,
 		UpdatedAt:   "2026-02-24T12:00:00Z",
 	})
 
@@ -67,7 +67,7 @@ func TestRenderReviewerLinePendingNoTimestamp(t *testing.T) {
 
 	line := renderer.renderReviewerLine(ticket.ReviewerEntry{
 		UserID:      ref.MustParseUserID("@bob:bureau.local"),
-		Disposition: "pending",
+		Disposition: ticket.DispositionPending,
 	})
 
 	if !strings.Contains(line, "@bob:bureau.local") {
@@ -84,9 +84,9 @@ func TestRenderTieredReviewers(t *testing.T) {
 	threshold := 2
 	review := &ticket.TicketReview{
 		Reviewers: []ticket.ReviewerEntry{
-			{UserID: ref.MustParseUserID("@alice:bureau.local"), Disposition: "approved", Tier: 0},
-			{UserID: ref.MustParseUserID("@bob:bureau.local"), Disposition: "pending", Tier: 0},
-			{UserID: ref.MustParseUserID("@charlie:bureau.local"), Disposition: "pending", Tier: 1},
+			{UserID: ref.MustParseUserID("@alice:bureau.local"), Disposition: ticket.DispositionApproved, Tier: 0},
+			{UserID: ref.MustParseUserID("@bob:bureau.local"), Disposition: ticket.DispositionPending, Tier: 0},
+			{UserID: ref.MustParseUserID("@charlie:bureau.local"), Disposition: ticket.DispositionPending, Tier: 1},
 		},
 		TierThresholds: []ticket.TierThreshold{
 			{Tier: 0, Threshold: &threshold},
@@ -130,8 +130,8 @@ func TestRenderTieredReviewersOrdering(t *testing.T) {
 	threshold := 1
 	review := &ticket.TicketReview{
 		Reviewers: []ticket.ReviewerEntry{
-			{UserID: ref.MustParseUserID("@tier1:bureau.local"), Disposition: "pending", Tier: 1},
-			{UserID: ref.MustParseUserID("@tier0:bureau.local"), Disposition: "pending", Tier: 0},
+			{UserID: ref.MustParseUserID("@tier1:bureau.local"), Disposition: ticket.DispositionPending, Tier: 1},
+			{UserID: ref.MustParseUserID("@tier0:bureau.local"), Disposition: ticket.DispositionPending, Tier: 0},
 		},
 		TierThresholds: []ticket.TierThreshold{
 			{Tier: 0, Threshold: &threshold},
@@ -168,7 +168,7 @@ func TestRenderReviewWithGateStatus(t *testing.T) {
 		},
 		Review: &ticket.TicketReview{
 			Reviewers: []ticket.ReviewerEntry{
-				{UserID: ref.MustParseUserID("@alice:bureau.local"), Disposition: "pending"},
+				{UserID: ref.MustParseUserID("@alice:bureau.local"), Disposition: ticket.DispositionPending},
 			},
 		},
 	}
@@ -204,7 +204,7 @@ func TestRenderReviewSatisfiedGate(t *testing.T) {
 		},
 		Review: &ticket.TicketReview{
 			Reviewers: []ticket.ReviewerEntry{
-				{UserID: ref.MustParseUserID("@alice:bureau.local"), Disposition: "approved"},
+				{UserID: ref.MustParseUserID("@alice:bureau.local"), Disposition: ticket.DispositionApproved},
 			},
 		},
 	}
@@ -227,7 +227,7 @@ func TestRenderReviewSkipsNonReviewGates(t *testing.T) {
 		},
 		Review: &ticket.TicketReview{
 			Reviewers: []ticket.ReviewerEntry{
-				{UserID: ref.MustParseUserID("@alice:bureau.local"), Disposition: "pending"},
+				{UserID: ref.MustParseUserID("@alice:bureau.local"), Disposition: ticket.DispositionPending},
 			},
 		},
 	}
@@ -251,8 +251,8 @@ func TestRenderReviewClassicFlatDisplay(t *testing.T) {
 		Status: ticket.StatusReview,
 		Review: &ticket.TicketReview{
 			Reviewers: []ticket.ReviewerEntry{
-				{UserID: ref.MustParseUserID("@alice:bureau.local"), Disposition: "approved"},
-				{UserID: ref.MustParseUserID("@bob:bureau.local"), Disposition: "pending"},
+				{UserID: ref.MustParseUserID("@alice:bureau.local"), Disposition: ticket.DispositionApproved},
+				{UserID: ref.MustParseUserID("@bob:bureau.local"), Disposition: ticket.DispositionPending},
 			},
 		},
 	}
@@ -278,7 +278,7 @@ func TestRenderReviewWithScope(t *testing.T) {
 		Status: ticket.StatusReview,
 		Review: &ticket.TicketReview{
 			Reviewers: []ticket.ReviewerEntry{
-				{UserID: ref.MustParseUserID("@alice:bureau.local"), Disposition: "pending"},
+				{UserID: ref.MustParseUserID("@alice:bureau.local"), Disposition: ticket.DispositionPending},
 			},
 			Scope: &ticket.ReviewScope{
 				Description: "Review GPU driver changes",
@@ -407,7 +407,7 @@ func TestCanReviewFileMode(t *testing.T) {
 		Type:    ticket.TypeTask,
 		Review: &ticket.TicketReview{
 			Reviewers: []ticket.ReviewerEntry{
-				{UserID: ref.MustParseUserID("@alice:bureau.local"), Disposition: "pending"},
+				{UserID: ref.MustParseUserID("@alice:bureau.local"), Disposition: ticket.DispositionPending},
 			},
 		},
 	})

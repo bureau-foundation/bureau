@@ -334,7 +334,7 @@ func computeTierProgress(review *ticket.TicketReview) []tierApprovalSummary {
 		for _, reviewer := range review.Reviewers {
 			if reviewer.Tier == tier {
 				total++
-				if reviewer.Disposition == "approved" {
+				if reviewer.Disposition == ticket.DispositionApproved {
 					approved++
 				}
 			}

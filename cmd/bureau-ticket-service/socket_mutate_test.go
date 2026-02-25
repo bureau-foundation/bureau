@@ -1954,7 +1954,7 @@ func TestHandleSetDisposition(t *testing.T) {
 	for _, reviewer := range result.Content.Review.Reviewers {
 		if reviewer.UserID == testerID {
 			found = true
-			if reviewer.Disposition != "approved" {
+			if reviewer.Disposition != ticket.DispositionApproved {
 				t.Errorf("disposition: got %q, want approved", reviewer.Disposition)
 			}
 			if reviewer.UpdatedAt == "" {
@@ -2000,7 +2000,7 @@ func TestHandleSetDispositionNotReviewer(t *testing.T) {
 				Reviewers: []ticket.ReviewerEntry{
 					{
 						UserID:      ref.MustParseUserID("@agent/other-reviewer:bureau.local"),
-						Disposition: "pending",
+						Disposition: ticket.DispositionPending,
 					},
 				},
 			},

@@ -177,11 +177,8 @@ type StewardshipTier struct {
 	Threshold *int `json:"threshold,omitempty"`
 
 	// Escalation controls when this tier's reviewers are notified.
-	// "immediate" (default) means the tier is notified when the review
-	// gate is created. "last_pending" means the tier is notified only
-	// when it is the last unsatisfied tier — all earlier tiers have
-	// met their thresholds.
-	Escalation string `json:"escalation,omitempty"`
+	// Empty defaults to "immediate" at runtime.
+	Escalation ticket.Escalation `json:"escalation,omitempty"`
 }
 
 // Validate checks that the tier has valid principals, threshold, and
@@ -210,10 +207,7 @@ func (t *StewardshipTier) Validate() error {
 			*t.Threshold,
 		)
 	}
-	switch t.Escalation {
-	case "", "immediate", "last_pending":
-		// Valid. Empty defaults to "immediate" at runtime.
-	default:
+	if t.Escalation != "" && !t.Escalation.IsKnown() {
 		return fmt.Errorf("unknown escalation %q (must be \"immediate\" or \"last_pending\")", t.Escalation)
 	}
 	return nil

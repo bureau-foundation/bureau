@@ -8,6 +8,7 @@ import (
 
 	"github.com/bureau-foundation/bureau/lib/ref"
 	"github.com/bureau-foundation/bureau/lib/schema/stewardship"
+	"github.com/bureau-foundation/bureau/lib/schema/ticket"
 )
 
 // testRoomID returns a ref.RoomID for use in tests.
@@ -28,7 +29,7 @@ func makeDeclarationContent(patterns ...string) stewardship.StewardshipContent {
 		Tiers: []stewardship.StewardshipTier{
 			{
 				Principals: []string{"iree/amdgpu/pm:bureau.local"},
-				Escalation: "immediate",
+				Escalation: ticket.EscalationImmediate,
 			},
 		},
 	}

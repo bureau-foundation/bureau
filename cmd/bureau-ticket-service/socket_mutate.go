@@ -1425,7 +1425,7 @@ func (ts *TicketService) handleSetDisposition(ctx context.Context, token *servic
 	// "pending" is valid in the schema but not as a set-disposition
 	// action — you can't "un-review" by setting pending. That's the
 	// initial state before any reviewer acts.
-	if request.Disposition == "pending" {
+	if request.Disposition == string(ticket.DispositionPending) {
 		return nil, errors.New("cannot set disposition to pending: pending is the initial state before review")
 	}
 
@@ -1463,7 +1463,7 @@ func (ts *TicketService) handleSetDisposition(ctx context.Context, token *servic
 	oldReview := snapshotReview(content.Review)
 
 	now := ts.clock.Now().UTC().Format(time.RFC3339)
-	content.Review.Reviewers[reviewerIndex].Disposition = request.Disposition
+	content.Review.Reviewers[reviewerIndex].Disposition = ticket.ReviewDisposition(request.Disposition)
 	content.Review.Reviewers[reviewerIndex].UpdatedAt = now
 	content.UpdatedAt = now
 

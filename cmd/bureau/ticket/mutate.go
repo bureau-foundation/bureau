@@ -283,7 +283,7 @@ in_progress returns a contention error with the current assignee.`,
 				for i, userID := range params.Reviewers {
 					reviewers[i] = map[string]any{
 						"user_id":     userID,
-						"disposition": "pending",
+						"disposition": string(ticketschema.DispositionPending),
 					}
 				}
 				fields["review"] = map[string]any{

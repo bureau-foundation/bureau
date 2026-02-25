@@ -601,11 +601,11 @@ func mutationRooms() map[ref.RoomID]*roomState {
 				Reviewers: []ticket.ReviewerEntry{
 					{
 						UserID:      ref.MustParseUserID("@bureau/fleet/prod/agent/tester:bureau.local"),
-						Disposition: "pending",
+						Disposition: ticket.DispositionPending,
 					},
 					{
 						UserID:      ref.MustParseUserID("@agent/reviewer:bureau.local"),
-						Disposition: "pending",
+						Disposition: ticket.DispositionPending,
 					},
 				},
 			},

@@ -927,7 +927,7 @@ func makeStewardshipContentMap(t *testing.T, patterns ...string) map[string]any 
 		Tiers: []stewardship.StewardshipTier{
 			{
 				Principals: []string{"iree/amdgpu/pm:bureau.local"},
-				Escalation: "immediate",
+				Escalation: ticket.EscalationImmediate,
 			},
 		},
 	}
@@ -1126,7 +1126,7 @@ func TestHandleSyncLeaveCleansMembersAndStewardship(t *testing.T) {
 		Version:          stewardship.StewardshipContentVersion,
 		ResourcePatterns: []string{"fleet/gpu/**"},
 		Tiers: []stewardship.StewardshipTier{
-			{Principals: []string{"pm:bureau.local"}, Escalation: "immediate"},
+			{Principals: []string{"pm:bureau.local"}, Escalation: ticket.EscalationImmediate},
 		},
 	})
 
@@ -1162,7 +1162,7 @@ func TestHandleRoomTombstoneCleansMembersAndStewardship(t *testing.T) {
 		Version:          stewardship.StewardshipContentVersion,
 		ResourcePatterns: []string{"fleet/gpu/**"},
 		Tiers: []stewardship.StewardshipTier{
-			{Principals: []string{"pm:bureau.local"}, Escalation: "immediate"},
+			{Principals: []string{"pm:bureau.local"}, Escalation: ticket.EscalationImmediate},
 		},
 	})
 

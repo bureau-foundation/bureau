@@ -2733,8 +2733,8 @@ func TestPutClonesReviewPointer(t *testing.T) {
 	threshold := 2
 	review := &ticket.TicketReview{
 		Reviewers: []ticket.ReviewerEntry{
-			{UserID: ref.MustParseUserID("@a:b.c"), Disposition: "pending", Tier: 0},
-			{UserID: ref.MustParseUserID("@b:b.c"), Disposition: "pending", Tier: 1},
+			{UserID: ref.MustParseUserID("@a:b.c"), Disposition: ticket.DispositionPending, Tier: 0},
+			{UserID: ref.MustParseUserID("@b:b.c"), Disposition: ticket.DispositionPending, Tier: 1},
 		},
 		TierThresholds: []ticket.TierThreshold{
 			{Tier: 0},
@@ -2755,9 +2755,9 @@ func TestPutClonesReviewPointer(t *testing.T) {
 	if !ok {
 		t.Fatal("ticket not found")
 	}
-	if stored.Review.Reviewers[0].Disposition != "pending" {
+	if stored.Review.Reviewers[0].Disposition != ticket.DispositionPending {
 		t.Errorf("stored Reviewers[0].Disposition = %q, want %q (caller mutation leaked through)",
-			stored.Review.Reviewers[0].Disposition, "pending")
+			stored.Review.Reviewers[0].Disposition, ticket.DispositionPending)
 	}
 	if stored.Review.TierThresholds[0].Tier != 0 {
 		t.Errorf("stored TierThresholds[0].Tier = %d, want 0 (caller mutation leaked through)",

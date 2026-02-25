@@ -1063,7 +1063,7 @@ func (renderer DetailRenderer) renderReviewerLine(entry ticket.ReviewerEntry) st
 	dispStyle := lipgloss.NewStyle().Foreground(dotColor(renderer.theme))
 
 	line := dotStyle.Render(dot) + " " + userStyle.Render(entry.UserID.String()) +
-		" " + dispStyle.Render(entry.Disposition)
+		" " + dispStyle.Render(string(entry.Disposition))
 	if entry.UpdatedAt != "" {
 		line += " " + labelStyle.Render(shortenTimestamp(entry.UpdatedAt))
 	}
@@ -1115,7 +1115,7 @@ func (renderer DetailRenderer) renderTieredReviewers(review *ticket.TicketReview
 		reviewers := tierReviewers[tier]
 		approved := 0
 		for _, entry := range reviewers {
-			if entry.Disposition == "approved" {
+			if entry.Disposition == ticket.DispositionApproved {
 				approved++
 			}
 		}
@@ -1144,15 +1144,15 @@ func (renderer DetailRenderer) renderTieredReviewers(review *ticket.TicketReview
 // dispositionIndicator returns a dot character and a color function
 // for a review disposition value. Green for approved, red for
 // changes_requested, blue for commented, yellow for pending.
-func dispositionIndicator(disposition string) (string, func(Theme) lipgloss.Color) {
+func dispositionIndicator(disposition ticket.ReviewDisposition) (string, func(Theme) lipgloss.Color) {
 	switch disposition {
-	case "approved":
+	case ticket.DispositionApproved:
 		return "●", func(theme Theme) lipgloss.Color { return theme.StatusOpen }
-	case "changes_requested":
+	case ticket.DispositionChangesRequested:
 		return "●", func(theme Theme) lipgloss.Color { return theme.StatusBlocked }
-	case "commented":
+	case ticket.DispositionCommented:
 		return "●", func(theme Theme) lipgloss.Color { return theme.LinkForeground }
-	default: // "pending"
+	default: // pending
 		return "○", func(theme Theme) lipgloss.Color { return theme.StatusInProgress }
 	}
 }

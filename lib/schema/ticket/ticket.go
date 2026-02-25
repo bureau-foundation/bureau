@@ -871,17 +871,54 @@ func (r *TicketReview) Validate() error {
 	return nil
 }
 
+// ReviewDisposition is the reviewer's current assessment on a ticket.
+type ReviewDisposition string
+
+const (
+	// DispositionPending means the reviewer has not yet provided feedback.
+	DispositionPending ReviewDisposition = "pending"
+
+	// DispositionApproved means the reviewer has approved the work.
+	DispositionApproved ReviewDisposition = "approved"
+
+	// DispositionChangesRequested means the reviewer requires changes
+	// before the work can proceed.
+	DispositionChangesRequested ReviewDisposition = "changes_requested"
+
+	// DispositionCommented means the reviewer provided feedback without
+	// a blocking opinion.
+	DispositionCommented ReviewDisposition = "commented"
+)
+
+// IsKnown reports whether d is one of the recognized disposition values.
+func (d ReviewDisposition) IsKnown() bool {
+	switch d {
+	case DispositionPending, DispositionApproved,
+		DispositionChangesRequested, DispositionCommented:
+		return true
+	default:
+		return false
+	}
+}
+
+// IsValidDisposition reports whether the given string is a recognized
+// reviewer disposition.
+//
+// Deprecated: use ReviewDisposition.IsKnown() instead. This function
+// exists for callers that receive dispositions as untyped strings from
+// wire formats.
+func IsValidDisposition(disposition string) bool {
+	return ReviewDisposition(disposition).IsKnown()
+}
+
 // ReviewerEntry tracks a single reviewer's feedback on a ticket.
 type ReviewerEntry struct {
 	// UserID is the Matrix user ID of the reviewer
 	// (e.g., "@iree/amdgpu/engineer:bureau.local").
 	UserID ref.UserID `json:"user_id"`
 
-	// Disposition is the reviewer's current assessment: "pending"
-	// (not yet reviewed), "approved" (looks good), "changes_requested"
-	// (must fix before proceeding), or "commented" (feedback provided,
-	// no blocking opinion).
-	Disposition string `json:"disposition"`
+	// Disposition is the reviewer's current assessment.
+	Disposition ReviewDisposition `json:"disposition"`
 
 	// UpdatedAt is the ISO 8601 timestamp of the last disposition
 	// change. Empty when disposition is "pending" (initial state).
@@ -898,33 +935,45 @@ type ReviewerEntry struct {
 	Tier int `json:"tier,omitempty"`
 }
 
-// validDispositions is the set of recognized reviewer dispositions.
-var validDispositions = map[string]bool{
-	"pending":           true,
-	"approved":          true,
-	"changes_requested": true,
-	"commented":         true,
-}
-
-// IsValidDisposition reports whether the given string is a recognized
-// reviewer disposition.
-func IsValidDisposition(disposition string) bool {
-	return validDispositions[disposition]
-}
-
 // Validate checks that the reviewer entry has a valid user ID and
 // disposition.
 func (r *ReviewerEntry) Validate() error {
 	if r.UserID.IsZero() {
 		return errors.New("user_id is required")
 	}
-	if !IsValidDisposition(r.Disposition) {
+	if !r.Disposition.IsKnown() {
 		return fmt.Errorf("unknown disposition %q", r.Disposition)
 	}
 	if r.Tier < 0 {
 		return fmt.Errorf("tier must be >= 0, got %d", r.Tier)
 	}
 	return nil
+}
+
+// Escalation controls when a stewardship tier's reviewers are notified.
+type Escalation string
+
+const (
+	// EscalationImmediate means reviewers are notified when the review
+	// gate is created. This is the default when the field is empty.
+	EscalationImmediate Escalation = "immediate"
+
+	// EscalationLastPending means reviewers are notified only when all
+	// earlier tiers have met their thresholds and this tier is the last
+	// remaining unsatisfied tier.
+	EscalationLastPending Escalation = "last_pending"
+)
+
+// IsKnown reports whether e is one of the recognized escalation values.
+// The empty string is not "known" — callers that treat empty as a default
+// should check for empty before calling IsKnown.
+func (e Escalation) IsKnown() bool {
+	switch e {
+	case EscalationImmediate, EscalationLastPending:
+		return true
+	default:
+		return false
+	}
 }
 
 // TierThreshold specifies the approval requirement for one
@@ -944,14 +993,11 @@ type TierThreshold struct {
 	Threshold *int `json:"threshold,omitempty"`
 
 	// Escalation controls when this tier's reviewers are
-	// notified. "immediate" (default, including empty) means
-	// reviewers are notified when the review gate is created.
-	// "last_pending" means reviewers are notified only when
-	// all earlier tiers have met their thresholds and this tier
-	// is the last remaining unsatisfied tier. Copied from the
-	// stewardship declaration's StewardshipTier.Escalation at
-	// gate creation time so the ticket is self-contained.
-	Escalation string `json:"escalation,omitempty"`
+	// notified. Empty defaults to "immediate" at runtime.
+	// Copied from the stewardship declaration's
+	// StewardshipTier.Escalation at gate creation time so
+	// the ticket is self-contained.
+	Escalation Escalation `json:"escalation,omitempty"`
 }
 
 // Validate checks that the tier threshold has valid values.
@@ -966,10 +1012,7 @@ func (tt *TierThreshold) Validate() error {
 			*tt.Threshold,
 		)
 	}
-	switch tt.Escalation {
-	case "", "immediate", "last_pending":
-		// Valid. Empty defaults to "immediate" at runtime.
-	default:
+	if tt.Escalation != "" && !tt.Escalation.IsKnown() {
 		return fmt.Errorf("unknown escalation %q (must be \"immediate\" or \"last_pending\")", tt.Escalation)
 	}
 	return nil

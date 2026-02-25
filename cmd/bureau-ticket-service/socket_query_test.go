@@ -872,9 +872,9 @@ func TestComputeTierProgress(t *testing.T) {
 			{Tier: 1, Threshold: nil},
 		},
 		Reviewers: []ticket.ReviewerEntry{
-			{UserID: ref.MustParseUserID("@alice:local"), Tier: 0, Disposition: "approved"},
-			{UserID: ref.MustParseUserID("@bob:local"), Tier: 0, Disposition: "pending"},
-			{UserID: ref.MustParseUserID("@carol:local"), Tier: 1, Disposition: "pending"},
+			{UserID: ref.MustParseUserID("@alice:local"), Tier: 0, Disposition: ticket.DispositionApproved},
+			{UserID: ref.MustParseUserID("@bob:local"), Tier: 0, Disposition: ticket.DispositionPending},
+			{UserID: ref.MustParseUserID("@carol:local"), Tier: 1, Disposition: ticket.DispositionPending},
 		},
 	}
 
@@ -985,7 +985,7 @@ func TestHandleShowIncludesStewardshipContext(t *testing.T) {
 						{Tier: 0, Threshold: &threshold},
 					},
 					Reviewers: []ticket.ReviewerEntry{
-						{UserID: ref.MustParseUserID("@admin:local"), Tier: 0, Disposition: "approved"},
+						{UserID: ref.MustParseUserID("@admin:local"), Tier: 0, Disposition: ticket.DispositionApproved},
 					},
 				},
 			},
@@ -1100,7 +1100,7 @@ func TestListIncludesStewardshipSummary(t *testing.T) {
 						{Tier: 0, Threshold: &threshold},
 					},
 					Reviewers: []ticket.ReviewerEntry{
-						{UserID: ref.MustParseUserID("@admin:local"), Tier: 0, Disposition: "approved"},
+						{UserID: ref.MustParseUserID("@admin:local"), Tier: 0, Disposition: ticket.DispositionApproved},
 					},
 				},
 			},

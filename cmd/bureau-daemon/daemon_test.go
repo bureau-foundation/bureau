@@ -73,6 +73,7 @@ func newTestDaemon(t *testing.T) (*Daemon, *clock.FakeClock) {
 		startFailures:         make(map[ref.Entity]*startFailure),
 		running:               make(map[ref.Entity]bool),
 		drainGracePeriod:      defaultDrainGracePeriod,
+		maxIdleInterval:       defaultMaxIdleInterval,
 		dynamicPrincipals:     make(map[ref.Entity]bool),
 		completed:             make(map[ref.Entity]bool),
 		draining:              make(map[ref.Entity]context.CancelFunc),

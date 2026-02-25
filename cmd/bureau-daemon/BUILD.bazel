@@ -143,5 +143,6 @@ go_test(
         "//lib/watchdog",
         "//messaging",
         "//observe",
+        "//transport",
     ],
 )

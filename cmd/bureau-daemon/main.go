@@ -60,6 +60,7 @@ func run() error {
 		pipelineExecutorBinary string
 		pipelineEnvironment    string
 		statusInterval         time.Duration
+		maxIdleInterval        time.Duration
 		haBaseDelay            time.Duration
 		drainGracePeriod       time.Duration
 		showVersion            bool
@@ -76,7 +77,8 @@ func run() error {
 	flag.StringVar(&workspaceRoot, "workspace-root", principal.DefaultWorkspaceRoot, "root directory for project workspaces")
 	flag.StringVar(&pipelineExecutorBinary, "pipeline-executor-binary", "", "path to bureau-pipeline-executor binary (enables pipeline.execute command)")
 	flag.StringVar(&pipelineEnvironment, "pipeline-environment", "", "Nix store path providing pipeline executor's toolchain (e.g., /nix/store/...-runner-env)")
-	flag.DurationVar(&statusInterval, "status-interval", 60*time.Second, "how often to publish machine status")
+	flag.DurationVar(&statusInterval, "status-interval", 60*time.Second, "how often to collect machine status metrics")
+	flag.DurationVar(&maxIdleInterval, "max-idle-interval", defaultMaxIdleInterval, "maximum time between heartbeat publishes when metrics are unchanged (liveness interval)")
 	flag.DurationVar(&haBaseDelay, "ha-base-delay", 1*time.Second, "base unit for HA acquisition timing (all backoff ranges and verification scale from this; 0 for instant acquisition in tests)")
 	flag.DurationVar(&drainGracePeriod, "drain-grace-period", 10*time.Second, "time to wait after SIGTERM before force-killing a drained sandbox (agents should finish cleanup within this window)")
 	flag.BoolVar(&showVersion, "version", false, "print version information and exit")
@@ -336,6 +338,7 @@ func run() error {
 		fleetRunDir:            fleet.RunDir(runDir),
 		launcherSocket:         principal.LauncherSocketPath(runDir),
 		statusInterval:         statusInterval,
+		maxIdleInterval:        maxIdleInterval,
 		drainGracePeriod:       drainGracePeriod,
 		operatorsGID:           operatorsGID,
 		daemonBinaryHash:       daemonBinaryHash,
@@ -568,6 +571,7 @@ type Daemon struct {
 	fleetRunDir      string     // fleet-scoped runtime directory (e.g., /run/bureau/fleet/prod)
 	launcherSocket   string
 	statusInterval   time.Duration
+	maxIdleInterval  time.Duration
 	drainGracePeriod time.Duration
 
 	// operatorsGID is the numeric GID of the bureau-operators system
@@ -772,6 +776,20 @@ type Daemon struct {
 	healthMonitors   map[ref.Entity]*healthMonitor
 	healthMonitorsMu sync.Mutex
 
+	// lastPublishedStatus stores the most recently published MachineStatus
+	// for adaptive heartbeat comparison. On each collection tick, the
+	// current status is compared against this value using deadband
+	// thresholds. A publish is suppressed when all metrics are within
+	// their deadbands AND the liveness window (maxIdleInterval) has not
+	// elapsed. Accessed only by statusLoop (single goroutine).
+	lastPublishedStatus *schema.MachineStatus
+
+	// lastPublishTime records when the last heartbeat was published to
+	// Matrix. Used to enforce the liveness window: even when metrics
+	// are unchanged, a heartbeat is published after maxIdleInterval
+	// to confirm the machine is still alive.
+	lastPublishTime time.Time
+
 	// previousCPU stores the last /proc/stat reading for CPU utilization
 	// delta computation. First heartbeat after startup reports 0%.
 	previousCPU *hwinfo.CPUReading
@@ -826,6 +844,19 @@ type Daemon struct {
 	// to validateCommandBinary. Tests override this when using fictional
 	// binary paths that don't need to exist on the host.
 	validateCommandFunc func(command string, environmentPath string) error
+
+	// collectStatusFunc assembles a MachineStatus for the heartbeat
+	// loop. Defaults to nil, which means statusLoop calls the real
+	// collectStatus (reads /proc, cgroups, GPU). Tests override this
+	// to return deterministic metrics, avoiding flaky deadband
+	// comparisons caused by real system metric fluctuation.
+	collectStatusFunc func(ctx context.Context) schema.MachineStatus
+
+	// statusLoopIterationDone is signaled (non-blocking) after each
+	// statusLoop iteration completes — both publishes and skips. Nil
+	// in production (zero overhead). Tests set this to synchronize
+	// with the loop goroutine without time.Sleep.
+	statusLoopIterationDone chan struct{}
 
 	// Transport: daemon-to-daemon communication for cross-machine routing.
 	// These fields are nil/empty when --transport-listen is not set
@@ -1088,12 +1119,36 @@ func (d *Daemon) notifyReconcile() {
 	}
 }
 
-// statusLoop publishes MachineStatus heartbeats. It publishes immediately
-// on startup, whenever the running set changes (via notifyStatusChange),
-// and periodically at statusInterval for ongoing monitoring.
+// Deadband thresholds for adaptive heartbeat publishing. A heartbeat
+// is suppressed when all metrics fall within these bounds of the last
+// published values. Thresholds filter noise from kernel scheduling,
+// filesystem cache activity, and GPU thermal fluctuation without
+// masking operationally meaningful changes.
+const (
+	cpuDeadbandPercent            = 5
+	memoryDeadbandMB              = 100
+	gpuUtilizationDeadbandPercent = 5
+	gpuTemperatureDeadbandMilli   = 2000     // 2°C
+	gpuVRAMDeadbandBytes          = 52428800 // 50 MB
+	principalCPUDeadbandPercent   = 3
+	principalMemoryDeadbandMB     = 50
+	defaultMaxIdleInterval        = 5 * time.Minute
+)
+
+// statusLoop collects MachineStatus metrics at a fixed interval and
+// publishes to Matrix only when the data has meaningfully changed or
+// the liveness window (maxIdleInterval) has elapsed. Sandbox state
+// changes (via notifyStatusChange) always trigger an immediate publish.
+//
+// The collection interval is fixed to keep cgroup CPU delta computation
+// correct (CgroupCPUPercent divides by the interval). The adaptive
+// behavior is entirely in the publish decision: identical metrics are
+// suppressed, saving the Matrix HTTP call, homeserver DAG insertion,
+// and /sync delivery to all watchers.
 func (d *Daemon) statusLoop(ctx context.Context) {
-	// Publish initial status immediately.
-	d.publishStatus(ctx)
+	// Always publish on startup — fleet controller needs to see us.
+	status := d.gatherStatus(ctx)
+	d.publishStatus(ctx, status)
 
 	ticker := d.clock.NewTicker(d.statusInterval)
 	defer ticker.Stop()
@@ -1103,16 +1158,43 @@ func (d *Daemon) statusLoop(ctx context.Context) {
 		case <-ctx.Done():
 			return
 		case <-ticker.C:
-			d.publishStatus(ctx)
+			status := d.gatherStatus(ctx)
+			timeSincePublish := d.clock.Now().Sub(d.lastPublishTime)
+			if statusSignificantlyChanged(&status, d.lastPublishedStatus) ||
+				timeSincePublish >= d.maxIdleInterval {
+				d.publishStatus(ctx, status)
+			} else {
+				d.logger.Debug("heartbeat unchanged, skipping publish",
+					"since_last_publish", timeSincePublish.Round(time.Second))
+			}
 		case <-d.statusNotify:
-			d.publishStatus(ctx)
+			// Sandbox state changed — always publish immediately.
+			status := d.gatherStatus(ctx)
+			d.publishStatus(ctx, status)
 			// Drain any queued notification so the next tick starts clean.
 			select {
 			case <-d.statusNotify:
 			default:
 			}
 		}
+
+		// Signal iteration complete (publish or skip). Non-blocking:
+		// nil channel in production (send on nil never proceeds).
+		select {
+		case d.statusLoopIterationDone <- struct{}{}:
+		default:
+		}
 	}
+}
+
+// gatherStatus returns the current machine status. If collectStatusFunc
+// is set (test override), it calls that; otherwise it calls the real
+// collectStatus which reads from /proc, cgroups, and GPU devices.
+func (d *Daemon) gatherStatus(ctx context.Context) schema.MachineStatus {
+	if d.collectStatusFunc != nil {
+		return d.collectStatusFunc(ctx)
+	}
+	return d.collectStatus(ctx)
 }
 
 // notifyStatusChange signals that the running set has changed and a
@@ -1126,13 +1208,14 @@ func (d *Daemon) notifyStatusChange() {
 	}
 }
 
-// publishStatus sends a MachineStatus state event to the machine room.
-func (d *Daemon) publishStatus(ctx context.Context) {
+// collectStatus gathers all machine metrics and assembles a MachineStatus
+// struct. Updates CPU delta baselines (previousCPU, previousCgroupCPU)
+// on every call so that the next collection has an accurate baseline
+// regardless of whether the result is published.
+func (d *Daemon) collectStatus(ctx context.Context) schema.MachineStatus {
 	d.reconcileMu.RLock()
-	runningCount := 0
 	runningPrincipals := make([]ref.Entity, 0, len(d.running))
 	for principal := range d.running {
-		runningCount++
 		runningPrincipals = append(runningPrincipals, principal)
 	}
 	var lastActivity string
@@ -1143,8 +1226,8 @@ func (d *Daemon) publishStatus(ctx context.Context) {
 
 	transportAddress := d.transportListener.Address()
 
-	// Compute CPU utilization from the delta since the last heartbeat.
-	// The first heartbeat after startup reports 0% (no baseline yet).
+	// Compute CPU utilization from the delta since the last collection.
+	// The first collection after startup reports 0% (no baseline yet).
 	currentCPU := hwinfo.ReadCPUStats()
 	cpuUtilization := hwinfo.CPUPercent(d.previousCPU, currentCPU)
 	d.previousCPU = currentCPU
@@ -1152,10 +1235,10 @@ func (d *Daemon) publishStatus(ctx context.Context) {
 	// Per-principal resource collection from cgroup v2.
 	principals := d.collectPrincipalResources(runningPrincipals)
 
-	status := schema.MachineStatus{
+	return schema.MachineStatus{
 		Principal: d.machine.UserID().String(),
 		Sandboxes: schema.SandboxCounts{
-			Running: runningCount,
+			Running: len(runningPrincipals),
 		},
 		CPUPercent:       int(cpuUtilization),
 		MemoryUsedMB:     hwinfo.MemoryUsedMB(),
@@ -1165,11 +1248,16 @@ func (d *Daemon) publishStatus(ctx context.Context) {
 		TransportAddress: transportAddress,
 		Principals:       principals,
 	}
+}
 
+// publishStatus sends a MachineStatus state event to the machine room
+// and updates presence. Records the published status and timestamp for
+// subsequent change comparison.
+func (d *Daemon) publishStatus(ctx context.Context, status schema.MachineStatus) {
 	// Update presence status_msg with a compact operational summary.
 	// This gives operators and the fleet controller a quick glance at
 	// machine state via any Matrix client, without parsing state events.
-	statusMsg := fmt.Sprintf("%d sandboxes, %d%% CPU", runningCount, int(cpuUtilization))
+	statusMsg := fmt.Sprintf("%d sandboxes, %d%% CPU", status.Sandboxes.Running, status.CPUPercent)
 	if err := d.session.SetPresence(ctx, "online", statusMsg); err != nil {
 		d.logger.Warn("updating presence status_msg", "error", err)
 	}
@@ -1179,13 +1267,141 @@ func (d *Daemon) publishStatus(ctx context.Context) {
 		d.logger.Error("publishing machine status", "error", err)
 		return
 	}
-	d.logger.Debug("published machine status", "running_sandboxes", runningCount)
+
+	d.lastPublishedStatus = &status
+	d.lastPublishTime = d.clock.Now()
+	d.logger.Debug("published machine status",
+		"running_sandboxes", status.Sandboxes.Running)
+}
+
+// statusSignificantlyChanged reports whether current differs meaningfully
+// from previous. Fields that always change (UptimeSeconds) are ignored.
+// Fields with natural noise (CPU, memory, GPU metrics) use deadband
+// thresholds to avoid publishing on minor fluctuations. Returns true
+// when previous is nil (first comparison after startup).
+func statusSignificantlyChanged(current, previous *schema.MachineStatus) bool {
+	if previous == nil {
+		return true
+	}
+
+	// Sandbox count — always meaningful.
+	if current.Sandboxes != previous.Sandboxes {
+		return true
+	}
+
+	// Transport address — topology change.
+	if current.TransportAddress != previous.TransportAddress {
+		return true
+	}
+
+	// Activity timestamp — something happened.
+	if current.LastActivityAt != previous.LastActivityAt {
+		return true
+	}
+
+	// Machine-wide CPU with deadband.
+	if intAbs(current.CPUPercent-previous.CPUPercent) > cpuDeadbandPercent {
+		return true
+	}
+
+	// Machine-wide memory with deadband.
+	if intAbs(current.MemoryUsedMB-previous.MemoryUsedMB) > memoryDeadbandMB {
+		return true
+	}
+
+	// GPU stats.
+	if gpuStatsChanged(current.GPUStats, previous.GPUStats) {
+		return true
+	}
+
+	// Per-principal resource usage.
+	if principalsChanged(current.Principals, previous.Principals) {
+		return true
+	}
+
+	return false
+}
+
+// gpuStatsChanged compares two GPU status slices using deadband
+// thresholds. GPUs are matched by PCISlot. Different slice lengths or
+// a missing PCISlot match means a GPU was added or removed.
+func gpuStatsChanged(current, previous []schema.GPUStatus) bool {
+	if len(current) != len(previous) {
+		return true
+	}
+
+	// Build a lookup from previous by PCISlot for O(n) matching.
+	previousBySlot := make(map[string]schema.GPUStatus, len(previous))
+	for _, gpu := range previous {
+		previousBySlot[gpu.PCISlot] = gpu
+	}
+
+	for _, currentGPU := range current {
+		previousGPU, exists := previousBySlot[currentGPU.PCISlot]
+		if !exists {
+			return true
+		}
+		if intAbs(currentGPU.UtilizationPercent-previousGPU.UtilizationPercent) > gpuUtilizationDeadbandPercent {
+			return true
+		}
+		if int64Abs(currentGPU.VRAMUsedBytes-previousGPU.VRAMUsedBytes) > gpuVRAMDeadbandBytes {
+			return true
+		}
+		if intAbs(currentGPU.TemperatureMillidegrees-previousGPU.TemperatureMillidegrees) > gpuTemperatureDeadbandMilli {
+			return true
+		}
+	}
+	return false
+}
+
+// principalsChanged compares two principal resource maps using deadband
+// thresholds. Different key sets (principal added/removed) or a status
+// transition (starting→running→idle) are always meaningful. CPU and
+// memory use per-principal deadbands.
+func principalsChanged(current, previous map[string]schema.PrincipalResourceUsage) bool {
+	if len(current) != len(previous) {
+		return true
+	}
+
+	for name, currentUsage := range current {
+		previousUsage, exists := previous[name]
+		if !exists {
+			return true
+		}
+		// Status transitions are always meaningful.
+		if currentUsage.Status != previousUsage.Status {
+			return true
+		}
+		if intAbs(currentUsage.CPUPercent-previousUsage.CPUPercent) > principalCPUDeadbandPercent {
+			return true
+		}
+		if intAbs(currentUsage.MemoryMB-previousUsage.MemoryMB) > principalMemoryDeadbandMB {
+			return true
+		}
+	}
+	return false
+}
+
+// intAbs returns the absolute value of x.
+func intAbs(x int) int {
+	if x < 0 {
+		return -x
+	}
+	return x
+}
+
+// int64Abs returns the absolute value of x.
+func int64Abs(x int64) int64 {
+	if x < 0 {
+		return -x
+	}
+	return x
 }
 
 // collectPrincipalResources reads cgroup v2 statistics for each running
-// principal and returns a map of resource usage. Called by publishStatus
+// principal and returns a map of resource usage. Called by collectStatus
 // in the status loop goroutine. The previousCgroupCPU map is accessed
-// without locking because publishStatus is the sole accessor (same
+// without locking because collectStatus is the sole accessor (same
 // single-goroutine pattern as previousCPU).
 func (d *Daemon) collectPrincipalResources(principals []ref.Entity) map[string]schema.PrincipalResourceUsage {
 	if len(principals) == 0 {

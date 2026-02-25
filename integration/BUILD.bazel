@@ -42,6 +42,7 @@ go_test(
         "sandbox_output_test.go",
         "service_discovery_test.go",
         "setup_test.go",
+        "stewardship_test.go",
         "structured_api_test.go",
         "ticket_service_test.go",
         "workspace_test.go",

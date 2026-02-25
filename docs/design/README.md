@@ -75,6 +75,15 @@ a Matrix account and a unix socket API.
   first-class artifact: context commits, delta chains, forking,
   materialization, format versioning, review discussion resumption.
 
+### Operations
+
+How machines join, run, update, and leave a Bureau fleet.
+
+- **[machine-lifecycle.md](machine-lifecycle.md)** — Machine lifecycle:
+  privilege model, personas (developer/operator/agent), bootstrap,
+  upgrade, diagnostics, decommission. The `bureau machine doctor`
+  workflow and the path to agent-driven fleet management.
+
 ### Applications
 
 How Bureau uses itself. These describe patterns built from everything

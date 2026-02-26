@@ -50,7 +50,7 @@ type userCreateParams struct {
 	HomeserverURL         string `json:"-"           flag:"homeserver"              desc:"Matrix homeserver URL (overrides credential file; default http://localhost:6167)"`
 	RegistrationTokenFile string `json:"-"           flag:"registration-token-file" desc:"path to file containing registration token, or - for stdin (overrides credential file)"`
 	PasswordFile          string `json:"-"           flag:"password-file"           desc:"path to file containing password, or - to prompt interactively (default: derive from registration token)"`
-	ServerName            string `json:"server_name" flag:"server-name"             desc:"Matrix server name for constructing user IDs" default:"bureau.local"`
+	ServerName            string `json:"server_name" flag:"server-name"             desc:"Matrix server name for constructing user IDs (auto-detected from machine.conf)"`
 	Operator              bool   `json:"operator"    flag:"operator"                desc:"invite the user to all Bureau infrastructure rooms (requires --credential-file)"`
 	cli.JSONOutput
 }
@@ -202,6 +202,8 @@ and proceeds directly to ensuring room membership.`,
 			if err != nil {
 				return cli.Internal("create matrix client: %w", err)
 			}
+
+			params.ServerName = cli.ResolveServerName(params.ServerName)
 
 			serverName, err := ref.ParseServerName(params.ServerName)
 			if err != nil {

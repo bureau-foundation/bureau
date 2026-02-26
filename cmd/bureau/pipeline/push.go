@@ -22,7 +22,7 @@ type pipelinePushParams struct {
 	cli.JSONOutput
 	PipelineRef string `json:"pipeline_ref" desc:"pipeline reference (e.g. bureau/pipeline:my-pipeline)" required:"true"`
 	File        string `json:"file"         desc:"path to local JSONC pipeline definition file" required:"true"`
-	ServerName  string `json:"server_name"  flag:"server-name" desc:"Matrix server name for resolving room aliases" default:"bureau.local"`
+	ServerName  string `json:"server_name"  flag:"server-name" desc:"Matrix server name for resolving room aliases (auto-detected from machine.conf)"`
 	DryRun      bool   `json:"dry_run"      flag:"dry-run"     desc:"validate only, do not publish to Matrix"`
 }
 
@@ -107,6 +107,8 @@ without actually publishing.`,
 				}
 				return cli.Validation("%s: %d validation issue(s) found", filePath, len(issues))
 			}
+
+			params.ServerName = cli.ResolveServerName(params.ServerName)
 
 			serverName, err := ref.ParseServerName(params.ServerName)
 			if err != nil {

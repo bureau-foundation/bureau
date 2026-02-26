@@ -46,7 +46,7 @@ type roomCreateParams struct {
 	Space             string   `json:"space"              flag:"space"              desc:"parent space alias or room ID (required)"`
 	Name              string   `json:"name"               flag:"name"               desc:"room display name (defaults to alias)"`
 	Topic             string   `json:"topic"              flag:"topic"              desc:"room topic"`
-	ServerName        string   `json:"server_name"        flag:"server-name"        desc:"Matrix server name for m.space.child via field" default:"bureau.local"`
+	ServerName        string   `json:"server_name"        flag:"server-name"        desc:"Matrix server name for m.space.child via field (auto-detected from machine.conf)"`
 	MemberStateEvents []string `json:"member_state_events" flag:"member-state-event" desc:"state event type that members can set (repeatable)"`
 	cli.JSONOutput
 }
@@ -109,6 +109,8 @@ such as m.bureau.machine_key or m.bureau.service.`,
 			if name == "" {
 				name = alias
 			}
+
+			params.ServerName = cli.ResolveServerName(params.ServerName)
 
 			ctx, cancel := context.WithTimeout(ctx, 30*time.Second)
 			defer cancel()

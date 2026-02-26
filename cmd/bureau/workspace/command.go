@@ -98,7 +98,7 @@ type DestroyParams struct {
 type destroyParams struct {
 	cli.SessionConfig
 	Mode       string `json:"mode"        flag:"mode"        desc:"teardown mode: archive or delete" default:"archive"`
-	ServerName string `json:"server_name" flag:"server-name" desc:"Matrix server name" default:"bureau.local"`
+	ServerName string `json:"server_name" flag:"server-name" desc:"Matrix server name (auto-detected from machine.conf)"`
 }
 
 func destroyCommand() *cli.Command {
@@ -144,6 +144,8 @@ Use "bureau matrix room leave" separately to remove the room.`,
 			if !teardownMode.IsKnown() {
 				return cli.Validation("--mode must be \"archive\" or \"delete\", got %q", params.Mode)
 			}
+
+			params.ServerName = cli.ResolveServerName(params.ServerName)
 
 			serverName, err := ref.ParseServerName(params.ServerName)
 			if err != nil {
@@ -390,7 +392,7 @@ func extractWorkspaceInfo(ctx context.Context, session messaging.Session, roomID
 // a single positional alias argument and a server name.
 type workspaceAliasParams struct {
 	cli.JSONOutput
-	ServerName string `json:"server_name" flag:"server-name" desc:"Matrix server name" default:"bureau.local"`
+	ServerName string `json:"server_name" flag:"server-name" desc:"Matrix server name (auto-detected from machine.conf)"`
 }
 
 // aliasRunFunc is the signature for workspace commands that operate on
@@ -416,6 +418,7 @@ func aliasCommand(name, summary, description, usage, grant string, annotations *
 			if len(args) > 1 {
 				return cli.Validation("unexpected argument: %s", args[1])
 			}
+			params.ServerName = cli.ResolveServerName(params.ServerName)
 			serverName, err := ref.ParseServerName(params.ServerName)
 			if err != nil {
 				return fmt.Errorf("invalid --server-name: %w", err)
@@ -582,7 +585,7 @@ type worktreeAddParams struct {
 	cli.JSONOutput
 	Branch     string `json:"branch"      flag:"branch"      desc:"git branch or commit to check out (empty for detached HEAD)"`
 	Wait       bool   `json:"wait"        flag:"wait"        desc:"wait for the setup pipeline to complete" default:"true"`
-	ServerName string `json:"server_name" flag:"server-name" desc:"Matrix server name" default:"bureau.local"`
+	ServerName string `json:"server_name" flag:"server-name" desc:"Matrix server name (auto-detected from machine.conf)"`
 }
 
 // worktreeAddResult is the JSON output for workspace worktree add.
@@ -622,6 +625,7 @@ step progress. Use --no-wait to return immediately after acceptance.`,
 			if len(args) > 1 {
 				return cli.Validation("unexpected argument: %s", args[1])
 			}
+			params.ServerName = cli.ResolveServerName(params.ServerName)
 			serverName, err := ref.ParseServerName(params.ServerName)
 			if err != nil {
 				return fmt.Errorf("invalid --server-name: %w", err)
@@ -743,7 +747,7 @@ type worktreeRemoveParams struct {
 	cli.JSONOutput
 	Mode       string `json:"mode"        flag:"mode"        desc:"removal mode: archive (preserve uncommitted work) or delete" default:"archive"`
 	Wait       bool   `json:"wait"        flag:"wait"        desc:"wait for the removal pipeline to complete" default:"true"`
-	ServerName string `json:"server_name" flag:"server-name" desc:"Matrix server name" default:"bureau.local"`
+	ServerName string `json:"server_name" flag:"server-name" desc:"Matrix server name (auto-detected from machine.conf)"`
 }
 
 // worktreeRemoveResult is the JSON output for workspace worktree remove.
@@ -787,6 +791,7 @@ to return immediately after acceptance.`,
 			if !teardownMode.IsKnown() {
 				return cli.Validation("--mode must be \"archive\" or \"delete\", got %q", params.Mode)
 			}
+			params.ServerName = cli.ResolveServerName(params.ServerName)
 			serverName, err := ref.ParseServerName(params.ServerName)
 			if err != nil {
 				return fmt.Errorf("invalid --server-name: %w", err)

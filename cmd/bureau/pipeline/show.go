@@ -21,7 +21,7 @@ import (
 type pipelineShowParams struct {
 	cli.JSONOutput
 	PipelineRef string `json:"pipeline_ref" desc:"pipeline reference (e.g. bureau/pipeline:dev-workspace-init)" required:"true"`
-	ServerName  string `json:"server_name"  flag:"server-name" desc:"Matrix server name for resolving room aliases" default:"bureau.local"`
+	ServerName  string `json:"server_name"  flag:"server-name" desc:"Matrix server name for resolving room aliases (auto-detected from machine.conf)"`
 }
 
 // showCommand returns the "show" subcommand for displaying a pipeline.
@@ -63,6 +63,8 @@ see is what the executor runs.`,
 			if err != nil {
 				return cli.Validation("parsing pipeline reference: %w", err)
 			}
+
+			params.ServerName = cli.ResolveServerName(params.ServerName)
 
 			serverName, err := ref.ParseServerName(params.ServerName)
 			if err != nil {

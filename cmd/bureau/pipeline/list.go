@@ -21,7 +21,7 @@ import (
 type listParams struct {
 	cli.JSONOutput
 	Room       string `json:"room"         desc:"room alias localpart (e.g. bureau/pipeline)" required:"true"`
-	ServerName string `json:"server_name"  flag:"server-name"  desc:"Matrix server name for resolving room aliases" default:"bureau.local"`
+	ServerName string `json:"server_name"  flag:"server-name"  desc:"Matrix server name for resolving room aliases (auto-detected from machine.conf)"`
 }
 
 // pipelineEntry is a single pipeline in the list output. Declared at
@@ -70,6 +70,8 @@ It is resolved to a full Matrix alias using the --server-name flag.`,
 			if params.Room == "" {
 				return cli.Validation("room is required\n\nusage: bureau pipeline list [flags] <room-alias-localpart>")
 			}
+
+			params.ServerName = cli.ResolveServerName(params.ServerName)
 
 			serverName, err := ref.ParseServerName(params.ServerName)
 			if err != nil {

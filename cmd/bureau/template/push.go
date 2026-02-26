@@ -20,7 +20,7 @@ import (
 type templatePushParams struct {
 	cli.SessionConfig
 	cli.JSONOutput
-	ServerName string `json:"server_name" flag:"server-name" desc:"Matrix server name for resolving room aliases" default:"bureau.local"`
+	ServerName string `json:"server_name" flag:"server-name" desc:"Matrix server name for resolving room aliases (auto-detected from machine.conf)"`
 	DryRun     bool   `json:"dry_run"     flag:"dry-run"     desc:"validate only, do not publish to Matrix"`
 }
 
@@ -104,6 +104,8 @@ exist without actually publishing.`,
 			if err != nil {
 				return err
 			}
+
+			params.ServerName = cli.ResolveServerName(params.ServerName)
 
 			serverName, err := ref.ParseServerName(params.ServerName)
 			if err != nil {

@@ -43,7 +43,7 @@ type contextListParams struct {
 	cli.JSONOutput
 	Machine    string `json:"machine"     flag:"machine"     desc:"machine localpart (optional — auto-discovers if omitted)"`
 	Fleet      string `json:"fleet"       flag:"fleet"       desc:"fleet prefix (e.g., bureau/fleet/prod) — required when --machine is omitted"`
-	ServerName string `json:"server_name" flag:"server-name" desc:"Matrix server name" default:"bureau.local"`
+	ServerName string `json:"server_name" flag:"server-name" desc:"Matrix server name (auto-detected from machine.conf)"`
 	Prefix     string `json:"prefix"      flag:"prefix"      desc:"filter keys by prefix"`
 }
 
@@ -85,6 +85,9 @@ modification time. Use --prefix to filter keys (e.g., --prefix "summary/").`,
 }
 
 func runContextList(ctx context.Context, localpart string, logger *slog.Logger, params contextListParams) error {
+	params.ServerName = cli.ResolveServerName(params.ServerName)
+	params.Fleet = cli.ResolveFleet(params.Fleet)
+
 	serverName, err := ref.ParseServerName(params.ServerName)
 	if err != nil {
 		return fmt.Errorf("invalid --server-name: %w", err)
@@ -187,7 +190,7 @@ type contextShowParams struct {
 	cli.JSONOutput
 	Machine    string `json:"machine"     flag:"machine"     desc:"machine localpart (optional — auto-discovers if omitted)"`
 	Fleet      string `json:"fleet"       flag:"fleet"       desc:"fleet prefix (e.g., bureau/fleet/prod) — required when --machine is omitted"`
-	ServerName string `json:"server_name" flag:"server-name" desc:"Matrix server name" default:"bureau.local"`
+	ServerName string `json:"server_name" flag:"server-name" desc:"Matrix server name (auto-detected from machine.conf)"`
 }
 
 func contextShowCommand() *cli.Command {
@@ -230,6 +233,9 @@ available.`,
 }
 
 func runContextShow(ctx context.Context, localpart, key string, logger *slog.Logger, params contextShowParams) error {
+	params.ServerName = cli.ResolveServerName(params.ServerName)
+	params.Fleet = cli.ResolveFleet(params.Fleet)
+
 	serverName, err := ref.ParseServerName(params.ServerName)
 	if err != nil {
 		return fmt.Errorf("invalid --server-name: %w", err)

@@ -26,7 +26,7 @@ type enableParams struct {
 	cli.JSONOutput
 	Space      string `json:"space"       flag:"space"       desc:"project space alias (e.g., iree) — scopes the ticket service to rooms in this space"`
 	Host       string `json:"host"        flag:"host"        desc:"fleet-scoped machine localpart (e.g., bureau/fleet/prod/machine/workstation; use 'local' to auto-detect)"`
-	ServerName string `json:"server_name" flag:"server-name" desc:"Matrix server name" default:"bureau.local"`
+	ServerName string `json:"server_name" flag:"server-name" desc:"Matrix server name (auto-detected from machine.conf)"`
 	Prefix     string `json:"prefix"      flag:"prefix"      desc:"ticket ID prefix for rooms in this space" default:"tkt"`
 }
 
@@ -119,6 +119,8 @@ func runEnable(ctx context.Context, logger *slog.Logger, params *enableParams) e
 		host = resolved
 		logger.Info("resolved local machine", "host", host)
 	}
+
+	params.ServerName = cli.ResolveServerName(params.ServerName)
 
 	serverName, err := ref.ParseServerName(params.ServerName)
 	if err != nil {

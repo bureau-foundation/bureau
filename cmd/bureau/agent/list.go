@@ -24,7 +24,7 @@ type agentListParams struct {
 	cli.JSONOutput
 	Machine    string `json:"machine"     flag:"machine"     desc:"filter to a specific machine (optional — lists all machines if omitted)"`
 	Fleet      string `json:"fleet"       flag:"fleet"       desc:"fleet prefix (e.g., bureau/fleet/prod) — required when --machine is omitted"`
-	ServerName string `json:"server_name" flag:"server-name" desc:"Matrix server name" default:"bureau.local"`
+	ServerName string `json:"server_name" flag:"server-name" desc:"Matrix server name (auto-detected from machine.conf)"`
 }
 
 // agentListEntry is a single row in the list output.
@@ -84,6 +84,9 @@ Each agent's status is enriched from agent service state events (best-effort):
 }
 
 func runList(ctx context.Context, logger *slog.Logger, params agentListParams) error {
+	params.ServerName = cli.ResolveServerName(params.ServerName)
+	params.Fleet = cli.ResolveFleet(params.Fleet)
+
 	serverName, err := ref.ParseServerName(params.ServerName)
 	if err != nil {
 		return fmt.Errorf("invalid --server-name: %w", err)

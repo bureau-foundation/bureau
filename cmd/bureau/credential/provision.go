@@ -24,7 +24,7 @@ type credentialProvisionParams struct {
 	cli.JSONOutput
 	MachineName string `json:"machine"     flag:"machine"     desc:"machine localpart (e.g., machine/workstation) (required)"`
 	Principal   string `json:"principal"   flag:"principal"   desc:"principal localpart (e.g., iree/amdgpu/pm) (required)"`
-	ServerName  string `json:"server_name" flag:"server-name" desc:"Matrix server name" default:"bureau.local"`
+	ServerName  string `json:"server_name" flag:"server-name" desc:"Matrix server name (auto-detected from machine.conf)"`
 	EscrowKey   string `json:"escrow_key"  flag:"escrow-key"  desc:"operator escrow age public key (optional)"`
 	FromFile    string `json:"-"           flag:"from-file"   desc:"read credentials from JSON file instead of stdin"`
 }
@@ -83,6 +83,8 @@ machine and an operator escrow key for recovery.`,
 			if params.Principal == "" {
 				return cli.Validation("--principal is required")
 			}
+
+			params.ServerName = cli.ResolveServerName(params.ServerName)
 
 			serverName, err := ref.ParseServerName(params.ServerName)
 			if err != nil {

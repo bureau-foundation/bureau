@@ -19,7 +19,7 @@ type pipelineWaitParams struct {
 	cli.JSONOutput
 	TicketID   string `json:"ticket_id"    desc:"pipeline ticket ID (e.g. pip-a3f9)" required:"true"`
 	Room       string `json:"room"         flag:"room"        desc:"room ID where the ticket lives (required)" required:"true"`
-	ServerName string `json:"server_name"  flag:"server-name" desc:"Matrix server name" default:"bureau.local"`
+	ServerName string `json:"server_name"  flag:"server-name" desc:"Matrix server name (auto-detected from machine.conf)"`
 }
 
 // waitResult is the JSON output for pipeline wait.

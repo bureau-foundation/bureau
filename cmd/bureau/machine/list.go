@@ -32,22 +32,41 @@ func listCommand() *cli.Command {
 		Summary: "List fleet machines",
 		Description: `List all machines that have published keys to the Bureau fleet.
 
-The argument is a fleet localpart (e.g., "bureau/fleet/prod"). The
-server name is derived from the connected session's identity.
+The fleet localpart is optional — on a Bureau machine, it is auto-detected
+from /etc/bureau/machine.conf. The server name is derived from the
+connected session's identity.
 
 Shows each machine's name, public key, and last status heartbeat
 (if available). Reads from the fleet's machine room state.`,
-		Usage:          "bureau machine list <fleet-localpart> [flags]",
+		Usage:          "bureau machine list [fleet-localpart] [flags]",
 		Params:         func() any { return &params },
 		Output:         func() any { return &[]MachineEntry{} },
 		RequiredGrants: []string{"command/machine/list"},
 		Annotations:    cli.ReadOnly(),
+		Examples: []cli.Example{
+			{
+				Description: "List machines (auto-detect fleet from machine.conf)",
+				Command:     "bureau machine list",
+			},
+			{
+				Description: "List machines in a specific fleet",
+				Command:     "bureau machine list bureau/fleet/prod",
+			},
+		},
 		Run: func(ctx context.Context, args []string, logger *slog.Logger) error {
-			if len(args) == 0 {
-				return cli.Validation("fleet localpart is required (e.g., bureau/fleet/prod)")
-			}
 			if len(args) > 1 {
-				return cli.Validation("expected exactly one argument (fleet localpart), got %d", len(args))
+				return cli.Validation("expected at most one argument (fleet localpart), got %d", len(args))
+			}
+
+			fleetLocalpart := ""
+			if len(args) > 0 {
+				fleetLocalpart = args[0]
+			}
+			fleetLocalpart = cli.ResolveFleet(fleetLocalpart)
+			if fleetLocalpart == "" {
+				return cli.Validation("fleet localpart is required (e.g., bureau/fleet/prod)\n\n" +
+					"On a Bureau machine, this is auto-detected from /etc/bureau/machine.conf.\n" +
+					"Run \"bureau machine doctor\" to check machine configuration.")
 			}
 
 			ctx, cancel := context.WithTimeout(ctx, 30*time.Second)
@@ -59,7 +78,7 @@ Shows each machine's name, public key, and last status heartbeat
 			}
 			defer matrixSession.Close()
 
-			return runList(ctx, matrixSession, args[0], &params.JSONOutput, logger)
+			return runList(ctx, matrixSession, fleetLocalpart, &params.JSONOutput, logger)
 		},
 	}
 }

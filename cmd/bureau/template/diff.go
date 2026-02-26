@@ -24,7 +24,7 @@ type templateDiffParams struct {
 	cli.JSONOutput
 	TemplateRef string `json:"template_ref" desc:"template reference (e.g. iree/template:amdgpu-developer)" required:"true"`
 	File        string `json:"file"         desc:"path to local template file to compare against" required:"true"`
-	ServerName  string `json:"server_name"  flag:"server-name" desc:"Matrix server name for resolving room aliases" default:"bureau.local"`
+	ServerName  string `json:"server_name"  flag:"server-name" desc:"Matrix server name for resolving room aliases (auto-detected from machine.conf)"`
 }
 
 // diffResult is the JSON output for template diff.
@@ -101,6 +101,8 @@ content, not the resolved inheritance chain — use "bureau template show
 				return err
 			}
 			defer cancel()
+
+			params.ServerName = cli.ResolveServerName(params.ServerName)
 
 			serverName, err := ref.ParseServerName(params.ServerName)
 			if err != nil {

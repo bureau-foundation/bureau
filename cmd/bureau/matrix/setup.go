@@ -32,7 +32,7 @@ type setupParams struct {
 	HomeserverURL         string   `json:"-"            flag:"homeserver"              desc:"Matrix homeserver URL" default:"http://localhost:6167"`
 	RegistrationTokenFile string   `json:"-"            flag:"registration-token-file" desc:"path to file containing registration token, or - for stdin"`
 	CredentialFile        string   `json:"-"            flag:"credential-file"         desc:"path to Bureau credentials file (read on re-run, written on first run; required)"`
-	ServerName            string   `json:"server_name"  flag:"server-name"             desc:"Matrix server name for constructing user/room IDs" default:"bureau.local"`
+	ServerName            string   `json:"server_name"  flag:"server-name"             desc:"Matrix server name for constructing user/room IDs (auto-detected from machine.conf)"`
 	AdminUsername         string   `json:"admin_user"   flag:"admin-user"              desc:"admin account username" default:"bureau-admin"`
 	InviteUsers           []string `json:"invite_users" flag:"invite"                  desc:"Matrix user ID to invite to all Bureau rooms (repeatable)"`
 }
@@ -113,6 +113,8 @@ by "bureau fleet enable" and resolved via the fleet prefix.`,
 
 			ctx, cancel := context.WithTimeout(ctx, 2*time.Minute)
 			defer cancel()
+
+			params.ServerName = cli.ResolveServerName(params.ServerName)
 
 			serverName, err := ref.ParseServerName(params.ServerName)
 			if err != nil {

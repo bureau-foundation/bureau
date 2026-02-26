@@ -22,7 +22,7 @@ type credentialListParams struct {
 	cli.SessionConfig
 	cli.JSONOutput
 	MachineName string `json:"machine"     flag:"machine"     desc:"machine localpart (e.g., machine/workstation) (required)"`
-	ServerName  string `json:"server_name" flag:"server-name" desc:"Matrix server name" default:"bureau.local"`
+	ServerName  string `json:"server_name" flag:"server-name" desc:"Matrix server name (auto-detected from machine.conf)"`
 }
 
 // credentialListEntry is a single entry in the JSON output.
@@ -68,6 +68,8 @@ Useful for auditing which principals have credentials on a machine.`,
 			if params.MachineName == "" {
 				return cli.Validation("--machine is required")
 			}
+
+			params.ServerName = cli.ResolveServerName(params.ServerName)
 
 			serverName, err := ref.ParseServerName(params.ServerName)
 			if err != nil {

@@ -32,7 +32,7 @@ type createParams struct {
 	Machine    string   `json:"machine"     flag:"machine"     desc:"fleet-scoped machine localpart (e.g., bureau/fleet/prod/machine/workstation; use 'local' to auto-detect)"`
 	Template   string   `json:"template"    flag:"template"    desc:"sandbox template ref for agent principals (required, e.g., bureau/template:base)"`
 	Param      []string `json:"param"       flag:"param"       desc:"key=value parameter (repeatable; recognized: repository, branch)"`
-	ServerName string   `json:"server_name" flag:"server-name" desc:"Matrix server name" default:"bureau.local"`
+	ServerName string   `json:"server_name" flag:"server-name" desc:"Matrix server name (auto-detected from machine.conf)"`
 	AgentCount int      `json:"agent_count" flag:"agent-count" desc:"number of agent principals to create" default:"1"`
 }
 
@@ -143,6 +143,8 @@ All worktrees in a project share a single bare git object store at
 			if params.AgentCount < 0 {
 				return cli.Validation("--agent-count must be non-negative, got %d", params.AgentCount)
 			}
+
+			params.ServerName = cli.ResolveServerName(params.ServerName)
 
 			return runCreate(ctx, logger, params.Alias, &params.SessionConfig, params.Machine, params.Template, params.Param, params.ServerName, params.AgentCount, &params.JSONOutput)
 		},

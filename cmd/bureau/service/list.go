@@ -21,7 +21,7 @@ type serviceListParams struct {
 	cli.JSONOutput
 	Machine    string `json:"machine"     flag:"machine"     desc:"filter to a specific machine (optional — lists all machines if omitted)"`
 	Fleet      string `json:"fleet"       flag:"fleet"       desc:"fleet prefix (e.g., bureau/fleet/prod) — required when --machine is omitted"`
-	ServerName string `json:"server_name" flag:"server-name" desc:"Matrix server name" default:"bureau.local"`
+	ServerName string `json:"server_name" flag:"server-name" desc:"Matrix server name (auto-detected from machine.conf)"`
 }
 
 // serviceListEntry is a single row in the list output.
@@ -72,6 +72,9 @@ lists every assigned principal. The scan count is reported for diagnostics.`,
 }
 
 func runList(ctx context.Context, logger *slog.Logger, params serviceListParams) error {
+	params.ServerName = cli.ResolveServerName(params.ServerName)
+	params.Fleet = cli.ResolveFleet(params.Fleet)
+
 	serverName, err := ref.ParseServerName(params.ServerName)
 	if err != nil {
 		return fmt.Errorf("invalid --server-name: %w", err)

@@ -20,7 +20,7 @@ import (
 type templateShowParams struct {
 	cli.JSONOutput
 	TemplateRef string `json:"template_ref" desc:"template reference (e.g. bureau/template:base-networked)" required:"true"`
-	ServerName  string `json:"server_name"  flag:"server-name" desc:"Matrix server name for resolving room aliases" default:"bureau.local"`
+	ServerName  string `json:"server_name"  flag:"server-name" desc:"Matrix server name for resolving room aliases (auto-detected from machine.conf)"`
 	Raw         bool   `json:"raw"          flag:"raw"         desc:"show the template as stored, without resolving inheritance"`
 }
 
@@ -70,6 +70,8 @@ template overrides versus what it inherits.`,
 				return err
 			}
 			defer cancel()
+
+			params.ServerName = cli.ResolveServerName(params.ServerName)
 
 			serverName, err := ref.ParseServerName(params.ServerName)
 			if err != nil {

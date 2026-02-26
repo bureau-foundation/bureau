@@ -165,10 +165,7 @@ func TestCheckMachineConfig_FileExists(t *testing.T) {
 		t.Fatalf("write machine.conf: %v", err)
 	}
 
-	// Override the machineConfPath for testing.
-	saved := machineConfPath
-	defer func() { machineConfPath = saved }()
-	machineConfPath = confPath
+	t.Setenv("BUREAU_MACHINE_CONF", confPath)
 
 	params := machineDoctorParams{}
 	config := readMachineConfig(params)
@@ -190,9 +187,7 @@ func TestCheckMachineConfig_MissingKeys(t *testing.T) {
 		t.Fatalf("write machine.conf: %v", err)
 	}
 
-	saved := machineConfPath
-	defer func() { machineConfPath = saved }()
-	machineConfPath = confPath
+	t.Setenv("BUREAU_MACHINE_CONF", confPath)
 
 	params := machineDoctorParams{}
 	config := readMachineConfig(params)
@@ -210,9 +205,7 @@ func TestCheckMachineConfig_MissingKeys(t *testing.T) {
 }
 
 func TestCheckMachineConfig_MissingFile_WithFlags(t *testing.T) {
-	saved := machineConfPath
-	defer func() { machineConfPath = saved }()
-	machineConfPath = t.TempDir() + "/nonexistent/machine.conf"
+	t.Setenv("BUREAU_MACHINE_CONF", t.TempDir()+"/nonexistent/machine.conf")
 
 	params := machineDoctorParams{
 		Homeserver:  "http://matrix:6167",
@@ -238,9 +231,7 @@ func TestCheckMachineConfig_MissingFile_WithFlags(t *testing.T) {
 }
 
 func TestCheckMachineConfig_MissingFile_NoFlags(t *testing.T) {
-	saved := machineConfPath
-	defer func() { machineConfPath = saved }()
-	machineConfPath = t.TempDir() + "/nonexistent/machine.conf"
+	t.Setenv("BUREAU_MACHINE_CONF", t.TempDir()+"/nonexistent/machine.conf")
 
 	params := machineDoctorParams{}
 	config := readMachineConfig(params)
@@ -386,9 +377,7 @@ func TestResolveOwner(t *testing.T) {
 
 func TestReadMachineConfig_FlagsOnly(t *testing.T) {
 	// With no machine.conf and flags provided, config should come from flags.
-	saved := machineConfPath
-	defer func() { machineConfPath = saved }()
-	machineConfPath = t.TempDir() + "/nonexistent"
+	t.Setenv("BUREAU_MACHINE_CONF", t.TempDir()+"/nonexistent")
 
 	params := machineDoctorParams{
 		Homeserver:  "http://matrix:6167",
@@ -426,9 +415,7 @@ func TestReadMachineConfig_FlagsOverrideFile(t *testing.T) {
 		t.Fatalf("write: %v", err)
 	}
 
-	saved := machineConfPath
-	defer func() { machineConfPath = saved }()
-	machineConfPath = confPath
+	t.Setenv("BUREAU_MACHINE_CONF", confPath)
 
 	params := machineDoctorParams{
 		Homeserver: "http://flag-server:6167",
@@ -450,9 +437,7 @@ func TestReadMachineConfig_FlagsOverrideFile(t *testing.T) {
 }
 
 func TestReadMachineConfig_NoValues(t *testing.T) {
-	saved := machineConfPath
-	defer func() { machineConfPath = saved }()
-	machineConfPath = t.TempDir() + "/nonexistent"
+	t.Setenv("BUREAU_MACHINE_CONF", t.TempDir()+"/nonexistent")
 
 	params := machineDoctorParams{}
 	config := readMachineConfig(params)
@@ -465,9 +450,7 @@ func TestWriteMachineConf(t *testing.T) {
 	confDir := t.TempDir() + "/etc/bureau"
 	confPath := confDir + "/machine.conf"
 
-	saved := machineConfPath
-	defer func() { machineConfPath = saved }()
-	machineConfPath = confPath
+	t.Setenv("BUREAU_MACHINE_CONF", confPath)
 
 	params := machineDoctorParams{
 		Homeserver:  "http://matrix:6167",

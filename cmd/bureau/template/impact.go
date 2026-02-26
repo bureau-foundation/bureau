@@ -24,7 +24,7 @@ import (
 // template ref and optional file path are positional in CLI mode.
 type impactParams struct {
 	cli.JSONOutput
-	ServerName string `json:"server_name"  flag:"server-name"  desc:"Matrix server name for resolving room aliases" default:"bureau.local"`
+	ServerName string `json:"server_name"  flag:"server-name"  desc:"Matrix server name for resolving room aliases (auto-detected from machine.conf)"`
 }
 
 // impactCommand returns the "impact" subcommand for analyzing the effect of a
@@ -86,6 +86,8 @@ With a file argument, also classifies each change:
 				return err
 			}
 			defer cancel()
+
+			params.ServerName = cli.ResolveServerName(params.ServerName)
 
 			serverName, err := ref.ParseServerName(params.ServerName)
 			if err != nil {

@@ -27,7 +27,7 @@ type pipelineRunParams struct {
 	Room        string   `json:"room"         flag:"room"        desc:"room ID where the pipeline ticket is created (required)" required:"true"`
 	Param       []string `json:"param"        flag:"param"       desc:"key=value parameter passed to the pipeline (repeatable)"`
 	Wait        bool     `json:"wait"         flag:"wait"        desc:"wait for the pipeline to complete after acceptance"`
-	ServerName  string   `json:"server_name"  flag:"server-name" desc:"Matrix server name for resolving room aliases" default:"bureau.local"`
+	ServerName  string   `json:"server_name"  flag:"server-name" desc:"Matrix server name for resolving room aliases (auto-detected from machine.conf)"`
 }
 
 // runResult is the JSON output for pipeline run.
@@ -104,6 +104,8 @@ variables, accessible in pipeline steps via ${NAME} substitution.`,
 			if _, err := schema.ParsePipelineRef(pipelineRefString); err != nil {
 				return cli.Validation("parsing pipeline reference: %w", err)
 			}
+
+			params.ServerName = cli.ResolveServerName(params.ServerName)
 
 			serverName, err := ref.ParseServerName(params.ServerName)
 			if err != nil {

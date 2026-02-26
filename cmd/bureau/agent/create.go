@@ -26,7 +26,7 @@ type agentCreateParams struct {
 	cli.SessionConfig
 	Machine    string `json:"machine"      flag:"machine"         desc:"target machine localpart (required)"`
 	Name       string `json:"name"         flag:"name"            desc:"agent principal localpart (required)"`
-	ServerName string `json:"server_name"  flag:"server-name"     desc:"Matrix server name" default:"bureau.local"`
+	ServerName string `json:"server_name"  flag:"server-name"     desc:"Matrix server name (auto-detected from machine.conf)"`
 	AutoStart  bool   `json:"auto_start"   flag:"auto-start"      desc:"start sandbox automatically" default:"true"`
 
 	cli.JSONOutput
@@ -98,6 +98,8 @@ token for creating the agent's account.`,
 			if params.Name == "" {
 				return cli.Validation("--name is required")
 			}
+
+			params.ServerName = cli.ResolveServerName(params.ServerName)
 
 			serverName, err := ref.ParseServerName(params.ServerName)
 			if err != nil {

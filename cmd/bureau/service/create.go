@@ -27,7 +27,7 @@ type serviceCreateParams struct {
 	Machine    string `json:"machine"      flag:"machine"         desc:"target machine localpart (required)"`
 	Name       string `json:"name"         flag:"name"            desc:"service principal localpart (required)"`
 	Fleet      string `json:"fleet"        flag:"fleet"           desc:"fleet prefix (e.g., bureau/fleet/prod) (required)"`
-	ServerName string `json:"server_name"  flag:"server-name"     desc:"Matrix server name" default:"bureau.local"`
+	ServerName string `json:"server_name"  flag:"server-name"     desc:"Matrix server name (auto-detected from machine.conf)"`
 	AutoStart  bool   `json:"auto_start"   flag:"auto-start"      desc:"start sandbox automatically" default:"true"`
 
 	cli.JSONOutput
@@ -114,6 +114,9 @@ token for creating the service's account.`,
 }
 
 func runCreate(ctx context.Context, logger *slog.Logger, templateRef schema.TemplateRef, params serviceCreateParams) error {
+	params.ServerName = cli.ResolveServerName(params.ServerName)
+	params.Fleet = cli.ResolveFleet(params.Fleet)
+
 	ctx, cancel := context.WithTimeout(ctx, 60*time.Second)
 	defer cancel()
 

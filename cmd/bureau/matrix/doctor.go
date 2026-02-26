@@ -24,7 +24,7 @@ import (
 // via AddFlags and excluded from JSON Schema generation.
 type doctorParams struct {
 	cli.SessionConfig
-	ServerName string `json:"server_name"  flag:"server-name"  desc:"Matrix server name for constructing aliases" default:"bureau.local"`
+	ServerName string `json:"server_name"  flag:"server-name"  desc:"Matrix server name for constructing aliases (auto-detected from machine.conf)"`
 	cli.JSONOutput
 	Fix    bool `json:"fix"    flag:"fix"     desc:"automatically repair fixable issues"`
 	DryRun bool `json:"dry_run" flag:"dry-run" desc:"preview repairs without executing (requires --fix)"`
@@ -126,6 +126,8 @@ Use --json for machine-readable output suitable for monitoring or CI.`,
 			repairedNames := make(map[string]bool)
 			var aggregateOutcome doctor.Outcome
 			var results []doctor.Result
+
+			params.ServerName = cli.ResolveServerName(params.ServerName)
 
 			serverName, err := ref.ParseServerName(params.ServerName)
 			if err != nil {

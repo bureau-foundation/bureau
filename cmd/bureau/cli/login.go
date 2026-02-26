@@ -24,7 +24,7 @@ import (
 // loginParams holds the parameters for the login command. All flags are
 // infrastructure-only (credential handling) and excluded from MCP schema.
 type loginParams struct {
-	HomeserverURL string `json:"-" flag:"homeserver"    desc:"Matrix homeserver URL" default:"http://localhost:6167"`
+	HomeserverURL string `json:"-" flag:"homeserver"    desc:"Matrix homeserver URL (auto-detected from machine.conf, fallback: http://localhost:6167)"`
 	PasswordFile  string `json:"-" flag:"password-file" desc:"path to file containing password, or - to prompt interactively (default: prompt)"`
 }
 
@@ -71,6 +71,8 @@ the password) or prompted interactively if --password-file is "-" or omitted.`,
 			if len(args) > 1 {
 				return Validation("unexpected argument: %s", args[1])
 			}
+
+			params.HomeserverURL = ResolveHomeserverURL(params.HomeserverURL, "http://localhost:6167")
 
 			// Read the password. Default to interactive prompt if no
 			// --password-file is given.

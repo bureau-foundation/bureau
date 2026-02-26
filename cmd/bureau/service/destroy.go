@@ -20,7 +20,7 @@ type serviceDestroyParams struct {
 	cli.JSONOutput
 	Machine    string `json:"machine"     flag:"machine"     desc:"machine localpart (optional — auto-discovers if omitted)"`
 	Fleet      string `json:"fleet"       flag:"fleet"       desc:"fleet prefix (e.g., bureau/fleet/prod) — required when --machine is omitted"`
-	ServerName string `json:"server_name" flag:"server-name" desc:"Matrix server name" default:"bureau.local"`
+	ServerName string `json:"server_name" flag:"server-name" desc:"Matrix server name (auto-detected from machine.conf)"`
 	Purge      bool   `json:"purge"       flag:"purge"       desc:"also clear the credential bundle"`
 }
 
@@ -71,6 +71,9 @@ state event trail remain intact for auditing.`,
 }
 
 func runDestroy(ctx context.Context, localpart string, logger *slog.Logger, params serviceDestroyParams) error {
+	params.ServerName = cli.ResolveServerName(params.ServerName)
+	params.Fleet = cli.ResolveFleet(params.Fleet)
+
 	serverName, err := ref.ParseServerName(params.ServerName)
 	if err != nil {
 		return fmt.Errorf("invalid --server-name: %w", err)

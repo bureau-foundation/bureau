@@ -418,16 +418,63 @@ bureau matrix state get \
   m.bureau.service | jq .
 ```
 
-## 14. Final Doctor Check
+## 14. Enable the Fleet Controller
 
-Run doctor one more time. All original checks should still pass (nothing
-we did should have broken the base infrastructure).
+After provisioning at least one machine, enable the fleet controller. This
+registers a fleet controller service account, publishes its assignment to
+a machine, and writes service binding events into every machine's config
+room so that agents with `required_services: ["fleet"]` can discover it.
 
 ```bash
-bureau matrix doctor --credential-file ./bureau-creds
+bureau fleet enable bureau/fleet/prod \
+  --host local \
+  --credential-file ./bureau-creds
 ```
 
-## 15. Re-run Setup (Idempotency)
+The `--host local` flag auto-detects the local machine name from the
+launcher's session file. Use `--host <name>` to target a specific machine.
+
+Verify the fleet controller is running and reachable from the host:
+
+```bash
+bureau fleet status --service
+```
+
+The `--service` flag connects via the daemon's observe socket using the
+operator session from `bureau login`. Without `--service`, the command
+expects to be running inside a sandbox with a daemon-provisioned token.
+
+The command is idempotent: the service account registration is skipped
+if it already exists, and any machine config rooms missing fleet bindings
+are updated. After initial deployment, the fleet controller watches for
+new machines joining the fleet and publishes bindings automatically —
+you do not need to re-run `fleet enable` when adding machines.
+
+## 15. Operator Login and End-to-End Check
+
+Log in as the operator created in step 7. This saves a session file
+at `~/.config/bureau/session.json` for subsequent operator commands.
+
+```bash
+bureau login ben
+```
+
+Run the top-level doctor to validate the entire operator environment:
+
+```bash
+bureau doctor
+```
+
+This checks the operator session, machine configuration, homeserver
+reachability, local services, socket connectivity, and Bureau space/room
+access. For domain-specific deep checks and repairs:
+
+```bash
+bureau machine doctor        # System user, directories, binaries, systemd
+bureau matrix doctor         # Rooms, power levels, templates, pipelines
+```
+
+## 16. Re-run Setup (Idempotency)
 
 Verify that setup is safe to re-run. It should detect existing resources
 and skip creation.
@@ -440,7 +487,7 @@ bureau matrix setup \
   --server-name bureau.local
 ```
 
-## 16. Teardown
+## 17. Teardown
 
 ```bash
 docker compose -f deploy/matrix/docker-compose.yaml down -v

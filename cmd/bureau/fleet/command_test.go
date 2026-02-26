@@ -98,7 +98,21 @@ func TestConnectionAddFlags(t *testing.T) {
 		t.Errorf("--token-file default: got %q, want %q", tokenFlag.DefValue, expectedToken)
 	}
 
-	// Parse with custom values.
+	// Verify service mode flags exist.
+	serviceFlag := flagSet.Lookup("service")
+	if serviceFlag == nil {
+		t.Fatal("--service flag not registered")
+	}
+	if serviceFlag.DefValue != "false" {
+		t.Errorf("--service default: got %q, want %q", serviceFlag.DefValue, "false")
+	}
+
+	daemonFlag := flagSet.Lookup("daemon-socket")
+	if daemonFlag == nil {
+		t.Fatal("--daemon-socket flag not registered")
+	}
+
+	// Parse with direct mode custom values.
 	err := flagSet.Parse([]string{"--socket", "/tmp/test.sock", "--token-file", "/tmp/token"})
 	if err != nil {
 		t.Fatalf("parsing flags: %v", err)
@@ -108,6 +122,63 @@ func TestConnectionAddFlags(t *testing.T) {
 	}
 	if connection.TokenPath != "/tmp/token" {
 		t.Errorf("token path after parse: got %q, want %q", connection.TokenPath, "/tmp/token")
+	}
+	if connection.ServiceMode {
+		t.Error("service mode should be false by default")
+	}
+}
+
+// TestConnectionAddFlagsServiceMode verifies that --service flag sets
+// ServiceMode and --daemon-socket overrides the daemon path.
+func TestConnectionAddFlagsServiceMode(t *testing.T) {
+	var connection FleetConnection
+
+	flagSet := pflag.NewFlagSet("test", pflag.ContinueOnError)
+	connection.AddFlags(flagSet)
+
+	err := flagSet.Parse([]string{"--service", "--daemon-socket", "/tmp/daemon.sock"})
+	if err != nil {
+		t.Fatalf("parsing flags: %v", err)
+	}
+	if !connection.ServiceMode {
+		t.Error("service mode should be true after --service")
+	}
+	if connection.DaemonSocket != "/tmp/daemon.sock" {
+		t.Errorf("daemon socket: got %q, want %q", connection.DaemonSocket, "/tmp/daemon.sock")
+	}
+}
+
+// TestConnectDirectModeRequiresTokenFile verifies that connect() in
+// direct mode fails when the token file does not exist, producing a
+// clear error rather than silently proceeding.
+func TestConnectDirectModeRequiresTokenFile(t *testing.T) {
+	connection := FleetConnection{
+		SocketPath: "/tmp/nonexistent.sock",
+		TokenPath:  "/tmp/nonexistent-token",
+	}
+
+	_, err := connection.connect()
+	if err == nil {
+		t.Fatal("expected error when token file does not exist, got nil")
+	}
+}
+
+// TestConnectServiceModeRequiresSession verifies that connect() in
+// service mode fails with a clear error when no operator session exists.
+// This exercises the MintServiceToken → LoadSession path without
+// requiring a running daemon.
+func TestConnectServiceModeRequiresSession(t *testing.T) {
+	// Point the session to a nonexistent path so LoadSession fails.
+	t.Setenv("BUREAU_SESSION_FILE", "/tmp/nonexistent-session.json")
+
+	connection := FleetConnection{
+		ServiceMode:  true,
+		DaemonSocket: "/tmp/nonexistent-daemon.sock",
+	}
+
+	_, err := connection.connect()
+	if err == nil {
+		t.Fatal("expected error when no operator session exists, got nil")
 	}
 }
 

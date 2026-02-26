@@ -305,4 +305,7 @@ else
     echo "Verify with:"
     echo "  systemctl status bureau-launcher bureau-daemon"
     echo "  bureau machine list --credential-file <creds>"
+    echo ""
+    echo "The fleet controller will discover this machine automatically"
+    echo "and publish service bindings to its config room."
 fi

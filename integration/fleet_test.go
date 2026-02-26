@@ -12,6 +12,7 @@ import (
 	"strings"
 	"testing"
 
+	"github.com/bureau-foundation/bureau/lib/principal"
 	"github.com/bureau-foundation/bureau/lib/ref"
 	"github.com/bureau-foundation/bureau/lib/schema"
 	"github.com/bureau-foundation/bureau/lib/schema/observation"
@@ -709,4 +710,94 @@ func TestConfigReconciliation(t *testing.T) {
 			return status.Sandboxes.Running == 0
 		}, "MachineStatus with 0 running sandboxes")
 	})
+}
+
+// TestServiceReEnable verifies that a principal can be re-deployed via
+// principal.AssignPrincipals when its Matrix account already exists.
+// This is the production path for "bureau fleet enable" and "bureau ticket
+// enable" when re-run: principal.Create fails with M_USER_IN_USE, and the
+// enable command calls AssignPrincipals to ensure the MachineConfig
+// assignment exists so the daemon starts the sandbox.
+//
+// The test exercises the exact sequence:
+//   - Register a principal and deploy it via credentials + MachineConfig
+//   - Verify the sandbox starts (proxy socket appears, whoami works)
+//   - Remove the MachineConfig assignment (daemon tears down the sandbox)
+//   - Call principal.AssignPrincipals to re-publish the assignment
+//   - Verify the daemon reconciles and restarts the sandbox
+func TestServiceReEnable(t *testing.T) {
+	t.Parallel()
+
+	admin := adminSession(t)
+	defer admin.Close()
+	fleet := createTestFleet(t, admin)
+
+	machine := newTestMachine(t, fleet, "reenable")
+	startMachine(t, admin, machine, machineOptions{
+		LauncherBinary: resolvedBinary(t, "LAUNCHER_BINARY"),
+		DaemonBinary:   resolvedBinary(t, "DAEMON_BINARY"),
+		Fleet:          fleet,
+		ProxyBinary:    resolvedBinary(t, "PROXY_BINARY"),
+	})
+
+	// Register a principal and push credentials. This is the state we'd
+	// have after a previous "enable" command created the account and
+	// provisioned credentials.
+	agent := registerFleetPrincipal(t, fleet, "test/reenable", "reenable-password")
+	pushCredentials(t, admin, machine, agent)
+
+	// Publish a template so the daemon can resolve it during sandbox creation.
+	// Both Phase 1 and Phase 3 use the same template ref, matching the
+	// production "enable" flow where the template is always specified.
+	templateRefStr := publishTestAgentTemplate(t, admin, machine, "test-agent")
+
+	proxySocket := machine.PrincipalProxySocketPath(t, agent.Localpart)
+
+	// Phase 1: Deploy via pushMachineConfig — daemon creates the sandbox.
+	pushMachineConfig(t, admin, machine, deploymentConfig{
+		Principals: []principalSpec{{Localpart: agent.Localpart, Template: templateRefStr}},
+	})
+	waitForFile(t, proxySocket)
+
+	proxyClient := proxyHTTPClient(proxySocket)
+	whoami := proxyWhoami(t, proxyClient)
+	if whoami != agent.UserID.String() {
+		t.Fatalf("whoami = %q, want %q", whoami, agent.UserID)
+	}
+
+	// Phase 2: Remove the MachineConfig assignment → daemon tears down.
+	pushMachineConfig(t, admin, machine, deploymentConfig{})
+	waitForFileGone(t, proxySocket)
+
+	// Phase 3: Re-publish via AssignPrincipals. This is the code path
+	// that fleet/ticket enable use when principal.Create returns
+	// M_USER_IN_USE. The test verifies the daemon reconciles and
+	// restarts the sandbox.
+	principalEntity, err := ref.NewEntityFromAccountLocalpart(fleet.Ref, agent.Localpart)
+	if err != nil {
+		t.Fatalf("build principal entity: %v", err)
+	}
+
+	templateRef, err := schema.ParseTemplateRef(templateRefStr)
+	if err != nil {
+		t.Fatalf("parse template ref: %v", err)
+	}
+	_, assignErr := principal.AssignPrincipals(t.Context(), admin, machine.ConfigRoomID, []principal.CreateParams{{
+		Machine:     machine.Ref,
+		Principal:   principalEntity,
+		TemplateRef: templateRef,
+		AutoStart:   true,
+	}})
+	if assignErr != nil {
+		t.Fatalf("AssignPrincipals: %v", assignErr)
+	}
+
+	// Phase 4: Verify daemon reconciles and restarts the sandbox.
+	waitForFile(t, proxySocket)
+
+	proxyClient = proxyHTTPClient(proxySocket)
+	whoami = proxyWhoami(t, proxyClient)
+	if whoami != agent.UserID.String() {
+		t.Fatalf("whoami after re-enable = %q, want %q", whoami, agent.UserID)
+	}
 }

@@ -6,6 +6,7 @@ package main
 import (
 	"context"
 	"encoding/base64"
+	"fmt"
 	"net"
 	"time"
 
@@ -87,7 +88,8 @@ func (d *Daemon) handleMintServiceToken(clientConnection net.Conn, request obser
 	socketPath, err := d.resolveServiceSocket(ctx, request.ServiceRole, []ref.RoomID{d.configRoomID})
 	if err != nil {
 		d.sendObserveError(clientConnection,
-			"resolving service socket: "+err.Error())
+			fmt.Sprintf("no service binding found for role %q in config room %s (%s)",
+				request.ServiceRole, d.machine.RoomAlias(), d.configRoomID))
 		return
 	}
 

@@ -190,7 +190,7 @@ func runEnable(ctx context.Context, logger *slog.Logger, fleetLocalpart string, 
 	// credentials, invite to config room, publish MachineConfig
 	// assignment. The daemon detects the assignment via /sync and
 	// creates the fleet controller's sandbox with AutoStart:true.
-	createResult, err := principal.Create(ctx, client, adminSession, registrationTokenBuffer, credential.AsProvisionFunc(), principal.CreateParams{
+	createParams := principal.CreateParams{
 		Machine:     machine,
 		Principal:   serviceRef.Entity(),
 		TemplateRef: templateRef,
@@ -205,15 +205,41 @@ func runEnable(ctx context.Context, logger *slog.Logger, fleetLocalpart string, 
 			"role":    "service",
 			"service": "fleet",
 		},
-	})
+	}
+
+	createResult, err := principal.Create(ctx, client, adminSession, registrationTokenBuffer, credential.AsProvisionFunc(), createParams)
 	if err != nil {
-		if messaging.IsMatrixError(err, messaging.ErrCodeUserInUse) {
-			// The fleet controller account already exists. This is
-			// expected when re-running fleet enable to update
-			// bindings after adding machines to the fleet.
-			logger.Info("fleet controller already deployed", "user_id", serviceRef.UserID().String())
-		} else {
+		if !messaging.IsMatrixError(err, messaging.ErrCodeUserInUse) {
 			return cli.Internal("deploying fleet controller: %w", err)
+		}
+
+		// The fleet controller account already exists. This is
+		// expected when re-running fleet enable to update bindings
+		// after adding machines to the fleet. Ensure the
+		// MachineConfig assignment is published — principal.Create
+		// skips the entire flow (including config assignment) when
+		// the account exists, so a previous interrupted enable or
+		// a first enable that failed after registration could leave
+		// the assignment missing.
+		logger.Info("fleet controller account exists, ensuring config assignment",
+			"user_id", serviceRef.UserID().String())
+
+		configRoomID, resolveErr := adminSession.ResolveAlias(ctx, machine.RoomAlias())
+		if resolveErr != nil {
+			return cli.Internal("resolve config room %s: %w", machine.RoomAlias(), resolveErr)
+		}
+
+		configEventID, assignErr := principal.AssignPrincipals(ctx, adminSession, configRoomID, []principal.CreateParams{createParams})
+		if assignErr != nil {
+			return cli.Internal("ensuring fleet controller assignment: %w", assignErr)
+		}
+
+		createResult = &principal.CreateResult{
+			PrincipalUserID: serviceRef.UserID(),
+			Machine:         machine,
+			TemplateRef:     templateRef,
+			ConfigRoomID:    configRoomID,
+			ConfigEventID:   configEventID,
 		}
 	} else {
 		logger.Info("fleet controller deployed",
@@ -232,13 +258,11 @@ func runEnable(ctx context.Context, logger *slog.Logger, fleetLocalpart string, 
 	}
 
 	result := enableResult{
-		Service:      serviceRef,
-		Machine:      machine,
-		BindingCount: bindingCount,
-	}
-	if createResult != nil {
-		result.ConfigRoomID = createResult.ConfigRoomID
-		result.ConfigEventID = createResult.ConfigEventID
+		Service:       serviceRef,
+		Machine:       machine,
+		BindingCount:  bindingCount,
+		ConfigRoomID:  createResult.ConfigRoomID,
+		ConfigEventID: createResult.ConfigEventID,
 	}
 
 	if done, emitErr := params.EmitJSON(result); done {
@@ -334,8 +358,8 @@ func publishFleetBindings(ctx context.Context, session messaging.Session, fleet 
 		if event.Type != schema.EventTypeMachineKey || event.StateKey == nil || *event.StateKey == "" {
 			continue
 		}
-		// Skip decommissioned machines (empty key field).
-		if keyValue, _ := event.Content["key"].(string); keyValue == "" {
+		// Skip decommissioned machines (empty public_key field).
+		if publicKey, _ := event.Content["public_key"].(string); publicKey == "" {
 			continue
 		}
 

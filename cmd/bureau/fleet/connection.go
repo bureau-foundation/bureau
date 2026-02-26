@@ -4,11 +4,15 @@
 package fleet
 
 import (
+	"fmt"
 	"os"
+	"strings"
 
 	"github.com/spf13/pflag"
 
+	"github.com/bureau-foundation/bureau/cmd/bureau/cli"
 	"github.com/bureau-foundation/bureau/lib/service"
+	"github.com/bureau-foundation/bureau/observe"
 )
 
 // Sandbox-standard paths for the fleet service role. When an agent
@@ -38,33 +42,60 @@ func defaultFleetSocketPath() string {
 }
 
 // defaultFleetTokenPath returns the default fleet service token path.
-// Inside a sandbox, the daemon-provisioned token at
-// /run/bureau/service/token/fleet.token is used. Outside a sandbox,
-// the same path is returned as a fallback (it will only exist if the
-// daemon minted tokens for this principal).
+// This is the daemon-provisioned path inside a sandbox. Operators running
+// CLI commands from the host should use --service mode instead — there
+// is no host-side fallback for token files.
 func defaultFleetTokenPath() string {
-	if _, err := os.Stat(sandboxTokenPath); err == nil {
-		return sandboxTokenPath
-	}
 	return sandboxTokenPath
 }
 
 // FleetConnection manages socket and token flags for fleet commands.
-// Implements [cli.FlagBinder] so it integrates with the params struct
-// system while handling dynamic defaults from environment variables.
+// Supports two modes:
+//
+// Direct mode (default): connects using --socket and --token-file,
+// designed for agents running inside sandboxes where the daemon has
+// bind-mounted the service socket and provisioned a token file.
+//
+// Service mode (--service): mints a token via the daemon's observe
+// socket using the operator's saved session (~/.config/bureau/session.json
+// from "bureau login"). Returns both the token and the host-side
+// service socket path. Designed for operator CLI use from the host.
+//
 // Excluded from JSON Schema generation since MCP callers don't specify
 // socket paths — the service connection is established by the hosting
 // sandbox.
 type FleetConnection struct {
-	SocketPath string
-	TokenPath  string
+	SocketPath   string
+	TokenPath    string
+	ServiceMode  bool
+	DaemonSocket string
 }
 
-// AddFlags registers --socket and --token-file flags with dynamic defaults
-// from BUREAU_FLEET_SOCKET and BUREAU_FLEET_TOKEN environment variables.
-// If neither environment variable is set, defaults are detected from the
-// runtime environment: inside a sandbox, the RequiredServices mount points
-// are used; outside, the host-side principal socket path.
+// MintResult holds the raw pieces from daemon-mediated token minting.
+// Returned by MintServiceToken for callers that need the individual
+// components (e.g., long-lived watchers need raw token bytes and TTL
+// for refresh scheduling). Short-lived commands use connect() which
+// calls MintServiceToken internally.
+type MintResult struct {
+	// SocketPath is the host-side Unix socket path for the fleet
+	// controller's CBOR listener, resolved by the daemon from the
+	// m.bureau.room_service binding in the machine's config room.
+	SocketPath string
+
+	// TokenBytes is the signed service token (CBOR + Ed25519
+	// signature). Pass to service.NewServiceClientFromToken.
+	TokenBytes []byte
+
+	// TTLSeconds is the token lifetime. Callers running long-lived
+	// sessions should refresh at 80% of TTL by calling
+	// MintServiceToken again.
+	TTLSeconds int
+}
+
+// AddFlags registers connection flags. In direct mode (default):
+// --socket and --token-file with defaults from BUREAU_FLEET_SOCKET
+// and BUREAU_FLEET_TOKEN environment variables. In service mode:
+// --daemon-socket for the daemon's observe socket.
 func (c *FleetConnection) AddFlags(flagSet *pflag.FlagSet) {
 	socketDefault := defaultFleetSocketPath()
 	if envSocket := os.Getenv("BUREAU_FLEET_SOCKET"); envSocket != "" {
@@ -75,11 +106,63 @@ func (c *FleetConnection) AddFlags(flagSet *pflag.FlagSet) {
 		tokenDefault = envToken
 	}
 
-	flagSet.StringVar(&c.SocketPath, "socket", socketDefault, "fleet controller socket path")
-	flagSet.StringVar(&c.TokenPath, "token-file", tokenDefault, "path to service token file")
+	flagSet.StringVar(&c.SocketPath, "socket", socketDefault, "fleet controller socket path (direct mode)")
+	flagSet.StringVar(&c.TokenPath, "token-file", tokenDefault, "path to service token file (direct mode)")
+	flagSet.BoolVar(&c.ServiceMode, "service", false, "connect via daemon token minting (requires 'bureau login')")
+	flagSet.StringVar(&c.DaemonSocket, "daemon-socket", observe.DefaultDaemonSocket, "daemon observe socket path (service mode)")
 }
 
 // connect creates a service client from the connection parameters.
+// In service mode, mints a token via the daemon and uses the returned
+// socket path. In direct mode, reads the token from a file.
 func (c *FleetConnection) connect() (*service.ServiceClient, error) {
+	if c.ServiceMode {
+		result, err := c.MintServiceToken()
+		if err != nil {
+			return nil, err
+		}
+		return service.NewServiceClientFromToken(result.SocketPath, result.TokenBytes), nil
+	}
 	return service.NewServiceClient(c.SocketPath, c.TokenPath)
+}
+
+// MintServiceToken mints a signed service token via the daemon's
+// observe socket. Loads the operator session from the well-known path
+// (~/.config/bureau/session.json) on each call, so token rotation in
+// the session file is picked up automatically.
+//
+// Returns the raw token bytes and service socket path for callers that
+// need them individually. Short-lived commands should use connect()
+// instead.
+//
+// Requires --service mode and a valid operator session from "bureau login".
+func (c *FleetConnection) MintServiceToken() (*MintResult, error) {
+	operatorSession, err := cli.LoadSession()
+	if err != nil {
+		return nil, err
+	}
+
+	tokenResponse, err := observe.MintServiceToken(
+		c.DaemonSocket,
+		"fleet",
+		operatorSession.UserID,
+		operatorSession.AccessToken,
+	)
+	if err != nil {
+		if strings.Contains(err.Error(), "no service binding found") {
+			return nil, fmt.Errorf("fleet controller not enabled on this machine — run \"bureau fleet enable <fleet-localpart> --host <machine>\" to set up service bindings")
+		}
+		return nil, fmt.Errorf("mint service token: %w", err)
+	}
+
+	tokenBytes, err := tokenResponse.TokenBytes()
+	if err != nil {
+		return nil, fmt.Errorf("decode service token: %w", err)
+	}
+
+	return &MintResult{
+		SocketPath: tokenResponse.SocketPath,
+		TokenBytes: tokenBytes,
+		TTLSeconds: tokenResponse.TTLSeconds,
+	}, nil
 }

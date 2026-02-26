@@ -211,7 +211,7 @@ func CreateMultiple(ctx context.Context, client *messaging.Client, session messa
 	// Phase 2: Atomic MachineConfig write — read existing config, add all
 	// principals, write back in a single state event.
 	configRoomID := registered[0].configRoomID
-	configEventID, err := assignPrincipals(ctx, session, configRoomID, params)
+	configEventID, err := AssignPrincipals(ctx, session, configRoomID, params)
 	if err != nil {
 		return nil, err
 	}
@@ -375,10 +375,15 @@ func registerAndProvision(ctx context.Context, client *messaging.Client, session
 	}, nil
 }
 
-// assignPrincipals reads the current MachineConfig, merges all new
+// AssignPrincipals reads the current MachineConfig, merges all new
 // PrincipalAssignments, and publishes the updated config in a single state
 // event. If any principal is already assigned, its entry is updated in place.
-func assignPrincipals(ctx context.Context, session messaging.Session, configRoomID ref.RoomID, params []CreateParams) (ref.EventID, error) {
+//
+// This is called internally by CreateMultiple after account registration,
+// but is also exported for callers that need to ensure a MachineConfig
+// assignment exists independently of account creation — for example, when
+// re-running an "enable" command after the service account already exists.
+func AssignPrincipals(ctx context.Context, session messaging.Session, configRoomID ref.RoomID, params []CreateParams) (ref.EventID, error) {
 	machineLocalpart := params[0].Machine.Localpart()
 
 	var config schema.MachineConfig

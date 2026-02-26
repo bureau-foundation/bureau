@@ -1593,11 +1593,7 @@ func (d *Daemon) resolveServiceSocket(ctx context.Context, role string, rooms []
 		return socketPath, nil
 	}
 
-	roomIDs := make([]string, len(rooms))
-	for i, r := range rooms {
-		roomIDs[i] = r.String()
-	}
-	return "", fmt.Errorf("no binding found for service role %q in rooms %v", role, roomIDs)
+	return "", fmt.Errorf("no service binding found for role %q — the service may not be enabled on this machine (checked %d config room(s))", role, len(rooms))
 }
 
 // tokenTTL is the default TTL for service tokens. Set to 5 minutes to

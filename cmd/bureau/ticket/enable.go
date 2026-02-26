@@ -217,8 +217,7 @@ func runEnable(ctx context.Context, logger *slog.Logger, params *enableParams) e
 	// credentials, invite to config room, publish MachineConfig
 	// assignment. The daemon detects the assignment via /sync and
 	// creates the ticket service's sandbox with AutoStart:true.
-	var createResult *principal.CreateResult
-	createResult, err = principal.Create(ctx, client, adminSession, registrationTokenBuffer, credential.AsProvisionFunc(), principal.CreateParams{
+	createParams := principal.CreateParams{
 		Machine:     machineRef,
 		Principal:   serviceEntity,
 		TemplateRef: templateRef,
@@ -234,15 +233,40 @@ func runEnable(ctx context.Context, logger *slog.Logger, params *enableParams) e
 			"service": "ticket",
 			"space":   params.Space,
 		},
-	})
+	}
+
+	var createResult *principal.CreateResult
+	createResult, err = principal.Create(ctx, client, adminSession, registrationTokenBuffer, credential.AsProvisionFunc(), createParams)
 	if err != nil {
-		if messaging.IsMatrixError(err, messaging.ErrCodeUserInUse) {
-			// The ticket service account already exists. This is
-			// expected when re-running ticket enable to configure
-			// new rooms added to the space.
-			logger.Info("ticket service already deployed", "user_id", serviceUserID.String())
-		} else {
+		if !messaging.IsMatrixError(err, messaging.ErrCodeUserInUse) {
 			return cli.Internal("deploying ticket service: %w", err)
+		}
+
+		// The ticket service account already exists. This is
+		// expected when re-running ticket enable to configure new
+		// rooms added to the space. Ensure the MachineConfig
+		// assignment is published — principal.Create skips the
+		// entire flow (including config assignment) when the account
+		// exists.
+		logger.Info("ticket service account exists, ensuring config assignment",
+			"user_id", serviceUserID.String())
+
+		configRoomID, resolveErr := adminSession.ResolveAlias(ctx, machineRef.RoomAlias())
+		if resolveErr != nil {
+			return cli.Internal("resolve config room %s: %w", machineRef.RoomAlias(), resolveErr)
+		}
+
+		configEventID, assignErr := principal.AssignPrincipals(ctx, adminSession, configRoomID, []principal.CreateParams{createParams})
+		if assignErr != nil {
+			return cli.Internal("ensuring ticket service assignment: %w", assignErr)
+		}
+
+		createResult = &principal.CreateResult{
+			PrincipalUserID: serviceUserID,
+			Machine:         machineRef,
+			TemplateRef:     templateRef,
+			ConfigRoomID:    configRoomID,
+			ConfigEventID:   configEventID,
 		}
 	} else {
 		logger.Info("ticket service deployed",
@@ -288,13 +312,11 @@ func runEnable(ctx context.Context, logger *slog.Logger, params *enableParams) e
 		ServicePrincipal: serviceEntity.Localpart(),
 		ServiceUserID:    serviceUserID.String(),
 		Machine:          host,
+		ConfigRoomID:     createResult.ConfigRoomID,
+		ConfigEventID:    createResult.ConfigEventID,
 		SpaceAlias:       spaceAlias.String(),
 		SpaceRoomID:      spaceRoomID.String(),
 		RoomsConfigured:  configuredRooms,
-	}
-	if createResult != nil {
-		result.ConfigRoomID = createResult.ConfigRoomID
-		result.ConfigEventID = createResult.ConfigEventID
 	}
 
 	if done, err := params.EmitJSON(result); done {

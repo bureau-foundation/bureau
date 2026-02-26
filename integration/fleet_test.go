@@ -16,6 +16,7 @@ import (
 	"github.com/bureau-foundation/bureau/lib/ref"
 	"github.com/bureau-foundation/bureau/lib/schema"
 	"github.com/bureau-foundation/bureau/lib/schema/observation"
+	"github.com/bureau-foundation/bureau/lib/service"
 	"github.com/bureau-foundation/bureau/observe"
 )
 
@@ -712,19 +713,24 @@ func TestConfigReconciliation(t *testing.T) {
 	})
 }
 
-// TestServiceReEnable verifies that a principal can be re-deployed via
+// TestServiceReEnable verifies that a service can be re-deployed via
 // principal.AssignPrincipals when its Matrix account already exists.
 // This is the production path for "bureau fleet enable" and "bureau ticket
 // enable" when re-run: principal.Create fails with M_USER_IN_USE, and the
 // enable command calls AssignPrincipals to ensure the MachineConfig
 // assignment exists so the daemon starts the sandbox.
 //
+// Unlike a proxy-level test, this deploys bureau-test-service which
+// exercises the full service lifecycle: BootstrapViaProxy, CBOR socket
+// server, fleet service directory registration, and token authentication.
+//
 // The test exercises the exact sequence:
-//   - Register a principal and deploy it via credentials + MachineConfig
-//   - Verify the sandbox starts (proxy socket appears, whoami works)
+//   - Deploy a service via deployTestService (production principal.Create path)
+//   - Verify the service socket responds to status queries
 //   - Remove the MachineConfig assignment (daemon tears down the sandbox)
 //   - Call principal.AssignPrincipals to re-publish the assignment
-//   - Verify the daemon reconciles and restarts the sandbox
+//   - Verify the daemon reconciles, restarts the sandbox, and the service
+//     socket becomes responsive again
 func TestServiceReEnable(t *testing.T) {
 	t.Parallel()
 
@@ -740,51 +746,49 @@ func TestServiceReEnable(t *testing.T) {
 		ProxyBinary:    resolvedBinary(t, "PROXY_BINARY"),
 	})
 
-	// Register a principal and push credentials. This is the state we'd
-	// have after a previous "enable" command created the account and
-	// provisioned credentials.
-	agent := registerFleetPrincipal(t, fleet, "test/reenable", "reenable-password")
-	pushCredentials(t, admin, machine, agent)
+	// Phase 1: Deploy via the production path. deployTestService calls
+	// principal.Create(AutoStart: true), which registers the Matrix
+	// account, provisions credentials, and publishes a MachineConfig
+	// assignment. The daemon creates the sandbox, the service calls
+	// BootstrapViaProxy, registers in the fleet service directory,
+	// and creates a CBOR socket.
+	svc := deployTestService(t, admin, fleet, machine, "reenable")
 
-	// Publish a template so the daemon can resolve it during sandbox creation.
-	// Both Phase 1 and Phase 3 use the same template ref, matching the
-	// production "enable" flow where the template is always specified.
-	templateRefStr := publishTestAgentTemplate(t, admin, machine, "test-agent")
-
-	proxySocket := machine.PrincipalProxySocketPath(t, agent.Localpart)
-
-	// Phase 1: Deploy via pushMachineConfig — daemon creates the sandbox.
-	pushMachineConfig(t, admin, machine, deploymentConfig{
-		Principals: []principalSpec{{Localpart: agent.Localpart, Template: templateRefStr}},
-	})
-	waitForFile(t, proxySocket)
-
-	proxyClient := proxyHTTPClient(proxySocket)
-	whoami := proxyWhoami(t, proxyClient)
-	if whoami != agent.UserID.String() {
-		t.Fatalf("whoami = %q, want %q", whoami, agent.UserID)
+	// Verify the service is alive via the unauthenticated status action.
+	statusClient := service.NewServiceClientFromToken(svc.SocketPath, nil)
+	var status struct {
+		UptimeSeconds float64 `cbor:"uptime_seconds"`
+		Principal     string  `cbor:"principal"`
+	}
+	if err := statusClient.Call(t.Context(), "status", nil, &status); err != nil {
+		t.Fatalf("initial status call: %v", err)
+	}
+	if status.Principal == "" {
+		t.Fatal("status returned empty principal")
 	}
 
 	// Phase 2: Remove the MachineConfig assignment → daemon tears down.
+	// Clear deployedServices so pushMachineConfig doesn't re-include
+	// the service we're intentionally removing.
+	machine.deployedServices = nil
 	pushMachineConfig(t, admin, machine, deploymentConfig{})
-	waitForFileGone(t, proxySocket)
+
+	// The launcher removes the service socket symlink on sandbox
+	// destruction, so wait for the symlink itself to disappear.
+	waitForFileGone(t, svc.SocketPath)
 
 	// Phase 3: Re-publish via AssignPrincipals. This is the code path
 	// that fleet/ticket enable use when principal.Create returns
 	// M_USER_IN_USE. The test verifies the daemon reconciles and
 	// restarts the sandbox.
-	principalEntity, err := ref.NewEntityFromAccountLocalpart(fleet.Ref, agent.Localpart)
-	if err != nil {
-		t.Fatalf("build principal entity: %v", err)
-	}
-
-	templateRef, err := schema.ParseTemplateRef(templateRefStr)
+	templateName := strings.ReplaceAll(svc.Account.Localpart, "/", "-")
+	templateRef, err := schema.ParseTemplateRef("bureau/template:" + templateName)
 	if err != nil {
 		t.Fatalf("parse template ref: %v", err)
 	}
 	_, assignErr := principal.AssignPrincipals(t.Context(), admin, machine.ConfigRoomID, []principal.CreateParams{{
 		Machine:     machine.Ref,
-		Principal:   principalEntity,
+		Principal:   svc.Entity,
 		TemplateRef: templateRef,
 		AutoStart:   true,
 	}})
@@ -792,12 +796,28 @@ func TestServiceReEnable(t *testing.T) {
 		t.Fatalf("AssignPrincipals: %v", assignErr)
 	}
 
-	// Phase 4: Verify daemon reconciles and restarts the sandbox.
-	waitForFile(t, proxySocket)
+	// Phase 4: Wait for the service to come back up. The launcher
+	// creates a new symlink on sandbox re-creation.
+	waitForFile(t, svc.SocketPath)
 
-	proxyClient = proxyHTTPClient(proxySocket)
-	whoami = proxyWhoami(t, proxyClient)
-	if whoami != agent.UserID.String() {
-		t.Fatalf("whoami after re-enable = %q, want %q", whoami, agent.UserID)
+	// Resolve the symlink target (new socket inside the new sandbox)
+	// and wait for the service binary to create it.
+	socketTarget, err := os.Readlink(svc.SocketPath)
+	if err != nil {
+		t.Fatalf("readlink service socket after re-enable: %v", err)
+	}
+	waitForFile(t, socketTarget)
+
+	// Verify the re-created service responds to status queries.
+	reenabledClient := service.NewServiceClientFromToken(svc.SocketPath, nil)
+	var reenabledStatus struct {
+		UptimeSeconds float64 `cbor:"uptime_seconds"`
+		Principal     string  `cbor:"principal"`
+	}
+	if err := reenabledClient.Call(t.Context(), "status", nil, &reenabledStatus); err != nil {
+		t.Fatalf("status after re-enable: %v", err)
+	}
+	if reenabledStatus.Principal == "" {
+		t.Fatal("status after re-enable returned empty principal")
 	}
 }

@@ -29,7 +29,15 @@ import (
 // when the kernel reuses watch descriptors for the same directory).
 func inotifyWaitCreate(ctx context.Context, targetPath string) error {
 	for {
-		if _, err := os.Stat(targetPath); err == nil {
+		// Lstat detects the file or symlink itself without following
+		// symlinks. This is critical for service socket paths, which
+		// are symlinks created by the launcher: the symlink may exist
+		// before its target does (the service binary creates the target
+		// after sandbox startup). os.Stat would follow the symlink,
+		// see the missing target, and report the file as absent —
+		// causing a hang when the symlink creation event was already
+		// missed by inotify.
+		if _, err := os.Lstat(targetPath); err == nil {
 			return nil
 		}
 		if err := ctx.Err(); err != nil {
@@ -58,9 +66,9 @@ func inotifyWaitCreate(ctx context.Context, targetPath string) error {
 		}
 
 		// Re-check after establishing the watch: the target (or an
-		// intermediate directory) may have appeared between our Stat
+		// intermediate directory) may have appeared between our Lstat
 		// above and the InotifyAddWatch.
-		if _, err := os.Stat(targetPath); err == nil {
+		if _, err := os.Lstat(targetPath); err == nil {
 			unix.Close(fd)
 			return nil
 		}

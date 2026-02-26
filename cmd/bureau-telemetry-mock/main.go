@@ -72,7 +72,7 @@ func run() error {
 
 	mock := &telemetryMock{}
 
-	socketServer := service.NewSocketServer(boot.SocketPath, boot.Logger, boot.AuthConfig)
+	socketServer := boot.NewSocketServer()
 	socketServer.RegisterRevocationHandler()
 
 	socketServer.Handle("status", mock.handleStatus)

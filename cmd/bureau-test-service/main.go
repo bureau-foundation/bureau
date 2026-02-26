@@ -48,7 +48,7 @@ func run() error {
 
 	startedAt := boot.Clock.Now()
 
-	socketServer := service.NewSocketServer(boot.SocketPath, boot.Logger, boot.AuthConfig)
+	socketServer := boot.NewSocketServer()
 	socketServer.RegisterRevocationHandler()
 
 	// Unauthenticated liveness check matching the pattern from

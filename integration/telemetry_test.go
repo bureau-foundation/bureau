@@ -4,6 +4,7 @@
 package integration_test
 
 import (
+	"fmt"
 	"net"
 	"testing"
 
@@ -381,4 +382,153 @@ func TestTelemetryRelayPipeline(t *testing.T) {
 	if mockStatus.StoredSpans != 1 {
 		t.Fatalf("expected 1 stored span on mock, got %d", mockStatus.StoredSpans)
 	}
+}
+
+// TestSocketServerTelemetryEmission verifies that a Bureau service with
+// telemetry enabled (RequiredServices: ["telemetry"]) automatically emits
+// socket.handle spans when processing CBOR socket requests. This tests
+// the full production path end-to-end:
+//
+//   - BootstrapViaProxy detects the telemetry relay socket (bind-mounted
+//     by the daemon from the telemetry mock's socket)
+//   - BootstrapResult.NewSocketServer() attaches the TelemetryEmitter to
+//     the SocketServer
+//   - SocketServer.handleConnection records a socket.handle span for
+//     each request
+//   - TelemetryEmitter flushes the buffered span to the mock via the
+//     CBOR submit action
+//   - The mock stores it and pushes it to the subscribe stream
+//
+// Verification is event-driven via the mock's subscribe streaming action:
+// the test opens a subscriber before making the request, so the span
+// arrives on the stream as soon as the emitter flushes (5-second interval
+// from BootstrapViaProxy).
+func TestSocketServerTelemetryEmission(t *testing.T) {
+	t.Parallel()
+
+	admin := adminSession(t)
+	defer admin.Close()
+	fleet := createTestFleet(t, admin)
+
+	machine := newTestMachine(t, fleet, "sockspan")
+	startMachine(t, admin, machine, machineOptions{
+		LauncherBinary: resolvedBinary(t, "LAUNCHER_BINARY"),
+		DaemonBinary:   resolvedBinary(t, "DAEMON_BINARY"),
+		ProxyBinary:    resolvedBinary(t, "PROXY_BINARY"),
+		Fleet:          fleet,
+	})
+
+	// Deploy the telemetry mock and publish a service binding so the
+	// daemon resolves RequiredServices: ["telemetry"] to the mock's
+	// socket for subsequent principals.
+	mockService := deployTelemetryMock(t, admin, fleet, machine, "sockspan")
+
+	// Open a subscribe stream on the mock BEFORE deploying the test
+	// service. This ensures the subscriber is registered and will
+	// receive any spans the test service's emitter flushes.
+	callerEntity, err := ref.NewEntityFromAccountLocalpart(fleet.Ref, "agent/sockspan-test")
+	if err != nil {
+		t.Fatalf("construct caller entity: %v", err)
+	}
+	subscribeToken := mintTestServiceToken(t, machine, callerEntity, "telemetry", nil)
+	subscribeConn := openTelemetryStream(t, mockService.SocketPath, "subscribe", subscribeToken)
+	subscribeDecoder := codec.NewDecoder(subscribeConn)
+
+	// Deploy the test service WITH RequiredServices: ["telemetry"].
+	// The daemon bind-mounts the telemetry mock's socket at
+	// /run/bureau/service/telemetry.sock inside the test service's
+	// sandbox. BootstrapViaProxy probes that path, creates a
+	// TelemetryEmitter, and NewSocketServer() attaches it.
+	testSvc := deployService(t, admin, fleet, machine, serviceDeployOptions{
+		Binary:           resolvedBinary(t, "TEST_SERVICE_BINARY"),
+		Name:             "test-sockspan",
+		Localpart:        "service/test/sockspan",
+		RequiredServices: []string{"telemetry"},
+	})
+
+	// Make an unauthenticated "status" request to the test service.
+	// This triggers handleConnection → recordRequestSpan → RecordSpan.
+	unauthClient := service.NewServiceClientFromToken(testSvc.SocketPath, nil)
+	var statusResp struct {
+		UptimeSeconds float64 `cbor:"uptime_seconds"`
+		Principal     string  `cbor:"principal"`
+	}
+	if err := unauthClient.Call(t.Context(), "status", nil, &statusResp); err != nil {
+		t.Fatalf("status call to test service: %v", err)
+	}
+	if statusResp.Principal == "" {
+		t.Fatal("status response missing principal")
+	}
+
+	// Read from the subscribe stream. The emitter flushes every 5s
+	// (configured in BootstrapViaProxy). When the batch arrives, the
+	// mock pushes a subscribeFrame containing the spans.
+	var frame telemetryMockSubscribeFrame
+	if err := subscribeDecoder.Decode(&frame); err != nil {
+		t.Fatalf("read subscribe frame from mock: %v", err)
+	}
+
+	// The frame should contain at least one socket.handle span from
+	// our status request. There may be additional spans if the emitter
+	// flushed other requests (e.g., the deployService helper's
+	// readiness probing), so find our span by operation + action.
+	var found *telemetry.Span
+	for index := range frame.Spans {
+		span := &frame.Spans[index]
+		if span.Operation == "socket.handle" {
+			action, _ := span.Attributes["action"].(string)
+			if action == "status" {
+				found = span
+				break
+			}
+		}
+	}
+	if found == nil {
+		t.Fatalf("no socket.handle span with action=status in subscribe frame "+
+			"(got %d spans: %s)", len(frame.Spans), summarizeSpans(frame.Spans))
+	}
+
+	// Verify span fields stamped by the emitter and socket server.
+	if found.Status != telemetry.SpanStatusOK {
+		t.Fatalf("expected span status OK, got %d", found.Status)
+	}
+	handlerType, _ := found.Attributes["handler_type"].(string)
+	if handlerType != "unauthenticated" {
+		t.Fatalf("expected handler_type %q, got %q", "unauthenticated", handlerType)
+	}
+	if found.Duration <= 0 {
+		t.Fatalf("expected positive duration, got %d", found.Duration)
+	}
+	if found.Fleet.IsZero() {
+		t.Fatal("span Fleet is zero (emitter did not stamp identity)")
+	}
+	if found.Machine.IsZero() {
+		t.Fatal("span Machine is zero (emitter did not stamp identity)")
+	}
+	if found.Source.IsZero() {
+		t.Fatal("span Source is zero (emitter did not stamp identity)")
+	}
+	if found.TraceID.IsZero() {
+		t.Fatal("span TraceID is zero")
+	}
+	if found.SpanID.IsZero() {
+		t.Fatal("span SpanID is zero")
+	}
+}
+
+// summarizeSpans produces a compact description of spans for diagnostic
+// messages when an expected span is not found.
+func summarizeSpans(spans []telemetry.Span) string {
+	if len(spans) == 0 {
+		return "none"
+	}
+	result := ""
+	for index, span := range spans {
+		if index > 0 {
+			result += ", "
+		}
+		action, _ := span.Attributes["action"].(string)
+		result += fmt.Sprintf("%s[action=%s,status=%d]", span.Operation, action, span.Status)
+	}
+	return result
 }

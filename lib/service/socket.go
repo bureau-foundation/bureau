@@ -17,6 +17,7 @@ import (
 
 	"github.com/bureau-foundation/bureau/lib/clock"
 	"github.com/bureau-foundation/bureau/lib/codec"
+	"github.com/bureau-foundation/bureau/lib/schema/telemetry"
 	"github.com/bureau-foundation/bureau/lib/servicetoken"
 )
 
@@ -107,6 +108,7 @@ type SocketServer struct {
 	streamHandlers map[string]AuthStreamFunc
 	authConfig     *AuthConfig
 	logger         *slog.Logger
+	telemetry      *TelemetryEmitter
 
 	// activeConnections tracks in-flight request handlers for graceful
 	// shutdown. Serve waits for all active connections to complete
@@ -153,6 +155,14 @@ func NewSocketServer(socketPath string, logger *slog.Logger, authConfig *AuthCon
 // bound and accepting connections.
 func (s *SocketServer) Ready() <-chan struct{} {
 	return s.ready
+}
+
+// SetTelemetry attaches a telemetry emitter to the server. When set,
+// every handled request produces a telemetry span covering the full
+// request lifecycle (decode, auth, handler execution, response write).
+// Must be called before Serve.
+func (s *SocketServer) SetTelemetry(emitter *TelemetryEmitter) {
+	s.telemetry = emitter
 }
 
 // Handle registers an unauthenticated handler for the given action
@@ -276,11 +286,67 @@ const writeTimeout = 10 * time.Second
 // events are ~35KB per the design doc's size analysis).
 const maxRequestSize = 1024 * 1024
 
+// requestOutcome collects the span-relevant fields from a single
+// socket request. Each exit path in handleConnection populates these
+// fields; a deferred call to recordRequestSpan builds the span.
+type requestOutcome struct {
+	action       string
+	handlerType  string // "unauthenticated", "authenticated", "stream"
+	subject      string // token subject for authenticated requests
+	status       telemetry.SpanStatus
+	errorMessage string
+	// spanEnd, when non-zero, overrides time.Now() as the span end
+	// time. Used by stream handlers to capture dispatch time (auth +
+	// routing) without including the unbounded stream lifetime.
+	spanEnd time.Time
+}
+
+// recordRequestSpan emits a telemetry span for a completed socket
+// request. No-op when the server has no telemetry emitter attached.
+func (s *SocketServer) recordRequestSpan(startTime time.Time, outcome *requestOutcome) {
+	if s.telemetry == nil {
+		return
+	}
+
+	endTime := outcome.spanEnd
+	if endTime.IsZero() {
+		endTime = time.Now()
+	}
+
+	attributes := map[string]any{
+		"action":       outcome.action,
+		"handler_type": outcome.handlerType,
+	}
+	if outcome.subject != "" {
+		attributes["subject"] = outcome.subject
+	}
+
+	s.telemetry.RecordSpan(telemetry.Span{
+		TraceID:       telemetry.NewTraceID(),
+		SpanID:        telemetry.NewSpanID(),
+		Operation:     "socket.handle",
+		StartTime:     startTime.UnixNano(),
+		Duration:      endTime.Sub(startTime).Nanoseconds(),
+		Status:        outcome.status,
+		StatusMessage: outcome.errorMessage,
+		Attributes:    attributes,
+	})
+}
+
 // handleConnection processes one request-response cycle.
 func (s *SocketServer) handleConnection(ctx context.Context, conn net.Conn) {
 	defer conn.Close()
 
-	conn.SetReadDeadline(time.Now().Add(readTimeout))
+	startTime := time.Now()
+	var outcome requestOutcome
+	recordSpan := true
+	defer func() {
+		if recordSpan {
+			s.recordRequestSpan(startTime, &outcome)
+		}
+	}()
+
+	conn.SetReadDeadline(startTime.Add(readTimeout))
 
 	// Decode one CBOR value from the connection. CBOR is self-
 	// delimiting so no framing protocol is needed. LimitReader
@@ -288,10 +354,14 @@ func (s *SocketServer) handleConnection(ctx context.Context, conn net.Conn) {
 	var raw codec.RawMessage
 	if err := codec.NewDecoder(io.LimitReader(conn, maxRequestSize)).Decode(&raw); err != nil {
 		if errors.Is(err, io.EOF) {
-			// Client connected but sent nothing.
+			// Client connected but sent nothing — not a
+			// meaningful request, skip telemetry.
+			recordSpan = false
 			return
 		}
-		s.writeError(conn, fmt.Sprintf("invalid request: %v", err))
+		outcome.status = telemetry.SpanStatusError
+		outcome.errorMessage = fmt.Sprintf("invalid request: %v", err)
+		s.writeError(conn, outcome.errorMessage)
 		return
 	}
 
@@ -300,36 +370,50 @@ func (s *SocketServer) handleConnection(ctx context.Context, conn net.Conn) {
 		Action string `cbor:"action"`
 	}
 	if err := codec.Unmarshal(raw, &header); err != nil {
-		s.writeError(conn, fmt.Sprintf("invalid request: %v", err))
+		outcome.status = telemetry.SpanStatusError
+		outcome.errorMessage = fmt.Sprintf("invalid request: %v", err)
+		s.writeError(conn, outcome.errorMessage)
 		return
 	}
 	if header.Action == "" {
-		s.writeError(conn, "missing required field: action")
+		outcome.status = telemetry.SpanStatusError
+		outcome.errorMessage = "missing required field: action"
+		s.writeError(conn, outcome.errorMessage)
 		return
 	}
 
+	outcome.action = header.Action
+
 	// Try unauthenticated handler first.
 	if handler, exists := s.handlers[header.Action]; exists {
+		outcome.handlerType = "unauthenticated"
 		result, err := handler(ctx, []byte(raw))
 		if err != nil {
 			s.logger.Debug("action failed",
 				"action", header.Action,
 				"error", err,
 			)
-			s.writeError(conn, err.Error())
+			outcome.status = telemetry.SpanStatusError
+			outcome.errorMessage = err.Error()
+			s.writeError(conn, outcome.errorMessage)
 			return
 		}
+		outcome.status = telemetry.SpanStatusOK
 		s.writeSuccess(conn, result)
 		return
 	}
 
 	// Try authenticated request-response handler.
 	if authHandler, exists := s.authHandlers[header.Action]; exists {
+		outcome.handlerType = "authenticated"
 		token, err := s.verifyRequestToken(raw, header.Action)
 		if err != nil {
-			s.writeError(conn, err.Error())
+			outcome.status = telemetry.SpanStatusError
+			outcome.errorMessage = err.Error()
+			s.writeError(conn, outcome.errorMessage)
 			return
 		}
+		outcome.subject = token.Subject.String()
 
 		result, err := authHandler(ctx, token, []byte(raw))
 		if err != nil {
@@ -338,10 +422,13 @@ func (s *SocketServer) handleConnection(ctx context.Context, conn net.Conn) {
 				"subject", token.Subject,
 				"error", err,
 			)
-			s.writeError(conn, err.Error())
+			outcome.status = telemetry.SpanStatusError
+			outcome.errorMessage = err.Error()
+			s.writeError(conn, outcome.errorMessage)
 			return
 		}
 
+		outcome.status = telemetry.SpanStatusOK
 		s.writeSuccess(conn, result)
 		return
 	}
@@ -351,11 +438,20 @@ func (s *SocketServer) handleConnection(ctx context.Context, conn net.Conn) {
 	// and does not write a response. The handler blocks until
 	// the stream ends.
 	if streamHandler, exists := s.streamHandlers[header.Action]; exists {
+		outcome.handlerType = "stream"
 		token, err := s.verifyRequestToken(raw, header.Action)
 		if err != nil {
-			s.writeError(conn, err.Error())
+			outcome.status = telemetry.SpanStatusError
+			outcome.errorMessage = err.Error()
+			s.writeError(conn, outcome.errorMessage)
 			return
 		}
+		outcome.subject = token.Subject.String()
+		outcome.status = telemetry.SpanStatusOK
+		// Capture dispatch time before the stream handler runs.
+		// The span reflects auth + routing latency, not the
+		// unbounded stream lifetime.
+		outcome.spanEnd = time.Now()
 
 		// Clear deadlines — stream connections are long-lived.
 		conn.SetReadDeadline(time.Time{})
@@ -375,7 +471,9 @@ func (s *SocketServer) handleConnection(ctx context.Context, conn net.Conn) {
 		return
 	}
 
-	s.writeError(conn, fmt.Sprintf("unknown action %q", header.Action))
+	outcome.status = telemetry.SpanStatusError
+	outcome.errorMessage = fmt.Sprintf("unknown action %q", header.Action)
+	s.writeError(conn, outcome.errorMessage)
 }
 
 // VerifyRequestToken extracts the "token" field from a CBOR request,

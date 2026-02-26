@@ -105,7 +105,7 @@ func run() error {
 	}
 
 	// Start the socket server.
-	socketServer := service.NewSocketServer(boot.SocketPath, boot.Logger, boot.AuthConfig)
+	socketServer := boot.NewSocketServer()
 	socketServer.RegisterRevocationHandler()
 	agentService.registerActions(socketServer)
 

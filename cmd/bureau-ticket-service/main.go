@@ -89,7 +89,7 @@ func run() error {
 	ticketService.rebuildTimerHeap()
 
 	// Start the socket server in a goroutine.
-	socketServer := service.NewSocketServer(boot.SocketPath, boot.Logger, boot.AuthConfig)
+	socketServer := boot.NewSocketServer()
 	socketServer.RegisterRevocationHandler()
 	ticketService.registerActions(socketServer)
 

@@ -55,7 +55,7 @@ func run() error {
 	}
 
 	// Start the CBOR socket server with ingestion and query actions.
-	socketServer := service.NewSocketServer(boot.SocketPath, boot.Logger, boot.AuthConfig)
+	socketServer := boot.NewSocketServer()
 	socketServer.RegisterRevocationHandler()
 	telemetryService.registerActions(socketServer)
 

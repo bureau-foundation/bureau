@@ -75,6 +75,26 @@ type BootstrapResult struct {
 	// ServerName is the Matrix server name, read from the
 	// BUREAU_SERVER_NAME environment variable, validated and typed.
 	ServerName ref.ServerName
+
+	// Telemetry is the telemetry emitter for this service. Nil when
+	// the telemetry relay is not available (no RequiredServices:
+	// ["telemetry"] in the template, or token not readable).
+	// When non-nil, the flush goroutine is already running and will
+	// be stopped by the cleanup function.
+	Telemetry *TelemetryEmitter
+}
+
+// NewSocketServer creates a SocketServer from the bootstrap result,
+// pre-configured with the service's socket path, logger, and auth
+// config. If a telemetry emitter is available, it is automatically
+// attached. This replaces the manual NewSocketServer(boot.SocketPath,
+// boot.Logger, boot.AuthConfig) + SetTelemetry pattern.
+func (b *BootstrapResult) NewSocketServer() *SocketServer {
+	server := NewSocketServer(b.SocketPath, b.Logger, b.AuthConfig)
+	if b.Telemetry != nil {
+		server.SetTelemetry(b.Telemetry)
+	}
+	return server
 }
 
 // ProxyBootstrapConfig controls the [BootstrapViaProxy] process.
@@ -247,7 +267,46 @@ func BootstrapViaProxy(ctx context.Context, config ProxyBootstrapConfig) (*Boots
 		"machine", machineRef.UserID(),
 	)
 
+	// Probe for telemetry relay. Services that declare
+	// RequiredServices: ["telemetry"] get the relay socket
+	// bind-mounted into their sandbox. If present, create an
+	// emitter and start the flush goroutine.
+	var telemetryEmitter *TelemetryEmitter
+	var telemetryCancel context.CancelFunc
+	if _, statErr := os.Stat(TelemetryRelaySocketPath); statErr == nil {
+		emitter, emitterErr := NewTelemetryEmitter(TelemetryConfig{
+			SocketPath: TelemetryRelaySocketPath,
+			TokenPath:  TelemetryRelayTokenPath,
+			Fleet:      fleet,
+			Machine:    machineRef,
+			Source:     serviceRef.Entity(),
+			Clock:      clk,
+			Logger:     logger,
+		})
+		if emitterErr != nil {
+			logger.Warn("telemetry relay socket present but emitter creation failed",
+				"error", emitterErr,
+			)
+		} else {
+			var telemetryContext context.Context
+			telemetryContext, telemetryCancel = context.WithCancel(context.Background())
+			go emitter.Run(telemetryContext, 5*time.Second)
+			telemetryEmitter = emitter
+			logger.Info("telemetry emitter started",
+				"relay_socket", TelemetryRelaySocketPath,
+			)
+		}
+	}
+
 	cleanup := func() {
+		// Stop the telemetry flush goroutine first. The drain
+		// flush captures any spans from handlers that completed
+		// before the socket server shut down.
+		if telemetryCancel != nil {
+			telemetryCancel()
+			<-telemetryEmitter.Done()
+		}
+
 		deregisterContext, deregisterCancel := context.WithTimeout(context.Background(), 5*time.Second)
 		defer deregisterCancel()
 		if err := Deregister(deregisterContext, session, serviceRoomID, serviceRef); err != nil {
@@ -275,6 +334,7 @@ func BootstrapViaProxy(ctx context.Context, config ProxyBootstrapConfig) (*Boots
 		PrincipalName: principalName,
 		MachineName:   machineName,
 		ServerName:    serverName,
+		Telemetry:     telemetryEmitter,
 	}, cleanup, nil
 }
 

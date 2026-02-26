@@ -7,6 +7,7 @@ go_library(
     name = "telemetry",
     srcs = [
         "doc.go",
+        "generate.go",
         "telemetry.go",
     ],
     importpath = "github.com/bureau-foundation/bureau/lib/schema/telemetry",
@@ -16,7 +17,10 @@ go_library(
 
 go_test(
     name = "telemetry_test",
-    srcs = ["telemetry_test.go"],
+    srcs = [
+        "generate_test.go",
+        "telemetry_test.go",
+    ],
     embed = [":telemetry"],
     deps = [
         "//lib/codec",

@@ -11,7 +11,7 @@
 //
 // The binary exposes seven actions:
 //   - status (unauthenticated): relay-compatible operational stats plus stored counts
-//   - submit (authenticated): accepts spans, metrics, logs — matches relay wire format
+//   - submit (authenticated): accepts spans, metrics, logs, output deltas — matches relay wire format
 //   - ingest (authenticated, streaming): accepts the relay-to-service streaming
 //     TelemetryBatch protocol, storing records and forwarding to subscribers
 //   - subscribe (authenticated, streaming): pushes records to the client as

@@ -44,20 +44,22 @@ type telemetryTailControl struct {
 // telemetry mock's subscribe streaming action. Contains the records
 // from a single submit or ingest batch.
 type telemetryMockSubscribeFrame struct {
-	Spans   []telemetry.Span        `cbor:"spans,omitempty"`
-	Metrics []telemetry.MetricPoint `cbor:"metrics,omitempty"`
-	Logs    []telemetry.LogRecord   `cbor:"logs,omitempty"`
+	Spans        []telemetry.Span        `cbor:"spans,omitempty"`
+	Metrics      []telemetry.MetricPoint `cbor:"metrics,omitempty"`
+	Logs         []telemetry.LogRecord   `cbor:"logs,omitempty"`
+	OutputDeltas []telemetry.OutputDelta `cbor:"output_deltas,omitempty"`
 }
 
 // telemetryServiceStatus mirrors the telemetry service's CBOR status
 // response. Defined locally in the test file — standard pattern.
 type telemetryServiceStatus struct {
-	BatchesReceived uint64  `cbor:"batches_received"`
-	SpansReceived   uint64  `cbor:"spans_received"`
-	MetricsReceived uint64  `cbor:"metrics_received"`
-	LogsReceived    uint64  `cbor:"logs_received"`
-	ConnectedRelays int     `cbor:"connected_relays"`
-	UptimeSeconds   float64 `cbor:"uptime_seconds"`
+	BatchesReceived      uint64  `cbor:"batches_received"`
+	SpansReceived        uint64  `cbor:"spans_received"`
+	MetricsReceived      uint64  `cbor:"metrics_received"`
+	LogsReceived         uint64  `cbor:"logs_received"`
+	OutputDeltasReceived uint64  `cbor:"output_deltas_received"`
+	ConnectedRelays      int     `cbor:"connected_relays"`
+	UptimeSeconds        float64 `cbor:"uptime_seconds"`
 }
 
 // openTelemetryStream dials a Unix socket, sends the CBOR streaming
@@ -183,6 +185,16 @@ func TestTelemetryServiceTail(t *testing.T) {
 			Severity:  telemetry.SeverityInfo,
 			Timestamp: 1000000000,
 		}},
+		OutputDeltas: []telemetry.OutputDelta{{
+			Fleet:     fleet.Ref,
+			Machine:   machine.Ref,
+			Source:    callerEntity,
+			SessionID: "tail-test-session",
+			Sequence:  0,
+			Stream:    telemetry.OutputStreamCombined,
+			Timestamp: 1000000000,
+			Data:      []byte("tail test output\n"),
+		}},
 	}
 
 	if err := ingestEncoder.Encode(batch); err != nil {
@@ -232,6 +244,17 @@ func TestTelemetryServiceTail(t *testing.T) {
 		t.Fatalf("expected log body %q, got %q",
 			"tail test log", receivedBatch.Logs[0].Body)
 	}
+	if length := len(receivedBatch.OutputDeltas); length != 1 {
+		t.Fatalf("expected 1 output delta in tail batch, got %d", length)
+	}
+	if receivedBatch.OutputDeltas[0].SessionID != "tail-test-session" {
+		t.Fatalf("expected output delta session_id %q, got %q",
+			"tail-test-session", receivedBatch.OutputDeltas[0].SessionID)
+	}
+	if string(receivedBatch.OutputDeltas[0].Data) != "tail test output\n" {
+		t.Fatalf("expected output delta data %q, got %q",
+			"tail test output\n", string(receivedBatch.OutputDeltas[0].Data))
+	}
 
 	// Verify the service's status endpoint reflects the ingested data.
 	unauthClient := service.NewServiceClientFromToken(telemetrySvc.SocketPath, nil)
@@ -247,6 +270,9 @@ func TestTelemetryServiceTail(t *testing.T) {
 	}
 	if status.LogsReceived != 1 {
 		t.Fatalf("expected 1 log received, got %d", status.LogsReceived)
+	}
+	if status.OutputDeltasReceived != 1 {
+		t.Fatalf("expected 1 output delta received, got %d", status.OutputDeltasReceived)
 	}
 }
 
@@ -336,6 +362,13 @@ func TestTelemetryRelayPipeline(t *testing.T) {
 			Value:     99,
 			Timestamp: 2000000000,
 		}},
+		OutputDeltas: []telemetry.OutputDelta{{
+			SessionID: "relay-test-session",
+			Sequence:  0,
+			Stream:    telemetry.OutputStreamStdout,
+			Timestamp: 2000000000,
+			Data:      []byte("relay pipeline output\n"),
+		}},
 	}
 	if err := relayClient.Call(t.Context(), "submit", submitRequest, nil); err != nil {
 		t.Fatalf("submit to relay: %v", err)
@@ -365,6 +398,19 @@ func TestTelemetryRelayPipeline(t *testing.T) {
 	if frame.Metrics[0].Name != "relay_test_gauge" {
 		t.Fatalf("expected metric name %q, got %q",
 			"relay_test_gauge", frame.Metrics[0].Name)
+	}
+
+	// Verify the output delta content arrived intact through the relay.
+	if length := len(frame.OutputDeltas); length != 1 {
+		t.Fatalf("expected 1 output delta on subscribe stream, got %d", length)
+	}
+	if frame.OutputDeltas[0].SessionID != "relay-test-session" {
+		t.Fatalf("expected output delta session_id %q, got %q",
+			"relay-test-session", frame.OutputDeltas[0].SessionID)
+	}
+	if string(frame.OutputDeltas[0].Data) != "relay pipeline output\n" {
+		t.Fatalf("expected output delta data %q, got %q",
+			"relay pipeline output\n", string(frame.OutputDeltas[0].Data))
 	}
 
 	// Cross-check: the mock's status should show the ingested batch.

@@ -12,9 +12,9 @@ import (
 )
 
 // TestTelemetryMock exercises the submit→query roundtrip on the
-// telemetry mock. It deploys the mock as a service, submits spans,
-// metrics, and logs, then queries them back to verify storage and
-// filtering.
+// telemetry mock. It deploys the mock as a service, submits all four
+// signal types (spans, metrics, logs, output deltas), then queries
+// them back to verify storage and filtering.
 func TestTelemetryMock(t *testing.T) {
 	t.Parallel()
 
@@ -38,9 +38,9 @@ func TestTelemetryMock(t *testing.T) {
 	if err := unauthClient.Call(t.Context(), "status", nil, &initialStatus); err != nil {
 		t.Fatalf("initial status call: %v", err)
 	}
-	if initialStatus.StoredSpans != 0 || initialStatus.StoredMetrics != 0 || initialStatus.StoredLogs != 0 {
-		t.Fatalf("expected zero initial counts, got spans=%d metrics=%d logs=%d",
-			initialStatus.StoredSpans, initialStatus.StoredMetrics, initialStatus.StoredLogs)
+	if initialStatus.StoredSpans != 0 || initialStatus.StoredMetrics != 0 || initialStatus.StoredLogs != 0 || initialStatus.StoredOutputDeltas != 0 {
+		t.Fatalf("expected zero initial counts, got spans=%d metrics=%d logs=%d output_deltas=%d",
+			initialStatus.StoredSpans, initialStatus.StoredMetrics, initialStatus.StoredLogs, initialStatus.StoredOutputDeltas)
 	}
 
 	// Mint an authenticated token for submit and query actions.
@@ -51,9 +51,9 @@ func TestTelemetryMock(t *testing.T) {
 	token := mintTestServiceToken(t, machine, callerEntity, "telemetry", nil)
 	authClient := service.NewServiceClientFromToken(mockService.SocketPath, token)
 
-	// Submit a span, a metric, and a log in one request. Identity is
-	// specified at the envelope level — the mock calls StampIdentity()
-	// after deserialization to populate per-record fields.
+	// Submit all four signal types in one request. Identity is specified
+	// at the envelope level — the mock calls StampIdentity() after
+	// deserialization to populate per-record fields.
 	submitRequest := telemetry.SubmitRequest{
 		Fleet:   fleet.Ref,
 		Machine: machine.Ref,
@@ -75,6 +75,13 @@ func TestTelemetryMock(t *testing.T) {
 			Severity:  telemetry.SeverityInfo,
 			Timestamp: 1000000000,
 		}},
+		OutputDeltas: []telemetry.OutputDelta{{
+			SessionID: "mock-test-session",
+			Sequence:  0,
+			Stream:    telemetry.OutputStreamCombined,
+			Timestamp: 1000000000,
+			Data:      []byte("mock test output\n"),
+		}},
 	}
 	if err := authClient.Call(t.Context(), "submit", submitRequest, nil); err != nil {
 		t.Fatalf("submit call: %v", err)
@@ -93,6 +100,9 @@ func TestTelemetryMock(t *testing.T) {
 	}
 	if afterSubmitStatus.StoredLogs != 1 {
 		t.Fatalf("expected 1 stored log, got %d", afterSubmitStatus.StoredLogs)
+	}
+	if afterSubmitStatus.StoredOutputDeltas != 1 {
+		t.Fatalf("expected 1 stored output delta, got %d", afterSubmitStatus.StoredOutputDeltas)
 	}
 	if afterSubmitStatus.Submits != 1 {
 		t.Fatalf("expected 1 submit, got %d", afterSubmitStatus.Submits)
@@ -173,12 +183,13 @@ func TestTelemetryMock(t *testing.T) {
 // same for test service status).
 
 type telemetryMockStatus struct {
-	UptimeSeconds float64 `cbor:"uptime_seconds"`
-	StoredSpans   int     `cbor:"stored_spans"`
-	StoredMetrics int     `cbor:"stored_metrics"`
-	StoredLogs    int     `cbor:"stored_logs"`
-	Submits       uint64  `cbor:"submits"`
-	IngestBatches uint64  `cbor:"ingest_batches"`
+	UptimeSeconds      float64 `cbor:"uptime_seconds"`
+	StoredSpans        int     `cbor:"stored_spans"`
+	StoredMetrics      int     `cbor:"stored_metrics"`
+	StoredLogs         int     `cbor:"stored_logs"`
+	StoredOutputDeltas int     `cbor:"stored_output_deltas"`
+	Submits            uint64  `cbor:"submits"`
+	IngestBatches      uint64  `cbor:"ingest_batches"`
 }
 
 type telemetryMockSpanResult struct {

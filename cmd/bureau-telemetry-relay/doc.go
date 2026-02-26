@@ -3,9 +3,9 @@
 
 // Bureau-telemetry-relay is the per-machine telemetry collection
 // agent. It runs alongside the daemon on each machine and collects
-// spans, metrics, and log records from local Bureau services (proxy,
-// launcher, pipeline executor, observation relay, etc.) via its CBOR
-// service socket.
+// spans, metrics, log records, and output deltas from local Bureau
+// services (proxy, launcher, pipeline executor, observation relay,
+// etc.) via its CBOR service socket.
 //
 // Collected records are accumulated, batched, and shipped to the
 // fleet-wide telemetry service through the standard service socket

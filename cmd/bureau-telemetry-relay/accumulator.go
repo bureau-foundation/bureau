@@ -26,6 +26,7 @@ type Accumulator struct {
 	spans          []telemetry.Span
 	metrics        []telemetry.MetricPoint
 	logs           []telemetry.LogRecord
+	outputDeltas   []telemetry.OutputDelta
 	sizeBytes      int
 	sequenceNumber uint64
 	fleet          ref.Fleet
@@ -100,6 +101,23 @@ func (a *Accumulator) AddLogs(logs []telemetry.LogRecord) (bool, error) {
 	return a.flushThreshold > 0 && a.sizeBytes >= a.flushThreshold, nil
 }
 
+// AddOutputDeltas appends output delta records to the accumulator.
+// Returns true if the accumulated size has crossed the flush threshold.
+func (a *Accumulator) AddOutputDeltas(deltas []telemetry.OutputDelta) (bool, error) {
+	if len(deltas) == 0 {
+		return false, nil
+	}
+	size, err := marshalSize(deltas)
+	if err != nil {
+		return false, fmt.Errorf("measuring output delta size: %w", err)
+	}
+	a.mu.Lock()
+	defer a.mu.Unlock()
+	a.outputDeltas = append(a.outputDeltas, deltas...)
+	a.sizeBytes += size
+	return a.flushThreshold > 0 && a.sizeBytes >= a.flushThreshold, nil
+}
+
 // Flush atomically drains the accumulated records into a
 // TelemetryBatch. Returns nil if no records have been accumulated
 // since the last flush. Each non-nil flush increments the sequence
@@ -109,7 +127,7 @@ func (a *Accumulator) Flush() *telemetry.TelemetryBatch {
 	a.mu.Lock()
 	defer a.mu.Unlock()
 
-	if len(a.spans) == 0 && len(a.metrics) == 0 && len(a.logs) == 0 {
+	if len(a.spans) == 0 && len(a.metrics) == 0 && len(a.logs) == 0 && len(a.outputDeltas) == 0 {
 		return nil
 	}
 
@@ -119,12 +137,14 @@ func (a *Accumulator) Flush() *telemetry.TelemetryBatch {
 		Spans:          a.spans,
 		Metrics:        a.metrics,
 		Logs:           a.logs,
+		OutputDeltas:   a.outputDeltas,
 		SequenceNumber: a.sequenceNumber,
 	}
 
 	a.spans = nil
 	a.metrics = nil
 	a.logs = nil
+	a.outputDeltas = nil
 	a.sizeBytes = 0
 	a.sequenceNumber++
 

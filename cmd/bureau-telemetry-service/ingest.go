@@ -136,11 +136,13 @@ func (s *TelemetryService) handleIngest(ctx context.Context, token *servicetoken
 		spanCount := uint64(len(batch.Spans))
 		metricCount := uint64(len(batch.Metrics))
 		logCount := uint64(len(batch.Logs))
+		outputDeltaCount := uint64(len(batch.OutputDeltas))
 
 		s.batchesReceived.Add(1)
 		s.spansReceived.Add(spanCount)
 		s.metricsReceived.Add(metricCount)
 		s.logsReceived.Add(logCount)
+		s.outputDeltasReceived.Add(outputDeltaCount)
 
 		s.logger.Info("batch received",
 			"machine", batch.Machine,
@@ -148,6 +150,7 @@ func (s *TelemetryService) handleIngest(ctx context.Context, token *servicetoken
 			"spans", spanCount,
 			"metrics", metricCount,
 			"logs", logCount,
+			"output_deltas", outputDeltaCount,
 		)
 
 		// Acknowledge the batch so the relay can pop it from its

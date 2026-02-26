@@ -360,6 +360,69 @@ type LogRecord struct {
 	Attributes map[string]any `json:"attributes,omitempty"`
 }
 
+// OutputStream distinguishes which output channel a delta came from.
+type OutputStream uint8
+
+const (
+	// OutputStreamCombined means stdout and stderr are interleaved
+	// in a single stream (e.g., from a PTY where both fd 1 and fd 2
+	// point to the same terminal).
+	OutputStreamCombined OutputStream = 0
+
+	// OutputStreamStdout captures only the process's standard output.
+	OutputStreamStdout OutputStream = 1
+
+	// OutputStreamStderr captures only the process's standard error.
+	OutputStreamStderr OutputStream = 2
+)
+
+// OutputDelta is a chunk of raw terminal output from a sandboxed
+// process. The log relay captures PTY output and submits it as a
+// sequence of deltas. Each delta carries enough context (Source,
+// SessionID, Sequence) to reconstruct a complete, ordered output
+// stream on the telemetry service side.
+//
+// Data is raw bytes (not necessarily valid UTF-8) because terminal
+// output includes control sequences, binary protocol frames, and
+// partial multi-byte characters at chunk boundaries.
+type OutputDelta struct {
+	// Fleet identifies the fleet this output originated in. Omitted
+	// in CBOR when zero-valued (identity dedup via submit envelope).
+	Fleet ref.Fleet `json:"fleet" cbor:"fleet,omitempty"`
+
+	// Machine identifies the machine where this output was captured.
+	// Omitted in CBOR when zero-valued.
+	Machine ref.Machine `json:"machine" cbor:"machine,omitempty"`
+
+	// Source identifies the sandboxed process that produced this
+	// output. Omitted in CBOR when zero-valued.
+	Source ref.Entity `json:"source" cbor:"source,omitempty"`
+
+	// SessionID identifies the process session (sandbox lifecycle
+	// instance). A new session starts each time the sandbox is
+	// created; the ID lets the consumer distinguish output from
+	// different incarnations of the same principal.
+	SessionID string `json:"session_id"`
+
+	// Sequence is a monotonically increasing counter per
+	// (Source, SessionID) pair. The consumer uses it to detect gaps
+	// (missed deltas during buffer overflow) and to reassemble
+	// output in order.
+	Sequence uint64 `json:"sequence"`
+
+	// Stream identifies which output channel this data came from.
+	Stream OutputStream `json:"stream"`
+
+	// Timestamp is when this chunk was captured, as Unix nanoseconds.
+	Timestamp int64 `json:"timestamp"`
+
+	// Data is the raw output bytes. Not necessarily valid UTF-8 —
+	// terminal output includes ANSI escape sequences, binary
+	// protocol frames, and partial multi-byte characters at chunk
+	// boundaries.
+	Data []byte `json:"data"`
+}
+
 // TelemetryBatch is the wire format for relay → telemetry service
 // communication. A single CBOR message containing mixed signal types
 // from one machine. The relay accumulates telemetry from local
@@ -382,6 +445,10 @@ type TelemetryBatch struct {
 
 	// Logs are log records collected since the last flush.
 	Logs []LogRecord `json:"logs,omitempty"`
+
+	// OutputDeltas are raw terminal output chunks collected since the
+	// last flush.
+	OutputDeltas []OutputDelta `json:"output_deltas,omitempty"`
 
 	// SequenceNumber is monotonically increasing per relay instance.
 	// The telemetry service uses it to detect gaps (dropped data

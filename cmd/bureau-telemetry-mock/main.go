@@ -105,10 +105,11 @@ func run() error {
 
 // telemetryMock stores telemetry data in memory for test assertions.
 type telemetryMock struct {
-	mu      sync.Mutex
-	spans   []telemetry.Span
-	metrics []telemetry.MetricPoint
-	logs    []telemetry.LogRecord
+	mu           sync.Mutex
+	spans        []telemetry.Span
+	metrics      []telemetry.MetricPoint
+	logs         []telemetry.LogRecord
+	outputDeltas []telemetry.OutputDelta
 
 	submits       atomic.Uint64
 	ingestBatches atomic.Uint64
@@ -130,9 +131,10 @@ type mockSubscriber struct {
 // subscribeFrame is the CBOR frame pushed to subscribe stream clients.
 // Contains the records from a single submit or ingest batch.
 type subscribeFrame struct {
-	Spans   []telemetry.Span        `cbor:"spans,omitempty"`
-	Metrics []telemetry.MetricPoint `cbor:"metrics,omitempty"`
-	Logs    []telemetry.LogRecord   `cbor:"logs,omitempty"`
+	Spans        []telemetry.Span        `cbor:"spans,omitempty"`
+	Metrics      []telemetry.MetricPoint `cbor:"metrics,omitempty"`
+	Logs         []telemetry.LogRecord   `cbor:"logs,omitempty"`
+	OutputDeltas []telemetry.OutputDelta `cbor:"output_deltas,omitempty"`
 }
 
 // streamAck is the acknowledgment frame for streaming connections
@@ -157,6 +159,7 @@ type statusResponse struct {
 	StoredSpans          int     `cbor:"stored_spans"`
 	StoredMetrics        int     `cbor:"stored_metrics"`
 	StoredLogs           int     `cbor:"stored_logs"`
+	StoredOutputDeltas   int     `cbor:"stored_output_deltas"`
 	Submits              uint64  `cbor:"submits"`
 	IngestBatches        uint64  `cbor:"ingest_batches"`
 }
@@ -206,14 +209,16 @@ func (m *telemetryMock) handleStatus(_ context.Context, _ []byte) (any, error) {
 	spanCount := len(m.spans)
 	metricCount := len(m.metrics)
 	logCount := len(m.logs)
+	outputDeltaCount := len(m.outputDeltas)
 	m.mu.Unlock()
 
 	return &statusResponse{
-		StoredSpans:   spanCount,
-		StoredMetrics: metricCount,
-		StoredLogs:    logCount,
-		Submits:       m.submits.Load(),
-		IngestBatches: m.ingestBatches.Load(),
+		StoredSpans:        spanCount,
+		StoredMetrics:      metricCount,
+		StoredLogs:         logCount,
+		StoredOutputDeltas: outputDeltaCount,
+		Submits:            m.submits.Load(),
+		IngestBatches:      m.ingestBatches.Load(),
 	}, nil
 }
 
@@ -223,8 +228,8 @@ func (m *telemetryMock) handleSubmit(_ context.Context, _ *servicetoken.Token, r
 		return nil, errors.New("invalid submit request")
 	}
 
-	if len(request.Spans) == 0 && len(request.Metrics) == 0 && len(request.Logs) == 0 {
-		return nil, errors.New("submit request must contain at least one span, metric, or log record")
+	if len(request.Spans) == 0 && len(request.Metrics) == 0 && len(request.Logs) == 0 && len(request.OutputDeltas) == 0 {
+		return nil, errors.New("submit request must contain at least one span, metric, log, or output delta record")
 	}
 
 	request.StampIdentity()
@@ -233,14 +238,16 @@ func (m *telemetryMock) handleSubmit(_ context.Context, _ *servicetoken.Token, r
 	m.spans = append(m.spans, request.Spans...)
 	m.metrics = append(m.metrics, request.Metrics...)
 	m.logs = append(m.logs, request.Logs...)
+	m.outputDeltas = append(m.outputDeltas, request.OutputDeltas...)
 	m.mu.Unlock()
 
 	m.submits.Add(1)
 
 	m.notifySubscribers(subscribeFrame{
-		Spans:   request.Spans,
-		Metrics: request.Metrics,
-		Logs:    request.Logs,
+		Spans:        request.Spans,
+		Metrics:      request.Metrics,
+		Logs:         request.Logs,
+		OutputDeltas: request.OutputDeltas,
 	})
 
 	return nil, nil
@@ -399,6 +406,7 @@ func (m *telemetryMock) handleIngest(ctx context.Context, token *servicetoken.To
 		m.spans = append(m.spans, batch.Spans...)
 		m.metrics = append(m.metrics, batch.Metrics...)
 		m.logs = append(m.logs, batch.Logs...)
+		m.outputDeltas = append(m.outputDeltas, batch.OutputDeltas...)
 		m.mu.Unlock()
 
 		m.ingestBatches.Add(1)
@@ -408,9 +416,10 @@ func (m *telemetryMock) handleIngest(ctx context.Context, token *servicetoken.To
 		}
 
 		m.notifySubscribers(subscribeFrame{
-			Spans:   batch.Spans,
-			Metrics: batch.Metrics,
-			Logs:    batch.Logs,
+			Spans:        batch.Spans,
+			Metrics:      batch.Metrics,
+			Logs:         batch.Logs,
+			OutputDeltas: batch.OutputDeltas,
 		})
 	}
 }

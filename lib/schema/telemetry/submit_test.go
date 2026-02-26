@@ -28,6 +28,9 @@ func TestSubmitRequestStampIdentity(t *testing.T) {
 		Logs: []LogRecord{
 			{Severity: SeverityInfo, Body: "test log"},
 		},
+		OutputDeltas: []OutputDelta{
+			{SessionID: "session-1", Sequence: 0, Data: []byte("output")},
+		},
 	}
 
 	request.StampIdentity()
@@ -65,6 +68,17 @@ func TestSubmitRequestStampIdentity(t *testing.T) {
 	}
 	if request.Logs[0].Source.IsZero() {
 		t.Error("Logs[0].Source is zero after StampIdentity")
+	}
+
+	// Verify output deltas got identity stamped.
+	if request.OutputDeltas[0].Fleet.IsZero() {
+		t.Error("OutputDeltas[0].Fleet is zero after StampIdentity")
+	}
+	if request.OutputDeltas[0].Machine.IsZero() {
+		t.Error("OutputDeltas[0].Machine is zero after StampIdentity")
+	}
+	if request.OutputDeltas[0].Source.IsZero() {
+		t.Error("OutputDeltas[0].Source is zero after StampIdentity")
 	}
 }
 
@@ -180,5 +194,8 @@ func TestSubmitRequestEmptySlicesOmitted(t *testing.T) {
 	}
 	if _, present := raw["logs"]; present {
 		t.Error("logs should be omitted when nil")
+	}
+	if _, present := raw["output_deltas"]; present {
+		t.Error("output_deltas should be omitted when nil")
 	}
 }

@@ -343,9 +343,9 @@ func readTailControls(conn net.Conn, controls chan<- tailControl) error {
 }
 
 // extractSourceLocalparts collects the unique Source localparts from
-// all records in a telemetry batch (spans, metrics, and log records).
-// Returns nil if the batch contains no records with non-empty Source
-// localparts.
+// all records in a telemetry batch (spans, metrics, log records, and
+// output deltas). Returns nil if the batch contains no records with
+// non-empty Source localparts.
 func extractSourceLocalparts(batch *telemetry.TelemetryBatch) []string {
 	// Pre-size for the common case: most batches have records from
 	// 1-3 distinct sources.
@@ -365,6 +365,12 @@ func extractSourceLocalparts(batch *telemetry.TelemetryBatch) []string {
 	}
 	for i := range batch.Logs {
 		localpart := batch.Logs[i].Source.Localpart()
+		if localpart != "" {
+			seen[localpart] = struct{}{}
+		}
+	}
+	for i := range batch.OutputDeltas {
+		localpart := batch.OutputDeltas[i].Source.Localpart()
 		if localpart != "" {
 			seen[localpart] = struct{}{}
 		}

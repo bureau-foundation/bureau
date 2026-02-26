@@ -173,6 +173,78 @@ func TestAccumulatorAddMetricsAndLogs(t *testing.T) {
 	}
 }
 
+func TestAccumulatorAddOutputDeltasAndFlush(t *testing.T) {
+	fleet := testFleet(t)
+	machine := testMachine(t)
+	accumulator := NewAccumulator(fleet, machine, 0)
+
+	deltas := []telemetry.OutputDelta{
+		{
+			Fleet:     fleet,
+			Machine:   machine,
+			Source:    testEntity(t),
+			SessionID: "session-abc",
+			Sequence:  0,
+			Stream:    telemetry.OutputStreamCombined,
+			Timestamp: 1000,
+			Data:      []byte("hello world\n"),
+		},
+		{
+			Fleet:     fleet,
+			Machine:   machine,
+			Source:    testEntity(t),
+			SessionID: "session-abc",
+			Sequence:  1,
+			Stream:    telemetry.OutputStreamCombined,
+			Timestamp: 2000,
+			Data:      []byte("second line\n"),
+		},
+	}
+
+	crossed, err := accumulator.AddOutputDeltas(deltas)
+	if err != nil {
+		t.Fatalf("AddOutputDeltas: %v", err)
+	}
+	if crossed {
+		t.Fatal("threshold should not be crossed with threshold=0")
+	}
+
+	batch := accumulator.Flush()
+	if batch == nil {
+		t.Fatal("expected non-nil batch")
+	}
+
+	if len(batch.OutputDeltas) != 2 {
+		t.Fatalf("expected 2 output deltas, got %d", len(batch.OutputDeltas))
+	}
+	if batch.OutputDeltas[0].SessionID != "session-abc" {
+		t.Fatalf("expected session_id %q, got %q", "session-abc", batch.OutputDeltas[0].SessionID)
+	}
+	if string(batch.OutputDeltas[0].Data) != "hello world\n" {
+		t.Fatalf("expected data %q, got %q", "hello world\n", string(batch.OutputDeltas[0].Data))
+	}
+	if batch.OutputDeltas[1].Sequence != 1 {
+		t.Fatalf("expected sequence 1, got %d", batch.OutputDeltas[1].Sequence)
+	}
+	if batch.Fleet != fleet {
+		t.Fatal("batch fleet does not match")
+	}
+	if batch.Machine != machine {
+		t.Fatal("batch machine does not match")
+	}
+	if batch.SequenceNumber != 0 {
+		t.Fatalf("expected sequence number 0, got %d", batch.SequenceNumber)
+	}
+
+	// After flush, accumulator is empty.
+	if accumulator.SizeBytes() != 0 {
+		t.Fatalf("expected 0 size after flush, got %d", accumulator.SizeBytes())
+	}
+	if accumulator.Flush() != nil {
+		t.Fatal("expected nil batch after double flush")
+	}
+}
+
 func TestAccumulatorSizeTracking(t *testing.T) {
 	fleet := testFleet(t)
 	machine := testMachine(t)
@@ -285,6 +357,14 @@ func TestAccumulatorAddEmptySlices(t *testing.T) {
 		t.Fatal("empty add should not cross threshold")
 	}
 
+	crossed, err = accumulator.AddOutputDeltas(nil)
+	if err != nil {
+		t.Fatalf("AddOutputDeltas(nil): %v", err)
+	}
+	if crossed {
+		t.Fatal("empty add should not cross threshold")
+	}
+
 	if accumulator.SizeBytes() != 0 {
 		t.Fatalf("expected 0 size after empty adds, got %d", accumulator.SizeBytes())
 	}
@@ -354,6 +434,13 @@ func TestAccumulatorMixedRecordTypes(t *testing.T) {
 		t.Fatalf("AddLogs: %v", err)
 	}
 
+	if _, err := accumulator.AddOutputDeltas([]telemetry.OutputDelta{
+		{Fleet: fleet, Machine: machine, Source: entity, SessionID: "s1", Sequence: 0, Data: []byte("d1")},
+		{Fleet: fleet, Machine: machine, Source: entity, SessionID: "s1", Sequence: 1, Data: []byte("d2")},
+	}); err != nil {
+		t.Fatalf("AddOutputDeltas: %v", err)
+	}
+
 	batch := accumulator.Flush()
 	if batch == nil {
 		t.Fatal("expected non-nil batch")
@@ -366,6 +453,9 @@ func TestAccumulatorMixedRecordTypes(t *testing.T) {
 	}
 	if len(batch.Logs) != 3 {
 		t.Fatalf("expected 3 logs, got %d", len(batch.Logs))
+	}
+	if len(batch.OutputDeltas) != 2 {
+		t.Fatalf("expected 2 output deltas, got %d", len(batch.OutputDeltas))
 	}
 }
 

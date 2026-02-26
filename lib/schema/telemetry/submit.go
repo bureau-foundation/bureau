@@ -33,6 +33,9 @@ type SubmitRequest struct {
 
 	// Logs are log records to submit.
 	Logs []LogRecord `cbor:"logs,omitempty"`
+
+	// OutputDeltas are raw terminal output chunks to submit.
+	OutputDeltas []OutputDelta `cbor:"output_deltas,omitempty"`
 }
 
 // StampIdentity populates Fleet, Machine, and Source on every record
@@ -54,5 +57,10 @@ func (r *SubmitRequest) StampIdentity() {
 		r.Logs[i].Fleet = r.Fleet
 		r.Logs[i].Machine = r.Machine
 		r.Logs[i].Source = r.Source
+	}
+	for i := range r.OutputDeltas {
+		r.OutputDeltas[i].Fleet = r.Fleet
+		r.OutputDeltas[i].Machine = r.Machine
+		r.OutputDeltas[i].Source = r.Source
 	}
 }

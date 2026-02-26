@@ -56,8 +56,8 @@ func (r *Relay) handleSubmit(_ context.Context, _ *servicetoken.Token, raw []byt
 		return nil, errors.New("submit request must include fleet, machine, and source identity")
 	}
 
-	if len(request.Spans) == 0 && len(request.Metrics) == 0 && len(request.Logs) == 0 {
-		return nil, errors.New("submit request must contain at least one span, metric, or log record")
+	if len(request.Spans) == 0 && len(request.Metrics) == 0 && len(request.Logs) == 0 && len(request.OutputDeltas) == 0 {
+		return nil, errors.New("submit request must contain at least one span, metric, log, or output delta record")
 	}
 
 	request.StampIdentity()
@@ -86,6 +86,16 @@ func (r *Relay) handleSubmit(_ context.Context, _ *servicetoken.Token, raw []byt
 
 	if len(request.Logs) > 0 {
 		crossed, err := r.accumulator.AddLogs(request.Logs)
+		if err != nil {
+			return nil, err
+		}
+		if crossed {
+			shouldFlush = true
+		}
+	}
+
+	if len(request.OutputDeltas) > 0 {
+		crossed, err := r.accumulator.AddOutputDeltas(request.OutputDeltas)
 		if err != nil {
 			return nil, err
 		}

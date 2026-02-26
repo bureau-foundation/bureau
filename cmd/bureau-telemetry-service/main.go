@@ -96,10 +96,11 @@ type TelemetryService struct {
 	startedAt  time.Time
 
 	// Ingestion counters, updated atomically by ingest stream handlers.
-	batchesReceived atomic.Uint64
-	spansReceived   atomic.Uint64
-	metricsReceived atomic.Uint64
-	logsReceived    atomic.Uint64
+	batchesReceived      atomic.Uint64
+	spansReceived        atomic.Uint64
+	metricsReceived      atomic.Uint64
+	logsReceived         atomic.Uint64
+	outputDeltasReceived atomic.Uint64
 
 	// relayMu protects connectedRelays. Read by the status handler,
 	// written by ingest stream handlers on connect/disconnect.
@@ -117,12 +118,13 @@ type TelemetryService struct {
 // action. Contains only aggregate operational metrics — no fleet, machine,
 // or source identifiers that could disclose topology.
 type statusResponse struct {
-	BatchesReceived uint64  `cbor:"batches_received"`
-	SpansReceived   uint64  `cbor:"spans_received"`
-	MetricsReceived uint64  `cbor:"metrics_received"`
-	LogsReceived    uint64  `cbor:"logs_received"`
-	ConnectedRelays int     `cbor:"connected_relays"`
-	UptimeSeconds   float64 `cbor:"uptime_seconds"`
+	BatchesReceived      uint64  `cbor:"batches_received"`
+	SpansReceived        uint64  `cbor:"spans_received"`
+	MetricsReceived      uint64  `cbor:"metrics_received"`
+	LogsReceived         uint64  `cbor:"logs_received"`
+	OutputDeltasReceived uint64  `cbor:"output_deltas_received"`
+	ConnectedRelays      int     `cbor:"connected_relays"`
+	UptimeSeconds        float64 `cbor:"uptime_seconds"`
 }
 
 // registerActions registers the service's socket actions on the server.
@@ -148,11 +150,12 @@ func (s *TelemetryService) handleStatus(_ context.Context, _ []byte) (any, error
 	s.relayMu.Unlock()
 
 	return statusResponse{
-		BatchesReceived: s.batchesReceived.Load(),
-		SpansReceived:   s.spansReceived.Load(),
-		MetricsReceived: s.metricsReceived.Load(),
-		LogsReceived:    s.logsReceived.Load(),
-		ConnectedRelays: relays,
-		UptimeSeconds:   s.clock.Now().Sub(s.startedAt).Seconds(),
+		BatchesReceived:      s.batchesReceived.Load(),
+		SpansReceived:        s.spansReceived.Load(),
+		MetricsReceived:      s.metricsReceived.Load(),
+		LogsReceived:         s.logsReceived.Load(),
+		OutputDeltasReceived: s.outputDeltasReceived.Load(),
+		ConnectedRelays:      relays,
+		UptimeSeconds:        s.clock.Now().Sub(s.startedAt).Seconds(),
 	}, nil
 }

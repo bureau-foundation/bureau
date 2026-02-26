@@ -475,6 +475,90 @@ func TestLogRecordUncorrelated(t *testing.T) {
 	assertField(t, raw, "span_id", "0000000000000000")
 }
 
+// --- OutputDelta ---
+
+func TestOutputDeltaJSONRoundTrip(t *testing.T) {
+	fleet := testFleet(t)
+	machine := testMachine(t)
+	source := testEntity(t)
+
+	original := OutputDelta{
+		Fleet:     fleet,
+		Machine:   machine,
+		Source:    source,
+		SessionID: "session-abc-123",
+		Sequence:  42,
+		Stream:    OutputStreamStdout,
+		Timestamp: 1708523456000000000,
+		Data:      []byte("hello world\n"),
+	}
+
+	data, err := json.Marshal(original)
+	if err != nil {
+		t.Fatalf("Marshal: %v", err)
+	}
+
+	var raw map[string]any
+	if err := json.Unmarshal(data, &raw); err != nil {
+		t.Fatalf("Unmarshal to map: %v", err)
+	}
+
+	assertField(t, raw, "session_id", "session-abc-123")
+	assertField(t, raw, "sequence", float64(42))
+	assertField(t, raw, "stream", float64(OutputStreamStdout))
+	assertField(t, raw, "timestamp", float64(1708523456000000000))
+
+	// Verify ref types are present.
+	if _, ok := raw["fleet"]; !ok {
+		t.Error("fleet field missing")
+	}
+	if _, ok := raw["machine"]; !ok {
+		t.Error("machine field missing")
+	}
+	if _, ok := raw["source"]; !ok {
+		t.Error("source field missing")
+	}
+
+	// Data is base64-encoded in JSON ([]byte default encoding).
+	if _, ok := raw["data"]; !ok {
+		t.Error("data field missing")
+	}
+
+	// Full struct round-trip.
+	var decoded OutputDelta
+	if err := json.Unmarshal(data, &decoded); err != nil {
+		t.Fatalf("Unmarshal to OutputDelta: %v", err)
+	}
+	if decoded.SessionID != original.SessionID {
+		t.Errorf("SessionID = %q, want %q", decoded.SessionID, original.SessionID)
+	}
+	if decoded.Sequence != original.Sequence {
+		t.Errorf("Sequence = %d, want %d", decoded.Sequence, original.Sequence)
+	}
+	if decoded.Stream != original.Stream {
+		t.Errorf("Stream = %d, want %d", decoded.Stream, original.Stream)
+	}
+	if decoded.Timestamp != original.Timestamp {
+		t.Errorf("Timestamp = %d, want %d", decoded.Timestamp, original.Timestamp)
+	}
+	if string(decoded.Data) != string(original.Data) {
+		t.Errorf("Data = %q, want %q", decoded.Data, original.Data)
+	}
+}
+
+func TestOutputDeltaStreamConstants(t *testing.T) {
+	// Verify stream constant values are stable (wire format).
+	if OutputStreamCombined != 0 {
+		t.Errorf("OutputStreamCombined = %d, want 0", OutputStreamCombined)
+	}
+	if OutputStreamStdout != 1 {
+		t.Errorf("OutputStreamStdout = %d, want 1", OutputStreamStdout)
+	}
+	if OutputStreamStderr != 2 {
+		t.Errorf("OutputStreamStderr = %d, want 2", OutputStreamStderr)
+	}
+}
+
 // --- TelemetryBatch ---
 
 func TestTelemetryBatchJSONRoundTrip(t *testing.T) {
@@ -603,6 +687,9 @@ func TestTelemetryBatchEmptySignals(t *testing.T) {
 	}
 	if _, ok := raw["logs"]; ok {
 		t.Error("logs should be omitted when nil")
+	}
+	if _, ok := raw["output_deltas"]; ok {
+		t.Error("output_deltas should be omitted when nil")
 	}
 }
 
@@ -809,6 +896,73 @@ func TestSpanCBORZeroIdentityRoundTrip(t *testing.T) {
 	}
 }
 
+func TestOutputDeltaCBORZeroIdentityOmitted(t *testing.T) {
+	delta := OutputDelta{
+		SessionID: "session-xyz",
+		Sequence:  7,
+		Stream:    OutputStreamCombined,
+		Timestamp: 1000000000,
+		Data:      []byte("output"),
+	}
+
+	data, err := codec.Marshal(delta)
+	if err != nil {
+		t.Fatalf("CBOR Marshal: %v", err)
+	}
+
+	var raw map[string]any
+	if err := codec.Unmarshal(data, &raw); err != nil {
+		t.Fatalf("CBOR Unmarshal to map: %v", err)
+	}
+
+	// Identity fields should be omitted when zero.
+	for _, key := range []string{"fleet", "machine", "source"} {
+		if _, present := raw[key]; present {
+			t.Errorf("field %q should be omitted for zero identity, but is present", key)
+		}
+	}
+
+	// Non-identity fields must be present.
+	for _, key := range []string{"session_id", "sequence", "stream", "timestamp", "data"} {
+		if _, present := raw[key]; !present {
+			t.Errorf("field %q should be present, but is missing", key)
+		}
+	}
+}
+
+func TestOutputDeltaCBORNonZeroIdentityPresent(t *testing.T) {
+	fleet := testFleet(t)
+	machine := testMachine(t)
+	source := testEntity(t)
+
+	delta := OutputDelta{
+		Fleet:     fleet,
+		Machine:   machine,
+		Source:    source,
+		SessionID: "session-xyz",
+		Sequence:  7,
+		Stream:    OutputStreamStdout,
+		Timestamp: 1000000000,
+		Data:      []byte("output"),
+	}
+
+	data, err := codec.Marshal(delta)
+	if err != nil {
+		t.Fatalf("CBOR Marshal: %v", err)
+	}
+
+	var raw map[string]any
+	if err := codec.Unmarshal(data, &raw); err != nil {
+		t.Fatalf("CBOR Unmarshal to map: %v", err)
+	}
+
+	for _, key := range []string{"fleet", "machine", "source"} {
+		if _, present := raw[key]; !present {
+			t.Errorf("field %q should be present for non-zero identity, but is missing", key)
+		}
+	}
+}
+
 // --- CBOR round-trips ---
 
 func TestSpanCBORRoundTrip(t *testing.T) {
@@ -885,6 +1039,58 @@ func TestSpanCBORRoundTrip(t *testing.T) {
 	}
 }
 
+func TestOutputDeltaCBORRoundTrip(t *testing.T) {
+	fleet := testFleet(t)
+	machine := testMachine(t)
+	source := testEntity(t)
+
+	original := OutputDelta{
+		Fleet:     fleet,
+		Machine:   machine,
+		Source:    source,
+		SessionID: "session-abc-123",
+		Sequence:  99,
+		Stream:    OutputStreamStderr,
+		Timestamp: 1708523456000000000,
+		Data:      []byte("\x1b[31merror: something failed\x1b[0m\n"),
+	}
+
+	data, err := codec.Marshal(original)
+	if err != nil {
+		t.Fatalf("CBOR Marshal: %v", err)
+	}
+
+	var decoded OutputDelta
+	if err := codec.Unmarshal(data, &decoded); err != nil {
+		t.Fatalf("CBOR Unmarshal: %v", err)
+	}
+
+	if decoded.Fleet.IsZero() {
+		t.Error("Fleet is zero after CBOR round-trip")
+	}
+	if decoded.Machine.IsZero() {
+		t.Error("Machine is zero after CBOR round-trip")
+	}
+	if decoded.Source.IsZero() {
+		t.Error("Source is zero after CBOR round-trip")
+	}
+	if decoded.SessionID != original.SessionID {
+		t.Errorf("SessionID: got %q, want %q", decoded.SessionID, original.SessionID)
+	}
+	if decoded.Sequence != original.Sequence {
+		t.Errorf("Sequence: got %d, want %d", decoded.Sequence, original.Sequence)
+	}
+	if decoded.Stream != original.Stream {
+		t.Errorf("Stream: got %d, want %d", decoded.Stream, original.Stream)
+	}
+	if decoded.Timestamp != original.Timestamp {
+		t.Errorf("Timestamp: got %d, want %d", decoded.Timestamp, original.Timestamp)
+	}
+	if string(decoded.Data) != string(original.Data) {
+		t.Errorf("Data: got %q, want %q", decoded.Data, original.Data)
+	}
+}
+
 func TestTelemetryBatchCBORRoundTrip(t *testing.T) {
 	fleet := testFleet(t)
 	machine := testMachine(t)
@@ -952,6 +1158,87 @@ func TestTelemetryBatchCBORRoundTrip(t *testing.T) {
 	}
 	if decoded.Fleet.IsZero() {
 		t.Error("Batch Fleet is zero after CBOR round-trip")
+	}
+}
+
+func TestTelemetryBatchWithOutputDeltasJSONRoundTrip(t *testing.T) {
+	fleet := testFleet(t)
+	machine := testMachine(t)
+	source := testEntity(t)
+
+	original := TelemetryBatch{
+		Machine: machine,
+		Fleet:   fleet,
+		OutputDeltas: []OutputDelta{
+			{
+				Fleet:     fleet,
+				Machine:   machine,
+				Source:    source,
+				SessionID: "session-1",
+				Sequence:  0,
+				Stream:    OutputStreamCombined,
+				Timestamp: 1708523456000000000,
+				Data:      []byte("hello\n"),
+			},
+			{
+				Fleet:     fleet,
+				Machine:   machine,
+				Source:    source,
+				SessionID: "session-1",
+				Sequence:  1,
+				Stream:    OutputStreamCombined,
+				Timestamp: 1708523456001000000,
+				Data:      []byte("world\n"),
+			},
+		},
+		SequenceNumber: 3,
+	}
+
+	data, err := json.Marshal(original)
+	if err != nil {
+		t.Fatalf("Marshal: %v", err)
+	}
+
+	var raw map[string]any
+	if err := json.Unmarshal(data, &raw); err != nil {
+		t.Fatalf("Unmarshal to map: %v", err)
+	}
+
+	// Spans, metrics, logs should be omitted when nil.
+	if _, ok := raw["spans"]; ok {
+		t.Error("spans should be omitted when nil")
+	}
+	if _, ok := raw["metrics"]; ok {
+		t.Error("metrics should be omitted when nil")
+	}
+	if _, ok := raw["logs"]; ok {
+		t.Error("logs should be omitted when nil")
+	}
+
+	deltas, ok := raw["output_deltas"].([]any)
+	if !ok {
+		t.Fatal("output_deltas field missing or wrong type")
+	}
+	if len(deltas) != 2 {
+		t.Fatalf("output_deltas length = %d, want 2", len(deltas))
+	}
+
+	// Full struct round-trip.
+	var decoded TelemetryBatch
+	if err := json.Unmarshal(data, &decoded); err != nil {
+		t.Fatalf("Unmarshal to TelemetryBatch: %v", err)
+	}
+	if decoded.SequenceNumber != 3 {
+		t.Errorf("SequenceNumber = %d, want 3", decoded.SequenceNumber)
+	}
+	if len(decoded.OutputDeltas) != 2 {
+		t.Fatalf("OutputDeltas length = %d, want 2", len(decoded.OutputDeltas))
+	}
+	if decoded.OutputDeltas[0].SessionID != "session-1" {
+		t.Errorf("OutputDeltas[0].SessionID = %q, want %q", decoded.OutputDeltas[0].SessionID, "session-1")
+	}
+	if decoded.OutputDeltas[1].Sequence != 1 {
+		t.Errorf("OutputDeltas[1].Sequence = %d, want 1", decoded.OutputDeltas[1].Sequence)
 	}
 }
 

@@ -9,9 +9,13 @@
 // Other services get the mock's socket via standard m.bureau.service_binding
 // resolution — zero code changes in the service under test.
 //
-// The binary exposes five actions:
+// The binary exposes seven actions:
 //   - status (unauthenticated): relay-compatible operational stats plus stored counts
 //   - submit (authenticated): accepts spans, metrics, logs — matches relay wire format
+//   - ingest (authenticated, streaming): accepts the relay-to-service streaming
+//     TelemetryBatch protocol, storing records and forwarding to subscribers
+//   - subscribe (authenticated, streaming): pushes records to the client as
+//     they arrive via submit or ingest — the event-driven wait mechanism for tests
 //   - query-spans (authenticated): filter stored spans by source, operation, or trace ID
 //   - query-metrics (authenticated): filter stored metrics by source or name
 //   - query-logs (authenticated): filter stored logs by source, severity, body substring, or trace ID
@@ -21,6 +25,8 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"io"
+	"net"
 	"os"
 	"os/signal"
 	"strings"
@@ -65,6 +71,8 @@ func run() error {
 	socketServer.HandleAuth("query-spans", mock.handleQuerySpans)
 	socketServer.HandleAuth("query-metrics", mock.handleQueryMetrics)
 	socketServer.HandleAuth("query-logs", mock.handleQueryLogs)
+	socketServer.HandleAuthStream("ingest", mock.handleIngest)
+	socketServer.HandleAuthStream("subscribe", mock.handleSubscribe)
 
 	socketDone := make(chan error, 1)
 	go func() {
@@ -93,7 +101,36 @@ type telemetryMock struct {
 	metrics []telemetry.MetricPoint
 	logs    []telemetry.LogRecord
 
-	submits atomic.Uint64
+	submits       atomic.Uint64
+	ingestBatches atomic.Uint64
+
+	// subscriberMu protects subscribers. The submit and ingest
+	// handlers read under RLock to fan out; the subscribe handler
+	// writes under Lock to add/remove subscribers.
+	subscriberMu sync.RWMutex
+	subscribers  []*mockSubscriber
+}
+
+// mockSubscriber represents a connected subscribe stream client.
+// Records are pushed on the events channel; the subscribe handler
+// reads from it and writes to the client connection.
+type mockSubscriber struct {
+	events chan subscribeFrame
+}
+
+// subscribeFrame is the CBOR frame pushed to subscribe stream clients.
+// Contains the records from a single submit or ingest batch.
+type subscribeFrame struct {
+	Spans   []telemetry.Span        `cbor:"spans,omitempty"`
+	Metrics []telemetry.MetricPoint `cbor:"metrics,omitempty"`
+	Logs    []telemetry.LogRecord   `cbor:"logs,omitempty"`
+}
+
+// ingestAck is the acknowledgment frame for the streaming ingest
+// protocol. Matches the real telemetry service's wire format.
+type ingestAck struct {
+	OK    bool   `cbor:"ok"`
+	Error string `cbor:"error,omitempty"`
 }
 
 // statusResponse is relay-compatible with additional stored-count
@@ -112,6 +149,7 @@ type statusResponse struct {
 	StoredMetrics        int     `cbor:"stored_metrics"`
 	StoredLogs           int     `cbor:"stored_logs"`
 	Submits              uint64  `cbor:"submits"`
+	IngestBatches        uint64  `cbor:"ingest_batches"`
 }
 
 // submitRequest matches the relay's wire format exactly. At least one
@@ -174,6 +212,7 @@ func (m *telemetryMock) handleStatus(_ context.Context, _ []byte) (any, error) {
 		StoredMetrics: metricCount,
 		StoredLogs:    logCount,
 		Submits:       m.submits.Load(),
+		IngestBatches: m.ingestBatches.Load(),
 	}, nil
 }
 
@@ -194,6 +233,12 @@ func (m *telemetryMock) handleSubmit(_ context.Context, _ *servicetoken.Token, r
 	m.mu.Unlock()
 
 	m.submits.Add(1)
+
+	m.notifySubscribers(subscribeFrame{
+		Spans:   request.Spans,
+		Metrics: request.Metrics,
+		Logs:    request.Logs,
+	})
 
 	return nil, nil
 }
@@ -290,4 +335,142 @@ func (m *telemetryMock) handleQueryLogs(_ context.Context, _ *servicetoken.Token
 		Logs:  matched,
 		Count: len(matched),
 	}, nil
+}
+
+// notifySubscribers pushes a subscribeFrame to all connected subscribe
+// stream clients. Uses non-blocking sends: if a subscriber's channel
+// is full (slow reader), the frame is dropped for that subscriber.
+func (m *telemetryMock) notifySubscribers(frame subscribeFrame) {
+	m.subscriberMu.RLock()
+	defer m.subscriberMu.RUnlock()
+
+	for _, subscriber := range m.subscribers {
+		select {
+		case subscriber.events <- frame:
+		default:
+		}
+	}
+}
+
+// handleIngest is the streaming handler for the "ingest" action.
+// Accepts the same wire protocol as the real telemetry service:
+// readiness ack, then a stream of TelemetryBatch CBOR values with
+// per-batch acks. Records are stored in memory and forwarded to
+// subscribe stream clients.
+func (m *telemetryMock) handleIngest(ctx context.Context, token *servicetoken.Token, _ []byte, conn net.Conn) {
+	encoder := codec.NewEncoder(conn)
+
+	// Send readiness ack.
+	if err := encoder.Encode(ingestAck{OK: true}); err != nil {
+		return
+	}
+
+	// Close the connection on context cancellation to unblock reads.
+	handlerDone := make(chan struct{})
+	defer close(handlerDone)
+
+	go func() {
+		select {
+		case <-ctx.Done():
+			conn.Close()
+		case <-handlerDone:
+		}
+	}()
+
+	decoder := codec.NewDecoder(conn)
+
+	for {
+		var batch telemetry.TelemetryBatch
+		if err := decoder.Decode(&batch); err != nil {
+			if ctx.Err() != nil || errors.Is(err, io.EOF) || errors.Is(err, net.ErrClosed) {
+				return
+			}
+			if opError := (*net.OpError)(nil); errors.As(err, &opError) && opError.Err.Error() == "use of closed network connection" {
+				return
+			}
+			encoder.Encode(ingestAck{Error: "decode error"})
+			return
+		}
+
+		m.mu.Lock()
+		m.spans = append(m.spans, batch.Spans...)
+		m.metrics = append(m.metrics, batch.Metrics...)
+		m.logs = append(m.logs, batch.Logs...)
+		m.mu.Unlock()
+
+		m.ingestBatches.Add(1)
+
+		if err := encoder.Encode(ingestAck{OK: true}); err != nil {
+			return
+		}
+
+		m.notifySubscribers(subscribeFrame{
+			Spans:   batch.Spans,
+			Metrics: batch.Metrics,
+			Logs:    batch.Logs,
+		})
+	}
+}
+
+// handleSubscribe is the streaming handler for the "subscribe" action.
+// After authentication, the client receives a readiness ack and then
+// subscribeFrame CBOR values whenever new telemetry data is stored
+// (via submit or ingest). The stream stays open until the client
+// disconnects or the context is cancelled. This is the event-driven
+// wait mechanism for integration tests.
+func (m *telemetryMock) handleSubscribe(ctx context.Context, token *servicetoken.Token, _ []byte, conn net.Conn) {
+	encoder := codec.NewEncoder(conn)
+
+	// Register the subscriber BEFORE sending the readiness ack.
+	// This guarantees no events are missed between the client
+	// receiving the ack and starting to read: by the time the
+	// client sees the ack, the subscriber channel is already
+	// receiving events from any concurrent submit/ingest handlers.
+	subscriber := &mockSubscriber{
+		events: make(chan subscribeFrame, 64),
+	}
+
+	m.subscriberMu.Lock()
+	m.subscribers = append(m.subscribers, subscriber)
+	m.subscriberMu.Unlock()
+
+	defer func() {
+		m.subscriberMu.Lock()
+		for i, existing := range m.subscribers {
+			if existing == subscriber {
+				m.subscribers = append(m.subscribers[:i], m.subscribers[i+1:]...)
+				break
+			}
+		}
+		m.subscriberMu.Unlock()
+	}()
+
+	// Send readiness ack after registration.
+	if err := encoder.Encode(ingestAck{OK: true}); err != nil {
+		return
+	}
+
+	// Close the connection on context cancellation to unblock the
+	// client's read (if it's doing bidirectional communication).
+	handlerDone := make(chan struct{})
+	defer close(handlerDone)
+
+	go func() {
+		select {
+		case <-ctx.Done():
+			conn.Close()
+		case <-handlerDone:
+		}
+	}()
+
+	for {
+		select {
+		case frame := <-subscriber.events:
+			if err := encoder.Encode(frame); err != nil {
+				return
+			}
+		case <-ctx.Done():
+			return
+		}
+	}
 }

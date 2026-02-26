@@ -100,8 +100,10 @@ func (s *TelemetryService) handleIngest(ctx context.Context, token *servicetoken
 	decoder := codec.NewDecoder(conn)
 
 	for {
-		var batch telemetry.TelemetryBatch
-		if err := decoder.Decode(&batch); err != nil {
+		// Decode as RawMessage first to capture the raw CBOR bytes
+		// for fan-out to tail subscribers without re-encoding.
+		var rawBatch codec.RawMessage
+		if err := decoder.Decode(&rawBatch); err != nil {
 			if ctx.Err() != nil || errors.Is(err, io.EOF) || errors.Is(err, net.ErrClosed) {
 				return
 			}
@@ -115,6 +117,18 @@ func (s *TelemetryService) handleIngest(ctx context.Context, token *servicetoken
 				"error", err,
 			)
 			encoder.Encode(ingestAck{Error: "decode error"})
+			return
+		}
+
+		// Unmarshal the raw bytes into the typed struct for counter
+		// updates and logging.
+		var batch telemetry.TelemetryBatch
+		if err := codec.Unmarshal(rawBatch, &batch); err != nil {
+			s.logger.Warn("ingest: unmarshal failed, closing stream",
+				"subject", relaySubject,
+				"error", err,
+			)
+			encoder.Encode(ingestAck{Error: "unmarshal error"})
 			return
 		}
 
@@ -144,6 +158,17 @@ func (s *TelemetryService) handleIngest(ctx context.Context, token *servicetoken
 				"error", err,
 			)
 			return
+		}
+
+		// Fan out to tail subscribers. Only build the tailEvent
+		// when there are active subscribers to avoid unnecessary
+		// source localpart extraction.
+		if s.hasSubscribers() {
+			s.fanOutToSubscribers(tailEvent{
+				machineLocalpart: batch.Machine.Localpart(),
+				sourceLocalparts: extractSourceLocalparts(&batch),
+				rawBatch:         rawBatch,
+			})
 		}
 	}
 }

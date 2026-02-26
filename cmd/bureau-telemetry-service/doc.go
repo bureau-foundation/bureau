@@ -16,7 +16,8 @@
 // The service runs inside a daemon-managed sandbox with a proxy that
 // injects Matrix credentials. It resolves the fleet service room for
 // discovery, registers itself, and starts the Unix socket server with
-// the "ingest" stream handler and the "status" query handler.
+// the "ingest" stream handler, the "tail" stream handler, and the
+// "status" query handler.
 //
 // # Ingestion Protocol
 //
@@ -24,8 +25,20 @@
 // After the initial CBOR handshake (action + service token), the
 // service sends a readiness ack. The relay then streams TelemetryBatch
 // CBOR values on the connection. The service decodes each batch,
-// updates stats, and sends a per-batch ack. The connection stays open
-// until the relay disconnects or the service shuts down.
+// updates stats, fans out to tail subscribers, and sends a per-batch
+// ack. The connection stays open until the relay disconnects or the
+// service shuts down.
+//
+// # Tail Protocol
+//
+// Clients open a streaming connection to the service's "tail" action.
+// After authentication (telemetry/tail grant required), the service
+// sends a readiness ack. The client then sends tailControl messages
+// to subscribe to sources by glob pattern (matching entity localparts
+// via [principal.MatchPattern]). The service pushes matching
+// TelemetryBatch frames as they are ingested. Heartbeat frames are
+// sent periodically to detect dead connections. The client can
+// dynamically add and remove patterns mid-stream.
 //
 // # Socket API
 //
@@ -33,6 +46,8 @@
 // CBOR requests. Currently supports:
 //
 //   - ingest (authenticated, streaming): relay batch ingestion
+//   - tail (authenticated, streaming): live telemetry subscription
+//     with dynamic glob-pattern source filtering
 //   - status (unauthenticated): ingestion stats, connected relay
 //     count, uptime
 package main

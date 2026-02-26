@@ -184,6 +184,7 @@ type telemetryMockStatus struct {
 	StoredMetrics int     `cbor:"stored_metrics"`
 	StoredLogs    int     `cbor:"stored_logs"`
 	Submits       uint64  `cbor:"submits"`
+	IngestBatches uint64  `cbor:"ingest_batches"`
 }
 
 type telemetryMockSpanResult struct {

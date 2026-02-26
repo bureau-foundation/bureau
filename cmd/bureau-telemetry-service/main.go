@@ -105,6 +105,12 @@ type TelemetryService struct {
 	// written by ingest stream handlers on connect/disconnect.
 	relayMu         sync.Mutex
 	connectedRelays int
+
+	// subscriberMu protects tailSubscribers. The ingest handler reads
+	// under RLock to fan out batches; the tail handler writes under
+	// Lock to add/remove subscribers.
+	subscriberMu    sync.RWMutex
+	tailSubscribers []*tailSubscriber
 }
 
 // statusResponse is the CBOR response for the unauthenticated "status"
@@ -126,6 +132,11 @@ func (s *TelemetryService) registerActions(server *service.SocketServer) {
 
 	// Authenticated streaming ingestion from relays.
 	server.HandleAuthStream("ingest", s.handleIngest)
+
+	// Authenticated streaming tail for live telemetry consumption.
+	// Clients subscribe to source patterns and receive matching
+	// batches as they are ingested.
+	server.HandleAuthStream("tail", s.handleTail)
 }
 
 // handleStatus returns aggregate ingestion stats. This is the only

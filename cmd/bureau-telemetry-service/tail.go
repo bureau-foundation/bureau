@@ -5,12 +5,11 @@ package main
 
 import (
 	"context"
-	"errors"
-	"io"
 	"net"
 	"time"
 
 	"github.com/bureau-foundation/bureau/lib/codec"
+	"github.com/bureau-foundation/bureau/lib/netutil"
 	"github.com/bureau-foundation/bureau/lib/principal"
 	"github.com/bureau-foundation/bureau/lib/schema/telemetry"
 	"github.com/bureau-foundation/bureau/lib/servicetoken"
@@ -331,10 +330,7 @@ func readTailControls(conn net.Conn, controls chan<- tailControl) error {
 	for {
 		var control tailControl
 		if err := decoder.Decode(&control); err != nil {
-			if errors.Is(err, io.EOF) || errors.Is(err, net.ErrClosed) {
-				return nil
-			}
-			if opError := (*net.OpError)(nil); errors.As(err, &opError) && opError.Err.Error() == "use of closed network connection" {
+			if netutil.IsExpectedCloseError(err) {
 				return nil
 			}
 			return err

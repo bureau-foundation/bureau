@@ -230,15 +230,11 @@ func (d *Daemon) acceptObserveConnections(ctx context.Context) {
 	for {
 		connection, err := d.observeListener.Accept()
 		if err != nil {
-			select {
-			case <-ctx.Done():
-				return
-			default:
-				if !strings.Contains(err.Error(), "use of closed network connection") {
-					d.logger.Error("accept observe connection", "error", err)
-				}
+			if ctx.Err() != nil || netutil.IsExpectedCloseError(err) {
 				return
 			}
+			d.logger.Error("accept observe connection", "error", err)
+			return
 		}
 		go d.handleObserveClient(connection)
 	}

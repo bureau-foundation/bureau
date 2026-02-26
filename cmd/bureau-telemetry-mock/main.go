@@ -25,7 +25,6 @@ import (
 	"context"
 	"errors"
 	"flag"
-	"io"
 	"net"
 	"os/signal"
 	"strings"
@@ -34,6 +33,7 @@ import (
 	"syscall"
 
 	"github.com/bureau-foundation/bureau/lib/codec"
+	"github.com/bureau-foundation/bureau/lib/netutil"
 	"github.com/bureau-foundation/bureau/lib/process"
 	"github.com/bureau-foundation/bureau/lib/schema/telemetry"
 	"github.com/bureau-foundation/bureau/lib/service"
@@ -390,10 +390,7 @@ func (m *telemetryMock) handleIngest(ctx context.Context, token *servicetoken.To
 	for {
 		var batch telemetry.TelemetryBatch
 		if err := decoder.Decode(&batch); err != nil {
-			if ctx.Err() != nil || errors.Is(err, io.EOF) || errors.Is(err, net.ErrClosed) {
-				return
-			}
-			if opError := (*net.OpError)(nil); errors.As(err, &opError) && opError.Err.Error() == "use of closed network connection" {
+			if ctx.Err() != nil || netutil.IsExpectedCloseError(err) {
 				return
 			}
 			encoder.Encode(telemetry.StreamAck{Error: "decode error"})

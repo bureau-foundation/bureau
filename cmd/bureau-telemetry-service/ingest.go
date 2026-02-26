@@ -5,11 +5,10 @@ package main
 
 import (
 	"context"
-	"errors"
-	"io"
 	"net"
 
 	"github.com/bureau-foundation/bureau/lib/codec"
+	"github.com/bureau-foundation/bureau/lib/netutil"
 	"github.com/bureau-foundation/bureau/lib/schema/telemetry"
 	"github.com/bureau-foundation/bureau/lib/servicetoken"
 )
@@ -98,12 +97,7 @@ func (s *TelemetryService) handleIngest(ctx context.Context, token *servicetoken
 		// batch structure and extracts fields for counters/logging.
 		var rawBatch codec.RawMessage
 		if err := decoder.Decode(&rawBatch); err != nil {
-			if ctx.Err() != nil || errors.Is(err, io.EOF) || errors.Is(err, net.ErrClosed) {
-				return
-			}
-			// Check for closed connection (the shutdown goroutine
-			// above may have closed it).
-			if opErr := (*net.OpError)(nil); errors.As(err, &opErr) && opErr.Err.Error() == "use of closed network connection" {
+			if ctx.Err() != nil || netutil.IsExpectedCloseError(err) {
 				return
 			}
 			s.logger.Warn("ingest: decode failed, closing stream",

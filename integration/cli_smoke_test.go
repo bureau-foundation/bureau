@@ -29,12 +29,7 @@ func TestCLILoginAndWhoAmI(t *testing.T) {
 	password := "test-cli-login-password"
 	registerPrincipal(t, localpart, password)
 
-	// Write password to a file for --password-file.
-	passwordDir := t.TempDir()
-	passwordFile := filepath.Join(passwordDir, "password")
-	if err := os.WriteFile(passwordFile, []byte(password), 0600); err != nil {
-		t.Fatalf("write password file: %v", err)
-	}
+	passwordFile := writePasswordFile(t, password)
 
 	// Machine.conf with only the homeserver URL — tests auto-detection
 	// for bureau login (which falls back to localhost:6167 without this).

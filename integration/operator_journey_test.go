@@ -6,7 +6,6 @@ package integration_test
 import (
 	"encoding/json"
 	"os"
-	"path/filepath"
 	"testing"
 
 	"github.com/bureau-foundation/bureau/cmd/bureau/cli/doctor"
@@ -453,15 +452,4 @@ func TestNewOperatorJourney(t *testing.T) {
 	}
 
 	t.Log("operator journey complete: doctor → machines → templates → create → list → observe → destroy → archived")
-}
-
-// writePasswordFile writes a password string to a temporary file and
-// returns the file path. Used for --password-file in bureau login.
-func writePasswordFile(t *testing.T, password string) string {
-	t.Helper()
-	passwordFile := filepath.Join(t.TempDir(), "password")
-	if err := os.WriteFile(passwordFile, []byte(password), 0600); err != nil {
-		t.Fatalf("write password file: %v", err)
-	}
-	return passwordFile
 }

@@ -58,10 +58,6 @@ type machineConfig struct {
 	Fleet         string
 }
 
-// machineConfPath returns the path to the machine configuration file.
-// Tests override this via t.Setenv("BUREAU_MACHINE_CONF", ...).
-func machineConfPath() string { return cli.MachineConfPath() }
-
 // machineConfRequiredKeys are the keys that must be present in machine.conf.
 var machineConfRequiredKeys = []string{
 	"BUREAU_HOMESERVER_URL",
@@ -269,7 +265,7 @@ func checkMachine(ctx context.Context, params machineDoctorParams, logger *slog.
 	systemUser := params.SystemUser
 	operatorsGroup := params.OperatorsGroup
 	if systemUser == "" || operatorsGroup == "" {
-		if credentials, err := cli.ReadCredentialFile(machineConfPath()); err == nil {
+		if credentials, err := cli.ReadCredentialFile(cli.MachineConfPath()); err == nil {
 			if systemUser == "" {
 				systemUser = credentials["BUREAU_SYSTEM_USER"]
 			}
@@ -513,7 +509,7 @@ func readMachineConfig(params machineDoctorParams) *machineConfig {
 		Fleet:         params.Fleet,
 	}
 
-	credentials, err := cli.ReadCredentialFile(machineConfPath())
+	credentials, err := cli.ReadCredentialFile(cli.MachineConfPath())
 	if err == nil {
 		if config.HomeserverURL == "" {
 			config.HomeserverURL = credentials["BUREAU_HOMESERVER_URL"]
@@ -540,7 +536,7 @@ func readMachineConfig(params machineDoctorParams) *machineConfig {
 
 func checkMachineConfig(params machineDoctorParams, config *machineConfig) []doctor.Result {
 	// Check machine.conf file exists.
-	_, err := os.Stat(machineConfPath())
+	_, err := os.Stat(cli.MachineConfPath())
 	if err != nil {
 		if os.IsNotExist(err) {
 			// Can we fix it? Only if all bootstrap flags are provided.
@@ -548,8 +544,8 @@ func checkMachineConfig(params machineDoctorParams, config *machineConfig) []doc
 				params.ServerName != "" && params.Fleet != "" {
 				return []doctor.Result{doctor.FailElevated(
 					"machine.conf",
-					fmt.Sprintf("%s does not exist", machineConfPath()),
-					fmt.Sprintf("write %s with bootstrap flags", machineConfPath()),
+					fmt.Sprintf("%s does not exist", cli.MachineConfPath()),
+					fmt.Sprintf("write %s with bootstrap flags", cli.MachineConfPath()),
 					func(ctx context.Context) error {
 						return writeMachineConf(params)
 					},
@@ -557,14 +553,14 @@ func checkMachineConfig(params machineDoctorParams, config *machineConfig) []doc
 			}
 			return []doctor.Result{doctor.Fail(
 				"machine.conf",
-				fmt.Sprintf("%s does not exist (use --homeserver, --machine-name, --server-name, --fleet with --fix to create)", machineConfPath()),
+				fmt.Sprintf("%s does not exist (use --homeserver, --machine-name, --server-name, --fleet with --fix to create)", cli.MachineConfPath()),
 			)}
 		}
 		return []doctor.Result{doctor.Fail("machine.conf", fmt.Sprintf("cannot stat: %v", err))}
 	}
 
 	// File exists — check it has all required keys.
-	credentials, err := cli.ReadCredentialFile(machineConfPath())
+	credentials, err := cli.ReadCredentialFile(cli.MachineConfPath())
 	if err != nil {
 		return []doctor.Result{doctor.Fail("machine.conf", fmt.Sprintf("cannot read: %v", err))}
 	}
@@ -605,7 +601,7 @@ func checkMachineConfig(params machineDoctorParams, config *machineConfig) []doc
 			return []doctor.Result{doctor.FailElevated(
 				"machine.conf",
 				message,
-				fmt.Sprintf("update %s with bootstrap flags", machineConfPath()),
+				fmt.Sprintf("update %s with bootstrap flags", cli.MachineConfPath()),
 				func(ctx context.Context) error {
 					return writeMachineConf(params)
 				},
@@ -617,7 +613,7 @@ func checkMachineConfig(params machineDoctorParams, config *machineConfig) []doc
 		)}
 	}
 
-	return []doctor.Result{doctor.Pass("machine.conf", fmt.Sprintf("%s has all required keys", machineConfPath()))}
+	return []doctor.Result{doctor.Pass("machine.conf", fmt.Sprintf("%s has all required keys", cli.MachineConfPath()))}
 }
 
 // --- Section 4: Binary installation ---
@@ -1226,12 +1222,12 @@ func writeMachineConf(params machineDoctorParams) error {
 	}
 
 	// Ensure parent directory exists.
-	parentDirectory := filepath.Dir(machineConfPath())
+	parentDirectory := filepath.Dir(cli.MachineConfPath())
 	if err := os.MkdirAll(parentDirectory, 0755); err != nil {
 		return fmt.Errorf("mkdir %s: %w", parentDirectory, err)
 	}
 
-	return atomicWriteFile(machineConfPath(), []byte(fileContent), 0644)
+	return atomicWriteFile(cli.MachineConfPath(), []byte(fileContent), 0644)
 }
 
 // callerSessionHasGroup checks whether the operator's login session

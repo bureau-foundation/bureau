@@ -14,6 +14,7 @@ import (
 
 	"github.com/bureau-foundation/bureau/lib/clock"
 	"github.com/bureau-foundation/bureau/lib/codec"
+	"github.com/bureau-foundation/bureau/lib/schema/telemetry"
 )
 
 // BatchShipper sends CBOR-encoded telemetry batches to the telemetry
@@ -25,14 +26,6 @@ type BatchShipper interface {
 	// Close shuts down the shipper, closing any persistent connection.
 	// Called after the shipper goroutine exits during graceful shutdown.
 	Close()
-}
-
-// ingestAck is the acknowledgment frame sent by the telemetry service
-// after each batch on the streaming connection. Also used for the
-// initial handshake readiness signal.
-type ingestAck struct {
-	OK    bool   `cbor:"ok"`
-	Error string `cbor:"error,omitempty"`
 }
 
 // streamShipper ships CBOR-encoded telemetry batches to the telemetry
@@ -88,7 +81,7 @@ func (s *streamShipper) Ship(ctx context.Context, data []byte) error {
 	}
 
 	// Read the per-batch acknowledgment.
-	var ack ingestAck
+	var ack telemetry.StreamAck
 	if err := s.decoder.Decode(&ack); err != nil {
 		s.closeConnection()
 		return fmt.Errorf("reading ack: %w", err)
@@ -134,7 +127,7 @@ func (s *streamShipper) connect(ctx context.Context) error {
 	// Wait for the readiness signal. If auth fails, the socket server
 	// writes {ok: false, error: "..."} directly. If auth succeeds,
 	// the ingest handler writes {ok: true}.
-	var ack ingestAck
+	var ack telemetry.StreamAck
 	if err := s.decoder.Decode(&ack); err != nil {
 		s.closeConnection()
 		return fmt.Errorf("reading handshake response: %w", err)

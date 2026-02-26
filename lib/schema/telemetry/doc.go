@@ -2,11 +2,13 @@
 // SPDX-License-Identifier: Apache-2.0
 
 // Package telemetry defines Bureau-native telemetry data types: spans,
-// metrics, log records, and the batch wire format used between the
-// per-machine relay and the fleet-wide telemetry service. All types
-// carry Bureau identity (ref.Fleet, ref.Machine, ref.Entity) as
-// first-class typed fields rather than opaque string attributes.
+// metrics, log records, output deltas, and the batch wire format used
+// between the per-machine relay and the fleet-wide telemetry service.
+// All types carry Bureau identity (ref.Fleet, ref.Machine, ref.Entity)
+// as first-class typed fields rather than opaque string attributes.
 //
+// Wire protocol types ([StreamAck], [TelemetryBatch]) are defined here
+// so that the relay, service, and mock share a single definition.
 // These types are serialized as CBOR on the relay→service wire and on
 // service socket query responses. JSON struct tags are used so that
 // the fxamacker/cbor library's json-tag fallback provides correct

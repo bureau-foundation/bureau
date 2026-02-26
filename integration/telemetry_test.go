@@ -17,13 +17,6 @@ import (
 
 // --- Wire protocol types for streaming telemetry actions ---
 
-// telemetryStreamAck is the readiness/batch acknowledgment frame used
-// by the ingest and tail protocols on the telemetry service and mock.
-type telemetryStreamAck struct {
-	OK    bool   `cbor:"ok"`
-	Error string `cbor:"error,omitempty"`
-}
-
 // telemetryTailFrame is the CBOR frame received from the telemetry
 // service's tail streaming action. Type "batch" carries a raw CBOR
 // TelemetryBatch; type "heartbeat" is a keepalive signal.
@@ -89,7 +82,7 @@ func openTelemetryStream(t *testing.T, socketPath, action string, token []byte) 
 	}
 
 	// Read readiness ack from the server.
-	var ack telemetryStreamAck
+	var ack telemetry.StreamAck
 	if err := decoder.Decode(&ack); err != nil {
 		t.Fatalf("read %s readiness ack: %v", action, err)
 	}
@@ -202,7 +195,7 @@ func TestTelemetryServiceTail(t *testing.T) {
 	}
 
 	// Read the per-batch ack from the ingest stream.
-	var batchAck telemetryStreamAck
+	var batchAck telemetry.StreamAck
 	if err := ingestDecoder.Decode(&batchAck); err != nil {
 		t.Fatalf("read ingest batch ack: %v", err)
 	}

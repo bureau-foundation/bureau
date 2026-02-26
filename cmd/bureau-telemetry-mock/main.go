@@ -41,6 +41,11 @@ import (
 	"github.com/bureau-foundation/bureau/lib/version"
 )
 
+// subscribeEventBufferSize is the channel capacity for each subscribe
+// stream client. At the relay's default 5-second flush interval,
+// 64 slots is ~5 minutes of backlog before frames are dropped.
+const subscribeEventBufferSize = 64
+
 func main() {
 	if err := run(); err != nil {
 		process.Fatal(err)
@@ -135,13 +140,6 @@ type subscribeFrame struct {
 	Metrics      []telemetry.MetricPoint `cbor:"metrics,omitempty"`
 	Logs         []telemetry.LogRecord   `cbor:"logs,omitempty"`
 	OutputDeltas []telemetry.OutputDelta `cbor:"output_deltas,omitempty"`
-}
-
-// streamAck is the acknowledgment frame for streaming connections
-// (ingest, subscribe). Matches the real telemetry service's wire format.
-type streamAck struct {
-	OK    bool   `cbor:"ok"`
-	Error string `cbor:"error,omitempty"`
 }
 
 // statusResponse is relay-compatible with additional stored-count
@@ -371,7 +369,7 @@ func (m *telemetryMock) handleIngest(ctx context.Context, token *servicetoken.To
 	encoder := codec.NewEncoder(conn)
 
 	// Send readiness ack.
-	if err := encoder.Encode(streamAck{OK: true}); err != nil {
+	if err := encoder.Encode(telemetry.StreamAck{OK: true}); err != nil {
 		return
 	}
 
@@ -398,7 +396,7 @@ func (m *telemetryMock) handleIngest(ctx context.Context, token *servicetoken.To
 			if opError := (*net.OpError)(nil); errors.As(err, &opError) && opError.Err.Error() == "use of closed network connection" {
 				return
 			}
-			encoder.Encode(streamAck{Error: "decode error"})
+			encoder.Encode(telemetry.StreamAck{Error: "decode error"})
 			return
 		}
 
@@ -411,7 +409,7 @@ func (m *telemetryMock) handleIngest(ctx context.Context, token *servicetoken.To
 
 		m.ingestBatches.Add(1)
 
-		if err := encoder.Encode(streamAck{OK: true}); err != nil {
+		if err := encoder.Encode(telemetry.StreamAck{OK: true}); err != nil {
 			return
 		}
 
@@ -439,7 +437,7 @@ func (m *telemetryMock) handleSubscribe(ctx context.Context, token *servicetoken
 	// client sees the ack, the subscriber channel is already
 	// receiving events from any concurrent submit/ingest handlers.
 	subscriber := &mockSubscriber{
-		events: make(chan subscribeFrame, 64),
+		events: make(chan subscribeFrame, subscribeEventBufferSize),
 	}
 
 	m.subscriberMu.Lock()
@@ -458,7 +456,7 @@ func (m *telemetryMock) handleSubscribe(ctx context.Context, token *servicetoken
 	}()
 
 	// Send readiness ack after registration.
-	if err := encoder.Encode(streamAck{OK: true}); err != nil {
+	if err := encoder.Encode(telemetry.StreamAck{OK: true}); err != nil {
 		return
 	}
 

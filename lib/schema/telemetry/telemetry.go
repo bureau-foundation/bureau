@@ -423,6 +423,15 @@ type OutputDelta struct {
 	Data []byte `json:"data"`
 }
 
+// StreamAck is the acknowledgment frame used on streaming telemetry
+// connections (ingest, tail, subscribe). Sent as the initial readiness
+// signal after a successful handshake and as per-batch acknowledgments
+// on the ingest stream.
+type StreamAck struct {
+	OK    bool   `cbor:"ok"`
+	Error string `cbor:"error,omitempty"`
+}
+
 // TelemetryBatch is the wire format for relay → telemetry service
 // communication. A single CBOR message containing mixed signal types
 // from one machine. The relay accumulates telemetry from local

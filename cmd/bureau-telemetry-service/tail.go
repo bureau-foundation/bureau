@@ -43,8 +43,9 @@ type tailEvent struct {
 	machineLocalpart string
 
 	// sourceLocalparts contains the unique Source localparts from
-	// all records in the batch (spans, metrics, logs). Used for
-	// per-record filtering when the machine localpart doesn't match.
+	// all records in the batch (spans, metrics, logs, output deltas).
+	// Used for per-record filtering when the machine localpart
+	// doesn't match.
 	sourceLocalparts []string
 
 	// rawBatch is the CBOR-encoded TelemetryBatch bytes, ready to
@@ -216,7 +217,7 @@ func (s *TelemetryService) handleTail(ctx context.Context, token *servicetoken.T
 		s.logger.Warn("tail: access denied",
 			"subject", subject,
 		)
-		codec.NewEncoder(conn).Encode(streamAck{Error: "access denied: missing grant for telemetry/tail"})
+		codec.NewEncoder(conn).Encode(telemetry.StreamAck{Error: "access denied: missing grant for telemetry/tail"})
 		return
 	}
 
@@ -240,7 +241,7 @@ func (s *TelemetryService) handleTail(ctx context.Context, token *servicetoken.T
 
 	// Send readiness signal so the client knows the stream is
 	// established and can begin sending control messages.
-	if err := encoder.Encode(streamAck{OK: true}); err != nil {
+	if err := encoder.Encode(telemetry.StreamAck{OK: true}); err != nil {
 		s.logger.Debug("tail: failed to write ready signal",
 			"subject", subject,
 			"error", err,

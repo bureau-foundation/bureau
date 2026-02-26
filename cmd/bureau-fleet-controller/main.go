@@ -69,12 +69,21 @@ func run() error {
 		return fmt.Errorf("resolving fleet machine room %q: %w", machineRoomAlias, err)
 	}
 
+	// Construct the fleet controller's own entity reference for publishing
+	// service bindings to config rooms. Agents with required_services:
+	// ["fleet"] discover the fleet controller via this binding.
+	serviceEntity, err := ref.NewEntityFromAccountLocalpart(boot.Fleet, boot.PrincipalName)
+	if err != nil {
+		return fmt.Errorf("constructing fleet controller entity: %w", err)
+	}
+
 	boot.Logger.Info("fleet rooms ready",
 		"fleet", boot.Fleet,
 		"fleet_room", fleetRoomID,
 		"system_room", boot.SystemRoomID,
 		"machine_room", machineRoomID,
 		"service_room", boot.ServiceRoomID,
+		"service_entity", serviceEntity,
 	)
 
 	fleetController := &FleetController{
@@ -85,6 +94,7 @@ func run() error {
 		machineName:   boot.MachineName,
 		serverName:    boot.ServerName,
 		fleet:         boot.Fleet,
+		serviceEntity: serviceEntity,
 		serviceRoomID: boot.ServiceRoomID,
 		startedAt:     boot.Clock.Now(),
 		machines:      make(map[string]*machineState),
@@ -150,6 +160,7 @@ type FleetController struct {
 	machineName   string
 	serverName    ref.ServerName
 	fleet         ref.Fleet
+	serviceEntity ref.Entity
 	serviceRoomID ref.RoomID
 	startedAt     time.Time
 

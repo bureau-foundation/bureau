@@ -29,6 +29,14 @@ const (
 	// within seconds, while heartbeat staleness takes 1-3x the
 	// heartbeat interval.
 	MsgTypeFleetPresenceChanged = "m.bureau.fleet_presence_changed"
+
+	// MsgTypeFleetServiceBindingPublished is posted when the fleet
+	// controller publishes its m.bureau.service_binding state event
+	// to a machine's config room. This happens automatically when
+	// the fleet controller discovers a new config room (both during
+	// initial sync and incremental sync), ensuring agents with
+	// required_services: ["fleet"] can discover the fleet controller.
+	MsgTypeFleetServiceBindingPublished = "m.bureau.fleet_service_binding_published"
 )
 
 // FleetConfigRoomDiscoveredMessage is the content of an m.room.message
@@ -90,6 +98,28 @@ func NewFleetPresenceChangedMessage(machine, previous, current string) FleetPres
 		Machine:  machine,
 		Previous: previous,
 		Current:  current,
+	}
+}
+
+// FleetServiceBindingPublishedMessage is the content of an m.room.message
+// event with msgtype MsgTypeFleetServiceBindingPublished. Posted when the
+// fleet controller publishes its service binding to a machine's config room,
+// ensuring agents with required_services: ["fleet"] can discover the fleet
+// controller socket via daemon service directory resolution.
+type FleetServiceBindingPublishedMessage struct {
+	MsgType      string `json:"msgtype"`
+	Body         string `json:"body"`
+	Machine      string `json:"machine"`
+	ConfigRoomID string `json:"config_room_id"`
+}
+
+// NewFleetServiceBindingPublishedMessage constructs a FleetServiceBindingPublishedMessage.
+func NewFleetServiceBindingPublishedMessage(machine, configRoomID string) FleetServiceBindingPublishedMessage {
+	return FleetServiceBindingPublishedMessage{
+		MsgType:      MsgTypeFleetServiceBindingPublished,
+		Body:         fmt.Sprintf("Fleet service binding published for %s", machine),
+		Machine:      machine,
+		ConfigRoomID: configRoomID,
 	}
 }
 

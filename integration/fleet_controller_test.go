@@ -4,6 +4,7 @@
 package integration_test
 
 import (
+	"encoding/json"
 	"errors"
 	"strings"
 	"syscall"
@@ -351,6 +352,35 @@ func TestFleetControllerLifecycle(t *testing.T) {
 		// execution time varies.
 		if status.UptimeSeconds < 0 {
 			t.Errorf("uptime = %d, want >= 0", status.UptimeSeconds)
+		}
+	})
+
+	// --- Sub-test: fleet service binding auto-published ---
+	t.Run("ServiceBinding", func(t *testing.T) {
+		// The fleet controller publishes its service binding to config
+		// rooms during initialSync. Since startFleetController blocks
+		// until the socket is ready (after initialSync completes), the
+		// binding should already be present.
+		raw, err := admin.GetStateEvent(ctx, machine.ConfigRoomID,
+			schema.EventTypeServiceBinding, "fleet")
+		if err != nil {
+			t.Fatalf("get fleet service binding: %v", err)
+		}
+
+		var binding schema.ServiceBindingContent
+		if err := json.Unmarshal(raw, &binding); err != nil {
+			t.Fatalf("unmarshal service binding: %v", err)
+		}
+
+		// The binding's principal should be the fleet controller's
+		// entity (fleet-scoped, with the controller's principal name).
+		if binding.Principal.IsZero() {
+			t.Fatal("service binding principal is zero")
+		}
+		expectedLocalpart := controllerName
+		if actualLocalpart := binding.Principal.AccountLocalpart(); actualLocalpart != expectedLocalpart {
+			t.Errorf("service binding principal localpart = %q, want %q",
+				actualLocalpart, expectedLocalpart)
 		}
 	})
 
@@ -914,6 +944,31 @@ func TestFleetReconciliation(t *testing.T) {
 		if !foundAssignment {
 			t.Errorf("machine %s: assignment for %q not found (got %d assignments)",
 				machine.Name, serviceLocalpart, len(showMachine.Assignments))
+		}
+	}
+
+	// Verify the fleet controller published its service binding to both
+	// config rooms. MachineA's binding comes from initial sync (the fleet
+	// controller discovers its own machine's config room during startup).
+	// MachineB's binding comes from incremental sync (the fleet controller
+	// accepts the invite to B's config room after grantFleetControllerConfigAccess).
+	for _, machine := range []*testMachine{machineA, machineB} {
+		raw, err := admin.GetStateEvent(ctx, machine.ConfigRoomID,
+			schema.EventTypeServiceBinding, "fleet")
+		if err != nil {
+			t.Fatalf("get fleet binding for %s: %v", machine.Name, err)
+		}
+
+		var binding schema.ServiceBindingContent
+		if err := json.Unmarshal(raw, &binding); err != nil {
+			t.Fatalf("unmarshal binding for %s: %v", machine.Name, err)
+		}
+
+		if binding.Principal.IsZero() {
+			t.Errorf("machine %s: fleet binding principal is zero", machine.Name)
+		} else if localpart := binding.Principal.AccountLocalpart(); localpart != controllerName {
+			t.Errorf("machine %s: fleet binding principal localpart = %q, want %q",
+				machine.Name, localpart, controllerName)
 		}
 	}
 }

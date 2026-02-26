@@ -196,6 +196,12 @@ func (fc *FleetController) initialSync(ctx context.Context) (string, error) {
 	// controller's model state without polling its API.
 	fc.emitDiscoveryNotifications(ctx, nil, nil)
 
+	// Publish the fleet controller's service binding to all config
+	// rooms. On startup, all rooms are treated as new (nil previous
+	// map), so every config room gets its binding refreshed. This
+	// ensures consistency even if a binding was lost.
+	fc.publishServiceBindings(ctx, nil)
+
 	return sinceToken, nil
 }
 
@@ -603,6 +609,11 @@ func (fc *FleetController) handleSync(ctx context.Context, response *messaging.S
 	// Emit notifications for newly discovered config rooms and services.
 	fc.emitDiscoveryNotifications(ctx, previousConfigRooms, previousServices)
 
+	// Publish the fleet controller's service binding to newly
+	// discovered config rooms so agents with required_services:
+	// ["fleet"] can discover the fleet controller socket.
+	fc.publishServiceBindings(ctx, previousConfigRooms)
+
 	// Reconcile after processing all events: compare desired replica
 	// counts with actual instance counts and place/unplace as needed.
 	fc.reconcile(ctx)
@@ -752,6 +763,43 @@ func (fc *FleetController) emitDiscoveryNotifications(ctx context.Context, previ
 		}
 		fc.sendFleetNotification(ctx,
 			fleet.NewFleetServiceDiscoveredMessage(serviceLocalpart))
+	}
+}
+
+// publishServiceBindings publishes the fleet controller's
+// m.bureau.service_binding state event to newly discovered config rooms.
+// This enables agents with required_services: ["fleet"] to discover
+// the fleet controller socket via daemon service directory resolution.
+//
+// Pass nil previousConfigRooms for initial sync (publish to all config
+// rooms) or a snapshot of the previous state for incremental sync (only
+// new rooms).
+//
+// Caller must hold fc.mu.
+func (fc *FleetController) publishServiceBindings(ctx context.Context, previousConfigRooms map[string]bool) {
+	binding := schema.ServiceBindingContent{Principal: fc.serviceEntity}
+
+	for machineLocalpart, roomID := range fc.configRooms {
+		if previousConfigRooms != nil && previousConfigRooms[machineLocalpart] {
+			continue
+		}
+
+		_, err := fc.configStore.SendStateEvent(ctx, roomID, schema.EventTypeServiceBinding, "fleet", binding)
+		if err != nil {
+			fc.logger.Warn("failed to publish fleet service binding",
+				"machine", machineLocalpart,
+				"config_room", roomID,
+				"error", err,
+			)
+			continue
+		}
+
+		fc.logger.Info("published fleet service binding",
+			"machine", machineLocalpart,
+			"config_room", roomID,
+		)
+		fc.sendFleetNotification(ctx,
+			fleet.NewFleetServiceBindingPublishedMessage(machineLocalpart, roomID.String()))
 	}
 }
 

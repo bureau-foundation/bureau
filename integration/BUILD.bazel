@@ -33,6 +33,7 @@ go_test(
         "messaging_test.go",
         "mock_llm_test.go",
         "native_agent_test.go",
+        "operator_journey_test.go",
         "payload_test.go",
         "pipeline_test.go",
         "powerlevel_test.go",
@@ -101,6 +102,7 @@ go_test(
     local = True,
     tags = ["manual"],
     deps = [
+        "//cmd/bureau/cli/doctor",
         "//cmd/bureau/fleet",
         "//cmd/bureau/machine",
         "//cmd/bureau/pipeline",

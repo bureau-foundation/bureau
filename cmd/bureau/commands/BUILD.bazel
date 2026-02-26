@@ -15,6 +15,7 @@ go_library(
         "//cmd/bureau/cbor",
         "//cmd/bureau/cli",
         "//cmd/bureau/credential",
+        "//cmd/bureau/doctor",
         "//cmd/bureau/environment",
         "//cmd/bureau/fleet",
         "//cmd/bureau/machine",

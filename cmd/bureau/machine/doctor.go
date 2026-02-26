@@ -199,7 +199,9 @@ Use --json for machine-readable output suitable for monitoring or CI.`,
 func runMachineDoctor(ctx context.Context, params machineDoctorParams, logger *slog.Logger) error {
 	const maxFixIterations = 5
 	repairedNames := make(map[string]bool)
-	var aggregateOutcome doctor.Outcome
+	aggregateOutcome := doctor.Outcome{
+		ElevatedHint: "sudo bureau machine doctor --fix",
+	}
 	var results []doctor.Result
 
 	isOSPermissionDenied := func(err error) bool {

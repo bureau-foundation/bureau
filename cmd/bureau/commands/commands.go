@@ -24,6 +24,7 @@ import (
 	cborcmd "github.com/bureau-foundation/bureau/cmd/bureau/cbor"
 	"github.com/bureau-foundation/bureau/cmd/bureau/cli"
 	credentialcmd "github.com/bureau-foundation/bureau/cmd/bureau/credential"
+	doctorcmd "github.com/bureau-foundation/bureau/cmd/bureau/doctor"
 	environmentcmd "github.com/bureau-foundation/bureau/cmd/bureau/environment"
 	fleetcmd "github.com/bureau-foundation/bureau/cmd/bureau/fleet"
 	machinecmd "github.com/bureau-foundation/bureau/cmd/bureau/machine"
@@ -53,6 +54,7 @@ observation, and structured messaging via Matrix.`,
 		Subcommands: []*cli.Command{
 			cli.LoginCommand(),
 			cli.WhoAmICommand(),
+			doctorcmd.Command(),
 			observecmd.ObserveCommand(),
 			observecmd.DashboardCommand(),
 			observecmd.ListCommand(),
@@ -80,6 +82,10 @@ observation, and structured messaging via Matrix.`,
 			},
 		},
 		Examples: []cli.Example{
+			{
+				Description: "Diagnose the operator environment (start here when lost)",
+				Command:     "bureau doctor",
+			},
 			{
 				Description: "Authenticate as an operator (saves session locally)",
 				Command:     "bureau login ben",

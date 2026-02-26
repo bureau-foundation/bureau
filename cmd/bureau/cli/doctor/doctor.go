@@ -92,6 +92,11 @@ type Outcome struct {
 	// ElevatedSkipped is the number of fixes skipped because they
 	// require root and the current process is not running as root.
 	ElevatedSkipped int
+
+	// ElevatedHint is the command to suggest when elevated fixes were
+	// skipped. For machine doctor, this is "sudo bureau machine doctor
+	// --fix". Each caller provides its own value.
+	ElevatedHint string
 }
 
 // JSONOutput is the JSON output structure for doctor commands.

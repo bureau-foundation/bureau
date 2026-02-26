@@ -70,9 +70,11 @@ func PrintChecklist(results []Result, fixMode, dryRun bool, outcome Outcome) err
 			for _, hint := range elevatedHints {
 				fmt.Fprintf(os.Stdout, "  - %s\n", hint)
 			}
-			fmt.Fprintln(os.Stdout)
-			fmt.Fprintln(os.Stdout, "Re-run with sudo to apply these fixes:")
-			fmt.Fprintln(os.Stdout, "  sudo bureau machine doctor --fix")
+			if outcome.ElevatedHint != "" {
+				fmt.Fprintln(os.Stdout)
+				fmt.Fprintln(os.Stdout, "Re-run with sudo to apply these fixes:")
+				fmt.Fprintf(os.Stdout, "  %s\n", outcome.ElevatedHint)
+			}
 		}
 		return &cli.ExitError{Code: 1}
 	}

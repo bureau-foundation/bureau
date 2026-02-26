@@ -10,9 +10,11 @@ go_library(
     visibility = ["//visibility:private"],
     deps = [
         "//lib/codec",
+        "//lib/process",
         "//lib/schema/telemetry",
         "//lib/service",
         "//lib/servicetoken",
+        "//lib/version",
     ],
 )
 

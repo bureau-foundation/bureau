@@ -24,10 +24,9 @@ package main
 import (
 	"context"
 	"errors"
-	"fmt"
+	"flag"
 	"io"
 	"net"
-	"os"
 	"os/signal"
 	"strings"
 	"sync"
@@ -35,19 +34,29 @@ import (
 	"syscall"
 
 	"github.com/bureau-foundation/bureau/lib/codec"
+	"github.com/bureau-foundation/bureau/lib/process"
 	"github.com/bureau-foundation/bureau/lib/schema/telemetry"
 	"github.com/bureau-foundation/bureau/lib/service"
 	"github.com/bureau-foundation/bureau/lib/servicetoken"
+	"github.com/bureau-foundation/bureau/lib/version"
 )
 
 func main() {
 	if err := run(); err != nil {
-		fmt.Fprintf(os.Stderr, "error: %v\n", err)
-		os.Exit(1)
+		process.Fatal(err)
 	}
 }
 
 func run() error {
+	var showVersion bool
+	flag.BoolVar(&showVersion, "version", false, "print version information and exit")
+	flag.Parse()
+
+	if showVersion {
+		version.Print("bureau-telemetry-mock")
+		return nil
+	}
+
 	ctx, stop := signal.NotifyContext(context.Background(), syscall.SIGINT, syscall.SIGTERM)
 	defer stop()
 
@@ -126,9 +135,9 @@ type subscribeFrame struct {
 	Logs    []telemetry.LogRecord   `cbor:"logs,omitempty"`
 }
 
-// ingestAck is the acknowledgment frame for the streaming ingest
-// protocol. Matches the real telemetry service's wire format.
-type ingestAck struct {
+// streamAck is the acknowledgment frame for streaming connections
+// (ingest, subscribe). Matches the real telemetry service's wire format.
+type streamAck struct {
 	OK    bool   `cbor:"ok"`
 	Error string `cbor:"error,omitempty"`
 }
@@ -361,7 +370,7 @@ func (m *telemetryMock) handleIngest(ctx context.Context, token *servicetoken.To
 	encoder := codec.NewEncoder(conn)
 
 	// Send readiness ack.
-	if err := encoder.Encode(ingestAck{OK: true}); err != nil {
+	if err := encoder.Encode(streamAck{OK: true}); err != nil {
 		return
 	}
 
@@ -388,7 +397,7 @@ func (m *telemetryMock) handleIngest(ctx context.Context, token *servicetoken.To
 			if opError := (*net.OpError)(nil); errors.As(err, &opError) && opError.Err.Error() == "use of closed network connection" {
 				return
 			}
-			encoder.Encode(ingestAck{Error: "decode error"})
+			encoder.Encode(streamAck{Error: "decode error"})
 			return
 		}
 
@@ -400,7 +409,7 @@ func (m *telemetryMock) handleIngest(ctx context.Context, token *servicetoken.To
 
 		m.ingestBatches.Add(1)
 
-		if err := encoder.Encode(ingestAck{OK: true}); err != nil {
+		if err := encoder.Encode(streamAck{OK: true}); err != nil {
 			return
 		}
 
@@ -446,7 +455,7 @@ func (m *telemetryMock) handleSubscribe(ctx context.Context, token *servicetoken
 	}()
 
 	// Send readiness ack after registration.
-	if err := encoder.Encode(ingestAck{OK: true}); err != nil {
+	if err := encoder.Encode(streamAck{OK: true}); err != nil {
 		return
 	}
 

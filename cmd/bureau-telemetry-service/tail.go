@@ -216,7 +216,7 @@ func (s *TelemetryService) handleTail(ctx context.Context, token *servicetoken.T
 		s.logger.Warn("tail: access denied",
 			"subject", subject,
 		)
-		codec.NewEncoder(conn).Encode(ingestAck{Error: "access denied: missing grant for telemetry/tail"})
+		codec.NewEncoder(conn).Encode(streamAck{Error: "access denied: missing grant for telemetry/tail"})
 		return
 	}
 
@@ -240,7 +240,7 @@ func (s *TelemetryService) handleTail(ctx context.Context, token *servicetoken.T
 
 	// Send readiness signal so the client knows the stream is
 	// established and can begin sending control messages.
-	if err := encoder.Encode(ingestAck{OK: true}); err != nil {
+	if err := encoder.Encode(streamAck{OK: true}); err != nil {
 		s.logger.Debug("tail: failed to write ready signal",
 			"subject", subject,
 			"error", err,

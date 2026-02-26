@@ -14,10 +14,10 @@ import (
 	"github.com/bureau-foundation/bureau/lib/servicetoken"
 )
 
-// ingestAck is the acknowledgment frame sent to the relay after each
-// batch on the streaming connection. Also used as the initial
-// readiness signal after the handshake succeeds.
-type ingestAck struct {
+// streamAck is the acknowledgment frame sent on streaming connections
+// (ingest, tail). Used both as the initial readiness signal after the
+// handshake succeeds and as per-batch acks on the ingest stream.
+type streamAck struct {
 	OK    bool   `cbor:"ok"`
 	Error string `cbor:"error,omitempty"`
 }
@@ -31,11 +31,11 @@ type ingestAck struct {
 //
 // Wire protocol after handshake:
 //
-//	Service → Relay: ingestAck{OK: true}        (readiness signal)
+//	Service → Relay: streamAck{OK: true}        (readiness signal)
 //	Relay   → Service: TelemetryBatch            (CBOR, self-delimiting)
-//	Service → Relay: ingestAck{OK: true}         (per-batch ack)
+//	Service → Relay: streamAck{OK: true}         (per-batch ack)
 //	Relay   → Service: TelemetryBatch            (next batch)
-//	Service → Relay: ingestAck{OK: true}         (ack)
+//	Service → Relay: streamAck{OK: true}         (ack)
 //	...
 func (s *TelemetryService) handleIngest(ctx context.Context, token *servicetoken.Token, _ []byte, conn net.Conn) {
 	relaySubject := token.Subject
@@ -47,7 +47,7 @@ func (s *TelemetryService) handleIngest(ctx context.Context, token *servicetoken
 			"subject", relaySubject,
 			"machine", relayMachine,
 		)
-		codec.NewEncoder(conn).Encode(ingestAck{Error: "access denied: missing grant for telemetry/ingest"})
+		codec.NewEncoder(conn).Encode(streamAck{Error: "access denied: missing grant for telemetry/ingest"})
 		return
 	}
 
@@ -55,7 +55,7 @@ func (s *TelemetryService) handleIngest(ctx context.Context, token *servicetoken
 
 	// Send readiness signal so the relay knows the stream is
 	// established and can begin sending batches.
-	if err := encoder.Encode(ingestAck{OK: true}); err != nil {
+	if err := encoder.Encode(streamAck{OK: true}); err != nil {
 		s.logger.Debug("ingest: failed to write ready signal",
 			"subject", relaySubject,
 			"error", err,
@@ -116,7 +116,7 @@ func (s *TelemetryService) handleIngest(ctx context.Context, token *servicetoken
 				"subject", relaySubject,
 				"error", err,
 			)
-			encoder.Encode(ingestAck{Error: "decode error"})
+			encoder.Encode(streamAck{Error: "decode error"})
 			return
 		}
 
@@ -128,7 +128,7 @@ func (s *TelemetryService) handleIngest(ctx context.Context, token *servicetoken
 				"subject", relaySubject,
 				"error", err,
 			)
-			encoder.Encode(ingestAck{Error: "unmarshal error"})
+			encoder.Encode(streamAck{Error: "unmarshal error"})
 			return
 		}
 
@@ -152,7 +152,7 @@ func (s *TelemetryService) handleIngest(ctx context.Context, token *servicetoken
 
 		// Acknowledge the batch so the relay can pop it from its
 		// outbound buffer.
-		if err := encoder.Encode(ingestAck{OK: true}); err != nil {
+		if err := encoder.Encode(streamAck{OK: true}); err != nil {
 			s.logger.Debug("ingest: failed to write ack",
 				"subject", relaySubject,
 				"error", err,

@@ -1,0 +1,79 @@
+#!/bin/bash
+# Copyright 2026 The Bureau Authors
+# SPDX-License-Identifier: Apache-2.0
+
+# Reject direct exec.Command("tmux", ...) calls in test files. Tests must
+# use lib/tmux.NewServer(socketPath, configPath) which always passes -S.
+#
+# A bare tmux command (without -S) hits the default server — which may be
+# the tmux session the test agent or developer is running in. This causes
+# phantom session corruption, test failures that only reproduce under
+# specific interactive conditions, and occasionally kills the operator's
+# terminal.
+#
+# Banned patterns:
+#   - exec.Command("tmux"   — direct subprocess without guaranteed -S
+#   - exec.CommandContext(…, "tmux"  — same, with context
+#
+# The lib/tmux/ package is exempt because it IS the wrapper that
+# correctly injects -S with the Server's socket path into every command.
+#
+# Per-line suppression: //nolint:baretmux for the rare case where
+# direct tmux exec is genuinely required (e.g., testing tmux detection
+# with exec.LookPath is fine — it doesn't invoke tmux).
+#
+# Only checks lines ADDED in the staged diff, so existing violations do
+# not block commits.
+
+set -euo pipefail
+
+banned='exec\.(Command|CommandContext)\(.*"tmux"'
+
+# Get added lines from staged test files, excluding lib/tmux/.
+violations=$(
+    git diff --cached --unified=0 --diff-filter=ACM -- '*_test.go' \
+        ':!lib/tmux/' |
+    awk '
+        # Track which file we are in.
+        /^--- /    { next }
+        /^\+\+\+ / { file = substr($0, 7); next }
+        # Track hunk line numbers. Format: @@ -old,count +new,count @@
+        /^@@ /     { split($3, a, /[,+]/); lineno = a[2] - 1; next }
+        # Only look at added lines (start with +, not +++).
+        /^\+[^+]/ {
+            lineno++
+            line = substr($0, 2)
+            print file ":" lineno ":" line
+            next
+        }
+        # Context and removed lines still advance the line counter for
+        # added-side tracking.
+        /^ / { lineno++; next }
+    ' |
+    grep -E "$banned" |
+    grep -v '//nolint:baretmux' || true
+)
+
+if [ -z "$violations" ]; then
+    exit 0
+fi
+
+echo ""
+echo "ERROR: Direct tmux exec in test files."
+echo ""
+echo "Tests must use lib/tmux.NewServer(socketPath, configPath), which"
+echo "always passes -S to ensure an isolated tmux server. A bare tmux"
+echo "command without -S hits the default server — potentially the"
+echo "session the test agent or developer is running in."
+echo ""
+echo "Violations:"
+while IFS= read -r line; do
+    echo "  $line"
+done <<< "$violations"
+echo ""
+echo "To fix:"
+echo "  1. Use tmux.NewServer(socketPath, configPath) from lib/tmux"
+echo "  2. Get a short socket path via testutil.SocketDir(t)"
+echo "  3. Only if bare exec is genuinely unavoidable, add //nolint:baretmux"
+echo ""
+exit 1

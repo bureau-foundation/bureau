@@ -122,6 +122,11 @@ pre-commit:
       glob: "*.go"
       priority: 2
 
+    check-bare-tmux:
+      run: script/check-bare-tmux
+      glob: "*_test.go"
+      priority: 2
+
     # ===================================================================
     # Tier 3: Build and test verification (Bazel)
     # ===================================================================

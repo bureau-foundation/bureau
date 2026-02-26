@@ -20,6 +20,7 @@ go_test(
     srcs = [
         "agent_service_test.go",
         "bootstrap_test.go",
+        "cli_smoke_test.go",
         "config_hotreload_test.go",
         "fleet_controller_test.go",
         "fleet_test.go",

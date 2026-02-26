@@ -527,6 +527,91 @@ func runBureauOrFail(t *testing.T, args ...string) string {
 	return output
 }
 
+// runBureauWithEnv executes the bureau CLI with custom environment variables
+// and returns its stdout output. Environment overrides are appended after
+// os.Environ(), so duplicate keys use the last value (standard Go exec behavior).
+func runBureauWithEnv(env []string, args ...string) (string, error) {
+	cmd := exec.Command(bureauBinary, args...)
+	cmd.Env = append(os.Environ(), env...)
+	var stdout strings.Builder
+	cmd.Stdout = &stdout
+	cmd.Stderr = os.Stderr
+	err := cmd.Run()
+	return stdout.String(), err
+}
+
+// runBureauWithEnvOrFail runs the bureau CLI with custom environment variables
+// and fails the test on error.
+func runBureauWithEnvOrFail(t *testing.T, env []string, args ...string) string {
+	t.Helper()
+	output, err := runBureauWithEnv(env, args...)
+	if err != nil {
+		t.Fatalf("bureau %s failed: %v\noutput:\n%s", strings.Join(args, " "), err, output)
+	}
+	return output
+}
+
+// writeMachineConf writes a machine.conf file with the given values and returns
+// the file path. Only non-empty fields are written. The returned path is suitable
+// for the BUREAU_MACHINE_CONF environment variable.
+func writeMachineConf(t *testing.T, homeserverURL, serverName, fleetPrefix string) string {
+	t.Helper()
+	var content strings.Builder
+	if homeserverURL != "" {
+		fmt.Fprintf(&content, "BUREAU_HOMESERVER_URL=%s\n", homeserverURL)
+	}
+	if serverName != "" {
+		fmt.Fprintf(&content, "BUREAU_SERVER_NAME=%s\n", serverName)
+	}
+	if fleetPrefix != "" {
+		fmt.Fprintf(&content, "BUREAU_FLEET=%s\n", fleetPrefix)
+	}
+	path := filepath.Join(t.TempDir(), "machine.conf")
+	if err := os.WriteFile(path, []byte(content.String()), 0644); err != nil {
+		t.Fatalf("write machine.conf: %v", err)
+	}
+	return path
+}
+
+// writeOperatorSession writes an operator session JSON file and returns the
+// file path. The returned path is suitable for the BUREAU_SESSION_FILE
+// environment variable.
+func writeOperatorSession(t *testing.T, userID, accessToken, homeserverURL string) string {
+	t.Helper()
+	session := struct {
+		UserID      string `json:"user_id"`
+		AccessToken string `json:"access_token"`
+		Homeserver  string `json:"homeserver"`
+	}{
+		UserID:      userID,
+		AccessToken: accessToken,
+		Homeserver:  homeserverURL,
+	}
+	data, err := json.MarshalIndent(session, "", "  ")
+	if err != nil {
+		t.Fatalf("marshal operator session: %v", err)
+	}
+	path := filepath.Join(t.TempDir(), "session.json")
+	if err := os.WriteFile(path, data, 0600); err != nil {
+		t.Fatalf("write operator session: %v", err)
+	}
+	return path
+}
+
+// writeTestCredentialFile writes a credential file in the KEY=VALUE format
+// that SessionConfig.Connect() reads. Returns the file path for use with
+// the --credential-file flag.
+func writeTestCredentialFile(t *testing.T, homeserverURL, userID, token string) string {
+	t.Helper()
+	content := fmt.Sprintf("MATRIX_HOMESERVER_URL=%s\nMATRIX_ADMIN_USER=%s\nMATRIX_ADMIN_TOKEN=%s\n",
+		homeserverURL, userID, token)
+	path := filepath.Join(t.TempDir(), "credentials")
+	if err := os.WriteFile(path, []byte(content), 0600); err != nil {
+		t.Fatalf("write credential file: %v", err)
+	}
+	return path
+}
+
 // adminSession creates a per-test admin user with a unique Matrix account,
 // invites it to all global rooms with PL 100, and returns an authenticated
 // session. Each test gets its own admin user so /sync connections are

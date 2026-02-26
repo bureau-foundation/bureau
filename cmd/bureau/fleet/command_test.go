@@ -47,14 +47,13 @@ func TestFleetCommandHasSubcommands(t *testing.T) {
 	}
 }
 
-// TestDefaultFleetSocketPath verifies the default socket path outside a
-// sandbox falls back to the host-side principal socket path.
+// TestDefaultFleetSocketPath verifies the default socket path returns
+// the sandbox socket path. Operators running on the host should use
+// --service mode rather than relying on path auto-detection.
 func TestDefaultFleetSocketPath(t *testing.T) {
-	// Tests run outside a sandbox, so the sandbox mount point does not
-	// exist and the function falls back to the host-side path.
 	got := defaultFleetSocketPath()
-	if got != hostFallbackSocketPath {
-		t.Errorf("defaultFleetSocketPath(): got %q, want %q", got, hostFallbackSocketPath)
+	if got != sandboxSocketPath {
+		t.Errorf("defaultFleetSocketPath(): got %q, want %q", got, sandboxSocketPath)
 	}
 }
 

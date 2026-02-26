@@ -23,27 +23,18 @@ const (
 	sandboxTokenPath  = "/run/bureau/service/token/fleet.token"
 )
 
-// hostFallbackSocketPath is the fleet controller socket path on the
-// host side (outside a sandbox). This is the default run directory
-// (/run/bureau/principal/) plus the service localpart and .sock suffix.
-const hostFallbackSocketPath = "/run/bureau/principal/service/fleet/main.sock"
-
 // defaultFleetSocketPath returns the default fleet controller socket path.
-// Inside a sandbox (detected by the presence of the RequiredServices mount
-// point), the standard /run/bureau/service/fleet.sock path is used.
-// Outside a sandbox, the host-side principal socket path is used as a
-// fallback for direct CLI access.
+// Inside a sandbox, the daemon bind-mounts the fleet controller socket at
+// the sandboxSocketPath. Outside a sandbox, the same path is used as the
+// default — operators running the CLI directly should use --service mode
+// instead.
 func defaultFleetSocketPath() string {
-	if _, err := os.Stat(sandboxSocketPath); err == nil {
-		return sandboxSocketPath
-	}
-	return hostFallbackSocketPath
+	return sandboxSocketPath
 }
 
 // defaultFleetTokenPath returns the default fleet service token path.
-// This is the daemon-provisioned path inside a sandbox. Operators running
-// CLI commands from the host should use --service mode instead — there
-// is no host-side fallback for token files.
+// The daemon-provisioned token is at sandboxTokenPath. Operators outside
+// a sandbox should use --service mode instead.
 func defaultFleetTokenPath() string {
 	return sandboxTokenPath
 }

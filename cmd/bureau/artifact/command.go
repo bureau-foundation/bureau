@@ -6,7 +6,8 @@
 //
 // Connection parameters default to the in-sandbox paths where the
 // daemon provisions sockets and tokens. Operators running outside a
-// sandbox can override with --socket and --token-file flags (or the
+// sandbox can use --service mode (daemon-mediated token minting) or
+// override with --socket and --token-file flags (or the
 // BUREAU_ARTIFACT_SOCKET and BUREAU_ARTIFACT_TOKEN environment
 // variables).
 package artifact
@@ -24,6 +25,7 @@ import (
 
 	"github.com/bureau-foundation/bureau/cmd/bureau/cli"
 	"github.com/bureau-foundation/bureau/lib/artifactstore"
+	"github.com/bureau-foundation/bureau/observe"
 )
 
 // Sandbox-standard paths for the artifact service role. When an agent
@@ -46,9 +48,9 @@ Store, fetch, list, and manage content-addressed artifacts. Artifacts
 are identified by BLAKE3 hashes and can be referenced by short refs
 (art-<hex>) or mutable tags (name→hash pointers).
 
-Connection defaults to the in-sandbox artifact service socket. Override
-with --socket/--token-file flags or BUREAU_ARTIFACT_SOCKET and
-BUREAU_ARTIFACT_TOKEN environment variables.`,
+Inside a sandbox, connection defaults to the daemon-provisioned socket
+and token. From the host, use --service mode (requires 'bureau login')
+or override with --socket/--token-file flags.`,
 		Subcommands: []*cli.Command{
 			storeCommand(),
 			fetchCommand(),
@@ -89,58 +91,121 @@ BUREAU_ARTIFACT_TOKEN environment variables.`,
 	}
 }
 
-// ArtifactConnection manages socket and token flags for artifact commands.
+// ArtifactConnection manages connection parameters for artifact commands.
+// Supports two modes:
+//
+// Direct mode (default): connects using --socket and --token-file,
+// designed for agents running inside sandboxes where the daemon has
+// bind-mounted the service socket and provisioned a token file.
+//
+// Service mode (--service): mints a token via the daemon's observe
+// socket using the operator's saved session (~/.config/bureau/session.json
+// from "bureau login"). Returns both the token and the host-side
+// service socket path. Designed for operator CLI use from the host.
+//
 // Implements [cli.FlagBinder] so it integrates with the params struct system
 // while handling dynamic defaults from environment variables. Excluded from
-// JSON Schema generation since MCP callers don't specify socket paths.
+// JSON Schema generation since MCP callers don't specify socket paths —
+// the service connection is established by the hosting sandbox.
 //
 // Exported so that embedded struct fields are visible to reflection in
 // [cli.FlagsFromParams] — unexported embedded types cause field.IsExported()
 // to return false, silently skipping FlagBinder detection.
 type ArtifactConnection struct {
-	SocketPath string
-	TokenPath  string
+	SocketPath   string
+	TokenPath    string
+	ServiceMode  bool
+	DaemonSocket string
 }
 
-// AddFlags registers --socket and --token-file flags with dynamic defaults
-// from BUREAU_ARTIFACT_SOCKET and BUREAU_ARTIFACT_TOKEN environment variables.
-// If neither environment variable is set, defaults are detected from the
-// runtime environment: inside a sandbox, the RequiredServices mount points
-// are used; outside, the host-side principal socket path.
+// AddFlags registers connection flags. In direct mode (default):
+// --socket and --token-file with defaults from BUREAU_ARTIFACT_SOCKET
+// and BUREAU_ARTIFACT_TOKEN environment variables. In service mode:
+// --daemon-socket for the daemon's observe socket.
 func (c *ArtifactConnection) AddFlags(flagSet *pflag.FlagSet) {
-	socketDefault := defaultArtifactSocketPath()
+	socketDefault := sandboxSocketPath
 	if envSocket := os.Getenv("BUREAU_ARTIFACT_SOCKET"); envSocket != "" {
 		socketDefault = envSocket
 	}
-	tokenDefault := defaultArtifactTokenPath()
+	tokenDefault := sandboxTokenPath
 	if envToken := os.Getenv("BUREAU_ARTIFACT_TOKEN"); envToken != "" {
 		tokenDefault = envToken
 	}
 
-	flagSet.StringVar(&c.SocketPath, "socket", socketDefault, "artifact service socket path")
-	flagSet.StringVar(&c.TokenPath, "token-file", tokenDefault, "path to service token file")
-}
-
-// defaultArtifactSocketPath returns the default artifact service socket path.
-// Inside a sandbox, the daemon bind-mounts the artifact service socket at
-// the sandboxSocketPath. Outside a sandbox, the same path is used as the
-// default — operators running the CLI directly must specify --socket or
-// set BUREAU_ARTIFACT_SOCKET (the actual host-side socket is fleet-scoped
-// and not discoverable without fleet context).
-func defaultArtifactSocketPath() string {
-	return sandboxSocketPath
-}
-
-// defaultArtifactTokenPath returns the default artifact service token path.
-// The daemon-provisioned token is at sandboxTokenPath. Operators outside
-// a sandbox must specify --token-file or set BUREAU_ARTIFACT_TOKEN.
-func defaultArtifactTokenPath() string {
-	return sandboxTokenPath
+	flagSet.StringVar(&c.SocketPath, "socket", socketDefault, "artifact service socket path (direct mode)")
+	flagSet.StringVar(&c.TokenPath, "token-file", tokenDefault, "path to service token file (direct mode)")
+	flagSet.BoolVar(&c.ServiceMode, "service", false, "connect via daemon token minting (requires 'bureau login')")
+	flagSet.StringVar(&c.DaemonSocket, "daemon-socket", observe.DefaultDaemonSocket, "daemon observe socket path (service mode)")
 }
 
 // connect creates an artifact client from the connection parameters.
+// In service mode, mints a token via the daemon and uses the returned
+// socket path. In direct mode, reads the token from a file.
 func (c *ArtifactConnection) connect() (*artifactstore.Client, error) {
+	if c.ServiceMode {
+		result, err := c.MintServiceToken()
+		if err != nil {
+			return nil, err
+		}
+		return artifactstore.NewClientFromToken(result.SocketPath, result.TokenBytes), nil
+	}
 	return artifactstore.NewClient(c.SocketPath, c.TokenPath)
+}
+
+// MintResult holds the raw pieces from daemon-mediated token minting.
+// Returned by MintServiceToken for callers that need the individual
+// components. Short-lived commands use connect() which calls
+// MintServiceToken internally.
+type MintResult struct {
+	// SocketPath is the host-side Unix socket path for the artifact
+	// service's CBOR listener, resolved by the daemon from the
+	// m.bureau.room_service binding in the machine's config room.
+	SocketPath string
+
+	// TokenBytes is the signed service token (CBOR + Ed25519
+	// signature). Pass to artifactstore.NewClientFromToken.
+	TokenBytes []byte
+
+	// TTLSeconds is the token lifetime. Callers running long-lived
+	// sessions should refresh at 80% of TTL by calling
+	// MintServiceToken again.
+	TTLSeconds int
+}
+
+// MintServiceToken mints a signed service token via the daemon's
+// observe socket. Loads the operator session from the well-known path
+// (~/.config/bureau/session.json) on each call, so token rotation in
+// the session file is picked up automatically.
+//
+// Requires --service mode and a valid operator session from "bureau login".
+func (c *ArtifactConnection) MintServiceToken() (*MintResult, error) {
+	operatorSession, err := cli.LoadSession()
+	if err != nil {
+		return nil, err
+	}
+
+	tokenResponse, err := observe.MintServiceToken(
+		c.DaemonSocket,
+		"artifact",
+		operatorSession.UserID,
+		operatorSession.AccessToken,
+	)
+	if err != nil {
+		return nil, cli.Transient("mint service token via daemon at %s: %w", c.DaemonSocket, err).
+			WithHint("Is the Bureau daemon running? Check with 'bureau service list'. " +
+				"The daemon must be started before using --service mode.")
+	}
+
+	tokenBytes, err := tokenResponse.TokenBytes()
+	if err != nil {
+		return nil, cli.Internal("decode service token: %w", err)
+	}
+
+	return &MintResult{
+		SocketPath: tokenResponse.SocketPath,
+		TokenBytes: tokenBytes,
+		TTLSeconds: tokenResponse.TTLSeconds,
+	}, nil
 }
 
 // formatSize returns a human-readable file size.

@@ -419,9 +419,9 @@ func checkSystemUser(systemUser, operatorsGroupName string) []doctor.Result {
 			}
 		}
 	} else if doctor.IsRoot() {
-		// Running as root without SUDO_USER (e.g., root shell). No operator
-		// to check, but the check itself is fine.
-		results = append(results, doctor.Pass("operator group membership", "running as root"))
+		// Running as root without SUDO_USER (e.g., root shell). Can't
+		// determine which operator to verify group membership for.
+		results = append(results, doctor.Warn("operator group membership", "running as root without SUDO_USER; cannot verify operator group membership"))
 	}
 
 	return results
@@ -785,7 +785,7 @@ func checkSystemdUnits() []doctor.Result {
 					fmt.Sprintf("%s not found", unit.installPath),
 					fmt.Sprintf("write %s", unit.installPath),
 					func(ctx context.Context) error {
-						if err := os.WriteFile(unit.installPath, []byte(unit.expectedContent()), 0644); err != nil {
+						if err := atomicWriteFile(unit.installPath, []byte(unit.expectedContent()), 0644); err != nil {
 							return err
 						}
 						return runCommand("systemctl", "daemon-reload")
@@ -809,7 +809,7 @@ func checkSystemdUnits() []doctor.Result {
 					"installed content differs from expected",
 					fmt.Sprintf("update %s and restart if running", unit.installPath),
 					func(ctx context.Context) error {
-						if err := os.WriteFile(unit.installPath, []byte(unit.expectedContent()), 0644); err != nil {
+						if err := atomicWriteFile(unit.installPath, []byte(unit.expectedContent()), 0644); err != nil {
 							return err
 						}
 						if err := runCommand("systemctl", "daemon-reload"); err != nil {
@@ -921,7 +921,7 @@ func checkSockets(operatorsGroupName string) []doctor.Result {
 			}
 
 			wrongGroup := int(stat.Gid) != operatorsGID
-			wrongMode := info.Mode().Perm()&0060 != 0060 // group read+write required
+			wrongMode := info.Mode().Perm() != 0660 // exact: owner+group rw, no world access
 			if wrongGroup || wrongMode {
 				gid := operatorsGID
 				detail := fmt.Sprintf("group=%d (want %d), mode=%04o (want 0660)",
@@ -1231,7 +1231,7 @@ func writeMachineConf(params machineDoctorParams) error {
 		return fmt.Errorf("mkdir %s: %w", parentDirectory, err)
 	}
 
-	return os.WriteFile(machineConfPath(), []byte(fileContent), 0644)
+	return atomicWriteFile(machineConfPath(), []byte(fileContent), 0644)
 }
 
 // callerSessionHasGroup checks whether the operator's login session
@@ -1368,11 +1368,28 @@ func readProcIntField(pid int, fieldPrefix string) (int, error) {
 	return 0, fmt.Errorf("no %s line in %s", fieldPrefix, statusPath)
 }
 
+// atomicWriteFile writes content to a file atomically by writing to a
+// temporary file and renaming it over the target. This prevents
+// truncated files from interrupted writes.
+func atomicWriteFile(path string, content []byte, mode os.FileMode) error {
+	tempPath := path + ".tmp"
+	if err := os.WriteFile(tempPath, content, mode); err != nil {
+		return fmt.Errorf("write %s: %w", tempPath, err)
+	}
+	if err := os.Rename(tempPath, path); err != nil {
+		os.Remove(tempPath)
+		return fmt.Errorf("rename %s -> %s: %w", tempPath, path, err)
+	}
+	return nil
+}
+
 // atomicSymlink creates or replaces a symlink atomically by creating a
 // temporary symlink and renaming it over the target.
 func atomicSymlink(source, target string) error {
 	tempPath := target + ".new"
-	os.Remove(tempPath) // remove leftover from previous interrupted operation
+	if err := os.Remove(tempPath); err != nil && !os.IsNotExist(err) {
+		return fmt.Errorf("remove leftover %s: %w", tempPath, err)
+	}
 	if err := os.Symlink(source, tempPath); err != nil {
 		return fmt.Errorf("create symlink %s -> %s: %w", tempPath, source, err)
 	}

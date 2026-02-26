@@ -944,3 +944,179 @@ func TestAtomicSymlink(t *testing.T) {
 		t.Errorf("target -> %s, want %s", resolved, source2)
 	}
 }
+
+func TestAtomicWriteFile(t *testing.T) {
+	directory := t.TempDir()
+	target := filepath.Join(directory, "test-file")
+
+	content := []byte("hello world\n")
+	if err := atomicWriteFile(target, content, 0644); err != nil {
+		t.Fatalf("atomicWriteFile: %v", err)
+	}
+
+	// Verify content.
+	data, err := os.ReadFile(target)
+	if err != nil {
+		t.Fatalf("read: %v", err)
+	}
+	if string(data) != string(content) {
+		t.Errorf("content = %q, want %q", string(data), string(content))
+	}
+
+	// Verify mode.
+	info, err := os.Stat(target)
+	if err != nil {
+		t.Fatalf("stat: %v", err)
+	}
+	if info.Mode().Perm() != 0644 {
+		t.Errorf("mode = %04o, want 0644", info.Mode().Perm())
+	}
+
+	// Verify no leftover temp file.
+	tempPath := target + ".tmp"
+	if _, err := os.Stat(tempPath); !os.IsNotExist(err) {
+		t.Errorf("temp file %s should not exist after successful write", tempPath)
+	}
+}
+
+func TestAtomicWriteFile_ReplacesExisting(t *testing.T) {
+	directory := t.TempDir()
+	target := filepath.Join(directory, "test-file")
+
+	// Write initial content.
+	if err := atomicWriteFile(target, []byte("original"), 0644); err != nil {
+		t.Fatalf("first write: %v", err)
+	}
+
+	// Replace with new content.
+	if err := atomicWriteFile(target, []byte("replacement"), 0600); err != nil {
+		t.Fatalf("second write: %v", err)
+	}
+
+	data, err := os.ReadFile(target)
+	if err != nil {
+		t.Fatalf("read: %v", err)
+	}
+	if string(data) != "replacement" {
+		t.Errorf("content = %q, want %q", string(data), "replacement")
+	}
+
+	info, err := os.Stat(target)
+	if err != nil {
+		t.Fatalf("stat: %v", err)
+	}
+	if info.Mode().Perm() != 0600 {
+		t.Errorf("mode = %04o, want 0600", info.Mode().Perm())
+	}
+}
+
+func TestAtomicWriteFile_ParentMustExist(t *testing.T) {
+	target := filepath.Join(t.TempDir(), "nonexistent", "file")
+	err := atomicWriteFile(target, []byte("content"), 0644)
+	if err == nil {
+		t.Fatal("expected error when parent directory doesn't exist")
+	}
+}
+
+func TestWriteMachineConf_NoTempLeftover(t *testing.T) {
+	confDir := t.TempDir() + "/etc/bureau"
+	confPath := confDir + "/machine.conf"
+
+	t.Setenv("BUREAU_MACHINE_CONF", confPath)
+
+	params := machineDoctorParams{
+		Homeserver:  "http://matrix:6167",
+		MachineName: "bureau/fleet/prod/machine/test",
+		ServerName:  "bureau.local",
+		Fleet:       "bureau/fleet/prod",
+	}
+
+	if err := writeMachineConf(params); err != nil {
+		t.Fatalf("writeMachineConf: %v", err)
+	}
+
+	// Verify no leftover temp file.
+	tempPath := confPath + ".tmp"
+	if _, err := os.Stat(tempPath); !os.IsNotExist(err) {
+		t.Errorf("temp file %s should not exist after successful write", tempPath)
+	}
+}
+
+func TestCheckSystemdUnits_MissingUnit_HasElevatedFix(t *testing.T) {
+	saved := expectedUnits
+	defer func() { expectedUnits = saved }()
+
+	unitDir := t.TempDir()
+	unitPath := filepath.Join(unitDir, "test-unit.service")
+	unitContent := "[Unit]\nDescription=Test\n"
+
+	expectedUnits = []systemdUnitSpec{
+		{
+			name:            "test-unit.service",
+			expectedContent: func() string { return unitContent },
+			installPath:     unitPath,
+		},
+	}
+
+	results := checkSystemdUnits()
+
+	// The "installed" check should have a fix, and it should be elevated.
+	found := false
+	for _, result := range results {
+		if result.Name == "test-unit.service installed" {
+			found = true
+			if result.Status != doctor.StatusFail {
+				t.Errorf("expected FAIL, got %s", result.Status)
+			}
+			if !result.HasFix() {
+				t.Error("missing unit should have a fix")
+			}
+			if !result.Elevated {
+				t.Error("unit install should be elevated")
+			}
+		}
+	}
+	if !found {
+		t.Fatal("did not find 'test-unit.service installed' result")
+	}
+}
+
+func TestCheckSystemdUnits_ContentMismatch_HasElevatedFix(t *testing.T) {
+	saved := expectedUnits
+	defer func() { expectedUnits = saved }()
+
+	unitDir := t.TempDir()
+	unitPath := filepath.Join(unitDir, "test-unit.service")
+	if err := os.WriteFile(unitPath, []byte("old content"), 0644); err != nil {
+		t.Fatalf("write: %v", err)
+	}
+
+	expectedUnits = []systemdUnitSpec{
+		{
+			name:            "test-unit.service",
+			expectedContent: func() string { return "[Unit]\nDescription=New\n" },
+			installPath:     unitPath,
+		},
+	}
+
+	results := checkSystemdUnits()
+
+	found := false
+	for _, result := range results {
+		if result.Name == "test-unit.service installed" {
+			found = true
+			if result.Status != doctor.StatusFail {
+				t.Errorf("expected FAIL for mismatch, got %s", result.Status)
+			}
+			if !result.HasFix() {
+				t.Error("content mismatch should have a fix")
+			}
+			if !result.Elevated {
+				t.Error("unit update should be elevated")
+			}
+		}
+	}
+	if !found {
+		t.Fatal("did not find 'test-unit.service installed' result")
+	}
+}

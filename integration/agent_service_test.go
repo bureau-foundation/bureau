@@ -7,12 +7,14 @@ import (
 	"encoding/json"
 	"os"
 	"path/filepath"
+	"strings"
 	"testing"
 
 	"github.com/bureau-foundation/bureau/lib/schema"
 	agentschema "github.com/bureau-foundation/bureau/lib/schema/agent"
 	"github.com/bureau-foundation/bureau/lib/schema/artifact"
 	"github.com/bureau-foundation/bureau/lib/testutil"
+	"github.com/bureau-foundation/bureau/messaging"
 )
 
 // TestAgentServiceSessionTracking exercises the full agent lifecycle
@@ -168,6 +170,9 @@ func TestAgentServiceSessionTracking(t *testing.T) {
 	if sessionContent.LatestSessionArtifactRef == "" {
 		t.Error("LatestSessionArtifactRef is empty, want non-empty (session log should be uploaded to artifact service)")
 	}
+	if sessionContent.LatestContextCommitID == "" {
+		t.Error("LatestContextCommitID is empty, want non-empty (checkpoint chain tip should be recorded for session resumption)")
+	}
 
 	// --- Verify metrics ---
 
@@ -287,4 +292,218 @@ func TestAgentServiceSessionTracking(t *testing.T) {
 	}
 
 	t.Logf("checkpoint chain verified: %d commits, format=events-v1", len(commits))
+}
+
+// TestAgentContextResumption verifies the full context resume cycle:
+//
+//   - Session 1: mock agent runs, creates context checkpoints, exits.
+//     EndSession stores LatestContextCommitID in session state.
+//   - Daemon restarts the agent (RestartPolicy "always").
+//   - Session 2: Run() reads LatestContextCommitID from get-session,
+//     calls materialize-context with include_content, writes the
+//     materialized context to a temp file, passes it to the driver
+//     via DriverConfig.ResumedContextFile. The event checkpoint
+//     tracker chains new checkpoints from the previous session's tip.
+//
+// The test verifies:
+//   - The mock agent's debug log contains "RESUMED" (proving the
+//     driver received the context file).
+//   - Context commits from session 2 chain from session 1's tip
+//     (proving checkpoint chain continuity across sessions).
+func TestAgentContextResumption(t *testing.T) {
+	t.Parallel()
+
+	ctx := t.Context()
+	admin := adminSession(t)
+	defer admin.Close()
+
+	fleet := createTestFleet(t, admin)
+
+	// Boot a machine.
+	machine := newTestMachine(t, fleet, "ctx-resume-test")
+	startMachine(t, admin, machine, machineOptions{
+		LauncherBinary: resolvedBinary(t, "LAUNCHER_BINARY"),
+		DaemonBinary:   resolvedBinary(t, "DAEMON_BINARY"),
+		ProxyBinary:    resolvedBinary(t, "PROXY_BINARY"),
+		Fleet:          fleet,
+	})
+
+	// --- Artifact service setup ---
+
+	artifactBinary := testutil.DataBinary(t, "ARTIFACT_SERVICE_BINARY")
+	artifactSvc := deployService(t, admin, fleet, machine, serviceDeployOptions{
+		Binary:    artifactBinary,
+		Name:      "artifact-service",
+		Localpart: "service/artifact/ctx-resume-test",
+		Command:   []string{artifactBinary, "--store-dir", "/tmp/artifacts"},
+	})
+
+	if _, err := admin.SendStateEvent(ctx, machine.ConfigRoomID,
+		schema.EventTypeServiceBinding, "artifact",
+		schema.ServiceBindingContent{Principal: artifactSvc.Entity}); err != nil {
+		t.Fatalf("publish artifact service binding: %v", err)
+	}
+
+	// --- Agent service setup ---
+
+	agentSvc := deployService(t, admin, fleet, machine, serviceDeployOptions{
+		Binary:           testutil.DataBinary(t, "AGENT_SERVICE_BINARY"),
+		Name:             "agent-service",
+		Localpart:        "service/agent/ctx-resume-test",
+		RequiredServices: []string{"artifact"},
+		Authorization: &schema.AuthorizationPolicy{
+			Grants: []schema.Grant{
+				{Actions: []string{artifact.ActionStore, artifact.ActionFetch}},
+			},
+		},
+	})
+
+	if _, err := admin.SendStateEvent(ctx, machine.ConfigRoomID,
+		schema.EventTypeServiceBinding, "agent",
+		schema.ServiceBindingContent{Principal: agentSvc.Entity}); err != nil {
+		t.Fatalf("publish agent service binding: %v", err)
+	}
+
+	// --- Deploy mock agent with restart policy "always" ---
+	//
+	// The daemon restarts the agent after clean exit. Session 1 runs,
+	// creates checkpoints, exits. The daemon restarts. Session 2 picks
+	// up context from session 1, materializes it, and passes it to the
+	// driver. We wait for TotalSessionCount >= 2 to verify both sessions
+	// completed.
+	const agentLocalpart = "agent/ctx-resume-e2e"
+
+	metricsWatch := watchRoom(t, admin, machine.ConfigRoomID)
+
+	debugDir := t.TempDir()
+	agent := deployAgent(t, admin, machine, agentOptions{
+		Binary:           testutil.DataBinary(t, "MOCK_AGENT_BINARY"),
+		Localpart:        agentLocalpart,
+		RequiredServices: []string{"agent"},
+		RestartPolicy:    schema.RestartPolicyAlways,
+		ExtraMounts: []schema.TemplateMount{
+			{Source: debugDir, Dest: "/run/bureau/debug", Mode: schema.MountModeRW},
+		},
+	})
+
+	// Wait for at least 2 sessions to complete. The metrics state
+	// event is written at the end of each session. We use WaitForEvent
+	// with a predicate that checks TotalSessionCount >= 2.
+	metricsStateKey := agent.Account.UserID.Localpart()
+	metricsWatch.WaitForEvent(t, func(event messaging.Event) bool {
+		if event.Type != agentschema.EventTypeAgentMetrics {
+			return false
+		}
+		if event.StateKey == nil || *event.StateKey != metricsStateKey {
+			return false
+		}
+		contentJSON, err := json.Marshal(event.Content)
+		if err != nil {
+			return false
+		}
+		var metrics agentschema.AgentMetricsContent
+		if json.Unmarshal(contentJSON, &metrics) != nil {
+			return false
+		}
+		return metrics.TotalSessionCount >= 2
+	}, "metrics with TotalSessionCount >= 2")
+	t.Log("at least 2 sessions completed")
+
+	// --- Verify debug log contains RESUMED ---
+
+	debugLogPath := filepath.Join(debugDir, "agent.log")
+	debugLog, err := os.ReadFile(debugLogPath)
+	if err != nil {
+		t.Fatalf("reading debug log: %v", err)
+	}
+	t.Logf("mock agent debug log (%d bytes):\n%s", len(debugLog), debugLog)
+
+	if !strings.Contains(string(debugLog), "RESUMED") {
+		t.Error("debug log does not contain RESUMED — the mock agent did not detect the materialized context file")
+	}
+
+	// --- Verify cross-session checkpoint chain ---
+
+	// Read all context commits from the config room.
+	allState, err := admin.GetRoomState(ctx, machine.ConfigRoomID)
+	if err != nil {
+		t.Fatalf("get config room state: %v", err)
+	}
+
+	// Read session state to get the latest session ID for filtering.
+	sessionRaw, err := admin.GetStateEvent(ctx, machine.ConfigRoomID,
+		agentschema.EventTypeAgentSession, agent.Account.UserID.Localpart())
+	if err != nil {
+		t.Fatalf("get agent session state: %v", err)
+	}
+	var sessionContent agentschema.AgentSessionContent
+	if err := json.Unmarshal(sessionRaw, &sessionContent); err != nil {
+		t.Fatalf("unmarshal agent session: %v", err)
+	}
+
+	type commitEntry struct {
+		stateKey string
+		content  agentschema.ContextCommitContent
+	}
+	var allCommits []commitEntry
+	for _, event := range allState {
+		if event.Type != agentschema.EventTypeAgentContextCommit {
+			continue
+		}
+		if event.StateKey == nil {
+			continue
+		}
+		contentJSON, _ := json.Marshal(event.Content)
+		var content agentschema.ContextCommitContent
+		if json.Unmarshal(contentJSON, &content) != nil {
+			continue
+		}
+		allCommits = append(allCommits, commitEntry{stateKey: *event.StateKey, content: content})
+	}
+
+	// Group commits by session ID and build a set of commit IDs per session.
+	sessionCommits := make(map[string]map[string]bool)
+	for _, commit := range allCommits {
+		if sessionCommits[commit.content.SessionID] == nil {
+			sessionCommits[commit.content.SessionID] = make(map[string]bool)
+		}
+		sessionCommits[commit.content.SessionID][commit.stateKey] = true
+	}
+
+	if len(sessionCommits) < 2 {
+		t.Fatalf("expected commits from at least 2 sessions, got %d sessions", len(sessionCommits))
+	}
+	t.Logf("context commits span %d sessions, %d total commits", len(sessionCommits), len(allCommits))
+
+	// Verify cross-session chaining: at least one commit must have a
+	// parent that belongs to a different session. This proves the
+	// checkpoint tracker was initialized with the previous session's
+	// tip commit, creating a continuous chain.
+	crossSessionLinks := 0
+	for _, commit := range allCommits {
+		if commit.content.Parent == "" {
+			continue
+		}
+		// Check if the parent belongs to a different session.
+		for otherSessionID, commitIDs := range sessionCommits {
+			if otherSessionID == commit.content.SessionID {
+				continue
+			}
+			if commitIDs[commit.content.Parent] {
+				crossSessionLinks++
+				t.Logf("cross-session link: commit %s (session %s) → parent %s (session %s)",
+					commit.stateKey, commit.content.SessionID,
+					commit.content.Parent, otherSessionID)
+			}
+		}
+	}
+
+	if crossSessionLinks == 0 {
+		t.Error("no cross-session parent links found — checkpoint chain does not continue across sessions")
+		for _, commit := range allCommits {
+			t.Logf("  commit=%s session=%s parent=%s type=%s",
+				commit.stateKey, commit.content.SessionID,
+				commit.content.Parent, commit.content.CommitType)
+		}
+	}
 }

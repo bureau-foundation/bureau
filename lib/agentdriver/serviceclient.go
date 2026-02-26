@@ -92,6 +92,12 @@ type EndSessionRequest struct {
 	Turns                 int64
 	Errors                int64
 	DurationSeconds       int64
+
+	// LatestContextCommitID is the ctx-* identifier of the most
+	// recent context commit from this session. Stored in the session
+	// state event so the next session can resume from this point.
+	// Empty when no context checkpointing was performed.
+	LatestContextCommitID string
 }
 
 // EndSessionRequestFromSummary constructs an EndSessionRequest from a
@@ -134,6 +140,9 @@ func (c *AgentServiceClient) EndSession(ctx context.Context, request EndSessionR
 	}
 	if request.SessionLogArtifactRef != "" {
 		fields["session_log_artifact_ref"] = request.SessionLogArtifactRef
+	}
+	if request.LatestContextCommitID != "" {
+		fields["latest_context_commit_id"] = request.LatestContextCommitID
 	}
 	return c.client.Call(ctx, "end-session", fields, nil)
 }
@@ -398,6 +407,65 @@ func (c *AgentServiceClient) CheckpointContext(ctx context.Context, request Chec
 
 	var response CheckpointContextResponse
 	if err := c.client.Call(ctx, "checkpoint-context", fields, &response); err != nil {
+		return nil, err
+	}
+	return &response, nil
+}
+
+// --- Context materialization actions ---
+
+// MaterializeContextRequest holds the parameters for materializing
+// a context commit chain into a single artifact.
+type MaterializeContextRequest struct {
+	// CommitID is the ctx-* identifier of the tip commit. Required.
+	CommitID string
+
+	// StopStrategy controls how far back the chain walk goes.
+	// "compaction" (default): stop at the nearest compaction/snapshot.
+	// "root": walk the entire chain to the root commit.
+	// A specific "ctx-*" ID: stop after including that commit.
+	StopStrategy string
+
+	// IncludeContent requests the materialized content bytes inline
+	// in the response, avoiding a separate artifact fetch. When
+	// false, only the artifact ref and metadata are returned.
+	IncludeContent bool
+}
+
+// MaterializeContextResponse is the response from a materialize-context
+// call. Contains the artifact ref for the concatenated conversation and
+// aggregate statistics. When IncludeContent was requested, Content and
+// ContentType are populated with the raw materialized bytes.
+type MaterializeContextResponse struct {
+	ArtifactRef  string `cbor:"artifact_ref"`
+	Format       string `cbor:"format"`
+	MessageCount int    `cbor:"message_count"`
+	TokenCount   int64  `cbor:"token_count"`
+	CommitCount  int    `cbor:"commit_count"`
+	Content      []byte `cbor:"content,omitempty"`
+	ContentType  string `cbor:"content_type,omitempty"`
+}
+
+// MaterializeContext reconstructs a full conversation from a context
+// commit chain. The server walks the chain from the tip commit to the
+// stop point, fetches delta artifacts, and concatenates them using
+// format-specific rules.
+func (c *AgentServiceClient) MaterializeContext(ctx context.Context, request MaterializeContextRequest) (*MaterializeContextResponse, error) {
+	if request.CommitID == "" {
+		return nil, fmt.Errorf("commit_id is required")
+	}
+	fields := map[string]any{
+		"commit_id": request.CommitID,
+	}
+	if request.StopStrategy != "" {
+		fields["stop_strategy"] = request.StopStrategy
+	}
+	if request.IncludeContent {
+		fields["include_content"] = true
+	}
+
+	var response MaterializeContextResponse
+	if err := c.client.Call(ctx, "materialize-context", fields, &response); err != nil {
 		return nil, err
 	}
 	return &response, nil

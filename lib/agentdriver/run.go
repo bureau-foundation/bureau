@@ -205,7 +205,11 @@ func Run(ctx context.Context, driver Driver, config RunConfig) error {
 	sessionID := fmt.Sprintf("%s-%d", agentContext.Identity.UserID, time.Now().UnixMilli())
 
 	// Agent service integration: session tracking and metrics.
+	// currentSession is declared in the outer scope because context
+	// materialization (below) reads LatestContextCommitID from the
+	// previous session after the agent service block closes.
 	var agentServiceClient *AgentServiceClient
+	var currentSession *agent.AgentSessionContent
 	if config.AgentServiceSocketPath != "" {
 		if config.AgentServiceTokenPath == "" {
 			return fmt.Errorf("AgentServiceTokenPath is required when AgentServiceSocketPath is set")
@@ -220,7 +224,8 @@ func Run(ctx context.Context, driver Driver, config RunConfig) error {
 		agentServiceClient = client
 
 		// Check for stale active sessions (e.g., from a crashed sandbox).
-		currentSession, getError := agentServiceClient.GetSession(ctx, "")
+		var getError error
+		currentSession, getError = agentServiceClient.GetSession(ctx, "")
 		if getError != nil {
 			return fmt.Errorf("checking current session state: %w", getError)
 		}
@@ -254,10 +259,62 @@ func Run(ctx context.Context, driver Driver, config RunConfig) error {
 		logger.Info("agent service session started", "session_id", sessionID)
 	}
 
+	// Materialize context from a previous session when checkpointing
+	// is enabled and the previous session produced context commits.
+	// The materialized content is written to a temp file and passed
+	// to the driver via DriverConfig so it can resume the conversation.
+	var resumedContextFile, resumedContextFormat, resumedContextCommitID string
+	if config.CheckpointFormat != "" && agentServiceClient != nil &&
+		currentSession != nil && currentSession.LatestContextCommitID != "" {
+
+		materializeResponse, materializeError := agentServiceClient.MaterializeContext(ctx, MaterializeContextRequest{
+			CommitID:       currentSession.LatestContextCommitID,
+			IncludeContent: true,
+		})
+		if materializeError != nil {
+			// Materialization failure is non-fatal: the agent runs
+			// without context and starts a fresh checkpoint chain.
+			logger.Warn("context materialization failed, starting fresh",
+				"commit_id", currentSession.LatestContextCommitID,
+				"error", materializeError,
+			)
+		} else if len(materializeResponse.Content) > 0 {
+			contextFile, writeError := os.CreateTemp("", "bureau-context-*")
+			if writeError != nil {
+				logger.Warn("creating context temp file", "error", writeError)
+			} else {
+				if _, writeError = contextFile.Write(materializeResponse.Content); writeError != nil {
+					logger.Warn("writing context temp file", "error", writeError)
+					contextFile.Close()
+					os.Remove(contextFile.Name())
+				} else {
+					contextFile.Close()
+					resumedContextFile = contextFile.Name()
+					resumedContextFormat = materializeResponse.Format
+					resumedContextCommitID = currentSession.LatestContextCommitID
+					logger.Info("context materialized from previous session",
+						"commit_id", currentSession.LatestContextCommitID,
+						"format", materializeResponse.Format,
+						"commit_count", materializeResponse.CommitCount,
+						"message_count", materializeResponse.MessageCount,
+						"token_count", materializeResponse.TokenCount,
+						"content_size", len(materializeResponse.Content),
+						"context_file", resumedContextFile,
+					)
+				}
+			}
+		}
+	}
+	if resumedContextFile != "" {
+		defer os.Remove(resumedContextFile)
+	}
+
 	// Create event checkpoint tracker when checkpointing is enabled.
 	// The tracker sends CBOR event deltas to the agent service, which
 	// stores them as artifacts and records commit metadata. Created
-	// after session start so the sessionID is available.
+	// after session start so the sessionID is available. When resuming,
+	// initialContextID chains new checkpoints from the previous session's
+	// tip commit.
 	var tracker *eventCheckpointTracker
 	if config.CheckpointFormat != "" {
 		tracker = newEventCheckpointTracker(
@@ -265,11 +322,13 @@ func Run(ctx context.Context, driver Driver, config RunConfig) error {
 			config.CheckpointFormat,
 			sessionID,
 			config.AgentTemplate,
+			resumedContextCommitID,
 			logger,
 		)
 		logger.Info("event checkpoint tracker initialized",
 			"format", config.CheckpointFormat,
 			"template", config.AgentTemplate,
+			"initial_context_id", resumedContextCommitID,
 		)
 	}
 
@@ -299,10 +358,12 @@ func Run(ctx context.Context, driver Driver, config RunConfig) error {
 	// Start the agent process.
 	logger.Info("starting agent process")
 	driverConfig := DriverConfig{
-		Prompt:           prompt,
-		SystemPromptFile: systemPromptFile,
-		SessionID:        sessionID,
-		WorkingDirectory: workingDirectory,
+		Prompt:               prompt,
+		SystemPromptFile:     systemPromptFile,
+		SessionID:            sessionID,
+		WorkingDirectory:     workingDirectory,
+		ResumedContextFile:   resumedContextFile,
+		ResumedContextFormat: resumedContextFormat,
 	}
 	process, stdout, err := driver.Start(ctx, driverConfig)
 	if err != nil {
@@ -451,6 +512,9 @@ func Run(ctx context.Context, driver Driver, config RunConfig) error {
 	// are logged but do not mask the agent's own exit status.
 	if agentServiceClient != nil {
 		endRequest := EndSessionRequestFromSummary(sessionID, summary, sessionLogArtifactRef)
+		if tracker != nil && tracker.currentContextID != "" {
+			endRequest.LatestContextCommitID = tracker.currentContextID
+		}
 		if endError := agentServiceClient.EndSession(ctx, endRequest); endError != nil {
 			logger.Error("ending agent service session", "error", endError)
 		} else {

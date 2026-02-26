@@ -44,6 +44,18 @@ type DriverConfig struct {
 	// WorkingDirectory is the directory the agent process should start in.
 	WorkingDirectory string
 
+	// ResumedContextFile is the path to a file containing materialized
+	// conversation context from a previous session. When non-empty, the
+	// driver can use this to resume the conversation. The file format is
+	// described by ResumedContextFormat. Empty when starting fresh (no
+	// previous context exists or context materialization is disabled).
+	ResumedContextFile string
+
+	// ResumedContextFormat is the serialization format of the resumed
+	// context file (e.g., "events-v1", "bureau-agent-v1",
+	// "claude-code-v1"). Empty when ResumedContextFile is empty.
+	ResumedContextFormat string
+
 	// ExtraEnv is additional environment variables to set for the agent
 	// process, in "KEY=VALUE" format.
 	ExtraEnv []string

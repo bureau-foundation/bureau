@@ -48,6 +48,7 @@ func testEventTracker(checkpointer eventContextCheckpointer) *eventCheckpointTra
 		"events-v1",
 		"test-session-1",
 		"test-template",
+		"", // no initial context ID (fresh session)
 		slog.Default(),
 	)
 }

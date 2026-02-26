@@ -109,6 +109,13 @@ type AgentSessionContent struct {
 	// the artifact service.
 	LatestSessionArtifactRef string `json:"latest_session_artifact_ref,omitempty"`
 
+	// LatestContextCommitID is the ctx-* identifier of the most
+	// recent context commit from the latest completed session. Used
+	// for session resumption — Run() reads this to materialize the
+	// previous conversation context and chain new checkpoints from
+	// the same tip.
+	LatestContextCommitID string `json:"latest_context_commit_id,omitempty"`
+
 	// SessionIndexArtifactRef is the artifact ref pointing to the
 	// session index — a JSONL file listing all sessions for this
 	// principal with their IDs, timestamps, summary stats, and

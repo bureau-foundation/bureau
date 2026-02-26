@@ -216,6 +216,11 @@ type endSessionRequest struct {
 	// Empty if session logging was disabled.
 	SessionLogArtifactRef string `cbor:"session_log_artifact_ref,omitempty"`
 
+	// LatestContextCommitID is the ctx-* identifier of the most
+	// recent context checkpoint from this session. Stored in the
+	// session state event so subsequent sessions can chain from it.
+	LatestContextCommitID string `cbor:"latest_context_commit_id,omitempty"`
+
 	// Metrics from the completed session, to be added to the
 	// principal's aggregate totals.
 	InputTokens      int64   `cbor:"input_tokens"`
@@ -268,6 +273,9 @@ func (agentService *AgentService) handleEndSession(ctx context.Context, token *s
 	sessionContent.LatestSessionID = request.SessionID
 	if request.SessionLogArtifactRef != "" {
 		sessionContent.LatestSessionArtifactRef = request.SessionLogArtifactRef
+	}
+	if request.LatestContextCommitID != "" {
+		sessionContent.LatestContextCommitID = request.LatestContextCommitID
 	}
 
 	if _, err := agentService.session.SendStateEvent(
@@ -806,21 +814,26 @@ func contentTypeForFormat(format string) string {
 // from a context commit chain by fetching deltas from the artifact
 // service and concatenating them using format-specific rules.
 type materializeContextRequest struct {
-	Action       string `cbor:"action"`
-	CommitID     string `cbor:"commit_id"`
-	OutputFormat string `cbor:"output_format,omitempty"`
-	StopStrategy string `cbor:"stop_strategy,omitempty"`
+	Action         string `cbor:"action"`
+	CommitID       string `cbor:"commit_id"`
+	OutputFormat   string `cbor:"output_format,omitempty"`
+	StopStrategy   string `cbor:"stop_strategy,omitempty"`
+	IncludeContent bool   `cbor:"include_content,omitempty"`
 }
 
 // materializeContextResponse is the wire format for the
 // "materialize-context" response. Contains the artifact ref for the
 // concatenated conversation and aggregate statistics from the chain.
+// When IncludeContent was requested, Content and ContentType are
+// populated with the raw materialized bytes.
 type materializeContextResponse struct {
 	ArtifactRef  string `cbor:"artifact_ref"`
 	Format       string `cbor:"format"`
 	MessageCount int    `cbor:"message_count"`
 	TokenCount   int64  `cbor:"token_count"`
 	CommitCount  int    `cbor:"commit_count"`
+	Content      []byte `cbor:"content,omitempty"`
+	ContentType  string `cbor:"content_type,omitempty"`
 }
 
 func (agentService *AgentService) handleMaterializeContext(ctx context.Context, token *servicetoken.Token, raw []byte) (any, error) {
@@ -899,13 +912,20 @@ func (agentService *AgentService) handleMaterializeContext(ctx context.Context, 
 		"artifact_ref", artifactRef,
 	)
 
-	return materializeContextResponse{
+	response := materializeContextResponse{
 		ArtifactRef:  artifactRef,
 		Format:       chainFormat,
 		MessageCount: totalMessageCount,
 		TokenCount:   totalTokenCount,
 		CommitCount:  len(chain),
-	}, nil
+	}
+
+	if request.IncludeContent {
+		response.Content = content
+		response.ContentType = contentType
+	}
+
+	return response, nil
 }
 
 // --- Matrix state helpers ---

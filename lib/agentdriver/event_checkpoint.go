@@ -59,11 +59,18 @@ type eventCheckpointTracker struct {
 // newEventCheckpointTracker creates a tracker for Run()-level event
 // checkpointing. All arguments are required — the caller validates
 // that the agent service client is present before calling this.
+//
+// initialContextID is the ctx-* identifier to use as the parent for
+// the first checkpoint. When resuming from a previous session, this
+// is the tip commit of the previous session's chain, ensuring new
+// checkpoints extend the existing chain rather than starting a new
+// root. Empty for a fresh session (first checkpoint has no parent).
 func newEventCheckpointTracker(
 	agentServiceClient eventContextCheckpointer,
 	format string,
 	sessionID string,
 	template string,
+	initialContextID string,
 	logger *slog.Logger,
 ) *eventCheckpointTracker {
 	return &eventCheckpointTracker{
@@ -71,6 +78,7 @@ func newEventCheckpointTracker(
 		format:             format,
 		sessionID:          sessionID,
 		template:           template,
+		currentContextID:   initialContextID,
 		logger:             logger,
 	}
 }

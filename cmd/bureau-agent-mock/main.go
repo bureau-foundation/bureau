@@ -33,21 +33,31 @@ func main() {
 
 	// Write structured logs to /run/bureau/debug/agent.log when the
 	// directory exists (bind-mounted from host for test diagnostics).
+	// Uses O_APPEND so logs accumulate across restarts within the
+	// same bind-mount (important for testing context resumption where
+	// the daemon restarts the agent and we need logs from all runs).
 	const debugLogPath = "/run/bureau/debug/agent.log"
-	if debugFile, err := os.Create(debugLogPath); err == nil {
+	if debugFile, err := os.OpenFile(debugLogPath, os.O_APPEND|os.O_CREATE|os.O_WRONLY, 0o644); err == nil {
 		config.Logger = slog.New(slog.NewTextHandler(io.MultiWriter(os.Stderr, debugFile), nil))
 		defer debugFile.Close()
 	}
 
-	if err := agentdriver.Run(context.Background(), &mockDriver{}, config); err != nil {
-		fmt.Fprintf(os.Stderr, "bureau-agent-mock: %v\n", err)
+	driver := &mockDriver{logger: config.Logger}
+	if driver.logger == nil {
+		driver.logger = slog.Default()
+	}
+
+	if err := agentdriver.Run(context.Background(), driver, config); err != nil {
+		driver.logger.Error("bureau-agent-mock fatal", "error", err)
 		os.Exit(1)
 	}
 }
 
 // mockDriver implements agentdriver.Driver with an internal pipe instead of an
 // external process.
-type mockDriver struct{}
+type mockDriver struct {
+	logger *slog.Logger
+}
 
 // mockProcess wraps an internal pipe to implement agentdriver.Process.
 type mockProcess struct {
@@ -78,14 +88,36 @@ func (driver *mockDriver) Start(ctx context.Context, config agentdriver.DriverCo
 		done:        done,
 	}
 
+	// Check for resumed context from a previous session.
+	resumed := config.ResumedContextFile != ""
+	if resumed {
+		info, statError := os.Stat(config.ResumedContextFile)
+		if statError != nil {
+			return nil, nil, fmt.Errorf("resumed context file does not exist: %w", statError)
+		}
+		if info.Size() == 0 {
+			return nil, nil, fmt.Errorf("resumed context file is empty: %s", config.ResumedContextFile)
+		}
+		driver.logger.Info("RESUMED",
+			"context_file", config.ResumedContextFile,
+			"format", config.ResumedContextFormat,
+			"size", info.Size())
+	}
+
 	// Emit events in a goroutine, then exit.
 	go func() {
 		defer close(done)
 		defer stdoutWriter.Close()
 
-		// Emit a few mock events.
+		// Emit a few mock events. When resuming, the init message
+		// indicates this is a resumed session.
+		initMessage := "mock agent starting"
+		if resumed {
+			initMessage = "mock agent resuming from previous context"
+		}
+
 		events := []map[string]any{
-			{"type": "system", "subtype": "init", "message": "mock agent starting"},
+			{"type": "system", "subtype": "init", "message": initMessage},
 			{"type": "assistant", "subtype": "text", "text": "I am a mock agent running in Bureau."},
 			{"type": "assistant", "subtype": "tool_use", "tool_use_id": "tu-mock-1", "name": "Read", "input": map[string]string{"file_path": "/run/bureau/payload.json"}},
 			{"type": "tool", "subtype": "result", "tool_use_id": "tu-mock-1", "content": "payload content", "is_error": false},

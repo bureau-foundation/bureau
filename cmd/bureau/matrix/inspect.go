@@ -141,7 +141,7 @@ or prefix (e.g., --type 'm.bureau.*').`,
 
 			session, err := params.SessionConfig.Connect(ctx)
 			if err != nil {
-				return cli.Internal("connect: %w", err)
+				return err
 			}
 
 			roomID, err := resolveRoom(ctx, session, params.Room)

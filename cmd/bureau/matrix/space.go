@@ -95,7 +95,7 @@ if not specified.`,
 
 			sess, err := params.SessionConfig.Connect(ctx)
 			if err != nil {
-				return cli.Internal("connect: %w", err)
+				return err
 			}
 
 			response, err := sess.CreateRoom(ctx, messaging.CreateRoomRequest{
@@ -170,7 +170,7 @@ table of room ID, alias, and name.`,
 
 			sess, err := params.SessionConfig.Connect(ctx)
 			if err != nil {
-				return cli.Internal("connect: %w", err)
+				return err
 			}
 
 			roomIDs, err := sess.JoinedRooms(ctx)
@@ -256,7 +256,7 @@ reclaim the room.`,
 
 			sess, err := params.SessionConfig.Connect(ctx)
 			if err != nil {
-				return cli.Internal("connect: %w", err)
+				return err
 			}
 
 			roomID, err := resolveRoom(ctx, sess, target)
@@ -323,7 +323,7 @@ Displays a table of user ID, display name, and membership state
 
 			sess, err := params.SessionConfig.Connect(ctx)
 			if err != nil {
-				return cli.Internal("connect: %w", err)
+				return err
 			}
 
 			roomID, err := resolveRoom(ctx, sess, target)

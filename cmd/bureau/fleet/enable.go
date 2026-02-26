@@ -104,16 +104,18 @@ func runEnable(ctx context.Context, logger *slog.Logger, fleetLocalpart string, 
 
 	// Read credentials for registration token and admin session.
 	if params.SessionConfig.CredentialFile == "" {
-		return cli.Validation("--credential-file is required for service account registration")
+		return cli.Validation("--credential-file is required for service account registration").
+			WithHint("Pass --credential-file with the file from 'bureau matrix setup'.")
 	}
 	credentials, err := cli.ReadCredentialFile(params.SessionConfig.CredentialFile)
 	if err != nil {
-		return cli.Internal("reading credentials: %w", err)
+		return err
 	}
 
 	registrationToken := credentials["MATRIX_REGISTRATION_TOKEN"]
 	if registrationToken == "" {
-		return cli.Validation("credential file missing MATRIX_REGISTRATION_TOKEN")
+		return cli.Validation("credential file %s is missing MATRIX_REGISTRATION_TOKEN", params.SessionConfig.CredentialFile).
+			WithHint("The credential file may be incomplete. Re-run 'bureau matrix setup' to regenerate it.")
 	}
 
 	registrationTokenBuffer, err := secret.NewFromString(registrationToken)
@@ -126,7 +128,7 @@ func runEnable(ctx context.Context, logger *slog.Logger, fleetLocalpart string, 
 	// provisioning.
 	adminSession, err := params.SessionConfig.Connect(ctx)
 	if err != nil {
-		return cli.Internal("connecting admin session: %w", err)
+		return err
 	}
 	defer adminSession.Close()
 
@@ -174,7 +176,11 @@ func runEnable(ctx context.Context, logger *slog.Logger, fleetLocalpart string, 
 	machineRoomAlias := fleet.MachineRoomAlias()
 	machineRoomID, err := adminSession.ResolveAlias(ctx, machineRoomAlias)
 	if err != nil {
-		return cli.Internal("resolve fleet machine room %q: %w", machineRoomAlias, err)
+		if messaging.IsMatrixError(err, messaging.ErrCodeNotFound) {
+			return cli.NotFound("fleet machine room %s not found", machineRoomAlias).
+				WithHint("Has the fleet been created? Run 'bureau fleet create' first.")
+		}
+		return cli.Transient("resolving fleet machine room %s: %w", machineRoomAlias, err)
 	}
 
 	// The fleet-controller template is published by "bureau matrix
@@ -226,7 +232,11 @@ func runEnable(ctx context.Context, logger *slog.Logger, fleetLocalpart string, 
 
 		configRoomID, resolveErr := adminSession.ResolveAlias(ctx, machine.RoomAlias())
 		if resolveErr != nil {
-			return cli.Internal("resolve config room %s: %w", machine.RoomAlias(), resolveErr)
+			if messaging.IsMatrixError(resolveErr, messaging.ErrCodeNotFound) {
+				return cli.NotFound("machine config room %s not found", machine.RoomAlias()).
+					WithHint("The machine may not have been registered yet. Run 'bureau machine list' to see available machines.")
+			}
+			return cli.Transient("resolving machine config room %s: %w", machine.RoomAlias(), resolveErr)
 		}
 
 		configEventID, assignErr := principal.AssignPrincipals(ctx, adminSession, configRoomID, []principal.CreateParams{createParams})
@@ -288,7 +298,7 @@ func resolveHostMachine(fleet ref.Fleet, host string, logger *slog.Logger) (ref.
 	if host == "local" {
 		resolved, err := resolveLocalMachineName()
 		if err != nil {
-			return ref.Machine{}, cli.Internal("resolving local machine identity: %w", err)
+			return ref.Machine{}, err
 		}
 		machineName = resolved
 		logger.Info("resolved --host=local", "machine_name", machineName)
@@ -343,7 +353,11 @@ func extractMachineName(localpart string) (string, error) {
 func publishFleetBindings(ctx context.Context, session messaging.Session, fleet ref.Fleet, serviceRef ref.Service, logger *slog.Logger) (int, error) {
 	machineRoomID, err := session.ResolveAlias(ctx, fleet.MachineRoomAlias())
 	if err != nil {
-		return 0, cli.NotFound("resolving fleet machine room %s: %w", fleet.MachineRoomAlias(), err)
+		if messaging.IsMatrixError(err, messaging.ErrCodeNotFound) {
+			return 0, cli.NotFound("fleet machine room %s not found", fleet.MachineRoomAlias()).
+				WithHint("Has the fleet been created? Run 'bureau fleet create' first.")
+		}
+		return 0, cli.Transient("resolving fleet machine room %s: %w", fleet.MachineRoomAlias(), err)
 	}
 
 	events, err := session.GetRoomState(ctx, machineRoomID)

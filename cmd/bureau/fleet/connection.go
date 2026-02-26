@@ -4,7 +4,6 @@
 package fleet
 
 import (
-	"fmt"
 	"os"
 	"strings"
 
@@ -123,7 +122,14 @@ func (c *FleetConnection) connect() (*service.ServiceClient, error) {
 		}
 		return service.NewServiceClientFromToken(result.SocketPath, result.TokenBytes), nil
 	}
-	return service.NewServiceClient(c.SocketPath, c.TokenPath)
+	client, err := service.NewServiceClient(c.SocketPath, c.TokenPath)
+	if err != nil {
+		return nil, cli.Internal("connecting to fleet controller: %w", err).
+			WithHint("In direct mode, check that --socket points to a valid fleet controller socket " +
+				"and --token-file points to a valid service token.\n" +
+				"From the host, use --service mode instead: 'bureau fleet <command> --service'.")
+	}
+	return client, nil
 }
 
 // MintServiceToken mints a signed service token via the daemon's
@@ -150,14 +156,16 @@ func (c *FleetConnection) MintServiceToken() (*MintResult, error) {
 	)
 	if err != nil {
 		if strings.Contains(err.Error(), "no service binding found") {
-			return nil, fmt.Errorf("fleet controller not enabled on this machine — run \"bureau fleet enable <fleet-localpart> --host <machine>\" to set up service bindings")
+			return nil, cli.NotFound("fleet controller not enabled on this machine").
+				WithHint("Run 'bureau fleet enable <fleet-localpart> --host <machine>' to set up service bindings.")
 		}
-		return nil, fmt.Errorf("mint service token: %w", err)
+		return nil, cli.Transient("minting fleet service token: %w", err).
+			WithHint("Check that the Bureau daemon is running and the observe socket is accessible at " + c.DaemonSocket + ".")
 	}
 
 	tokenBytes, err := tokenResponse.TokenBytes()
 	if err != nil {
-		return nil, fmt.Errorf("decode service token: %w", err)
+		return nil, cli.Internal("decoding service token: %w", err)
 	}
 
 	return &MintResult{

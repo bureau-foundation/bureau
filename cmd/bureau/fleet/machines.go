@@ -67,7 +67,7 @@ the number of assigned principals.`,
 
 			var response machinesResponse
 			if err := client.Call(ctx, "list-machines", nil, &response); err != nil {
-				return cli.Internal("listing machines: %w", err)
+				return cli.Transient("listing machines: %w", err)
 			}
 
 			if done, err := params.EmitJSON(listMachinesResult{Machines: response.Machines}); done {
@@ -170,7 +170,8 @@ current resource usage, and all assigned principals.`,
 			if err := client.Call(ctx, "show-machine", map[string]any{
 				"machine": machineLocalpart,
 			}, &response); err != nil {
-				return cli.Internal("showing machine: %w", err)
+				return cli.Transient("showing machine %q: %w", machineLocalpart, err).
+					WithHint("Run 'bureau fleet list-machines' to see available machines.")
 			}
 
 			result := showMachineResult{

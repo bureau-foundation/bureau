@@ -69,13 +69,15 @@ failure explicitly.`,
 		Annotations:    cli.Destructive(),
 		Run: func(ctx context.Context, args []string, logger *slog.Logger) error {
 			if len(args) == 0 {
-				return cli.Validation("machine reference is required\n\nUsage: bureau machine decommission <machine-ref> [flags]")
+				return cli.Validation("machine reference is required").
+					WithHint("Usage: bureau machine decommission <machine-ref> [flags]")
 			}
 			if len(args) > 1 {
 				return cli.Validation("expected exactly one argument (machine reference), got %d", len(args))
 			}
 			if params.SessionConfig.CredentialFile == "" {
-				return cli.Validation("--credential-file is required")
+				return cli.Validation("--credential-file is required").
+					WithHint("Pass --credential-file with the file from 'bureau matrix setup'.")
 			}
 
 			ctx, cancel := context.WithTimeout(ctx, 60*time.Second)
@@ -83,13 +85,14 @@ failure explicitly.`,
 
 			genericSession, err := params.SessionConfig.Connect(ctx)
 			if err != nil {
-				return cli.Internal("connect: %w", err)
+				return err
 			}
 			defer genericSession.Close()
 
 			session, ok := genericSession.(*messaging.DirectSession)
 			if !ok {
-				return cli.Internal("decommission requires a direct session (credential file), not a proxy session")
+				return cli.Validation("decommission requires a direct session (credential file), not a proxy session").
+					WithHint("This command must be run by an operator with --credential-file, not from inside a sandbox.")
 			}
 
 			defaultServer, err := ref.ServerFromUserID(session.UserID().String())
@@ -149,7 +152,8 @@ func Decommission(ctx context.Context, session *messaging.DirectSession, params 
 	// Resolve the fleet-scoped rooms for state event cleanup and kicking.
 	machineRoomID, serviceRoomID, fleetRoomID, err := resolveFleetRooms(ctx, session, fleet)
 	if err != nil {
-		return cli.NotFound("fleet rooms could not be resolved — cannot clear machine state: %w", err)
+		return cli.NotFound("fleet rooms could not be resolved — cannot clear machine state: %w", err).
+			WithHint("Has 'bureau matrix setup' been run for this fleet? Check with 'bureau matrix doctor'.")
 	}
 
 	_, err = session.SendStateEvent(ctx, machineRoomID, schema.EventTypeMachineKey, machineUsername, map[string]any{})
@@ -173,7 +177,8 @@ func Decommission(ctx context.Context, session *messaging.DirectSession, params 
 		if messaging.IsMatrixError(err, messaging.ErrCodeNotFound) {
 			logger.Info("config room does not exist, skipping", "alias", configAlias)
 		} else {
-			return cli.NotFound("resolve config room %q: %w", configAlias, err)
+			return cli.Transient("resolve config room %q: %w", configAlias, err).
+				WithHint("Check that the homeserver is running. Run 'bureau matrix doctor' to diagnose.")
 		}
 	} else {
 		// Clear machine_config.
@@ -250,7 +255,9 @@ func Decommission(ctx context.Context, session *messaging.DirectSession, params 
 			"count", len(activeRooms),
 			"rooms", roomDescriptions,
 		)
-		return cli.Internal("decommission incomplete: machine still has %d active room membership(s) — re-provisioning will not be possible until these are cleared", len(activeRooms))
+		return cli.Conflict("decommission incomplete: machine still has %d active room membership(s)", len(activeRooms)).
+			WithHint("The homeserver may not have processed all kick operations yet. Retry the decommission,\n" +
+				"or manually remove the machine from the listed rooms via 'bureau matrix room kick'.")
 	}
 
 	logger.Info("machine decommissioned",
@@ -267,7 +274,7 @@ func Decommission(ctx context.Context, session *messaging.DirectSession, params 
 func clearConfigRoomCredentials(ctx context.Context, session messaging.Session, roomID ref.RoomID, logger *slog.Logger) ([]string, error) {
 	events, err := session.GetRoomState(ctx, roomID)
 	if err != nil {
-		return nil, cli.Internal("read config room state: %w", err)
+		return nil, cli.Transient("read config room state: %w", err)
 	}
 
 	var cleared []string

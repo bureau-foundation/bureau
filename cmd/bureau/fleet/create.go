@@ -94,7 +94,7 @@ func runCreate(ctx context.Context, logger *slog.Logger, fleetLocalpart string, 
 
 	session, err := params.SessionConfig.Connect(ctx)
 	if err != nil {
-		return cli.Internal("connecting: %w", err)
+		return err
 	}
 	defer session.Close()
 
@@ -165,9 +165,10 @@ func EnsureFleetRooms(ctx context.Context, session messaging.Session, fleet ref.
 	spaceRoomID, err := session.ResolveAlias(ctx, spaceAlias)
 	if err != nil {
 		if messaging.IsMatrixError(err, messaging.ErrCodeNotFound) {
-			return FleetRooms{}, cli.NotFound("namespace space %s not found (run 'bureau matrix setup' first)", spaceAlias)
+			return FleetRooms{}, cli.NotFound("namespace space %s not found", spaceAlias).
+				WithHint("Run 'bureau matrix setup' to create the namespace space.")
 		}
-		return FleetRooms{}, cli.Internal("resolving namespace space %s: %w", spaceAlias, err)
+		return FleetRooms{}, cli.Transient("resolving namespace space %s: %w", spaceAlias, err)
 	}
 
 	adminUserID := session.UserID()
@@ -229,10 +230,12 @@ func EnsureFleetRooms(ctx context.Context, session messaging.Session, fleet ref.
 func InviteToFleetRooms(ctx context.Context, session messaging.Session, rooms FleetRooms, userID ref.UserID, logger *slog.Logger) error {
 	for _, roomID := range []ref.RoomID{rooms.ConfigRoomID, rooms.MachineRoomID, rooms.ServiceRoomID} {
 		if err := session.InviteUser(ctx, roomID, userID); err != nil {
+			// Forbidden on invite means the user is already in the room.
+			// This is expected on idempotent re-runs.
 			if messaging.IsMatrixError(err, messaging.ErrCodeForbidden) {
 				continue
 			}
-			return cli.Internal("inviting %s to room %s: %w", userID, roomID, err)
+			return cli.Transient("inviting %s to room %s: %w", userID, roomID, err)
 		}
 	}
 	logger.Info("invited user to fleet rooms", "user_id", userID.String())
@@ -251,7 +254,7 @@ func idempotentCreateRoom(ctx context.Context, session messaging.Session, alias 
 		return roomID, nil
 	}
 	if !messaging.IsMatrixError(err, messaging.ErrCodeNotFound) {
-		return ref.RoomID{}, cli.Internal("resolving %s: %w", alias, err)
+		return ref.RoomID{}, cli.Transient("resolving room %s: %w", alias, err)
 	}
 
 	response, err := session.CreateRoom(ctx, request)

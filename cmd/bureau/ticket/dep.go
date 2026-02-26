@@ -95,7 +95,7 @@ cycle.`,
 			}
 			var current showResult
 			if err := client.Call(ctx, "show", fields, &current); err != nil {
-				return cli.Internal("fetching ticket: %w", err)
+				return err
 			}
 
 			blockedBy := current.Content.BlockedBy
@@ -189,13 +189,14 @@ func depRemoveCommand() *cli.Command {
 			}
 			var current showResult
 			if err := client.Call(ctx, "show", fields, &current); err != nil {
-				return cli.Internal("fetching ticket: %w", err)
+				return err
 			}
 
 			blockedBy := current.Content.BlockedBy
 			index := slices.Index(blockedBy, params.DependsOn)
 			if index < 0 {
-				return cli.NotFound("%s does not depend on %s", params.Ticket, params.DependsOn)
+				return cli.NotFound("ticket %s does not have %s in its blocked_by list", params.Ticket, params.DependsOn).
+					WithHint("Run 'bureau ticket show " + params.Ticket + "' to see current dependencies.")
 			}
 
 			blockedBy = slices.Delete(blockedBy, index, index+1)

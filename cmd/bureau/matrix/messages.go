@@ -94,7 +94,7 @@ main room timeline.`,
 
 			session, err := params.SessionConfig.Connect(ctx)
 			if err != nil {
-				return cli.Internal("connect: %w", err)
+				return err
 			}
 
 			roomID, err := resolveRoom(ctx, session, params.Room)

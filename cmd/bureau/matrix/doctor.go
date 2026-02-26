@@ -113,7 +113,7 @@ Use --json for machine-readable output suitable for monitoring or CI.`,
 
 			sess, err := params.SessionConfig.Connect(ctx)
 			if err != nil {
-				return cli.Internal("connect: %w", err)
+				return err
 			}
 
 			// Run checks, optionally fixing. In fix mode, loop until no
@@ -131,7 +131,7 @@ Use --json for machine-readable output suitable for monitoring or CI.`,
 
 			serverName, err := ref.ParseServerName(params.ServerName)
 			if err != nil {
-				return fmt.Errorf("invalid --server-name: %w", err)
+				return cli.Validation("invalid --server-name %q: %w", params.ServerName, err)
 			}
 
 			isMatrixPermissionDenied := func(err error) bool {

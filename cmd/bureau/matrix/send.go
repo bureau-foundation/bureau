@@ -94,7 +94,7 @@ Bureau protocol events).`,
 
 			matrixSession, err := params.SessionConfig.Connect(ctx)
 			if err != nil {
-				return cli.Internal("connect: %w", err)
+				return err
 			}
 
 			roomID, err := resolveRoom(ctx, matrixSession, roomTarget)

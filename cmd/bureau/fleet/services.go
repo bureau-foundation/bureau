@@ -81,7 +81,7 @@ replica count, current instance count, failover policy, and priority.`,
 
 			var response listServicesResponse
 			if err := client.Call(ctx, "list-services", nil, &response); err != nil {
-				return cli.Internal("listing services: %w", err)
+				return cli.Transient("listing services: %w", err)
 			}
 
 			if done, err := params.EmitJSON(listServicesResult{Services: response.Services}); done {
@@ -195,7 +195,8 @@ failover policy, and all current instances with their host machines.`,
 			if err := client.Call(ctx, "show-service", map[string]any{
 				"service": serviceLocalpart,
 			}, &response); err != nil {
-				return cli.Internal("showing service: %w", err)
+				return cli.Transient("showing service %q: %w", serviceLocalpart, err).
+					WithHint("Run 'bureau fleet list-services' to see available services.")
 			}
 
 			instances := make([]serviceInstanceResult, len(response.Instances))

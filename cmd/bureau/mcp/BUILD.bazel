@@ -39,5 +39,6 @@ go_test(
         "//cmd/bureau/cli",
         "//lib/schema",
         "//lib/testutil",
+        "//messaging",
     ],
 )

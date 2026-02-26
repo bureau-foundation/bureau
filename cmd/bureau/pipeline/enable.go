@@ -5,7 +5,6 @@ package pipeline
 
 import (
 	"context"
-	"fmt"
 	"log/slog"
 	"time"
 
@@ -89,7 +88,7 @@ func runEnable(ctx context.Context, logger *slog.Logger, params *enableParams) e
 
 	serverName, err := ref.ParseServerName(params.ServerName)
 	if err != nil {
-		return fmt.Errorf("invalid --server-name: %w", err)
+		return cli.Validation("invalid --server-name %q: %w", params.ServerName, err)
 	}
 
 	namespace, err := ref.NewNamespace(serverName, params.Space)
@@ -103,7 +102,7 @@ func runEnable(ctx context.Context, logger *slog.Logger, params *enableParams) e
 
 	session, err := params.SessionConfig.Connect(ctx)
 	if err != nil {
-		return cli.Internal("connecting session: %w", err)
+		return err
 	}
 	defer session.Close()
 

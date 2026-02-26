@@ -149,7 +149,7 @@ Use "bureau matrix room leave" separately to remove the room.`,
 
 			serverName, err := ref.ParseServerName(params.ServerName)
 			if err != nil {
-				return fmt.Errorf("invalid --server-name: %w", err)
+				return cli.Validation("invalid --server-name %q: %w", params.ServerName, err)
 			}
 
 			ctx, cancel := context.WithTimeout(ctx, 60*time.Second)
@@ -157,7 +157,7 @@ Use "bureau matrix room leave" separately to remove the room.`,
 
 			session, err := params.SessionConfig.Connect(ctx)
 			if err != nil {
-				return cli.Internal("connect: %w", err)
+				return err
 			}
 			defer session.Close()
 
@@ -198,7 +198,8 @@ func Destroy(ctx context.Context, session messaging.Session, params DestroyParam
 	}
 	workspaceRoomID, err := session.ResolveAlias(ctx, fullAlias)
 	if err != nil {
-		return cli.NotFound("resolve workspace room %s: %w", fullAlias, err)
+		return cli.NotFound("workspace room %s not found: %w", fullAlias, err).
+			WithHint("Run 'bureau workspace list' to see workspaces.")
 	}
 
 	// Read the current workspace state and verify status is "active".
@@ -421,7 +422,7 @@ func aliasCommand(name, summary, description, usage, grant string, annotations *
 			params.ServerName = cli.ResolveServerName(params.ServerName)
 			serverName, err := ref.ParseServerName(params.ServerName)
 			if err != nil {
-				return fmt.Errorf("invalid --server-name: %w", err)
+				return cli.Validation("invalid --server-name %q: %w", params.ServerName, err)
 			}
 			return run(ctx, logger, args[0], serverName, &params.JSONOutput)
 		},
@@ -628,7 +629,7 @@ step progress. Use --no-wait to return immediately after acceptance.`,
 			params.ServerName = cli.ResolveServerName(params.ServerName)
 			serverName, err := ref.ParseServerName(params.ServerName)
 			if err != nil {
-				return fmt.Errorf("invalid --server-name: %w", err)
+				return cli.Validation("invalid --server-name %q: %w", params.ServerName, err)
 			}
 			return runWorktreeAdd(ctx, logger, args[0], params.Branch, params.Wait, serverName, &params.JSONOutput)
 		},
@@ -794,7 +795,7 @@ to return immediately after acceptance.`,
 			params.ServerName = cli.ResolveServerName(params.ServerName)
 			serverName, err := ref.ParseServerName(params.ServerName)
 			if err != nil {
-				return fmt.Errorf("invalid --server-name: %w", err)
+				return cli.Validation("invalid --server-name %q: %w", params.ServerName, err)
 			}
 			return runWorktreeRemove(ctx, logger, args[0], params.Mode, params.Wait, serverName, &params.JSONOutput)
 		},

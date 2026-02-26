@@ -5,7 +5,6 @@ package ticket
 
 import (
 	"context"
-	"fmt"
 	"log/slog"
 	"time"
 
@@ -114,7 +113,7 @@ func runEnable(ctx context.Context, logger *slog.Logger, params *enableParams) e
 	if host == "local" {
 		resolved, err := cli.ResolveLocalMachine()
 		if err != nil {
-			return cli.Internal("resolving local machine identity: %w", err)
+			return err
 		}
 		host = resolved
 		logger.Info("resolved local machine", "host", host)
@@ -124,7 +123,7 @@ func runEnable(ctx context.Context, logger *slog.Logger, params *enableParams) e
 
 	serverName, err := ref.ParseServerName(params.ServerName)
 	if err != nil {
-		return fmt.Errorf("invalid --server-name: %w", err)
+		return cli.Validation("invalid --server-name %q: %w", params.ServerName, err)
 	}
 
 	// Parse and validate the machine localpart as a typed ref. The
@@ -161,7 +160,7 @@ func runEnable(ctx context.Context, logger *slog.Logger, params *enableParams) e
 	}
 	credentials, err := cli.ReadCredentialFile(params.SessionConfig.CredentialFile)
 	if err != nil {
-		return cli.Internal("reading credentials: %w", err)
+		return err
 	}
 
 	registrationToken := credentials["MATRIX_REGISTRATION_TOKEN"]
@@ -179,7 +178,7 @@ func runEnable(ctx context.Context, logger *slog.Logger, params *enableParams) e
 	// provisioning, and room management.
 	adminSession, err := params.SessionConfig.Connect(ctx)
 	if err != nil {
-		return cli.Internal("connecting admin session: %w", err)
+		return err
 	}
 	defer adminSession.Close()
 
@@ -201,7 +200,8 @@ func runEnable(ctx context.Context, logger *slog.Logger, params *enableParams) e
 	machineRoomAlias := fleet.MachineRoomAlias()
 	machineRoomID, err := adminSession.ResolveAlias(ctx, machineRoomAlias)
 	if err != nil {
-		return cli.Internal("resolve fleet machine room %q: %w", machineRoomAlias, err)
+		return cli.NotFound("fleet machine room %s not found: %w", machineRoomAlias, err).
+			WithHint("Has the fleet been initialized? Run 'bureau matrix setup' to create fleet rooms.")
 	}
 
 	// The ticket-service template is published by "bureau matrix
@@ -239,7 +239,7 @@ func runEnable(ctx context.Context, logger *slog.Logger, params *enableParams) e
 	createResult, err = principal.Create(ctx, client, adminSession, registrationTokenBuffer, credential.AsProvisionFunc(), createParams)
 	if err != nil {
 		if !messaging.IsMatrixError(err, messaging.ErrCodeUserInUse) {
-			return cli.Internal("deploying ticket service: %w", err)
+			return cli.Internal("deploying ticket service principal %s: %w", serviceEntity.Localpart(), err)
 		}
 
 		// The ticket service account already exists. This is
@@ -253,7 +253,8 @@ func runEnable(ctx context.Context, logger *slog.Logger, params *enableParams) e
 
 		configRoomID, resolveErr := adminSession.ResolveAlias(ctx, machineRef.RoomAlias())
 		if resolveErr != nil {
-			return cli.Internal("resolve config room %s: %w", machineRef.RoomAlias(), resolveErr)
+			return cli.NotFound("machine config room %s not found: %w", machineRef.RoomAlias(), resolveErr).
+				WithHint("The machine may not be registered. Check that the daemon is running on " + host + ".")
 		}
 
 		configEventID, assignErr := principal.AssignPrincipals(ctx, adminSession, configRoomID, []principal.CreateParams{createParams})
@@ -279,7 +280,8 @@ func runEnable(ctx context.Context, logger *slog.Logger, params *enableParams) e
 	// Resolve the space and discover child rooms.
 	spaceRoomID, err := adminSession.ResolveAlias(ctx, spaceAlias)
 	if err != nil {
-		return cli.NotFound("resolving space %s: %w (has 'bureau matrix space create %s' been run?)", spaceAlias, err, params.Space)
+		return cli.NotFound("space %s not found: %w", spaceAlias, err).
+			WithHint("Run 'bureau matrix space create " + params.Space + "' to create the space first.")
 	}
 
 	childRoomIDs, err := cli.GetSpaceChildren(ctx, adminSession, spaceRoomID)
@@ -361,7 +363,7 @@ func ConfigureRoom(ctx context.Context, logger *slog.Logger, session messaging.S
 	}
 	_, err := session.SendStateEvent(ctx, roomID, schema.EventTypeTicketConfig, "", ticketConfig)
 	if err != nil {
-		return cli.Internal("publishing ticket config: %w", err)
+		return cli.Internal("publishing ticket config to room %s: %w", roomID, err)
 	}
 
 	// Publish service binding (state_key="ticket").
@@ -370,21 +372,21 @@ func ConfigureRoom(ctx context.Context, logger *slog.Logger, session messaging.S
 	}
 	_, err = session.SendStateEvent(ctx, roomID, schema.EventTypeServiceBinding, "ticket", binding)
 	if err != nil {
-		return cli.Internal("publishing service binding: %w", err)
+		return cli.Internal("publishing service binding to room %s: %w", roomID, err)
 	}
 
 	// Invite the service to the room (idempotent — M_FORBIDDEN means already a member).
 	serviceUserID := serviceEntity.UserID()
 	if err := session.InviteUser(ctx, roomID, serviceUserID); err != nil {
 		if !messaging.IsMatrixError(err, "M_FORBIDDEN") {
-			return cli.Internal("inviting service: %w", err)
+			return cli.Internal("inviting service %s to room %s: %w", serviceUserID, roomID, err)
 		}
 	}
 
 	// Configure power levels. Read-modify-write on the existing power levels
 	// to add the ticket service user and ticket event type requirements.
 	if err := configureTicketPowerLevels(ctx, session, roomID, serviceUserID); err != nil {
-		return cli.Internal("configuring power levels: %w", err)
+		return cli.Internal("configuring power levels in room %s: %w", roomID, err)
 	}
 
 	return nil

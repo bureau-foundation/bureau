@@ -5,7 +5,6 @@ package ticket
 
 import (
 	"context"
-	"fmt"
 	"os"
 	"time"
 
@@ -142,12 +141,14 @@ func (c *TicketConnection) MintServiceToken() (*MintResult, error) {
 		operatorSession.AccessToken,
 	)
 	if err != nil {
-		return nil, fmt.Errorf("mint service token: %w", err)
+		return nil, cli.Transient("mint service token via daemon at %s: %w", c.DaemonSocket, err).
+			WithHint("Is the Bureau daemon running? Check with 'bureau service list'. " +
+				"The daemon must be started before using --service mode.")
 	}
 
 	tokenBytes, err := tokenResponse.TokenBytes()
 	if err != nil {
-		return nil, fmt.Errorf("decode service token: %w", err)
+		return nil, cli.Internal("decode service token: %w", err)
 	}
 
 	return &MintResult{

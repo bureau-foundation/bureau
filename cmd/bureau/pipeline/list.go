@@ -75,7 +75,7 @@ It is resolved to a full Matrix alias using the --server-name flag.`,
 
 			serverName, err := ref.ParseServerName(params.ServerName)
 			if err != nil {
-				return fmt.Errorf("invalid --server-name: %w", err)
+				return cli.Validation("invalid --server-name %q: %w", params.ServerName, err)
 			}
 
 			roomAlias := ref.MustParseRoomAlias(schema.FullRoomAlias(params.Room, serverName))

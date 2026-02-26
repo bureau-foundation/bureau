@@ -15,6 +15,7 @@ import (
 
 	"github.com/bureau-foundation/bureau/cmd/bureau/cli"
 	"github.com/bureau-foundation/bureau/lib/schema"
+	"github.com/bureau-foundation/bureau/messaging"
 )
 
 // testResponse is a JSON-RPC 2.0 response for test assertions. Result
@@ -2154,5 +2155,118 @@ func TestServer_CallTool_MetaToolRecursionBlocked(t *testing.T) {
 	}
 	if !strings.Contains(err.Error(), "meta-tools cannot be called") {
 		t.Errorf("error = %q, should contain 'meta-tools cannot be called'", err.Error())
+	}
+}
+
+func TestClassifyError_HintPropagation(t *testing.T) {
+	err := cli.Validation("fleet localpart is required").
+		WithHint("Run 'bureau machine doctor' to check configuration.")
+
+	info := classifyError(err)
+	if info.Category != "validation" {
+		t.Errorf("category = %q, want %q", info.Category, "validation")
+	}
+	if info.Hint != "Run 'bureau machine doctor' to check configuration." {
+		t.Errorf("hint = %q, want %q", info.Hint, "Run 'bureau machine doctor' to check configuration.")
+	}
+}
+
+func TestClassifyError_HintEmptyWhenNotSet(t *testing.T) {
+	info := classifyError(cli.Validation("bad input"))
+	if info.Hint != "" {
+		t.Errorf("hint = %q, want empty", info.Hint)
+	}
+}
+
+func TestClassifyError_DrillThroughInternalToMatrixNotFound(t *testing.T) {
+	matrixErr := &messaging.MatrixError{Code: messaging.ErrCodeNotFound, Message: "Room not found"}
+	err := cli.Internal("resolve alias: %w", matrixErr)
+
+	info := classifyError(err)
+	if info.Category != "not_found" {
+		t.Errorf("category = %q, want %q (drill-through should find MatrixError)", info.Category, "not_found")
+	}
+	if info.Retryable {
+		t.Error("not_found should not be retryable")
+	}
+}
+
+func TestClassifyError_DrillThroughInternalToMatrixForbidden(t *testing.T) {
+	matrixErr := &messaging.MatrixError{Code: messaging.ErrCodeForbidden, Message: "Access denied"}
+	err := cli.Internal("get room state: %w", matrixErr)
+
+	info := classifyError(err)
+	if info.Category != "forbidden" {
+		t.Errorf("category = %q, want %q (drill-through should find MatrixError)", info.Category, "forbidden")
+	}
+}
+
+func TestClassifyError_DrillThroughInternalToContextDeadline(t *testing.T) {
+	err := cli.Internal("connect: %w", context.DeadlineExceeded)
+
+	info := classifyError(err)
+	if info.Category != "transient" {
+		t.Errorf("category = %q, want %q (drill-through should find deadline)", info.Category, "transient")
+	}
+	if !info.Retryable {
+		t.Error("transient should be retryable")
+	}
+}
+
+func TestClassifyError_DrillThroughInternalToContextCanceled(t *testing.T) {
+	err := cli.Internal("operation: %w", context.Canceled)
+
+	info := classifyError(err)
+	if info.Category != "transient" {
+		t.Errorf("category = %q, want %q (drill-through should find canceled)", info.Category, "transient")
+	}
+}
+
+func TestClassifyError_DrillThroughPreservesHint(t *testing.T) {
+	matrixErr := &messaging.MatrixError{Code: messaging.ErrCodeNotFound, Message: "not found"}
+	err := cli.Internal("resolve: %w", matrixErr).
+		WithHint("Run 'bureau matrix setup' first.")
+
+	info := classifyError(err)
+	if info.Category != "not_found" {
+		t.Errorf("category = %q, want %q", info.Category, "not_found")
+	}
+	if info.Hint != "Run 'bureau matrix setup' first." {
+		t.Errorf("hint = %q, want preserved after drill-through", info.Hint)
+	}
+}
+
+func TestClassifyError_NoDrillThroughForExplicitCategory(t *testing.T) {
+	// When a ToolError has an explicit non-Internal category, the
+	// drill-through should NOT override it, even if the wrapped error
+	// is a MatrixError with a different classification.
+	matrixErr := &messaging.MatrixError{Code: messaging.ErrCodeNotFound, Message: "not found"}
+	err := cli.Validation("invalid room: %w", matrixErr)
+
+	info := classifyError(err)
+	if info.Category != "validation" {
+		t.Errorf("category = %q, want %q (explicit category should not be overridden)", info.Category, "validation")
+	}
+}
+
+func TestClassifyError_InternalWithoutTypedInnerStaysInternal(t *testing.T) {
+	err := cli.Internal("unexpected state: something broke")
+
+	info := classifyError(err)
+	if info.Category != "internal" {
+		t.Errorf("category = %q, want %q (no typed inner error to drill through)", info.Category, "internal")
+	}
+}
+
+func TestClassifyError_DrillThroughInternalToMatrixRateLimit(t *testing.T) {
+	matrixErr := &messaging.MatrixError{Code: messaging.ErrCodeLimitExceeded, Message: "rate limited"}
+	err := cli.Internal("send message: %w", matrixErr)
+
+	info := classifyError(err)
+	if info.Category != "transient" {
+		t.Errorf("category = %q, want %q (rate limit is transient)", info.Category, "transient")
+	}
+	if !info.Retryable {
+		t.Error("rate limit should be retryable")
 	}
 }

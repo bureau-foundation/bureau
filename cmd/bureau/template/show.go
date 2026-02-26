@@ -5,7 +5,6 @@ package template
 
 import (
 	"context"
-	"fmt"
 	"log/slog"
 
 	"github.com/bureau-foundation/bureau/cmd/bureau/cli"
@@ -75,13 +74,14 @@ template overrides versus what it inherits.`,
 
 			serverName, err := ref.ParseServerName(params.ServerName)
 			if err != nil {
-				return fmt.Errorf("invalid --server-name: %w", err)
+				return cli.Validation("invalid --server-name: %w", err)
 			}
 
 			if params.Raw {
 				templateRef, err := schema.ParseTemplateRef(templateRefString)
 				if err != nil {
-					return cli.Validation("parsing template reference: %w", err)
+					return cli.Validation("invalid template reference: %w", err).
+						WithHint("Template references have the form namespace/template:name (e.g., bureau/template:base-networked).")
 				}
 				content, err := libtmpl.Fetch(ctx, session, templateRef, serverName)
 				if err != nil {

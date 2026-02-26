@@ -5,7 +5,6 @@ package pipeline
 
 import (
 	"context"
-	"fmt"
 	"log/slog"
 	"os"
 	"strings"
@@ -102,14 +101,15 @@ variables, accessible in pipeline steps via ${NAME} substitution.`,
 
 			// Validate the pipeline ref is parseable.
 			if _, err := schema.ParsePipelineRef(pipelineRefString); err != nil {
-				return cli.Validation("parsing pipeline reference: %w", err)
+				return cli.Validation("invalid pipeline reference: %w", err).
+					WithHint("Pipeline references have the form namespace/pipeline:name (e.g., bureau/pipeline:setup).")
 			}
 
 			params.ServerName = cli.ResolveServerName(params.ServerName)
 
 			serverName, err := ref.ParseServerName(params.ServerName)
 			if err != nil {
-				return fmt.Errorf("invalid --server-name: %w", err)
+				return cli.Validation("invalid --server-name %q: %w", params.ServerName, err)
 			}
 
 			// Parse and validate the machine localpart as a typed ref.

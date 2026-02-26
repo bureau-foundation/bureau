@@ -30,7 +30,8 @@ func resolveWorkspaceRoom(ctx context.Context, session messaging.Session, alias 
 	}
 	roomID, err := session.ResolveAlias(ctx, fullAlias)
 	if err != nil {
-		return ref.RoomID{}, cli.NotFound("resolving room %s: %w", fullAlias, err)
+		return ref.RoomID{}, cli.NotFound("workspace room %s not found: %w", fullAlias, err).
+			WithHint("Run 'bureau workspace list' to see workspaces.")
 	}
 	return roomID, nil
 }
@@ -49,7 +50,8 @@ func findParentWorkspace(ctx context.Context, session messaging.Session, alias s
 	for {
 		lastSlash := strings.LastIndex(remaining, "/")
 		if lastSlash < 0 {
-			return ref.RoomID{}, nil, "", cli.NotFound("no parent workspace found for %q (walked up to root)", alias)
+			return ref.RoomID{}, nil, "", cli.NotFound("no parent workspace found for %q", alias).
+				WithHint("Run 'bureau workspace list' to see workspaces.")
 		}
 		candidate := remaining[:lastSlash]
 		remaining = candidate

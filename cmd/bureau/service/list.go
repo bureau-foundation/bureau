@@ -77,7 +77,7 @@ func runList(ctx context.Context, logger *slog.Logger, params serviceListParams)
 
 	serverName, err := ref.ParseServerName(params.ServerName)
 	if err != nil {
-		return fmt.Errorf("invalid --server-name: %w", err)
+		return cli.Validation("invalid --server-name %q: %w", params.ServerName, err)
 	}
 
 	ctx, cancel := context.WithTimeout(ctx, 30*time.Second)

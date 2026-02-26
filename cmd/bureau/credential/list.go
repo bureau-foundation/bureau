@@ -73,7 +73,7 @@ Useful for auditing which principals have credentials on a machine.`,
 
 			serverName, err := ref.ParseServerName(params.ServerName)
 			if err != nil {
-				return fmt.Errorf("invalid --server-name: %w", err)
+				return cli.Validation("invalid --server-name %q: %w", params.ServerName, err)
 			}
 
 			machine, err := ref.ParseMachine(params.MachineName, serverName)

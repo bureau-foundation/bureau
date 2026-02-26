@@ -58,7 +58,7 @@ func runSession(ctx context.Context, localpart string, logger *slog.Logger, para
 
 	serverName, err := ref.ParseServerName(params.ServerName)
 	if err != nil {
-		return fmt.Errorf("invalid --server-name: %w", err)
+		return cli.Validation("invalid --server-name %q: %w", params.ServerName, err)
 	}
 
 	agentRef, err := ref.ParseAgent(localpart, serverName)
@@ -95,7 +95,8 @@ func runSession(ctx context.Context, localpart string, logger *slog.Logger, para
 
 	location, machineCount, err := principal.Resolve(ctx, session, localpart, machine, fleet)
 	if err != nil {
-		return cli.NotFound("resolve agent: %w", err)
+		return cli.NotFound("agent %q not found: %w", localpart, err).
+			WithHint("Run 'bureau agent list' to see agents on this machine.")
 	}
 
 	if machine.IsZero() && machineCount > 0 {
@@ -104,7 +105,8 @@ func runSession(ctx context.Context, localpart string, logger *slog.Logger, para
 
 	sessionRaw, err := session.GetStateEvent(ctx, location.ConfigRoomID, agentschema.EventTypeAgentSession, localpart)
 	if err != nil {
-		return cli.NotFound("no session data for %s: %w", localpart, err)
+		return cli.NotFound("no session data for agent %q: %w", localpart, err).
+			WithHint(fmt.Sprintf("The agent may not have started a session yet. Run 'bureau agent show %s' to check its status.", localpart))
 	}
 
 	var content agentschema.AgentSessionContent

@@ -207,7 +207,7 @@ and proceeds directly to ensuring room membership.`,
 
 			serverName, err := ref.ParseServerName(params.ServerName)
 			if err != nil {
-				return fmt.Errorf("invalid --server-name: %w", err)
+				return cli.Validation("invalid --server-name %q: %w", params.ServerName, err)
 			}
 
 			// Register the account. In operator mode, M_USER_IN_USE means

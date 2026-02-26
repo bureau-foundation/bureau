@@ -53,6 +53,7 @@ go_test(
         "session_config_test.go",
         "suggest_semantic_test.go",
         "suggest_test.go",
+        "toolerror_test.go",
     ],
     embed = [":cli"],
     deps = ["@com_github_spf13_pflag//:pflag"],

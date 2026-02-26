@@ -54,16 +54,37 @@ type ToolError struct {
 
 	// Err is the underlying error with the human-readable message.
 	Err error
+
+	// Hint is optional actionable guidance for the caller: what command
+	// to run, what flag to pass, what prerequisite to check. When
+	// non-empty, it is appended to the error string (separated by a
+	// blank line) and exposed as a structured field in MCP errorInfo.
+	Hint string
 }
 
-// Error returns the underlying error message. The category is not
-// included in the string — it travels separately via the MCP errorInfo
-// field, not in the text content block.
-func (e *ToolError) Error() string { return e.Err.Error() }
+// Error returns the error message. When a hint is set, it is appended
+// after a blank line so that both CLI and MCP consumers see the
+// guidance. The category is not included — it travels separately via
+// the MCP errorInfo field.
+func (e *ToolError) Error() string {
+	if e.Hint == "" {
+		return e.Err.Error()
+	}
+	return e.Err.Error() + "\n\n" + e.Hint
+}
 
 // Unwrap returns the underlying error, allowing errors.Is and
 // errors.As to walk the full chain through the ToolError wrapper.
 func (e *ToolError) Unwrap() error { return e.Err }
+
+// WithHint attaches actionable guidance to the error. The hint tells
+// the caller what to do: which command to run, which flag to pass,
+// which prerequisite to install. Returns the same ToolError for
+// chaining.
+func (e *ToolError) WithHint(hint string) *ToolError {
+	e.Hint = hint
+	return e
+}
 
 // Validation creates a validation error: the caller provided bad input.
 func Validation(format string, args ...any) *ToolError {

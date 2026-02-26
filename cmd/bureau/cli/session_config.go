@@ -82,7 +82,9 @@ func (c *SessionConfig) Connect(ctx context.Context) (messaging.Session, error) 
 	if c.CredentialFile != "" {
 		credentials, err := ReadCredentialFile(c.CredentialFile)
 		if err != nil {
-			return nil, Internal("read credential file: %w", err)
+			return nil, Internal("read credential file %s: %w", c.CredentialFile, err).
+				WithHint("Check that the file exists and is readable. " +
+					"Credential files are created by 'bureau matrix setup'.")
 		}
 		if homeserverURL == "" {
 			homeserverURL = credentials["MATRIX_HOMESERVER_URL"]
@@ -104,14 +106,19 @@ func (c *SessionConfig) Connect(ctx context.Context) (messaging.Session, error) 
 	}
 
 	// Direct connection with explicit credentials.
+	credentialHint := "Pass --credential-file with the file from 'bureau matrix setup', " +
+		"or set all three flags: --homeserver, --token, --user-id."
 	if homeserverURL == "" {
-		return nil, Validation("--homeserver is required (or use --credential-file)")
+		return nil, Validation("--homeserver is required (or use --credential-file)").
+			WithHint(credentialHint)
 	}
 	if token == "" {
-		return nil, Validation("--token is required (or use --credential-file)")
+		return nil, Validation("--token is required (or use --credential-file)").
+			WithHint(credentialHint)
 	}
 	if userID == "" {
-		return nil, Validation("--user-id is required (or use --credential-file)")
+		return nil, Validation("--user-id is required (or use --credential-file)").
+			WithHint(credentialHint)
 	}
 
 	logger := NewClientLogger(slog.LevelInfo)
@@ -121,12 +128,15 @@ func (c *SessionConfig) Connect(ctx context.Context) (messaging.Session, error) 
 		Logger:        logger,
 	})
 	if err != nil {
-		return nil, Internal("create matrix client: %w", err)
+		return nil, Transient("cannot connect to homeserver at %s: %w", homeserverURL, err).
+			WithHint("Check that the homeserver is running and the URL is correct. " +
+				"Run 'bureau matrix doctor' to diagnose homeserver connectivity.")
 	}
 
 	parsedUserID, err := ref.ParseUserID(userID)
 	if err != nil {
-		return nil, Internal("parse user ID: %w", err)
+		return nil, Validation("invalid user ID %q: %w", userID, err).
+			WithHint("User IDs have the form @localpart:servername (e.g., @admin:bureau.local).")
 	}
 
 	return client.SessionFromToken(parsedUserID, token)
@@ -139,7 +149,9 @@ func (c *SessionConfig) Connect(ctx context.Context) (messaging.Session, error) 
 func (c *SessionConfig) connectViaProxy(ctx context.Context) (messaging.Session, error) {
 	socketPath := os.Getenv("BUREAU_PROXY_SOCKET")
 	if socketPath == "" {
-		return nil, Validation("no credentials provided and BUREAU_PROXY_SOCKET is not set\n\nUse --credential-file, or run inside a Bureau sandbox where the proxy socket is available")
+		return nil, Validation("no credentials provided and BUREAU_PROXY_SOCKET is not set").
+			WithHint("Use --credential-file with the file from 'bureau matrix setup', " +
+				"or run inside a Bureau sandbox where the proxy socket is available.")
 	}
 
 	proxy := proxyclient.New(socketPath, ref.ServerName{})
@@ -148,12 +160,16 @@ func (c *SessionConfig) connectViaProxy(ctx context.Context) (messaging.Session,
 	// who we are (the daemon told it) — we just need to ask.
 	identity, err := proxy.Identity(ctx)
 	if err != nil {
-		return nil, Internal("proxy identity: %w", err)
+		return nil, Transient("proxy identity request failed on %s: %w", socketPath, err).
+			WithHint("The proxy socket exists but is not responding. " +
+				"Check that the Bureau daemon is running and the proxy process is healthy.")
 	}
 
 	proxyUserID, err := ref.ParseUserID(identity.UserID)
 	if err != nil {
-		return nil, Internal("parse proxy identity user ID: %w", err)
+		return nil, Internal("proxy returned invalid user ID %q: %w", identity.UserID, err).
+			WithHint("The proxy and daemon may be running different versions. " +
+				"Restart the daemon and check for version mismatches.")
 	}
 
 	return proxyclient.NewProxySession(proxy, proxyUserID), nil
@@ -169,14 +185,20 @@ func (c *SessionConfig) ResolveHomeserverURL() (string, error) {
 	if c.CredentialFile != "" {
 		credentials, err := ReadCredentialFile(c.CredentialFile)
 		if err != nil {
-			return "", Internal("read credential file: %w", err)
+			return "", Internal("read credential file %s: %w", c.CredentialFile, err).
+				WithHint("Check that the file exists and is readable. " +
+					"Credential files are created by 'bureau matrix setup'.")
 		}
 		if url, ok := credentials["MATRIX_HOMESERVER_URL"]; ok && url != "" {
 			return url, nil
 		}
-		return "", Validation("credential file missing MATRIX_HOMESERVER_URL")
+		return "", Validation("credential file %s is missing MATRIX_HOMESERVER_URL", c.CredentialFile).
+			WithHint("The credential file may be incomplete. " +
+				"Re-run 'bureau matrix setup' to regenerate it, or add MATRIX_HOMESERVER_URL=<url> to the file.")
 	}
-	return "", Validation("--homeserver or --credential-file is required")
+	return "", Validation("--homeserver or --credential-file is required").
+		WithHint("Pass --homeserver <url> (e.g., http://localhost:6167) or " +
+			"--credential-file with the file from 'bureau matrix setup'.")
 }
 
 // ReadCredentialFile parses a key=value credential file. Lines starting

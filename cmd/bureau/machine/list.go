@@ -64,9 +64,10 @@ Shows each machine's name, public key, and last status heartbeat
 			}
 			fleetLocalpart = cli.ResolveFleet(fleetLocalpart)
 			if fleetLocalpart == "" {
-				return cli.Validation("fleet localpart is required (e.g., bureau/fleet/prod)\n\n" +
-					"On a Bureau machine, this is auto-detected from /etc/bureau/machine.conf.\n" +
-					"Run \"bureau machine doctor\" to check machine configuration.")
+				return cli.Validation("fleet localpart is required (e.g., bureau/fleet/prod)").
+					WithHint("Pass the fleet localpart as the first argument, or run on a Bureau machine where\n" +
+						"/etc/bureau/machine.conf provides the fleet automatically.\n" +
+						"Run 'bureau machine doctor' to check machine configuration.")
 			}
 
 			ctx, cancel := context.WithTimeout(ctx, 30*time.Second)
@@ -102,12 +103,14 @@ func ListMachines(ctx context.Context, session messaging.Session, fleet ref.Flee
 	machineAlias := fleet.MachineRoomAlias()
 	machineRoomID, err := session.ResolveAlias(ctx, machineAlias)
 	if err != nil {
-		return nil, cli.NotFound("resolve fleet machine room %q: %w", machineAlias, err)
+		return nil, cli.NotFound("resolve fleet machine room %q: %w", machineAlias, err).
+			WithHint("Has 'bureau matrix setup' been run for this fleet? Check with 'bureau matrix doctor'.")
 	}
 
 	events, err := session.GetRoomState(ctx, machineRoomID)
 	if err != nil {
-		return nil, cli.Internal("get machine room state: %w", err)
+		return nil, cli.Transient("get machine room state: %w", err).
+			WithHint("Check that the homeserver is running. Run 'bureau matrix doctor' to diagnose.")
 	}
 
 	// Index machine keys, statuses, and hardware info by state_key (machine name).

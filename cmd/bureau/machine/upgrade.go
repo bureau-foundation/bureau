@@ -93,13 +93,16 @@ func runUpgrade(ctx context.Context, args []string, params *upgradeParams, logge
 		return cli.Validation("--local and a positional machine argument are mutually exclusive")
 	}
 	if !params.Local && len(args) == 0 {
-		return cli.Validation("either a machine reference or --local is required\n\nUsage: bureau machine upgrade <machine-ref> --host-env <path> [flags]")
+		return cli.Validation("either a machine reference or --local is required").
+			WithHint("Usage: bureau machine upgrade <machine-ref> --host-env <path> [flags]")
 	}
 	if len(args) > 1 {
 		return cli.Validation("expected at most one argument (machine reference), got %d", len(args))
 	}
 	if params.HostEnvPath == "" {
-		return cli.Validation("--host-env is required")
+		return cli.Validation("--host-env is required").
+			WithHint("Pass --host-env with the path to a bureau-host-env Nix derivation.\n" +
+				"Build one with: nix build .#bureau-host-env --print-out-paths --no-link")
 	}
 
 	ctx, cancel := context.WithTimeout(ctx, 60*time.Second)
@@ -108,7 +111,7 @@ func runUpgrade(ctx context.Context, args []string, params *upgradeParams, logge
 	// Connect as admin for state event publishing.
 	session, err := params.SessionConfig.Connect(ctx)
 	if err != nil {
-		return cli.Internal("connect: %w", err)
+		return err
 	}
 	defer session.Close()
 
@@ -159,9 +162,11 @@ func runUpgrade(ctx context.Context, args []string, params *upgradeParams, logge
 	configRoomID, err := session.ResolveAlias(ctx, configAlias)
 	if err != nil {
 		if messaging.IsMatrixError(err, messaging.ErrCodeNotFound) {
-			return cli.NotFound("config room %s not found — is the machine provisioned?", configAlias)
+			return cli.NotFound("config room %s not found", configAlias).
+				WithHint("Is the machine provisioned? Run 'bureau machine provision' to register it.")
 		}
-		return cli.Internal("resolving config room %s: %w", configAlias, err)
+		return cli.Transient("resolving config room %s: %w", configAlias, err).
+			WithHint("Check that the homeserver is running. Run 'bureau matrix doctor' to diagnose.")
 	}
 
 	// Read-modify-write MachineConfig. Read the existing config (404
@@ -176,14 +181,17 @@ func runUpgrade(ctx context.Context, args []string, params *upgradeParams, logge
 			return cli.Internal("parsing existing machine config: %w", unmarshalErr)
 		}
 	} else if !messaging.IsMatrixError(err, messaging.ErrCodeNotFound) {
-		return cli.Internal("reading machine config: %w", err)
+		return cli.Transient("reading machine config: %w", err).
+			WithHint("Check that the homeserver is running. Run 'bureau matrix doctor' to diagnose.")
 	}
 
 	config.BureauVersion = version
 
 	eventID, err := session.SendStateEvent(ctx, configRoomID, schema.EventTypeMachineConfig, machineLocalpart, config)
 	if err != nil {
-		return cli.Internal("publishing machine config: %w", err)
+		return cli.Transient("publishing machine config: %w", err).
+			WithHint("Check that the homeserver is running and you have write access to the config room.\n" +
+				"Run 'bureau matrix doctor' to diagnose.")
 	}
 
 	result := upgradeResult{

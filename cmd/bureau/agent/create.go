@@ -5,7 +5,6 @@ package agent
 
 import (
 	"context"
-	"fmt"
 	"log/slog"
 	"time"
 
@@ -103,7 +102,7 @@ token for creating the agent's account.`,
 
 			serverName, err := ref.ParseServerName(params.ServerName)
 			if err != nil {
-				return fmt.Errorf("invalid --server-name: %w", err)
+				return cli.Validation("invalid --server-name %q: %w", params.ServerName, err)
 			}
 
 			if _, err := ref.ParseMachine(params.Machine, serverName); err != nil {
@@ -132,7 +131,7 @@ func runCreate(ctx context.Context, logger *slog.Logger, templateRef schema.Temp
 	// service commands.
 	adminSession, err := params.SessionConfig.Connect(ctx)
 	if err != nil {
-		return cli.Internal("connect: %w", err)
+		return err
 	}
 	defer adminSession.Close()
 
@@ -146,7 +145,9 @@ func runCreate(ctx context.Context, logger *slog.Logger, templateRef schema.Temp
 
 	registrationToken := credentials["MATRIX_REGISTRATION_TOKEN"]
 	if registrationToken == "" {
-		return cli.Validation("credential file missing MATRIX_REGISTRATION_TOKEN")
+		return cli.Validation("credential file missing MATRIX_REGISTRATION_TOKEN").
+			WithHint("The credential file must contain MATRIX_REGISTRATION_TOKEN. " +
+				"Re-run 'bureau matrix setup' to regenerate the credential file.")
 	}
 
 	registrationTokenBuffer, err := secret.NewFromString(registrationToken)
@@ -173,13 +174,15 @@ func runCreate(ctx context.Context, logger *slog.Logger, templateRef schema.Temp
 	// Parse the machine ref and resolve the fleet machine room for credential provisioning.
 	machine, err := ref.ParseMachine(params.Machine, serverName)
 	if err != nil {
+		// Already validated in the Run function; this should not happen.
 		return cli.Internal("parse machine: %w", err)
 	}
 	fleet := machine.Fleet()
 	machineRoomAlias := fleet.MachineRoomAlias()
 	machineRoomID, err := adminSession.ResolveAlias(ctx, machineRoomAlias)
 	if err != nil {
-		return cli.Internal("resolve fleet machine room %q: %w", machineRoomAlias, err)
+		return cli.NotFound("fleet machine room %s not found: %w", machineRoomAlias, err).
+			WithHint("Run 'bureau machine list' to see machines, or 'bureau machine provision' to register one.")
 	}
 
 	logger.Info("creating agent", "name", params.Name, "machine", params.Machine, "template", templateRef.String())

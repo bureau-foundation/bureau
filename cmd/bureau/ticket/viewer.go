@@ -82,7 +82,8 @@ available rooms.`,
 
 			source, err := ticketui.LoadBeadsFile(filePath)
 			if err != nil {
-				return cli.Internal("load tickets from %s: %w", filePath, err)
+				return cli.Validation("cannot load tickets from %s: %w", filePath, err).
+					WithHint("Check that the file exists and contains valid JSONL. Use --service to connect to the ticket service instead.")
 			}
 
 			model := ticketui.NewModel(source)
@@ -107,7 +108,7 @@ func runServiceViewer(ctx context.Context, logger *slog.Logger, connection *Tick
 	// Mint initial service token via the daemon.
 	mintResult, err := connection.MintServiceToken()
 	if err != nil {
-		return cli.Internal("initial token mint: %w", err)
+		return err
 	}
 
 	// Load operator session for the viewer's display identity.
@@ -136,7 +137,7 @@ func runServiceViewer(ctx context.Context, logger *slog.Logger, connection *Tick
 		// Also write all records to the file at DEBUG level.
 		fileHandler, fileCloser, fileErr := openFileLogHandler(logOutput)
 		if fileErr != nil {
-			return cli.Internal("open log file %s: %w", logOutput, fileErr)
+			return cli.Validation("cannot open log file %s: %w", logOutput, fileErr)
 		}
 		defer fileCloser()
 		backgroundLogger = slog.New(fanoutHandler{tuiHandler, fileHandler})
@@ -196,11 +197,12 @@ func resolveViewerRoom(ctx context.Context, logger *slog.Logger, socketPath stri
 
 	var rooms []viewerRoomInfo
 	if err := client.Call(ctx, "list-rooms", nil, &rooms); err != nil {
-		return "", cli.Internal("list rooms: %w", err)
+		return "", err
 	}
 
 	if len(rooms) == 0 {
-		return "", cli.Validation("ticket service has no rooms — enable ticket management in a room first")
+		return "", cli.NotFound("ticket service has no rooms configured").
+			WithHint("Run 'bureau ticket enable --space <space> --host <machine>' to enable ticket management.")
 	}
 
 	if len(rooms) == 1 {
@@ -226,10 +228,10 @@ func resolveViewerRoom(ctx context.Context, logger *slog.Logger, socketPath stri
 
 	var selection int
 	if _, err := fmt.Scan(&selection); err != nil {
-		return "", cli.Internal("reading room selection: %w", err)
+		return "", cli.Validation("failed to read room selection: %w", err)
 	}
 	if selection < 1 || selection > len(rooms) {
-		return "", cli.Validation("invalid selection: %d", selection)
+		return "", cli.Validation("invalid selection %d: must be between 1 and %d", selection, len(rooms))
 	}
 
 	return rooms[selection-1].RoomID, nil

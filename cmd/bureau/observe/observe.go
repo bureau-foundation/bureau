@@ -102,7 +102,9 @@ admin to add an observe allowance for your identity on the target.`,
 				Token:     operatorSession.AccessToken,
 			})
 			if err != nil {
-				return cli.Internal("connect to %s: %w", target, err)
+				return cli.Transient("connect to observation relay for %s: %w", target, err).
+					WithHint("Check that the Bureau daemon is running on the target machine " +
+						"and that the principal is active. Run 'bureau observe list' to see available targets.")
 			}
 			defer session.Close()
 
@@ -308,7 +310,8 @@ display their role identity.`,
 			// Attach to the session via exec (replaces this process).
 			tmuxBinary, err := exec.LookPath("tmux")
 			if err != nil {
-				return cli.Internal("tmux not found in PATH: %w", err)
+				return cli.Validation("tmux not found in PATH: %w", err).
+					WithHint("Install tmux to use dashboard mode. On Debian/Ubuntu: apt install tmux. On macOS: brew install tmux.")
 			}
 
 			// Build the full exec argv without mutating tmuxArgs.

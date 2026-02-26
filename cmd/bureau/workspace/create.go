@@ -6,7 +6,6 @@ package workspace
 import (
 	"context"
 	"encoding/json"
-	"fmt"
 	"log/slog"
 	"strconv"
 	"strings"
@@ -157,7 +156,7 @@ All worktrees in a project share a single bare git object store at
 func runCreate(ctx context.Context, logger *slog.Logger, alias string, sessionConfig *cli.SessionConfig, machineName, templateRef string, rawParams []string, serverNameString string, agentCount int, jsonOutput *cli.JSONOutput) error {
 	serverName, err := ref.ParseServerName(serverNameString)
 	if err != nil {
-		return fmt.Errorf("invalid --server-name: %w", err)
+		return cli.Validation("invalid --server-name %q: %w", serverNameString, err)
 	}
 
 	// Resolve "local" to the actual machine localpart from the launcher's
@@ -165,7 +164,7 @@ func runCreate(ctx context.Context, logger *slog.Logger, alias string, sessionCo
 	if machineName == "local" {
 		resolved, err := cli.ResolveLocalMachine()
 		if err != nil {
-			return cli.NotFound("resolving local machine identity: %w", err)
+			return err
 		}
 		machineName = resolved
 		logger.Info("resolved --machine=local", "machine", machineName)
@@ -188,7 +187,7 @@ func runCreate(ctx context.Context, logger *slog.Logger, alias string, sessionCo
 
 	session, err := sessionConfig.Connect(ctx)
 	if err != nil {
-		return cli.Internal("connect: %w", err)
+		return err
 	}
 	defer session.Close()
 
@@ -271,7 +270,8 @@ func Create(ctx context.Context, session messaging.Session, params CreateParams,
 	}
 	spaceRoomID, err := session.ResolveAlias(ctx, spaceAlias)
 	if err != nil {
-		return nil, cli.NotFound("resolve Bureau space %s: %w (has 'bureau matrix setup' been run?)", spaceAlias, err)
+		return nil, cli.NotFound("resolve Bureau space %s: %w", spaceAlias, err).
+			WithHint("Run 'bureau matrix setup' to initialize the homeserver and create the Bureau space.")
 	}
 
 	// Ensure the workspace room exists (idempotent).
@@ -329,7 +329,8 @@ func Create(ctx context.Context, session messaging.Session, params CreateParams,
 		return nil, cli.Internal("querying ticket service: %w", err)
 	}
 	if !found {
-		return nil, cli.NotFound("no ticket service deployed on %s — run 'bureau ticket enable' first", machineRef.Localpart())
+		return nil, cli.NotFound("no ticket service deployed on %s", machineRef.Localpart()).
+			WithHint("Run 'bureau ticket enable' to deploy a ticket service on this machine.")
 	}
 	if err := ticket.ConfigureRoom(ctx, logger, session, workspaceRoomID, ticketService.Principal, ticket.ConfigureRoomParams{
 		Prefix: "tkt",
@@ -456,7 +457,7 @@ func ensureWorkspaceRoom(ctx context.Context, session messaging.Session, alias s
 func buildPrincipalAssignments(alias, agentTemplate string, agentCount int, serverName ref.ServerName, machineRef ref.Machine, workspaceRoomID ref.RoomID, params map[string]string) ([]schema.PrincipalAssignment, error) {
 	workspaceRoomAlias, err := ref.ParseRoomAlias(schema.FullRoomAlias(alias, serverName))
 	if err != nil {
-		return nil, fmt.Errorf("constructing workspace room alias: %w", err)
+		return nil, cli.Internal("constructing workspace room alias: %w", err)
 	}
 	fleet := machineRef.Fleet()
 
@@ -483,7 +484,7 @@ func buildPrincipalAssignments(alias, agentTemplate string, agentCount int, serv
 	// pipeline to run; all other keys become pipeline variables.
 	setupEntity, err := makeEntity("agent/" + alias + "/setup")
 	if err != nil {
-		return nil, fmt.Errorf("constructing setup principal: %w", err)
+		return nil, cli.Internal("constructing setup principal: %w", err)
 	}
 	assignments := []schema.PrincipalAssignment{
 		{
@@ -514,7 +515,7 @@ func buildPrincipalAssignments(alias, agentTemplate string, agentCount int, serv
 	for index := 0; index < agentCount; index++ {
 		agentEntity, err := makeEntity("agent/" + alias + "/" + strconv.Itoa(index))
 		if err != nil {
-			return nil, fmt.Errorf("constructing agent principal %d: %w", index, err)
+			return nil, cli.Internal("constructing agent principal %d: %w", index, err)
 		}
 		agentPayload := map[string]any{
 			"PROJECT": project,
@@ -553,7 +554,7 @@ func buildPrincipalAssignments(alias, agentTemplate string, agentCount int, serv
 	// EVENT_teardown_mode variable.
 	teardownEntity, err := makeEntity("agent/" + alias + "/teardown")
 	if err != nil {
-		return nil, fmt.Errorf("constructing teardown principal: %w", err)
+		return nil, cli.Internal("constructing teardown principal: %w", err)
 	}
 	assignments = append(assignments, schema.PrincipalAssignment{
 		Principal: teardownEntity,
@@ -585,7 +586,8 @@ func updateMachineConfig(ctx context.Context, session messaging.Session, machine
 	configRoomAlias := machine.RoomAlias()
 	configRoomID, err := session.ResolveAlias(ctx, configRoomAlias)
 	if err != nil {
-		return cli.NotFound("resolve config room %s: %w (has the machine been registered?)", configRoomAlias, err)
+		return cli.NotFound("resolve machine config room %s: %w", configRoomAlias, err).
+			WithHint("Run 'bureau machine list' to see machines, or 'bureau machine provision' to register one.")
 	}
 
 	// Read the existing MachineConfig.

@@ -348,16 +348,16 @@ overlap_policy, and digest_interval.`,
 func loadStewardshipContent(path string) (stewardship.StewardshipContent, error) {
 	data, err := os.ReadFile(path)
 	if err != nil {
-		return stewardship.StewardshipContent{}, fmt.Errorf("reading %s: %w", path, err)
+		return stewardship.StewardshipContent{}, cli.Validation("cannot read stewardship file %s: %w", path, err)
 	}
 
 	var content stewardship.StewardshipContent
 	if err := json.Unmarshal(data, &content); err != nil {
-		return stewardship.StewardshipContent{}, fmt.Errorf("parsing %s: %w", path, err)
+		return stewardship.StewardshipContent{}, cli.Validation("invalid JSON in stewardship file %s: %w", path, err)
 	}
 
 	if err := content.Validate(); err != nil {
-		return stewardship.StewardshipContent{}, err
+		return stewardship.StewardshipContent{}, cli.Validation("invalid stewardship content in %s: %w", path, err)
 	}
 
 	return content, nil

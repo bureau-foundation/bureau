@@ -96,7 +96,7 @@ Use "bureau template show --raw" to export a template for editing.`,
 func readTemplateFile(path string) (*schema.TemplateContent, error) {
 	data, err := os.ReadFile(path)
 	if err != nil {
-		return nil, cli.Internal("reading %s: %w", path, err)
+		return nil, cli.Validation("reading %s: %w", path, err)
 	}
 
 	// Strip comments and trailing commas before parsing as standard JSON.
@@ -104,7 +104,7 @@ func readTemplateFile(path string) (*schema.TemplateContent, error) {
 
 	var content schema.TemplateContent
 	if err := json.Unmarshal(stripped, &content); err != nil {
-		return nil, cli.Internal("parsing %s: %w", path, err)
+		return nil, cli.Validation("parsing %s as template JSON: %w", path, err)
 	}
 
 	return &content, nil

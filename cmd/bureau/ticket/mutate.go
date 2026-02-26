@@ -512,12 +512,13 @@ created.`,
 
 			data, err := os.ReadFile(params.File)
 			if err != nil {
-				return cli.Internal("reading %s: %w", params.File, err)
+				return cli.Validation("cannot read batch file %s: %w", params.File, err)
 			}
 
 			var tickets []batchTicket
 			if err := json.Unmarshal(data, &tickets); err != nil {
-				return cli.Internal("parsing %s: %w", params.File, err)
+				return cli.Validation("invalid JSON in batch file %s: %w", params.File, err).
+					WithHint("The file must contain a JSON array of ticket objects. See 'bureau ticket batch --help' for the expected format.")
 			}
 
 			if len(tickets) == 0 {

@@ -86,7 +86,8 @@ content, not the resolved inheritance chain — use "bureau template show
 			// Parse the template reference.
 			templateRef, err := schema.ParseTemplateRef(templateRefString)
 			if err != nil {
-				return cli.Validation("parsing template reference: %w", err)
+				return cli.Validation("invalid template reference: %w", err).
+					WithHint("Template references have the form namespace/template:name (e.g., bureau/template:base-networked).")
 			}
 
 			// Read the local file.
@@ -106,7 +107,7 @@ content, not the resolved inheritance chain — use "bureau template show
 
 			serverName, err := ref.ParseServerName(params.ServerName)
 			if err != nil {
-				return fmt.Errorf("invalid --server-name: %w", err)
+				return cli.Validation("invalid --server-name: %w", err)
 			}
 
 			remoteContent, err := libtmpl.Fetch(ctx, session, templateRef, serverName)

@@ -6,7 +6,6 @@ package credential
 import (
 	"context"
 	"encoding/json"
-	"fmt"
 	"io"
 	"log/slog"
 	"os"
@@ -88,7 +87,7 @@ machine and an operator escrow key for recovery.`,
 
 			serverName, err := ref.ParseServerName(params.ServerName)
 			if err != nil {
-				return fmt.Errorf("invalid --server-name: %w", err)
+				return cli.Validation("invalid --server-name %q: %w", params.ServerName, err)
 			}
 
 			machine, err := ref.ParseMachine(params.MachineName, serverName)

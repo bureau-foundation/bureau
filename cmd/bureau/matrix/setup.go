@@ -118,7 +118,7 @@ by "bureau fleet enable" and resolved via the fleet prefix.`,
 
 			serverName, err := ref.ParseServerName(params.ServerName)
 			if err != nil {
-				return fmt.Errorf("invalid --server-name: %w", err)
+				return cli.Validation("invalid --server-name %q: %w", params.ServerName, err)
 			}
 
 			return runSetup(ctx, logger, setupConfig{

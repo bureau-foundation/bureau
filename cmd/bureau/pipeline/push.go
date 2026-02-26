@@ -91,7 +91,8 @@ without actually publishing.`,
 			// Parse the pipeline reference.
 			pipelineRef, err := schema.ParsePipelineRef(pipelineRefString)
 			if err != nil {
-				return cli.Validation("parsing pipeline reference: %w", err)
+				return cli.Validation("invalid pipeline reference: %w", err).
+					WithHint("Pipeline references have the form namespace/pipeline:name (e.g., bureau/pipeline:setup).")
 			}
 
 			// Read and validate the local file.
@@ -112,7 +113,7 @@ without actually publishing.`,
 
 			serverName, err := ref.ParseServerName(params.ServerName)
 			if err != nil {
-				return fmt.Errorf("invalid --server-name: %w", err)
+				return cli.Validation("invalid --server-name %q: %w", params.ServerName, err)
 			}
 
 			// Connect to Matrix for room verification and publishing.

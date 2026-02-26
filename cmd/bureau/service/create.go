@@ -5,7 +5,6 @@ package service
 
 import (
 	"context"
-	"fmt"
 	"log/slog"
 	"time"
 
@@ -125,7 +124,7 @@ func runCreate(ctx context.Context, logger *slog.Logger, templateRef schema.Temp
 	// agent commands.
 	adminSession, err := params.SessionConfig.Connect(ctx)
 	if err != nil {
-		return cli.Internal("connect: %w", err)
+		return err
 	}
 	defer adminSession.Close()
 
@@ -139,7 +138,9 @@ func runCreate(ctx context.Context, logger *slog.Logger, templateRef schema.Temp
 
 	registrationToken := credentials["MATRIX_REGISTRATION_TOKEN"]
 	if registrationToken == "" {
-		return cli.Validation("credential file missing MATRIX_REGISTRATION_TOKEN")
+		return cli.Validation("credential file missing MATRIX_REGISTRATION_TOKEN").
+			WithHint("The credential file must contain MATRIX_REGISTRATION_TOKEN. " +
+				"Re-run 'bureau matrix setup' to regenerate the credential file.")
 	}
 
 	registrationTokenBuffer, err := secret.NewFromString(registrationToken)
@@ -165,7 +166,7 @@ func runCreate(ctx context.Context, logger *slog.Logger, templateRef schema.Temp
 
 	serverName, err := ref.ParseServerName(params.ServerName)
 	if err != nil {
-		return fmt.Errorf("invalid --server-name: %w", err)
+		return cli.Validation("invalid --server-name %q: %w", params.ServerName, err)
 	}
 
 	// Parse the machine ref at the CLI boundary. Fleet is derived from the
@@ -180,7 +181,8 @@ func runCreate(ctx context.Context, logger *slog.Logger, templateRef schema.Temp
 	machineRoomAlias := fleet.MachineRoomAlias()
 	machineRoomID, err := adminSession.ResolveAlias(ctx, machineRoomAlias)
 	if err != nil {
-		return cli.Internal("resolve fleet machine room %q: %w", machineRoomAlias, err)
+		return cli.NotFound("fleet machine room %s not found: %w", machineRoomAlias, err).
+			WithHint("Run 'bureau machine list' to see machines, or 'bureau machine provision' to register one.")
 	}
 
 	logger.Info("creating service", "name", params.Name, "machine", params.Machine, "template", templateRef.String())

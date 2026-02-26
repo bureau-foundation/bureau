@@ -79,7 +79,8 @@ exist without actually publishing.`,
 			// Parse the template reference.
 			templateRef, err := schema.ParseTemplateRef(templateRefString)
 			if err != nil {
-				return cli.Validation("parsing template reference: %w", err)
+				return cli.Validation("invalid template reference: %w", err).
+					WithHint("Template references have the form namespace/template:name (e.g., bureau/template:base-networked).")
 			}
 
 			// Read and validate the local file.
@@ -109,7 +110,7 @@ exist without actually publishing.`,
 
 			serverName, err := ref.ParseServerName(params.ServerName)
 			if err != nil {
-				return fmt.Errorf("invalid --server-name: %w", err)
+				return cli.Validation("invalid --server-name: %w", err)
 			}
 
 			// Dry-run: resolve room and verify inheritance without publishing.
@@ -117,7 +118,9 @@ exist without actually publishing.`,
 				roomAlias := templateRef.RoomAlias(serverName)
 				roomID, err := session.ResolveAlias(ctx, roomAlias)
 				if err != nil {
-					return cli.NotFound("resolving target room %q: %w", roomAlias, err)
+					return cli.NotFound("resolving target room %q: %w", roomAlias, err).
+						WithHint("The template room must exist before pushing. " +
+							"Run 'bureau matrix setup' to create standard rooms, or check the namespace.")
 				}
 
 				for index, parentRefString := range content.Inherits {
@@ -126,7 +129,8 @@ exist without actually publishing.`,
 						return cli.Validation("inherits[%d] reference %q is invalid: %w", index, parentRefString, err)
 					}
 					if _, err := libtmpl.Fetch(ctx, session, parentRef, serverName); err != nil {
-						return cli.NotFound("parent template %q not found in Matrix: %w", parentRefString, err)
+						return cli.NotFound("parent template %q not found in Matrix: %w", parentRefString, err).
+							WithHint("Push the parent template first with 'bureau template push'.")
 					}
 					logger.Info("parent template found", "parent", parentRefString)
 				}

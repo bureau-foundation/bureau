@@ -358,17 +358,44 @@ func buildToolResult(output string, runErr error) toolsCallResult {
 // It checks for ToolError first (the primary path after migration),
 // then falls back to known error types (MatrixError, context errors)
 // for defense in depth.
+//
+// When a ToolError has category Internal, classifyError drills through
+// the wrapped error chain to find a more specific classification. This
+// handles the common pattern of cli.Internal("context: %w", matrixErr)
+// where the inner error carries better classification than the generic
+// Internal wrapper. Explicit non-Internal categories (Validation,
+// NotFound, etc.) are always respected as-is.
 func classifyError(err error) *errorInfo {
 	var toolErr *cli.ToolError
 	if errors.As(err, &toolErr) {
-		return &errorInfo{
+		info := &errorInfo{
 			Category:  string(toolErr.Category),
 			Retryable: toolErr.Category == cli.CategoryTransient,
+			Hint:      toolErr.Hint,
 		}
+
+		// Drill through Internal to find better classification from
+		// the wrapped error chain. The ToolError's hint and message
+		// are preserved — only the category and retryable flag change.
+		if toolErr.Category == cli.CategoryInternal {
+			if refined := classifyInnerError(toolErr.Err); refined != nil {
+				info.Category = refined.Category
+				info.Retryable = refined.Retryable
+			}
+		}
+
+		return info
 	}
 
 	// Fallback: classify known library error types that might not
 	// be wrapped in a ToolError.
+	return classifyUnwrappedError(err)
+}
+
+// classifyInnerError checks a (non-ToolError) error chain for known
+// typed errors that provide better classification than Internal. Returns
+// nil if no specific type is found (the caller should keep Internal).
+func classifyInnerError(err error) *errorInfo {
 	var matrixErr *messaging.MatrixError
 	if errors.As(err, &matrixErr) {
 		return classifyMatrixError(matrixErr)
@@ -376,7 +403,19 @@ func classifyError(err error) *errorInfo {
 	if errors.Is(err, context.DeadlineExceeded) || errors.Is(err, context.Canceled) {
 		return &errorInfo{Category: string(cli.CategoryTransient), Retryable: true}
 	}
+	return nil
+}
 
+// classifyUnwrappedError classifies errors that are not wrapped in a
+// ToolError. This is the fallback path for bare library errors.
+func classifyUnwrappedError(err error) *errorInfo {
+	var matrixErr *messaging.MatrixError
+	if errors.As(err, &matrixErr) {
+		return classifyMatrixError(matrixErr)
+	}
+	if errors.Is(err, context.DeadlineExceeded) || errors.Is(err, context.Canceled) {
+		return &errorInfo{Category: string(cli.CategoryTransient), Retryable: true}
+	}
 	return &errorInfo{Category: string(cli.CategoryInternal), Retryable: false}
 }
 

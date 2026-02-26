@@ -84,7 +84,9 @@ eligibility).`,
 
 			var response placeResponse
 			if err := client.Call(ctx, "place", fields, &response); err != nil {
-				return cli.Internal("placing service: %w", err)
+				return cli.Transient("placing service %q: %w", serviceLocalpart, err).
+					WithHint("Run 'bureau fleet list-services' to verify the service exists, " +
+						"and 'bureau fleet list-machines' to verify eligible machines.")
 			}
 
 			result := placeResult{
@@ -166,7 +168,8 @@ daemon to tear down the service's sandbox.`,
 				"service": serviceLocalpart,
 				"machine": params.Machine,
 			}, &response); err != nil {
-				return cli.Internal("unplacing service: %w", err)
+				return cli.Transient("removing service %q from machine %q: %w", serviceLocalpart, params.Machine, err).
+					WithHint("Run 'bureau fleet show-service " + serviceLocalpart + "' to check current placement.")
 			}
 
 			result := unplaceResult{
@@ -260,7 +263,8 @@ placement. Use this to preview what "place" would choose.`,
 			if err := client.Call(ctx, "plan", map[string]any{
 				"service": serviceLocalpart,
 			}, &response); err != nil {
-				return cli.Internal("planning placement: %w", err)
+				return cli.Transient("planning placement for service %q: %w", serviceLocalpart, err).
+					WithHint("Run 'bureau fleet list-services' to verify the service exists.")
 			}
 
 			candidates := make([]planCandidateJSON, len(response.Candidates))

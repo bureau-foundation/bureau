@@ -102,13 +102,15 @@ accidental or intentional spoofing of active machines.`,
 		Annotations:    cli.Create(),
 		Run: func(ctx context.Context, args []string, logger *slog.Logger) error {
 			if len(args) == 0 {
-				return cli.Validation("machine reference is required\n\nUsage: bureau machine provision <machine-ref> [flags]")
+				return cli.Validation("machine reference is required").
+					WithHint("Usage: bureau machine provision <machine-ref> [flags]")
 			}
 			if len(args) > 1 {
 				return cli.Validation("expected exactly one argument (machine reference), got %d", len(args))
 			}
 			if params.SessionConfig.CredentialFile == "" {
-				return cli.Validation("--credential-file is required")
+				return cli.Validation("--credential-file is required").
+					WithHint("Pass --credential-file with the file from 'bureau matrix setup'.")
 			}
 
 			ctx, cancel := context.WithTimeout(ctx, 60*time.Second)
@@ -119,13 +121,14 @@ accidental or intentional spoofing of active machines.`,
 			// decommission and revoke.
 			genericSession, err := params.SessionConfig.Connect(ctx)
 			if err != nil {
-				return cli.Internal("connect: %w", err)
+				return err
 			}
 			defer genericSession.Close()
 
 			adminSession, ok := genericSession.(*messaging.DirectSession)
 			if !ok {
-				return cli.Internal("provision requires a direct session (credential file), not a proxy session")
+				return cli.Validation("provision requires a direct session (credential file), not a proxy session").
+					WithHint("This command must be run by an operator with --credential-file, not from inside a sandbox.")
 			}
 
 			// The credential file also contains the registration token,
@@ -138,7 +141,9 @@ accidental or intentional spoofing of active machines.`,
 
 			registrationToken := credentials["MATRIX_REGISTRATION_TOKEN"]
 			if registrationToken == "" {
-				return cli.Validation("credential file missing MATRIX_REGISTRATION_TOKEN")
+				return cli.Validation("credential file missing MATRIX_REGISTRATION_TOKEN").
+					WithHint("The credential file should contain MATRIX_REGISTRATION_TOKEN=<token>.\n" +
+						"Re-run 'bureau matrix setup' to regenerate the credential file.")
 			}
 
 			registrationTokenBuffer, err := secret.NewFromString(registrationToken)
@@ -262,14 +267,19 @@ func Provision(ctx context.Context, client *messaging.Client, adminSession *mess
 			resetErr := adminSession.ResetUserPassword(ctx, machineUserID, oneTimePassword.String(), true)
 			if resetErr != nil {
 				if messaging.IsMatrixError(resetErr, messaging.ErrCodeUnrecognized) {
-					return nil, cli.Internal("this homeserver does not support admin password reset (Synapse admin API) — "+
-						"the decommissioned machine %q cannot be reused; choose a new machine name", machineUsername)
+					return nil, cli.Conflict("this homeserver does not support admin password reset — "+
+						"the decommissioned machine %q cannot be reused", machineUsername).
+						WithHint("The homeserver lacks the Synapse admin API for password reset.\n" +
+							"Choose a new machine name, or use a homeserver that supports the /_synapse/admin/v1/reset_password endpoint.")
 				}
-				return nil, cli.Internal("reset password for re-provisioned machine: %w", resetErr)
+				return nil, cli.Transient("reset password for re-provisioned machine: %w", resetErr).
+					WithHint("Check that the homeserver is running. Run 'bureau matrix doctor' to diagnose.")
 			}
 			logger.Info("password reset for re-provisioning")
 		} else {
-			return nil, cli.Internal("register machine account: %w", registerError)
+			return nil, cli.Transient("register machine account: %w", registerError).
+				WithHint("Check that the homeserver is running and the registration token is valid.\n" +
+					"Run 'bureau matrix doctor' to diagnose homeserver connectivity.")
 		}
 	} else {
 		logger.Info("account created", "machine_user_id", machineUserID.String())
@@ -282,13 +292,14 @@ func Provision(ctx context.Context, client *messaging.Client, adminSession *mess
 		// All global rooms must be resolvable for provisioning. Unlike
 		// decommission (where best-effort is acceptable), a provision that
 		// skips rooms would produce a machine that can't fully participate.
-		return nil, cli.NotFound("cannot resolve all Bureau rooms: %v", resolveErrors[0])
+		return nil, cli.NotFound("cannot resolve all Bureau rooms: %v", resolveErrors[0]).
+			WithHint("Has 'bureau matrix setup' been run? Check with 'bureau matrix doctor'.")
 	}
 
 	for _, room := range globalRooms {
 		if err := adminSession.InviteUser(ctx, room.roomID, machineUserID); err != nil {
 			if !messaging.IsMatrixError(err, messaging.ErrCodeForbidden) {
-				return nil, cli.Internal("invite machine to %s: %w", room.alias, err)
+				return nil, cli.Transient("invite machine to %s: %w", room.alias, err)
 			}
 			logger.Info("already invited to room", "room", room.alias)
 		} else {
@@ -299,7 +310,8 @@ func Provision(ctx context.Context, client *messaging.Client, adminSession *mess
 	// Resolve and invite to fleet-scoped rooms.
 	machineRoomID, serviceRoomID, fleetRoomID, err := resolveFleetRooms(ctx, adminSession, fleet)
 	if err != nil {
-		return nil, cli.NotFound("resolve fleet rooms: %w", err)
+		return nil, cli.NotFound("resolve fleet rooms: %w", err).
+			WithHint("Has 'bureau matrix setup' been run for this fleet? Check with 'bureau matrix doctor'.")
 	}
 	for _, fleetRoom := range []struct {
 		id   ref.RoomID
@@ -311,7 +323,7 @@ func Provision(ctx context.Context, client *messaging.Client, adminSession *mess
 	} {
 		if err := adminSession.InviteUser(ctx, fleetRoom.id, machineUserID); err != nil {
 			if !messaging.IsMatrixError(err, messaging.ErrCodeForbidden) {
-				return nil, cli.Internal("invite machine to %s: %w", fleetRoom.name, err)
+				return nil, cli.Transient("invite machine to %s: %w", fleetRoom.name, err)
 			}
 			logger.Info("already invited to room", "room", fleetRoom.name)
 		} else {
@@ -341,18 +353,18 @@ func Provision(ctx context.Context, client *messaging.Client, adminSession *mess
 			logger.Info("config room already exists, re-inviting machine")
 			configRoomID, err := adminSession.ResolveAlias(ctx, configAlias)
 			if err != nil {
-				return nil, cli.Internal("resolve existing config room %q: %w", configAlias, err)
+				return nil, cli.Transient("resolve existing config room %q: %w", configAlias, err)
 			}
 			if err := adminSession.InviteUser(ctx, configRoomID, machineUserID); err != nil {
 				if !messaging.IsMatrixError(err, messaging.ErrCodeForbidden) {
-					return nil, cli.Internal("re-invite machine to config room: %w", err)
+					return nil, cli.Transient("re-invite machine to config room: %w", err)
 				}
 				logger.Info("already invited to config room")
 			} else {
 				logger.Info("re-invited to config room")
 			}
 		} else {
-			return nil, cli.Internal("create config room: %w", createError)
+			return nil, cli.Transient("create config room: %w", createError)
 		}
 	} else {
 		// Set power levels: admin=100, machine=50. Machine can write
@@ -361,7 +373,7 @@ func Provision(ctx context.Context, client *messaging.Client, adminSession *mess
 		_, err = adminSession.SendStateEvent(ctx, configRoom.RoomID, "m.room.power_levels", "",
 			schema.ConfigRoomPowerLevels(adminUserID, machineUserID))
 		if err != nil {
-			return nil, cli.Internal("set config room power levels: %w", err)
+			return nil, cli.Transient("set config room power levels: %w", err)
 		}
 		logger.Info("config room created", "room_id", configRoom.RoomID.String())
 	}
@@ -397,8 +409,9 @@ func verifyFullDecommission(ctx context.Context, session messaging.Session, mach
 		for _, room := range failedRooms {
 			failedNames = append(failedNames, room.displayName)
 		}
-		return cli.Internal("cannot verify decommission: unable to resolve rooms [%s] — cannot confirm machine has zero Bureau memberships",
-			strings.Join(failedNames, ", "))
+		return cli.Transient("cannot verify decommission: unable to resolve rooms [%s] — cannot confirm machine has zero Bureau memberships",
+			strings.Join(failedNames, ", ")).
+			WithHint("Check that the homeserver is running. Run 'bureau matrix doctor' to diagnose.")
 	}
 
 	// Check for active memberships in all global rooms.
@@ -436,12 +449,14 @@ func verifyFullDecommission(ctx context.Context, session messaging.Session, mach
 	// machine room.
 	machineRoomID, _, _, err := resolveFleetRooms(ctx, session, machine.Fleet())
 	if err != nil {
-		return cli.Internal("resolve fleet rooms for decommission check: %w", err)
+		return cli.Transient("resolve fleet rooms for decommission check: %w", err).
+			WithHint("Check that the homeserver is running. Run 'bureau matrix doctor' to diagnose.")
 	}
 
 	events, err := session.GetRoomState(ctx, machineRoomID)
 	if err != nil {
-		return cli.Internal("cannot read machine room state to verify decommission: %w", err)
+		return cli.Transient("cannot read machine room state to verify decommission: %w", err).
+			WithHint("Check that the homeserver is running. Run 'bureau matrix doctor' to diagnose.")
 	}
 
 	for _, event := range events {

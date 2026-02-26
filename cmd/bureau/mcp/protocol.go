@@ -160,6 +160,11 @@ type errorInfo struct {
 	// True for transient errors (network, timeout, rate limit); false
 	// for validation, not_found, forbidden, and internal errors.
 	Retryable bool `json:"retryable"`
+
+	// Hint is actionable guidance for the caller: what command to run,
+	// what flag to pass, what prerequisite to check. Empty when no
+	// specific guidance is available.
+	Hint string `json:"hint,omitempty"`
 }
 
 // contentBlock is an MCP content block within a tool result.

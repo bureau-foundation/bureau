@@ -90,7 +90,7 @@ Use --status to export only tickets in a particular state (e.g.
 			if params.File != "" && params.File != "-" {
 				file, err := os.Create(params.File)
 				if err != nil {
-					return cli.Internal("creating output file: %w", err)
+					return cli.Validation("cannot create output file %s: %w", params.File, err)
 				}
 				defer file.Close()
 				output = file
@@ -215,7 +215,7 @@ invalid, none are imported.`,
 			if params.File != "-" {
 				file, err := os.Open(params.File)
 				if err != nil {
-					return cli.Internal("opening input file: %w", err)
+					return cli.Validation("cannot open input file %s: %w", params.File, err)
 				}
 				defer file.Close()
 				input = file

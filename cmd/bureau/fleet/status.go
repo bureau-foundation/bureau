@@ -112,13 +112,13 @@ func runStatus(ctx context.Context, logger *slog.Logger, params *statusParams) e
 	// Fetch aggregate info.
 	var info infoResponse
 	if err := client.Call(ctx, "info", nil, &info); err != nil {
-		return cli.Internal("fetching fleet info: %w", err)
+		return cli.Transient("fetching fleet info: %w", err)
 	}
 
 	// Fetch per-machine health.
 	var machines machinesResponse
 	if err := client.Call(ctx, "list-machines", nil, &machines); err != nil {
-		return cli.Internal("fetching machine list: %w", err)
+		return cli.Transient("fetching machine list: %w", err)
 	}
 
 	machineList := make([]machineHealth, len(machines.Machines))

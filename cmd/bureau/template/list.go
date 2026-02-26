@@ -76,7 +76,7 @@ It is resolved to a full Matrix alias using the --server-name flag.`,
 
 			serverName, err := ref.ParseServerName(params.ServerName)
 			if err != nil {
-				return fmt.Errorf("invalid --server-name: %w", err)
+				return cli.Validation("invalid --server-name: %w", err)
 			}
 
 			roomAlias := ref.MustParseRoomAlias(schema.FullRoomAlias(params.Room, serverName))
@@ -89,7 +89,9 @@ It is resolved to a full Matrix alias using the --server-name flag.`,
 
 			roomID, err := session.ResolveAlias(ctx, roomAlias)
 			if err != nil {
-				return cli.NotFound("resolving room alias %q: %w", roomAlias, err)
+				return cli.NotFound("resolving room alias %q: %w", roomAlias, err).
+					WithHint("Check the room alias localpart and server name. " +
+						"Run 'bureau matrix room list' to see available rooms.")
 			}
 
 			// Fetch all state events in the room, then filter for templates.

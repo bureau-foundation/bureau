@@ -91,7 +91,7 @@ With a file argument, also classifies each change:
 
 			serverName, err := ref.ParseServerName(params.ServerName)
 			if err != nil {
-				return fmt.Errorf("invalid --server-name: %w", err)
+				return cli.Validation("invalid --server-name: %w", err)
 			}
 
 			analyzer := &impactAnalyzer{

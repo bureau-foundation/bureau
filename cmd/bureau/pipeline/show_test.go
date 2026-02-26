@@ -70,8 +70,8 @@ func TestShowPipelineBadRef(t *testing.T) {
 	if err == nil {
 		t.Fatal("expected error for bad pipeline reference")
 	}
-	if !strings.Contains(err.Error(), "parsing pipeline reference") {
-		t.Errorf("error %q should mention parsing", err.Error())
+	if !strings.Contains(err.Error(), "invalid pipeline reference") {
+		t.Errorf("error %q should mention invalid pipeline reference", err.Error())
 	}
 }
 

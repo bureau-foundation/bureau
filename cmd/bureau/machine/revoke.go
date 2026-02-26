@@ -77,13 +77,15 @@ depending on the homeserver — this is by design for emergency revocation.`,
 		Annotations:    cli.Destructive(),
 		Run: func(ctx context.Context, args []string, logger *slog.Logger) error {
 			if len(args) == 0 {
-				return cli.Validation("machine reference is required\n\nUsage: bureau machine revoke <machine-ref> [flags]")
+				return cli.Validation("machine reference is required").
+					WithHint("Usage: bureau machine revoke <machine-ref> [flags]")
 			}
 			if len(args) > 1 {
 				return cli.Validation("expected exactly one argument (machine reference), got %d", len(args))
 			}
 			if params.SessionConfig.CredentialFile == "" {
-				return cli.Validation("--credential-file is required")
+				return cli.Validation("--credential-file is required").
+					WithHint("Pass --credential-file with the file from 'bureau matrix setup'.")
 			}
 
 			ctx, cancel := context.WithTimeout(ctx, 60*time.Second)
@@ -91,13 +93,14 @@ depending on the homeserver — this is by design for emergency revocation.`,
 
 			genericSession, err := params.SessionConfig.Connect(ctx)
 			if err != nil {
-				return cli.Internal("connect: %w", err)
+				return err
 			}
 			defer genericSession.Close()
 
 			adminSession, ok := genericSession.(*messaging.DirectSession)
 			if !ok {
-				return cli.Internal("revoke requires a direct session (credential file), not a proxy session")
+				return cli.Validation("revoke requires a direct session (credential file), not a proxy session").
+					WithHint("This command must be run by an operator with --credential-file, not from inside a sandbox.")
 			}
 
 			defaultServer, err := ref.ServerFromUserID(adminSession.UserID().String())
@@ -193,7 +196,8 @@ func Revoke(ctx context.Context, adminSession *messaging.DirectSession, params R
 	// Resolve the fleet-scoped rooms for state event cleanup and kicking.
 	machineRoomID, serviceRoomID, fleetRoomID, err := resolveFleetRooms(ctx, adminSession, fleet)
 	if err != nil {
-		return cli.NotFound("fleet rooms could not be resolved — cannot clear machine state: %w", err)
+		return cli.NotFound("fleet rooms could not be resolved — cannot clear machine state: %w", err).
+			WithHint("Has 'bureau matrix setup' been run for this fleet? Check with 'bureau matrix doctor'.")
 	}
 
 	// Kick the machine from ALL rooms first. This is the access
@@ -207,7 +211,8 @@ func Revoke(ctx context.Context, adminSession *messaging.DirectSession, params R
 	configRoomID, err := adminSession.ResolveAlias(ctx, configAlias)
 	configRoomExists := err == nil
 	if err != nil && !messaging.IsMatrixError(err, messaging.ErrCodeNotFound) {
-		return cli.NotFound("resolve config room %q: %w", configAlias, err)
+		return cli.Transient("resolve config room %q: %w", configAlias, err).
+			WithHint("Check that the homeserver is running. Run 'bureau matrix doctor' to diagnose.")
 	}
 	if !configRoomExists {
 		logger.Info("config room does not exist, skipping", "alias", configAlias)

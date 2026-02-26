@@ -6,7 +6,6 @@ package pipeline
 import (
 	"context"
 	"encoding/json"
-	"fmt"
 	"log/slog"
 
 	"github.com/bureau-foundation/bureau/cmd/bureau/cli"
@@ -61,14 +60,15 @@ see is what the executor runs.`,
 
 			pipelineRef, err := schema.ParsePipelineRef(params.PipelineRef)
 			if err != nil {
-				return cli.Validation("parsing pipeline reference: %w", err)
+				return cli.Validation("invalid pipeline reference: %w", err).
+					WithHint("Pipeline references have the form namespace/pipeline:name (e.g., bureau/pipeline:setup).")
 			}
 
 			params.ServerName = cli.ResolveServerName(params.ServerName)
 
 			serverName, err := ref.ParseServerName(params.ServerName)
 			if err != nil {
-				return fmt.Errorf("invalid --server-name: %w", err)
+				return cli.Validation("invalid --server-name %q: %w", params.ServerName, err)
 			}
 
 			ctx, cancel, session, err := cli.ConnectOperator(ctx)

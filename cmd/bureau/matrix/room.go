@@ -117,7 +117,7 @@ such as m.bureau.machine_key or m.bureau.service.`,
 
 			sess, err := params.SessionConfig.Connect(ctx)
 			if err != nil {
-				return cli.Internal("connect: %w", err)
+				return err
 			}
 
 			// Resolve the parent space.
@@ -211,7 +211,7 @@ lists all joined rooms that are NOT spaces.`,
 
 			sess, err := params.SessionConfig.Connect(ctx)
 			if err != nil {
-				return cli.Internal("connect: %w", err)
+				return err
 			}
 
 			if params.Space != "" {
@@ -399,7 +399,7 @@ to clear the m.space.child event in the space.`,
 
 			sess, err := params.SessionConfig.Connect(ctx)
 			if err != nil {
-				return cli.Internal("connect: %w", err)
+				return err
 			}
 
 			roomID, err := resolveRoom(ctx, sess, target)
@@ -472,7 +472,7 @@ Displays a table of user ID, display name, and membership state
 
 			sess, err := params.SessionConfig.Connect(ctx)
 			if err != nil {
-				return cli.Internal("connect: %w", err)
+				return err
 			}
 
 			roomID, err := resolveRoom(ctx, sess, target)

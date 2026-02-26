@@ -110,7 +110,7 @@ func runConfig(ctx context.Context, logger *slog.Logger, fleetLocalpart string, 
 
 	session, err := params.SessionConfig.Connect(ctx)
 	if err != nil {
-		return cli.Internal("connecting admin session: %w", err)
+		return err
 	}
 	defer session.Close()
 
@@ -137,7 +137,11 @@ func runConfig(ctx context.Context, logger *slog.Logger, fleetLocalpart string, 
 	// Resolve fleet room from the fleet's room alias.
 	fleetRoomID, err := session.ResolveAlias(ctx, fleet.RoomAlias())
 	if err != nil {
-		return cli.NotFound("resolving fleet room %s: %w (run 'bureau fleet create' first)", fleet.RoomAlias(), err)
+		if messaging.IsMatrixError(err, messaging.ErrCodeNotFound) {
+			return cli.NotFound("fleet room %s not found", fleet.RoomAlias()).
+				WithHint("Has the fleet been created? Run 'bureau fleet create' first.")
+		}
+		return cli.Transient("resolving fleet room %s: %w", fleet.RoomAlias(), err)
 	}
 
 	// Read existing config.
@@ -148,7 +152,7 @@ func runConfig(ctx context.Context, logger *slog.Logger, fleetLocalpart string, 
 			return cli.Internal("parsing existing fleet config: %w", unmarshalErr)
 		}
 	} else if !messaging.IsMatrixError(err, messaging.ErrCodeNotFound) {
-		return cli.Internal("reading fleet config: %w", err)
+		return cli.Transient("reading fleet config from room %s: %w", fleetRoomID, err)
 	}
 
 	if !hasConfigUpdates(params) {
@@ -205,7 +209,11 @@ func runConfig(ctx context.Context, logger *slog.Logger, fleetLocalpart string, 
 
 	_, err = session.SendStateEvent(ctx, fleetRoomID, schema.EventTypeFleetConfig, stateKey, config)
 	if err != nil {
-		return cli.Internal("publishing fleet config: %w", err)
+		if messaging.IsMatrixError(err, messaging.ErrCodeForbidden) {
+			return cli.Forbidden("cannot publish fleet config to %s: %w", fleetRoomID, err).
+				WithHint("The connected session lacks permission to write state events in this room.")
+		}
+		return cli.Transient("publishing fleet config to %s: %w", fleetRoomID, err)
 	}
 
 	result := configResult{

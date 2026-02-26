@@ -80,11 +80,12 @@ available rooms.`,
 				filePath = ".beads/issues.jsonl"
 			}
 
-			source, err := ticketui.LoadBeadsFile(filePath)
+			source, cleanup, err := ticketui.WatchBeadsFile(filePath)
 			if err != nil {
 				return cli.Validation("cannot load tickets from %s: %w", filePath, err).
 					WithHint("Check that the file exists and contains valid JSONL. Use --service to connect to the ticket service instead.")
 			}
+			defer cleanup()
 
 			model := ticketui.NewModel(source)
 			program := tea.NewProgram(model, tea.WithAltScreen(), tea.WithMouseAllMotion())

@@ -9,6 +9,7 @@ go_library(
         "animation.go",
         "autolink.go",
         "beads.go",
+        "beads_watch.go",
         "dependency.go",
         "detail.go",
         "doc.go",
@@ -44,6 +45,7 @@ go_library(
         "@com_github_charmbracelet_lipgloss//:lipgloss",
         "@com_github_charmbracelet_x_ansi//:ansi",
         "@com_github_junegunn_fzf//src/util",
+        "@org_golang_x_sys//unix",
     ],
 )
 
@@ -52,6 +54,7 @@ go_test(
     srcs = [
         "autolink_test.go",
         "beads_test.go",
+        "beads_watch_test.go",
         "dependency_test.go",
         "detail_test.go",
         "filter_test.go",

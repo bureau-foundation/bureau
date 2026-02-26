@@ -7,6 +7,7 @@ import (
 	"context"
 	"fmt"
 	"log/slog"
+	"sync"
 
 	"github.com/bureau-foundation/bureau/lib/codec"
 	"github.com/bureau-foundation/bureau/lib/schema/agent"
@@ -50,9 +51,14 @@ type eventCheckpointTracker struct {
 	// allEvents[lastCheckpointIndex:].
 	lastCheckpointIndex int
 
+	// mu guards currentContextID for concurrent reads from the
+	// wrapper context socket while the consumer goroutine writes.
+	mu sync.Mutex
+
 	// currentContextID is the ctx-* identifier of the most recent
 	// checkpoint commit. Empty until the first checkpoint succeeds.
-	// Used as the parent for the next checkpoint.
+	// Used as the parent for the next checkpoint. Reads from
+	// outside the consumer goroutine must use CurrentContextID().
 	currentContextID string
 }
 
@@ -81,6 +87,16 @@ func newEventCheckpointTracker(
 		currentContextID:   initialContextID,
 		logger:             logger,
 	}
+}
+
+// CurrentContextID returns the most recent checkpoint's ctx-* ID.
+// Thread-safe: may be called concurrently with the consumer goroutine
+// that writes currentContextID during checkpoint(). Returns empty
+// string if no checkpoint has completed yet.
+func (tracker *eventCheckpointTracker) CurrentContextID() string {
+	tracker.mu.Lock()
+	defer tracker.mu.Unlock()
+	return tracker.currentContextID
 }
 
 // appendEvent records an event in the tracker's history. Call this
@@ -141,7 +157,9 @@ func (tracker *eventCheckpointTracker) checkpoint(
 		return fmt.Errorf("checkpoint-context: %w", err)
 	}
 
+	tracker.mu.Lock()
 	tracker.currentContextID = checkpointResponse.ID
+	tracker.mu.Unlock()
 	tracker.lastCheckpointIndex = len(tracker.allEvents)
 
 	tracker.logger.Info("event checkpoint created",

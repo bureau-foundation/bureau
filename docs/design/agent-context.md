@@ -563,19 +563,44 @@ the context request it from the agent service by ID.
 - The mechanism must work for both MCP tool calls and CLI invocations
   (`bureau ticket update ...`).
 
-**Approaches under consideration:**
+**Wrapper context socket (primary path):**
 
-The fundamental challenge is that for external-process runtimes (Claude
-Code, Codex), the entity with the context state (the wrapper) and the
-entity performing ticket mutations (the MCP tool or CLI) are in
-different processes. For the native agent they are the same process and
-the problem is trivial. Several approaches bridge this gap with
-different tradeoff profiles; the choice depends on what the wrapper
-architecture can support at the point of integration. The agent service's
-`resolve` endpoint (find context by principal and timestamp) provides a
-fallback that requires no explicit capture — the join uses the principal
-identity and event timestamp that Matrix already records on every state
-event.
+The wrapper exposes a Unix socket at `/run/bureau/agent-context.sock`
+with a single unauthenticated action: `current-context`. No auth is
+needed because the socket lives inside the sandbox namespace and is
+unreachable from outside. The socket uses `lib/service.SocketServer`
+with `Handle` (not `HandleAuth`).
+
+Tools query the socket via `BUREAU_AGENT_CONTEXT_SOCKET` (set
+automatically by `Run()` when checkpointing is enabled). The response
+is `{"context_id": "ctx-..."}` — the ctx-* identifier of the most
+recent checkpoint commit, or empty string if no checkpoint has fired.
+
+Timing guarantee: checkpoints fire at `EventTypeResponse` (turn
+boundary), before the agent begins tool execution. By the time a tool
+queries the socket, the checkpoint has completed and the context ID is
+settled. A mutex-guarded getter (`CurrentContextID()`) ensures
+consistent reads even if a checkpoint is in-flight.
+
+**Tool integration:**
+
+Ticket mutation CLI commands (`create`, `update`, `close`, `reopen`,
+`defer`) auto-detect the wrapper socket via the environment variable.
+If present, they query it and include `context_id` in the mutation
+request. If absent (outside sandbox), `context_id` is silently
+omitted. The ticket service stores it on `TicketContent.ContextID`
+(and on `TicketNote.ContextID` for add-note). The MCP server has no
+context capture logic: tools inherit `BUREAU_AGENT_CONTEXT_SOCKET`
+from the wrapper environment and query it like any CLI command.
+
+**Resolve fallback (retrospective linking):**
+
+For mutations made outside sandboxes (operator CLI, ticket service
+backfill), the agent service's `resolve-context` endpoint finds the
+nearest commit by principal and timestamp. This requires no explicit
+capture — the join uses the principal identity and event timestamp
+that Matrix already records on every state event. Separate
+implementation.
 
 ---
 

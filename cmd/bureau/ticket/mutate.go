@@ -147,6 +147,9 @@ Required fields: --room, --title, --type. Priority defaults to P2
 			if len(params.Affects) > 0 {
 				fields["affects"] = params.Affects
 			}
+			if contextID := resolveContextID(); contextID != "" {
+				fields["context_id"] = contextID
+			}
 
 			var result createResult
 			if err := client.Call(ctx, "create", fields, &result); err != nil {
@@ -290,6 +293,9 @@ in_progress returns a contention error with the current assignee.`,
 					"reviewers": reviewers,
 				}
 			}
+			if contextID := resolveContextID(); contextID != "" {
+				fields["context_id"] = contextID
+			}
 
 			var result mutationResult
 			if err := client.Call(ctx, "update", fields, &result); err != nil {
@@ -377,6 +383,9 @@ close a recurring ticket by stripping its recurring gates first.`,
 			if params.EndRecurrence {
 				fields["end_recurrence"] = true
 			}
+			if contextID := resolveContextID(); contextID != "" {
+				fields["context_id"] = contextID
+			}
 
 			var result mutationResult
 			if err := client.Call(ctx, "close", fields, &result); err != nil {
@@ -436,6 +445,9 @@ close timestamp and reason.`,
 			fields := map[string]any{"ticket": params.Ticket}
 			if err := addResolvedRoom(ctx, fields, params.Room); err != nil {
 				return err
+			}
+			if contextID := resolveContextID(); contextID != "" {
+				fields["context_id"] = contextID
 			}
 			var result mutationResult
 			if err := client.Call(ctx, "reopen", fields, &result); err != nil {
@@ -628,6 +640,9 @@ remove a defer gate (un-defer), use: bureau ticket gate resolve ID defer`,
 			}
 			if params.For != "" {
 				fields["for"] = params.For
+			}
+			if contextID := resolveContextID(); contextID != "" {
+				fields["context_id"] = contextID
 			}
 
 			var result mutationResult

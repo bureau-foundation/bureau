@@ -332,6 +332,26 @@ func Run(ctx context.Context, driver Driver, config RunConfig) error {
 		)
 	}
 
+	// Start the wrapper context socket when checkpointing is enabled.
+	// Tools running inside the sandbox query this socket to discover
+	// the current ctx-* identifier for ticket mutations. The socket
+	// must start before the driver so that tools spawned by the agent
+	// can reach it immediately. Uses a dedicated child context so the
+	// server shuts down cleanly when Run() returns.
+	var contextSocketPath string
+	if tracker != nil {
+		contextSocketPath = DefaultWrapperContextSocketPath
+		contextSocketCtx, cancelContextSocket := context.WithCancel(ctx)
+		defer cancelContextSocket()
+		contextSocketServer := newWrapperContextSocketServer(
+			contextSocketPath,
+			tracker.CurrentContextID,
+			logger,
+		)
+		go contextSocketServer.Serve(contextSocketCtx)
+		logger.Info("wrapper context socket started", "path", contextSocketPath)
+	}
+
 	// Determine initial prompt. If no prompt is configured in the
 	// payload, pass empty to the driver — the agent loop waits for
 	// a Matrix message instead of making a wasted LLM call.
@@ -364,6 +384,11 @@ func Run(ctx context.Context, driver Driver, config RunConfig) error {
 		WorkingDirectory:     workingDirectory,
 		ResumedContextFile:   resumedContextFile,
 		ResumedContextFormat: resumedContextFormat,
+	}
+	if contextSocketPath != "" {
+		driverConfig.ExtraEnv = append(driverConfig.ExtraEnv,
+			"BUREAU_AGENT_CONTEXT_SOCKET="+contextSocketPath,
+		)
 	}
 	process, stdout, err := driver.Start(ctx, driverConfig)
 	if err != nil {
@@ -512,8 +537,10 @@ func Run(ctx context.Context, driver Driver, config RunConfig) error {
 	// are logged but do not mask the agent's own exit status.
 	if agentServiceClient != nil {
 		endRequest := EndSessionRequestFromSummary(sessionID, summary, sessionLogArtifactRef)
-		if tracker != nil && tracker.currentContextID != "" {
-			endRequest.LatestContextCommitID = tracker.currentContextID
+		if tracker != nil {
+			if contextID := tracker.CurrentContextID(); contextID != "" {
+				endRequest.LatestContextCommitID = contextID
+			}
 		}
 		if endError := agentServiceClient.EndSession(ctx, endRequest); endError != nil {
 			logger.Error("ending agent service session", "error", endError)

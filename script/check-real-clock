@@ -26,6 +26,9 @@
 #   - Waiting for a goroutine to finish: use a channel. If the goroutine
 #     does observable work (IPC call, state mutation), have the mock or
 #     callback send on a channel, then select on it with t.Context().
+#   - Polling for socket/file readiness: use t.Context() + runtime.Gosched()
+#     in a tight loop. No wall-clock needed. See lib/service/socket_test.go
+#     waitForSocket() for the canonical pattern.
 #   - Token timestamps: use fixed Unix constants (e.g. 1735689600 for
 #     2025-01-01, 4070908800 for 2099-01-01). Far-future expiry for valid
 #     tokens, far-past expiry for expired token tests.
@@ -95,9 +98,17 @@ echo "  2. Wait on a deterministic signal instead of sleeping: use a"
 echo "     channel that fires when the operation completes (e.g. mock"
 echo "     handler sends on a channel when it receives an IPC request,"
 echo "     or the goroutine under test signals completion directly)"
-echo "  3. Use fixed Unix timestamp constants for token/test data"
+echo "  3. Poll with t.Context() + runtime.Gosched() for socket/file"
+echo "     readiness — no wall-clock needed. See lib/service/socket_test.go"
+echo "     waitForSocket() for the canonical pattern:"
+echo "       for {"
+echo "           if _, err := os.Stat(path); err == nil { return }"
+echo "           if t.Context().Err() != nil { t.Fatal(...) }"
+echo "           runtime.Gosched()"
+echo "       }"
+echo "  4. Use fixed Unix timestamp constants for token/test data"
 echo "     (e.g. 1735689600 for 2025-01-01, 4070908800 for 2099-01-01)"
-echo "  4. Only if wall time is genuinely unavoidable (OS I/O deadlines,"
+echo "  5. Only if wall time is genuinely unavoidable (OS I/O deadlines,"
 echo "     filesystem polling), add //nolint:realclock with justification"
 echo ""
 exit 1

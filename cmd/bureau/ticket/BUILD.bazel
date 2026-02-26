@@ -9,6 +9,7 @@ go_library(
         "attach.go",
         "command.go",
         "connection.go",
+        "context.go",
         "dep.go",
         "doc.go",
         "enable.go",

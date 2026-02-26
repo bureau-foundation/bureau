@@ -114,8 +114,8 @@ func TestEventCheckpointDelta(t *testing.T) {
 	}
 
 	// Verify tracker state updated.
-	if tracker.currentContextID != "ctx-00000001" {
-		t.Errorf("currentContextID = %q, want %q", tracker.currentContextID, "ctx-00000001")
+	if tracker.CurrentContextID() != "ctx-00000001" {
+		t.Errorf("CurrentContextID() = %q, want %q", tracker.CurrentContextID(), "ctx-00000001")
 	}
 	if tracker.lastCheckpointIndex != 2 {
 		t.Errorf("lastCheckpointIndex = %d, want 2", tracker.lastCheckpointIndex)
@@ -150,8 +150,8 @@ func TestEventCheckpointDelta_CheckpointFailure(t *testing.T) {
 		t.Fatalf("expected 1 checkpoint call, got %d", len(checkpointer.calls))
 	}
 	// Tracker state unchanged — the event pump continues.
-	if tracker.currentContextID != "" {
-		t.Errorf("expected empty currentContextID after failure, got %q", tracker.currentContextID)
+	if tracker.CurrentContextID() != "" {
+		t.Errorf("expected empty CurrentContextID() after failure, got %q", tracker.CurrentContextID())
 	}
 	if tracker.lastCheckpointIndex != 0 {
 		t.Errorf("expected lastCheckpointIndex=0 after failure, got %d", tracker.lastCheckpointIndex)

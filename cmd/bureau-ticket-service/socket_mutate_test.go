@@ -2276,3 +2276,109 @@ func TestHandleAddAttachmentDenied(t *testing.T) {
 		t.Errorf("action: got %q, want 'add-attachment'", serviceErr.Action)
 	}
 }
+
+// --- Context ID on mutations ---
+
+func TestHandleCreateWithContextID(t *testing.T) {
+	env := testMutationServer(t, mutationRooms())
+	defer env.cleanup()
+
+	var result createResponse
+	err := env.client.Call(context.Background(), "create", map[string]any{
+		"room":       "!room:bureau.local",
+		"title":      "task with context",
+		"type":       "task",
+		"priority":   2,
+		"context_id": "ctx-abc12345",
+	}, &result)
+	if err != nil {
+		t.Fatalf("Call: %v", err)
+	}
+
+	content, exists := env.service.rooms[testRoomID("!room:bureau.local")].index.Get(result.ID)
+	if !exists {
+		t.Fatalf("ticket %s not in index after create", result.ID)
+	}
+	if content.ContextID != "ctx-abc12345" {
+		t.Errorf("context_id: got %q, want %q", content.ContextID, "ctx-abc12345")
+	}
+}
+
+func TestHandleUpdateWithContextID(t *testing.T) {
+	env := testMutationServer(t, mutationRooms())
+	defer env.cleanup()
+
+	var result mutationResponse
+	err := env.client.Call(context.Background(), "update", map[string]any{
+		"ticket":     "tkt-open",
+		"room":       "!room:bureau.local",
+		"context_id": "ctx-update-001",
+	}, &result)
+	if err != nil {
+		t.Fatalf("Call: %v", err)
+	}
+
+	if result.Content.ContextID != "ctx-update-001" {
+		t.Errorf("context_id: got %q, want %q", result.Content.ContextID, "ctx-update-001")
+	}
+
+	// Verify a second update replaces the context_id.
+	err = env.client.Call(context.Background(), "update", map[string]any{
+		"ticket":     "tkt-open",
+		"room":       "!room:bureau.local",
+		"context_id": "ctx-update-002",
+	}, &result)
+	if err != nil {
+		t.Fatalf("Call: %v", err)
+	}
+	if result.Content.ContextID != "ctx-update-002" {
+		t.Errorf("context_id after second update: got %q, want %q", result.Content.ContextID, "ctx-update-002")
+	}
+}
+
+func TestHandleCloseWithContextID(t *testing.T) {
+	env := testMutationServer(t, mutationRooms())
+	defer env.cleanup()
+
+	var result mutationResponse
+	err := env.client.Call(context.Background(), "close", map[string]any{
+		"ticket":     "tkt-open",
+		"room":       "!room:bureau.local",
+		"reason":     "done",
+		"context_id": "ctx-close-001",
+	}, &result)
+	if err != nil {
+		t.Fatalf("Call: %v", err)
+	}
+
+	if result.Content.ContextID != "ctx-close-001" {
+		t.Errorf("context_id: got %q, want %q", result.Content.ContextID, "ctx-close-001")
+	}
+	if result.Content.Status != ticket.StatusClosed {
+		t.Errorf("status: got %q, want %q", result.Content.Status, ticket.StatusClosed)
+	}
+}
+
+func TestHandleAddNoteWithContextID(t *testing.T) {
+	env := testMutationServer(t, mutationRooms())
+	defer env.cleanup()
+
+	var result mutationResponse
+	err := env.client.Call(context.Background(), "add-note", map[string]any{
+		"ticket":     "tkt-open",
+		"room":       "!room:bureau.local",
+		"body":       "note with context",
+		"context_id": "ctx-note-001",
+	}, &result)
+	if err != nil {
+		t.Fatalf("Call: %v", err)
+	}
+
+	if len(result.Content.Notes) != 1 {
+		t.Fatalf("expected 1 note, got %d", len(result.Content.Notes))
+	}
+	note := result.Content.Notes[0]
+	if note.ContextID != "ctx-note-001" {
+		t.Errorf("note context_id: got %q, want %q", note.ContextID, "ctx-note-001")
+	}
+}

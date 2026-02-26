@@ -7,6 +7,7 @@ go_library(
     name = "agentdriver",
     srcs = [
         "context.go",
+        "context_socket.go",
         "doc.go",
         "driver.go",
         "event.go",
@@ -32,6 +33,7 @@ go_library(
 go_test(
     name = "agentdriver_test",
     srcs = [
+        "context_socket_test.go",
         "context_test.go",
         "event_checkpoint_test.go",
         "mention_test.go",
@@ -46,5 +48,7 @@ go_test(
         "//lib/ref",
         "//lib/schema",
         "//lib/schema/agent",
+        "//lib/service",
+        "//lib/testutil",
     ],
 )

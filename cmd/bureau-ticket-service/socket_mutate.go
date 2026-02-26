@@ -286,6 +286,12 @@ type createRequest struct {
 	// ticket remains open past its deadline. Deadlines are
 	// informational — they do not affect readiness.
 	Deadline string `cbor:"deadline,omitempty"`
+
+	// ContextID is the ctx-* identifier linking this ticket to the
+	// agent's context checkpoint at creation time. Auto-populated
+	// by tools running inside agent sandboxes via the wrapper
+	// context socket.
+	ContextID string `cbor:"context_id,omitempty"`
 }
 
 // updateRequest is the input for the "update" action. Pointer fields
@@ -306,6 +312,11 @@ type updateRequest struct {
 	Affects   *[]string   `cbor:"affects,omitempty"`
 	Deadline  *string     `cbor:"deadline,omitempty"`
 
+	// ContextID links this mutation to the agent's context checkpoint.
+	// Pointer semantics: nil means "don't change", non-nil pointing
+	// to empty string means "clear".
+	ContextID *string `cbor:"context_id,omitempty"`
+
 	// Review replaces the ticket's review content. When provided,
 	// the entire TicketReview is replaced. Use this to set up
 	// reviewers and scope before transitioning to "review" status,
@@ -325,6 +336,12 @@ type closeRequest struct {
 	Ticket string `cbor:"ticket"`
 	Reason string `cbor:"reason,omitempty"`
 
+	// ContextID links this close operation to the agent's context
+	// checkpoint. Applied only when non-empty (close is a terminal
+	// operation, so there is no need for pointer semantics to
+	// distinguish "clear" from "not provided").
+	ContextID string `cbor:"context_id,omitempty"`
+
 	// EndRecurrence stops recurring timer gates from re-arming on
 	// close. When true, recurring gates are removed from the ticket
 	// before closing, so the ticket stays closed permanently. When
@@ -337,8 +354,9 @@ type closeRequest struct {
 
 // reopenRequest is the input for the "reopen" action.
 type reopenRequest struct {
-	Room   string `cbor:"room,omitempty"`
-	Ticket string `cbor:"ticket"`
+	Room      string `cbor:"room,omitempty"`
+	Ticket    string `cbor:"ticket"`
+	ContextID string `cbor:"context_id,omitempty"`
 }
 
 // batchCreateRequest is the input for the "batch-create" action.
@@ -406,9 +424,10 @@ type updateGateRequest struct {
 // new note to an existing ticket. The note ID and timestamps are
 // assigned by the service; the caller provides only the body.
 type addNoteRequest struct {
-	Room   string `cbor:"room,omitempty"`
-	Ticket string `cbor:"ticket"`
-	Body   string `cbor:"body"`
+	Room      string `cbor:"room,omitempty"`
+	Ticket    string `cbor:"ticket"`
+	Body      string `cbor:"body"`
+	ContextID string `cbor:"context_id,omitempty"`
 }
 
 // deferRequest is the input for the "defer" action. Exactly one of
@@ -416,10 +435,11 @@ type addNoteRequest struct {
 // ID "defer", its Target is updated. Otherwise a new timer gate is
 // created.
 type deferRequest struct {
-	Room   string `cbor:"room,omitempty"`
-	Ticket string `cbor:"ticket"`
-	Until  string `cbor:"until,omitempty"`
-	For    string `cbor:"for,omitempty"`
+	Room      string `cbor:"room,omitempty"`
+	Ticket    string `cbor:"ticket"`
+	Until     string `cbor:"until,omitempty"`
+	For       string `cbor:"for,omitempty"`
+	ContextID string `cbor:"context_id,omitempty"`
 }
 
 // setDispositionRequest is the input for the "set-disposition" action.
@@ -523,6 +543,7 @@ func (ts *TicketService) handleCreate(ctx context.Context, token *servicetoken.T
 		Origin:    request.Origin,
 		Pipeline:  request.Pipeline,
 		Deadline:  request.Deadline,
+		ContextID: request.ContextID,
 		CreatedBy: token.Subject,
 		CreatedAt: now,
 		UpdatedAt: now,
@@ -683,6 +704,9 @@ func (ts *TicketService) handleUpdate(ctx context.Context, token *servicetoken.T
 	}
 	if request.Affects != nil {
 		content.Affects = *request.Affects
+	}
+	if request.ContextID != nil {
+		content.ContextID = *request.ContextID
 	}
 
 	// Re-resolve stewardship if Affects or Type changed. The old
@@ -981,6 +1005,9 @@ func (ts *TicketService) handleClose(ctx context.Context, token *servicetoken.To
 	content.CloseReason = request.Reason
 	content.Assignee = ref.UserID{}
 	content.UpdatedAt = nowStr
+	if request.ContextID != "" {
+		content.ContextID = request.ContextID
+	}
 
 	if err := content.Validate(); err != nil {
 		return nil, fmt.Errorf("invalid ticket: %w", err)
@@ -1038,6 +1065,9 @@ func (ts *TicketService) handleReopen(ctx context.Context, token *servicetoken.T
 	content.ClosedAt = ""
 	content.CloseReason = ""
 	content.UpdatedAt = ts.clock.Now().UTC().Format(time.RFC3339)
+	if request.ContextID != "" {
+		content.ContextID = request.ContextID
+	}
 
 	if err := content.Validate(); err != nil {
 		return nil, fmt.Errorf("invalid ticket: %w", err)
@@ -1555,6 +1585,7 @@ func (ts *TicketService) handleAddNote(ctx context.Context, token *servicetoken.
 		Author:    token.Subject,
 		CreatedAt: now,
 		Body:      request.Body,
+		ContextID: request.ContextID,
 	})
 	content.UpdatedAt = now
 
@@ -1651,6 +1682,9 @@ func (ts *TicketService) handleDefer(ctx context.Context, token *servicetoken.To
 		})
 	}
 	content.UpdatedAt = nowStr
+	if request.ContextID != "" {
+		content.ContextID = request.ContextID
+	}
 
 	if err := content.Validate(); err != nil {
 		return nil, fmt.Errorf("invalid ticket: %w", err)

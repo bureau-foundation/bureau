@@ -591,7 +591,7 @@ func runBureauWithEnvOrFail(t *testing.T, env []string, args ...string) string {
 // writeMachineConf writes a machine.conf file with the given values and returns
 // the file path. Only non-empty fields are written. The returned path is suitable
 // for the BUREAU_MACHINE_CONF environment variable.
-func writeMachineConf(t *testing.T, homeserverURL, serverName, fleetPrefix string) string {
+func writeMachineConf(t *testing.T, homeserverURL, serverName, fleetPrefix, machineName string) string {
 	t.Helper()
 	var content strings.Builder
 	if homeserverURL != "" {
@@ -602,6 +602,9 @@ func writeMachineConf(t *testing.T, homeserverURL, serverName, fleetPrefix strin
 	}
 	if fleetPrefix != "" {
 		fmt.Fprintf(&content, "BUREAU_FLEET=%s\n", fleetPrefix)
+	}
+	if machineName != "" {
+		fmt.Fprintf(&content, "BUREAU_MACHINE_NAME=%s\n", machineName)
 	}
 	path := filepath.Join(t.TempDir(), "machine.conf")
 	if err := os.WriteFile(path, []byte(content.String()), 0644); err != nil {
@@ -647,6 +650,63 @@ func writeTestCredentialFile(t *testing.T, homeserverURL, userID, token string) 
 		t.Fatalf("write credential file: %v", err)
 	}
 	return path
+}
+
+// operatorEnv bundles everything needed for a CLI test that runs bureau
+// commands as an operator. Provides an authenticated admin session, fleet,
+// credential file, operator session file, machine.conf, and ready-to-use
+// environment variables. Use setupOperatorEnv to create one.
+type operatorEnv struct {
+	Admin          *messaging.DirectSession
+	Fleet          *testFleet
+	CredentialFile string   // path for --credential-file flag
+	SessionFile    string   // path, set via BUREAU_SESSION_FILE in Env
+	MachineConf    string   // path, set via BUREAU_MACHINE_CONF in Env
+	Env            []string // [BUREAU_MACHINE_CONF=..., BUREAU_SESSION_FILE=...]
+}
+
+// setupOperatorEnv creates a fully provisioned operator environment for CLI
+// tests. Allocates a per-test admin session, fleet, credential file, operator
+// session, and machine.conf with all four required keys populated.
+func setupOperatorEnv(t *testing.T) *operatorEnv {
+	t.Helper()
+
+	admin := adminSession(t)
+	t.Cleanup(func() { admin.Close() })
+
+	fleet := createTestFleet(t, admin)
+
+	credentialFile := writeTestCredentialFile(t,
+		testHomeserverURL, admin.UserID().String(), admin.AccessToken())
+	sessionFile := writeOperatorSession(t,
+		admin.UserID().String(), admin.AccessToken(), testHomeserverURL)
+
+	// Derive a short machine name from the test name for BUREAU_MACHINE_NAME.
+	machineName := strings.ToLower(strings.ReplaceAll(t.Name(), "/", "-"))
+	machineConf := writeMachineConf(t,
+		testHomeserverURL, testServerName, fleet.Prefix, machineName)
+
+	env := []string{
+		"BUREAU_MACHINE_CONF=" + machineConf,
+		"BUREAU_SESSION_FILE=" + sessionFile,
+	}
+
+	return &operatorEnv{
+		Admin:          admin,
+		Fleet:          fleet,
+		CredentialFile: credentialFile,
+		SessionFile:    sessionFile,
+		MachineConf:    machineConf,
+		Env:            env,
+	}
+}
+
+// run executes a bureau CLI command with the operator's environment and fails
+// the test on error. For commands expected to exit non-zero (e.g., bureau
+// doctor when some checks fail), use runBureauWithEnv(op.Env, ...) directly.
+func (op *operatorEnv) run(t *testing.T, args ...string) string {
+	t.Helper()
+	return runBureauWithEnvOrFail(t, op.Env, args...)
 }
 
 // adminSession creates a per-test admin user with a unique Matrix account,

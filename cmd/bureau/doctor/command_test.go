@@ -27,9 +27,7 @@ import (
 // --- Machine configuration tests ---
 
 func TestCheckMachineConfiguration_FileNotFound(t *testing.T) {
-	original := machineConfPath
-	machineConfPath = filepath.Join(t.TempDir(), "nonexistent.conf")
-	t.Cleanup(func() { machineConfPath = original })
+	t.Setenv("BUREAU_MACHINE_CONF", filepath.Join(t.TempDir(), "nonexistent.conf"))
 
 	var state checkState
 	results := checkMachineConfiguration(&state)
@@ -54,9 +52,7 @@ func TestCheckMachineConfiguration_MissingKeys(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	original := machineConfPath
-	machineConfPath = configPath
-	t.Cleanup(func() { machineConfPath = original })
+	t.Setenv("BUREAU_MACHINE_CONF", configPath)
 
 	var state checkState
 	results := checkMachineConfiguration(&state)
@@ -83,9 +79,7 @@ BUREAU_FLEET=bureau/fleet/prod
 		t.Fatal(err)
 	}
 
-	original := machineConfPath
-	machineConfPath = configPath
-	t.Cleanup(func() { machineConfPath = original })
+	t.Setenv("BUREAU_MACHINE_CONF", configPath)
 
 	var state checkState
 	results := checkMachineConfiguration(&state)
@@ -115,9 +109,7 @@ BUREAU_FLEET=fleet/test
 		t.Fatal(err)
 	}
 
-	original := machineConfPath
-	machineConfPath = configPath
-	t.Cleanup(func() { machineConfPath = original })
+	t.Setenv("BUREAU_MACHINE_CONF", configPath)
 
 	// State has no homeserver URL from operator session — should fall back.
 	var state checkState
@@ -142,9 +134,7 @@ BUREAU_FLEET=fleet/test
 		t.Fatal(err)
 	}
 
-	original := machineConfPath
-	machineConfPath = configPath
-	t.Cleanup(func() { machineConfPath = original })
+	t.Setenv("BUREAU_MACHINE_CONF", configPath)
 
 	// State already has homeserver URL from operator session.
 	state := checkState{

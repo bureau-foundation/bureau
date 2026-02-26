@@ -203,10 +203,6 @@ func checkOperatorSession(ctx context.Context, state *checkState, logger *slog.L
 
 // --- Section 2: Machine configuration ---
 
-// machineConfPath is the canonical location for machine configuration.
-// Variable rather than constant to allow test overrides.
-var machineConfPath = "/etc/bureau/machine.conf"
-
 // machineConfRequiredKeys are the keys that must be present in machine.conf.
 var machineConfRequiredKeys = []string{
 	"BUREAU_HOMESERVER_URL",
@@ -216,14 +212,14 @@ var machineConfRequiredKeys = []string{
 }
 
 func checkMachineConfiguration(state *checkState) []doctor.Result {
-	credentials, err := cli.ReadCredentialFile(machineConfPath)
+	credentials, err := cli.ReadCredentialFile(cli.MachineConfPath())
 	if err != nil {
 		if os.IsNotExist(err) {
 			return []doctor.Result{doctor.Fail("machine configuration",
-				fmt.Sprintf("%s does not exist — run \"sudo bureau machine doctor --fix\" with bootstrap flags", machineConfPath))}
+				fmt.Sprintf("%s does not exist — run \"sudo bureau machine doctor --fix\" with bootstrap flags", cli.MachineConfPath()))}
 		}
 		return []doctor.Result{doctor.Fail("machine configuration",
-			fmt.Sprintf("cannot read %s: %v", machineConfPath, err))}
+			fmt.Sprintf("cannot read %s: %v", cli.MachineConfPath(), err))}
 	}
 
 	state.machineConfig = credentials
@@ -246,7 +242,7 @@ func checkMachineConfiguration(state *checkState) []doctor.Result {
 
 	if len(missingKeys) > 0 {
 		return []doctor.Result{doctor.Fail("machine configuration",
-			fmt.Sprintf("missing keys in %s: %s", machineConfPath, strings.Join(missingKeys, ", ")))}
+			fmt.Sprintf("missing keys in %s: %s", cli.MachineConfPath(), strings.Join(missingKeys, ", ")))}
 	}
 
 	fleet := credentials["BUREAU_FLEET"]

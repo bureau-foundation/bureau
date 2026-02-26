@@ -171,7 +171,7 @@ func TestNewOperatorJourney(t *testing.T) {
 	sessionFile := writeOperatorSession(t,
 		admin.UserID().String(), admin.AccessToken(), testHomeserverURL)
 
-	machineConf := writeMachineConf(t, testHomeserverURL, testServerName, fleet.Prefix)
+	machineConf := writeMachineConf(t, testHomeserverURL, testServerName, fleet.Prefix, machine.Name)
 
 	env := []string{
 		"BUREAU_MACHINE_CONF=" + machineConf,
@@ -181,11 +181,11 @@ func TestNewOperatorJourney(t *testing.T) {
 	// ================================================================
 	// Step 1: bureau doctor --json
 	// ================================================================
-	// The doctor checks operator session, machine.conf (/etc/bureau/),
-	// homeserver reachability, systemd services, sockets, and Bureau space.
-	// In the test environment, machine.conf and systemd checks will fail
-	// (hardcoded paths). We verify the checks that CAN pass in the test
-	// environment DO pass.
+	// The doctor checks operator session, machine.conf, homeserver
+	// reachability, systemd services, sockets, and Bureau space.
+	// Machine.conf is read via BUREAU_MACHINE_CONF (the test environment
+	// override), so that check passes. Systemd checks fail because
+	// there's no systemd in the test environment.
 	t.Log("step 1: bureau doctor")
 	doctorOutput, doctorError := runBureauWithEnv(env, "doctor", "--json")
 
@@ -216,6 +216,15 @@ func TestNewOperatorJourney(t *testing.T) {
 		}
 	} else {
 		t.Error("doctor: homeserver reachable check not found")
+	}
+
+	if check, ok := doctorChecks["machine configuration"]; ok {
+		if check.Status != doctor.StatusPass {
+			t.Errorf("doctor: machine configuration status = %q, want %q (message: %s)",
+				check.Status, doctor.StatusPass, check.Message)
+		}
+	} else {
+		t.Error("doctor: machine configuration check not found")
 	}
 
 	if check, ok := doctorChecks["bureau space"]; ok {

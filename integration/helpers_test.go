@@ -202,6 +202,13 @@ func TestMain(m *testing.M) {
 		os.Exit(1)
 	}
 
+	// Stream Continuwuity container logs to test output. This captures
+	// homeserver-side logs alongside daemon and launcher structured logs,
+	// allowing diagnosis of /sync delivery issues and event ordering from
+	// the server perspective. The process is explicitly killed after
+	// m.Run() returns, before dockerCompose("down") tears down the stack.
+	containerLogProcess := startContainerLogStream()
+
 	if err := runBureauSetup(); err != nil {
 		fmt.Fprintf(os.Stderr, "bureau matrix setup failed: %v\n", err)
 		_ = dockerCompose("down", "-v")
@@ -216,6 +223,10 @@ func TestMain(m *testing.M) {
 
 	code := m.Run()
 
+	if containerLogProcess != nil {
+		containerLogProcess.Kill()
+		containerLogProcess.Wait()
+	}
 	_ = dockerCompose("down", "-v")
 	_ = os.RemoveAll(credentialDirectory)
 	os.Exit(code)
@@ -318,6 +329,32 @@ func dockerComposeOutput(args ...string) (string, error) {
 	cmd.Stderr = os.Stderr
 	output, err := cmd.Output()
 	return string(output), err
+}
+
+// startContainerLogStream starts `docker compose logs -f matrix` as a
+// background subprocess that pipes container output to os.Stderr. This
+// captures Continuwuity homeserver logs alongside daemon and launcher
+// structured logs in verbose test output (--test_output=all), enabling
+// diagnosis of /sync event delivery issues from the server perspective.
+//
+// Returns the process handle for cleanup (Kill + Wait). Returns nil if
+// the subprocess fails to start (non-fatal — tests still run without
+// homeserver logs).
+func startContainerLogStream() *os.Process {
+	composeFile := filepath.Join(workspaceRoot, "deploy", "test", "docker-compose.yaml")
+	cmd := exec.Command("docker",
+		"compose",
+		"-f", composeFile,
+		"-p", composeProjectName,
+		"logs", "-f", "matrix",
+	)
+	cmd.Stdout = os.Stderr
+	cmd.Stderr = os.Stderr
+	if err := cmd.Start(); err != nil {
+		fmt.Fprintf(os.Stderr, "warning: failed to start container log stream: %v\n", err)
+		return nil
+	}
+	return cmd.Process
 }
 
 // cleanupLeakedDockerResources removes containers, networks, and volumes

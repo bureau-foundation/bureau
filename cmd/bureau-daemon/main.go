@@ -834,6 +834,17 @@ type Daemon struct {
 	// to avoid per-heartbeat open/close overhead. Closed on shutdown.
 	gpuCollectors []hwinfo.GPUCollector
 
+	// serviceResyncCountdown tracks remaining /sync cycles where the
+	// daemon should unconditionally re-read the service room state,
+	// regardless of whether /sync delivered service room events. Set
+	// to a positive value after reconcile starts new sandboxes (which
+	// may register services via BootstrapViaProxy). Decremented each
+	// cycle; cleared to zero when syncServiceDirectory finds new
+	// services. This is defense-in-depth against /sync event delivery
+	// gaps under concurrent write load: GetRoomState reads authoritative
+	// state regardless of event stream position ordering.
+	serviceResyncCountdown int
+
 	// services is the cached service directory, built from m.bureau.service
 	// state events in #bureau/service. Keyed by service localpart (the
 	// state_key of the Matrix event, e.g., "service/stt/whisper").
@@ -998,15 +1009,15 @@ type Daemon struct {
 	// Nil in unit tests that don't need self-cancellation.
 	shutdownCancel context.CancelFunc
 
-	// reconcileNotify receives a signal after each asynchronous
-	// reconcile completes (sandbox exit, proxy crash recovery, health
-	// rollback). Tests use this to wait for state changes without
-	// polling. Nil in production — notifications are skipped.
 	// haWatchdog manages HA lease acquisition and renewal for
 	// ha_class:critical services. Nil when the fleet room is not
 	// available (fleet features disabled).
 	haWatchdog *haWatchdog
 
+	// reconcileNotify receives a signal after each asynchronous
+	// reconcile completes (sandbox exit, proxy crash recovery, health
+	// rollback). Tests use this to wait for state changes without
+	// polling. Nil in production — notifications are skipped.
 	reconcileNotify chan struct{}
 
 	logger *slog.Logger

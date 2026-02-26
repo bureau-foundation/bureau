@@ -79,6 +79,186 @@ func TestRoomHasStateChanges(t *testing.T) {
 	}
 }
 
+func TestRoomHasExternalStateChanges(t *testing.T) {
+	t.Parallel()
+
+	selfUserID := ref.MustParseUserID("@bureau/fleet/test/machine/self:bureau.local")
+	peerUserID := ref.MustParseUserID("@bureau/fleet/test/machine/peer:bureau.local")
+	stateKey := "test"
+
+	tests := []struct {
+		name     string
+		room     messaging.JoinedRoom
+		expected bool
+	}{
+		{
+			name:     "empty room",
+			room:     messaging.JoinedRoom{},
+			expected: false,
+		},
+		{
+			name: "state section with only self events",
+			room: messaging.JoinedRoom{
+				State: messaging.StateSection{
+					Events: []messaging.Event{
+						{Type: schema.EventTypeMachineStatus, StateKey: &stateKey, Sender: selfUserID},
+					},
+				},
+			},
+			expected: false,
+		},
+		{
+			name: "state section with peer event",
+			room: messaging.JoinedRoom{
+				State: messaging.StateSection{
+					Events: []messaging.Event{
+						{Type: schema.EventTypeMachineStatus, StateKey: &stateKey, Sender: peerUserID},
+					},
+				},
+			},
+			expected: true,
+		},
+		{
+			name: "state section with mixed self and peer events",
+			room: messaging.JoinedRoom{
+				State: messaging.StateSection{
+					Events: []messaging.Event{
+						{Type: schema.EventTypeMachineStatus, StateKey: &stateKey, Sender: selfUserID},
+						{Type: schema.EventTypeMachineStatus, StateKey: &stateKey, Sender: peerUserID},
+					},
+				},
+			},
+			expected: true,
+		},
+		{
+			name: "timeline state event from self",
+			room: messaging.JoinedRoom{
+				Timeline: messaging.TimelineSection{
+					Events: []messaging.Event{
+						{Type: schema.EventTypeMachineStatus, StateKey: &stateKey, Sender: selfUserID},
+					},
+				},
+			},
+			expected: false,
+		},
+		{
+			name: "timeline state event from peer",
+			room: messaging.JoinedRoom{
+				Timeline: messaging.TimelineSection{
+					Events: []messaging.Event{
+						{Type: schema.EventTypeMachineStatus, StateKey: &stateKey, Sender: peerUserID},
+					},
+				},
+			},
+			expected: true,
+		},
+		{
+			name: "timeline non-state event from peer ignored",
+			room: messaging.JoinedRoom{
+				Timeline: messaging.TimelineSection{
+					Events: []messaging.Event{
+						{Type: schema.MatrixEventTypeMessage, Sender: peerUserID, Content: map[string]any{"body": "hello"}},
+					},
+				},
+			},
+			expected: false,
+		},
+	}
+
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			t.Parallel()
+			result := roomHasExternalStateChanges(test.room, selfUserID)
+			if result != test.expected {
+				t.Errorf("roomHasExternalStateChanges() = %v, want %v", result, test.expected)
+			}
+		})
+	}
+}
+
+// TestProcessSyncResponse_MachineRoomSelfEventsFiltered verifies that the
+// daemon's own MachineStatus heartbeat events in the machine room do NOT
+// trigger syncPeerAddresses. This prevents a feedback loop where each
+// heartbeat publish triggers an unnecessary GetRoomState call.
+func TestProcessSyncResponse_MachineRoomSelfEventsFiltered(t *testing.T) {
+	t.Parallel()
+
+	machine, fleet := testMachineSetup(t, "test", "bureau.local")
+
+	matrixState := newMockMatrixState()
+	matrixServer := httptest.NewServer(matrixState.handler())
+	t.Cleanup(matrixServer.Close)
+
+	const configRoomID = "!config:test"
+	const machineRoomID = "!machine:test"
+	const serviceRoomID = "!service:test"
+
+	// Machine room has NO state events for GetRoomState.
+	matrixState.setRoomState(machineRoomID, nil)
+
+	matrixClient, err := messaging.NewClient(messaging.ClientConfig{
+		HomeserverURL: matrixServer.URL,
+	})
+	if err != nil {
+		t.Fatalf("NewClient: %v", err)
+	}
+	session, err := matrixClient.SessionFromToken(machine.UserID(), "syt_test_token")
+	if err != nil {
+		t.Fatalf("SessionFromToken: %v", err)
+	}
+	t.Cleanup(func() { session.Close() })
+
+	daemon, _ := newTestDaemon(t)
+	daemon.session = session
+	daemon.runDir = principal.DefaultRunDir
+	daemon.machine = machine
+	daemon.fleet = fleet
+	daemon.configRoomID = mustRoomID(configRoomID)
+	daemon.machineRoomID = mustRoomID(machineRoomID)
+	daemon.serviceRoomID = mustRoomID(serviceRoomID)
+	daemon.launcherSocket = "/nonexistent/launcher.sock"
+	daemon.logger = slog.New(slog.NewJSONHandler(os.Stderr, nil))
+	t.Cleanup(daemon.stopAllLayoutWatchers)
+
+	// Pre-populate a peer address. If syncPeerAddresses runs, it will
+	// see no state events and remove this entry.
+	daemon.peerAddresses["@machine/peer:bureau.local"] = "10.0.0.1:9090"
+
+	// Sync response with a machine room state change from the daemon
+	// itself (self-event from heartbeat).
+	selfKey := machine.Localpart()
+	response := &messaging.SyncResponse{
+		NextBatch: "batch_1",
+		Rooms: messaging.RoomsSection{
+			Join: map[ref.RoomID]messaging.JoinedRoom{
+				mustRoomID(machineRoomID): {
+					Timeline: messaging.TimelineSection{
+						Events: []messaging.Event{
+							{
+								Type:     schema.EventTypeMachineStatus,
+								StateKey: &selfKey,
+								Sender:   machine.UserID(),
+								Content: map[string]any{
+									"principal":   machine.UserID().String(),
+									"cpu_percent": 42,
+								},
+							},
+						},
+					},
+				},
+			},
+		},
+	}
+
+	daemon.processSyncResponse(context.Background(), response)
+
+	// The pre-populated peer address should still be present because
+	// syncPeerAddresses was NOT called (self-event was filtered).
+	if _, ok := daemon.peerAddresses["@machine/peer:bureau.local"]; !ok {
+		t.Error("peer address should still exist (self-event should not trigger syncPeerAddresses)")
+	}
+}
+
 func TestProcessSyncResponse_ConfigRoom(t *testing.T) {
 	t.Parallel()
 

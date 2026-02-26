@@ -12,6 +12,7 @@ address = "0.0.0.0"
 allow_registration = true
 allow_federation = false
 new_user_displayname_suffix = ""
+log = "info"
 
 # No TURN server for integration tests — all containers are on the
 # same Docker network, so no NAT traversal is needed.

@@ -349,6 +349,13 @@ func (h *Handler) HandleMatrixPutState(w http.ResponseWriter, r *http.Request) {
 	}
 	defer response.Body.Close()
 
+	h.logger.Info("matrix put state response",
+		"room", roomID,
+		"event_type", request.EventType,
+		"state_key", request.StateKey,
+		"status", response.StatusCode,
+	)
+
 	w.Header().Set("Content-Type", "application/json")
 	w.WriteHeader(response.StatusCode)
 	h.copyResponseBody(w, response.Body, "put_state")

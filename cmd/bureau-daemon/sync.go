@@ -322,11 +322,24 @@ func (d *Daemon) processSyncResponse(ctx context.Context, response *messaging.Sy
 		case d.configRoomID:
 			needsReconcile = true
 		case d.machineRoomID:
-			needsPeerSync = true
+			// Only react to state changes from OTHER machines. The daemon
+			// publishes its own MachineStatus heartbeats to this room and
+			// already knows its own state — reacting to self-events wastes
+			// a GetRoomState call on every heartbeat cycle and creates a
+			// feedback loop where each publish triggers syncPeerAddresses.
+			if roomHasExternalStateChanges(room, d.machine.UserID()) {
+				needsPeerSync = true
+			}
 		case d.serviceRoomID:
 			needsServiceSync = true
 		case d.fleetRoomID:
-			needsHAEval = true
+			// Only react to fleet room changes from OTHER daemons or
+			// operators. The HA watchdog writes lease renewal events
+			// to this room; reacting to self-events wastes a
+			// GetRoomState call on every renewal cycle.
+			if roomHasExternalStateChanges(room, d.machine.UserID()) {
+				needsHAEval = true
+			}
 		default:
 			// Non-core rooms (workspace rooms joined via invite) with
 			// state changes trigger reconcile so deferred principals
@@ -336,6 +349,32 @@ func (d *Daemon) processSyncResponse(ctx context.Context, response *messaging.Sy
 				"machine", d.machine.Localpart())
 			needsReconcile = true
 		}
+	}
+
+	// Apply the service resync countdown: when a recent reconcile
+	// started new sandboxes, force service directory re-reads for
+	// several cycles regardless of /sync delivery. This catches
+	// service registrations from BootstrapViaProxy that /sync may
+	// miss due to event stream position ordering under concurrent
+	// write load.
+	if d.serviceResyncCountdown > 0 && !needsServiceSync {
+		needsServiceSync = true
+		d.logger.Info("service resync after principal start",
+			"remaining_cycles", d.serviceResyncCountdown)
+		d.serviceResyncCountdown--
+	}
+
+	// Diagnostic logging: which flags were set and why. Only emitted
+	// when at least one handler will run (avoids noise on empty /sync
+	// responses from long-poll timeouts).
+	if needsReconcile || needsPeerSync || needsServiceSync || needsHAEval {
+		d.logger.Info("sync response flags",
+			"needs_reconcile", needsReconcile,
+			"needs_peer_sync", needsPeerSync,
+			"needs_service_sync", needsServiceSync,
+			"needs_ha_eval", needsHAEval,
+			"service_resync_countdown", d.serviceResyncCountdown,
+		)
 	}
 
 	// Process temporal grant events before reconcile so that grants
@@ -349,12 +388,34 @@ func (d *Daemon) processSyncResponse(ctx context.Context, response *messaging.Sy
 		// backoffs so the reconcile below can immediately retry principals
 		// that were blocked by a now-potentially-resolved issue (new
 		// credentials provisioned, template updated, config changed, etc.).
+
+		// Capture sandbox count before reconcile to detect new starts.
+		d.reconcileMu.RLock()
+		runningBefore := len(d.running)
+		d.reconcileMu.RUnlock()
+
 		d.reconcileMu.Lock()
 		d.clearStartFailures()
 		clear(d.completed)
 		d.reconcileMu.Unlock()
 		if err := d.reconcile(ctx); err != nil {
 			d.logger.Error("reconciliation failed", "error", err)
+		}
+
+		// If reconcile started new sandboxes, set the service resync
+		// countdown. New principals may register services via
+		// BootstrapViaProxy; the countdown ensures the daemon re-reads
+		// the service room state to catch registrations that /sync
+		// might not deliver due to event position ordering races.
+		d.reconcileMu.RLock()
+		runningAfter := len(d.running)
+		d.reconcileMu.RUnlock()
+		if runningAfter > runningBefore {
+			d.serviceResyncCountdown = 5
+			d.logger.Info("new sandboxes started, enabling service resync countdown",
+				"started", runningAfter-runningBefore,
+				"countdown_cycles", d.serviceResyncCountdown,
+			)
 		}
 	}
 
@@ -378,6 +439,15 @@ func (d *Daemon) processSyncResponse(ctx context.Context, response *messaging.Sy
 				"updated", len(updated),
 				"consumers", len(consumers),
 			)
+
+			// Clear the resync countdown when new services are found.
+			// The event has been discovered via GetRoomState; further
+			// countdown cycles are unnecessary.
+			if len(added) > 0 && d.serviceResyncCountdown > 0 {
+				d.logger.Info("service resync countdown cleared (services found)",
+					"remaining_was", d.serviceResyncCountdown)
+				d.serviceResyncCountdown = 0
+			}
 			d.reconcileServices(ctx, consumers, added, removed, updated)
 			d.logger.Info("service routes reconciled")
 			d.pushServiceDirectory(ctx, consumers)
@@ -564,6 +634,26 @@ func roomHasStateChanges(room messaging.JoinedRoom) bool {
 	}
 	for _, event := range room.Timeline.Events {
 		if event.StateKey != nil {
+			return true
+		}
+	}
+	return false
+}
+
+// roomHasExternalStateChanges returns true if the JoinedRoom contains
+// state events from senders other than selfUserID. Used for the machine
+// room where the daemon publishes its own MachineStatus heartbeats: the
+// daemon already knows what it published, so reacting to its own events
+// wastes a GetRoomState call and creates a feedback loop where each
+// heartbeat triggers syncPeerAddresses on the next /sync cycle.
+func roomHasExternalStateChanges(room messaging.JoinedRoom, selfUserID ref.UserID) bool {
+	for _, event := range room.State.Events {
+		if event.Sender != selfUserID {
+			return true
+		}
+	}
+	for _, event := range room.Timeline.Events {
+		if event.StateKey != nil && event.Sender != selfUserID {
 			return true
 		}
 	}

@@ -69,22 +69,14 @@ func TestNewOperatorJourney(t *testing.T) {
 	// Set a DefaultPolicy allowing observation. This is part of the
 	// production deployment configuration — the machine operator sets
 	// authorization policy when provisioning the machine. Without it,
-	// the daemon's authorization index has no grants for the admin to
-	// observe workspace agents, so "bureau list" returns nothing.
+	// the daemon's authorization index has no allowances for the admin
+	// to observe workspace agents, so "bureau list" returns nothing.
 	// Push this BEFORE deployTicketService: each subsequent config
 	// writer (deployTicketService, workspace create) does a
 	// read-modify-write that preserves DefaultPolicy.
 	if _, err := admin.SendStateEvent(t.Context(), machine.ConfigRoomID,
 		schema.EventTypeMachineConfig, machine.Name, schema.MachineConfig{
 			DefaultPolicy: &schema.AuthorizationPolicy{
-				Grants: []schema.Grant{
-					// Allow room joining — the ticket service needs this
-					// to join workspace rooms. Without it, the proxy
-					// denies join requests because resolveGrantsForProxy
-					// uses the authorization index (not MatrixPolicy
-					// synthesis) when DefaultPolicy is set.
-					{Actions: []string{schema.ActionMatrixJoin}},
-				},
 				Allowances: []schema.Allowance{
 					{Actions: []string{observation.ActionObserve}, Actors: []string{"**:**"}},
 				},

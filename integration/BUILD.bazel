@@ -66,6 +66,7 @@ go_test(
         "//cmd/bureau-proxy",
         "//cmd/bureau-sandbox",
         "//cmd/bureau-test-agent",
+        "//cmd/bureau-test-service",
         "//cmd/bureau-ticket-service",
     ],
     env = {
@@ -85,6 +86,7 @@ go_test(
         "PROXY_BINARY": "$(rlocationpath //cmd/bureau-proxy:bureau-proxy)",
         "SANDBOX_BINARY": "$(rlocationpath //cmd/bureau-sandbox:bureau-sandbox)",
         "TEST_AGENT_BINARY": "$(rlocationpath //cmd/bureau-test-agent:bureau-test-agent)",
+        "TEST_SERVICE_BINARY": "$(rlocationpath //cmd/bureau-test-service:bureau-test-service)",
         "TICKET_SERVICE_BINARY": "$(rlocationpath //cmd/bureau-ticket-service:bureau-ticket-service)",
     },
     local = True,

@@ -1114,6 +1114,22 @@ type serviceDeployResult struct {
 	SocketPath string
 }
 
+// deployTestService deploys the bureau-test-service binary using
+// deployService. The test service exercises the full service lifecycle
+// (BootstrapViaProxy, CBOR socket, token authentication, fleet service
+// directory) with minimal domain logic. The localpart is service-scoped
+// (e.g., "service/test/<suffix>") so ref.Entity detects the service
+// entity type and the launcher creates a service socket.
+func deployTestService(t *testing.T, admin *messaging.DirectSession, fleet *testFleet, machine *testMachine, suffix string) serviceDeployResult {
+	t.Helper()
+
+	return deployService(t, admin, fleet, machine, serviceDeployOptions{
+		Binary:    resolvedBinary(t, "TEST_SERVICE_BINARY"),
+		Name:      "test-" + suffix,
+		Localpart: "service/test/" + suffix,
+	})
+}
+
 // serviceTemplateContent builds a sandbox-ready schema.TemplateContent for
 // a service binary. Services run in daemon-managed sandboxes (AutoStart:
 // true) and bootstrap via BootstrapViaProxy, which reads BUREAU_PROXY_SOCKET,

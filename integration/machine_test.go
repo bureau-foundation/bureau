@@ -1130,6 +1130,32 @@ func deployTestService(t *testing.T, admin *messaging.DirectSession, fleet *test
 	})
 }
 
+// deployTelemetryMock deploys the bureau-telemetry-mock binary using
+// deployService and publishes a service binding so daemon resolves
+// RequiredServices: ["telemetry"] to this mock's socket. The mock
+// accepts the relay's submit protocol and stores telemetry in memory
+// for test assertions via query actions.
+func deployTelemetryMock(t *testing.T, admin *messaging.DirectSession, fleet *testFleet, machine *testMachine, suffix string) serviceDeployResult {
+	t.Helper()
+
+	service := deployService(t, admin, fleet, machine, serviceDeployOptions{
+		Binary:    resolvedBinary(t, "TELEMETRY_MOCK_BINARY"),
+		Name:      "telemetry-mock-" + suffix,
+		Localpart: "service/telemetry/" + suffix,
+	})
+
+	// Publish service binding so daemon resolves RequiredServices:
+	// ["telemetry"] to this mock's socket for any subsequent principal
+	// deployments on this machine.
+	if _, err := admin.SendStateEvent(t.Context(), machine.ConfigRoomID,
+		schema.EventTypeServiceBinding, "telemetry",
+		schema.ServiceBindingContent{Principal: service.Entity}); err != nil {
+		t.Fatalf("publish telemetry service binding: %v", err)
+	}
+
+	return service
+}
+
 // serviceTemplateContent builds a sandbox-ready schema.TemplateContent for
 // a service binary. Services run in daemon-managed sandboxes (AutoStart:
 // true) and bootstrap via BootstrapViaProxy, which reads BUREAU_PROXY_SOCKET,

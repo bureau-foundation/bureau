@@ -72,6 +72,7 @@ func run() error {
 	logger := slog.New(slog.NewTextHandler(os.Stderr, &slog.HandlerOptions{
 		Level: logLevel,
 	}))
+	slog.SetDefault(logger)
 
 	b := &bridge.Bridge{
 		ListenAddr: listenAddr,

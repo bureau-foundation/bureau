@@ -28,6 +28,7 @@ import (
 	"github.com/bureau-foundation/bureau/lib/hwinfo/amdgpu"
 	"github.com/bureau-foundation/bureau/lib/hwinfo/nvidia"
 	"github.com/bureau-foundation/bureau/lib/principal"
+	"github.com/bureau-foundation/bureau/lib/process"
 	"github.com/bureau-foundation/bureau/lib/ref"
 	"github.com/bureau-foundation/bureau/lib/schema"
 	"github.com/bureau-foundation/bureau/lib/sealed"
@@ -41,8 +42,7 @@ import (
 
 func main() {
 	if err := run(); err != nil {
-		fmt.Fprintf(os.Stderr, "error: %v\n", err)
-		os.Exit(1)
+		process.Fatal(err)
 	}
 }
 
@@ -87,7 +87,7 @@ func run() error {
 	flag.Parse()
 
 	if showVersion {
-		fmt.Printf("bureau-daemon %s\n", version.Info())
+		version.Print("bureau-daemon")
 		return nil
 	}
 

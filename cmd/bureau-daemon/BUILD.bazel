@@ -48,6 +48,7 @@ go_library(
         "//lib/netutil",
         "//lib/nix",
         "//lib/principal",
+        "//lib/process",
         "//lib/ref",
         "//lib/schema",
         "//lib/schema/artifact",

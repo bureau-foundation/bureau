@@ -24,6 +24,7 @@ go_library(
         "//lib/codec",
         "//lib/ipc",
         "//lib/principal",
+        "//lib/process",
         "//lib/ref",
         "//lib/schema",
         "//lib/sealed",

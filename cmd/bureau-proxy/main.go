@@ -14,6 +14,7 @@ import (
 	"syscall"
 	"time"
 
+	"github.com/bureau-foundation/bureau/lib/process"
 	"github.com/bureau-foundation/bureau/lib/ref"
 	"github.com/bureau-foundation/bureau/lib/secret"
 	"github.com/bureau-foundation/bureau/lib/version"
@@ -23,8 +24,7 @@ import (
 
 func main() {
 	if err := run(); err != nil {
-		fmt.Fprintf(os.Stderr, "error: %v\n", err)
-		os.Exit(1)
+		process.Fatal(err)
 	}
 }
 
@@ -43,7 +43,7 @@ func run() error {
 	flag.Parse()
 
 	if showVersion {
-		fmt.Printf("bureau-proxy %s\n", version.Info())
+		version.Print("bureau-proxy")
 		return nil
 	}
 

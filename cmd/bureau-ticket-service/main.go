@@ -8,13 +8,13 @@ import (
 	"flag"
 	"fmt"
 	"log/slog"
-	"os"
 	"os/signal"
 	"sync"
 	"syscall"
 	"time"
 
 	"github.com/bureau-foundation/bureau/lib/clock"
+	"github.com/bureau-foundation/bureau/lib/process"
 	"github.com/bureau-foundation/bureau/lib/ref"
 	"github.com/bureau-foundation/bureau/lib/service"
 	"github.com/bureau-foundation/bureau/lib/stewardshipindex"
@@ -24,8 +24,7 @@ import (
 
 func main() {
 	if err := run(); err != nil {
-		fmt.Fprintf(os.Stderr, "error: %v\n", err)
-		os.Exit(1)
+		process.Fatal(err)
 	}
 }
 
@@ -35,7 +34,7 @@ func run() error {
 	flag.Parse()
 
 	if showVersion {
-		fmt.Printf("bureau-ticket-service %s\n", version.Info())
+		version.Print("bureau-ticket-service")
 		return nil
 	}
 

@@ -29,20 +29,27 @@ import (
 	"os"
 
 	"github.com/bureau-foundation/bureau/lib/agentdriver"
+	"github.com/bureau-foundation/bureau/lib/process"
 	"github.com/bureau-foundation/bureau/lib/ref"
 )
 
 func main() {
+	if err := run(); err != nil {
+		process.Fatal(err)
+	}
+}
+
+func run() error {
 	config := agentdriver.RunConfigFromEnvironment()
 	config.SessionLogPath = "/run/bureau/session.jsonl"
 	config.Logger = slog.New(slog.NewTextHandler(os.Stderr, &slog.HandlerOptions{
 		Level: slog.LevelDebug,
 	}))
+	slog.SetDefault(config.Logger)
 
 	serverName, err := ref.ParseServerName(config.ServerName)
 	if err != nil {
-		fmt.Fprintf(os.Stderr, "bureau-agent: invalid server name %q: %v\n", config.ServerName, err)
-		os.Exit(1)
+		return fmt.Errorf("invalid server name %q: %w", config.ServerName, err)
 	}
 
 	driver := &nativeDriver{
@@ -51,8 +58,5 @@ func main() {
 		logger:          config.Logger,
 	}
 
-	if err := agentdriver.Run(context.Background(), driver, config); err != nil {
-		fmt.Fprintf(os.Stderr, "bureau-agent: %v\n", err)
-		os.Exit(1)
-	}
+	return agentdriver.Run(context.Background(), driver, config)
 }

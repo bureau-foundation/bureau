@@ -19,6 +19,7 @@ go_library(
         "//lib/artifactstore",
         "//lib/clock",
         "//lib/pipelinedef",
+        "//lib/process",
         "//lib/proxyclient",
         "//lib/ref",
         "//lib/schema",

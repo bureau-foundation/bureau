@@ -47,3 +47,9 @@ func Short() string {
 func Commit() string {
 	return GitCommit
 }
+
+// Print writes "name version.Info()" to stdout. Used by --version flag
+// handlers in binary entrypoints.
+func Print(name string) {
+	fmt.Printf("%s %s\n", name, Info())
+}

@@ -6,9 +6,7 @@ package main
 import (
 	"context"
 	"flag"
-	"fmt"
 	"log/slog"
-	"os"
 	"os/signal"
 	"sync"
 	"sync/atomic"
@@ -16,14 +14,14 @@ import (
 	"time"
 
 	"github.com/bureau-foundation/bureau/lib/clock"
+	"github.com/bureau-foundation/bureau/lib/process"
 	"github.com/bureau-foundation/bureau/lib/service"
 	"github.com/bureau-foundation/bureau/lib/version"
 )
 
 func main() {
 	if err := run(); err != nil {
-		fmt.Fprintf(os.Stderr, "error: %v\n", err)
-		os.Exit(1)
+		process.Fatal(err)
 	}
 }
 
@@ -33,7 +31,7 @@ func run() error {
 	flag.Parse()
 
 	if showVersion {
-		fmt.Printf("bureau-telemetry-service %s\n", version.Info())
+		version.Print("bureau-telemetry-service")
 		return nil
 	}
 

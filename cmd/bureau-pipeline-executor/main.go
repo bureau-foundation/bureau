@@ -17,6 +17,7 @@ import (
 	"github.com/bureau-foundation/bureau/lib/artifactstore"
 	"github.com/bureau-foundation/bureau/lib/clock"
 	"github.com/bureau-foundation/bureau/lib/pipelinedef"
+	"github.com/bureau-foundation/bureau/lib/process"
 	"github.com/bureau-foundation/bureau/lib/proxyclient"
 	"github.com/bureau-foundation/bureau/lib/ref"
 	"github.com/bureau-foundation/bureau/lib/schema"
@@ -34,8 +35,7 @@ const (
 
 func main() {
 	if err := run(); err != nil {
-		fmt.Fprintf(os.Stderr, "[pipeline] fatal: %v\n", err)
-		os.Exit(1)
+		process.Fatal(err)
 	}
 }
 
@@ -43,7 +43,7 @@ func run() error {
 	// Handle --version before any other checks.
 	args := os.Args[1:]
 	if len(args) > 0 && args[0] == "--version" {
-		fmt.Println(version.Info())
+		version.Print("bureau-pipeline-executor")
 		return nil
 	}
 
@@ -143,6 +143,7 @@ func run() error {
 		"ticket_room", ticketRoom,
 		"pipeline_ref", pipelineRef,
 	)
+	slog.SetDefault(logger)
 
 	// Claim the ticket — atomically transition from "open" to
 	// "in_progress" with ourselves as the assignee. On contention

@@ -33,6 +33,7 @@ func main() {
 	logger := slog.New(slog.NewTextHandler(os.Stderr, &slog.HandlerOptions{
 		Level: logLevel,
 	}))
+	slog.SetDefault(logger)
 
 	cmd := os.Args[1]
 	args := os.Args[2:]

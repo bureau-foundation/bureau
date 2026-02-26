@@ -117,6 +117,11 @@ pre-commit:
       glob: "*_test.go"
       priority: 2
 
+    check-raw-output:
+      run: script/check-raw-output
+      glob: "*.go"
+      priority: 2
+
     # ===================================================================
     # Tier 3: Build and test verification (Bazel)
     # ===================================================================

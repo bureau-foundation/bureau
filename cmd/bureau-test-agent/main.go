@@ -20,6 +20,7 @@ import (
 	"os"
 	"time"
 
+	"github.com/bureau-foundation/bureau/lib/process"
 	"github.com/bureau-foundation/bureau/lib/proxyclient"
 	"github.com/bureau-foundation/bureau/lib/ref"
 	"github.com/bureau-foundation/bureau/messaging"
@@ -27,8 +28,7 @@ import (
 
 func main() {
 	if err := run(); err != nil {
-		fmt.Fprintf(os.Stderr, "TEST_AGENT: FATAL: %v\n", err)
-		os.Exit(1)
+		process.Fatal(err)
 	}
 }
 

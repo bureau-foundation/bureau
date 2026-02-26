@@ -15,6 +15,7 @@ go_library(
     deps = [
         "//lib/clock",
         "//lib/codec",
+        "//lib/process",
         "//lib/schema/telemetry",
         "//lib/service",
         "//lib/servicetoken",

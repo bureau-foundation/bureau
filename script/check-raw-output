@@ -1,0 +1,110 @@
+#!/bin/bash
+# Copyright 2026 The Bureau Authors
+# SPDX-License-Identifier: Apache-2.0
+
+# Reject direct stdout/stderr writes in service and agent binaries.
+# All diagnostic output must flow through slog so the telemetry service
+# can collect it via handler chain tee.
+#
+# Banned calls: fmt.Fprintf(os.Stderr, ...), fmt.Printf(...),
+# fmt.Println(...), fmt.Print(...), log.Printf(...), log.Fatal(...),
+# os.Stderr.Write(...), os.Stdout.Write(...), and related variants.
+#
+# These create output channels that bypass slog and cannot be collected,
+# queried, or correlated by the telemetry pipeline.
+#
+# Exemptions (via excluded paths):
+#   - lib/version/     — Print() helper writes to stdout (this IS the
+#                        centralized raw I/O for version output)
+#   - lib/process/     — Fatal() helper writes to stderr (this IS the
+#                        centralized raw I/O for entrypoint error exit)
+#   - cmd/bureau/      — CLI user-facing output (tables, lists, help)
+#   - cmd/bureau-credentials/    — credential provisioning CLI
+#   - cmd/bureau-proxy-call/     — diagnostic CLI tool
+#   - cmd/bureau-state-check/    — diagnostic CLI tool
+#   - cmd/bureau-observe-relay/  — PTY data passthrough
+#   - cmd/bureau-log-relay/      — subprocess I/O wiring
+#   - cmd/bureau-bridge/         — CLI with printUsage, subprocess I/O
+#   - cmd/bureau-sandbox/        — CLI with printUsage, test output
+#
+# Per-line suppression: //nolint:rawoutput for the rare case where raw
+# I/O is correct in a non-excluded file.
+#
+# NOT valid exemptions (use these helpers instead):
+#   - Version printing: use version.Print("binary-name")
+#   - Fatal error in main(): use process.Fatal(err)
+#   - Diagnostic logging: use slog.Info/Warn/Error
+#
+# Only checks lines ADDED in the staged diff, so existing violations do
+# not block commits. New violations must use the helpers or justify the
+# raw I/O with //nolint:rawoutput.
+
+set -euo pipefail
+
+# Banned patterns. Each is a separate alternation for precise error
+# reporting. The pattern covers:
+#   - fmt.Fprintf/Fprintln/Fprint targeting os.Stderr
+#   - fmt.Printf/Println/Print (targets stdout)
+#   - log.Printf/Println/Print/Fatal/Fatalf/Fatalln/Panic/Panicf/Panicln
+#   - os.Stderr.Write / os.Stdout.Write
+banned='(fmt\.Fprintf\(os\.Stderr|fmt\.Fprintln\(os\.Stderr|fmt\.Fprint\(os\.Stderr|fmt\.Printf\(|fmt\.Println\(|fmt\.Print\(|log\.Printf\(|log\.Println\(|log\.Print\(|log\.Fatal[fl]?\(|log\.Panic[fl]?\(|os\.Stderr\.Write\(|os\.Stdout\.Write\()'
+
+# Get added lines from staged Go files, excluding helper packages and
+# CLI tools where raw I/O is correct.
+violations=$(
+    git diff --cached --unified=0 --diff-filter=ACM -- '*.go' \
+        ':!lib/version/' \
+        ':!lib/process/' \
+        ':!cmd/bureau/' \
+        ':!cmd/bureau-credentials/' \
+        ':!cmd/bureau-proxy-call/' \
+        ':!cmd/bureau-state-check/' \
+        ':!cmd/bureau-observe-relay/' \
+        ':!cmd/bureau-log-relay/' \
+        ':!cmd/bureau-bridge/' \
+        ':!cmd/bureau-sandbox/' |
+    awk '
+        # Track which file we are in.
+        /^--- /    { next }
+        /^\+\+\+ / { file = substr($0, 7); next }
+        # Track hunk line numbers. Format: @@ -old,count +new,count @@
+        /^@@ /     { split($3, a, /[,+]/); lineno = a[2] - 1; next }
+        # Only look at added lines (start with +, not +++).
+        /^\+[^+]/ {
+            lineno++
+            line = substr($0, 2)
+            print file ":" lineno ":" line
+            next
+        }
+        # Context and removed lines still advance the line counter for
+        # added-side tracking.
+        /^ / { lineno++; next }
+    ' |
+    grep -E "$banned" |
+    grep -v '//nolint:rawoutput' || true
+)
+
+if [ -z "$violations" ]; then
+    exit 0
+fi
+
+echo ""
+echo "ERROR: Direct stdout/stderr writes in service/agent code."
+echo ""
+echo "All diagnostic output must flow through slog for telemetry collection."
+echo "Direct writes to os.Stderr or os.Stdout bypass the structured logging"
+echo "pipeline and create invisible output channels."
+echo ""
+echo "Violations:"
+while IFS= read -r line; do
+    echo "  $line"
+done <<< "$violations"
+echo ""
+echo "To fix (in order of preference):"
+echo "  1. Use slog.Info/Warn/Error for diagnostic messages"
+echo "  2. Use version.Print(\"binary-name\") for --version output"
+echo "  3. Use process.Fatal(err) for fatal errors in main()"
+echo "  4. Only if raw I/O is genuinely unavoidable, add //nolint:rawoutput"
+echo "     with a comment explaining why"
+echo ""
+exit 1

@@ -23,6 +23,7 @@ import (
 	"time"
 
 	"github.com/bureau-foundation/bureau/lib/agentdriver"
+	"github.com/bureau-foundation/bureau/lib/process"
 )
 
 func main() {
@@ -46,10 +47,10 @@ func main() {
 	if driver.logger == nil {
 		driver.logger = slog.Default()
 	}
+	slog.SetDefault(driver.logger)
 
 	if err := agentdriver.Run(context.Background(), driver, config); err != nil {
-		driver.logger.Error("bureau-agent-mock fatal", "error", err)
-		os.Exit(1)
+		process.Fatal(err)
 	}
 }
 

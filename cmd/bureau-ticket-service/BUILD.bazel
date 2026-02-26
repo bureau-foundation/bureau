@@ -25,6 +25,7 @@ go_library(
         "//lib/codec",
         "//lib/cron",
         "//lib/principal",
+        "//lib/process",
         "//lib/ref",
         "//lib/schema",
         "//lib/schema/pipeline",

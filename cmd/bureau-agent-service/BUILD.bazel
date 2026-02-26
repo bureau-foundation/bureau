@@ -18,6 +18,7 @@ go_library(
         "//lib/artifactstore",
         "//lib/clock",
         "//lib/codec",
+        "//lib/process",
         "//lib/ref",
         "//lib/schema/agent",
         "//lib/service",

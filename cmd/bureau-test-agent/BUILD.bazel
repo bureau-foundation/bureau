@@ -9,6 +9,7 @@ go_library(
     importpath = "github.com/bureau-foundation/bureau/cmd/bureau-test-agent",
     visibility = ["//visibility:private"],
     deps = [
+        "//lib/process",
         "//lib/proxyclient",
         "//lib/ref",
         "//messaging",

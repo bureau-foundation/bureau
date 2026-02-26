@@ -1071,7 +1071,7 @@ func (d *Daemon) evaluateStartCondition(ctx context.Context, principal ref.Entit
 			"principal", principal,
 			"event_type", condition.EventType,
 			"state_key", condition.StateKey,
-			"room_id", roomID,
+			"room_id", roomID, "room", d.displayRoom(roomID),
 			"error", err,
 		)
 		return false, nil, ref.RoomID{}
@@ -1095,7 +1095,7 @@ func (d *Daemon) evaluateStartCondition(ctx context.Context, principal ref.Entit
 			d.logger.Error("start condition content_match expression error",
 				"principal", principal,
 				"event_type", condition.EventType,
-				"room_id", roomID,
+				"room_id", roomID, "room", d.displayRoom(roomID),
 				"key", failedKey,
 				"error", err,
 			)
@@ -1251,7 +1251,7 @@ func (d *Daemon) fetchRoomAuthorizationPolicies(
 				continue
 			}
 			d.logger.Warn("failed to fetch room authorization policy",
-				"room_id", roomID,
+				"room_id", roomID, "room", d.displayRoom(roomID),
 				"error", err,
 			)
 			continue
@@ -1260,7 +1260,7 @@ func (d *Daemon) fetchRoomAuthorizationPolicies(
 		var policy schema.RoomAuthorizationPolicy
 		if err := json.Unmarshal(rawPolicy, &policy); err != nil {
 			d.logger.Warn("failed to parse room authorization policy",
-				"room_id", roomID,
+				"room_id", roomID, "room", d.displayRoom(roomID),
 				"error", err,
 			)
 			continue
@@ -1273,7 +1273,7 @@ func (d *Daemon) fetchRoomAuthorizationPolicies(
 			rawPowerLevels, err := d.session.GetStateEvent(ctx, roomID, schema.MatrixEventTypePowerLevels, "")
 			if err != nil {
 				d.logger.Warn("failed to fetch power levels for room with PowerLevelGrants",
-					"room_id", roomID,
+					"room_id", roomID, "room", d.displayRoom(roomID),
 					"error", err,
 				)
 				// Proceed without power levels — MemberGrants still apply,
@@ -1281,7 +1281,7 @@ func (d *Daemon) fetchRoomAuthorizationPolicies(
 				// each user's power level.
 			} else if err := json.Unmarshal(rawPowerLevels, &fetched.powerLevels); err != nil {
 				d.logger.Warn("failed to parse power levels",
-					"room_id", roomID,
+					"room_id", roomID, "room", d.displayRoom(roomID),
 					"error", err,
 				)
 			}
@@ -1361,7 +1361,7 @@ func (d *Daemon) rebuildAuthorizationIndex(
 						level, err := strconv.Atoi(levelString)
 						if err != nil {
 							d.logger.Warn("invalid power level key in room authorization policy",
-								"room_id", roomID,
+								"room_id", roomID, "room", d.displayRoom(roomID),
 								"level_key", levelString,
 								"error", err,
 							)
@@ -1497,7 +1497,7 @@ func (d *Daemon) ensurePrincipalRoomAccess(ctx context.Context, principalEntity 
 		if !messaging.IsMatrixError(err, "M_FORBIDDEN") {
 			d.logger.Warn("failed to invite principal to room",
 				"principal", principalEntity,
-				"room_id", roomID,
+				"room_id", roomID, "room", d.displayRoom(roomID),
 				"error", err,
 			)
 		}
@@ -1555,16 +1555,16 @@ func (d *Daemon) resolveServiceSocket(ctx context.Context, role string, rooms []
 				)
 				continue // Not bound in this room, try next.
 			}
-			return "", fmt.Errorf("fetching service binding in room %s: %w", roomID, err)
+			return "", fmt.Errorf("fetching service binding in room %s: %w", d.displayRoom(roomID), err)
 		}
 
 		var binding schema.ServiceBindingContent
 		if err := json.Unmarshal(content, &binding); err != nil {
-			return "", fmt.Errorf("parsing service binding for role %q in room %s: %w", role, roomID, err)
+			return "", fmt.Errorf("parsing service binding for role %q in room %s: %w", role, d.displayRoom(roomID), err)
 		}
 
 		if binding.Principal.IsZero() {
-			return "", fmt.Errorf("service binding for role %q in room %s has empty principal", role, roomID)
+			return "", fmt.Errorf("service binding for role %q in room %s has empty principal", role, d.displayRoom(roomID))
 		}
 
 		// Ensure the service is a member of the room where its binding
@@ -1574,7 +1574,7 @@ func (d *Daemon) resolveServiceSocket(ctx context.Context, role string, rooms []
 		// joined or the invite is otherwise redundant.
 		if inviteErr := d.session.InviteUser(ctx, roomID, binding.Principal.UserID()); inviteErr != nil {
 			if !messaging.IsMatrixError(inviteErr, "M_FORBIDDEN") {
-				return "", fmt.Errorf("inviting service %s to room %s: %w", binding.Principal, roomID, inviteErr)
+				return "", fmt.Errorf("inviting service %s to room %s: %w", binding.Principal, d.displayRoom(roomID), inviteErr)
 			}
 		}
 

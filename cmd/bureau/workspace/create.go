@@ -336,7 +336,7 @@ func Create(ctx context.Context, session messaging.Session, params CreateParams,
 		return nil, cli.Internal("configuring ticket management: %w", err)
 	}
 	if err := service.EnsureServiceInRoom(ctx, session, workspaceRoomID, ticketService.Principal.UserID()); err != nil {
-		return nil, cli.Internal("ticket service failed to join workspace room: %w", err)
+		return nil, cli.Internal("ticket service failed to join workspace room %s: %w", params.Alias, err)
 	}
 
 	// Build principal assignments (setup + agents + teardown).

@@ -353,6 +353,7 @@ func run() error {
 		cgroupPathFunc: func(principal ref.Entity) string {
 			return hwinfo.CgroupDefaultPath(principal.AccountLocalpart())
 		},
+		workspaceAliases:      make(map[ref.RoomID]ref.RoomAlias),
 		failedExecPaths:       make(map[string]bool),
 		startFailures:         make(map[ref.Entity]*startFailure),
 		running:               make(map[ref.Entity]bool),
@@ -563,21 +564,30 @@ type Daemon struct {
 	// error message.
 	machinePublicKey string
 
-	machine          ref.Machine
-	fleet            ref.Fleet
-	adminUser        string // admin account localpart (for fleet controller PL grants)
-	systemRoomID     ref.RoomID
-	configRoomID     ref.RoomID
-	machineRoomID    ref.RoomID
-	serviceRoomID    ref.RoomID
-	fleetRoomID      ref.RoomID // fleet room for HA leases, service definitions, and alerts
-	syncFilter       string     // inline Matrix /sync filter JSON (room- and type-scoped)
-	runDir           string     // base runtime directory (e.g., /run/bureau)
-	fleetRunDir      string     // fleet-scoped runtime directory (e.g., /run/bureau/fleet/prod)
-	launcherSocket   string
-	statusInterval   time.Duration
-	maxIdleInterval  time.Duration
-	drainGracePeriod time.Duration
+	machine       ref.Machine
+	fleet         ref.Fleet
+	adminUser     string // admin account localpart (for fleet controller PL grants)
+	systemRoomID  ref.RoomID
+	configRoomID  ref.RoomID
+	machineRoomID ref.RoomID
+	serviceRoomID ref.RoomID
+	fleetRoomID   ref.RoomID // fleet room for HA leases, service definitions, and alerts
+	syncFilter    string     // inline Matrix /sync filter JSON (room- and type-scoped)
+
+	// workspaceAliases maps room IDs to their canonical aliases for
+	// rooms discovered via /sync invites (workspace rooms). Populated
+	// when the daemon accepts a room invite and reads the room's
+	// m.room.canonical_alias state event. Core rooms (config, system,
+	// fleet, machine, service) are not stored here — their aliases are
+	// derived deterministically from d.machine and d.fleet.
+	workspaceAliases   map[ref.RoomID]ref.RoomAlias
+	workspaceAliasesMu sync.RWMutex
+	runDir             string // base runtime directory (e.g., /run/bureau)
+	fleetRunDir        string // fleet-scoped runtime directory (e.g., /run/bureau/fleet/prod)
+	launcherSocket     string
+	statusInterval     time.Duration
+	maxIdleInterval    time.Duration
+	drainGracePeriod   time.Duration
 
 	// operatorsGID is the numeric GID of the bureau-operators system
 	// group. Operator-facing sockets (observe.sock, service endpoints)
@@ -992,6 +1002,66 @@ type Daemon struct {
 	reconcileNotify chan struct{}
 
 	logger *slog.Logger
+}
+
+// roomAlias returns the human-readable room alias for a known room ID.
+// For the daemon's 5 core rooms, the alias is derived deterministically
+// from the machine and fleet refs. For workspace rooms, the alias is
+// looked up from the cache populated on invite acceptance. Returns the
+// zero RoomAlias if the room is not tracked.
+func (d *Daemon) roomAlias(roomID ref.RoomID) ref.RoomAlias {
+	switch roomID {
+	case d.configRoomID:
+		return d.machine.RoomAlias()
+	case d.systemRoomID:
+		return d.fleet.Namespace().SystemRoomAlias()
+	case d.fleetRoomID:
+		return d.fleet.RoomAlias()
+	case d.machineRoomID:
+		return d.fleet.MachineRoomAlias()
+	case d.serviceRoomID:
+		return d.fleet.ServiceRoomAlias()
+	default:
+		d.workspaceAliasesMu.RLock()
+		alias := d.workspaceAliases[roomID]
+		d.workspaceAliasesMu.RUnlock()
+		return alias
+	}
+}
+
+// displayRoom returns a human-readable string identifying a room. When
+// an alias is known, returns the alias (e.g., "#bureau/fleet/prod:server").
+// Otherwise returns the opaque room ID. Used in fmt.Errorf messages
+// where a single string representation is needed.
+func (d *Daemon) displayRoom(roomID ref.RoomID) string {
+	if alias := d.roomAlias(roomID); !alias.IsZero() {
+		return alias.String()
+	}
+	return roomID.String()
+}
+
+// cacheRoomAlias fetches the m.room.canonical_alias state event for a
+// room and stores it in the workspace aliases map. Best-effort: if the
+// fetch fails or the room has no alias, the map is not updated and
+// subsequent displayRoom calls fall back to the opaque room ID.
+func (d *Daemon) cacheRoomAlias(ctx context.Context, roomID ref.RoomID) {
+	raw, err := d.session.GetStateEvent(ctx, roomID, schema.MatrixEventTypeCanonicalAlias, "")
+	if err != nil {
+		return
+	}
+	var content struct {
+		Alias string `json:"alias"`
+	}
+	if err := json.Unmarshal(raw, &content); err != nil || content.Alias == "" {
+		return
+	}
+	alias, err := ref.ParseRoomAlias(content.Alias)
+	if err != nil {
+		return
+	}
+	d.workspaceAliasesMu.Lock()
+	d.workspaceAliases[roomID] = alias
+	d.workspaceAliasesMu.Unlock()
 }
 
 // startFailureCategory classifies why a principal failed to start, so

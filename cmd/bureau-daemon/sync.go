@@ -169,7 +169,11 @@ func (d *Daemon) initialSync(ctx context.Context) (string, error) {
 	for roomID := range response.Rooms.Invite {
 		d.logger.Info("accepting pending invite", "room_id", roomID)
 		if _, err := d.session.JoinRoom(ctx, roomID); err != nil {
-			d.logger.Error("failed to accept pending invite", "room_id", roomID, "error", err)
+			d.logger.Error("failed to accept pending invite",
+				"room_id", roomID, "room", d.displayRoom(roomID),
+				"error", err)
+		} else {
+			d.cacheRoomAlias(ctx, roomID)
 		}
 	}
 
@@ -251,9 +255,12 @@ func (d *Daemon) processSyncResponse(ctx context.Context, response *messaging.Sy
 		d.logger.Info("accepting room invite", "room_id", roomID,
 			"machine", d.machine.Localpart())
 		if _, err := d.session.JoinRoom(ctx, roomID); err != nil {
-			d.logger.Error("failed to accept room invite", "room_id", roomID, "error", err)
+			d.logger.Error("failed to accept room invite",
+				"room_id", roomID, "room", d.displayRoom(roomID),
+				"error", err)
 			continue
 		}
+		d.cacheRoomAlias(ctx, roomID)
 		needsReconcile = true
 	}
 
@@ -268,7 +275,7 @@ func (d *Daemon) processSyncResponse(ctx context.Context, response *messaging.Sy
 	// events are never visible to the Join handler.
 	if _, kicked := response.Rooms.Leave[d.configRoomID]; kicked {
 		d.logger.Error("evicted from config room, initiating emergency shutdown",
-			"config_room", d.configRoomID)
+			"config_room", d.configRoomID, "room", d.displayRoom(d.configRoomID))
 		d.emergencyShutdown()
 		return
 	}
@@ -454,7 +461,7 @@ func (d *Daemon) processTemporalGrantEvents(response *messaging.SyncResponse) {
 			contentBytes, err := json.Marshal(event.Content)
 			if err != nil {
 				d.logger.Error("marshaling temporal grant event content",
-					"room_id", roomID,
+					"room_id", roomID, "room", d.displayRoom(roomID),
 					"state_key", stateKey,
 					"error", err,
 				)
@@ -464,7 +471,7 @@ func (d *Daemon) processTemporalGrantEvents(response *messaging.SyncResponse) {
 			var content schema.TemporalGrantContent
 			if err := json.Unmarshal(contentBytes, &content); err != nil {
 				d.logger.Error("parsing temporal grant event",
-					"room_id", roomID,
+					"room_id", roomID, "room", d.displayRoom(roomID),
 					"state_key", stateKey,
 					"error", err,
 				)
@@ -473,7 +480,7 @@ func (d *Daemon) processTemporalGrantEvents(response *messaging.SyncResponse) {
 
 			if content.Principal.IsZero() {
 				d.logger.Warn("temporal grant has empty principal",
-					"room_id", roomID,
+					"room_id", roomID, "room", d.displayRoom(roomID),
 					"state_key", stateKey,
 				)
 				continue
@@ -499,7 +506,7 @@ func (d *Daemon) processTemporalGrantEvents(response *messaging.SyncResponse) {
 			} else {
 				d.logger.Warn("failed to add temporal grant (missing expiry or ticket)",
 					"principal", content.Principal,
-					"room_id", roomID,
+					"room_id", roomID, "room", d.displayRoom(roomID),
 					"state_key", stateKey,
 				)
 			}

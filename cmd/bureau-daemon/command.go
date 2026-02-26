@@ -83,14 +83,14 @@ func (d *Daemon) processCommandMessages(ctx context.Context, roomID ref.RoomID, 
 		contentJSON, err := json.Marshal(event.Content)
 		if err != nil {
 			d.logger.Error("failed to marshal command event content",
-				"room_id", roomID, "event_id", event.EventID, "error", err)
+				"room_id", roomID, "room", d.displayRoom(roomID), "event_id", event.EventID, "error", err)
 			continue
 		}
 
 		var command schema.CommandMessage
 		if err := json.Unmarshal(contentJSON, &command); err != nil {
 			d.logger.Error("failed to parse command message",
-				"room_id", roomID, "event_id", event.EventID, "error", err)
+				"room_id", roomID, "room", d.displayRoom(roomID), "event_id", event.EventID, "error", err)
 			continue
 		}
 
@@ -191,14 +191,14 @@ func (d *Daemon) authorizeCommand(ctx context.Context, roomID ref.RoomID, sender
 		// If the room has no power levels event (unlikely but possible),
 		// treat as denied rather than defaulting to open.
 		if messaging.IsMatrixError(err, messaging.ErrCodeNotFound) {
-			return fmt.Errorf("room %s has no power levels configured", roomID)
+			return fmt.Errorf("room %s has no power levels configured", d.displayRoom(roomID))
 		}
-		return fmt.Errorf("reading power levels for room %s: %w", roomID, err)
+		return fmt.Errorf("reading power levels for room %s: %w", d.displayRoom(roomID), err)
 	}
 
 	var powerLevels map[string]any
 	if err := json.Unmarshal(raw, &powerLevels); err != nil {
-		return fmt.Errorf("parsing power levels for room %s: %w", roomID, err)
+		return fmt.Errorf("parsing power levels for room %s: %w", d.displayRoom(roomID), err)
 	}
 
 	senderLevel := getUserPowerLevel(powerLevels, sender.String())
@@ -246,7 +246,7 @@ func (d *Daemon) postCommandResult(ctx context.Context, roomID ref.RoomID, comma
 	resultJSON, err := json.Marshal(result)
 	if err != nil {
 		d.logger.Error("failed to marshal command result",
-			"room_id", roomID,
+			"room_id", roomID, "room", d.displayRoom(roomID),
 			"command", command.Command,
 			"error", err,
 		)
@@ -265,7 +265,7 @@ func (d *Daemon) postCommandResult(ctx context.Context, roomID ref.RoomID, comma
 
 	if _, err := d.sendEventRetry(ctx, roomID, schema.MatrixEventTypeMessage, message); err != nil {
 		d.logger.Error("failed to post command result",
-			"room_id", roomID,
+			"room_id", roomID, "room", d.displayRoom(roomID),
 			"command", command.Command,
 			"error", err,
 		)
@@ -278,7 +278,7 @@ func (d *Daemon) postCommandError(ctx context.Context, roomID ref.RoomID, comman
 	durationMilliseconds := time.Since(start).Milliseconds()
 
 	d.logger.Warn("command failed",
-		"room_id", roomID,
+		"room_id", roomID, "room", d.displayRoom(roomID),
 		"command", command.Command,
 		"error", errorMessage,
 	)
@@ -295,7 +295,7 @@ func (d *Daemon) postCommandError(ctx context.Context, roomID ref.RoomID, comman
 
 	if _, err := d.sendEventRetry(ctx, roomID, schema.MatrixEventTypeMessage, message); err != nil {
 		d.logger.Error("failed to post command error",
-			"room_id", roomID,
+			"room_id", roomID, "room", d.displayRoom(roomID),
 			"command", command.Command,
 			"error", err,
 		)

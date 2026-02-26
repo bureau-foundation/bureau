@@ -58,7 +58,7 @@ func (d *Daemon) sendEventRetry(ctx context.Context, roomID ref.RoomID, eventTyp
 		}
 
 		d.logger.Warn("transient event send failure, retrying",
-			"room_id", roomID,
+			"room_id", roomID, "room", d.displayRoom(roomID),
 			"event_type", eventType,
 			"attempt", attempt+1,
 			"error", err,

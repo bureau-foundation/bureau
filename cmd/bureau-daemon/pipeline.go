@@ -189,13 +189,15 @@ func (d *Daemon) processPipelineTickets(ctx context.Context, response *messaging
 			contentBytes, err := json.Marshal(event.Content)
 			if err != nil {
 				d.logger.Warn("failed to marshal ticket event content",
-					"room_id", roomID, "state_key", stateKey, "error", err)
+					"room_id", roomID, "room", d.displayRoom(roomID),
+					"state_key", stateKey, "error", err)
 				continue
 			}
 			var ticketContent ticket.TicketContent
 			if err := json.Unmarshal(contentBytes, &ticketContent); err != nil {
 				d.logger.Warn("failed to unmarshal ticket content",
-					"room_id", roomID, "state_key", stateKey, "error", err)
+					"room_id", roomID, "room", d.displayRoom(roomID),
+					"state_key", stateKey, "error", err)
 				continue
 			}
 
@@ -207,7 +209,8 @@ func (d *Daemon) processPipelineTickets(ctx context.Context, response *messaging
 			}
 			if ticketContent.Pipeline == nil {
 				d.logger.Warn("pipeline ticket has no pipeline content",
-					"room_id", roomID, "state_key", stateKey)
+					"room_id", roomID, "room", d.displayRoom(roomID),
+					"state_key", stateKey)
 				continue
 			}
 

@@ -7,6 +7,11 @@ build --incompatible_strict_action_env
 # Test output: only print on failure.
 test --test_output=errors
 
+# Retry flaky tests once before reporting failure. Reduces noise from
+# transient infrastructure issues (Docker socket races, homeserver startup
+# jitter) while still surfacing genuine failures on the second attempt.
+test --flaky_test_attempts=2
+
 # Tests that use tmux need:
 #   TERM — tmux refuses to attach if the terminal lacks basic capabilities
 #          ("terminal does not support clear")

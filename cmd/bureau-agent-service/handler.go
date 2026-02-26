@@ -10,6 +10,7 @@ import (
 	"sort"
 	"strings"
 
+	"github.com/bureau-foundation/bureau/lib/artifactstore"
 	"github.com/bureau-foundation/bureau/lib/codec"
 	"github.com/bureau-foundation/bureau/lib/schema/agent"
 	"github.com/bureau-foundation/bureau/lib/service"
@@ -26,6 +27,7 @@ func (agentService *AgentService) registerActions(server *service.SocketServer) 
 	server.HandleAuth("get-session", agentService.withReadLock(agentService.handleGetSession))
 	server.HandleAuth("start-session", agentService.withWriteLock(agentService.handleStartSession))
 	server.HandleAuth("end-session", agentService.withWriteLock(agentService.handleEndSession))
+	server.HandleAuth("store-session-log", agentService.withWriteLock(agentService.handleStoreSessionLog))
 
 	// Authenticated context actions.
 	server.HandleAuth("set-context", agentService.withWriteLock(agentService.handleSetContext))
@@ -325,6 +327,81 @@ func (agentService *AgentService) handleEndSession(ctx context.Context, token *s
 	)
 
 	return nil, nil
+}
+
+// --- Session log handler ---
+
+// storeSessionLogRequest is the wire format for "store-session-log".
+type storeSessionLogRequest struct {
+	Action    string `cbor:"action"`
+	SessionID string `cbor:"session_id"`
+	Data      []byte `cbor:"data"`
+}
+
+// storeSessionLogResponse is returned after the session log is stored.
+type storeSessionLogResponse struct {
+	Ref string `cbor:"ref"`
+}
+
+// handleStoreSessionLog stores the agent's JSONL session log as an
+// artifact and returns the content-addressed ref. The caller passes
+// this ref to end-session so it is recorded in the session state
+// event. The session must be active — this prevents orphaned
+// artifacts from agents that crashed before calling end-session.
+func (agentService *AgentService) handleStoreSessionLog(ctx context.Context, token *servicetoken.Token, raw []byte) (any, error) {
+	var request storeSessionLogRequest
+	if err := codec.Unmarshal(raw, &request); err != nil {
+		return nil, fmt.Errorf("invalid request: %w", err)
+	}
+
+	if request.SessionID == "" {
+		return nil, fmt.Errorf("session_id is required")
+	}
+	if len(request.Data) == 0 {
+		return nil, fmt.Errorf("data is required")
+	}
+
+	principalLocal := token.Subject.Localpart()
+
+	// Verify the caller has an active session matching the request.
+	sessionContent, err := agentService.readSessionState(ctx, principalLocal)
+	if err != nil {
+		return nil, fmt.Errorf("reading session state: %w", err)
+	}
+	if sessionContent == nil || sessionContent.ActiveSessionID != request.SessionID {
+		activeID := ""
+		if sessionContent != nil {
+			activeID = sessionContent.ActiveSessionID
+		}
+		return nil, fmt.Errorf(
+			"session mismatch: active session is %q, but store-session-log was called for %q",
+			activeID, request.SessionID,
+		)
+	}
+
+	header := &artifactstore.StoreHeader{
+		Action:      "store",
+		ContentType: "application/jsonl",
+		Size:        int64(len(request.Data)),
+		Data:        request.Data,
+		Labels:      []string{"session-log"},
+		CachePolicy: "ephemeral",
+		TTL:         "30d",
+	}
+	storeResponse, err := agentService.artifactClient.Store(ctx, header, nil)
+	if err != nil {
+		return nil, fmt.Errorf("storing session log: %w", err)
+	}
+	artifactRef := storeResponse.Ref
+
+	agentService.logger.Info("session log stored",
+		"principal", principalLocal,
+		"session_id", request.SessionID,
+		"ref", artifactRef,
+		"size", len(request.Data),
+	)
+
+	return storeSessionLogResponse{Ref: artifactRef}, nil
 }
 
 // --- Metrics handler ---
@@ -649,7 +726,7 @@ func (agentService *AgentService) handleCheckpointContext(ctx context.Context, t
 		// derived from the format — CBOR for structured formats,
 		// application/octet-stream as fallback.
 		contentType := contentTypeForFormat(request.Format)
-		storedRef, storeErr := agentService.storeArtifact(ctx, request.Data, contentType)
+		storedRef, storeErr := agentService.storeArtifact(ctx, request.Data, contentType, []string{"context-delta"})
 		if storeErr != nil {
 			return nil, fmt.Errorf("storing checkpoint data: %w", storeErr)
 		}
@@ -798,7 +875,7 @@ func (agentService *AgentService) handleMaterializeContext(ctx context.Context, 
 	}
 
 	// Store the materialized result as an artifact.
-	artifactRef, err := agentService.storeArtifact(ctx, content, contentType)
+	artifactRef, err := agentService.storeArtifact(ctx, content, contentType, []string{"context-materialization"})
 	if err != nil {
 		return nil, err
 	}

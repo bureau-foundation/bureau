@@ -165,6 +165,9 @@ func TestAgentServiceSessionTracking(t *testing.T) {
 	if sessionContent.LatestSessionID == "" {
 		t.Error("LatestSessionID is empty, want non-empty (session should be recorded)")
 	}
+	if sessionContent.LatestSessionArtifactRef == "" {
+		t.Error("LatestSessionArtifactRef is empty, want non-empty (session log should be uploaded to artifact service)")
+	}
 
 	// --- Verify metrics ---
 

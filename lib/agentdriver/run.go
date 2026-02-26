@@ -416,6 +416,32 @@ func Run(ctx context.Context, driver Driver, config RunConfig) error {
 		summary = sessionLog.Summary()
 	}
 
+	// Upload session log to the artifact service via the agent
+	// service. Close the log file first so the completed JSONL is
+	// readable, then read it back and store it. The defer at line
+	// 200 remains as a safety net (Close is idempotent). Upload
+	// failures are logged but do not affect session end — the
+	// session log is best-effort, same as checkpoint persistence.
+	var sessionLogArtifactRef string
+	if sessionLog != nil {
+		sessionLog.Close()
+
+		if agentServiceClient != nil {
+			logData, readError := os.ReadFile(config.SessionLogPath)
+			if readError != nil {
+				logger.Warn("reading session log for upload", "error", readError)
+			} else if len(logData) > 0 {
+				storeResponse, storeError := agentServiceClient.StoreSessionLog(ctx, sessionID, logData)
+				if storeError != nil {
+					logger.Warn("uploading session log to artifact service", "error", storeError)
+				} else {
+					sessionLogArtifactRef = storeResponse.Ref
+					logger.Info("session log uploaded", "ref", storeResponse.Ref, "size", len(logData))
+				}
+			}
+		}
+	}
+
 	// End the agent service session before posting the completion
 	// summary. This ensures that by the time "agent-complete" is
 	// visible to observers via /sync, the session and metrics state
@@ -424,7 +450,7 @@ func Run(ctx context.Context, driver Driver, config RunConfig) error {
 	// the session is over and its metrics should be recorded. Errors
 	// are logged but do not mask the agent's own exit status.
 	if agentServiceClient != nil {
-		endRequest := EndSessionRequestFromSummary(sessionID, summary, "")
+		endRequest := EndSessionRequestFromSummary(sessionID, summary, sessionLogArtifactRef)
 		if endError := agentServiceClient.EndSession(ctx, endRequest); endError != nil {
 			logger.Error("ending agent service session", "error", endError)
 		} else {

@@ -17,6 +17,7 @@ type SessionLogWriter struct {
 	file    *os.File
 	encoder *json.Encoder
 	mutex   sync.Mutex
+	closed  bool
 
 	// Aggregated summary counters, protected by mutex.
 	startTime        time.Time
@@ -87,9 +88,14 @@ func (writer *SessionLogWriter) Write(event Event) error {
 }
 
 // Close flushes any buffered data and closes the underlying file.
+// Close is idempotent — calling it more than once returns nil.
 func (writer *SessionLogWriter) Close() error {
 	writer.mutex.Lock()
 	defer writer.mutex.Unlock()
+	if writer.closed {
+		return nil
+	}
+	writer.closed = true
 	return writer.file.Close()
 }
 

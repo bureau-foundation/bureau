@@ -225,24 +225,25 @@ func (agentService *AgentService) fetchArtifactContent(ctx context.Context, arti
 	return data, nil
 }
 
-// storeArtifact stores concatenated content as a new artifact and
-// returns the artifact ref.
+// storeArtifact stores content as a new artifact and returns the
+// artifact ref.
 func (agentService *AgentService) storeArtifact(
 	ctx context.Context,
 	content []byte,
 	contentType string,
+	labels []string,
 ) (string, error) {
 	header := &artifactstore.StoreHeader{
 		Action:      "store",
 		ContentType: contentType,
 		Size:        int64(len(content)),
 		Data:        content,
-		Labels:      []string{"context-materialization"},
+		Labels:      labels,
 	}
 
 	response, err := agentService.artifactClient.Store(ctx, header, nil)
 	if err != nil {
-		return "", fmt.Errorf("storing materialized context: %w", err)
+		return "", fmt.Errorf("storing artifact: %w", err)
 	}
 
 	return response.Ref, nil

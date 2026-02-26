@@ -138,6 +138,33 @@ func (c *AgentServiceClient) EndSession(ctx context.Context, request EndSessionR
 	return c.client.Call(ctx, "end-session", fields, nil)
 }
 
+// StoreSessionLogResponse holds the artifact ref returned after the
+// agent service stores the session log in the artifact service.
+type StoreSessionLogResponse struct {
+	Ref string `cbor:"ref"`
+}
+
+// StoreSessionLog uploads raw session log bytes through the agent
+// service, which stores them in the artifact service and returns
+// the content-addressed ref. The session must be active — the agent
+// service validates the session ID to prevent orphaned artifacts.
+func (c *AgentServiceClient) StoreSessionLog(ctx context.Context, sessionID string, data []byte) (*StoreSessionLogResponse, error) {
+	if sessionID == "" {
+		return nil, fmt.Errorf("session_id is required")
+	}
+	if len(data) == 0 {
+		return nil, fmt.Errorf("data is required")
+	}
+	var response StoreSessionLogResponse
+	if err := c.client.Call(ctx, "store-session-log", map[string]any{
+		"session_id": sessionID,
+		"data":       data,
+	}, &response); err != nil {
+		return nil, err
+	}
+	return &response, nil
+}
+
 // --- Context actions ---
 
 // SetContextRequest holds the parameters for setting a context entry.

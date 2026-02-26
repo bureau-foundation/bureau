@@ -51,12 +51,16 @@ these as first-class typed fields, not opaque string attributes.
 Queries filter by `machine`, `service`, or `fleet` using the same ref
 values used everywhere else in Bureau.
 
-**Standard ingestion, native internals.** Sandboxed agents may be
-written in any language. The ingestion boundary accepts
-[OTLP/HTTP](https://opentelemetry.io/docs/specs/otlp/#otlphttp) —
-the standard protocol every OpenTelemetry SDK speaks. Inside Bureau,
-everything is CBOR: the native wire format for all service-to-service
-communication.
+**CBOR-native ingestion, OTLP for external interop.** Bureau Go
+services emit telemetry directly using `lib/schema/telemetry` types
+over the relay's CBOR service socket (`submit` action). No OTel SDK,
+no protobuf — the same CBOR wire format used for all Bureau
+service-to-service communication. For sandboxed agents written in
+other languages, the relay will accept
+[OTLP/HTTP](https://opentelemetry.io/docs/specs/otlp/#otlphttp) as
+an interop surface, allowing polyglot agents to use their language's
+native OpenTelemetry SDK. OTLP is the compatibility layer, not the
+primary path.
 
 **Separation of collection and aggregation.** The per-machine relay is
 thin and stable (protocol bridge, in-memory buffer). The fleet-wide
@@ -79,38 +83,41 @@ Three components, two binaries:
 Machine (ephemeral)                         Fleet-wide (persistent)
 ┌──────────────────────────────┐           ┌───────────────────────────────┐
 │                              │           │                               │
-│  agents  ──OTLP/HTTP──►┐     │           │  bureau-telemetry-service     │
-│  daemon  ──OTLP/HTTP──►│     │  service  │  ├─ ingest action (CBOR)      │
-│  proxy   ──OTLP/HTTP──►│     │  socket   │  ├─ SQLite store              │
-│  services──OTLP/HTTP──►│     │──────────►│  ├─ CBOR query socket         │
-│              OR        │     │  (daemon  │  ├─ HTTP /metrics (Prometheus)│
-│  Go svcs ──CBOR───────►│     │  routes   │  └─ retention/rotation        │
-│                        │     │  cross-   │                               │
-│     bureau-telemetry-relay   │  machine) │  fleet controller             │
-│      ├─ OTLP/HTTP listener   │           │  ├─ queries telemetry svc     │
-│      ├─ CBOR listener        │           │  │  for placement decisions   │
-│      └─ in-memory buffer     │           │  └─ (no telemetry storage)    │
+│  daemon  ───CBOR submit──►┐  │           │  bureau-telemetry-service     │
+│  proxy   ───CBOR submit──►│  │  service  │  ├─ ingest action (CBOR)      │
+│  services───CBOR submit──►│  │  socket   │  ├─ SQLite store              │
+│  executor───CBOR submit──►│  │──────────►│  ├─ CBOR query socket         │
+│                           │  │  (daemon  │  ├─ HTTP /metrics (Prometheus)│
+│     bureau-telemetry-relay   │  routes   │  └─ retention/rotation        │
+│      ├─ CBOR submit action   │  cross-   │                               │
+│      ├─ OTLP/HTTP (planned)  │  machine) │  fleet controller             │
+│      └─ in-memory buffer     │           │  ├─ queries telemetry svc     │
+│                              │           │  │  for placement decisions   │
+│  agents ──CBOR submit────►┘  │           │  └─ (no telemetry storage)    │
+│      (or OTLP when added)    │           │                               │
 └──────────────────────────────┘           └───────────────────────────────┘
 ```
 
 ### bureau-telemetry-relay (per-machine)
 
-A protocol bridge. Accepts telemetry from local processes via two
-ingestion paths:
+Accepts telemetry from local processes via its CBOR service socket
+`submit` action. Bureau Go services (daemon, proxy, pipeline executor,
+other service principals) build `telemetry.Span`, `telemetry.MetricPoint`,
+and `telemetry.LogRecord` values directly using `lib/schema/telemetry`
+types and submit them over the relay socket. No OTel SDK, no protobuf
+dependency — the same CBOR wire format used for all Bureau service
+communication.
 
-- **OTLP/HTTP** on a Unix socket — for sandboxed agents using any
-  language's OpenTelemetry SDK, and for Bureau Go services using the
-  standard OTel Go SDK exporter.
-- **CBOR** on a Unix socket — for Bureau Go services that emit
-  telemetry directly in Bureau-native types, avoiding the
-  protobuf encode/decode round trip.
+A planned OTLP/HTTP listener will accept standard OpenTelemetry protocol
+from sandboxed agents written in other languages, converting OTLP
+protobuf to Bureau-native types at the ingestion boundary. This is not
+yet implemented.
 
-Both paths feed into a single outbound queue. The relay batches CBOR
-messages and ships them to the telemetry service via the standard CBOR
-service socket protocol (the daemon handles cross-machine routing
-through the transport layer). When the telemetry service is temporarily
-unreachable, the
-relay buffers in memory with a bounded ring buffer (configurable max
+The relay batches CBOR messages and ships them to the telemetry service
+via the standard CBOR service socket protocol (the daemon handles
+cross-machine routing through the transport layer). When the telemetry
+service is temporarily unreachable, the relay buffers in memory with a
+bounded ring buffer (configurable max
 size, default 64 MB). Old data drops when the buffer fills.
 
 The relay stores nothing to disk. It is a stateless forwarder. Its
@@ -170,9 +177,12 @@ exactly what its identity model looks like. Fleet, machine, service, and
 agent are first-class typed fields with proper `ref.*` values, not
 string attributes that require parsing at query time.
 
-The relay performs the OTLP → Bureau-native conversion once at the
-ingestion boundary. The telemetry service stores and queries native
-types. The SQLite schema has proper indexed columns for identity fields.
+Bureau services emit telemetry in native types directly — no conversion
+step. The relay receives Bureau-native CBOR and batches it for the fleet
+service. When an OTLP listener is added for external agents, OTLP →
+Bureau-native conversion will happen at the relay ingestion boundary.
+The telemetry service stores and queries native types. The SQLite schema
+has proper indexed columns for identity fields.
 
 ### Common Fields
 
@@ -277,29 +287,35 @@ or when the batch reaches a size threshold (default 256 KB of CBOR).
 
 ---
 
-## OTLP-to-Bureau Conversion
+## OTLP Interop (Planned)
 
-The relay's OTLP/HTTP listener accepts standard
-`ExportTraceServiceRequest`, `ExportMetricsServiceRequest`, and
-`ExportLogsServiceRequest` protobuf messages on the standard OTLP paths
-(`/v1/traces`, `/v1/metrics`, `/v1/logs`).
+The relay's OTLP/HTTP listener is planned but not yet implemented. When
+added, it will accept standard `ExportTraceServiceRequest`,
+`ExportMetricsServiceRequest`, and `ExportLogsServiceRequest` protobuf
+messages on the standard OTLP paths (`/v1/traces`, `/v1/metrics`,
+`/v1/logs`). This provides interop for sandboxed agents written in
+languages other than Go, using their native OpenTelemetry SDK.
 
-The conversion extracts Bureau identity from OTLP resource attributes:
+The planned conversion will extract Bureau identity from OTLP resource
+attributes:
 
 - `bureau.fleet` → `ref.Fleet` (parsed from fleet alias)
 - `bureau.machine` → `ref.Machine` (parsed from Matrix user ID)
 - `bureau.source` → `ref.Entity` (parsed from Matrix user ID)
 
 When these attributes are absent (e.g., a third-party agent using a
-vanilla OTel SDK without Bureau-specific configuration), the relay falls
-back to the machine identity it was configured with at startup and sets
-the source to a generic entity derived from the OTLP `service.name`
+vanilla OTel SDK without Bureau-specific configuration), the relay will
+fall back to the machine identity it was configured with at startup and
+set the source to a generic entity derived from the OTLP `service.name`
 resource attribute.
 
-OTLP scope and instrumentation library metadata are flattened into span
-attributes (prefixed with `otel.scope.*`). OTLP resource attributes not
-consumed by the identity extraction are preserved in span/metric/log
-attributes.
+OTLP scope and instrumentation library metadata will be flattened into
+span attributes (prefixed with `otel.scope.*`). OTLP resource attributes
+not consumed by the identity extraction will be preserved in
+span/metric/log attributes.
+
+Bureau's own Go processes do not use OTLP. They emit telemetry directly
+as Bureau-native CBOR via the relay's `submit` action.
 
 ---
 
@@ -521,10 +537,11 @@ control on the scrape endpoint can place it behind a reverse proxy.
 
 ## Instrumentation
 
-Bureau instruments its own processes using the OpenTelemetry Go SDK for
-processes that already carry the dependency, and directly emitting
-Bureau-native CBOR telemetry for lean binaries that benefit from
-avoiding the protobuf dependency.
+Bureau instruments its own Go processes by emitting telemetry directly
+using `lib/schema/telemetry` types submitted to the relay's CBOR
+`submit` action. No OTel SDK dependency, no protobuf — the same wire
+format and type system used for all Bureau service-to-service
+communication.
 
 ### Framework-Level Instrumentation
 
@@ -561,11 +578,16 @@ Highest-value targets, roughly in priority order:
 
 ### Agent Instrumentation
 
-Sandboxed agents instrument themselves using their language's
-OpenTelemetry SDK. Configuration:
+Sandboxed agents submit telemetry via the relay socket bind-mounted at
+`/run/bureau/service/telemetry.sock`. The relay's `submit` action
+accepts CBOR-encoded spans, metrics, and logs with a service token for
+authentication.
 
-- **Endpoint**: `http+unix:///run/bureau/service/telemetry.sock` (the
-  relay socket bind-mounted into the sandbox)
+When the relay's OTLP/HTTP listener is implemented, polyglot agents
+will be able to use their language's native OpenTelemetry SDK with
+this configuration:
+
+- **Endpoint**: `http+unix:///run/bureau/service/telemetry.sock`
 - **Protocol**: OTLP/HTTP
 - **Headers**: `Authorization: Bearer <token>` (the agent's service
   token for the telemetry audience)

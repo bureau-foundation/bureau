@@ -47,24 +47,23 @@ func TestFleetCommandHasSubcommands(t *testing.T) {
 	}
 }
 
-// TestDefaultFleetSocketPath verifies the default socket path returns
-// the sandbox socket path. Operators running on the host should use
-// --service mode rather than relying on path auto-detection.
-func TestDefaultFleetSocketPath(t *testing.T) {
-	got := defaultFleetSocketPath()
-	if got != sandboxSocketPath {
-		t.Errorf("defaultFleetSocketPath(): got %q, want %q", got, sandboxSocketPath)
+// TestFleetConnectionConfig verifies that the fleet service connection
+// config has the expected sandbox paths and environment variable names.
+func TestFleetConnectionConfig(t *testing.T) {
+	if fleetConnectionConfig.Role != "fleet" {
+		t.Errorf("role: got %q, want %q", fleetConnectionConfig.Role, "fleet")
 	}
-}
-
-// TestDefaultFleetTokenPath verifies the default token path outside a
-// sandbox returns the sandbox token path (which won't exist on disk,
-// but is the canonical location).
-func TestDefaultFleetTokenPath(t *testing.T) {
-	got := defaultFleetTokenPath()
-	want := sandboxTokenPath
-	if got != want {
-		t.Errorf("defaultFleetTokenPath(): got %q, want %q", got, want)
+	if fleetConnectionConfig.SandboxSocket != "/run/bureau/service/fleet.sock" {
+		t.Errorf("sandbox socket: got %q, want %q", fleetConnectionConfig.SandboxSocket, "/run/bureau/service/fleet.sock")
+	}
+	if fleetConnectionConfig.SandboxToken != "/run/bureau/service/token/fleet.token" {
+		t.Errorf("sandbox token: got %q, want %q", fleetConnectionConfig.SandboxToken, "/run/bureau/service/token/fleet.token")
+	}
+	if fleetConnectionConfig.SocketEnvVar != "BUREAU_FLEET_SOCKET" {
+		t.Errorf("socket env var: got %q, want %q", fleetConnectionConfig.SocketEnvVar, "BUREAU_FLEET_SOCKET")
+	}
+	if fleetConnectionConfig.TokenEnvVar != "BUREAU_FLEET_TOKEN" {
+		t.Errorf("token env var: got %q, want %q", fleetConnectionConfig.TokenEnvVar, "BUREAU_FLEET_TOKEN")
 	}
 }
 
@@ -77,9 +76,9 @@ func TestConnectionAddFlags(t *testing.T) {
 	connection.AddFlags(flagSet)
 
 	// Verify flags exist. Outside a sandbox (the test environment), the
-	// defaults come from the host-side fallback paths.
-	expectedSocket := defaultFleetSocketPath()
-	expectedToken := defaultFleetTokenPath()
+	// defaults come from the sandbox paths in fleetConnectionConfig.
+	expectedSocket := fleetConnectionConfig.SandboxSocket
+	expectedToken := fleetConnectionConfig.SandboxToken
 
 	socketFlag := flagSet.Lookup("socket")
 	if socketFlag == nil {
@@ -151,10 +150,9 @@ func TestConnectionAddFlagsServiceMode(t *testing.T) {
 // direct mode fails when the token file does not exist, producing a
 // clear error rather than silently proceeding.
 func TestConnectDirectModeRequiresTokenFile(t *testing.T) {
-	connection := FleetConnection{
-		SocketPath: "/tmp/nonexistent.sock",
-		TokenPath:  "/tmp/nonexistent-token",
-	}
+	var connection FleetConnection
+	connection.SocketPath = "/tmp/nonexistent.sock"
+	connection.TokenPath = "/tmp/nonexistent-token"
 
 	_, err := connection.connect()
 	if err == nil {
@@ -170,12 +168,16 @@ func TestConnectServiceModeRequiresSession(t *testing.T) {
 	// Point the session to a nonexistent path so LoadSession fails.
 	t.Setenv("BUREAU_SESSION_FILE", "/tmp/nonexistent-session.json")
 
-	connection := FleetConnection{
-		ServiceMode:  true,
-		DaemonSocket: "/tmp/nonexistent-daemon.sock",
+	var connection FleetConnection
+	flagSet := pflag.NewFlagSet("test", pflag.ContinueOnError)
+	connection.AddFlags(flagSet)
+
+	err := flagSet.Parse([]string{"--service", "--daemon-socket", "/tmp/nonexistent-daemon.sock"})
+	if err != nil {
+		t.Fatalf("parsing flags: %v", err)
 	}
 
-	_, err := connection.connect()
+	_, err = connection.connect()
 	if err == nil {
 		t.Fatal("expected error when no operator session exists, got nil")
 	}

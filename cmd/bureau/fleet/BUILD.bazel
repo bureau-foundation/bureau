@@ -30,7 +30,6 @@ go_library(
         "//lib/service",
         "//lib/templatedef",
         "//messaging",
-        "//observe",
         "@com_github_spf13_pflag//:pflag",
     ],
 )

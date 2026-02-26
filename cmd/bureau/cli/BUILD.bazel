@@ -20,6 +20,7 @@ go_library(
         "params.go",
         "schema.go",
         "session_config.go",
+        "spaces.go",
         "suggest.go",
         "suggest_semantic.go",
         "toolerror.go",

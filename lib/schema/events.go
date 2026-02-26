@@ -155,6 +155,16 @@ const (
 	// Room: the workspace room
 	EventTypeWorktree ref.EventType = "m.bureau.worktree"
 
+	// EventTypePipelineConfig enables and configures pipeline execution
+	// for a room. Rooms without this event are not eligible for pipeline
+	// execution — the daemon skips pip- tickets in unconfigured rooms.
+	// Published by the admin (via "bureau pipeline enable") to each room
+	// where pipeline execution should be available.
+	//
+	// State key: "" (singleton per room)
+	// Room: any room that wants pipeline execution
+	EventTypePipelineConfig ref.EventType = "m.bureau.pipeline_config"
+
 	// EventTypePipeline defines a pipeline — a structured sequence of
 	// steps that run inside a Bureau sandbox. Pipelines are stored as
 	// state events in pipeline rooms (e.g., #bureau/pipeline for

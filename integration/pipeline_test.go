@@ -4,9 +4,11 @@
 package integration_test
 
 import (
+	"log/slog"
 	"os"
 	"testing"
 
+	pipelinecmd "github.com/bureau-foundation/bureau/cmd/bureau/pipeline"
 	"github.com/bureau-foundation/bureau/lib/command"
 	"github.com/bureau-foundation/bureau/lib/schema/pipeline"
 	"github.com/bureau-foundation/bureau/lib/schema/ticket"
@@ -53,6 +55,12 @@ func TestPipelineExecution(t *testing.T) {
 
 	projectRoomID := createTicketProjectRoom(t, admin, "pipeline-project",
 		ticketSvc.Entity, machine.UserID.String())
+
+	// Enable pipeline execution in the project room. Without this,
+	// the daemon rejects pipeline.execute commands for this room.
+	if err := pipelinecmd.ConfigureRoom(ctx, slog.Default(), admin, projectRoomID, pipelinecmd.ConfigureRoomParams{}); err != nil {
+		t.Fatalf("configure pipeline execution: %v", err)
+	}
 
 	// --- Publish pipeline definition ---
 	publishPipelineDefinition(t, admin, "test-greet", pipeline.PipelineContent{
@@ -147,6 +155,11 @@ func TestPipelineExecutionFailure(t *testing.T) {
 	projectRoomID := createTicketProjectRoom(t, admin, "pipefail-project",
 		ticketSvc.Entity, machine.UserID.String())
 
+	// Enable pipeline execution in the project room.
+	if err := pipelinecmd.ConfigureRoom(ctx, slog.Default(), admin, projectRoomID, pipelinecmd.ConfigureRoomParams{}); err != nil {
+		t.Fatalf("configure pipeline execution: %v", err)
+	}
+
 	// --- Publish failing pipeline definition ---
 	publishPipelineDefinition(t, admin, "test-fail", pipeline.PipelineContent{
 		Description: "Failing pipeline",
@@ -239,6 +252,11 @@ func TestPipelineParameterPropagation(t *testing.T) {
 	ticketSvc := deployTicketService(t, admin, fleet, machine, "pipeparam")
 	projectRoomID := createTicketProjectRoom(t, admin, "pipeparam-project",
 		ticketSvc.Entity, machine.UserID.String())
+
+	// Enable pipeline execution in the project room.
+	if err := pipelinecmd.ConfigureRoom(ctx, slog.Default(), admin, projectRoomID, pipelinecmd.ConfigureRoomParams{}); err != nil {
+		t.Fatalf("configure pipeline execution: %v", err)
+	}
 
 	// --- Publish pipeline definition with variable declaration ---
 	publishPipelineDefinition(t, admin, "test-params", pipeline.PipelineContent{

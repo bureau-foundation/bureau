@@ -282,7 +282,7 @@ func runEnable(ctx context.Context, logger *slog.Logger, params *enableParams) e
 		return cli.NotFound("resolving space %s: %w (has 'bureau matrix space create %s' been run?)", spaceAlias, err, params.Space)
 	}
 
-	childRoomIDs, err := getSpaceChildren(ctx, adminSession, spaceRoomID)
+	childRoomIDs, err := cli.GetSpaceChildren(ctx, adminSession, spaceRoomID)
 	if err != nil {
 		return cli.Internal("listing space children: %w", err)
 	}
@@ -334,26 +334,6 @@ func runEnable(ctx context.Context, logger *slog.Logger, params *enableParams) e
 	)
 
 	return nil
-}
-
-// getSpaceChildren returns the room IDs of all child rooms in a space.
-func getSpaceChildren(ctx context.Context, session messaging.Session, spaceRoomID ref.RoomID) ([]ref.RoomID, error) {
-	events, err := session.GetRoomState(ctx, spaceRoomID)
-	if err != nil {
-		return nil, cli.Internal("fetching space state: %w", err)
-	}
-
-	var children []ref.RoomID
-	for _, event := range events {
-		if event.Type == "m.space.child" && event.StateKey != nil && *event.StateKey != "" {
-			childID, parseErr := ref.ParseRoomID(*event.StateKey)
-			if parseErr != nil {
-				continue
-			}
-			children = append(children, childID)
-		}
-	}
-	return children, nil
 }
 
 // ConfigureRoomParams holds parameters for ConfigureRoom.

@@ -76,6 +76,7 @@ func buildSyncFilter(excludeRooms []ref.RoomID) string {
 		schema.EventTypeCredentials,
 		schema.EventTypeMachineStatus,
 		schema.EventTypeService,
+		schema.EventTypePipelineConfig,
 		schema.EventTypeProject,
 		schema.EventTypeWorkspace,
 		schema.EventTypeWorktree,
@@ -176,6 +177,20 @@ func (d *Daemon) initialSync(ctx context.Context) (string, error) {
 			d.cacheRoomAlias(ctx, roomID)
 		}
 	}
+
+	// Populate pipelineEnabledRooms from the initial state snapshot.
+	// The incremental sync loop also tracks these, but the initial sync
+	// response is not routed through processSyncResponse, so pipeline
+	// config events must be scanned here too.
+	d.reconcileMu.Lock()
+	for roomID, room := range response.Rooms.Join {
+		for _, event := range room.State.Events {
+			if event.Type == schema.EventTypePipelineConfig && event.StateKey != nil {
+				d.pipelineEnabledRooms[roomID] = true
+			}
+		}
+	}
+	d.reconcileMu.Unlock()
 
 	// Run all handlers unconditionally to establish baseline state.
 	// These use their own GetStateEvent/GetRoomState calls, which is
@@ -279,6 +294,24 @@ func (d *Daemon) processSyncResponse(ctx context.Context, response *messaging.Sy
 		d.emergencyShutdown()
 		return
 	}
+
+	// Track pipeline_config state events across all joined rooms.
+	// This must happen before the handler dispatch below so that
+	// pipelineEnabledRooms is current when processPipelineTickets runs.
+	d.reconcileMu.Lock()
+	for roomID, room := range response.Rooms.Join {
+		for _, event := range room.State.Events {
+			if event.Type == schema.EventTypePipelineConfig && event.StateKey != nil {
+				d.pipelineEnabledRooms[roomID] = true
+			}
+		}
+		for _, event := range room.Timeline.Events {
+			if event.Type == schema.EventTypePipelineConfig && event.StateKey != nil {
+				d.pipelineEnabledRooms[roomID] = true
+			}
+		}
+	}
+	d.reconcileMu.Unlock()
 
 	for roomID, room := range response.Rooms.Join {
 		if !roomHasStateChanges(room) {

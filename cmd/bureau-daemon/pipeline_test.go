@@ -392,6 +392,12 @@ func TestHandlePipelineExecute_Accepted(t *testing.T) {
 		},
 	})
 
+	// Pipeline execution requires m.bureau.pipeline_config in the
+	// target room. Without it, handlePipelineExecute rejects the
+	// command before discovering the ticket service.
+	harness.matrixState.setStateEvent("!tickets:bureau.local",
+		schema.EventTypePipelineConfig, "", map[string]any{"version": 1})
+
 	event := buildPipelineCommandEvent(ref.MustParseEventID("$pipe3"), ref.MustParseUserID("@admin:bureau.local"),
 		"bureau/pipeline:dev-init", "!tickets:bureau.local", "req-accepted")
 
@@ -425,6 +431,51 @@ func TestHandlePipelineExecute_Accepted(t *testing.T) {
 	room, _ := result["room"].(string)
 	if room != "!tickets:bureau.local" {
 		t.Errorf("result.room = %q, want %q", room, "!tickets:bureau.local")
+	}
+}
+
+func TestHandlePipelineExecute_RoomNotEnabled(t *testing.T) {
+	t.Parallel()
+	harness := newCommandTestHarness(t)
+
+	// Create a temporary "binary" that exists and is executable.
+	binaryDir := t.TempDir()
+	binaryPath := filepath.Join(binaryDir, "executor")
+	if err := os.WriteFile(binaryPath, []byte("#!/bin/sh\n"), 0755); err != nil {
+		t.Fatal(err)
+	}
+	harness.daemon.pipelineExecutorBinary = binaryPath
+
+	const roomID = "!workspace:test"
+	harness.matrixState.setStateEvent(roomID, schema.MatrixEventTypePowerLevels, "", map[string]any{
+		"users": map[string]any{
+			"@admin:bureau.local": float64(100),
+		},
+	})
+
+	// Deliberately do NOT set pipeline_config on the target room.
+	// The handler should reject the command with a helpful message.
+	event := buildPipelineCommandEvent(ref.MustParseEventID("$pipe-noconfig"), ref.MustParseUserID("@admin:bureau.local"),
+		"bureau/pipeline:test", "!tickets:bureau.local", "req-noconfig")
+
+	ctx := context.Background()
+	harness.daemon.processCommandMessages(ctx, mustRoomID(roomID), []messaging.Event{event})
+
+	messages := harness.getSentMessages()
+	if len(messages) != 1 {
+		t.Fatalf("expected 1 sent message, got %d", len(messages))
+	}
+
+	message := messages[0]
+	if message.Content["status"] != "error" {
+		t.Errorf("status = %v, want 'error'", message.Content["status"])
+	}
+	errorText, _ := message.Content["error"].(string)
+	if !strings.Contains(errorText, "pipeline execution not enabled") {
+		t.Errorf("error should mention pipeline not enabled, got: %q", errorText)
+	}
+	if !strings.Contains(errorText, "bureau pipeline enable") {
+		t.Errorf("error should suggest 'bureau pipeline enable', got: %q", errorText)
 	}
 }
 

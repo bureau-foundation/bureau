@@ -9,6 +9,7 @@ go_library(
         "cancel.go",
         "command.go",
         "doc.go",
+        "enable.go",
         "list.go",
         "list_runs.go",
         "push.go",
@@ -30,6 +31,7 @@ go_library(
         "//lib/schema/pipeline",
         "//lib/schema/ticket",
         "//lib/service",
+        "//messaging",
     ],
 )
 

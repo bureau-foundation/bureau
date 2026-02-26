@@ -72,6 +72,15 @@ func handlePipelineExecute(ctx context.Context, d *Daemon, roomID ref.RoomID, ev
 		return nil, fmt.Errorf("parameter 'room' is not a valid room ID: %w", err)
 	}
 
+	// Verify the target room has pipeline execution enabled.
+	_, err = d.session.GetStateEvent(ctx, ticketRoomID, schema.EventTypePipelineConfig, "")
+	if err != nil {
+		if messaging.IsMatrixError(err, messaging.ErrCodeNotFound) {
+			return nil, fmt.Errorf("pipeline execution not enabled in room %s (run 'bureau pipeline enable' for the space)", d.displayRoom(ticketRoomID))
+		}
+		return nil, fmt.Errorf("checking pipeline config in room %s: %w", d.displayRoom(ticketRoomID), err)
+	}
+
 	// Discover the ticket service.
 	ticketSocketPath := d.findLocalTicketSocket()
 	if ticketSocketPath == "" {
@@ -160,6 +169,12 @@ func (d *Daemon) processPipelineTickets(ctx context.Context, response *messaging
 	}
 
 	for roomID, room := range response.Rooms.Join {
+		// Skip rooms without pipeline_config — pipeline execution
+		// requires explicit opt-in via "bureau pipeline enable".
+		if !d.pipelineEnabledRooms[roomID] {
+			continue
+		}
+
 		// Combine state and timeline events — ticket state events
 		// can appear in either section depending on sync gaps.
 		allEvents := make([]messaging.Event, 0, len(room.State.Events)+len(room.Timeline.Events))

@@ -13,6 +13,7 @@ import (
 	"time"
 
 	"github.com/bureau-foundation/bureau/cmd/bureau/cli"
+	"github.com/bureau-foundation/bureau/cmd/bureau/pipeline"
 	"github.com/bureau-foundation/bureau/cmd/bureau/ticket"
 	"github.com/bureau-foundation/bureau/lib/principal"
 	"github.com/bureau-foundation/bureau/lib/ref"
@@ -337,6 +338,13 @@ func Create(ctx context.Context, session messaging.Session, params CreateParams,
 	}
 	if err := service.EnsureServiceInRoom(ctx, session, workspaceRoomID, ticketService.Principal.UserID()); err != nil {
 		return nil, cli.Internal("ticket service failed to join workspace room %s: %w", params.Alias, err)
+	}
+
+	// Enable pipeline execution in the workspace room. Pipeline tickets
+	// (pip-* IDs) require the room to have pipeline_config — without it,
+	// the daemon skips pipeline execution for this room.
+	if err := pipeline.ConfigureRoom(ctx, logger, session, workspaceRoomID, pipeline.ConfigureRoomParams{}); err != nil {
+		return nil, cli.Internal("configuring pipeline execution: %w", err)
 	}
 
 	// Build principal assignments (setup + agents + teardown).

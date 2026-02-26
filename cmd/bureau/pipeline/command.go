@@ -32,6 +32,7 @@ documentation.
 All commands that access Matrix require an operator session. Run
 "bureau login" first to authenticate.`,
 		Subcommands: []*cli.Command{
+			enableCommand(),
 			listCommand(),
 			showCommand(),
 			validateCommand(),

@@ -362,6 +362,7 @@ func run() error {
 		completed:             make(map[ref.Entity]bool),
 		draining:              make(map[ref.Entity]context.CancelFunc),
 		pipelineTickets:       make(map[string]ref.Entity),
+		pipelineEnabledRooms:  make(map[ref.RoomID]bool),
 		exitWatchers:          make(map[ref.Entity]context.CancelFunc),
 		proxyExitWatchers:     make(map[ref.Entity]context.CancelFunc),
 		lastCredentials:       make(map[ref.Entity]string),
@@ -706,6 +707,13 @@ type Daemon struct {
 	// register their tickets here. Cleaned up when the executor
 	// sandbox exits (in watchSandboxExit and destroyPrincipal).
 	pipelineTickets map[string]ref.Entity
+
+	// pipelineEnabledRooms tracks which rooms have m.bureau.pipeline_config
+	// state events. Populated from /sync state events (both initial and
+	// incremental). processPipelineTickets skips pip- tickets in rooms
+	// not in this set — pipeline execution requires explicit opt-in via
+	// "bureau pipeline enable". Protected by reconcileMu.
+	pipelineEnabledRooms map[ref.RoomID]bool
 
 	// lastCredentials stores the ciphertext from the most recently
 	// deployed m.bureau.credentials state event for each running

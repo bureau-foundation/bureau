@@ -51,38 +51,32 @@ func TestTelemetryMock(t *testing.T) {
 	token := mintTestServiceToken(t, machine, callerEntity, "telemetry", nil)
 	authClient := service.NewServiceClientFromToken(mockService.SocketPath, token)
 
-	// Submit a span, a metric, and a log in one request. Each telemetry
-	// record requires Fleet, Machine, and Source — the ref types refuse
-	// to marshal as zero values.
-	submitFields := map[string]any{
-		"spans": []telemetry.Span{{
-			Fleet:     fleet.Ref,
-			Machine:   machine.Ref,
-			Source:    callerEntity,
+	// Submit a span, a metric, and a log in one request. Identity is
+	// specified at the envelope level — the mock calls StampIdentity()
+	// after deserialization to populate per-record fields.
+	submitRequest := telemetry.SubmitRequest{
+		Fleet:   fleet.Ref,
+		Machine: machine.Ref,
+		Source:  callerEntity,
+		Spans: []telemetry.Span{{
 			Operation: "test.operation",
 			StartTime: 1000000000,
 			Duration:  500000000,
 			Status:    telemetry.SpanStatusOK,
 		}},
-		"metrics": []telemetry.MetricPoint{{
-			Fleet:     fleet.Ref,
-			Machine:   machine.Ref,
-			Source:    callerEntity,
+		Metrics: []telemetry.MetricPoint{{
 			Name:      "test_counter",
 			Kind:      telemetry.MetricKindCounter,
 			Value:     42,
 			Timestamp: 1000000000,
 		}},
-		"logs": []telemetry.LogRecord{{
-			Fleet:     fleet.Ref,
-			Machine:   machine.Ref,
-			Source:    callerEntity,
+		Logs: []telemetry.LogRecord{{
 			Body:      "test log message",
 			Severity:  telemetry.SeverityInfo,
 			Timestamp: 1000000000,
 		}},
 	}
-	if err := authClient.Call(t.Context(), "submit", submitFields, nil); err != nil {
+	if err := authClient.Call(t.Context(), "submit", submitRequest, nil); err != nil {
 		t.Fatalf("submit call: %v", err)
 	}
 

@@ -161,14 +161,6 @@ type statusResponse struct {
 	IngestBatches        uint64  `cbor:"ingest_batches"`
 }
 
-// submitRequest matches the relay's wire format exactly. At least one
-// of the three slices must be non-empty.
-type submitRequest struct {
-	Spans   []telemetry.Span        `cbor:"spans"`
-	Metrics []telemetry.MetricPoint `cbor:"metrics"`
-	Logs    []telemetry.LogRecord   `cbor:"logs"`
-}
-
 // spanQuery filters stored spans. All fields are optional — an empty
 // query returns all spans.
 type spanQuery struct {
@@ -226,7 +218,7 @@ func (m *telemetryMock) handleStatus(_ context.Context, _ []byte) (any, error) {
 }
 
 func (m *telemetryMock) handleSubmit(_ context.Context, _ *servicetoken.Token, raw []byte) (any, error) {
-	var request submitRequest
+	var request telemetry.SubmitRequest
 	if err := codec.Unmarshal(raw, &request); err != nil {
 		return nil, errors.New("invalid submit request")
 	}
@@ -234,6 +226,8 @@ func (m *telemetryMock) handleSubmit(_ context.Context, _ *servicetoken.Token, r
 	if len(request.Spans) == 0 && len(request.Metrics) == 0 && len(request.Logs) == 0 {
 		return nil, errors.New("submit request must contain at least one span, metric, or log record")
 	}
+
+	request.StampIdentity()
 
 	m.mu.Lock()
 	m.spans = append(m.spans, request.Spans...)

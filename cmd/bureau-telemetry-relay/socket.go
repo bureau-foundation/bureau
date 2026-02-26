@@ -14,15 +14,6 @@ import (
 	"github.com/bureau-foundation/bureau/lib/servicetoken"
 )
 
-// submitRequest is the wire format for the "submit" action. Local
-// services send telemetry records to the relay using this structure.
-// At least one of the three slices must be non-empty.
-type submitRequest struct {
-	Spans   []telemetry.Span        `cbor:"spans"`
-	Metrics []telemetry.MetricPoint `cbor:"metrics"`
-	Logs    []telemetry.LogRecord   `cbor:"logs"`
-}
-
 // relayStatusResponse is the wire format for the "status" action.
 // Returns relay health information for liveness checks and
 // operational monitoring.
@@ -51,15 +42,25 @@ func (r *Relay) registerActions(server *service.SocketServer) {
 // accumulator's size threshold is crossed. The flush-to-buffer is
 // inline (the caller holds no lock that would conflict) to minimize
 // latency between threshold detection and buffer entry.
+//
+// The [telemetry.SubmitRequest] carries identity at the envelope level.
+// StampIdentity re-hydrates per-record identity before accumulating so
+// that the downstream [telemetry.TelemetryBatch] carries full identity.
 func (r *Relay) handleSubmit(_ context.Context, _ *servicetoken.Token, raw []byte) (any, error) {
-	var request submitRequest
+	var request telemetry.SubmitRequest
 	if err := codec.Unmarshal(raw, &request); err != nil {
 		return nil, errors.New("invalid submit request")
+	}
+
+	if request.Fleet.IsZero() || request.Machine.IsZero() || request.Source.IsZero() {
+		return nil, errors.New("submit request must include fleet, machine, and source identity")
 	}
 
 	if len(request.Spans) == 0 && len(request.Metrics) == 0 && len(request.Logs) == 0 {
 		return nil, errors.New("submit request must contain at least one span, metric, or log record")
 	}
+
+	request.StampIdentity()
 
 	shouldFlush := false
 

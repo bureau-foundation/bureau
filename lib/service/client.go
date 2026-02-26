@@ -88,8 +88,12 @@ func NewServiceClientFromToken(socketPath string, tokenBytes []byte) *ServiceCli
 //
 // The fields parameter may contain any handler-specific request
 // fields; the client adds "action" and "token" automatically. Pass
-// nil for actions that take no additional parameters. The caller must
-// not include "action" or "token" keys in the fields map.
+// nil for actions that take no additional parameters.
+//
+// The fields parameter accepts either a map[string]any (keys become
+// top-level CBOR map entries) or a struct (CBOR-encoded then merged
+// as a map). The caller must not include "action" or "token" in the
+// fields — these are injected by the client.
 //
 // On success (response ok=true), if result is non-nil and the
 // response contains data, the data is CBOR-decoded into result.
@@ -97,8 +101,11 @@ func NewServiceClientFromToken(socketPath string, tokenBytes []byte) *ServiceCli
 // On failure (response ok=false), returns a *ServiceError containing
 // the server's error message. Connection and encoding errors are
 // returned as plain errors (not *ServiceError).
-func (c *ServiceClient) Call(ctx context.Context, action string, fields map[string]any, result any) error {
-	request := c.buildRequest(action, fields)
+func (c *ServiceClient) Call(ctx context.Context, action string, fields any, result any) error {
+	request, err := c.buildRequest(action, fields)
+	if err != nil {
+		return fmt.Errorf("building request for %q: %w", action, err)
+	}
 
 	response, err := c.send(ctx, request)
 	if err != nil {
@@ -123,16 +130,30 @@ func (c *ServiceClient) Call(ctx context.Context, action string, fields map[stri
 
 // buildRequest constructs the CBOR request map. Starts with the
 // caller's fields (if any), then injects "action" and optionally
-// "token".
-func (c *ServiceClient) buildRequest(action string, fields map[string]any) map[string]any {
+// "token". The fields parameter may be nil, a map[string]any, or a
+// struct. Struct fields are flattened by CBOR-encoding the struct and
+// decoding into a map[string]any.
+func (c *ServiceClient) buildRequest(action string, fields any) (map[string]any, error) {
 	var request map[string]any
-	if fields != nil {
-		request = make(map[string]any, len(fields)+2)
-		for key, value := range fields {
+
+	switch typedFields := fields.(type) {
+	case nil:
+		request = make(map[string]any, 2)
+	case map[string]any:
+		request = make(map[string]any, len(typedFields)+2)
+		for key, value := range typedFields {
 			request[key] = value
 		}
-	} else {
-		request = make(map[string]any, 2)
+	default:
+		// Struct or other type: CBOR-encode then decode into a map
+		// to flatten struct fields into top-level map entries.
+		encoded, err := codec.Marshal(typedFields)
+		if err != nil {
+			return nil, fmt.Errorf("encoding fields: %w", err)
+		}
+		if err := codec.Unmarshal(encoded, &request); err != nil {
+			return nil, fmt.Errorf("decoding fields to map: %w", err)
+		}
 	}
 
 	request["action"] = action
@@ -140,7 +161,7 @@ func (c *ServiceClient) buildRequest(action string, fields map[string]any) map[s
 		request["token"] = c.tokenBytes
 	}
 
-	return request
+	return request, nil
 }
 
 // send connects to the socket, writes the request, and reads the

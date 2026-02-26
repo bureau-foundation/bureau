@@ -131,11 +131,11 @@ func NewTelemetryEmitter(config TelemetryConfig) (*TelemetryEmitter, error) {
 	}, nil
 }
 
-// RecordSpan buffers a span for the next flush cycle. The emitter
-// stamps the span's Fleet, Machine, and Source fields from its own
-// identity — callers provide only the operation-specific fields
-// (TraceID, SpanID, Operation, StartTime, Duration, Status,
-// Attributes, etc.).
+// RecordSpan buffers a span for the next flush cycle. Callers provide
+// the operation-specific fields (TraceID, SpanID, Operation, StartTime,
+// Duration, Status, Attributes, etc.); identity (Fleet, Machine,
+// Source) is carried at the submit envelope level during flush, not
+// stamped per-span.
 //
 // Safe to call on a nil receiver (no-op). This allows callers to
 // unconditionally call RecordSpan without checking whether telemetry
@@ -144,9 +144,6 @@ func (e *TelemetryEmitter) RecordSpan(span telemetry.Span) {
 	if e == nil {
 		return
 	}
-	span.Fleet = e.fleet
-	span.Machine = e.machine
-	span.Source = e.source
 
 	e.mu.Lock()
 	e.spans = append(e.spans, span)
@@ -186,11 +183,13 @@ func (e *TelemetryEmitter) Done() <-chan struct{} {
 	return e.done
 }
 
-// flush drains the span buffer and sends it to the relay. The buffer
-// is swapped under the lock so RecordSpan does not block during
-// network I/O. Flush failures are logged but do not retry — the spans
-// are dropped. Lost telemetry is preferable to unbounded memory growth
-// or degraded service latency.
+// flush drains the span buffer and sends it to the relay as a
+// [telemetry.SubmitRequest] with envelope-level identity. Per-span
+// identity fields are zero — the relay re-stamps them from the
+// envelope after receiving. The buffer is swapped under the lock so
+// RecordSpan does not block during network I/O. Flush failures are
+// logged but do not retry — the spans are dropped. Lost telemetry is
+// preferable to unbounded memory growth or degraded service latency.
 func (e *TelemetryEmitter) flush(ctx context.Context) {
 	e.mu.Lock()
 	if len(e.spans) == 0 {
@@ -201,9 +200,13 @@ func (e *TelemetryEmitter) flush(ctx context.Context) {
 	e.spans = nil
 	e.mu.Unlock()
 
-	if err := e.client.Call(ctx, "submit", map[string]any{
-		"spans": spans,
-	}, nil); err != nil {
+	request := telemetry.SubmitRequest{
+		Fleet:   e.fleet,
+		Machine: e.machine,
+		Source:  e.source,
+		Spans:   spans,
+	}
+	if err := e.client.Call(ctx, "submit", request, nil); err != nil {
 		e.logger.Error("telemetry flush failed",
 			"error", err,
 			"dropped_spans", len(spans),

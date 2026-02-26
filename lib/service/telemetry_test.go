@@ -48,12 +48,11 @@ func setupTestRelay(t *testing.T) *testRelay {
 	}
 
 	server.HandleAuth("submit", func(ctx context.Context, token *servicetoken.Token, raw []byte) (any, error) {
-		var request struct {
-			Spans []telemetry.Span `cbor:"spans"`
-		}
+		var request telemetry.SubmitRequest
 		if err := codec.Unmarshal(raw, &request); err != nil {
 			return nil, err
 		}
+		request.StampIdentity()
 		relay.mu.Lock()
 		relay.spans = append(relay.spans, request.Spans...)
 		relay.submits++
@@ -155,7 +154,8 @@ func TestTelemetryEmitterFlush(t *testing.T) {
 	// Wait for the ticker to register before advancing the clock.
 	fakeClock.WaitForTimers(1)
 
-	// Record a span. The emitter should stamp identity fields.
+	// Record a span. Identity is at the submit envelope level, not
+	// per-span. The mock relay's StampIdentity re-hydrates it.
 	traceID := telemetry.NewTraceID()
 	spanID := telemetry.NewSpanID()
 	emitter.RecordSpan(telemetry.Span{
@@ -189,7 +189,7 @@ func TestTelemetryEmitterFlush(t *testing.T) {
 	}
 	span := relay.spans[0]
 
-	// Verify identity was stamped by the emitter.
+	// Verify identity was delivered via envelope and re-stamped.
 	if span.Fleet != config.Fleet {
 		t.Errorf("Fleet: got %v, want %v", span.Fleet, config.Fleet)
 	}

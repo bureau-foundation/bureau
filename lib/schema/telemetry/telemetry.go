@@ -7,13 +7,17 @@ import (
 	"encoding/hex"
 	"fmt"
 
+	"github.com/bureau-foundation/bureau/lib/codec"
 	"github.com/bureau-foundation/bureau/lib/ref"
 )
 
 // TraceID is a 16-byte globally unique trace identifier. It correlates
 // spans across services and machines within a single distributed
-// operation. Serialized as a 32-character lowercase hex string in both
-// JSON and CBOR (via encoding.TextMarshaler).
+// operation.
+//
+// Encoding: JSON uses 32-character lowercase hex text (via
+// encoding.TextMarshaler). CBOR uses a 16-byte binary string (via
+// cbor.Marshaler), saving 17 bytes per ID compared to hex text.
 type TraceID [16]byte
 
 // MarshalText implements encoding.TextMarshaler. Returns a 32-character
@@ -40,6 +44,27 @@ func (id *TraceID) UnmarshalText(data []byte) error {
 	return nil
 }
 
+// MarshalCBOR implements cbor.Marshaler. Encodes as a CBOR byte string
+// (major type 2) containing the raw 16 bytes. This is 17 bytes on the
+// wire versus 34 for the hex text encoding used by MarshalText.
+func (id TraceID) MarshalCBOR() ([]byte, error) {
+	return codec.Marshal(id[:])
+}
+
+// UnmarshalCBOR implements cbor.Unmarshaler. Decodes a CBOR byte string
+// into the 16-byte array.
+func (id *TraceID) UnmarshalCBOR(data []byte) error {
+	var raw []byte
+	if err := codec.Unmarshal(data, &raw); err != nil {
+		return fmt.Errorf("invalid TraceID CBOR: %w", err)
+	}
+	if len(raw) != 16 {
+		return fmt.Errorf("invalid TraceID: expected 16 bytes, got %d", len(raw))
+	}
+	copy(id[:], raw)
+	return nil
+}
+
 // IsZero reports whether this is an uninitialized zero-value TraceID.
 func (id TraceID) IsZero() bool { return id == TraceID{} }
 
@@ -47,8 +72,10 @@ func (id TraceID) IsZero() bool { return id == TraceID{} }
 func (id TraceID) String() string { return hex.EncodeToString(id[:]) }
 
 // SpanID is an 8-byte span identifier, unique within a trace.
-// Serialized as a 16-character lowercase hex string in both JSON and
-// CBOR (via encoding.TextMarshaler).
+//
+// Encoding: JSON uses 16-character lowercase hex text (via
+// encoding.TextMarshaler). CBOR uses an 8-byte binary string (via
+// cbor.Marshaler), saving 9 bytes per ID compared to hex text.
 type SpanID [8]byte
 
 // MarshalText implements encoding.TextMarshaler. Returns a 16-character
@@ -72,6 +99,27 @@ func (id *SpanID) UnmarshalText(data []byte) error {
 		return fmt.Errorf("invalid SpanID: expected 8 bytes, got %d", len(decoded))
 	}
 	copy(id[:], decoded)
+	return nil
+}
+
+// MarshalCBOR implements cbor.Marshaler. Encodes as a CBOR byte string
+// (major type 2) containing the raw 8 bytes. This is 9 bytes on the
+// wire versus 18 for the hex text encoding used by MarshalText.
+func (id SpanID) MarshalCBOR() ([]byte, error) {
+	return codec.Marshal(id[:])
+}
+
+// UnmarshalCBOR implements cbor.Unmarshaler. Decodes a CBOR byte string
+// into the 8-byte array.
+func (id *SpanID) UnmarshalCBOR(data []byte) error {
+	var raw []byte
+	if err := codec.Unmarshal(data, &raw); err != nil {
+		return fmt.Errorf("invalid SpanID CBOR: %w", err)
+	}
+	if len(raw) != 8 {
+		return fmt.Errorf("invalid SpanID: expected 8 bytes, got %d", len(raw))
+	}
+	copy(id[:], raw)
 	return nil
 }
 
@@ -151,15 +199,19 @@ type Span struct {
 	// (the first span in a trace or a new local root).
 	ParentSpanID SpanID `json:"parent_span_id"`
 
-	// Fleet identifies the fleet this span originated in.
-	Fleet ref.Fleet `json:"fleet"`
+	// Fleet identifies the fleet this span originated in. Omitted in
+	// CBOR when zero-valued (identity dedup: submit envelope carries
+	// the fleet, per-span fields are only populated after re-stamping).
+	Fleet ref.Fleet `json:"fleet" cbor:"fleet,omitempty"`
 
 	// Machine identifies the machine where this span was recorded.
-	Machine ref.Machine `json:"machine"`
+	// Omitted in CBOR when zero-valued (same identity dedup as Fleet).
+	Machine ref.Machine `json:"machine" cbor:"machine,omitempty"`
 
 	// Source identifies the process that emitted this span (a service,
-	// agent, or machine-level daemon).
-	Source ref.Entity `json:"source"`
+	// agent, or machine-level daemon). Omitted in CBOR when
+	// zero-valued (same identity dedup as Fleet).
+	Source ref.Entity `json:"source" cbor:"source,omitempty"`
 
 	// Operation names the work this span represents, scoped by
 	// convention: "socket.handle", "sync.loop", "proxy.forward",
@@ -208,14 +260,17 @@ type SpanEvent struct {
 // "bureau_proxy_request_duration_seconds",
 // "bureau_socket_request_total").
 type MetricPoint struct {
-	// Fleet identifies the fleet this metric originated in.
-	Fleet ref.Fleet `json:"fleet"`
+	// Fleet identifies the fleet this metric originated in. Omitted
+	// in CBOR when zero-valued (identity dedup via submit envelope).
+	Fleet ref.Fleet `json:"fleet" cbor:"fleet,omitempty"`
 
 	// Machine identifies the machine where this metric was recorded.
-	Machine ref.Machine `json:"machine"`
+	// Omitted in CBOR when zero-valued.
+	Machine ref.Machine `json:"machine" cbor:"machine,omitempty"`
 
-	// Source identifies the process that emitted this metric.
-	Source ref.Entity `json:"source"`
+	// Source identifies the process that emitted this metric. Omitted
+	// in CBOR when zero-valued.
+	Source ref.Entity `json:"source" cbor:"source,omitempty"`
 
 	// Name is the metric name, following Prometheus conventions:
 	// bureau_proxy_request_duration_seconds,
@@ -270,14 +325,17 @@ type HistogramValue struct {
 // When TraceID and SpanID are set, the log is linked to the span that
 // produced it, giving narrative context that metrics lack.
 type LogRecord struct {
-	// Fleet identifies the fleet this log originated in.
-	Fleet ref.Fleet `json:"fleet"`
+	// Fleet identifies the fleet this log originated in. Omitted in
+	// CBOR when zero-valued (identity dedup via submit envelope).
+	Fleet ref.Fleet `json:"fleet" cbor:"fleet,omitempty"`
 
 	// Machine identifies the machine where this log was recorded.
-	Machine ref.Machine `json:"machine"`
+	// Omitted in CBOR when zero-valued.
+	Machine ref.Machine `json:"machine" cbor:"machine,omitempty"`
 
-	// Source identifies the process that emitted this log.
-	Source ref.Entity `json:"source"`
+	// Source identifies the process that emitted this log. Omitted in
+	// CBOR when zero-valued.
+	Source ref.Entity `json:"source" cbor:"source,omitempty"`
 
 	// Severity follows OpenTelemetry severity numbering: 1-4=TRACE,
 	// 5-8=DEBUG, 9-12=INFO, 13-16=WARN, 17-20=ERROR, 21-24=FATAL.

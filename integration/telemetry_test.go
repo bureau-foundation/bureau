@@ -320,27 +320,24 @@ func TestTelemetryRelayPipeline(t *testing.T) {
 	submitToken := mintTestServiceToken(t, machine, callerEntity, "telemetry", nil)
 	relayClient := service.NewServiceClientFromToken(relayService.SocketPath, submitToken)
 
-	submitFields := map[string]any{
-		"spans": []telemetry.Span{{
-			Fleet:     fleet.Ref,
-			Machine:   machine.Ref,
-			Source:    callerEntity,
+	submitRequest := telemetry.SubmitRequest{
+		Fleet:   fleet.Ref,
+		Machine: machine.Ref,
+		Source:  callerEntity,
+		Spans: []telemetry.Span{{
 			Operation: "test.relay.pipeline",
 			StartTime: 2000000000,
 			Duration:  100000000,
 			Status:    telemetry.SpanStatusOK,
 		}},
-		"metrics": []telemetry.MetricPoint{{
-			Fleet:     fleet.Ref,
-			Machine:   machine.Ref,
-			Source:    callerEntity,
+		Metrics: []telemetry.MetricPoint{{
 			Name:      "relay_test_gauge",
 			Kind:      telemetry.MetricKindGauge,
 			Value:     99,
 			Timestamp: 2000000000,
 		}},
 	}
-	if err := relayClient.Call(t.Context(), "submit", submitFields, nil); err != nil {
+	if err := relayClient.Call(t.Context(), "submit", submitRequest, nil); err != nil {
 		t.Fatalf("submit to relay: %v", err)
 	}
 

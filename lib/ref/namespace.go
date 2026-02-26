@@ -100,17 +100,24 @@ func (n Namespace) ArtifactRoomAliasLocalpart() string {
 }
 
 // MarshalText implements encoding.TextMarshaler. Serializes as the
-// space alias form: #namespace:server.
+// space alias form: #namespace:server. A zero-value Namespace marshals
+// as empty bytes — consistent with other ref types, and symmetric with
+// UnmarshalText's zero-value-on-empty-input behavior.
 func (n Namespace) MarshalText() ([]byte, error) {
 	if n.IsZero() {
-		return nil, fmt.Errorf("cannot marshal zero-value Namespace")
+		return []byte{}, nil
 	}
 	return []byte(n.SpaceAlias().String()), nil
 }
 
-// UnmarshalText implements encoding.TextUnmarshaler. Parses the
-// space alias form: #namespace:server.
+// UnmarshalText implements encoding.TextUnmarshaler. Parses the space
+// alias form: #namespace:server. Empty input produces the zero value
+// — the symmetric counterpart to MarshalText's zero-value behavior.
 func (n *Namespace) UnmarshalText(data []byte) error {
+	if len(data) == 0 {
+		*n = Namespace{}
+		return nil
+	}
 	localpart, server, err := parseRoomAlias(string(data))
 	if err != nil {
 		return fmt.Errorf("invalid Namespace: %w", err)

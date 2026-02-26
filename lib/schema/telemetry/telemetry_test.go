@@ -606,6 +606,209 @@ func TestTelemetryBatchEmptySignals(t *testing.T) {
 	}
 }
 
+// --- CBOR binary ID encoding ---
+
+func TestTraceIDCBORRoundTrip(t *testing.T) {
+	original := TraceID{0x01, 0x23, 0x45, 0x67, 0x89, 0xab, 0xcd, 0xef,
+		0xfe, 0xdc, 0xba, 0x98, 0x76, 0x54, 0x32, 0x10}
+
+	data, err := codec.Marshal(original)
+	if err != nil {
+		t.Fatalf("CBOR Marshal: %v", err)
+	}
+
+	// CBOR byte string: 1-byte header (0x50 = major type 2, length 16)
+	// + 16 raw bytes = 17 bytes total. The hex text encoding would be
+	// 34 bytes (2-byte header + 32 hex chars).
+	if len(data) != 17 {
+		t.Errorf("CBOR encoding is %d bytes, want 17 (got %x)", len(data), data)
+	}
+
+	var decoded TraceID
+	if err := codec.Unmarshal(data, &decoded); err != nil {
+		t.Fatalf("CBOR Unmarshal: %v", err)
+	}
+	if decoded != original {
+		t.Errorf("round-trip: got %x, want %x", decoded, original)
+	}
+}
+
+func TestTraceIDCBORZeroValue(t *testing.T) {
+	var zero TraceID
+	data, err := codec.Marshal(zero)
+	if err != nil {
+		t.Fatalf("CBOR Marshal zero: %v", err)
+	}
+
+	var decoded TraceID
+	if err := codec.Unmarshal(data, &decoded); err != nil {
+		t.Fatalf("CBOR Unmarshal zero: %v", err)
+	}
+	if !decoded.IsZero() {
+		t.Errorf("zero-value TraceID should round-trip as zero, got %x", decoded)
+	}
+}
+
+func TestSpanIDCBORRoundTrip(t *testing.T) {
+	original := SpanID{0x01, 0x23, 0x45, 0x67, 0x89, 0xab, 0xcd, 0xef}
+
+	data, err := codec.Marshal(original)
+	if err != nil {
+		t.Fatalf("CBOR Marshal: %v", err)
+	}
+
+	// CBOR byte string: 1-byte header (0x48 = major type 2, length 8)
+	// + 8 raw bytes = 9 bytes total. The hex text encoding would be
+	// 18 bytes (2-byte header + 16 hex chars).
+	if len(data) != 9 {
+		t.Errorf("CBOR encoding is %d bytes, want 9 (got %x)", len(data), data)
+	}
+
+	var decoded SpanID
+	if err := codec.Unmarshal(data, &decoded); err != nil {
+		t.Fatalf("CBOR Unmarshal: %v", err)
+	}
+	if decoded != original {
+		t.Errorf("round-trip: got %x, want %x", decoded, original)
+	}
+}
+
+func TestSpanIDCBORZeroValue(t *testing.T) {
+	var zero SpanID
+	data, err := codec.Marshal(zero)
+	if err != nil {
+		t.Fatalf("CBOR Marshal zero: %v", err)
+	}
+
+	var decoded SpanID
+	if err := codec.Unmarshal(data, &decoded); err != nil {
+		t.Fatalf("CBOR Unmarshal zero: %v", err)
+	}
+	if !decoded.IsZero() {
+		t.Errorf("zero-value SpanID should round-trip as zero, got %x", decoded)
+	}
+}
+
+// --- CBOR identity omitempty ---
+
+func TestSpanCBORZeroIdentityOmitted(t *testing.T) {
+	// A span with zero-valued identity fields (as sent by the emitter
+	// before the relay stamps identity from the submit envelope).
+	span := Span{
+		TraceID:   TraceID{0xaa},
+		SpanID:    SpanID{0xbb},
+		Operation: "socket.handle",
+		StartTime: 1000000000,
+		Duration:  500000,
+		Status:    SpanStatusOK,
+	}
+
+	data, err := codec.Marshal(span)
+	if err != nil {
+		t.Fatalf("CBOR Marshal: %v", err)
+	}
+
+	// Unmarshal into a map to inspect which keys are present.
+	var raw map[string]any
+	if err := codec.Unmarshal(data, &raw); err != nil {
+		t.Fatalf("CBOR Unmarshal to map: %v", err)
+	}
+
+	// Identity fields should be omitted when zero.
+	for _, key := range []string{"fleet", "machine", "source"} {
+		if _, present := raw[key]; present {
+			t.Errorf("field %q should be omitted for zero identity, but is present", key)
+		}
+	}
+
+	// Non-identity fields must be present.
+	for _, key := range []string{"trace_id", "span_id", "operation", "start_time", "duration", "status"} {
+		if _, present := raw[key]; !present {
+			t.Errorf("field %q should be present, but is missing", key)
+		}
+	}
+
+	// ParentSpanID must be present even when zero (intentional — "no
+	// parent" is semantically different from "parent unknown").
+	if _, present := raw["parent_span_id"]; !present {
+		t.Error("parent_span_id should be present even when zero")
+	}
+}
+
+func TestSpanCBORNonZeroIdentityPresent(t *testing.T) {
+	fleet := testFleet(t)
+	machine := testMachine(t)
+	source := testEntity(t)
+
+	span := Span{
+		TraceID:   TraceID{0xaa},
+		SpanID:    SpanID{0xbb},
+		Fleet:     fleet,
+		Machine:   machine,
+		Source:    source,
+		Operation: "socket.handle",
+		StartTime: 1000000000,
+		Duration:  500000,
+		Status:    SpanStatusOK,
+	}
+
+	data, err := codec.Marshal(span)
+	if err != nil {
+		t.Fatalf("CBOR Marshal: %v", err)
+	}
+
+	var raw map[string]any
+	if err := codec.Unmarshal(data, &raw); err != nil {
+		t.Fatalf("CBOR Unmarshal to map: %v", err)
+	}
+
+	// Identity fields should be present when non-zero.
+	for _, key := range []string{"fleet", "machine", "source"} {
+		if _, present := raw[key]; !present {
+			t.Errorf("field %q should be present for non-zero identity, but is missing", key)
+		}
+	}
+}
+
+func TestSpanCBORZeroIdentityRoundTrip(t *testing.T) {
+	// Verify that a span with zero identity marshals, unmarshals, and
+	// the identity fields remain zero.
+	original := Span{
+		TraceID:   TraceID{0xaa},
+		SpanID:    SpanID{0xbb},
+		Operation: "socket.handle",
+		StartTime: 1000000000,
+		Duration:  500000,
+		Status:    SpanStatusOK,
+	}
+
+	data, err := codec.Marshal(original)
+	if err != nil {
+		t.Fatalf("CBOR Marshal: %v", err)
+	}
+
+	var decoded Span
+	if err := codec.Unmarshal(data, &decoded); err != nil {
+		t.Fatalf("CBOR Unmarshal: %v", err)
+	}
+
+	if !decoded.Fleet.IsZero() {
+		t.Error("Fleet should be zero after round-trip of identity-stripped span")
+	}
+	if !decoded.Machine.IsZero() {
+		t.Error("Machine should be zero after round-trip of identity-stripped span")
+	}
+	if !decoded.Source.IsZero() {
+		t.Error("Source should be zero after round-trip of identity-stripped span")
+	}
+	if decoded.Operation != "socket.handle" {
+		t.Errorf("Operation: got %q, want %q", decoded.Operation, "socket.handle")
+	}
+	if decoded.TraceID != original.TraceID {
+		t.Errorf("TraceID: got %s, want %s", decoded.TraceID, original.TraceID)
+	}
+}
+
 // --- CBOR round-trips ---
 
 func TestSpanCBORRoundTrip(t *testing.T) {

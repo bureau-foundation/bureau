@@ -115,17 +115,24 @@ func (f Fleet) RunDir(base string) string {
 }
 
 // MarshalText implements encoding.TextMarshaler. Serializes as the
-// fleet room alias: #localpart:server.
+// fleet room alias: #localpart:server. A zero-value Fleet marshals as
+// empty bytes — consistent with Entity and Machine, and symmetric
+// with UnmarshalText's zero-value-on-empty-input behavior.
 func (f Fleet) MarshalText() ([]byte, error) {
 	if f.IsZero() {
-		return nil, fmt.Errorf("cannot marshal zero-value Fleet")
+		return []byte{}, nil
 	}
 	return []byte(f.RoomAlias().String()), nil
 }
 
-// UnmarshalText implements encoding.TextUnmarshaler. Parses the
-// fleet room alias: #localpart:server.
+// UnmarshalText implements encoding.TextUnmarshaler. Parses the fleet
+// room alias: #localpart:server. Empty input produces the zero value
+// — the symmetric counterpart to MarshalText's zero-value behavior.
 func (f *Fleet) UnmarshalText(data []byte) error {
+	if len(data) == 0 {
+		*f = Fleet{}
+		return nil
+	}
 	parsed, err := ParseFleetRoomAlias(string(data))
 	if err != nil {
 		return err

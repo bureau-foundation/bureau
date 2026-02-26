@@ -8,17 +8,22 @@ go_library(
     srcs = [
         "doc.go",
         "generate.go",
+        "submit.go",
         "telemetry.go",
     ],
     importpath = "github.com/bureau-foundation/bureau/lib/schema/telemetry",
     visibility = ["//visibility:public"],
-    deps = ["//lib/ref"],
+    deps = [
+        "//lib/codec",
+        "//lib/ref",
+    ],
 )
 
 go_test(
     name = "telemetry_test",
     srcs = [
         "generate_test.go",
+        "submit_test.go",
         "telemetry_test.go",
     ],
     embed = [":telemetry"],

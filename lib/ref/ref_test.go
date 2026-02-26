@@ -799,18 +799,24 @@ func TestZeroValues(t *testing.T) {
 		t.Error("Agent should be zero")
 	}
 
-	// Namespace and Fleet zero values should fail to marshal — they have
-	// no deregistration protocol that needs empty-string serialization.
-	if _, err := ns.MarshalText(); err == nil {
-		t.Error("marshaling zero Namespace should fail")
+	// All ref types marshal zero values as empty bytes. This is
+	// consistent across the package and enables CBOR omitempty behavior
+	// (the telemetry submit envelope carries identity; per-record
+	// identity fields are zero and CBOR-omitted).
+	nsBytes, err := ns.MarshalText()
+	if err != nil {
+		t.Errorf("marshaling zero Namespace should succeed: %v", err)
 	}
-	if _, err := fleet.MarshalText(); err == nil {
-		t.Error("marshaling zero Fleet should fail")
+	if len(nsBytes) != 0 {
+		t.Errorf("zero Namespace marshaled to %q, want empty", nsBytes)
 	}
-
-	// Entity types (Machine, Service, Agent, Entity) marshal zero values
-	// as empty string. This supports the service deregistration protocol
-	// where schema.Service{} is published to clear a directory entry.
+	fleetBytes, err := fleet.MarshalText()
+	if err != nil {
+		t.Errorf("marshaling zero Fleet should succeed: %v", err)
+	}
+	if len(fleetBytes) != 0 {
+		t.Errorf("zero Fleet marshaled to %q, want empty", fleetBytes)
+	}
 	machineBytes, err := machine.MarshalText()
 	if err != nil {
 		t.Errorf("marshaling zero Machine should succeed: %v", err)

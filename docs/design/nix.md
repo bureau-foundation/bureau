@@ -426,13 +426,19 @@ Two units, both reading `/etc/bureau/machine.conf`:
   `/var/lib/bureau` and `/run/bureau`. Depends on and requires the
   launcher.
 
-The machine config is three environment variables:
+The machine config is a KEY=VALUE file at `/etc/bureau/machine.conf`,
+written by `bureau machine doctor --fix`:
 
 ```bash
 BUREAU_HOMESERVER_URL=http://matrix.internal:6167
-BUREAU_MACHINE_NAME=machine/worker-01
+BUREAU_MACHINE_NAME=bureau/fleet/prod/machine/worker-01
 BUREAU_SERVER_NAME=bureau.local
+BUREAU_FLEET=bureau/fleet/prod
 ```
+
+The systemd units pass these to the launcher and daemon. CLI commands
+also read machine.conf to auto-detect `--server-name`, `--fleet`, and
+`--homeserver` when no explicit flag is given.
 
 After bootstrap, SSH remains available for debugging but is not part of
 normal operations. Binary updates arrive via the cache, environment

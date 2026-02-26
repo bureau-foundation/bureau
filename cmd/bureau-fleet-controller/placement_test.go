@@ -27,7 +27,7 @@ func newPlacementTestController(t *testing.T, now time.Time) *FleetController {
 func standardMachine() *machineState {
 	return &machineState{
 		info: &schema.MachineInfo{
-			Principal:     "@machine/workstation:bureau.local",
+			Principal:     "@bureau/fleet/prod/machine/workstation:bureau.local",
 			Hostname:      "workstation",
 			MemoryTotalMB: 65536,
 			CPU: schema.CPUInfo{
@@ -47,7 +47,7 @@ func standardMachine() *machineState {
 			},
 		},
 		status: &schema.MachineStatus{
-			Principal:    "@machine/workstation:bureau.local",
+			Principal:    "@bureau/fleet/prod/machine/workstation:bureau.local",
 			CPUPercent:   42,
 			MemoryUsedMB: 32000,
 			GPUStats: []schema.GPUStatus{
@@ -84,12 +84,12 @@ func standardService() *fleet.FleetServiceContent {
 
 func TestScoreMachineIneligibleNoInfo(t *testing.T) {
 	fc := newPlacementTestController(t, time.Date(2026, 1, 15, 12, 0, 0, 0, time.UTC))
-	fc.machines["machine/noinfo"] = &machineState{
+	fc.machines["bureau/fleet/prod/machine/noinfo"] = &machineState{
 		status:      &schema.MachineStatus{CPUPercent: 10},
 		assignments: make(map[string]*schema.PrincipalAssignment),
 	}
 
-	score := fc.scoreMachine("machine/noinfo", standardService())
+	score := fc.scoreMachine("bureau/fleet/prod/machine/noinfo", standardService())
 	if score != ineligible {
 		t.Errorf("machine with nil info: got score %d, want %d", score, ineligible)
 	}
@@ -97,7 +97,7 @@ func TestScoreMachineIneligibleNoInfo(t *testing.T) {
 
 func TestScoreMachineIneligibleNoStatus(t *testing.T) {
 	fc := newPlacementTestController(t, time.Date(2026, 1, 15, 12, 0, 0, 0, time.UTC))
-	fc.machines["machine/nostatus"] = &machineState{
+	fc.machines["bureau/fleet/prod/machine/nostatus"] = &machineState{
 		info: &schema.MachineInfo{
 			MemoryTotalMB: 65536,
 			Labels:        map[string]string{"gpu": "rtx4090"},
@@ -105,7 +105,7 @@ func TestScoreMachineIneligibleNoStatus(t *testing.T) {
 		assignments: make(map[string]*schema.PrincipalAssignment),
 	}
 
-	score := fc.scoreMachine("machine/nostatus", standardService())
+	score := fc.scoreMachine("bureau/fleet/prod/machine/nostatus", standardService())
 	if score != ineligible {
 		t.Errorf("machine with nil status: got score %d, want %d", score, ineligible)
 	}
@@ -115,9 +115,9 @@ func TestScoreMachineIneligibleCordoned(t *testing.T) {
 	fc := newPlacementTestController(t, time.Date(2026, 1, 15, 12, 0, 0, 0, time.UTC))
 	machine := standardMachine()
 	machine.info.Labels["cordoned"] = "maintenance"
-	fc.machines["machine/cordoned"] = machine
+	fc.machines["bureau/fleet/prod/machine/cordoned"] = machine
 
-	score := fc.scoreMachine("machine/cordoned", standardService())
+	score := fc.scoreMachine("bureau/fleet/prod/machine/cordoned", standardService())
 	if score != ineligible {
 		t.Errorf("cordoned machine: got score %d, want %d", score, ineligible)
 	}
@@ -127,12 +127,12 @@ func TestScoreMachineIneligibleMissingLabel(t *testing.T) {
 	fc := newPlacementTestController(t, time.Date(2026, 1, 15, 12, 0, 0, 0, time.UTC))
 	machine := standardMachine()
 	machine.info.Labels = map[string]string{} // no labels
-	fc.machines["machine/nolabel"] = machine
+	fc.machines["bureau/fleet/prod/machine/nolabel"] = machine
 
 	service := standardService()
 	service.Placement.Requires = []string{"gpu"}
 
-	score := fc.scoreMachine("machine/nolabel", service)
+	score := fc.scoreMachine("bureau/fleet/prod/machine/nolabel", service)
 	if score != ineligible {
 		t.Errorf("machine missing required label: got score %d, want %d", score, ineligible)
 	}
@@ -142,12 +142,12 @@ func TestScoreMachineIneligibleLabelValueMismatch(t *testing.T) {
 	fc := newPlacementTestController(t, time.Date(2026, 1, 15, 12, 0, 0, 0, time.UTC))
 	machine := standardMachine()
 	machine.info.Labels = map[string]string{"gpu": "rtx4090"}
-	fc.machines["machine/wronggpu"] = machine
+	fc.machines["bureau/fleet/prod/machine/wronggpu"] = machine
 
 	service := standardService()
 	service.Placement.Requires = []string{"gpu=h100"}
 
-	score := fc.scoreMachine("machine/wronggpu", service)
+	score := fc.scoreMachine("bureau/fleet/prod/machine/wronggpu", service)
 	if score != ineligible {
 		t.Errorf("label value mismatch: got score %d, want %d", score, ineligible)
 	}
@@ -157,13 +157,13 @@ func TestScoreMachineLabelPresenceCheck(t *testing.T) {
 	fc := newPlacementTestController(t, time.Date(2026, 1, 15, 12, 0, 0, 0, time.UTC))
 	machine := standardMachine()
 	machine.info.Labels = map[string]string{"gpu": "rtx4090", "persistent": "true"}
-	fc.machines["machine/haslabels"] = machine
+	fc.machines["bureau/fleet/prod/machine/haslabels"] = machine
 
 	// "gpu" without =value should match any machine with the "gpu" key.
 	service := standardService()
 	service.Placement.Requires = []string{"gpu"}
 
-	score := fc.scoreMachine("machine/haslabels", service)
+	score := fc.scoreMachine("bureau/fleet/prod/machine/haslabels", service)
 	if score == ineligible {
 		t.Error("label presence check failed: machine has 'gpu' label but was scored ineligible")
 	}
@@ -172,12 +172,12 @@ func TestScoreMachineLabelPresenceCheck(t *testing.T) {
 func TestScoreMachineIneligibleNotInAllowedMachines(t *testing.T) {
 	fc := newPlacementTestController(t, time.Date(2026, 1, 15, 12, 0, 0, 0, time.UTC))
 	machine := standardMachine()
-	fc.machines["machine/workstation"] = machine
+	fc.machines["bureau/fleet/prod/machine/workstation"] = machine
 
 	service := standardService()
-	service.Placement.AllowedMachines = []string{"machine/cloud-*"}
+	service.Placement.AllowedMachines = []string{"bureau/fleet/prod/machine/cloud-*"}
 
-	score := fc.scoreMachine("machine/workstation", service)
+	score := fc.scoreMachine("bureau/fleet/prod/machine/workstation", service)
 	if score != ineligible {
 		t.Errorf("not in allowed machines: got score %d, want %d", score, ineligible)
 	}
@@ -186,15 +186,15 @@ func TestScoreMachineIneligibleNotInAllowedMachines(t *testing.T) {
 func TestScoreMachineAllowedMachinesGlobMatch(t *testing.T) {
 	fc := newPlacementTestController(t, time.Date(2026, 1, 15, 12, 0, 0, 0, time.UTC))
 	machine := standardMachine()
-	fc.machines["machine/cloud-gpu-1"] = machine
-	machine.info.Principal = "@machine/cloud-gpu-1:bureau.local"
+	fc.machines["bureau/fleet/prod/machine/cloud-gpu-1"] = machine
+	machine.info.Principal = "@bureau/fleet/prod/machine/cloud-gpu-1:bureau.local"
 
 	service := standardService()
-	service.Placement.AllowedMachines = []string{"machine/cloud-*"}
+	service.Placement.AllowedMachines = []string{"bureau/fleet/prod/machine/cloud-*"}
 
-	score := fc.scoreMachine("machine/cloud-gpu-1", service)
+	score := fc.scoreMachine("bureau/fleet/prod/machine/cloud-gpu-1", service)
 	if score == ineligible {
-		t.Error("allowed machines glob should match 'machine/cloud-gpu-1' against 'machine/cloud-*'")
+		t.Error("allowed machines glob should match 'bureau/fleet/prod/machine/cloud-gpu-1' against 'bureau/fleet/prod/machine/cloud-*'")
 	}
 }
 
@@ -203,12 +203,12 @@ func TestScoreMachineIneligibleInsufficientMemory(t *testing.T) {
 	machine := standardMachine()
 	machine.info.MemoryTotalMB = 8192
 	machine.status.MemoryUsedMB = 7000 // only 1192 MB free
-	fc.machines["machine/lowmem"] = machine
+	fc.machines["bureau/fleet/prod/machine/lowmem"] = machine
 
 	service := standardService()
 	service.Resources.MemoryMB = 4096 // needs 4 GB
 
-	score := fc.scoreMachine("machine/lowmem", service)
+	score := fc.scoreMachine("bureau/fleet/prod/machine/lowmem", service)
 	if score != ineligible {
 		t.Errorf("insufficient memory: got score %d, want %d", score, ineligible)
 	}
@@ -220,12 +220,12 @@ func TestScoreMachineIneligibleNoGPU(t *testing.T) {
 	machine.info.GPUs = nil
 	machine.status.GPUStats = nil
 	machine.info.Labels = map[string]string{} // no gpu label
-	fc.machines["machine/nogpu"] = machine
+	fc.machines["bureau/fleet/prod/machine/nogpu"] = machine
 
 	service := standardService()
 	service.Placement.Requires = nil // remove label requirement so we test GPU check specifically
 
-	score := fc.scoreMachine("machine/nogpu", service)
+	score := fc.scoreMachine("bureau/fleet/prod/machine/nogpu", service)
 	if score != ineligible {
 		t.Errorf("no GPU: got score %d, want %d", score, ineligible)
 	}
@@ -238,12 +238,12 @@ func TestScoreMachineIneligibleAntiAffinity(t *testing.T) {
 		Principal: testEntity(t, "service/llm/large"),
 		Labels:    map[string]string{"fleet_managed": "service/fleet/prod"},
 	}
-	fc.machines["machine/hasllm"] = machine
+	fc.machines["bureau/fleet/prod/machine/hasllm"] = machine
 
 	service := standardService()
 	service.Placement.AntiAffinity = []string{"service/llm/large"}
 
-	score := fc.scoreMachine("machine/hasllm", service)
+	score := fc.scoreMachine("bureau/fleet/prod/machine/hasllm", service)
 	if score != ineligible {
 		t.Errorf("anti-affinity violation: got score %d, want %d", score, ineligible)
 	}
@@ -252,9 +252,9 @@ func TestScoreMachineIneligibleAntiAffinity(t *testing.T) {
 func TestScoreMachineEligibleBasic(t *testing.T) {
 	fc := newPlacementTestController(t, time.Date(2026, 1, 15, 12, 0, 0, 0, time.UTC))
 	machine := standardMachine()
-	fc.machines["machine/workstation"] = machine
+	fc.machines["bureau/fleet/prod/machine/workstation"] = machine
 
-	score := fc.scoreMachine("machine/workstation", standardService())
+	score := fc.scoreMachine("bureau/fleet/prod/machine/workstation", standardService())
 	if score <= 0 {
 		t.Errorf("eligible machine should have positive score, got %d", score)
 	}
@@ -267,7 +267,7 @@ func TestScoreMachineEligibleBasic(t *testing.T) {
 func TestScoreMachineNotFound(t *testing.T) {
 	fc := newPlacementTestController(t, time.Date(2026, 1, 15, 12, 0, 0, 0, time.UTC))
 
-	score := fc.scoreMachine("machine/nonexistent", standardService())
+	score := fc.scoreMachine("bureau/fleet/prod/machine/nonexistent", standardService())
 	if score != ineligible {
 		t.Errorf("nonexistent machine: got score %d, want %d", score, ineligible)
 	}
@@ -277,17 +277,17 @@ func TestScoreMachinePreferredMachineBonus(t *testing.T) {
 	fc := newPlacementTestController(t, time.Date(2026, 1, 15, 12, 0, 0, 0, time.UTC))
 
 	// Create three identical machines.
-	for _, name := range []string{"machine/alpha", "machine/beta", "machine/gamma"} {
+	for _, name := range []string{"bureau/fleet/prod/machine/alpha", "bureau/fleet/prod/machine/beta", "bureau/fleet/prod/machine/gamma"} {
 		machine := standardMachine()
 		fc.machines[name] = machine
 	}
 
 	service := standardService()
-	service.Placement.PreferredMachines = []string{"machine/alpha", "machine/beta", "machine/gamma"}
+	service.Placement.PreferredMachines = []string{"bureau/fleet/prod/machine/alpha", "bureau/fleet/prod/machine/beta", "bureau/fleet/prod/machine/gamma"}
 
-	scoreAlpha := fc.scoreMachine("machine/alpha", service)
-	scoreBeta := fc.scoreMachine("machine/beta", service)
-	scoreGamma := fc.scoreMachine("machine/gamma", service)
+	scoreAlpha := fc.scoreMachine("bureau/fleet/prod/machine/alpha", service)
+	scoreBeta := fc.scoreMachine("bureau/fleet/prod/machine/beta", service)
+	scoreGamma := fc.scoreMachine("bureau/fleet/prod/machine/gamma", service)
 
 	if scoreAlpha <= scoreBeta {
 		t.Errorf("first preferred (%d) should score higher than second preferred (%d)", scoreAlpha, scoreBeta)
@@ -306,17 +306,17 @@ func TestScoreMachineCoLocateBonus(t *testing.T) {
 		Principal: testEntity(t, "service/rag/local"),
 		Labels:    map[string]string{"fleet_managed": "service/fleet/prod"},
 	}
-	fc.machines["machine/colocated"] = machineWith
+	fc.machines["bureau/fleet/prod/machine/colocated"] = machineWith
 
 	// Machine without co-located service.
 	machineWithout := standardMachine()
-	fc.machines["machine/separate"] = machineWithout
+	fc.machines["bureau/fleet/prod/machine/separate"] = machineWithout
 
 	service := standardService()
 	service.Placement.CoLocateWith = []string{"service/rag/local"}
 
-	scoreWith := fc.scoreMachine("machine/colocated", service)
-	scoreWithout := fc.scoreMachine("machine/separate", service)
+	scoreWith := fc.scoreMachine("bureau/fleet/prod/machine/colocated", service)
+	scoreWithout := fc.scoreMachine("bureau/fleet/prod/machine/separate", service)
 
 	if scoreWith <= scoreWithout {
 		t.Errorf("co-located machine (%d) should score higher than separate machine (%d)", scoreWith, scoreWithout)
@@ -330,16 +330,16 @@ func TestScoreMachineLowUtilizationPreferred(t *testing.T) {
 	machineIdle := standardMachine()
 	machineIdle.status.CPUPercent = 10
 	machineIdle.status.MemoryUsedMB = 8000
-	fc.machines["machine/idle"] = machineIdle
+	fc.machines["bureau/fleet/prod/machine/idle"] = machineIdle
 
 	// High utilization machine.
 	machineBusy := standardMachine()
 	machineBusy.status.CPUPercent = 85
 	machineBusy.status.MemoryUsedMB = 58000
-	fc.machines["machine/busy"] = machineBusy
+	fc.machines["bureau/fleet/prod/machine/busy"] = machineBusy
 
-	score := fc.scoreMachine("machine/idle", standardService())
-	scoreBusy := fc.scoreMachine("machine/busy", standardService())
+	score := fc.scoreMachine("bureau/fleet/prod/machine/idle", standardService())
+	scoreBusy := fc.scoreMachine("bureau/fleet/prod/machine/busy", standardService())
 
 	if score <= scoreBusy {
 		t.Errorf("idle machine (%d) should score higher than busy machine (%d)", score, scoreBusy)
@@ -353,17 +353,17 @@ func TestScorePlacementSortOrder(t *testing.T) {
 	machineA := standardMachine()
 	machineA.status.CPUPercent = 20
 	machineA.status.MemoryUsedMB = 16000
-	fc.machines["machine/alpha"] = machineA
+	fc.machines["bureau/fleet/prod/machine/alpha"] = machineA
 
 	machineB := standardMachine()
 	machineB.status.CPUPercent = 80
 	machineB.status.MemoryUsedMB = 55000
-	fc.machines["machine/beta"] = machineB
+	fc.machines["bureau/fleet/prod/machine/beta"] = machineB
 
 	machineC := standardMachine()
 	machineC.status.CPUPercent = 50
 	machineC.status.MemoryUsedMB = 32000
-	fc.machines["machine/gamma"] = machineC
+	fc.machines["bureau/fleet/prod/machine/gamma"] = machineC
 
 	candidates := fc.scorePlacement(standardService())
 
@@ -380,8 +380,8 @@ func TestScorePlacementSortOrder(t *testing.T) {
 	}
 
 	// Lowest CPU machine should be first (highest score).
-	if candidates[0].machineLocalpart != "machine/alpha" {
-		t.Errorf("expected machine/alpha first (lowest CPU), got %s", candidates[0].machineLocalpart)
+	if candidates[0].machineLocalpart != "bureau/fleet/prod/machine/alpha" {
+		t.Errorf("expected bureau/fleet/prod/machine/alpha first (lowest CPU), got %s", candidates[0].machineLocalpart)
 	}
 }
 
@@ -390,15 +390,15 @@ func TestScorePlacementFiltersIneligible(t *testing.T) {
 
 	// One eligible machine.
 	eligible := standardMachine()
-	fc.machines["machine/eligible"] = eligible
+	fc.machines["bureau/fleet/prod/machine/eligible"] = eligible
 
 	// One ineligible machine (cordoned).
 	cordoned := standardMachine()
 	cordoned.info.Labels["cordoned"] = "maintenance"
-	fc.machines["machine/cordoned"] = cordoned
+	fc.machines["bureau/fleet/prod/machine/cordoned"] = cordoned
 
 	// One ineligible machine (no info).
-	fc.machines["machine/noinfo"] = &machineState{
+	fc.machines["bureau/fleet/prod/machine/noinfo"] = &machineState{
 		status:      &schema.MachineStatus{CPUPercent: 10},
 		assignments: make(map[string]*schema.PrincipalAssignment),
 	}
@@ -407,8 +407,8 @@ func TestScorePlacementFiltersIneligible(t *testing.T) {
 	if len(candidates) != 1 {
 		t.Fatalf("expected 1 eligible candidate, got %d", len(candidates))
 	}
-	if candidates[0].machineLocalpart != "machine/eligible" {
-		t.Errorf("expected machine/eligible, got %s", candidates[0].machineLocalpart)
+	if candidates[0].machineLocalpart != "bureau/fleet/prod/machine/eligible" {
+		t.Errorf("expected bureau/fleet/prod/machine/eligible, got %s", candidates[0].machineLocalpart)
 	}
 }
 
@@ -416,7 +416,7 @@ func TestScorePlacementTieBreaking(t *testing.T) {
 	fc := newPlacementTestController(t, time.Date(2026, 1, 15, 12, 0, 0, 0, time.UTC))
 
 	// Create identical machines — scores will be equal.
-	for _, name := range []string{"machine/charlie", "machine/alpha", "machine/bravo"} {
+	for _, name := range []string{"bureau/fleet/prod/machine/charlie", "bureau/fleet/prod/machine/alpha", "bureau/fleet/prod/machine/bravo"} {
 		machine := standardMachine()
 		fc.machines[name] = machine
 	}
@@ -427,14 +427,14 @@ func TestScorePlacementTieBreaking(t *testing.T) {
 	}
 
 	// Identical scores should be broken by localpart ascending.
-	if candidates[0].machineLocalpart != "machine/alpha" {
-		t.Errorf("expected machine/alpha first in tie-break, got %s", candidates[0].machineLocalpart)
+	if candidates[0].machineLocalpart != "bureau/fleet/prod/machine/alpha" {
+		t.Errorf("expected bureau/fleet/prod/machine/alpha first in tie-break, got %s", candidates[0].machineLocalpart)
 	}
-	if candidates[1].machineLocalpart != "machine/bravo" {
-		t.Errorf("expected machine/bravo second in tie-break, got %s", candidates[1].machineLocalpart)
+	if candidates[1].machineLocalpart != "bureau/fleet/prod/machine/bravo" {
+		t.Errorf("expected bureau/fleet/prod/machine/bravo second in tie-break, got %s", candidates[1].machineLocalpart)
 	}
-	if candidates[2].machineLocalpart != "machine/charlie" {
-		t.Errorf("expected machine/charlie third in tie-break, got %s", candidates[2].machineLocalpart)
+	if candidates[2].machineLocalpart != "bureau/fleet/prod/machine/charlie" {
+		t.Errorf("expected bureau/fleet/prod/machine/charlie third in tie-break, got %s", candidates[2].machineLocalpart)
 	}
 }
 
@@ -542,14 +542,14 @@ func TestScoreMachineBatchTimeOfDay(t *testing.T) {
 	// Score during preferred window.
 	fcInWindow := newPlacementTestController(t, inWindowTime)
 	machineIn := standardMachine()
-	fcInWindow.machines["machine/worker"] = machineIn
-	scoreInWindow := fcInWindow.scoreMachine("machine/worker", service)
+	fcInWindow.machines["bureau/fleet/prod/machine/worker"] = machineIn
+	scoreInWindow := fcInWindow.scoreMachine("bureau/fleet/prod/machine/worker", service)
 
 	// Score outside preferred window.
 	fcOutside := newPlacementTestController(t, outsideWindowTime)
 	machineOut := standardMachine()
-	fcOutside.machines["machine/worker"] = machineOut
-	scoreOutside := fcOutside.scoreMachine("machine/worker", service)
+	fcOutside.machines["bureau/fleet/prod/machine/worker"] = machineOut
+	scoreOutside := fcOutside.scoreMachine("bureau/fleet/prod/machine/worker", service)
 
 	if scoreInWindow <= scoreOutside {
 		t.Errorf("score during preferred window (%d) should be higher than outside (%d)",
@@ -574,13 +574,13 @@ func TestScoreMachineNonBatchIgnoresTimeOfDay(t *testing.T) {
 
 	fcMorning := newPlacementTestController(t, morningTime)
 	machineMorning := standardMachine()
-	fcMorning.machines["machine/worker"] = machineMorning
-	scoreMorning := fcMorning.scoreMachine("machine/worker", service)
+	fcMorning.machines["bureau/fleet/prod/machine/worker"] = machineMorning
+	scoreMorning := fcMorning.scoreMachine("bureau/fleet/prod/machine/worker", service)
 
 	fcAfternoon := newPlacementTestController(t, afternoonTime)
 	machineAfternoon := standardMachine()
-	fcAfternoon.machines["machine/worker"] = machineAfternoon
-	scoreAfternoon := fcAfternoon.scoreMachine("machine/worker", service)
+	fcAfternoon.machines["bureau/fleet/prod/machine/worker"] = machineAfternoon
+	scoreAfternoon := fcAfternoon.scoreMachine("bureau/fleet/prod/machine/worker", service)
 
 	// Non-batch services should score identically regardless of time.
 	if scoreMorning != scoreAfternoon {
@@ -594,12 +594,12 @@ func TestScoreMachineGPUMemoryInsufficient(t *testing.T) {
 	machine := standardMachine()
 	// GPU has 24576 MB total, 20480 MB used (only ~4096 MB free).
 	machine.status.GPUStats[0].VRAMUsedBytes = 21474836480 // 20480 MB
-	fc.machines["machine/lowvram"] = machine
+	fc.machines["bureau/fleet/prod/machine/lowvram"] = machine
 
 	service := standardService()
 	service.Resources.GPUMemoryMB = 8192 // needs 8 GB, only ~4 GB free
 
-	score := fc.scoreMachine("machine/lowvram", service)
+	score := fc.scoreMachine("bureau/fleet/prod/machine/lowvram", service)
 	if score != ineligible {
 		t.Errorf("insufficient GPU memory: got score %d, want %d", score, ineligible)
 	}
@@ -610,12 +610,12 @@ func TestScoreMachineGPUNoStatsNeutralScore(t *testing.T) {
 	machine := standardMachine()
 	// Has GPU hardware but no GPU stats (monitoring unavailable).
 	machine.status.GPUStats = nil
-	fc.machines["machine/nostats"] = machine
+	fc.machines["bureau/fleet/prod/machine/nostats"] = machine
 
 	service := standardService()
 	service.Resources.GPUMemoryMB = 0 // don't check VRAM so we can test the headroom score path
 
-	score := fc.scoreMachine("machine/nostats", service)
+	score := fc.scoreMachine("bureau/fleet/prod/machine/nostats", service)
 	if score <= 0 {
 		t.Errorf("machine with GPUs but no stats should still be eligible, got score %d", score)
 	}
@@ -626,7 +626,7 @@ func TestScoreMachineNoGPUServiceNoGPURequirement(t *testing.T) {
 	machine := standardMachine()
 	machine.info.GPUs = nil
 	machine.status.GPUStats = nil
-	fc.machines["machine/cpuonly"] = machine
+	fc.machines["bureau/fleet/prod/machine/cpuonly"] = machine
 
 	// Service that doesn't require GPU.
 	service := &fleet.FleetServiceContent{
@@ -642,7 +642,7 @@ func TestScoreMachineNoGPUServiceNoGPURequirement(t *testing.T) {
 		Priority:  50,
 	}
 
-	score := fc.scoreMachine("machine/cpuonly", service)
+	score := fc.scoreMachine("bureau/fleet/prod/machine/cpuonly", service)
 	if score <= 0 {
 		t.Errorf("CPU-only machine with CPU-only service should be eligible, got score %d", score)
 	}

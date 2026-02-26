@@ -367,6 +367,32 @@ func (fc *FleetController) processMachineInfoEvent(event messaging.Event) {
 	machine.info = content
 }
 
+// machineInFleet validates that a machine localpart belongs to this
+// fleet controller's fleet. Returns false (with a warning log) if the
+// localpart doesn't parse as a machine reference or belongs to a
+// different fleet. This prevents cross-fleet contamination when a fleet
+// controller is accidentally invited to a config room owned by another
+// fleet.
+func (fc *FleetController) machineInFleet(stateKey string) bool {
+	machine, err := ref.ParseMachine(stateKey, fc.serverName)
+	if err != nil {
+		fc.logger.Warn("ignoring machine event with unparseable localpart",
+			"state_key", stateKey,
+			"error", err,
+		)
+		return false
+	}
+	if machine.Fleet().Localpart() != fc.fleet.Localpart() {
+		fc.logger.Warn("ignoring machine event from foreign fleet",
+			"state_key", stateKey,
+			"expected_fleet", fc.fleet.Localpart(),
+			"actual_fleet", machine.Fleet().Localpart(),
+		)
+		return false
+	}
+	return true
+}
+
 // processMachineStatusEvent parses a machine status event and updates
 // the machines map. Each status event is treated as a heartbeat: the
 // machine's lastHeartbeat timestamp is set to the current clock time,
@@ -375,6 +401,9 @@ func (fc *FleetController) processMachineInfoEvent(event messaging.Event) {
 func (fc *FleetController) processMachineStatusEvent(event messaging.Event) {
 	stateKey := *event.StateKey
 	if len(event.Content) == 0 {
+		return
+	}
+	if !fc.machineInFleet(stateKey) {
 		return
 	}
 
@@ -456,6 +485,9 @@ func (fc *FleetController) processPresenceEvents(ctx context.Context, events []m
 func (fc *FleetController) processMachineConfigEvent(roomID ref.RoomID, event messaging.Event) {
 	stateKey := *event.StateKey
 	if len(event.Content) == 0 {
+		return
+	}
+	if !fc.machineInFleet(stateKey) {
 		return
 	}
 

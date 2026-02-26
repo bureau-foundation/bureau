@@ -197,9 +197,9 @@ func sampleFleetController(t *testing.T) *FleetController {
 	fc.configStore = newFakeConfigStore()
 
 	// Machine 1: workstation with GPU, one fleet-managed assignment.
-	fc.machines["machine/workstation"] = &machineState{
+	fc.machines["bureau/fleet/prod/machine/workstation"] = &machineState{
 		info: &schema.MachineInfo{
-			Principal:     "@machine/workstation:bureau.local",
+			Principal:     "@bureau/fleet/prod/machine/workstation:bureau.local",
 			Hostname:      "workstation",
 			MemoryTotalMB: 65536,
 			GPUs: []schema.GPUInfo{
@@ -208,7 +208,7 @@ func sampleFleetController(t *testing.T) *FleetController {
 			Labels: map[string]string{"gpu": "rtx4090"},
 		},
 		status: &schema.MachineStatus{
-			Principal:    "@machine/workstation:bureau.local",
+			Principal:    "@bureau/fleet/prod/machine/workstation:bureau.local",
 			CPUPercent:   42,
 			MemoryUsedMB: 32000,
 		},
@@ -221,25 +221,25 @@ func sampleFleetController(t *testing.T) *FleetController {
 		},
 		configRoomID: mustRoomID("!config-ws:local"),
 	}
-	fc.configRooms["machine/workstation"] = mustRoomID("!config-ws:local")
+	fc.configRooms["bureau/fleet/prod/machine/workstation"] = mustRoomID("!config-ws:local")
 
 	// Machine 2: server with no GPU, no assignments.
-	fc.machines["machine/server"] = &machineState{
+	fc.machines["bureau/fleet/prod/machine/server"] = &machineState{
 		info: &schema.MachineInfo{
-			Principal:     "@machine/server:bureau.local",
+			Principal:     "@bureau/fleet/prod/machine/server:bureau.local",
 			Hostname:      "server",
 			MemoryTotalMB: 131072,
 			Labels:        map[string]string{},
 		},
 		status: &schema.MachineStatus{
-			Principal:    "@machine/server:bureau.local",
+			Principal:    "@bureau/fleet/prod/machine/server:bureau.local",
 			CPUPercent:   15,
 			MemoryUsedMB: 16000,
 		},
 		assignments:  make(map[string]*schema.PrincipalAssignment),
 		configRoomID: mustRoomID("!config-srv:local"),
 	}
-	fc.configRooms["machine/server"] = mustRoomID("!config-srv:local")
+	fc.configRooms["bureau/fleet/prod/machine/server"] = mustRoomID("!config-srv:local")
 
 	// Fleet service 1: whisper STT.
 	fc.services["service/stt/whisper"] = &fleetServiceState{
@@ -250,7 +250,7 @@ func sampleFleetController(t *testing.T) *FleetController {
 			Priority: 10,
 		},
 		instances: map[string]*schema.PrincipalAssignment{
-			"machine/workstation": {
+			"bureau/fleet/prod/machine/workstation": {
 				Principal: testEntity(t, "service/stt/whisper"),
 				Template:  "bureau/template:whisper-stt",
 			},
@@ -403,10 +403,10 @@ func TestListMachinesReturnsSorted(t *testing.T) {
 	}
 
 	// Should be sorted by localpart.
-	if response.Machines[0].Localpart != "machine/server" {
+	if response.Machines[0].Localpart != "bureau/fleet/prod/machine/server" {
 		t.Errorf("first machine = %q, want machine/server", response.Machines[0].Localpart)
 	}
-	if response.Machines[1].Localpart != "machine/workstation" {
+	if response.Machines[1].Localpart != "bureau/fleet/prod/machine/workstation" {
 		t.Errorf("second machine = %q, want machine/workstation", response.Machines[1].Localpart)
 	}
 
@@ -435,7 +435,7 @@ func TestListMachinesReturnsSorted(t *testing.T) {
 func TestListMachinesIncludesPartialMachines(t *testing.T) {
 	fc := sampleFleetController(t)
 	// Add a machine with nil info.
-	fc.machines["machine/booting"] = &machineState{
+	fc.machines["bureau/fleet/prod/machine/booting"] = &machineState{
 		status:      &schema.MachineStatus{CPUPercent: 5},
 		assignments: make(map[string]*schema.PrincipalAssignment),
 	}
@@ -453,8 +453,8 @@ func TestListMachinesIncludesPartialMachines(t *testing.T) {
 	}
 
 	// The partial machine should have zero-value fields for info.
-	booting := response.Machines[0] // "machine/booting" sorts first
-	if booting.Localpart != "machine/booting" {
+	booting := response.Machines[0] // "bureau/fleet/prod/machine/booting" sorts first
+	if booting.Localpart != "bureau/fleet/prod/machine/booting" {
 		t.Fatalf("expected machine/booting first, got %s", booting.Localpart)
 	}
 	if booting.Hostname != "" {
@@ -559,12 +559,12 @@ func TestShowMachineReturnsDetail(t *testing.T) {
 	defer cleanup()
 
 	var response showMachineResponse
-	fields := map[string]any{"machine": "machine/workstation"}
+	fields := map[string]any{"machine": "bureau/fleet/prod/machine/workstation"}
 	if err := client.Call(context.Background(), "show-machine", fields, &response); err != nil {
 		t.Fatalf("show-machine call failed: %v", err)
 	}
 
-	if response.Localpart != "machine/workstation" {
+	if response.Localpart != "bureau/fleet/prod/machine/workstation" {
 		t.Errorf("localpart = %q, want machine/workstation", response.Localpart)
 	}
 	if response.Info == nil {
@@ -596,7 +596,7 @@ func TestShowMachineNotFound(t *testing.T) {
 	defer cleanup()
 
 	var response showMachineResponse
-	fields := map[string]any{"machine": "machine/nonexistent"}
+	fields := map[string]any{"machine": "bureau/fleet/prod/machine/nonexistent"}
 	err := client.Call(context.Background(), "show-machine", fields, &response)
 	serviceErr := requireServiceError(t, err)
 	if serviceErr.Message == "" {
@@ -620,7 +620,7 @@ func TestShowMachineDeniedWithoutGrant(t *testing.T) {
 	defer cleanup()
 
 	var response showMachineResponse
-	fields := map[string]any{"machine": "machine/workstation"}
+	fields := map[string]any{"machine": "bureau/fleet/prod/machine/workstation"}
 	err := client.Call(context.Background(), "show-machine", fields, &response)
 	requireServiceError(t, err)
 }
@@ -650,7 +650,7 @@ func TestShowServiceReturnsDetail(t *testing.T) {
 	if len(response.Instances) != 1 {
 		t.Fatalf("expected 1 instance, got %d", len(response.Instances))
 	}
-	if response.Instances[0].Machine != "machine/workstation" {
+	if response.Instances[0].Machine != "bureau/fleet/prod/machine/workstation" {
 		t.Errorf("instance machine = %q, want machine/workstation", response.Instances[0].Machine)
 	}
 }
@@ -702,7 +702,7 @@ func sampleFleetControllerForMutation(t *testing.T) *FleetController {
 	store := fc.configStore.(*fakeConfigStore)
 
 	// Seed the workstation config with its current assignment.
-	store.seedConfig("!config-ws:local", "machine/workstation", &schema.MachineConfig{
+	store.seedConfig("!config-ws:local", "bureau/fleet/prod/machine/workstation", &schema.MachineConfig{
 		Principals: []schema.PrincipalAssignment{
 			{
 				Principal: testEntity(t, "service/stt/whisper"),
@@ -714,7 +714,7 @@ func sampleFleetControllerForMutation(t *testing.T) *FleetController {
 	})
 
 	// Server config is empty (no assignments).
-	store.seedConfig("!config-srv:local", "machine/server", &schema.MachineConfig{})
+	store.seedConfig("!config-srv:local", "bureau/fleet/prod/machine/server", &schema.MachineConfig{})
 
 	return fc
 }
@@ -760,13 +760,13 @@ func TestPlaceManualMachine(t *testing.T) {
 	var response placeResponse
 	fields := map[string]any{
 		"service": "service/batch/worker",
-		"machine": "machine/server",
+		"machine": "bureau/fleet/prod/machine/server",
 	}
 	if err := client.Call(context.Background(), "place", fields, &response); err != nil {
 		t.Fatalf("place call failed: %v", err)
 	}
 
-	if response.Machine != "machine/server" {
+	if response.Machine != "bureau/fleet/prod/machine/server" {
 		t.Errorf("machine = %q, want machine/server", response.Machine)
 	}
 	// Manual placement doesn't run scoring, so score should be -1.
@@ -780,11 +780,11 @@ func TestPlaceNoEligibleMachine(t *testing.T) {
 
 	// Place whisper on both machines so no eligible machines remain.
 	// (workstation already has it via sampleFleetController)
-	fc.machines["machine/server"].assignments["service/stt/whisper"] = &schema.PrincipalAssignment{
+	fc.machines["bureau/fleet/prod/machine/server"].assignments["service/stt/whisper"] = &schema.PrincipalAssignment{
 		Principal: testEntity(t, "service/stt/whisper"),
 		Labels:    map[string]string{"fleet_managed": "service/fleet/prod"},
 	}
-	fc.services["service/stt/whisper"].instances["machine/server"] = fc.machines["machine/server"].assignments["service/stt/whisper"]
+	fc.services["service/stt/whisper"].instances["bureau/fleet/prod/machine/server"] = fc.machines["bureau/fleet/prod/machine/server"].assignments["service/stt/whisper"]
 
 	client, cleanup := testServer(t, fc)
 	defer cleanup()
@@ -826,7 +826,7 @@ func TestUnplaceRemovesAssignment(t *testing.T) {
 	var response unplaceResponse
 	fields := map[string]any{
 		"service": "service/stt/whisper",
-		"machine": "machine/workstation",
+		"machine": "bureau/fleet/prod/machine/workstation",
 	}
 	if err := client.Call(context.Background(), "unplace", fields, &response); err != nil {
 		t.Fatalf("unplace call failed: %v", err)
@@ -835,7 +835,7 @@ func TestUnplaceRemovesAssignment(t *testing.T) {
 	if response.Service != "service/stt/whisper" {
 		t.Errorf("service = %q, want service/stt/whisper", response.Service)
 	}
-	if response.Machine != "machine/workstation" {
+	if response.Machine != "bureau/fleet/prod/machine/workstation" {
 		t.Errorf("machine = %q, want machine/workstation", response.Machine)
 	}
 
@@ -851,7 +851,7 @@ func TestUnplaceRemovesAssignment(t *testing.T) {
 
 	// Verify machine has 0 assignments.
 	var machineResponse showMachineResponse
-	machineFields := map[string]any{"machine": "machine/workstation"}
+	machineFields := map[string]any{"machine": "bureau/fleet/prod/machine/workstation"}
 	if err := client.Call(context.Background(), "show-machine", machineFields, &machineResponse); err != nil {
 		t.Fatalf("show-machine call failed: %v", err)
 	}
@@ -868,7 +868,7 @@ func TestUnplaceNotPlacedReturnsError(t *testing.T) {
 	var response unplaceResponse
 	fields := map[string]any{
 		"service": "service/batch/worker",
-		"machine": "machine/workstation",
+		"machine": "bureau/fleet/prod/machine/workstation",
 	}
 	err := client.Call(context.Background(), "unplace", fields, &response)
 	requireServiceError(t, err)
@@ -886,7 +886,7 @@ func TestUnplaceMissingFields(t *testing.T) {
 	requireServiceError(t, err)
 
 	// Missing service.
-	fields2 := map[string]any{"machine": "machine/workstation"}
+	fields2 := map[string]any{"machine": "bureau/fleet/prod/machine/workstation"}
 	err2 := client.Call(context.Background(), "unplace", fields2, &response)
 	requireServiceError(t, err2)
 }
@@ -899,7 +899,7 @@ func TestUnplaceDeniedWithoutGrant(t *testing.T) {
 	var response unplaceResponse
 	fields := map[string]any{
 		"service": "service/stt/whisper",
-		"machine": "machine/workstation",
+		"machine": "bureau/fleet/prod/machine/workstation",
 	}
 	err := client.Call(context.Background(), "unplace", fields, &response)
 	requireServiceError(t, err)
@@ -938,7 +938,7 @@ func TestPlanReturnsScores(t *testing.T) {
 	if len(response.CurrentMachines) != 1 {
 		t.Fatalf("expected 1 current machine, got %d", len(response.CurrentMachines))
 	}
-	if response.CurrentMachines[0] != "machine/workstation" {
+	if response.CurrentMachines[0] != "bureau/fleet/prod/machine/workstation" {
 		t.Errorf("current machine = %q, want machine/workstation", response.CurrentMachines[0])
 	}
 }

@@ -295,12 +295,12 @@ func (d *Daemon) startPipelineExecutor(
 	}
 
 	// Mint a ticket service token for ongoing operations (claim,
-	// progress, notes, close, show).
+	// progress, notes, attachments, close, show).
 	ticketToken := &servicetoken.Token{
 		Subject:   pipelineEntity.UserID(),
 		Machine:   d.machine,
 		Audience:  "ticket",
-		Grants:    []servicetoken.Grant{{Actions: []string{"ticket/update", "ticket/close", "ticket/show"}}},
+		Grants:    []servicetoken.Grant{{Actions: []string{"ticket/update", "ticket/close", "ticket/show", "ticket/attach"}}},
 		IssuedAt:  d.clock.Now().Unix(),
 		ExpiresAt: d.clock.Now().Add(1 * time.Hour).Unix(),
 	}

@@ -6,6 +6,7 @@ load("@rules_go//go:def.bzl", "go_library", "go_test")
 go_library(
     name = "ticket",
     srcs = [
+        "attach.go",
         "command.go",
         "connection.go",
         "dep.go",
@@ -24,6 +25,7 @@ go_library(
     visibility = ["//visibility:public"],
     deps = [
         "//cmd/bureau/cli",
+        "//lib/artifactstore",
         "//lib/credential",
         "//lib/principal",
         "//lib/ref",

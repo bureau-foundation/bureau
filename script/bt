@@ -24,7 +24,7 @@ BUREAU="${BUREAU_BIN:-bureau}"
 
 # Commands that take a --room flag. When only one room exists
 # we inject it automatically so callers don't have to.
-ROOM_COMMANDS="list|ready|blocked|ranked|stats|create|batch|import|export|show|close|reopen|update|deps|children|epic-health|grep|search|upcoming|defer|review|dep|gate"
+ROOM_COMMANDS="list|ready|blocked|ranked|stats|create|batch|import|export|show|close|reopen|update|deps|children|epic-health|grep|search|upcoming|defer|review|dep|gate|attach|detach"
 
 # Resolve the default room. BUREAU_TICKET_ROOM can be a room ID,
 # a full alias (#prod/tickets:bureau.local), or a bare localpart

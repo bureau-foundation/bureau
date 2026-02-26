@@ -393,6 +393,33 @@ func run() error {
 					variableName := stepPrefix + "_" + outputName
 					variables[variableName] = outputValue
 				}
+
+				// Attach artifact outputs to the pipeline ticket.
+				parsedOutputs, parseError := pipeline.ParseStepOutputs(expandedStep.Outputs)
+				if parseError != nil {
+					logger.Warn("failed to parse step outputs for attachment",
+						"step", expandedStep.Name, "error", parseError)
+				} else {
+					for outputName, outputValue := range result.outputs {
+						outputDeclaration, declared := parsedOutputs[outputName]
+						if !declared || !outputDeclaration.Artifact {
+							continue
+						}
+						if !strings.HasPrefix(outputValue, "art-") {
+							continue
+						}
+						attachLabel := expandedStep.Name + "/" + outputName
+						if attachError := addTicketAttachment(ctx, ticketClient,
+							ticketID, ticketRoom, outputValue,
+							attachLabel, outputDeclaration.ContentType); attachError != nil {
+							logger.Warn("failed to attach artifact output to ticket",
+								"step", expandedStep.Name,
+								"output", outputName,
+								"ref", outputValue,
+								"error", attachError)
+						}
+					}
+				}
 			}
 		}
 	}

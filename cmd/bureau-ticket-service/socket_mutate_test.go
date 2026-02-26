@@ -2060,3 +2060,219 @@ func TestHandleSetDispositionInvalidDisposition(t *testing.T) {
 		t.Errorf("unexpected error: %s", serviceErr.Message)
 	}
 }
+
+// --- Attachment tests ---
+
+func TestHandleAddAttachment(t *testing.T) {
+	env := testMutationServer(t, mutationRooms())
+	defer env.cleanup()
+
+	var result mutationResponse
+	err := env.client.Call(context.Background(), "add-attachment", map[string]any{
+		"ticket":       "tkt-open",
+		"room":         "!room:bureau.local",
+		"ref":          "art-abc123def456",
+		"label":        "build output",
+		"content_type": "application/octet-stream",
+	}, &result)
+	if err != nil {
+		t.Fatalf("Call: %v", err)
+	}
+
+	if result.ID != "tkt-open" {
+		t.Errorf("id: got %q, want 'tkt-open'", result.ID)
+	}
+	if len(result.Content.Attachments) != 1 {
+		t.Fatalf("expected 1 attachment, got %d", len(result.Content.Attachments))
+	}
+
+	attachment := result.Content.Attachments[0]
+	if attachment.Ref != "art-abc123def456" {
+		t.Errorf("ref: got %q, want 'art-abc123def456'", attachment.Ref)
+	}
+	if attachment.Label != "build output" {
+		t.Errorf("label: got %q, want 'build output'", attachment.Label)
+	}
+	if attachment.ContentType != "application/octet-stream" {
+		t.Errorf("content_type: got %q, want 'application/octet-stream'", attachment.ContentType)
+	}
+	if result.Content.UpdatedAt != "2026-01-15T12:00:00Z" {
+		t.Errorf("updated_at: got %q, want '2026-01-15T12:00:00Z'", result.Content.UpdatedAt)
+	}
+
+	// Verify state event was written to Matrix.
+	env.writer.mu.Lock()
+	defer env.writer.mu.Unlock()
+	if len(env.writer.events) != 1 {
+		t.Fatalf("expected 1 written event, got %d", len(env.writer.events))
+	}
+}
+
+func TestHandleAddAttachmentUpsert(t *testing.T) {
+	env := testMutationServer(t, mutationRooms())
+	defer env.cleanup()
+
+	ctx := context.Background()
+
+	// First attach.
+	err := env.client.Call(ctx, "add-attachment", map[string]any{
+		"ticket":       "tkt-open",
+		"room":         "!room:bureau.local",
+		"ref":          "art-abc123def456",
+		"label":        "original label",
+		"content_type": "text/plain",
+	}, nil)
+	if err != nil {
+		t.Fatalf("first add-attachment: %v", err)
+	}
+
+	// Upsert same ref with different label and content type.
+	var result mutationResponse
+	err = env.client.Call(ctx, "add-attachment", map[string]any{
+		"ticket":       "tkt-open",
+		"room":         "!room:bureau.local",
+		"ref":          "art-abc123def456",
+		"label":        "updated label",
+		"content_type": "application/json",
+	}, &result)
+	if err != nil {
+		t.Fatalf("upsert add-attachment: %v", err)
+	}
+
+	// Should still be exactly 1 attachment, not 2.
+	if len(result.Content.Attachments) != 1 {
+		t.Fatalf("expected 1 attachment after upsert, got %d", len(result.Content.Attachments))
+	}
+	if result.Content.Attachments[0].Label != "updated label" {
+		t.Errorf("label: got %q, want 'updated label'", result.Content.Attachments[0].Label)
+	}
+	if result.Content.Attachments[0].ContentType != "application/json" {
+		t.Errorf("content_type: got %q, want 'application/json'", result.Content.Attachments[0].ContentType)
+	}
+}
+
+func TestHandleAddAttachmentMXCRejected(t *testing.T) {
+	env := testMutationServer(t, mutationRooms())
+	defer env.cleanup()
+
+	err := env.client.Call(context.Background(), "add-attachment", map[string]any{
+		"ticket": "tkt-open",
+		"room":   "!room:bureau.local",
+		"ref":    "mxc://bureau.local/abc123",
+		"label":  "screenshot",
+	}, nil)
+	serviceErr := requireServiceError(t, err)
+	if !strings.Contains(serviceErr.Message, "mxc://") {
+		t.Errorf("expected MXC rejection error, got: %s", serviceErr.Message)
+	}
+}
+
+func TestHandleRemoveAttachment(t *testing.T) {
+	room := newTrackedRoom(map[string]ticket.TicketContent{
+		"tkt-attached": {
+			Version:  1,
+			Title:    "ticket with attachment",
+			Status:   ticket.StatusOpen,
+			Priority: 2,
+			Type:     ticket.TypeTask,
+			Attachments: []ticket.TicketAttachment{
+				{
+					Ref:         "art-aaa111",
+					Label:       "first artifact",
+					ContentType: "text/plain",
+				},
+				{
+					Ref:         "art-bbb222",
+					Label:       "second artifact",
+					ContentType: "application/json",
+				},
+			},
+			CreatedBy: ref.MustParseUserID("@agent/creator:bureau.local"),
+			CreatedAt: "2026-01-01T00:00:00Z",
+			UpdatedAt: "2026-01-01T00:00:00Z",
+		},
+	})
+	rooms := map[ref.RoomID]*roomState{
+		ref.MustParseRoomID("!room:bureau.local"): room,
+	}
+
+	env := testMutationServer(t, rooms)
+	defer env.cleanup()
+
+	var result mutationResponse
+	err := env.client.Call(context.Background(), "remove-attachment", map[string]any{
+		"ticket": "tkt-attached",
+		"room":   "!room:bureau.local",
+		"ref":    "art-aaa111",
+	}, &result)
+	if err != nil {
+		t.Fatalf("Call: %v", err)
+	}
+
+	if len(result.Content.Attachments) != 1 {
+		t.Fatalf("expected 1 remaining attachment, got %d", len(result.Content.Attachments))
+	}
+	if result.Content.Attachments[0].Ref != "art-bbb222" {
+		t.Errorf("remaining attachment ref: got %q, want 'art-bbb222'", result.Content.Attachments[0].Ref)
+	}
+}
+
+func TestHandleRemoveAttachmentNotFound(t *testing.T) {
+	env := testMutationServer(t, mutationRooms())
+	defer env.cleanup()
+
+	err := env.client.Call(context.Background(), "remove-attachment", map[string]any{
+		"ticket": "tkt-open",
+		"room":   "!room:bureau.local",
+		"ref":    "art-nonexistent",
+	}, nil)
+	serviceErr := requireServiceError(t, err)
+	if !strings.Contains(serviceErr.Message, "no attachment with ref") {
+		t.Errorf("expected not-found error, got: %s", serviceErr.Message)
+	}
+}
+
+func TestHandleAddAttachmentMissingFields(t *testing.T) {
+	env := testMutationServer(t, mutationRooms())
+	defer env.cleanup()
+
+	ctx := context.Background()
+
+	// Missing ticket.
+	err := env.client.Call(ctx, "add-attachment", map[string]any{
+		"room": "!room:bureau.local",
+		"ref":  "art-abc123",
+	}, nil)
+	serviceErr := requireServiceError(t, err)
+	if !strings.Contains(serviceErr.Message, "ticket") {
+		t.Errorf("expected missing ticket error, got: %s", serviceErr.Message)
+	}
+
+	// Missing ref.
+	err = env.client.Call(ctx, "add-attachment", map[string]any{
+		"ticket": "tkt-open",
+		"room":   "!room:bureau.local",
+	}, nil)
+	serviceErr = requireServiceError(t, err)
+	if !strings.Contains(serviceErr.Message, "ref") {
+		t.Errorf("expected missing ref error, got: %s", serviceErr.Message)
+	}
+}
+
+func TestHandleAddAttachmentDenied(t *testing.T) {
+	// Token has ticket/update but NOT ticket/attach.
+	env := testMutationServerWithGrants(t, mutationRooms(), []servicetoken.Grant{
+		{Actions: []string{ticket.ActionUpdate}},
+	})
+	defer env.cleanup()
+
+	err := env.client.Call(context.Background(), "add-attachment", map[string]any{
+		"ticket": "tkt-open",
+		"room":   "!room:bureau.local",
+		"ref":    "art-abc123",
+	}, nil)
+	serviceErr := requireServiceError(t, err)
+	if serviceErr.Action != "add-attachment" {
+		t.Errorf("action: got %q, want 'add-attachment'", serviceErr.Action)
+	}
+}

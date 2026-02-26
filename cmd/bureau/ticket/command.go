@@ -52,6 +52,8 @@ the ticket across all rooms.`,
 			reopenCommand(),
 			batchCommand(),
 			deferCommand(),
+			attachCommand(),
+			detachCommand(),
 
 			// Transfer commands.
 			exportCommand(),

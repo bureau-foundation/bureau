@@ -1670,3 +1670,146 @@ func (ts *TicketService) handleDefer(ctx context.Context, token *servicetoken.To
 		Content: content,
 	}, nil
 }
+
+// --- Attachment handlers ---
+
+// addAttachmentRequest is the input for the "add-attachment" action.
+type addAttachmentRequest struct {
+	Room        string `cbor:"room,omitempty"`
+	Ticket      string `cbor:"ticket"`
+	Ref         string `cbor:"ref"`
+	Label       string `cbor:"label,omitempty"`
+	ContentType string `cbor:"content_type,omitempty"`
+}
+
+// removeAttachmentRequest is the input for the "remove-attachment" action.
+type removeAttachmentRequest struct {
+	Room   string `cbor:"room,omitempty"`
+	Ticket string `cbor:"ticket"`
+	Ref    string `cbor:"ref"`
+}
+
+// handleAddAttachment adds or updates an artifact attachment on a
+// ticket. Upserts by ref: if the ticket already has an attachment
+// with the same ref, the label and content_type are updated in place.
+// Otherwise a new attachment is appended. Returns the full updated
+// ticket content.
+func (ts *TicketService) handleAddAttachment(ctx context.Context, token *servicetoken.Token, raw []byte) (any, error) {
+	if err := requireGrant(token, ticket.ActionAttach); err != nil {
+		return nil, err
+	}
+
+	var request addAttachmentRequest
+	if err := codec.Unmarshal(raw, &request); err != nil {
+		return nil, fmt.Errorf("decoding request: %w", err)
+	}
+
+	if request.Ticket == "" {
+		return nil, errors.New("missing required field: ticket")
+	}
+	if request.Ref == "" {
+		return nil, errors.New("missing required field: ref")
+	}
+
+	roomID, state, ticketID, content, err := ts.resolveTicket(request.Room, request.Ticket)
+	if err != nil {
+		return nil, err
+	}
+
+	if err := content.CanModify(); err != nil {
+		return nil, err
+	}
+
+	// Upsert: update existing attachment with the same ref, or append.
+	found := false
+	for i := range content.Attachments {
+		if content.Attachments[i].Ref == request.Ref {
+			content.Attachments[i].Label = request.Label
+			content.Attachments[i].ContentType = request.ContentType
+			found = true
+			break
+		}
+	}
+	if !found {
+		content.Attachments = append(content.Attachments, ticket.TicketAttachment{
+			Ref:         request.Ref,
+			Label:       request.Label,
+			ContentType: request.ContentType,
+		})
+	}
+
+	content.UpdatedAt = ts.clock.Now().UTC().Format(time.RFC3339)
+
+	if err := content.Validate(); err != nil {
+		return nil, fmt.Errorf("invalid ticket: %w", err)
+	}
+
+	if err := ts.putWithEcho(ctx, roomID, state, ticketID, content); err != nil {
+		return nil, fmt.Errorf("writing ticket to Matrix: %w", err)
+	}
+
+	return mutationResponse{
+		ID:      ticketID,
+		Room:    roomID.String(),
+		Content: content,
+	}, nil
+}
+
+// handleRemoveAttachment removes an artifact attachment from a ticket
+// by ref. Returns an error if no attachment with the given ref exists
+// (fail loud — callers must not silently ignore missing attachments).
+func (ts *TicketService) handleRemoveAttachment(ctx context.Context, token *servicetoken.Token, raw []byte) (any, error) {
+	if err := requireGrant(token, ticket.ActionAttach); err != nil {
+		return nil, err
+	}
+
+	var request removeAttachmentRequest
+	if err := codec.Unmarshal(raw, &request); err != nil {
+		return nil, fmt.Errorf("decoding request: %w", err)
+	}
+
+	if request.Ticket == "" {
+		return nil, errors.New("missing required field: ticket")
+	}
+	if request.Ref == "" {
+		return nil, errors.New("missing required field: ref")
+	}
+
+	roomID, state, ticketID, content, err := ts.resolveTicket(request.Room, request.Ticket)
+	if err != nil {
+		return nil, err
+	}
+
+	if err := content.CanModify(); err != nil {
+		return nil, err
+	}
+
+	// Find and remove the attachment with the matching ref.
+	foundIndex := -1
+	for i := range content.Attachments {
+		if content.Attachments[i].Ref == request.Ref {
+			foundIndex = i
+			break
+		}
+	}
+	if foundIndex == -1 {
+		return nil, fmt.Errorf("ticket %s has no attachment with ref %q", ticketID, request.Ref)
+	}
+
+	content.Attachments = append(content.Attachments[:foundIndex], content.Attachments[foundIndex+1:]...)
+	content.UpdatedAt = ts.clock.Now().UTC().Format(time.RFC3339)
+
+	if err := content.Validate(); err != nil {
+		return nil, fmt.Errorf("invalid ticket: %w", err)
+	}
+
+	if err := ts.putWithEcho(ctx, roomID, state, ticketID, content); err != nil {
+		return nil, fmt.Errorf("writing ticket to Matrix: %w", err)
+	}
+
+	return mutationResponse{
+		ID:      ticketID,
+		Room:    roomID.String(),
+		Content: content,
+	}, nil
+}

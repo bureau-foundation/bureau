@@ -171,6 +171,9 @@ type mockTicketService struct {
 	// noteCalls records each "add-note" call.
 	noteCalls []mockTicketCall
 
+	// attachCalls records each "add-attachment" call.
+	attachCalls []mockTicketCall
+
 	// showCalls counts show invocations for assertions.
 	showCalls int
 
@@ -263,6 +266,23 @@ func startMockTicketService(t *testing.T) (string, string, *mockTicketService) {
 		}
 		mock.mu.Lock()
 		mock.noteCalls = append(mock.noteCalls, mockTicketCall{Fields: fields})
+		mock.mu.Unlock()
+		return map[string]any{
+			"id":      fields["ticket"],
+			"content": map[string]any{"status": string(ticket.StatusInProgress)},
+		}, nil
+	})
+
+	server.Handle("add-attachment", func(ctx context.Context, raw []byte) (any, error) {
+		if mock.shouldFail("add-attachment") {
+			return nil, fmt.Errorf("mock: add-attachment failure")
+		}
+		var fields map[string]any
+		if err := codec.Unmarshal(raw, &fields); err != nil {
+			return nil, fmt.Errorf("decoding add-attachment request: %w", err)
+		}
+		mock.mu.Lock()
+		mock.attachCalls = append(mock.attachCalls, mockTicketCall{Fields: fields})
 		mock.mu.Unlock()
 		return map[string]any{
 			"id":      fields["ticket"],

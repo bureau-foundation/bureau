@@ -113,6 +113,24 @@ func addTicketStepNote(ctx context.Context, client *service.ServiceClient, ticke
 	return client.Call(ctx, "add-note", fields, nil)
 }
 
+// addTicketAttachment calls the "add-attachment" action to attach an
+// artifact reference to the pipeline ticket. Best-effort: the caller
+// should log warnings on failure but continue pipeline execution.
+func addTicketAttachment(ctx context.Context, client *service.ServiceClient, ticketID, roomID, artifactRef, label, contentType string) error {
+	fields := map[string]any{
+		"ticket": ticketID,
+		"room":   roomID,
+		"ref":    artifactRef,
+	}
+	if label != "" {
+		fields["label"] = label
+	}
+	if contentType != "" {
+		fields["content_type"] = contentType
+	}
+	return client.Call(ctx, "add-attachment", fields, nil)
+}
+
 // closeTicket calls the "close" action with retry logic. Close is a
 // critical operation — the ticket must reflect the pipeline's terminal
 // outcome. Retries up to closeRetryCount times with exponential

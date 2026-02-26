@@ -91,6 +91,8 @@ func (ts *TicketService) registerActions(server *service.SocketServer) {
 	server.HandleAuth("update-gate", ts.withWriteLock(ts.handleUpdateGate))
 	server.HandleAuth("set-disposition", ts.withWriteLock(ts.handleSetDisposition))
 	server.HandleAuth("defer", ts.withWriteLock(ts.handleDefer))
+	server.HandleAuth("add-attachment", ts.withWriteLock(ts.handleAddAttachment))
+	server.HandleAuth("remove-attachment", ts.withWriteLock(ts.handleRemoveAttachment))
 
 	// Stream actions — long-lived authenticated connections. The
 	// handler takes ownership of the connection after the initial

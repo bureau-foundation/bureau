@@ -16,6 +16,7 @@ const (
 	ActionReopen = "ticket/reopen"
 	ActionImport = "ticket/import"
 	ActionReview = "ticket/review"
+	ActionAttach = "ticket/attach"
 )
 
 // Query operations.

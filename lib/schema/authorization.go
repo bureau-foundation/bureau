@@ -56,6 +56,14 @@ const (
 	// PrincipalAssignment.Authorization policy.
 	SourcePrincipal = "principal"
 
+	// SourcePrincipalShorthand marks entries synthesized from
+	// PrincipalAssignment.MatrixPolicy and ServiceVisibility fields.
+	// These shorthand fields are always merged into the authorization
+	// index alongside DefaultPolicy and per-principal Authorization,
+	// so operators can mix shorthand configuration with the full
+	// authorization framework.
+	SourcePrincipalShorthand = "principal-shorthand"
+
 	// SourceTemporal marks entries from temporal grant state events.
 	// The grant's Ticket, GrantedBy, and GrantedAt fields provide
 	// further provenance.

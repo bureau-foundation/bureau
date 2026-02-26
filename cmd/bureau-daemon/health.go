@@ -295,7 +295,7 @@ func (d *Daemon) rollbackPrincipal(ctx context.Context, principal ref.Entity) {
 	}
 
 	// Resolve authorization grants so the proxy starts with enforcement.
-	grants := d.resolveGrantsForProxy(principal.UserID(), *assignment, config)
+	grants := d.resolveGrantsForProxy(principal.UserID())
 
 	// Recreate with the previous working spec.
 	response, err := d.launcherRequest(ctx, launcherIPCRequest{

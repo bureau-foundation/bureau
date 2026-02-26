@@ -1622,6 +1622,127 @@ func TestRebuildAuthorizationIndex_PayloadWorkspaceRoomID(t *testing.T) {
 	}
 }
 
+// TestRebuildAuthorizationIndex_ShorthandWithDefaultPolicy verifies that
+// MatrixPolicy and ServiceVisibility shorthand fields are merged into the
+// authorization index alongside DefaultPolicy. Before this fix,
+// resolveGrantsForProxy would silently ignore MatrixPolicy when
+// DefaultPolicy was set, because it switched from synthesizeGrants to the
+// authorization index — which didn't contain shorthand-derived grants.
+func TestRebuildAuthorizationIndex_ShorthandWithDefaultPolicy(t *testing.T) {
+	t.Parallel()
+
+	daemon, _ := newTestDaemon(t)
+
+	alpha := testEntity(t, daemon.fleet, "agent/alpha")
+
+	config := &schema.MachineConfig{
+		DefaultPolicy: &schema.AuthorizationPolicy{
+			Grants: []schema.Grant{{Actions: []string{"observe/*"}}},
+			Allowances: []schema.Allowance{
+				{Actions: []string{"observe"}, Actors: []string{"**:**"}},
+			},
+		},
+		Principals: []schema.PrincipalAssignment{
+			{
+				Principal: alpha,
+				AutoStart: true,
+				MatrixPolicy: &schema.MatrixPolicy{
+					AllowJoin:   true,
+					AllowInvite: true,
+				},
+				ServiceVisibility: []string{"ticket/**"},
+			},
+		},
+	}
+
+	daemon.rebuildAuthorizationIndex(config, nil, nil)
+
+	grants := daemon.authorizationIndex.Grants(alpha.UserID())
+
+	// Expect 4 grants:
+	// 1. machine-default: observe/*
+	// 2. principal-shorthand: matrix/join (from AllowJoin)
+	// 3. principal-shorthand: matrix/invite (from AllowInvite)
+	// 4. principal-shorthand: service/discover with targets (from ServiceVisibility)
+	if len(grants) != 4 {
+		t.Fatalf("grants = %d, want 4 (1 default + 3 shorthand)", len(grants))
+	}
+
+	if grants[0].Source != schema.SourceMachineDefault {
+		t.Errorf("grants[0].Source = %q, want %q", grants[0].Source, schema.SourceMachineDefault)
+	}
+	if grants[0].Actions[0] != "observe/*" {
+		t.Errorf("grants[0].Actions[0] = %q, want %q", grants[0].Actions[0], "observe/*")
+	}
+
+	// Shorthand-derived grants.
+	for _, grant := range grants[1:] {
+		if grant.Source != schema.SourcePrincipalShorthand {
+			t.Errorf("shorthand grant source = %q, want %q", grant.Source, schema.SourcePrincipalShorthand)
+		}
+	}
+	if grants[1].Actions[0] != schema.ActionMatrixJoin {
+		t.Errorf("grants[1].Actions[0] = %q, want %q", grants[1].Actions[0], schema.ActionMatrixJoin)
+	}
+	if grants[2].Actions[0] != schema.ActionMatrixInvite {
+		t.Errorf("grants[2].Actions[0] = %q, want %q", grants[2].Actions[0], schema.ActionMatrixInvite)
+	}
+	if grants[3].Actions[0] != schema.ActionServiceDiscover {
+		t.Errorf("grants[3].Actions[0] = %q, want %q", grants[3].Actions[0], schema.ActionServiceDiscover)
+	}
+
+	// Allowances from DefaultPolicy should also be present.
+	allowances := daemon.authorizationIndex.Allowances(alpha.UserID())
+	if len(allowances) != 1 {
+		t.Fatalf("allowances = %d, want 1", len(allowances))
+	}
+}
+
+// TestRebuildAuthorizationIndex_ShorthandOnly verifies that principals
+// using only MatrixPolicy/ServiceVisibility (no DefaultPolicy, no
+// Authorization) get their grants indexed rather than being computed
+// on-the-fly by resolveGrantsForProxy.
+func TestRebuildAuthorizationIndex_ShorthandOnly(t *testing.T) {
+	t.Parallel()
+
+	daemon, _ := newTestDaemon(t)
+
+	alpha := testEntity(t, daemon.fleet, "agent/alpha")
+
+	config := &schema.MachineConfig{
+		Principals: []schema.PrincipalAssignment{
+			{
+				Principal: alpha,
+				AutoStart: true,
+				MatrixPolicy: &schema.MatrixPolicy{
+					AllowJoin:       true,
+					AllowRoomCreate: true,
+				},
+			},
+		},
+	}
+
+	daemon.rebuildAuthorizationIndex(config, nil, nil)
+
+	grants := daemon.authorizationIndex.Grants(alpha.UserID())
+
+	// 2 grants: matrix/join + matrix/create-room.
+	if len(grants) != 2 {
+		t.Fatalf("grants = %d, want 2", len(grants))
+	}
+	if grants[0].Actions[0] != schema.ActionMatrixJoin {
+		t.Errorf("grants[0].Actions[0] = %q, want %q", grants[0].Actions[0], schema.ActionMatrixJoin)
+	}
+	if grants[1].Actions[0] != schema.ActionMatrixCreateRoom {
+		t.Errorf("grants[1].Actions[0] = %q, want %q", grants[1].Actions[0], schema.ActionMatrixCreateRoom)
+	}
+	for _, grant := range grants {
+		if grant.Source != schema.SourcePrincipalShorthand {
+			t.Errorf("grant source = %q, want %q", grant.Source, schema.SourcePrincipalShorthand)
+		}
+	}
+}
+
 func TestFilterGrantsForService(t *testing.T) {
 	t.Parallel()
 

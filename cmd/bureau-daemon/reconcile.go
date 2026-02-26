@@ -169,11 +169,11 @@ func (d *Daemon) reconcile(ctx context.Context) error {
 	if d.lastGrants == nil {
 		d.lastGrants = make(map[ref.Entity][]schema.Grant)
 	}
-	for principal, assignment := range desired {
+	for principal := range desired {
 		if !d.running[principal] {
 			continue
 		}
-		newGrants := d.resolveGrantsForProxy(principal.UserID(), assignment, config)
+		newGrants := d.resolveGrantsForProxy(principal.UserID())
 		oldGrants := d.lastGrants[principal]
 		if !reflect.DeepEqual(oldGrants, newGrants) {
 			d.logger.Info("authorization grants changed, updating proxy",
@@ -637,7 +637,7 @@ func (d *Daemon) reconcile(ctx context.Context) error {
 		// Resolve authorization grants before sandbox creation so the
 		// proxy starts with enforcement from the first request. The
 		// launcher pipes these to the proxy's stdin alongside credentials.
-		grants := d.resolveGrantsForProxy(principal.UserID(), assignment, config)
+		grants := d.resolveGrantsForProxy(principal.UserID())
 
 		// Send create-sandbox to the launcher.
 		response, err := d.launcherRequest(ctx, launcherIPCRequest{
@@ -1336,6 +1336,14 @@ func (d *Daemon) rebuildAuthorizationIndex(
 		// denials are appended to the machine defaults. A principal cannot
 		// have fewer permissions than the machine default.
 		merged := mergeAuthorizationPolicy(config.DefaultPolicy, assignment.Authorization)
+
+		// Merge grants from MatrixPolicy/ServiceVisibility shorthand
+		// fields. These are always included regardless of whether
+		// DefaultPolicy or per-principal Authorization is set, so
+		// operators can mix shorthand fields with the full authorization
+		// framework without one silently overriding the other.
+		shorthandGrants := synthesizeGrants(assignment.MatrixPolicy, assignment.ServiceVisibility)
+		merged.Grants = appendGrantsWithSource(merged.Grants, shorthandGrants, schema.SourcePrincipalShorthand)
 
 		// Merge room-level grants from all rooms this principal belongs to.
 		// A principal belongs to the config room (always) plus their

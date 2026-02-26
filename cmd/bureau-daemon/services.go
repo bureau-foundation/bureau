@@ -602,9 +602,9 @@ func (d *Daemon) pushAuthorizationToProxy(ctx context.Context, principal ref.Ent
 // synthesizeGrants converts the shorthand MatrixPolicy and ServiceVisibility
 // fields on PrincipalAssignment into authorization grants. These fields are
 // the simple configuration surface — operators set booleans and glob patterns
-// instead of spelling out full Grant objects. When a principal has the full
-// Authorization field set (or the machine has DefaultPolicy), the daemon
-// uses the authorization index instead of calling this function.
+// instead of spelling out full Grant objects. Called by
+// rebuildAuthorizationIndex to merge shorthand-derived grants into the
+// authorization index alongside DefaultPolicy and per-principal Authorization.
 func synthesizeGrants(policy *schema.MatrixPolicy, visibility []string) []schema.Grant {
 	var grants []schema.Grant
 	if policy != nil {
@@ -627,17 +627,13 @@ func synthesizeGrants(policy *schema.MatrixPolicy, visibility []string) []schema
 	return grants
 }
 
-// resolveGrantsForProxy returns the authorization grants that should be pushed
-// to a principal's proxy. If the machine config or per-principal assignment
-// uses the authorization framework (DefaultPolicy or per-principal
-// Authorization), the grants come from the pre-merged authorization index.
-// Otherwise, grants are synthesized from the shorthand MatrixPolicy and
-// ServiceVisibility fields.
-func (d *Daemon) resolveGrantsForProxy(userID ref.UserID, assignment schema.PrincipalAssignment, config *schema.MachineConfig) []schema.Grant {
-	if config.DefaultPolicy != nil || assignment.Authorization != nil {
-		return d.authorizationIndex.Grants(userID)
-	}
-	return synthesizeGrants(assignment.MatrixPolicy, assignment.ServiceVisibility)
+// resolveGrantsForProxy returns the authorization grants that should be
+// pushed to a principal's proxy. Grants come from the pre-merged
+// authorization index, which combines all sources: machine DefaultPolicy,
+// per-principal Authorization, MatrixPolicy/ServiceVisibility shorthand
+// fields, and room-level grants.
+func (d *Daemon) resolveGrantsForProxy(userID ref.UserID) []schema.Grant {
+	return d.authorizationIndex.Grants(userID)
 }
 
 // unregisterProxyRoute removes a single service from a single consumer's proxy

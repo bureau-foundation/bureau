@@ -90,14 +90,17 @@ func (renderer ListRenderer) RenderRow(entry ticketindex.Entry, selected bool, s
 	// Title width uses worst-case left portion (with status icon)
 	// so truncation is consistent across rows.
 	titleWidth := renderer.width - maxLeftWidth - columnWidthID
-	if titleWidth < 10 {
-		titleWidth = 10
+	if titleWidth < 0 {
+		titleWidth = 0
 	}
 
 	// Reserve space for the unblock indicator when present.
 	hasUnblock := score != nil && score.UnblockCount > 0
 	if hasUnblock {
 		titleWidth -= unblockIndicatorWidth
+		if titleWidth < 0 {
+			titleWidth = 0
+		}
 	}
 
 	// Build the title portion with optional labels suffix.
@@ -107,9 +110,13 @@ func (renderer ListRenderer) RenderRow(entry ticketindex.Entry, selected bool, s
 		labelsText = " [" + strings.Join(entry.Content.Labels, ", ") + "]"
 	}
 
-	// Truncate title+labels to fit the available width.
+	// Truncate title+labels to fit the available width. When the
+	// available width is zero or negative (panel narrower than the
+	// fixed columns), show nothing rather than overflowing.
 	combined := titleText + labelsText
-	if lipgloss.Width(combined) > titleWidth {
+	if titleWidth <= 0 {
+		combined = ""
+	} else if lipgloss.Width(combined) > titleWidth {
 		// Truncate to fit, preferring to show the title over labels.
 		if lipgloss.Width(titleText) >= titleWidth-1 {
 			combined = truncateString(titleText, titleWidth-1) + "…"
@@ -118,9 +125,14 @@ func (renderer ListRenderer) RenderRow(entry ticketindex.Entry, selected bool, s
 		}
 	}
 
-	// Append unblock indicator after the title+labels.
+	// Build the unblock indicator separately — it contains ANSI
+	// styling and must not be included in the string that
+	// highlightTitle iterates over, or match positions (which index
+	// into the plain title) will land on escape code bytes and
+	// corrupt the output.
+	unblockSuffix := ""
 	if hasUnblock {
-		combined += renderer.renderUnblockIndicator(score.UnblockCount, selected)
+		unblockSuffix = renderer.renderUnblockIndicator(score.UnblockCount, selected)
 	}
 
 	// Determine the display priority color. When the ticket has a
@@ -132,9 +144,9 @@ func (renderer ListRenderer) RenderRow(entry ticketindex.Entry, selected bool, s
 	}
 
 	if selected {
-		return renderer.renderSelectedRow(entry, combined, matchPositions)
+		return renderer.renderSelectedRow(entry, combined, unblockSuffix, matchPositions)
 	}
-	return renderer.renderNormalRow(entry, combined, displayPriorityColor, matchPositions)
+	return renderer.renderNormalRow(entry, combined, unblockSuffix, displayPriorityColor, matchPositions)
 }
 
 // renderUnblockIndicator returns a styled " ↑N" suffix for the title
@@ -161,8 +173,10 @@ func (renderer ListRenderer) renderUnblockIndicator(count int, selected bool) st
 // displayPriorityColor controls the color of the priority badge; it
 // may differ from the ticket's own priority when borrowed priority
 // escalates the visual urgency. matchPositions contains rune indices
-// in the original title that should be highlighted.
-func (renderer ListRenderer) renderNormalRow(entry ticketindex.Entry, titleLabels string, displayPriorityColor int, matchPositions []int) string {
+// in the original title that should be highlighted. The unblockSuffix
+// is pre-styled ANSI text appended after highlighting to avoid
+// corrupting escape sequences during character-level match rendering.
+func (renderer ListRenderer) renderNormalRow(entry ticketindex.Entry, titleLabels string, unblockSuffix string, displayPriorityColor int, matchPositions []int) string {
 	priority := entry.Content.Priority
 	status := string(entry.Content.Status)
 
@@ -208,7 +222,8 @@ func (renderer ListRenderer) renderNormalRow(entry ticketindex.Entry, titleLabel
 		statusPart +
 		" " +
 		idStyle.Render(entry.ID) +
-		titleRendered
+		titleRendered +
+		unblockSuffix
 
 	return lipgloss.NewStyle().Width(renderer.width).MaxWidth(renderer.width).Render(row)
 }
@@ -217,7 +232,8 @@ func (renderer ListRenderer) renderNormalRow(entry ticketindex.Entry, titleLabel
 // background. All text uses the selected foreground color.
 // matchPositions contains rune indices in the original title that
 // should be highlighted (with bold+underline on the selection bg).
-func (renderer ListRenderer) renderSelectedRow(entry ticketindex.Entry, titleLabels string, matchPositions []int) string {
+// The unblockSuffix is pre-rendered text appended after highlighting.
+func (renderer ListRenderer) renderSelectedRow(entry ticketindex.Entry, titleLabels string, unblockSuffix string, matchPositions []int) string {
 	baseStyle := lipgloss.NewStyle().
 		Background(renderer.theme.SelectedBackground).
 		Foreground(renderer.theme.SelectedForeground)
@@ -249,7 +265,8 @@ func (renderer ListRenderer) renderSelectedRow(entry ticketindex.Entry, titleLab
 		statusPart +
 		" " +
 		baseStyle.Width(columnWidthID).Bold(false).Render(entry.ID) +
-		titleRendered
+		titleRendered +
+		unblockSuffix
 
 	return baseStyle.Width(renderer.width).MaxWidth(renderer.width).Render(row)
 }
@@ -299,7 +316,9 @@ func (renderer ListRenderer) RenderGroupHeader(item ListItem, width int, selecte
 	progressWidth := lipgloss.Width(progress)
 	availableForTitle := width - prefixWidth - progressWidth
 	title := item.EpicTitle
-	if availableForTitle > 0 && lipgloss.Width(title) > availableForTitle {
+	if availableForTitle <= 0 {
+		title = ""
+	} else if lipgloss.Width(title) > availableForTitle {
 		title = truncateString(title, availableForTitle-1) + "…"
 	}
 
@@ -372,16 +391,16 @@ func (renderer ListRenderer) RenderPipelineRow(entry ticketindex.Entry, selected
 	// Available width after the left portion (indent+emoji+priority+
 	// status icon+space) and ID column.
 	contentWidth := renderer.width - maxLeftWidth - columnWidthID
-	if contentWidth < 10 {
-		contentWidth = 10
+	if contentWidth < 0 {
+		contentWidth = 0
 	}
 
 	// Reserve space for the suffix with a space separator.
 	textWidth := contentWidth
 	if suffix != "" {
 		textWidth = contentWidth - suffixWidth - 1
-		if textWidth < 10 {
-			textWidth = 10
+		if textWidth < 0 {
+			textWidth = 0
 		}
 	}
 
@@ -506,6 +525,10 @@ func (renderer ListRenderer) renderSelectedPipelineRow(
 // pipeline ref gets priority; the title is appended in faint style
 // only if space remains.
 func composePipelineText(pipelineRef, title string, maxWidth int, refStyle, titleStyle lipgloss.Style) string {
+	if maxWidth <= 0 {
+		return ""
+	}
+
 	refWidth := lipgloss.Width(pipelineRef)
 
 	if refWidth >= maxWidth {

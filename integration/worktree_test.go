@@ -24,10 +24,11 @@ import (
 // to the workspace room, daemon processes it via /sync, executes the handler,
 // posts a threaded m.bureau.command_result reply.
 //
-// These are the "read" commands — they don't modify state, they just query
-// the filesystem on the machine where the workspace lives. The test creates
-// a real bare git repo in the workspace directory so that worktree.list and
-// fetch have something to operate on.
+// Uses a two-segment workspace alias ("wscmds/main") to exercise the
+// production code path where the daemon must extract the project component
+// for .bare directory lookups. The bare repo lives at
+// <workspaceRoot>/<project>/.bare/ — shared across all worktrees in the
+// project.
 func TestWorkspaceCommands(t *testing.T) {
 	t.Parallel()
 
@@ -53,15 +54,13 @@ func TestWorkspaceCommands(t *testing.T) {
 	ctx := t.Context()
 
 	// --- Set up workspace filesystem ---
-	// Create a bare git repo at <workspaceRoot>/testproj/.bare/
+	// Create a bare git repo at <workspaceRoot>/wscmds/.bare/
 	// This is the standard Bureau layout: project root with a .bare/
-	// directory containing the shared git object store.
-	//
-	// Strategy: init a normal repo in a temp directory, make an initial
-	// commit on "main", then clone it bare into .bare/. This avoids the
-	// problem of trying to add worktrees to an empty bare repo.
-	projectDir := filepath.Join(machine.WorkspaceRoot, "testproj")
+	// directory containing the shared git object store. The worktree
+	// path ("main") lives at <workspaceRoot>/wscmds/main/.
+	projectDir := filepath.Join(machine.WorkspaceRoot, "wscmds")
 	bareDir := filepath.Join(projectDir, ".bare")
+	worktreeDir := filepath.Join(projectDir, "main")
 	if err := os.MkdirAll(projectDir, 0755); err != nil {
 		t.Fatalf("create project dir: %v", err)
 	}
@@ -75,28 +74,24 @@ func TestWorkspaceCommands(t *testing.T) {
 		t.Fatalf("git clone --bare: %v", err)
 	}
 
-	// --- Create workspace room ---
-	workspaceAlias := "testproj"
-	adminUserID := admin.UserID()
-
-	spaceRoomID, err := admin.ResolveAlias(ctx, ref.MustParseRoomAlias("#bureau:"+testServerName))
-	if err != nil {
-		t.Fatalf("resolve bureau space: %v", err)
+	// Create the worktree directory so workspace.status reports it as
+	// existing. In production, the setup pipeline creates this via
+	// git worktree add.
+	if err := os.MkdirAll(worktreeDir, 0755); err != nil {
+		t.Fatalf("create worktree dir: %v", err)
 	}
 
-	workspaceRoomID := createTestWorkspaceRoom(t, admin, workspaceAlias, machine.UserID, adminUserID, spaceRoomID)
+	// --- Deploy ticket service and create workspace via production API ---
+	deployTicketService(t, admin, fleet, machine, "ws-cmds")
 
-	// Publish workspace state.
-	_, err = admin.SendStateEvent(ctx, workspaceRoomID,
-		schema.EventTypeWorkspace, "", workspace.WorkspaceState{
-			Status:    workspace.WorkspaceStatusActive,
-			Project:   "testproj",
-			Machine:   machine.Name,
-			UpdatedAt: "2026-01-01T00:00:00Z",
-		})
-	if err != nil {
-		t.Fatalf("publish workspace state: %v", err)
-	}
+	wsResult := createWorkspace(t, admin, machine.Ref, "wscmds/main",
+		"bureau/template:base", nil)
+	workspaceRoomID := wsResult.RoomID
+
+	// The workspace alias "wscmds/main" exercises multi-segment path
+	// handling in the daemon command handlers. The handlers must extract
+	// the project ("wscmds") for .bare lookups while using the full path
+	// for workspace existence checks.
 
 	// --- Test workspace.status ---
 	t.Run("status", func(t *testing.T) {
@@ -106,9 +101,9 @@ func TestWorkspaceCommands(t *testing.T) {
 		_, err := admin.SendEvent(ctx, workspaceRoomID, schema.MatrixEventTypeMessage,
 			schema.CommandMessage{
 				MsgType:   schema.MsgTypeCommand,
-				Body:      "workspace.status testproj",
+				Body:      "workspace.status wscmds/main",
 				Command:   "workspace.status",
-				Workspace: "testproj",
+				Workspace: "wscmds/main",
 				RequestID: requestID,
 			})
 		if err != nil {
@@ -139,9 +134,9 @@ func TestWorkspaceCommands(t *testing.T) {
 			t.Error("workspace.status: has_bare_repo = false, want true")
 		}
 
-		workspace, _ := resultMap["workspace"].(string)
-		if workspace != "testproj" {
-			t.Errorf("workspace.status: workspace = %q, want %q", workspace, "testproj")
+		workspaceName, _ := resultMap["workspace"].(string)
+		if workspaceName != "wscmds/main" {
+			t.Errorf("workspace.status: workspace = %q, want %q", workspaceName, "wscmds/main")
 		}
 	})
 
@@ -153,9 +148,9 @@ func TestWorkspaceCommands(t *testing.T) {
 		_, err := admin.SendEvent(ctx, workspaceRoomID, schema.MatrixEventTypeMessage,
 			schema.CommandMessage{
 				MsgType:   schema.MsgTypeCommand,
-				Body:      "workspace.du testproj",
+				Body:      "workspace.du wscmds/main",
 				Command:   "workspace.du",
-				Workspace: "testproj",
+				Workspace: "wscmds/main",
 				RequestID: requestID,
 			})
 		if err != nil {
@@ -181,9 +176,9 @@ func TestWorkspaceCommands(t *testing.T) {
 			t.Error("workspace.du: size is empty")
 		}
 
-		workspace, _ := resultMap["workspace"].(string)
-		if workspace != "testproj" {
-			t.Errorf("workspace.du: workspace = %q, want %q", workspace, "testproj")
+		workspaceName, _ := resultMap["workspace"].(string)
+		if workspaceName != "wscmds/main" {
+			t.Errorf("workspace.du: workspace = %q, want %q", workspaceName, "wscmds/main")
 		}
 	})
 
@@ -195,9 +190,9 @@ func TestWorkspaceCommands(t *testing.T) {
 		_, err := admin.SendEvent(ctx, workspaceRoomID, schema.MatrixEventTypeMessage,
 			schema.CommandMessage{
 				MsgType:   schema.MsgTypeCommand,
-				Body:      "workspace.worktree.list testproj",
+				Body:      "workspace.worktree.list wscmds/main",
 				Command:   "workspace.worktree.list",
-				Workspace: "testproj",
+				Workspace: "wscmds/main",
 				RequestID: requestID,
 			})
 		if err != nil {
@@ -234,9 +229,9 @@ func TestWorkspaceCommands(t *testing.T) {
 		_, err := admin.SendEvent(ctx, workspaceRoomID, schema.MatrixEventTypeMessage,
 			schema.CommandMessage{
 				MsgType:   schema.MsgTypeCommand,
-				Body:      "workspace.fetch testproj",
+				Body:      "workspace.fetch wscmds/main",
 				Command:   "workspace.fetch",
-				Workspace: "testproj",
+				Workspace: "wscmds/main",
 				RequestID: requestID,
 			})
 		if err != nil {
@@ -257,9 +252,9 @@ func TestWorkspaceCommands(t *testing.T) {
 			t.Fatal("workspace.fetch result is nil")
 		}
 
-		workspace, _ := resultMap["workspace"].(string)
-		if workspace != "testproj" {
-			t.Errorf("workspace.fetch: workspace = %q, want %q", workspace, "testproj")
+		workspaceName, _ := resultMap["workspace"].(string)
+		if workspaceName != "wscmds/main" {
+			t.Errorf("workspace.fetch: workspace = %q, want %q", workspaceName, "wscmds/main")
 		}
 	})
 

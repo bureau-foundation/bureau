@@ -182,6 +182,25 @@ func (d *Daemon) workspacePath(workspace string) string {
 	return filepath.Join(d.workspaceRoot, workspace)
 }
 
+// workspaceProject extracts the project name (first path segment)
+// from a workspace alias. For "myproject/main", the project is
+// "myproject". For single-segment aliases, returns the whole string.
+func workspaceProject(workspace string) string {
+	project, _, _ := strings.Cut(workspace, "/")
+	if project == "" {
+		return workspace
+	}
+	return project
+}
+
+// workspaceProjectBareDir returns the filesystem path to the .bare
+// directory for the project containing the given workspace. The bare
+// repo is shared across all worktrees in the same project:
+// <workspaceRoot>/<project>/.bare/
+func (d *Daemon) workspaceProjectBareDir(workspace string) string {
+	return filepath.Join(d.workspaceRoot, workspaceProject(workspace), ".bare")
+}
+
 // authorizeCommand reads the room's m.room.power_levels state event and
 // checks that the sender's power level meets the required threshold.
 // Returns an error if authorization fails or power levels cannot be read.
@@ -356,8 +375,10 @@ func handleWorkspaceStatus(ctx context.Context, d *Daemon, roomID ref.RoomID, _ 
 		"is_dir":    info.IsDir(),
 	}
 
-	// Check for .bare directory (indicates git workspace).
-	bareDir := filepath.Join(path, ".bare")
+	// Check for .bare directory (indicates git workspace). The bare
+	// repo is at the project level (<workspaceRoot>/<project>/.bare/),
+	// shared across all worktrees in the project.
+	bareDir := d.workspaceProjectBareDir(command.Workspace)
 	if _, err := os.Stat(bareDir); err == nil {
 		result["has_bare_repo"] = true
 	}
@@ -400,10 +421,9 @@ func handleWorkspaceDu(ctx context.Context, d *Daemon, roomID ref.RoomID, _ ref.
 }
 
 // handleWorkspaceWorktreeList runs git worktree list on the workspace's
-// .bare directory and returns the output.
+// project-level .bare directory and returns the output.
 func handleWorkspaceWorktreeList(ctx context.Context, d *Daemon, roomID ref.RoomID, _ ref.EventID, command schema.CommandMessage) (any, error) {
-	path := d.workspacePath(command.Workspace)
-	bareDir := filepath.Join(path, ".bare")
+	bareDir := d.workspaceProjectBareDir(command.Workspace)
 
 	if _, err := os.Stat(bareDir); os.IsNotExist(err) {
 		return nil, fmt.Errorf("workspace %q has no .bare directory (not a git workspace)", command.Workspace)
@@ -433,11 +453,11 @@ func handleWorkspaceWorktreeList(ctx context.Context, d *Daemon, roomID ref.Room
 	}, nil
 }
 
-// handleWorkspaceFetch runs git fetch --all in the workspace's .bare
-// directory, using flock to serialize concurrent fetches.
+// handleWorkspaceFetch runs git fetch --all in the workspace's
+// project-level .bare directory, using flock to serialize concurrent
+// fetches.
 func handleWorkspaceFetch(ctx context.Context, d *Daemon, roomID ref.RoomID, _ ref.EventID, command schema.CommandMessage) (any, error) {
-	path := d.workspacePath(command.Workspace)
-	bareDir := filepath.Join(path, ".bare")
+	bareDir := d.workspaceProjectBareDir(command.Workspace)
 
 	if _, err := os.Stat(bareDir); os.IsNotExist(err) {
 		return nil, fmt.Errorf("workspace %q has no .bare directory (not a git workspace)", command.Workspace)

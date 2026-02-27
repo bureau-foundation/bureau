@@ -417,9 +417,17 @@ func TestWorkspaceCLILifecycle(t *testing.T) {
 
 // --- Workspace test helpers ---
 
-// createTestWorkspaceRoom creates a workspace room for integration tests.
-// The room is created with WorkspaceRoomPowerLevels, the machine is invited,
-// and the room is added as a child of the Bureau space.
+// createTestWorkspaceRoom creates a workspace room for integration tests
+// that need lightweight room setup without the full workspace.Create
+// lifecycle (ticket service, principal assignments, pipeline configuration).
+//
+// Used by TestWorkspaceStartConditionLifecycle, which needs a workspace
+// room with custom proxy-only principals and manual state transitions.
+// Tests that can use the full production lifecycle should call
+// createWorkspace() instead.
+//
+// Mirrors the production ensureWorkspaceRoom (workspace/create.go):
+// same power levels, visibility, space child relationship.
 func createTestWorkspaceRoom(t *testing.T, admin *messaging.DirectSession, alias string, machineUserID, adminUserID ref.UserID, spaceRoomID ref.RoomID) ref.RoomID {
 	t.Helper()
 

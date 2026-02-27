@@ -15,8 +15,6 @@ import (
 	"context"
 	"fmt"
 	"os"
-	"path/filepath"
-	"strings"
 
 	"github.com/bureau-foundation/bureau/lib/principal"
 	"github.com/bureau-foundation/bureau/lib/ref"
@@ -44,15 +42,10 @@ func handleWorkspaceWorktreeAdd(ctx context.Context, d *Daemon, roomID ref.RoomI
 	branch, _ := command.Parameters["branch"].(string)
 
 	// Derive the project (first path segment) from the workspace name.
-	// The bare repo lives at /workspace/<project>/.bare/ regardless
-	// of how deep the workspace alias is.
-	project, _, _ := strings.Cut(command.Workspace, "/")
-	if project == "" {
-		project = command.Workspace
-	}
+	project := workspaceProject(command.Workspace)
 
 	// Verify the bare repo exists on this machine.
-	bareDir := filepath.Join(d.workspaceRoot, project, ".bare")
+	bareDir := d.workspaceProjectBareDir(command.Workspace)
 	if err := requireDirectory(bareDir); err != nil {
 		return nil, fmt.Errorf("project %q has no .bare directory: %w", project, err)
 	}
@@ -144,10 +137,7 @@ func handleWorkspaceWorktreeRemove(ctx context.Context, d *Daemon, roomID ref.Ro
 		return nil, fmt.Errorf("parameter 'mode' must be \"archive\" or \"delete\", got %q", mode)
 	}
 
-	project, _, _ := strings.Cut(command.Workspace, "/")
-	if project == "" {
-		project = command.Workspace
-	}
+	project := workspaceProject(command.Workspace)
 
 	// Discover the ticket service.
 	ticketSocketPath := d.findLocalTicketSocket()

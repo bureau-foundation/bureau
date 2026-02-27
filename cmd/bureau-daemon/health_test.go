@@ -6,12 +6,14 @@ package main
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"log/slog"
 	"net"
 	"net/http"
 	"net/http/httptest"
 	"os"
 	"path/filepath"
+	"runtime"
 	"strings"
 	"sync"
 	"sync/atomic"
@@ -23,6 +25,7 @@ import (
 	"github.com/bureau-foundation/bureau/lib/principal"
 	"github.com/bureau-foundation/bureau/lib/ref"
 	"github.com/bureau-foundation/bureau/lib/schema"
+	"github.com/bureau-foundation/bureau/lib/service"
 	"github.com/bureau-foundation/bureau/lib/testutil"
 	"github.com/bureau-foundation/bureau/messaging"
 )
@@ -98,7 +101,7 @@ func TestCheckHealth(t *testing.T) {
 		daemon.adminSocketPathFunc = func(ref.Entity) string { return socketPath }
 		daemon.logger = slog.New(slog.NewJSONHandler(os.Stderr, nil))
 
-		if !daemon.checkHealth(context.Background(), testEntity(t, daemon.fleet, "test/agent"), "/health", 5) {
+		if !daemon.checkHealthHTTP(context.Background(), testEntity(t, daemon.fleet, "test/agent"), "/health", 5) {
 			t.Error("checkHealth returned false for a healthy proxy")
 		}
 	})
@@ -113,7 +116,7 @@ func TestCheckHealth(t *testing.T) {
 		daemon.adminSocketPathFunc = func(ref.Entity) string { return socketPath }
 		daemon.logger = slog.New(slog.NewJSONHandler(os.Stderr, nil))
 
-		if daemon.checkHealth(context.Background(), testEntity(t, daemon.fleet, "test/agent"), "/health", 5) {
+		if daemon.checkHealthHTTP(context.Background(), testEntity(t, daemon.fleet, "test/agent"), "/health", 5) {
 			t.Error("checkHealth returned true for an unhealthy proxy (HTTP 503)")
 		}
 	})
@@ -125,7 +128,7 @@ func TestCheckHealth(t *testing.T) {
 		daemon.adminSocketPathFunc = func(ref.Entity) string { return "/nonexistent/proxy.sock" }
 		daemon.logger = slog.New(slog.NewJSONHandler(os.Stderr, nil))
 
-		if daemon.checkHealth(context.Background(), testEntity(t, daemon.fleet, "test/agent"), "/health", 1) {
+		if daemon.checkHealthHTTP(context.Background(), testEntity(t, daemon.fleet, "test/agent"), "/health", 1) {
 			t.Error("checkHealth returned true for a missing socket")
 		}
 	})
@@ -143,8 +146,8 @@ func TestCheckHealth(t *testing.T) {
 		ctx, cancel := context.WithCancel(context.Background())
 		cancel()
 
-		if daemon.checkHealth(ctx, testEntity(t, daemon.fleet, "test/agent"), "/health", 5) {
-			t.Error("checkHealth returned true with a cancelled context")
+		if daemon.checkHealthHTTP(ctx, testEntity(t, daemon.fleet, "test/agent"), "/health", 5) {
+			t.Error("checkHealthHTTP returned true with a cancelled context")
 		}
 	})
 }
@@ -1874,7 +1877,336 @@ func TestDestroyExtrasCleansPreviousSpecs(t *testing.T) {
 	}
 }
 
+// --- Socket health check tests ---
+
+func TestCheckHealthSocket_Healthy(t *testing.T) {
+	t.Parallel()
+
+	socketDir := testutil.SocketDir(t)
+	socketPath := filepath.Join(socketDir, "healthy.sock")
+
+	// NewSocketServer registers a default health handler that reports healthy.
+	server := service.NewSocketServer(socketPath, slog.New(slog.NewJSONHandler(os.Stderr, nil)), nil)
+
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+
+	var wg sync.WaitGroup
+	wg.Add(1)
+	go func() {
+		defer wg.Done()
+		server.Serve(ctx)
+	}()
+	waitForServiceSocket(t, socketPath)
+
+	daemon, _ := newTestDaemon(t)
+	daemon.serviceSocketPathFunc = func(ref.Entity) string { return socketPath }
+	daemon.logger = slog.New(slog.NewJSONHandler(os.Stderr, nil))
+
+	if !daemon.checkHealthSocket(context.Background(), testEntity(t, daemon.fleet, "service/test"), 5) {
+		t.Error("checkHealthSocket returned false for a healthy service")
+	}
+
+	cancel()
+	wg.Wait()
+}
+
+func TestCheckHealthSocket_Unhealthy(t *testing.T) {
+	t.Parallel()
+
+	socketDir := testutil.SocketDir(t)
+	socketPath := filepath.Join(socketDir, "unhealthy.sock")
+
+	// Start a SocketServer with a health func that reports unhealthy.
+	server := service.NewSocketServer(socketPath, slog.New(slog.NewJSONHandler(os.Stderr, nil)), nil)
+	server.SetHealthFunc(func() error {
+		return errors.New("intentionally unhealthy")
+	})
+
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+
+	var wg sync.WaitGroup
+	wg.Add(1)
+	go func() {
+		defer wg.Done()
+		server.Serve(ctx)
+	}()
+	waitForServiceSocket(t, socketPath)
+
+	daemon, _ := newTestDaemon(t)
+	daemon.serviceSocketPathFunc = func(ref.Entity) string { return socketPath }
+	daemon.logger = slog.New(slog.NewJSONHandler(os.Stderr, nil))
+
+	if daemon.checkHealthSocket(context.Background(), testEntity(t, daemon.fleet, "service/test"), 5) {
+		t.Error("checkHealthSocket returned true for an unhealthy service")
+	}
+
+	cancel()
+	wg.Wait()
+}
+
+func TestCheckHealthSocket_MissingSocket(t *testing.T) {
+	t.Parallel()
+
+	daemon, _ := newTestDaemon(t)
+	daemon.serviceSocketPathFunc = func(ref.Entity) string { return "/nonexistent/path/service.sock" }
+	daemon.logger = slog.New(slog.NewJSONHandler(os.Stderr, nil))
+
+	if daemon.checkHealthSocket(context.Background(), testEntity(t, daemon.fleet, "service/test"), 1) {
+		t.Error("checkHealthSocket returned true for a missing socket")
+	}
+}
+
+func TestHealthCheckDefaults_NormalizesType(t *testing.T) {
+	t.Parallel()
+
+	t.Run("empty type defaults to http", func(t *testing.T) {
+		t.Parallel()
+		config := healthCheckDefaults(&schema.HealthCheck{
+			Endpoint:        "/health",
+			IntervalSeconds: 10,
+		})
+		if config.Type != schema.HealthCheckTypeHTTP {
+			t.Errorf("Type = %q, want %q", config.Type, schema.HealthCheckTypeHTTP)
+		}
+	})
+
+	t.Run("socket type preserved", func(t *testing.T) {
+		t.Parallel()
+		config := healthCheckDefaults(&schema.HealthCheck{
+			Type:            schema.HealthCheckTypeSocket,
+			IntervalSeconds: 10,
+		})
+		if config.Type != schema.HealthCheckTypeSocket {
+			t.Errorf("Type = %q, want %q", config.Type, schema.HealthCheckTypeSocket)
+		}
+	})
+
+	t.Run("http type preserved", func(t *testing.T) {
+		t.Parallel()
+		config := healthCheckDefaults(&schema.HealthCheck{
+			Type:            schema.HealthCheckTypeHTTP,
+			Endpoint:        "/healthz",
+			IntervalSeconds: 5,
+		})
+		if config.Type != schema.HealthCheckTypeHTTP {
+			t.Errorf("Type = %q, want %q", config.Type, schema.HealthCheckTypeHTTP)
+		}
+	})
+}
+
+func TestValidateHealthCheck(t *testing.T) {
+	t.Parallel()
+
+	t.Run("valid http with endpoint", func(t *testing.T) {
+		t.Parallel()
+		err := validateHealthCheck(&schema.HealthCheck{
+			Type:            schema.HealthCheckTypeHTTP,
+			Endpoint:        "/health",
+			IntervalSeconds: 10,
+		})
+		if err != nil {
+			t.Errorf("unexpected error: %v", err)
+		}
+	})
+
+	t.Run("valid http with empty type (defaults to http)", func(t *testing.T) {
+		t.Parallel()
+		err := validateHealthCheck(&schema.HealthCheck{
+			Endpoint:        "/health",
+			IntervalSeconds: 10,
+		})
+		if err != nil {
+			t.Errorf("unexpected error: %v", err)
+		}
+	})
+
+	t.Run("http missing endpoint", func(t *testing.T) {
+		t.Parallel()
+		err := validateHealthCheck(&schema.HealthCheck{
+			Type:            schema.HealthCheckTypeHTTP,
+			IntervalSeconds: 10,
+		})
+		if err == nil {
+			t.Fatal("expected error for HTTP health check without endpoint")
+		}
+		if !strings.Contains(err.Error(), "endpoint is required") {
+			t.Errorf("expected 'endpoint is required' in error, got %q", err)
+		}
+	})
+
+	t.Run("empty type missing endpoint", func(t *testing.T) {
+		t.Parallel()
+		err := validateHealthCheck(&schema.HealthCheck{
+			IntervalSeconds: 10,
+		})
+		if err == nil {
+			t.Fatal("expected error for defaulted-to-HTTP health check without endpoint")
+		}
+	})
+
+	t.Run("valid socket", func(t *testing.T) {
+		t.Parallel()
+		err := validateHealthCheck(&schema.HealthCheck{
+			Type:            schema.HealthCheckTypeSocket,
+			IntervalSeconds: 5,
+		})
+		if err != nil {
+			t.Errorf("unexpected error: %v", err)
+		}
+	})
+
+	t.Run("socket does not require endpoint", func(t *testing.T) {
+		t.Parallel()
+		err := validateHealthCheck(&schema.HealthCheck{
+			Type:            schema.HealthCheckTypeSocket,
+			IntervalSeconds: 10,
+		})
+		if err != nil {
+			t.Errorf("unexpected error for socket without endpoint: %v", err)
+		}
+	})
+
+	t.Run("unknown type rejected", func(t *testing.T) {
+		t.Parallel()
+		err := validateHealthCheck(&schema.HealthCheck{
+			Type:            "grpc",
+			IntervalSeconds: 10,
+		})
+		if err == nil {
+			t.Fatal("expected error for unknown health check type")
+		}
+		if !strings.Contains(err.Error(), "unknown health check type") {
+			t.Errorf("expected 'unknown health check type' in error, got %q", err)
+		}
+	})
+
+	t.Run("zero interval rejected", func(t *testing.T) {
+		t.Parallel()
+		err := validateHealthCheck(&schema.HealthCheck{
+			Type:     schema.HealthCheckTypeSocket,
+			Endpoint: "/health",
+		})
+		if err == nil {
+			t.Fatal("expected error for zero interval")
+		}
+		if !strings.Contains(err.Error(), "interval_seconds must be positive") {
+			t.Errorf("expected 'interval_seconds must be positive' in error, got %q", err)
+		}
+	})
+
+	t.Run("negative interval rejected", func(t *testing.T) {
+		t.Parallel()
+		err := validateHealthCheck(&schema.HealthCheck{
+			Type:            schema.HealthCheckTypeHTTP,
+			Endpoint:        "/health",
+			IntervalSeconds: -1,
+		})
+		if err == nil {
+			t.Fatal("expected error for negative interval")
+		}
+	})
+}
+
+func TestCheckHealth_DispatchesOnType(t *testing.T) {
+	t.Parallel()
+
+	socketDir := testutil.SocketDir(t)
+
+	t.Run("socket type dispatches to checkHealthSocket", func(t *testing.T) {
+		t.Parallel()
+		socketPath := filepath.Join(socketDir, "dispatch-socket.sock")
+
+		server := service.NewSocketServer(socketPath, slog.New(slog.NewJSONHandler(os.Stderr, nil)), nil)
+
+		ctx, cancel := context.WithCancel(context.Background())
+		defer cancel()
+
+		var wg sync.WaitGroup
+		wg.Add(1)
+		go func() {
+			defer wg.Done()
+			server.Serve(ctx)
+		}()
+		waitForServiceSocket(t, socketPath)
+
+		daemon, _ := newTestDaemon(t)
+		daemon.serviceSocketPathFunc = func(ref.Entity) string { return socketPath }
+		daemon.logger = slog.New(slog.NewJSONHandler(os.Stderr, nil))
+
+		config := &schema.HealthCheck{
+			Type:            schema.HealthCheckTypeSocket,
+			IntervalSeconds: 10,
+			TimeoutSeconds:  5,
+		}
+		if !daemon.checkHealth(context.Background(), testEntity(t, daemon.fleet, "service/relay"), config) {
+			t.Error("checkHealth with socket type returned false for a healthy service")
+		}
+
+		cancel()
+		wg.Wait()
+	})
+
+	t.Run("http type dispatches to checkHealthHTTP", func(t *testing.T) {
+		t.Parallel()
+		adminSocketPath := filepath.Join(socketDir, "dispatch-http.sock")
+		startMockAdminServer(t, adminSocketPath, http.StatusOK)
+
+		daemon, _ := newTestDaemon(t)
+		daemon.runDir = principal.DefaultRunDir
+		daemon.adminSocketPathFunc = func(ref.Entity) string { return adminSocketPath }
+		daemon.logger = slog.New(slog.NewJSONHandler(os.Stderr, nil))
+
+		config := &schema.HealthCheck{
+			Type:            schema.HealthCheckTypeHTTP,
+			Endpoint:        "/health",
+			IntervalSeconds: 10,
+			TimeoutSeconds:  5,
+		}
+		if !daemon.checkHealth(context.Background(), testEntity(t, daemon.fleet, "agent/test"), config) {
+			t.Error("checkHealth with http type returned false for a healthy proxy")
+		}
+	})
+
+	t.Run("default type dispatches to http", func(t *testing.T) {
+		t.Parallel()
+		adminSocketPath := filepath.Join(socketDir, "dispatch-default.sock")
+		startMockAdminServer(t, adminSocketPath, http.StatusOK)
+
+		daemon, _ := newTestDaemon(t)
+		daemon.runDir = principal.DefaultRunDir
+		daemon.adminSocketPathFunc = func(ref.Entity) string { return adminSocketPath }
+		daemon.logger = slog.New(slog.NewJSONHandler(os.Stderr, nil))
+
+		config := &schema.HealthCheck{
+			Endpoint:        "/health",
+			IntervalSeconds: 10,
+			TimeoutSeconds:  5,
+		}
+		if !daemon.checkHealth(context.Background(), testEntity(t, daemon.fleet, "agent/test"), config) {
+			t.Error("checkHealth with default (empty) type returned false for a healthy proxy")
+		}
+	})
+}
+
 // --- Test helpers ---
+
+// waitForServiceSocket polls until a service socket file exists.
+// Uses t.Context() (bounded by test timeout) and runtime.Gosched()
+// instead of wall-clock deadlines.
+func waitForServiceSocket(t *testing.T, path string) {
+	t.Helper()
+	for {
+		if _, err := os.Stat(path); err == nil {
+			return
+		}
+		if t.Context().Err() != nil {
+			t.Fatalf("service socket %s did not appear before test timeout", path)
+		}
+		runtime.Gosched()
+	}
+}
 
 // startMockAdminServer starts an HTTP server on a Unix socket that responds
 // to all requests with the given status code. Used to simulate a proxy's

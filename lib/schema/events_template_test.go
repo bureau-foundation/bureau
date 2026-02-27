@@ -709,3 +709,119 @@ func TestStartConditionMultipleContentMatch(t *testing.T) {
 	assertField(t, contentMatch, "status", "healthy")
 	assertField(t, contentMatch, "stage", "canary")
 }
+
+func TestHealthCheckTypeIsKnown(t *testing.T) {
+	t.Parallel()
+
+	tests := []struct {
+		value HealthCheckType
+		known bool
+	}{
+		{HealthCheckTypeHTTP, true},
+		{HealthCheckTypeSocket, true},
+		{"", false},
+		{"grpc", false},
+		{"HTTP", false}, // case-sensitive
+	}
+
+	for _, test := range tests {
+		if got := test.value.IsKnown(); got != test.known {
+			t.Errorf("HealthCheckType(%q).IsKnown() = %v, want %v", test.value, got, test.known)
+		}
+	}
+}
+
+func TestHealthCheckTypeOnTemplateRoundTrip(t *testing.T) {
+	t.Parallel()
+
+	t.Run("socket type round-trips", func(t *testing.T) {
+		t.Parallel()
+		original := TemplateContent{
+			Command: []string{"/usr/local/bin/telemetry-relay"},
+			HealthCheck: &HealthCheck{
+				Type:            HealthCheckTypeSocket,
+				IntervalSeconds: 10,
+			},
+		}
+
+		data, err := json.Marshal(original)
+		if err != nil {
+			t.Fatalf("Marshal: %v", err)
+		}
+
+		var raw map[string]any
+		if err := json.Unmarshal(data, &raw); err != nil {
+			t.Fatalf("Unmarshal to map: %v", err)
+		}
+
+		healthCheck, ok := raw["health_check"].(map[string]any)
+		if !ok {
+			t.Fatal("health_check field missing or wrong type")
+		}
+		assertField(t, healthCheck, "type", "socket")
+		assertField(t, healthCheck, "interval_seconds", float64(10))
+		// Endpoint should be omitted for socket type.
+		if _, exists := healthCheck["endpoint"]; exists {
+			t.Error("endpoint should be omitted for socket health check")
+		}
+
+		var decoded TemplateContent
+		if err := json.Unmarshal(data, &decoded); err != nil {
+			t.Fatalf("Unmarshal: %v", err)
+		}
+		if decoded.HealthCheck.Type != HealthCheckTypeSocket {
+			t.Errorf("Type: got %q, want %q", decoded.HealthCheck.Type, HealthCheckTypeSocket)
+		}
+	})
+
+	t.Run("http type round-trips", func(t *testing.T) {
+		t.Parallel()
+		original := TemplateContent{
+			Command: []string{"/usr/local/bin/some-service"},
+			HealthCheck: &HealthCheck{
+				Type:            HealthCheckTypeHTTP,
+				Endpoint:        "/healthz",
+				IntervalSeconds: 30,
+			},
+		}
+
+		data, err := json.Marshal(original)
+		if err != nil {
+			t.Fatalf("Marshal: %v", err)
+		}
+
+		var raw map[string]any
+		if err := json.Unmarshal(data, &raw); err != nil {
+			t.Fatalf("Unmarshal to map: %v", err)
+		}
+
+		healthCheck, ok := raw["health_check"].(map[string]any)
+		if !ok {
+			t.Fatal("health_check field missing or wrong type")
+		}
+		assertField(t, healthCheck, "type", "http")
+		assertField(t, healthCheck, "endpoint", "/healthz")
+	})
+
+	t.Run("empty type omitted from wire format", func(t *testing.T) {
+		t.Parallel()
+		// When Type is the zero value, it should be omitted.
+		original := HealthCheck{
+			Endpoint:        "/health",
+			IntervalSeconds: 10,
+		}
+
+		data, err := json.Marshal(original)
+		if err != nil {
+			t.Fatalf("Marshal: %v", err)
+		}
+
+		var raw map[string]any
+		if err := json.Unmarshal(data, &raw); err != nil {
+			t.Fatalf("Unmarshal to map: %v", err)
+		}
+		if _, exists := raw["type"]; exists {
+			t.Error("type should be omitted when empty (defaults to http at runtime)")
+		}
+	})
+}

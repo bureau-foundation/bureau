@@ -1104,6 +1104,11 @@ type serviceDeployOptions struct {
 	// principal. Grants are included in service tokens the daemon
 	// mints when resolving RequiredServices for other principals.
 	Authorization *schema.AuthorizationPolicy
+
+	// HealthCheck is the health check config for this service's
+	// template. When non-nil, the daemon starts a health monitor that
+	// probes the service at the configured interval and type.
+	HealthCheck *schema.HealthCheck
 }
 
 // serviceDeployResult holds the result of deployService: entity reference,
@@ -1247,8 +1252,9 @@ func deployService(
 	if err != nil {
 		t.Fatalf("parse service template ref for %q: %v", templateName, err)
 	}
-	_, err = templatedef.Push(ctx, admin, templateRef,
-		serviceTemplateContent(options.Binary, options.Command, options.RequiredServices, options.ExtraMounts), testServer)
+	content := serviceTemplateContent(options.Binary, options.Command, options.RequiredServices, options.ExtraMounts)
+	content.HealthCheck = options.HealthCheck
+	_, err = templatedef.Push(ctx, admin, templateRef, content, testServer)
 	if err != nil {
 		t.Fatalf("push service template %q: %v", templateName, err)
 	}

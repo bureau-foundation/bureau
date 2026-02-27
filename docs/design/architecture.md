@@ -604,6 +604,65 @@ filesystem contract (payload.json, trigger.json, identity.json). The
 boundary is clear — JSON crosses network boundaries and enters the
 sandbox filesystem, CBOR stays inside Bureau's internal protocols.
 
+### Health monitoring
+
+The daemon monitors the health of running principals and takes corrective
+action (rollback to previous working configuration) when sustained
+failures are detected. Health monitoring is configured per-principal via
+the `health_check` field on the template.
+
+Two transport tiers serve different service types:
+
+- **HTTP** (`type: "http"`, the default): The daemon sends an HTTP GET to
+  the principal's proxy admin socket at the configured `endpoint` path.
+  This is the right choice for sandboxed third-party services and Docker
+  containers, where the proxy admin socket is the only daemon-reachable
+  interface.
+
+- **Socket** (`type: "socket"`): The daemon sends a CBOR `health` action
+  to the principal's service socket. This is the right choice for Bureau's
+  own native services (telemetry relay, ticket service, fleet controller,
+  agent service, telemetry service), which already run CBOR socket servers
+  via `lib/service.SocketServer`. Socket probes are direct — daemon to
+  service, no proxy in the path — and use the same wire protocol as all
+  other service actions.
+
+The `health` action returns a standard `HealthResponse` envelope:
+
+```
+{healthy: bool, reason?: string}
+```
+
+The response shape is uniform across all services. Every `SocketServer`
+registers a default `health` handler automatically — no per-service
+registration is needed. The default handler reports healthy (meaning "I'm
+alive and accepting requests"). Services with degraded states override
+this via `SetHealthFunc(func() error)`: return nil for healthy, or an
+error whose message becomes the reason string in the response. This
+design makes it structurally impossible for an unhealthy response to lack
+a diagnostic reason.
+
+Both tiers share the same failure lifecycle:
+
+- **Grace period**: After sandbox creation, the monitor sleeps for the
+  configured `grace_period_seconds` before its first probe. This gives the
+  sandbox, proxy, and service time to initialize.
+- **Failure threshold**: Consecutive unhealthy probes must reach
+  `failure_threshold` before the monitor takes action. A single healthy
+  response resets the counter.
+- **Rollback**: When the threshold is reached and a previous working
+  configuration exists (`previousSpecs`), the daemon destroys the current
+  sandbox and recreates it with the previous spec and credentials. The
+  daemon posts a `m.bureau.health_check` notification to the config room
+  with outcome `rolled_back`, `destroyed` (no previous config), or
+  `rollback_failed`.
+
+Health check configuration is validated at template resolution time. An
+HTTP health check without an `endpoint`, a socket health check with an
+unknown type, or a zero/negative interval are caught during reconciliation
+and recorded as a template resolution failure — not silently ignored at
+probe time.
+
 ---
 
 ## Machine Bootstrap and Lifecycle

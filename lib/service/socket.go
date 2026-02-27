@@ -102,6 +102,10 @@ type Response struct {
 // (authenticated request-response), or HandleAuthStream (authenticated
 // long-lived stream) before calling Serve. Unknown actions receive an
 // error response.
+//
+// Every SocketServer registers a default "health" action that reports
+// healthy. Services with degraded states override this via
+// SetHealthFunc.
 type SocketServer struct {
 	socketPath     string
 	handlers       map[string]ActionFunc
@@ -110,6 +114,12 @@ type SocketServer struct {
 	authConfig     *AuthConfig
 	logger         *slog.Logger
 	telemetry      *TelemetryEmitter
+
+	// healthFunc, when non-nil, is called on each health probe.
+	// Return nil for healthy, or an error describing the unhealthy
+	// state. When nil (the default), the server reports healthy —
+	// meaning "I'm alive and accepting requests."
+	healthFunc func() error
 
 	// activeConnections tracks in-flight request handlers for graceful
 	// shutdown. Serve waits for all active connections to complete
@@ -126,6 +136,9 @@ type SocketServer struct {
 // If authConfig is non-nil, authenticated handlers may be registered
 // via HandleAuth. Register actions with Handle/HandleAuth before
 // calling Serve.
+//
+// A default "health" action is registered automatically. It reports
+// healthy unless overridden via SetHealthFunc.
 func NewSocketServer(socketPath string, logger *slog.Logger, authConfig *AuthConfig) *SocketServer {
 	if authConfig != nil {
 		if authConfig.PublicKey == nil {
@@ -141,7 +154,7 @@ func NewSocketServer(socketPath string, logger *slog.Logger, authConfig *AuthCon
 			panic("service.SocketServer: AuthConfig.Clock must not be nil")
 		}
 	}
-	return &SocketServer{
+	server := &SocketServer{
 		socketPath:     socketPath,
 		handlers:       make(map[string]ActionFunc),
 		authHandlers:   make(map[string]AuthActionFunc),
@@ -150,6 +163,8 @@ func NewSocketServer(socketPath string, logger *slog.Logger, authConfig *AuthCon
 		logger:         logger,
 		ready:          make(chan struct{}),
 	}
+	server.handlers["health"] = server.handleHealth
+	return server
 }
 
 // Ready returns a channel that is closed once the server socket is
@@ -575,6 +590,46 @@ func (s *SocketServer) writeSuccess(conn net.Conn, result any) {
 	if err := codec.NewEncoder(conn).Encode(response); err != nil {
 		s.logger.Debug("failed to write success response", "error", err)
 	}
+}
+
+// HealthResponse is the wire-format response for the standard "health"
+// action. The daemon decodes this uniformly across all services to
+// determine whether a service is healthy. Services that need to report
+// degraded state provide a Reason string.
+type HealthResponse struct {
+	Healthy bool   `cbor:"healthy"`
+	Reason  string `cbor:"reason,omitempty"`
+}
+
+// SetHealthFunc overrides the default health handler behavior. The
+// function is called on each health probe. Return nil for healthy, or
+// an error describing the unhealthy state — the error message becomes
+// the Reason field in the HealthResponse.
+//
+// When f is nil (the default, and the behavior after calling
+// SetHealthFunc(nil)), the server reports healthy. This means "I'm
+// alive and accepting requests" — appropriate for services without
+// degraded states to distinguish from "not running" (which the daemon
+// detects as a connection failure).
+//
+// Must be called before Serve.
+func (s *SocketServer) SetHealthFunc(f func() error) {
+	s.healthFunc = f
+}
+
+// handleHealth is the built-in handler for the "health" action,
+// registered automatically by NewSocketServer. Health checks are
+// unauthenticated because they are liveness probes from the daemon,
+// not data queries. The daemon reaches the service socket via the
+// host filesystem, not through the sandbox.
+func (s *SocketServer) handleHealth(_ context.Context, _ []byte) (any, error) {
+	if s.healthFunc == nil {
+		return &HealthResponse{Healthy: true}, nil
+	}
+	if err := s.healthFunc(); err != nil {
+		return &HealthResponse{Healthy: false, Reason: err.Error()}, nil
+	}
+	return &HealthResponse{Healthy: true}, nil
 }
 
 // RegisterRevocationHandler registers the standard "revoke-tokens"

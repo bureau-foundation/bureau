@@ -25,6 +25,7 @@ go_test(
         "fleet_controller_test.go",
         "fleet_test.go",
         "ha_test.go",
+        "health_test.go",
         "helpers_test.go",
         "inotify_test.go",
         "lifecycle_test.go",

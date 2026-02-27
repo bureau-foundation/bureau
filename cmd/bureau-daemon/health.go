@@ -4,10 +4,16 @@
 package main
 
 // Health monitoring: each running principal whose template defines a
-// HealthCheck gets a health monitor goroutine. The goroutine polls the
-// proxy admin socket at the configured endpoint and interval. When
-// consecutive failures reach the threshold, it triggers a rollback to
-// the previous working sandbox configuration.
+// HealthCheck gets a health monitor goroutine. The goroutine probes the
+// service at the configured interval using one of two transports:
+//
+//   - HTTP (type "http"): sends GET to the proxy admin socket at the
+//     configured Endpoint. For sandboxed third-party services.
+//   - Socket (type "socket"): sends a CBOR "health" action to the
+//     principal's service socket. For Bureau-native services.
+//
+// When consecutive failures reach the threshold, the monitor triggers a
+// rollback to the previous working sandbox configuration.
 //
 // The health monitor mirrors the layoutWatcher pattern: per-principal
 // goroutine with cancel + done channel for lifecycle management. The
@@ -25,6 +31,7 @@ import (
 	"github.com/bureau-foundation/bureau/lib/ipc"
 	"github.com/bureau-foundation/bureau/lib/ref"
 	"github.com/bureau-foundation/bureau/lib/schema"
+	"github.com/bureau-foundation/bureau/lib/service"
 )
 
 // healthMonitor tracks a running health check goroutine for a single
@@ -97,6 +104,9 @@ func (d *Daemon) stopAllHealthMonitors() {
 // defaults. Does not modify the original.
 func healthCheckDefaults(config *schema.HealthCheck) schema.HealthCheck {
 	result := *config
+	if result.Type == "" {
+		result.Type = schema.HealthCheckTypeHTTP
+	}
 	if result.TimeoutSeconds == 0 {
 		result.TimeoutSeconds = 5
 	}
@@ -109,18 +119,54 @@ func healthCheckDefaults(config *schema.HealthCheck) schema.HealthCheck {
 	return result
 }
 
+// validateHealthCheck checks that a HealthCheck configuration is valid.
+// Called during template resolution so misconfigured health checks are
+// caught at reconcile time (loud failure), not silently failing at
+// probe time.
+func validateHealthCheck(check *schema.HealthCheck) error {
+	effectiveType := check.Type
+	if effectiveType == "" {
+		effectiveType = schema.HealthCheckTypeHTTP
+	}
+	switch effectiveType {
+	case schema.HealthCheckTypeHTTP:
+		if check.Endpoint == "" {
+			return fmt.Errorf("endpoint is required for HTTP health checks")
+		}
+	case schema.HealthCheckTypeSocket:
+		// No endpoint needed — the daemon sends a CBOR "health" action
+		// to the principal's service socket.
+	default:
+		return fmt.Errorf("unknown health check type %q (valid: %q, %q)",
+			check.Type, schema.HealthCheckTypeHTTP, schema.HealthCheckTypeSocket)
+	}
+	if check.IntervalSeconds <= 0 {
+		return fmt.Errorf("interval_seconds must be positive")
+	}
+	return nil
+}
+
 // runHealthMonitor is the main goroutine for a single principal's
-// health monitoring. It waits the grace period, then polls the proxy
-// admin socket at the configured interval. On sustained failure, it
-// triggers a rollback.
+// health monitoring. It waits the grace period, then probes the
+// service at the configured interval using the transport selected by
+// the HealthCheck type. On sustained failure, it triggers a rollback.
 func (d *Daemon) runHealthMonitor(ctx context.Context, principal ref.Entity, healthCheck *schema.HealthCheck, done chan struct{}) {
 	defer close(done)
 
 	config := healthCheckDefaults(healthCheck)
 
+	// Log the socket path for socket-type health checks so
+	// operators can verify the daemon is probing the right path.
+	var healthTarget string
+	if config.Type == schema.HealthCheckTypeSocket {
+		healthTarget = d.serviceSocketPathFunc(principal)
+	} else {
+		healthTarget = config.Endpoint
+	}
 	d.logger.Info("health monitor started",
 		"principal", principal,
-		"endpoint", config.Endpoint,
+		"type", config.Type,
+		"target", healthTarget,
 		"interval_seconds", config.IntervalSeconds,
 		"timeout_seconds", config.TimeoutSeconds,
 		"failure_threshold", config.FailureThreshold,
@@ -145,7 +191,7 @@ func (d *Daemon) runHealthMonitor(ctx context.Context, principal ref.Entity, hea
 		case <-ticker.C:
 		}
 
-		healthy := d.checkHealth(ctx, principal, config.Endpoint, config.TimeoutSeconds)
+		healthy := d.checkHealth(ctx, principal, &config)
 		if healthy {
 			if consecutiveFailures > 0 {
 				d.logger.Info("health check recovered",
@@ -160,6 +206,7 @@ func (d *Daemon) runHealthMonitor(ctx context.Context, principal ref.Entity, hea
 		consecutiveFailures++
 		d.logger.Warn("health check failed",
 			"principal", principal,
+			"type", config.Type,
 			"endpoint", config.Endpoint,
 			"consecutive_failures", consecutiveFailures,
 			"threshold", config.FailureThreshold,
@@ -176,10 +223,21 @@ func (d *Daemon) runHealthMonitor(ctx context.Context, principal ref.Entity, hea
 	}
 }
 
-// checkHealth sends a single HTTP GET to the principal's proxy admin
+// checkHealth dispatches a health probe to the appropriate transport
+// based on the config type. Returns true if the service is healthy.
+func (d *Daemon) checkHealth(ctx context.Context, principal ref.Entity, config *schema.HealthCheck) bool {
+	switch config.Type {
+	case schema.HealthCheckTypeSocket:
+		return d.checkHealthSocket(ctx, principal, config.TimeoutSeconds)
+	default:
+		return d.checkHealthHTTP(ctx, principal, config.Endpoint, config.TimeoutSeconds)
+	}
+}
+
+// checkHealthHTTP sends a single HTTP GET to the principal's proxy admin
 // socket at the configured health endpoint. Returns true if the
 // response is HTTP 200.
-func (d *Daemon) checkHealth(ctx context.Context, principal ref.Entity, endpoint string, timeoutSeconds int) bool {
+func (d *Daemon) checkHealthHTTP(ctx context.Context, principal ref.Entity, endpoint string, timeoutSeconds int) bool {
 	adminSocket := d.adminSocketPathFunc(principal)
 	client := proxyAdminClient(adminSocket)
 
@@ -202,6 +260,35 @@ func (d *Daemon) checkHealth(ctx context.Context, principal ref.Entity, endpoint
 	defer response.Body.Close()
 
 	return response.StatusCode == http.StatusOK
+}
+
+// checkHealthSocket sends a CBOR "health" action to the principal's
+// service socket. Returns true if the service responds with
+// {healthy: true}. Connection failures, timeouts, and error responses
+// all count as unhealthy.
+func (d *Daemon) checkHealthSocket(ctx context.Context, principal ref.Entity, timeoutSeconds int) bool {
+	socketPath := d.serviceSocketPathFunc(principal)
+	client := service.NewServiceClientFromToken(socketPath, nil)
+
+	requestContext, cancel := context.WithTimeout(ctx, time.Duration(timeoutSeconds)*time.Second)
+	defer cancel()
+
+	var response service.HealthResponse
+	if err := client.Call(requestContext, "health", nil, &response); err != nil {
+		d.logger.Warn("health check socket probe failed",
+			"principal", principal,
+			"socket_path", socketPath,
+			"error", err,
+		)
+		return false
+	}
+	if !response.Healthy {
+		d.logger.Info("health check socket returned unhealthy",
+			"principal", principal,
+			"reason", response.Reason,
+		)
+	}
+	return response.Healthy
 }
 
 // rollbackPrincipal destroys the current sandbox and recreates it with

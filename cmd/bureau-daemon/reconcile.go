@@ -329,6 +329,19 @@ func (d *Daemon) reconcile(ctx context.Context) error {
 				continue
 			}
 			resolvedTemplate = template
+
+			if template.HealthCheck != nil {
+				if err := validateHealthCheck(template.HealthCheck); err != nil {
+					d.logger.Error("invalid health check in template",
+						"principal", principal,
+						"template", assignment.Template,
+						"error", err,
+					)
+					d.recordStartFailure(principal, failureCategoryTemplate, fmt.Sprintf("invalid health check: %v", err))
+					continue
+				}
+			}
+
 			sandboxSpec = resolveInstanceConfig(template, &assignment)
 			d.logger.Info("resolved sandbox spec from template",
 				"principal", principal,
@@ -843,6 +856,17 @@ func (d *Daemon) reconcileRunningPrincipal(ctx context.Context, principal ref.En
 			"principal", principal, "template", assignment.Template, "error", err)
 		return
 	}
+	if template.HealthCheck != nil {
+		if err := validateHealthCheck(template.HealthCheck); err != nil {
+			d.logger.Error("invalid health check in re-resolved template",
+				"principal", principal,
+				"template", assignment.Template,
+				"error", err,
+			)
+			return
+		}
+	}
+
 	newSpec := resolveInstanceConfig(template, &assignment)
 
 	// Apply the same overlays that the create path uses so the stored

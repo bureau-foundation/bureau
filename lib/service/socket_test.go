@@ -6,6 +6,7 @@ package service
 import (
 	"context"
 	"crypto/ed25519"
+	"errors"
 	"fmt"
 	"log/slog"
 	"net"
@@ -1424,6 +1425,116 @@ func TestRevocationHandler_MultipleTokens(t *testing.T) {
 		if !authConfig.Blacklist.IsRevoked(tokenID) {
 			t.Errorf("token %q should be revoked", tokenID)
 		}
+	}
+
+	cancel()
+	wg.Wait()
+}
+
+// --- Health handler tests ---
+
+func TestDefaultHealthHandler(t *testing.T) {
+	socketPath := testSocketPath(t)
+	server := NewSocketServer(socketPath, testLogger(), nil)
+
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+
+	var wg sync.WaitGroup
+	wg.Add(1)
+	go func() {
+		defer wg.Done()
+		server.Serve(ctx)
+	}()
+
+	waitForSocket(t, socketPath)
+
+	response := sendRequest(t, socketPath, map[string]string{"action": "health"})
+	if !response.OK {
+		t.Fatalf("expected ok=true, got false (error: %s)", response.Error)
+	}
+
+	var health HealthResponse
+	decodeData(t, response, &health)
+	if !health.Healthy {
+		t.Error("expected healthy=true for default health handler")
+	}
+	if health.Reason != "" {
+		t.Errorf("expected empty reason, got %q", health.Reason)
+	}
+
+	cancel()
+	wg.Wait()
+}
+
+func TestSetHealthFunc_Healthy(t *testing.T) {
+	socketPath := testSocketPath(t)
+	server := NewSocketServer(socketPath, testLogger(), nil)
+	server.SetHealthFunc(func() error {
+		return nil
+	})
+
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+
+	var wg sync.WaitGroup
+	wg.Add(1)
+	go func() {
+		defer wg.Done()
+		server.Serve(ctx)
+	}()
+
+	waitForSocket(t, socketPath)
+
+	response := sendRequest(t, socketPath, map[string]string{"action": "health"})
+	if !response.OK {
+		t.Fatalf("expected ok=true, got false (error: %s)", response.Error)
+	}
+
+	var health HealthResponse
+	decodeData(t, response, &health)
+	if !health.Healthy {
+		t.Error("expected healthy=true")
+	}
+	if health.Reason != "" {
+		t.Errorf("expected empty reason, got %q", health.Reason)
+	}
+
+	cancel()
+	wg.Wait()
+}
+
+func TestSetHealthFunc_Unhealthy(t *testing.T) {
+	socketPath := testSocketPath(t)
+	server := NewSocketServer(socketPath, testLogger(), nil)
+	server.SetHealthFunc(func() error {
+		return errors.New("upstream database unreachable")
+	})
+
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+
+	var wg sync.WaitGroup
+	wg.Add(1)
+	go func() {
+		defer wg.Done()
+		server.Serve(ctx)
+	}()
+
+	waitForSocket(t, socketPath)
+
+	response := sendRequest(t, socketPath, map[string]string{"action": "health"})
+	if !response.OK {
+		t.Fatalf("expected ok=true (action succeeded), got false (error: %s)", response.Error)
+	}
+
+	var health HealthResponse
+	decodeData(t, response, &health)
+	if health.Healthy {
+		t.Error("expected healthy=false")
+	}
+	if health.Reason != "upstream database unreachable" {
+		t.Errorf("expected reason %q, got %q", "upstream database unreachable", health.Reason)
 	}
 
 	cancel()

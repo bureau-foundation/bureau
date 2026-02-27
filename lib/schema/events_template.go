@@ -431,28 +431,68 @@ type TemplateProxyService struct {
 	StripHeaders []string `json:"strip_headers,omitempty"`
 }
 
+// HealthCheckType selects the transport for health check probes.
+type HealthCheckType string
+
+const (
+	// HealthCheckTypeHTTP sends HTTP GET to the proxy admin socket at the
+	// configured Endpoint. For sandboxed third-party services, Docker
+	// containers, and generic HTTP services. This is the default when
+	// Type is empty.
+	HealthCheckTypeHTTP HealthCheckType = "http"
+
+	// HealthCheckTypeSocket sends a CBOR "health" action to the
+	// principal's service socket (principal.ServiceSocketPath). For
+	// Bureau-native services that run a lib/service.SocketServer. No
+	// HTTP roundtrip through the proxy — the daemon reaches the service
+	// socket directly on the host filesystem.
+	HealthCheckTypeSocket HealthCheckType = "socket"
+)
+
+// IsKnown reports whether t is one of the defined HealthCheckType values.
+func (t HealthCheckType) IsKnown() bool {
+	switch t {
+	case HealthCheckTypeHTTP, HealthCheckTypeSocket:
+		return true
+	}
+	return false
+}
+
 // HealthCheck configures automated health monitoring for principals
-// created from a template. The daemon polls the health endpoint through
-// the principal's proxy admin socket. If consecutive failures exceed the
-// threshold, the daemon triggers a rollback to the previously working
-// sandbox configuration.
+// created from a template. Two transport tiers match Bureau's
+// communication model:
+//
+//   - HTTP (type "http", the default): sends HTTP GET to the proxy admin
+//     socket at the configured Endpoint. For sandboxed third-party
+//     services, Docker containers, and any service reachable via its proxy.
+//   - Socket (type "socket"): sends a CBOR "health" action to the
+//     principal's service socket. For Bureau-native services that run a
+//     lib/service.SocketServer. No Endpoint field needed.
+//
+// Both tiers share the same monitor lifecycle: grace period, polling
+// interval, failure threshold, and rollback behavior. The type only
+// determines how the daemon reaches the service for each probe.
 //
 // Health checks are optional. Templates for services (databases, API
 // servers, webhook relays) should define health checks; templates for
 // interactive agents typically should not.
 type HealthCheck struct {
+	// Type selects the health check transport. Empty defaults to "http"
+	// at runtime. See HealthCheckTypeHTTP and HealthCheckTypeSocket.
+	Type HealthCheckType `json:"type,omitempty"`
+
 	// Endpoint is the HTTP path to poll (e.g., "/health", "/healthz",
-	// "/api/v1/status"). The daemon sends HTTP GET requests to this
-	// path through the proxy admin socket.
-	Endpoint string `json:"endpoint"`
+	// "/api/v1/status"). Required when Type is "http" (or empty).
+	// Ignored when Type is "socket".
+	Endpoint string `json:"endpoint,omitempty"`
 
 	// IntervalSeconds is the polling interval in seconds. The daemon
 	// sends one health check request per interval. Must be positive.
 	IntervalSeconds int `json:"interval_seconds"`
 
 	// TimeoutSeconds is the per-request timeout in seconds. A request
-	// that does not receive HTTP 200 within this duration counts as a
-	// failure. Zero defaults to 5 seconds at runtime.
+	// that does not complete within this duration counts as a failure.
+	// Zero defaults to 5 seconds at runtime.
 	TimeoutSeconds int `json:"timeout_seconds,omitempty"`
 
 	// FailureThreshold is the number of consecutive failures before

@@ -384,6 +384,9 @@ func run() error {
 		adminSocketPathFunc: func(principal ref.Entity) string {
 			return principal.ProxyAdminSocketPath(fleet.RunDir(runDir))
 		},
+		serviceSocketPathFunc: func(principal ref.Entity) string {
+			return principal.ServiceSocketPath(fleet.RunDir(runDir))
+		},
 		observeSocketPath:      principal.ObserveSocketPath(runDir),
 		tmuxServer:             tmux.NewServer(principal.TmuxSocketPath(runDir), ""),
 		observeRelayBinary:     observeRelayBinary,
@@ -877,6 +880,13 @@ type Daemon struct {
 	// ref.ParseEntityLocalpart and deriving the fleet-scoped path.
 	// Tests override this to use temp directories.
 	adminSocketPathFunc func(principal ref.Entity) string
+
+	// serviceSocketPathFunc returns the service CBOR socket path for
+	// a principal. Used by socket-type health checks to reach the
+	// service directly instead of going through the proxy admin socket.
+	// Defaults to principal.ServiceSocketPath(fleet.RunDir(runDir)).
+	// Tests override this to use temp directories.
+	serviceSocketPathFunc func(principal ref.Entity) string
 
 	// prefetchFunc fetches a Nix store path and its closure from
 	// configured substituters. Defaults to prefetchNixStore. Tests

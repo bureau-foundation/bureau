@@ -9,8 +9,10 @@
 // Other services get the mock's socket via standard m.bureau.service_binding
 // resolution — zero code changes in the service under test.
 //
-// The binary exposes seven actions:
+// The binary exposes nine actions:
+//   - health (unauthenticated): standard HealthResponse controlled by set-health
 //   - status (unauthenticated): relay-compatible operational stats plus stored counts
+//   - set-health (unauthenticated): sets the health state returned by the health action
 //   - submit (authenticated): accepts spans, metrics, logs, output deltas — matches relay wire format
 //   - ingest (authenticated, streaming): accepts the relay-to-service streaming
 //     TelemetryBatch protocol, storing records and forwarding to subscribers
@@ -77,11 +79,19 @@ func run() error {
 	defer cleanup()
 
 	mock := &telemetryMock{}
+	mock.healthy.Store(true)
 
 	socketServer := boot.NewSocketServer()
 	socketServer.RegisterRevocationHandler()
+	socketServer.SetHealthFunc(func() error {
+		if mock.healthy.Load() {
+			return nil
+		}
+		return errors.New("set-health: manually set unhealthy")
+	})
 
 	socketServer.Handle("status", mock.handleStatus)
+	socketServer.Handle("set-health", mock.handleSetHealth)
 	socketServer.HandleAuth("submit", mock.handleSubmit)
 	socketServer.HandleAuth("query-spans", mock.handleQuerySpans)
 	socketServer.HandleAuth("query-metrics", mock.handleQueryMetrics)
@@ -119,6 +129,11 @@ type telemetryMock struct {
 
 	submits       atomic.Uint64
 	ingestBatches atomic.Uint64
+
+	// healthy controls the response from SetHealthFunc.
+	// Starts true; tests set it false via the set-health action to
+	// simulate health check failure and trigger daemon rollback.
+	healthy atomic.Bool
 
 	// subscriberMu protects subscribers. The submit and ingest
 	// handlers read under RLock to fan out; the subscribe handler
@@ -219,6 +234,23 @@ func (m *telemetryMock) handleStatus(_ context.Context, _ []byte) (any, error) {
 		Submits:            m.submits.Load(),
 		IngestBatches:      m.ingestBatches.Load(),
 	}, nil
+}
+
+// setHealthRequest is the CBOR request for the unauthenticated "set-health"
+// action. Tests call this to make the mock report unhealthy, triggering the
+// daemon's health monitor rollback path.
+type setHealthRequest struct {
+	Healthy bool `cbor:"healthy"`
+}
+
+func (m *telemetryMock) handleSetHealth(_ context.Context, raw []byte) (any, error) {
+	var request setHealthRequest
+	if err := codec.Unmarshal(raw, &request); err != nil {
+		return nil, fmt.Errorf("invalid set-health request: %w", err)
+	}
+
+	m.healthy.Store(request.Healthy)
+	return &service.HealthResponse{Healthy: request.Healthy}, nil
 }
 
 func (m *telemetryMock) handleSubmit(_ context.Context, _ *servicetoken.Token, raw []byte) (any, error) {

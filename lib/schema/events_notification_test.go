@@ -250,6 +250,64 @@ func TestCredentialsRotatedMessageRoundTrip(t *testing.T) {
 	}
 }
 
+func TestCredentialsRotatedMessageRolledBack(t *testing.T) {
+	t.Parallel()
+	original := NewCredentialsRotatedMessage("agent/cred-test", CredRotationRolledBack, "")
+
+	data, err := json.Marshal(original)
+	if err != nil {
+		t.Fatalf("Marshal: %v", err)
+	}
+
+	var raw map[string]any
+	if err := json.Unmarshal(data, &raw); err != nil {
+		t.Fatalf("Unmarshal to map: %v", err)
+	}
+	assertField(t, raw, "msgtype", MsgTypeCredentialsRotated)
+	assertField(t, raw, "status", string(CredRotationRolledBack))
+
+	if _, exists := raw["error"]; exists {
+		t.Error("error field should be omitted for rolled_back")
+	}
+
+	var decoded CredentialsRotatedMessage
+	if err := json.Unmarshal(data, &decoded); err != nil {
+		t.Fatalf("Unmarshal: %v", err)
+	}
+	if decoded.Status != CredRotationRolledBack {
+		t.Errorf("Status = %q, want %q", decoded.Status, CredRotationRolledBack)
+	}
+}
+
+func TestCredentialsRotatedMessageRollbackFailed(t *testing.T) {
+	t.Parallel()
+	original := NewCredentialsRotatedMessage("agent/cred-test", CredRotationRollbackFailed, "previous credentials also unhealthy")
+
+	data, err := json.Marshal(original)
+	if err != nil {
+		t.Fatalf("Marshal: %v", err)
+	}
+
+	var raw map[string]any
+	if err := json.Unmarshal(data, &raw); err != nil {
+		t.Fatalf("Unmarshal to map: %v", err)
+	}
+	assertField(t, raw, "msgtype", MsgTypeCredentialsRotated)
+	assertField(t, raw, "status", string(CredRotationRollbackFailed))
+	assertField(t, raw, "error", "previous credentials also unhealthy")
+
+	var decoded CredentialsRotatedMessage
+	if err := json.Unmarshal(data, &decoded); err != nil {
+		t.Fatalf("Unmarshal: %v", err)
+	}
+	if decoded.Status != CredRotationRollbackFailed {
+		t.Errorf("Status = %q, want %q", decoded.Status, CredRotationRollbackFailed)
+	}
+	if decoded.Error != "previous credentials also unhealthy" {
+		t.Errorf("Error = %q, want %q", decoded.Error, "previous credentials also unhealthy")
+	}
+}
+
 func TestCredentialsRotatedMessageRestartingOmitsError(t *testing.T) {
 	t.Parallel()
 	original := NewCredentialsRotatedMessage("agent/cred-test", CredRotationRestarting, "")
@@ -466,6 +524,25 @@ func TestPrincipalRestartedMessageRoundTrip(t *testing.T) {
 	}
 	if decoded.Template != original.Template {
 		t.Errorf("Template = %q, want %q", decoded.Template, original.Template)
+	}
+}
+
+func TestCredRotationStatusIsKnown(t *testing.T) {
+	t.Parallel()
+	known := []CredRotationStatus{
+		CredRotationRestarting,
+		CredRotationCompleted,
+		CredRotationFailed,
+		CredRotationRolledBack,
+		CredRotationRollbackFailed,
+	}
+	for _, status := range known {
+		if !status.IsKnown() {
+			t.Errorf("CredRotationStatus(%q).IsKnown() = false, want true", status)
+		}
+	}
+	if CredRotationStatus("bogus").IsKnown() {
+		t.Error("CredRotationStatus(\"bogus\").IsKnown() = true, want false")
 	}
 }
 

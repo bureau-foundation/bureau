@@ -373,6 +373,7 @@ func run() error {
 		lastObserveAllowances: make(map[ref.Entity][]schema.Allowance),
 		lastSpecs:             make(map[ref.Entity]*schema.SandboxSpec),
 		previousSpecs:         make(map[ref.Entity]*schema.SandboxSpec),
+		previousCredentials:   make(map[ref.Entity]string),
 		lastTemplates:         make(map[ref.Entity]*schema.TemplateContent),
 		healthMonitors:        make(map[ref.Entity]*healthMonitor),
 		services:              make(map[string]*schema.Service),
@@ -772,6 +773,15 @@ type Daemon struct {
 	// the sandbox with this spec. Cleared after rollback or when the
 	// principal is removed from config. Keyed by principal localpart.
 	previousSpecs map[ref.Entity]*schema.SandboxSpec
+
+	// previousCredentials stores the credential ciphertext that was
+	// active before a credential rotation triggered a sandbox restart.
+	// On health check rollback, the daemon uses these credentials
+	// instead of reading fresh ones from Matrix (which would return
+	// the new, possibly broken, credentials). One-shot: consumed and
+	// deleted on rollback. In-memory only — daemon restart during the
+	// rollback window requires manual re-provisioning.
+	previousCredentials map[ref.Entity]string
 
 	// lastTemplates stores the resolved TemplateContent for each running
 	// principal. Health monitors read HealthCheck config from here.

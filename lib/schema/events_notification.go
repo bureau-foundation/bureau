@@ -88,12 +88,24 @@ const (
 	// CredRotationFailed means the restart after credential rotation
 	// did not succeed.
 	CredRotationFailed CredRotationStatus = "failed"
+
+	// CredRotationRolledBack means the health check failed after
+	// credential rotation and the daemon rolled back to the previous
+	// working credentials.
+	CredRotationRolledBack CredRotationStatus = "rolled_back"
+
+	// CredRotationRollbackFailed means the daemon attempted to roll
+	// back after credential rotation but the previous credentials
+	// were unavailable (daemon restarted during rollback window) or
+	// also failed health checks. The operator must re-provision.
+	CredRotationRollbackFailed CredRotationStatus = "rollback_failed"
 )
 
 // IsKnown reports whether s is one of the defined CredRotationStatus values.
 func (s CredRotationStatus) IsKnown() bool {
 	switch s {
-	case CredRotationRestarting, CredRotationCompleted, CredRotationFailed:
+	case CredRotationRestarting, CredRotationCompleted, CredRotationFailed,
+		CredRotationRolledBack, CredRotationRollbackFailed:
 		return true
 	}
 	return false
@@ -368,6 +380,10 @@ func NewCredentialsRotatedMessage(principal string, status CredRotationStatus, e
 		body = fmt.Sprintf("Restarted %s with new credentials", principal)
 	case CredRotationFailed:
 		body = fmt.Sprintf("FAILED to restart %s after credential rotation: %s", principal, errorMessage)
+	case CredRotationRolledBack:
+		body = fmt.Sprintf("Rolled back %s to previous credentials after health check failure", principal)
+	case CredRotationRollbackFailed:
+		body = fmt.Sprintf("CRITICAL: %s credential rollback failed: %s. Re-provisioning required.", principal, errorMessage)
 	default:
 		body = fmt.Sprintf("Credential rotation for %s: %s", principal, status)
 	}

@@ -12,7 +12,6 @@ import (
 	"net/http/httptest"
 	"os"
 	"path/filepath"
-	"runtime"
 	"strings"
 	"sync"
 	"sync/atomic"
@@ -620,6 +619,366 @@ func TestRollbackNoPreviousSpec(t *testing.T) {
 	messagesMu.Unlock()
 	if !foundCritical {
 		t.Error("expected CRITICAL message when rollback has no previous spec")
+	}
+}
+
+// TestRollbackCredentialRotation verifies that when a health check fails
+// after a credential rotation, the daemon recreates the sandbox with the
+// previous credentials (from previousCredentials) rather than reading the
+// new (broken) credentials from Matrix. This is the core fix for the
+// credential rotation rollback bug: without previousCredentials, the
+// daemon would read the new broken ciphertext from Matrix and create an
+// infinite destroy/recreate loop.
+func TestRollbackCredentialRotation(t *testing.T) {
+	t.Parallel()
+
+	const (
+		configRoomID     = "!config:test.local"
+		accountLocalpart = "agent/test"
+		oldCiphertext    = "encrypted-old-working-creds"
+		newCiphertext    = "encrypted-new-broken-creds"
+	)
+
+	daemon, fakeClock := newTestDaemon(t)
+	daemon.machine, daemon.fleet = testMachineSetup(t, "test", "test.local")
+	machineName := daemon.machine.Localpart()
+	serverName := daemon.machine.Server().String()
+
+	ipcEntity := testEntity(t, daemon.fleet, accountLocalpart)
+
+	// Mock Matrix: credentials state event has the NEW (broken) ciphertext.
+	// This is the key to the test: Matrix holds the broken credentials,
+	// but the daemon should use previousCredentials instead.
+	state := newMockMatrixState()
+	state.setStateEvent(configRoomID, schema.EventTypeMachineConfig, machineName, schema.MachineConfig{
+		Principals: []schema.PrincipalAssignment{{
+			Principal: ipcEntity,
+			AutoStart: true,
+		}},
+	})
+	state.setStateEvent(configRoomID, schema.EventTypeCredentials, ipcEntity.Localpart(), schema.Credentials{
+		Ciphertext: newCiphertext,
+	})
+
+	// Capture messages sent to the config room, tracking both body text
+	// and typed msgtype/status fields.
+	type capturedMessage struct {
+		Body    string `json:"body"`
+		MsgType string `json:"msgtype"`
+		Status  string `json:"status"`
+	}
+	var (
+		messagesMu sync.Mutex
+		messages   []capturedMessage
+	)
+	matrixServer := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.Method == "PUT" && strings.Contains(r.URL.Path, "/send/"+string(schema.MatrixEventTypeMessage)+"/") {
+			var content capturedMessage
+			if err := json.NewDecoder(r.Body).Decode(&content); err == nil {
+				messagesMu.Lock()
+				messages = append(messages, content)
+				messagesMu.Unlock()
+			}
+			w.Header().Set("Content-Type", "application/json")
+			json.NewEncoder(w).Encode(map[string]string{"event_id": "$msg1"})
+			return
+		}
+		state.handler().ServeHTTP(w, r)
+	}))
+	t.Cleanup(matrixServer.Close)
+
+	client, err := messaging.NewClient(messaging.ClientConfig{HomeserverURL: matrixServer.URL})
+	if err != nil {
+		t.Fatalf("creating client: %v", err)
+	}
+	session, err := client.SessionFromToken(mustParseUserID("@"+machineName+":"+serverName), "test-token")
+	if err != nil {
+		t.Fatalf("creating session: %v", err)
+	}
+	t.Cleanup(func() { session.Close() })
+
+	socketDir := testutil.SocketDir(t)
+	launcherSocket := filepath.Join(socketDir, "launcher.sock")
+
+	rollbackDone := make(chan struct{}, 1)
+	var (
+		launcherMu           sync.Mutex
+		ipcActions           []string
+		lastCreateCiphertext string
+	)
+	listener := startMockLauncher(t, launcherSocket, func(request launcherIPCRequest) launcherIPCResponse {
+		launcherMu.Lock()
+		ipcActions = append(ipcActions, string(request.Action))
+		if request.Action == ipc.ActionCreateSandbox {
+			lastCreateCiphertext = request.EncryptedCredentials
+			select {
+			case rollbackDone <- struct{}{}:
+			default:
+			}
+		}
+		launcherMu.Unlock()
+		return launcherIPCResponse{OK: true, ProxyPID: 99999}
+	})
+	t.Cleanup(func() { listener.Close() })
+
+	// Mock admin server: always unhealthy.
+	adminSocket := filepath.Join(socketDir, "admin.sock")
+	checkHandled := make(chan struct{}, 10)
+	adminListener, err := net.Listen("unix", adminSocket)
+	if err != nil {
+		t.Fatalf("Listen(%s) error: %v", adminSocket, err)
+	}
+	adminServer := &http.Server{
+		Handler: http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+			w.WriteHeader(http.StatusServiceUnavailable)
+			select {
+			case checkHandled <- struct{}{}:
+			default:
+			}
+		}),
+	}
+	go adminServer.Serve(adminListener)
+	t.Cleanup(func() { adminServer.Close(); adminListener.Close() })
+
+	previousSpec := &schema.SandboxSpec{Command: []string{"/bin/old-agent"}}
+
+	daemon.runDir = principal.DefaultRunDir
+	daemon.session = session
+	daemon.configRoomID = mustRoomID(configRoomID)
+	daemon.launcherSocket = launcherSocket
+	daemon.running[ipcEntity] = true
+	daemon.lastSpecs[ipcEntity] = &schema.SandboxSpec{Command: []string{"/bin/new-agent"}}
+	daemon.previousSpecs[ipcEntity] = previousSpec
+	daemon.previousCredentials[ipcEntity] = oldCiphertext
+	daemon.lastTemplates[ipcEntity] = &schema.TemplateContent{
+		HealthCheck: &schema.HealthCheck{
+			Endpoint:        "/health",
+			IntervalSeconds: 1,
+		},
+	}
+	daemon.adminSocketPathFunc = func(ref.Entity) string { return adminSocket }
+	daemon.logger = slog.New(slog.NewJSONHandler(os.Stderr, nil))
+	t.Cleanup(daemon.stopAllLayoutWatchers)
+	t.Cleanup(daemon.stopAllHealthMonitors)
+
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+
+	daemon.startHealthMonitor(ctx, ipcEntity, &schema.HealthCheck{
+		Endpoint:           "/health",
+		IntervalSeconds:    1,
+		FailureThreshold:   2,
+		GracePeriodSeconds: 1,
+		TimeoutSeconds:     1,
+	})
+
+	// Advance past grace period.
+	fakeClock.WaitForTimers(1)
+	fakeClock.Advance(1 * time.Second)
+
+	// Wait for ticker registration after grace period.
+	fakeClock.WaitForTimers(1)
+
+	// First tick → failure 1.
+	fakeClock.Advance(1 * time.Second)
+	testutil.RequireReceive(t, checkHandled, 5*time.Second, "waiting for first health check")
+
+	// Second tick → failure 2 → rollback.
+	fakeClock.Advance(1 * time.Second)
+
+	testutil.RequireReceive(t, rollbackDone, 5*time.Second, "waiting for rollback")
+
+	// Verify the create-sandbox used the OLD credentials, not the new
+	// broken ones from Matrix.
+	launcherMu.Lock()
+	gotCiphertext := lastCreateCiphertext
+	launcherMu.Unlock()
+
+	if gotCiphertext != oldCiphertext {
+		t.Errorf("rollback used wrong credentials:\n  got:  %q\n  want: %q (previous working)\n  Matrix has: %q (new broken)",
+			gotCiphertext, oldCiphertext, newCiphertext)
+	}
+
+	// Verify previousCredentials consumed (one-shot).
+	daemon.reconcileMu.RLock()
+	_, hasPreviousCredentials := daemon.previousCredentials[ipcEntity]
+	daemon.reconcileMu.RUnlock()
+	if hasPreviousCredentials {
+		t.Error("previousCredentials should be consumed after rollback")
+	}
+
+	// Verify lastCredentials updated to the rolled-back ciphertext.
+	// This prevents the next reconcile from re-detecting a rotation.
+	daemon.reconcileMu.RLock()
+	lastCreds := daemon.lastCredentials[ipcEntity]
+	daemon.reconcileMu.RUnlock()
+	if lastCreds != oldCiphertext {
+		t.Errorf("lastCredentials after rollback = %q, want %q", lastCreds, oldCiphertext)
+	}
+
+	// Verify principal is running again.
+	daemon.reconcileMu.RLock()
+	isRunning := daemon.running[ipcEntity]
+	daemon.reconcileMu.RUnlock()
+	if !isRunning {
+		t.Error("principal should be running after rollback")
+	}
+
+	// Verify credential rotation rollback notification was posted.
+	messagesMu.Lock()
+	foundCredRollback := false
+	for _, message := range messages {
+		if message.MsgType == schema.MsgTypeCredentialsRotated && message.Status == string(schema.CredRotationRolledBack) {
+			foundCredRollback = true
+			break
+		}
+	}
+	messagesMu.Unlock()
+	if !foundCredRollback {
+		t.Error("expected CredRotationRolledBack notification in config room")
+	}
+}
+
+// TestRollbackCredentialRotationNoPreviousCredentials verifies the fallback
+// behavior when a health check fails after credential rotation but the
+// daemon has no previousCredentials (e.g., daemon restarted during the
+// rollback window). The daemon reads fresh credentials from Matrix and
+// does NOT post a CredRotationRolledBack notification since it can't
+// distinguish this from a regular structural rollback.
+func TestRollbackCredentialRotationNoPreviousCredentials(t *testing.T) {
+	t.Parallel()
+
+	const (
+		configRoomID      = "!config:test.local"
+		accountLocalpart  = "agent/test"
+		currentCiphertext = "encrypted-current-creds"
+	)
+
+	daemon, _ := newTestDaemon(t)
+	daemon.machine, daemon.fleet = testMachineSetup(t, "test", "test.local")
+	machineName := daemon.machine.Localpart()
+	serverName := daemon.machine.Server().String()
+
+	ipcEntity := testEntity(t, daemon.fleet, accountLocalpart)
+
+	state := newMockMatrixState()
+	state.setStateEvent(configRoomID, schema.EventTypeMachineConfig, machineName, schema.MachineConfig{
+		Principals: []schema.PrincipalAssignment{{
+			Principal: ipcEntity,
+			AutoStart: true,
+		}},
+	})
+	state.setStateEvent(configRoomID, schema.EventTypeCredentials, ipcEntity.Localpart(), schema.Credentials{
+		Ciphertext: currentCiphertext,
+	})
+
+	type capturedMessage struct {
+		Body    string `json:"body"`
+		MsgType string `json:"msgtype"`
+		Status  string `json:"status"`
+	}
+	var (
+		messagesMu sync.Mutex
+		messages   []capturedMessage
+	)
+	matrixServer := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.Method == "PUT" && strings.Contains(r.URL.Path, "/send/"+string(schema.MatrixEventTypeMessage)+"/") {
+			var content capturedMessage
+			if err := json.NewDecoder(r.Body).Decode(&content); err == nil {
+				messagesMu.Lock()
+				messages = append(messages, content)
+				messagesMu.Unlock()
+			}
+			w.Header().Set("Content-Type", "application/json")
+			json.NewEncoder(w).Encode(map[string]string{"event_id": "$msg1"})
+			return
+		}
+		state.handler().ServeHTTP(w, r)
+	}))
+	t.Cleanup(matrixServer.Close)
+
+	client, err := messaging.NewClient(messaging.ClientConfig{HomeserverURL: matrixServer.URL})
+	if err != nil {
+		t.Fatalf("creating client: %v", err)
+	}
+	session, err := client.SessionFromToken(mustParseUserID("@"+machineName+":"+serverName), "test-token")
+	if err != nil {
+		t.Fatalf("creating session: %v", err)
+	}
+	t.Cleanup(func() { session.Close() })
+
+	socketDir := testutil.SocketDir(t)
+	launcherSocket := filepath.Join(socketDir, "launcher.sock")
+
+	rollbackDone := make(chan struct{}, 1)
+	var (
+		launcherMu           sync.Mutex
+		lastCreateCiphertext string
+	)
+	listener := startMockLauncher(t, launcherSocket, func(request launcherIPCRequest) launcherIPCResponse {
+		launcherMu.Lock()
+		if request.Action == ipc.ActionCreateSandbox {
+			lastCreateCiphertext = request.EncryptedCredentials
+			select {
+			case rollbackDone <- struct{}{}:
+			default:
+			}
+		}
+		launcherMu.Unlock()
+		return launcherIPCResponse{OK: true, ProxyPID: 99999}
+	})
+	t.Cleanup(func() { listener.Close() })
+
+	previousSpec := &schema.SandboxSpec{Command: []string{"/bin/old-agent"}}
+
+	daemon.runDir = principal.DefaultRunDir
+	daemon.session = session
+	daemon.configRoomID = mustRoomID(configRoomID)
+	daemon.launcherSocket = launcherSocket
+	daemon.running[ipcEntity] = true
+	daemon.lastSpecs[ipcEntity] = &schema.SandboxSpec{Command: []string{"/bin/new-agent"}}
+	daemon.previousSpecs[ipcEntity] = previousSpec
+	// No previousCredentials — simulates daemon restart after rotation.
+	daemon.lastTemplates[ipcEntity] = &schema.TemplateContent{
+		HealthCheck: &schema.HealthCheck{
+			Endpoint:        "/health",
+			IntervalSeconds: 1,
+		},
+	}
+	daemon.adminSocketPathFunc = func(ref.Entity) string {
+		return filepath.Join(socketDir, "admin.sock")
+	}
+	daemon.logger = slog.New(slog.NewJSONHandler(os.Stderr, nil))
+	t.Cleanup(daemon.stopAllLayoutWatchers)
+	t.Cleanup(daemon.stopAllHealthMonitors)
+
+	// Call rollbackPrincipal directly.
+	daemon.rollbackPrincipal(context.Background(), ipcEntity)
+
+	testutil.RequireReceive(t, rollbackDone, 5*time.Second, "waiting for rollback")
+
+	// Without previousCredentials, the daemon reads from Matrix.
+	launcherMu.Lock()
+	gotCiphertext := lastCreateCiphertext
+	launcherMu.Unlock()
+
+	if gotCiphertext != currentCiphertext {
+		t.Errorf("rollback should use Matrix credentials when no previousCredentials:\n  got:  %q\n  want: %q",
+			gotCiphertext, currentCiphertext)
+	}
+
+	// Verify NO CredRotationRolledBack notification (not a credential rollback).
+	messagesMu.Lock()
+	foundCredRollback := false
+	for _, message := range messages {
+		if message.MsgType == schema.MsgTypeCredentialsRotated && message.Status == string(schema.CredRotationRolledBack) {
+			foundCredRollback = true
+			break
+		}
+	}
+	messagesMu.Unlock()
+	if foundCredRollback {
+		t.Error("should NOT post CredRotationRolledBack when no previousCredentials exist")
 	}
 }
 
@@ -1434,15 +1793,23 @@ func TestDestroyExtrasCleansPreviousSpecs(t *testing.T) {
 	socketDir := testutil.SocketDir(t)
 	launcherSocket := filepath.Join(socketDir, "launcher.sock")
 
+	destroySandboxReceived := make(chan struct{}, 1)
 	listener := startMockLauncher(t, launcherSocket, func(request launcherIPCRequest) launcherIPCResponse {
+		if request.Action == ipc.ActionDestroySandbox {
+			select {
+			case destroySandboxReceived <- struct{}{}:
+			default:
+			}
+		}
 		return launcherIPCResponse{OK: true}
 	})
 	t.Cleanup(func() { listener.Close() })
 
-	// Principal has a populated previousSpecs entry (from a prior
-	// structural restart). When the principal is destroyed (removed from
-	// config), the destroy-extras pass should clean up all associated
-	// map entries: running, lastSpecs, previousSpecs, lastTemplates.
+	// Principal has populated previousSpecs and previousCredentials entries
+	// (from a prior credential rotation). When the principal is destroyed
+	// (removed from config), the destroy-extras pass should clean up all
+	// associated map entries: running, lastSpecs, previousSpecs,
+	// previousCredentials, lastTemplates.
 	fleetEntity := testEntity(t, daemon.fleet, "agent/test")
 	daemon.runDir = principal.DefaultRunDir
 	daemon.session = session
@@ -1451,6 +1818,7 @@ func TestDestroyExtrasCleansPreviousSpecs(t *testing.T) {
 	daemon.running[fleetEntity] = true
 	daemon.lastSpecs[fleetEntity] = &schema.SandboxSpec{Command: []string{"/bin/agent-v2"}}
 	daemon.previousSpecs[fleetEntity] = &schema.SandboxSpec{Command: []string{"/bin/agent-v1"}}
+	daemon.previousCredentials[fleetEntity] = "encrypted-old-creds"
 	daemon.lastTemplates[fleetEntity] = &schema.TemplateContent{
 		HealthCheck: &schema.HealthCheck{Endpoint: "/health", IntervalSeconds: 10},
 	}
@@ -1478,26 +1846,28 @@ func TestDestroyExtrasCleansPreviousSpecs(t *testing.T) {
 	fakeClock.WaitForTimers(1)
 	fakeClock.Advance(defaultDrainGracePeriod + time.Second)
 
-	// Give the goroutine time to acquire reconcileMu and call
-	// destroyPrincipal.
-	for i := 0; i < 100; i++ {
-		runtime.Gosched()
-		daemon.reconcileMu.Lock()
-		running := daemon.running[fleetEntity]
-		daemon.reconcileMu.Unlock()
-		if !running {
-			break
-		}
-	}
+	// Wait for the drain goroutine to call destroyPrincipal, which
+	// sends "destroy-sandbox" IPC to the mock launcher.
+	testutil.RequireReceive(t, destroySandboxReceived, 5*time.Second, "waiting for destroy-sandbox after drain grace period")
 
-	if daemon.running[fleetEntity] {
+	// The mock handler signaled when it received the destroy-sandbox
+	// request, but the drain goroutine still holds reconcileMu while
+	// finishing destroyPrincipal. Acquire the lock to synchronize.
+	daemon.reconcileMu.Lock()
+	running := daemon.running[fleetEntity]
+	daemon.reconcileMu.Unlock()
+	if running {
 		t.Error("principal should not be running after drain grace period expired")
 	}
+
 	if daemon.lastSpecs[fleetEntity] != nil {
 		t.Error("lastSpecs should be cleaned up when principal is destroyed")
 	}
 	if daemon.previousSpecs[fleetEntity] != nil {
 		t.Error("previousSpecs should be cleaned up when principal is destroyed")
+	}
+	if _, hasPreviousCredentials := daemon.previousCredentials[fleetEntity]; hasPreviousCredentials {
+		t.Error("previousCredentials should be cleaned up when principal is destroyed")
 	}
 	if daemon.lastTemplates[fleetEntity] != nil {
 		t.Error("lastTemplates should be cleaned up when principal is destroyed")

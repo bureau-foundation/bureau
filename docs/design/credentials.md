@@ -466,6 +466,43 @@ encryption using only public keys. The sysadmin sees the plaintext
 value briefly (it generated it), but cannot decrypt the resulting
 bundle or any other machine's bundles.
 
+### Rollback on Failure
+
+When the daemon detects a credential rotation (ciphertext change in the
+`m.bureau.credentials` state event), it destroys the existing sandbox
+and recreates it with the new credentials. If the new credentials are
+bad, the health monitor triggers a rollback:
+
+- **Before destroying the sandbox**, the daemon saves the previous
+  working credential ciphertext, sandbox spec, and template. This
+  parallels the structural restart path, which saves the previous spec
+  for configuration rollbacks.
+
+- **On health check failure**, the daemon uses the saved credentials
+  rather than reading fresh from Matrix. Reading from Matrix would
+  return the new (broken) credentials, creating an infinite
+  destroy/recreate loop. The saved credentials are one-shot: consumed
+  on rollback and not persisted across daemon restarts.
+
+- **Notifications**: the daemon posts a `m.bureau.credentials_rotated`
+  message with status `rolled_back` when it reverts to previous
+  credentials, or `rollback_failed` if the rollback cannot complete.
+  Operators see these alongside the health check notifications.
+
+- **Daemon restart during rollback window**: the previous credentials
+  are in-memory only. If the daemon restarts between the credential
+  rotation and the health check failure, the saved credentials are
+  lost. The daemon falls back to reading from Matrix (the new
+  credentials), which may fail health checks again. The operator must
+  re-provision working credentials manually. The rollback window is
+  narrow (the health check grace period, typically 30-60 seconds).
+
+The recommended rotation protocol — generate new key, provision,
+verify, then revoke old — avoids most rollback scenarios. Rollback
+handles the case where verification fails before revocation: the old
+key is still valid at the provider, and the daemon restores it
+automatically.
+
 ### Matrix Token Rotation
 
 The launcher can rotate Matrix tokens directly. It holds the

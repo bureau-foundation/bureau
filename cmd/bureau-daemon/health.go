@@ -227,6 +227,7 @@ func (d *Daemon) rollbackPrincipal(ctx context.Context, principal ref.Entity) {
 	// maps, so these must be captured before the call.
 	previousSpec := d.previousSpecs[principal]
 	template := d.lastTemplates[principal]
+	previousCiphertext, credentialRollback := d.previousCredentials[principal]
 
 	// Remove this monitor from the health monitors map before calling
 	// destroyPrincipal. destroyPrincipal calls stopHealthMonitor, which
@@ -257,20 +258,41 @@ func (d *Daemon) rollbackPrincipal(ctx context.Context, principal ref.Entity) {
 			d.logger.Error("failed to post health rollback notification",
 				"principal", principal, "error", err)
 		}
+		if credentialRollback {
+			if _, err := d.sendEventRetry(ctx, d.configRoomID, schema.MatrixEventTypeMessage,
+				schema.NewCredentialsRotatedMessage(principal.AccountLocalpart(), schema.CredRotationRollbackFailed,
+					"no previous sandbox spec available for rollback")); err != nil {
+				d.logger.Error("failed to post credential rollback failure notification",
+					"principal", principal, "error", err)
+			}
+		}
 		return
 	}
 
-	// Read fresh credentials (they may have been rotated).
-	credentials, err := d.readCredentials(ctx, principal)
-	if err != nil {
-		d.logger.Error("health rollback: cannot read credentials",
-			"principal", principal, "error", err)
-		if _, err := d.sendEventRetry(ctx, d.configRoomID, schema.MatrixEventTypeMessage,
-			schema.NewHealthCheckMessage(principal.AccountLocalpart(), schema.HealthCheckRollbackFailed, fmt.Sprintf("cannot read credentials: %v", err))); err != nil {
-			d.logger.Error("failed to post health rollback notification",
+	// Use previous credentials if available (credential rotation rollback).
+	// After a credential rotation, previousCredentials holds the ciphertext
+	// that was working before the rotation. Reading fresh from Matrix would
+	// return the new (possibly broken) credentials that triggered the health
+	// check failure. For non-rotation rollbacks (structural restart), there
+	// are no previous credentials, so we read from Matrix as before.
+	var ciphertext string
+	if credentialRollback {
+		ciphertext = previousCiphertext
+		d.logger.Info("health rollback: using previous credentials",
+			"principal", principal)
+	} else {
+		credentials, err := d.readCredentials(ctx, principal)
+		if err != nil {
+			d.logger.Error("health rollback: cannot read credentials",
 				"principal", principal, "error", err)
+			if _, err := d.sendEventRetry(ctx, d.configRoomID, schema.MatrixEventTypeMessage,
+				schema.NewHealthCheckMessage(principal.AccountLocalpart(), schema.HealthCheckRollbackFailed, fmt.Sprintf("cannot read credentials: %v", err))); err != nil {
+				d.logger.Error("failed to post health rollback notification",
+					"principal", principal, "error", err)
+			}
+			return
 		}
-		return
+		ciphertext = credentials.Ciphertext
 	}
 
 	// Read the current assignment for authorization grants and service config.
@@ -297,11 +319,11 @@ func (d *Daemon) rollbackPrincipal(ctx context.Context, principal ref.Entity) {
 	// Resolve authorization grants so the proxy starts with enforcement.
 	grants := d.resolveGrantsForProxy(principal.UserID())
 
-	// Recreate with the previous working spec.
+	// Recreate with the previous working spec and credentials.
 	response, err := d.launcherRequest(ctx, launcherIPCRequest{
 		Action:               ipc.ActionCreateSandbox,
 		Principal:            principal.AccountLocalpart(),
-		EncryptedCredentials: credentials.Ciphertext,
+		EncryptedCredentials: ciphertext,
 		Grants:               grants,
 		SandboxSpec:          previousSpec,
 	})
@@ -329,10 +351,11 @@ func (d *Daemon) rollbackPrincipal(ctx context.Context, principal ref.Entity) {
 	d.running[principal] = true
 	d.notifyStatusChange()
 	d.lastSpecs[principal] = previousSpec
+	d.lastCredentials[principal] = ciphertext
 	d.lastGrants[principal] = grants
 	d.lastActivityAt = d.clock.Now()
 
-	d.logger.Info("health rollback: sandbox recreated with previous spec",
+	d.logger.Info("health rollback: sandbox recreated with previous working configuration",
 		"principal", principal)
 
 	d.startLayoutWatcher(ctx, principal)
@@ -367,6 +390,18 @@ func (d *Daemon) rollbackPrincipal(ctx context.Context, principal ref.Entity) {
 		schema.NewHealthCheckMessage(principal.AccountLocalpart(), schema.HealthCheckRolledBack, "")); err != nil {
 		d.logger.Error("failed to post health rollback notification",
 			"principal", principal, "error", err)
+	}
+
+	// Post a credential-specific notification when rolling back a
+	// credential rotation. Operators need to know the rotation failed
+	// and old credentials were restored — distinct from a structural
+	// config rollback.
+	if credentialRollback {
+		if _, err := d.sendEventRetry(ctx, d.configRoomID, schema.MatrixEventTypeMessage,
+			schema.NewCredentialsRotatedMessage(principal.AccountLocalpart(), schema.CredRotationRolledBack, "")); err != nil {
+			d.logger.Error("failed to post credential rollback notification",
+				"principal", principal, "error", err)
+		}
 	}
 
 	d.notifyReconcile()

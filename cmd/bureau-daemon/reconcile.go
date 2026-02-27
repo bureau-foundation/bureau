@@ -146,11 +146,27 @@ func (d *Daemon) reconcile(ctx context.Context) error {
 		d.logger.Info("credentials changed, restarting principal",
 			"principal", principal)
 
+		// Save rollback state before destroy. destroyPrincipal clears all
+		// tracking maps, so the previous working credentials, spec, and
+		// template must be captured first. On health check failure, the
+		// daemon uses these to recreate the sandbox with the previous
+		// credentials rather than reading the new (possibly broken) ones
+		// from Matrix.
+		savedCiphertext := d.lastCredentials[principal]
+		savedSpec := d.lastSpecs[principal]
+		savedTemplate := d.lastTemplates[principal]
+
 		if err := d.destroyPrincipal(ctx, principal); err != nil {
 			d.logger.Error("failed to destroy sandbox during credential rotation",
 				"principal", principal, "error", err)
 			continue
 		}
+
+		// Restore rollback state after destroy clears the maps. This
+		// parallels the structural restart path which saves previousSpecs.
+		d.previousCredentials[principal] = savedCiphertext
+		d.previousSpecs[principal] = savedSpec
+		d.lastTemplates[principal] = savedTemplate
 
 		d.logger.Info("principal stopped for credential rotation (will recreate)",
 			"principal", principal)
@@ -1824,6 +1840,7 @@ func (d *Daemon) destroyPrincipal(ctx context.Context, principal ref.Entity) err
 	delete(d.proxyExitWatchers, principal)
 	delete(d.lastSpecs, principal)
 	delete(d.previousSpecs, principal)
+	delete(d.previousCredentials, principal)
 	delete(d.lastTemplates, principal)
 	delete(d.lastCredentials, principal)
 	delete(d.lastGrants, principal)

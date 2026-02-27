@@ -449,11 +449,13 @@ func TestRevokeAndCleanupTokens_FullLifecycle(t *testing.T) {
 func waitForSocket(t *testing.T, path string) {
 	t.Helper()
 	for {
-		if _, err := os.Stat(path); err == nil {
+		conn, err := net.DialTimeout("unix", path, 100*time.Millisecond)
+		if err == nil {
+			conn.Close()
 			return
 		}
 		if t.Context().Err() != nil {
-			t.Fatalf("socket %s did not appear before test context expired", path)
+			t.Fatalf("socket %s not accepting connections before test context expired", path)
 		}
 		runtime.Gosched()
 	}

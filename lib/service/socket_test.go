@@ -1213,16 +1213,22 @@ func TestSocketServerStreamCoexistsWithRequestResponse(t *testing.T) {
 	wg.Wait()
 }
 
-// waitForSocket polls until the socket file exists. Bounded by the
-// test context timeout (no wall-clock access).
+// waitForSocket polls until the socket is accepting connections.
+// Uses an actual connect attempt rather than os.Stat because the
+// socket file exists after bind(2) but connections are only accepted
+// after listen(2) — goroutine preemption between the two syscalls
+// causes a race where os.Stat succeeds but connect returns
+// ECONNREFUSED. Bounded by the test context timeout.
 func waitForSocket(t *testing.T, path string) {
 	t.Helper()
 	for {
-		if _, err := os.Stat(path); err == nil {
+		conn, err := net.DialTimeout("unix", path, 100*time.Millisecond)
+		if err == nil {
+			conn.Close()
 			return
 		}
 		if t.Context().Err() != nil {
-			t.Fatalf("socket %s did not appear before test context expired", path)
+			t.Fatalf("socket %s not accepting connections before test context expired", path)
 		}
 		runtime.Gosched()
 	}

@@ -10,7 +10,7 @@ import (
 	"errors"
 	"io"
 	"log/slog"
-	"os"
+	"net"
 	"path/filepath"
 	"sync"
 	"testing"
@@ -165,12 +165,14 @@ func mintToken(t *testing.T, privateKey ed25519.PrivateKey, subject string, gran
 func waitForSocket(t *testing.T, path string) {
 	t.Helper()
 	for range 500 {
-		if _, err := os.Stat(path); err == nil {
+		conn, err := net.DialTimeout("unix", path, 100*time.Millisecond)
+		if err == nil {
+			conn.Close()
 			return
 		}
-		time.Sleep(time.Millisecond) //nolint:realclock — filesystem polling for socket existence
+		time.Sleep(time.Millisecond) //nolint:realclock — polling for socket readiness
 	}
-	t.Fatalf("socket %s did not appear within timeout", path)
+	t.Fatalf("socket %s not accepting connections within timeout", path)
 }
 
 // requireServiceError asserts that err is a *service.ServiceError.

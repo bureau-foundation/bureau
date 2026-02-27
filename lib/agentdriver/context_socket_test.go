@@ -6,11 +6,12 @@ package agentdriver
 import (
 	"context"
 	"log/slog"
-	"os"
+	"net"
 	"runtime"
 	"sync"
 	"sync/atomic"
 	"testing"
+	"time"
 
 	"github.com/bureau-foundation/bureau/lib/service"
 	"github.com/bureau-foundation/bureau/lib/testutil"
@@ -119,16 +120,20 @@ func TestWrapperContextSocketConcurrent(t *testing.T) {
 	waitGroup.Wait()
 }
 
-// waitForSocket polls until the socket file exists. Bounded by
-// the test context timeout (no wall-clock access).
+// waitForSocket polls until the socket is accepting connections.
+// Uses an actual connect attempt rather than os.Stat because the
+// socket file exists after bind(2) but connections are only accepted
+// after listen(2). Bounded by the test context timeout.
 func waitForSocket(t *testing.T, socketPath string) {
 	t.Helper()
 	for {
-		if _, err := os.Stat(socketPath); err == nil {
+		conn, err := net.DialTimeout("unix", socketPath, 100*time.Millisecond)
+		if err == nil {
+			conn.Close()
 			return
 		}
 		if t.Context().Err() != nil {
-			t.Fatalf("socket %s did not appear before test context expired", socketPath)
+			t.Fatalf("socket %s not accepting connections before test context expired", socketPath)
 		}
 		runtime.Gosched()
 	}

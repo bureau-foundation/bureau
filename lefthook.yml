@@ -16,7 +16,9 @@
 
 pre-commit:
   piped: true
-  exclude: '\.local\.|^lefthook\.yml$'
+  exclude:
+    - "*.local.*"
+    - "lefthook.yml"
 
   commands:
     # ===================================================================
@@ -46,7 +48,13 @@ pre-commit:
     license-shell:
       run: script/format-staged script/insert-license --comment-style "#" -- {staged_files}
       glob: "script/*"
-      exclude: '\.(md|txt|gitkeep)$|nix-expected-version|nix-installer-version'
+      exclude:
+        - "*.md"
+        - "*.txt"
+        - "*.json"
+        - "*.gitkeep"
+        - "**/nix-expected-version"
+        - "**/nix-installer-version"
       priority: 1
 
     license-nix:
@@ -84,7 +92,13 @@ pre-commit:
     shellcheck:
       run: shellcheck --severity=warning {staged_files}
       glob: "script/*"
-      exclude: '\.(md|txt|gitkeep)$|nix-expected-version|nix-installer-version'
+      exclude:
+        - "*.md"
+        - "*.txt"
+        - "*.json"
+        - "*.gitkeep"
+        - "**/nix-expected-version"
+        - "**/nix-installer-version"
       priority: 2
 
     lychee:
@@ -147,6 +161,10 @@ pre-commit:
 
     bazel-test:
       run: bazel test //...
+      priority: 3
+
+    binary-sizes:
+      run: script/check-binary-sizes
       priority: 3
 
     # ===================================================================

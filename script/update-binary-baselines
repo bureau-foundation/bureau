@@ -1,0 +1,68 @@
+#!/bin/bash
+# Copyright 2026 The Bureau Authors
+# SPDX-License-Identifier: Apache-2.0
+#
+# Regenerate script/binary-size-baseline.json from the current Bazel
+# build output. Run this after investigating binary size growth and
+# confirming it is intentional.
+#
+# Requires: bazel build //... to have been run first.
+
+set -euo pipefail
+
+SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+REPO_ROOT="$(cd "$SCRIPT_DIR/.." && pwd)"
+BASELINE_FILE="$SCRIPT_DIR/binary-size-baseline.json"
+
+entries=()
+
+# Collect all cmd/bureau-* binaries.
+for dir in "$REPO_ROOT"/cmd/bureau-*/; do
+    name=$(basename "$dir")
+    binary_path="$REPO_ROOT/bazel-bin/cmd/$name/${name}_/$name"
+    if [ -f "$binary_path" ]; then
+        size=$(stat -c %s "$binary_path")
+        entries+=("$(printf '  "%s": %d' "$name" "$size")")
+    fi
+done
+
+# Collect the unified CLI binary.
+bureau_path="$REPO_ROOT/bazel-bin/cmd/bureau/bureau_/bureau"
+if [ -f "$bureau_path" ]; then
+    size=$(stat -c %s "$bureau_path")
+    entries+=("$(printf '  "bureau": %d' "$size")")
+fi
+
+if [ ${#entries[@]} -eq 0 ]; then
+    echo "update-binary-baselines: no binaries found in bazel-bin/" >&2
+    echo "Run bazel build //... first." >&2
+    exit 1
+fi
+
+# Sort entries and write JSON. Sort puts "bureau" before "bureau-*"
+# which gives a clean alphabetical order.
+{
+    echo "{"
+    mapfile -t sorted < <(printf '%s\n' "${entries[@]}" | sort)
+    last_index=$((${#sorted[@]} - 1))
+    for i in "${!sorted[@]}"; do
+        if [ "$i" -eq "$last_index" ]; then
+            echo "${sorted[$i]}"
+        else
+            echo "${sorted[$i]},"
+        fi
+    done
+    echo "}"
+} > "$BASELINE_FILE"
+
+count=${#entries[@]}
+echo "Updated $BASELINE_FILE with $count binaries."
+
+# Show a summary of what changed if we're in a git repo.
+if git diff --quiet "$BASELINE_FILE" 2>/dev/null; then
+    echo "No changes from previous baseline."
+else
+    echo ""
+    echo "Changes:"
+    git diff --no-color "$BASELINE_FILE" 2>/dev/null || true
+fi

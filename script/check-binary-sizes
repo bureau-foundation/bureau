@@ -1,0 +1,179 @@
+#!/bin/bash
+# Copyright 2026 The Bureau Authors
+# SPDX-License-Identifier: Apache-2.0
+#
+# Compare stripped binary sizes against a checked-in baseline. Fails if any
+# binary grew by more than the threshold, prompting the developer to
+# investigate before updating the baseline.
+#
+# The baseline file (script/binary-size-baseline.json) is committed
+# alongside the code. Every legitimate size change includes a baseline
+# update, so git log -p on that file gives the full size history.
+#
+# Run manually:
+#   script/check-binary-sizes
+#
+# Update baseline after investigating growth:
+#   script/update-binary-baselines
+
+set -euo pipefail
+
+SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+REPO_ROOT="$(cd "$SCRIPT_DIR/.." && pwd)"
+BASELINE_FILE="$SCRIPT_DIR/binary-size-baseline.json"
+
+# Growth threshold in bytes. 100 KB catches new dependency imports
+# (encoding/gob is 378 KB, charmbracelet is 490 KB) without firing
+# on normal code additions (a new handler is 5-20 KB).
+THRESHOLD=102400
+
+if [ ! -f "$BASELINE_FILE" ]; then
+    echo "check-binary-sizes: baseline file not found: $BASELINE_FILE" >&2
+    echo "Run script/update-binary-baselines to create it." >&2
+    exit 1
+fi
+
+# Parse the baseline JSON. Uses only bash builtins and grep/sed to
+# avoid requiring jq in the dev shell.
+declare -A baseline
+while IFS= read -r line; do
+    # Extract "name": number pairs from JSON.
+    name=$(echo "$line" | sed -n 's/.*"\([^"]*\)": *\([0-9][0-9]*\).*/\1/p')
+    size=$(echo "$line" | sed -n 's/.*"\([^"]*\)": *\([0-9][0-9]*\).*/\2/p')
+    if [ -n "$name" ] && [ -n "$size" ]; then
+        baseline[$name]=$size
+    fi
+done < "$BASELINE_FILE"
+
+if [ ${#baseline[@]} -eq 0 ]; then
+    echo "check-binary-sizes: no entries found in baseline file" >&2
+    exit 1
+fi
+
+grew=()
+shrank=()
+missing=()
+new_binaries=()
+
+# Check each baselined binary against the built output.
+for name in $(echo "${!baseline[@]}" | tr ' ' '\n' | sort); do
+    expected=${baseline[$name]}
+
+    # Find the binary in bazel-bin. The path pattern is:
+    #   bazel-bin/cmd/<name>/<name>_/<name>
+    binary_path="$REPO_ROOT/bazel-bin/cmd/$name/${name}_/$name"
+    if [ ! -f "$binary_path" ]; then
+        missing+=("$name")
+        continue
+    fi
+
+    actual=$(stat -c %s "$binary_path")
+    delta=$((actual - expected))
+
+    if [ "$delta" -gt "$THRESHOLD" ]; then
+        delta_kb=$(echo "scale=1; $delta / 1024" | bc)
+        expected_mb=$(echo "scale=1; $expected / 1048576" | bc)
+        actual_mb=$(echo "scale=1; $actual / 1048576" | bc)
+        grew+=("$(printf "  %-30s  %6s MB → %6s MB  (+%s KB)" "$name" "$expected_mb" "$actual_mb" "$delta_kb")")
+    elif [ "$delta" -lt "-$THRESHOLD" ]; then
+        shrink=$((-delta))
+        delta_kb=$(echo "scale=1; $shrink / 1024" | bc)
+        expected_mb=$(echo "scale=1; $expected / 1048576" | bc)
+        actual_mb=$(echo "scale=1; $actual / 1048576" | bc)
+        shrank+=("$(printf "  %-30s  %6s MB → %6s MB  (-%s KB)" "$name" "$expected_mb" "$actual_mb" "$delta_kb")")
+    fi
+done
+
+# Check for new binaries not in the baseline.
+for dir in "$REPO_ROOT"/cmd/bureau-*/; do
+    name=$(basename "$dir")
+    binary_path="$REPO_ROOT/bazel-bin/cmd/$name/${name}_/$name"
+    if [ -f "$binary_path" ] && [ -z "${baseline[$name]+set}" ]; then
+        actual=$(stat -c %s "$binary_path")
+        actual_mb=$(echo "scale=1; $actual / 1048576" | bc)
+        new_binaries+=("$(printf "  %-30s  %6s MB  (not in baseline)" "$name" "$actual_mb")")
+    fi
+done
+# Check the unified CLI binary separately.
+bureau_path="$REPO_ROOT/bazel-bin/cmd/bureau/bureau_/bureau"
+if [ -f "$bureau_path" ] && [ -z "${baseline[bureau]+set}" ]; then
+    actual=$(stat -c %s "$bureau_path")
+    actual_mb=$(echo "scale=1; $actual / 1048576" | bc)
+    new_binaries+=("$(printf "  %-30s  %6s MB  (not in baseline)" "bureau" "$actual_mb")")
+fi
+
+# Report results.
+has_problem=false
+
+if [ ${#grew[@]} -gt 0 ]; then
+    has_problem=true
+    echo ""
+    echo "ERROR: Binary size growth exceeds threshold ($(echo "scale=0; $THRESHOLD / 1024" | bc) KB)."
+    echo ""
+    echo "The following binaries grew significantly:"
+    echo ""
+    for line in "${grew[@]}"; do
+        echo "$line"
+    done
+    echo ""
+    echo "Before updating the baseline, investigate:"
+    echo ""
+    echo "  1. What changed? Check your staged diff for new imports,"
+    echo "     new dependencies in go.mod, or new package references."
+    echo ""
+    echo "  2. Is the growth expected? A new feature that adds a"
+    echo "     legitimate dependency is fine. An unrelated import"
+    echo "     pulling in encoding/gob or text/template is not."
+    echo ""
+    echo "  3. Profile the binary to understand the cost:"
+    echo "     go build -o /tmp/binary-debug ./cmd/<name>/"
+    echo "     go tool nm -size /tmp/binary-debug | sort -rn | head -30"
+    echo ""
+    echo "  4. Check for unnecessary transitive dependencies:"
+    echo "     go list -deps ./cmd/<name>/ | wc -l"
+    echo ""
+    echo "If the growth is intentional, update the baseline:"
+    echo "  script/update-binary-baselines"
+    echo ""
+fi
+
+if [ ${#new_binaries[@]} -gt 0 ]; then
+    has_problem=true
+    echo ""
+    echo "ERROR: New binaries not in baseline."
+    echo ""
+    for line in "${new_binaries[@]}"; do
+        echo "$line"
+    done
+    echo ""
+    echo "Add them to the baseline:"
+    echo "  script/update-binary-baselines"
+    echo ""
+fi
+
+if [ ${#shrank[@]} -gt 0 ]; then
+    # Shrinkage is good news but the baseline should still be updated
+    # to track the improvement.
+    echo ""
+    echo "NOTE: Some binaries shrank (update baseline to record the improvement):"
+    echo ""
+    for line in "${shrank[@]}"; do
+        echo "$line"
+    done
+    echo ""
+    echo "  script/update-binary-baselines"
+    echo ""
+fi
+
+if [ ${#missing[@]} -gt 0 ]; then
+    echo ""
+    echo "WARNING: Baselined binaries not found (run bazel build //... first):"
+    for name in "${missing[@]}"; do
+        echo "  $name"
+    done
+    echo ""
+fi
+
+if $has_problem; then
+    exit 1
+fi

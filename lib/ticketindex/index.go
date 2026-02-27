@@ -14,6 +14,7 @@ import (
 	"github.com/bureau-foundation/bureau/lib/bm25"
 	"github.com/bureau-foundation/bureau/lib/ref"
 	"github.com/bureau-foundation/bureau/lib/schema"
+	"github.com/bureau-foundation/bureau/lib/schema/pipeline"
 	"github.com/bureau-foundation/bureau/lib/schema/ticket"
 )
 
@@ -554,7 +555,7 @@ func (idx *Index) watchKeysForGate(gate *ticket.TicketGate, ticketID string) []g
 		// state key. The fine-grained match on pipeline_ref and
 		// conclusion is done by matchGateEvent after the watch map
 		// narrows candidates.
-		return []gateWatchKey{{eventType: schema.EventTypePipelineResult}}
+		return []gateWatchKey{{eventType: pipeline.EventTypePipelineResult}}
 
 	case ticket.GateTicket:
 		// Ticket gates watch for a specific ticket's state event to

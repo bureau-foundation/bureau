@@ -10,6 +10,7 @@ import (
 
 	"github.com/bureau-foundation/bureau/lib/ref"
 	"github.com/bureau-foundation/bureau/lib/schema"
+	"github.com/bureau-foundation/bureau/lib/schema/pipeline"
 	"github.com/bureau-foundation/bureau/lib/schema/ticket"
 )
 
@@ -1056,7 +1057,7 @@ func TestWatchedGatesPipelineGate(t *testing.T) {
 	idx.Put("tkt-a", tc)
 
 	// Pipeline gates register as wildcard watchers for EventTypePipelineResult.
-	watches := idx.WatchedGates(schema.EventTypePipelineResult, "build-check")
+	watches := idx.WatchedGates(pipeline.EventTypePipelineResult, "build-check")
 	if len(watches) != 1 {
 		t.Fatalf("WatchedGates for pipeline_result = %d, want 1", len(watches))
 	}
@@ -1066,7 +1067,7 @@ func TestWatchedGatesPipelineGate(t *testing.T) {
 
 	// Pipeline gates match any state key, so a different state key
 	// should still return the watch.
-	watches = idx.WatchedGates(schema.EventTypePipelineResult, "other-pipeline")
+	watches = idx.WatchedGates(pipeline.EventTypePipelineResult, "other-pipeline")
 	if len(watches) != 1 {
 		t.Fatalf("WatchedGates for other state key = %d, want 1 (wildcard)", len(watches))
 	}
@@ -1128,7 +1129,7 @@ func TestWatchedGatesReviewGate(t *testing.T) {
 	}
 
 	// An unrelated event type should not match.
-	watches = idx.WatchedGates(schema.EventTypePipelineResult, "tkt-a")
+	watches = idx.WatchedGates(pipeline.EventTypePipelineResult, "tkt-a")
 	if len(watches) != 0 {
 		t.Errorf("WatchedGates for wrong event type = %d, want 0", len(watches))
 	}
@@ -1411,7 +1412,7 @@ func TestWatchedGatesSkipsSatisfiedGates(t *testing.T) {
 	}
 	idx.Put("tkt-a", tc)
 
-	watches := idx.WatchedGates(schema.EventTypePipelineResult, "build")
+	watches := idx.WatchedGates(pipeline.EventTypePipelineResult, "build")
 	if len(watches) != 0 {
 		t.Errorf("WatchedGates should exclude satisfied gates, got %d", len(watches))
 	}
@@ -1427,7 +1428,7 @@ func TestWatchedGatesUpdatedOnPut(t *testing.T) {
 	}
 	idx.Put("tkt-a", tc)
 
-	watches := idx.WatchedGates(schema.EventTypePipelineResult, "build")
+	watches := idx.WatchedGates(pipeline.EventTypePipelineResult, "build")
 	if len(watches) != 1 {
 		t.Fatalf("before satisfaction: WatchedGates = %d, want 1", len(watches))
 	}
@@ -1436,7 +1437,7 @@ func TestWatchedGatesUpdatedOnPut(t *testing.T) {
 	tc.Gates[0].Status = ticket.GateSatisfied
 	idx.Put("tkt-a", tc)
 
-	watches = idx.WatchedGates(schema.EventTypePipelineResult, "build")
+	watches = idx.WatchedGates(pipeline.EventTypePipelineResult, "build")
 	if len(watches) != 0 {
 		t.Errorf("after satisfaction: WatchedGates = %d, want 0", len(watches))
 	}
@@ -1451,14 +1452,14 @@ func TestWatchedGatesCleanedOnRemove(t *testing.T) {
 	}
 	idx.Put("tkt-a", tc)
 
-	watches := idx.WatchedGates(schema.EventTypePipelineResult, "build")
+	watches := idx.WatchedGates(pipeline.EventTypePipelineResult, "build")
 	if len(watches) != 1 {
 		t.Fatalf("before remove: WatchedGates = %d, want 1", len(watches))
 	}
 
 	idx.Remove("tkt-a")
 
-	watches = idx.WatchedGates(schema.EventTypePipelineResult, "build")
+	watches = idx.WatchedGates(pipeline.EventTypePipelineResult, "build")
 	if len(watches) != 0 {
 		t.Errorf("after remove: WatchedGates = %d, want 0", len(watches))
 	}
@@ -1477,7 +1478,7 @@ func TestWatchedGatesMultipleGatesOnOneTicket(t *testing.T) {
 	idx.Put("tkt-a", tc)
 
 	// Pipeline gate should be in the watch map.
-	watches := idx.WatchedGates(schema.EventTypePipelineResult, "build")
+	watches := idx.WatchedGates(pipeline.EventTypePipelineResult, "build")
 	if len(watches) != 1 {
 		t.Errorf("pipeline watches = %d, want 1", len(watches))
 	}
@@ -1510,7 +1511,7 @@ func TestWatchedGatesMultipleTicketsSameWatchKey(t *testing.T) {
 		idx.Put(id, tc)
 	}
 
-	watches := idx.WatchedGates(schema.EventTypePipelineResult, "build")
+	watches := idx.WatchedGates(pipeline.EventTypePipelineResult, "build")
 	if len(watches) != 2 {
 		t.Fatalf("WatchedGates for shared key = %d, want 2", len(watches))
 	}
@@ -1520,7 +1521,7 @@ func TestWatchedGatesMultipleTicketsSameWatchKey(t *testing.T) {
 	tc.Gates[0].Status = ticket.GateSatisfied
 	idx.Put("tkt-a", tc)
 
-	watches = idx.WatchedGates(schema.EventTypePipelineResult, "build")
+	watches = idx.WatchedGates(pipeline.EventTypePipelineResult, "build")
 	if len(watches) != 1 {
 		t.Errorf("after satisfying one: WatchedGates = %d, want 1", len(watches))
 	}
@@ -1562,7 +1563,7 @@ func TestWatchedGatesGateWatchKeyConsistency(t *testing.T) {
 	idx.Put("tkt-3", tc3)
 
 	// Verify all watches exist.
-	if len(idx.WatchedGates(schema.EventTypePipelineResult, "x")) != 1 {
+	if len(idx.WatchedGates(pipeline.EventTypePipelineResult, "x")) != 1 {
 		t.Error("pipeline watch missing")
 	}
 	if len(idx.WatchedGates(schema.EventTypeTicket, "tkt-blocker")) != 1 {
@@ -1575,7 +1576,7 @@ func TestWatchedGatesGateWatchKeyConsistency(t *testing.T) {
 	// Satisfy tc1's gate.
 	tc1.Gates[0].Status = ticket.GateSatisfied
 	idx.Put("tkt-1", tc1)
-	if len(idx.WatchedGates(schema.EventTypePipelineResult, "x")) != 0 {
+	if len(idx.WatchedGates(pipeline.EventTypePipelineResult, "x")) != 0 {
 		t.Error("pipeline watch should be removed after satisfaction")
 	}
 

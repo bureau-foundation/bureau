@@ -9,7 +9,7 @@ import "github.com/bureau-foundation/bureau/lib/ref"
 // artifact coordination room (#bureau/artifact). Per-artifact metadata
 // and tag mappings live in the artifact service, not as Matrix state
 // events. The room carries only admin-level configuration
-// (EventTypeArtifactScope) and coordination messages.
+// (artifact.EventTypeArtifactScope) and coordination messages.
 //
 // Room membership is invite-only — the admin invites artifact service
 // principals and machine daemons during setup.

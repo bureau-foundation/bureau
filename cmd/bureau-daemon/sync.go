@@ -37,6 +37,7 @@ import (
 
 	"github.com/bureau-foundation/bureau/lib/ref"
 	"github.com/bureau-foundation/bureau/lib/schema"
+	"github.com/bureau-foundation/bureau/lib/schema/pipeline"
 	"github.com/bureau-foundation/bureau/lib/service"
 	"github.com/bureau-foundation/bureau/messaging"
 )
@@ -76,7 +77,7 @@ func buildSyncFilter(excludeRooms []ref.RoomID) string {
 		schema.EventTypeCredentials,
 		schema.EventTypeMachineStatus,
 		schema.EventTypeService,
-		schema.EventTypePipelineConfig,
+		pipeline.EventTypePipelineConfig,
 		schema.EventTypeProject,
 		schema.EventTypeWorkspace,
 		schema.EventTypeWorktree,
@@ -185,7 +186,7 @@ func (d *Daemon) initialSync(ctx context.Context) (string, error) {
 	d.reconcileMu.Lock()
 	for roomID, room := range response.Rooms.Join {
 		for _, event := range room.State.Events {
-			if event.Type == schema.EventTypePipelineConfig && event.StateKey != nil {
+			if event.Type == pipeline.EventTypePipelineConfig && event.StateKey != nil {
 				d.pipelineEnabledRooms[roomID] = true
 			}
 		}
@@ -301,12 +302,12 @@ func (d *Daemon) processSyncResponse(ctx context.Context, response *messaging.Sy
 	d.reconcileMu.Lock()
 	for roomID, room := range response.Rooms.Join {
 		for _, event := range room.State.Events {
-			if event.Type == schema.EventTypePipelineConfig && event.StateKey != nil {
+			if event.Type == pipeline.EventTypePipelineConfig && event.StateKey != nil {
 				d.pipelineEnabledRooms[roomID] = true
 			}
 		}
 		for _, event := range room.Timeline.Events {
-			if event.Type == schema.EventTypePipelineConfig && event.StateKey != nil {
+			if event.Type == pipeline.EventTypePipelineConfig && event.StateKey != nil {
 				d.pipelineEnabledRooms[roomID] = true
 			}
 		}

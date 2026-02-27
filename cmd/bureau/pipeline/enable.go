@@ -170,7 +170,7 @@ func ConfigureRoom(ctx context.Context, logger *slog.Logger, session messaging.S
 	pipelineConfig := pipelineschema.PipelineConfigContent{
 		Version: pipelineschema.PipelineConfigVersion,
 	}
-	_, err := session.SendStateEvent(ctx, roomID, schema.EventTypePipelineConfig, "", pipelineConfig)
+	_, err := session.SendStateEvent(ctx, roomID, pipelineschema.EventTypePipelineConfig, "", pipelineConfig)
 	if err != nil {
 		return cli.Internal("publishing pipeline config: %w", err)
 	}
@@ -192,7 +192,7 @@ func ConfigureRoom(ctx context.Context, logger *slog.Logger, session messaging.S
 func configurePipelinePowerLevels(ctx context.Context, session messaging.Session, roomID ref.RoomID) error {
 	return schema.GrantPowerLevels(ctx, session, roomID, schema.PowerLevelGrants{
 		Events: map[ref.EventType]int{
-			schema.EventTypePipelineConfig: 100,
+			pipelineschema.EventTypePipelineConfig: 100,
 		},
 	})
 }

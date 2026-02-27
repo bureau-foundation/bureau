@@ -5,8 +5,20 @@ package schema
 
 import "github.com/bureau-foundation/bureau/lib/ref"
 
-// Matrix state event type constants. These are the "type" field in Matrix
-// state events. The state_key for each is the principal's localpart.
+// Bureau event type constants for machine infrastructure, service
+// discovery, and transport. Content types for machine events live in
+// events_machine.go; content types for templates live in
+// events_template.go.
+//
+// Event type constants for domains with dedicated sub-packages live
+// alongside their content types:
+//   - Agent:       lib/schema/agent/       (EventTypeAgentSession, etc.)
+//   - Artifact:    lib/schema/artifact/    (EventTypeArtifactScope)
+//   - Fleet:       events_fleet.go         (EventTypeFleetService, etc.)
+//   - Log:         lib/schema/log/         (EventTypeLog)
+//   - Pipeline:    lib/schema/pipeline/    (EventTypePipelineConfig, EventTypePipelineResult)
+//   - Auth:        authorization.go        (EventTypeAuthorization, etc.)
+//   - Revocation:  events_revocation.go    (EventTypeCredentialRevocation)
 const (
 	// EventTypeMachineKey is published to #bureau/machine when a machine
 	// first boots. Contains the machine's age public key for credential
@@ -48,7 +60,12 @@ const (
 	// State key: principal localpart (e.g., "iree/amdgpu/pm")
 	// Room: #<machine-localpart>:<server>
 	EventTypeCredentials ref.EventType = "m.bureau.credentials"
+)
 
+// Service discovery and binding event types. The service
+// infrastructure is cross-cutting — all Bureau services (tickets,
+// artifacts, pipelines, fleet) use these to register and bind.
+const (
 	// EventTypeService is published to #bureau/service when a principal
 	// starts providing a service. Used for service discovery.
 	//
@@ -56,6 +73,34 @@ const (
 	// Room: #bureau/service:<server>
 	EventTypeService ref.EventType = "m.bureau.service"
 
+	// EventTypeServiceReady is a timeline event sent by a service after
+	// it joins a room and finishes processing the room's configuration.
+	// Consumers use this as a deterministic readiness signal — the
+	// service is guaranteed to accept requests for this room after
+	// this event is sent. Not a state event: message events are
+	// append-only, so a rogue service cannot overwrite another
+	// service's readiness signal. The sender field (set by the
+	// homeserver) authenticates the source.
+	//
+	// Room: any room the service has joined and is tracking
+	EventTypeServiceReady ref.EventType = "m.bureau.service_ready"
+
+	// EventTypeServiceBinding declares which service principal handles a
+	// given service role in a room. This is a general mechanism for
+	// room-scoped service binding — any service type (tickets, CI, code
+	// review, RAG) uses the same event type with different state keys.
+	//
+	// The daemon reads these events at sandbox creation time to resolve
+	// a template's RequiredServices to concrete service principals and
+	// their socket paths.
+	//
+	// State key: service role name (e.g., "ticket", "rag", "ci")
+	// Room: any room that uses the service
+	EventTypeServiceBinding ref.EventType = "m.bureau.service_binding"
+)
+
+// Transport event types for cross-machine daemon connectivity.
+const (
 	// EventTypeWebRTCOffer is published to #bureau/machine when a daemon
 	// wants to establish a WebRTC PeerConnection to another daemon. The
 	// offerer gathers all ICE candidates (vanilla ICE), generates a
@@ -76,21 +121,10 @@ const (
 	// State key: "<offerer-localpart>|<target-localpart>"
 	// Room: #bureau/machine:<server>
 	EventTypeWebRTCAnswer ref.EventType = "m.bureau.webrtc_answer"
+)
 
-	// EventTypeLayout describes the tmux session structure for an
-	// observation target. Published to the room associated with the
-	// target: a principal's room, a channel room, or a machine's config
-	// room.
-	//
-	// For principal layouts, the state key is the principal's localpart
-	// (e.g., "iree/amdgpu/pm"). For channel/room-level layouts, the
-	// state key is empty ("").
-	//
-	// The daemon reads these events to create and reconcile tmux sessions.
-	// Changes to the live tmux session are synced back as state event
-	// updates. See OBSERVATION.md for the full bidirectional sync design.
-	EventTypeLayout ref.EventType = "m.bureau.layout"
-
+// Template event type. Content types in events_template.go.
+const (
 	// EventTypeTemplate defines a sandbox template — the complete
 	// specification for how to create a sandboxed environment. Templates
 	// are stored as state events in template rooms (e.g.,
@@ -104,7 +138,31 @@ const (
 	// resolves the full inheritance chain and merges fields before sending
 	// a fully-resolved SandboxSpec to the launcher via IPC.
 	EventTypeTemplate ref.EventType = "m.bureau.template"
+)
 
+// Observation event type. Content types in lib/schema/observation/.
+// This constant remains here because ConfigRoomPowerLevels and
+// WorkspaceRoomPowerLevels reference it for room permission setup.
+const (
+	// EventTypeLayout describes the tmux session structure for an
+	// observation target. Published to the room associated with the
+	// target: a principal's room, a channel room, or a machine's config
+	// room.
+	//
+	// For principal layouts, the state key is the principal's localpart
+	// (e.g., "iree/amdgpu/pm"). For channel/room-level layouts, the
+	// state key is empty ("").
+	//
+	// The daemon reads these events to create and reconcile tmux sessions.
+	// Changes to the live tmux session are synced back as state event
+	// updates. See observation.md for the full bidirectional sync design.
+	EventTypeLayout ref.EventType = "m.bureau.layout"
+)
+
+// Workspace event types. Content types in lib/schema/workspace/.
+// These constants remain here because WorkspaceRoomPowerLevels
+// references them for room permission setup.
+const (
 	// EventTypeProject declares a workspace project — the top-level
 	// organizational unit in /var/bureau/workspace/. Contains the git
 	// repository URL (if git-backed), worktree definitions, and directory
@@ -154,17 +212,14 @@ const (
 	// State key: worktree path relative to project root
 	// Room: the workspace room
 	EventTypeWorktree ref.EventType = "m.bureau.worktree"
+)
 
-	// EventTypePipelineConfig enables and configures pipeline execution
-	// for a room. Rooms without this event are not eligible for pipeline
-	// execution — the daemon skips pip- tickets in unconfigured rooms.
-	// Published by the admin (via "bureau pipeline enable") to each room
-	// where pipeline execution should be available.
-	//
-	// State key: "" (singleton per room)
-	// Room: any room that wants pipeline execution
-	EventTypePipelineConfig ref.EventType = "m.bureau.pipeline_config"
-
+// Pipeline definition event type. Content types in lib/schema/pipeline/.
+// EventTypePipelineConfig and EventTypePipelineResult have been moved
+// to lib/schema/pipeline/ alongside their content types.
+// EventTypePipeline remains here because PipelineRoomPowerLevels
+// references it for room permission setup.
+const (
 	// EventTypePipeline defines a pipeline — a structured sequence of
 	// steps that run inside a Bureau sandbox. Pipelines are stored as
 	// state events in pipeline rooms (e.g., #bureau/pipeline for
@@ -174,46 +229,14 @@ const (
 	// State key: pipeline name (e.g., "dev-workspace-init", "dev-worktree-teardown")
 	// Room: pipeline room (e.g., #bureau/pipeline:<server>)
 	EventTypePipeline ref.EventType = "m.bureau.pipeline"
+)
 
-	// EventTypePipelineResult is published by the pipeline executor when
-	// a pipeline completes (successfully, with failure, or by abort). The
-	// ticket service watches these events to evaluate pipeline gates —
-	// a TicketGate with type "pipeline" matches the PipelineRef and
-	// Conclusion fields from this event.
-	//
-	// Published to the pipeline's log room (PipelineContent.Log.Room).
-	// Pipelines without a log room do not publish result events; the
-	// JSONL result log (BUREAU_RESULT_PATH) covers daemon-internal needs.
-	//
-	// State key: pipeline name/ref (e.g., "dev-workspace-init")
-	// Room: the pipeline's log room
-	EventTypePipelineResult ref.EventType = "m.bureau.pipeline_result"
-
-	// EventTypeServiceReady is a timeline event sent by a service after
-	// it joins a room and finishes processing the room's configuration.
-	// Consumers use this as a deterministic readiness signal — the
-	// service is guaranteed to accept requests for this room after
-	// this event is sent. Not a state event: message events are
-	// append-only, so a rogue service cannot overwrite another
-	// service's readiness signal. The sender field (set by the
-	// homeserver) authenticates the source.
-	//
-	// Room: any room the service has joined and is tracking
-	EventTypeServiceReady ref.EventType = "m.bureau.service_ready"
-
-	// EventTypeServiceBinding declares which service principal handles a
-	// given service role in a room. This is a general mechanism for
-	// room-scoped service binding — any service type (tickets, CI, code
-	// review, RAG) uses the same event type with different state keys.
-	//
-	// The daemon reads these events at sandbox creation time to resolve
-	// a template's RequiredServices to concrete service principals and
-	// their socket paths.
-	//
-	// State key: service role name (e.g., "ticket", "rag", "ci")
-	// Room: any room that uses the service
-	EventTypeServiceBinding ref.EventType = "m.bureau.service_binding"
-
+// Ticket event types. Content types in lib/schema/ticket/.
+// These constants remain here because lib/schema/ticket/ imports this
+// package (for ContentMatch). Moving the constants there would require
+// this package to import lib/schema/ticket/ in return, creating a
+// circular dependency.
+const (
 	// EventTypeTicket is a work item tracked in a room by the ticket
 	// service. Each ticket is a state event whose state key is the
 	// ticket ID (e.g., "tkt-a3f9"). The ticket service maintains an
@@ -233,7 +256,12 @@ const (
 	// State key: "" (singleton per room)
 	// Room: any room that wants ticket management
 	EventTypeTicketConfig ref.EventType = "m.bureau.ticket_config"
+)
 
+// Stewardship event type. Content types in lib/schema/stewardship/.
+// This constant remains here because WorkspaceRoomPowerLevels
+// references it for room permission setup.
+const (
 	// EventTypeStewardship declares resource governance in a room.
 	// Each stewardship declaration maps resource patterns to
 	// responsible principals with tiered review escalation. The
@@ -244,29 +272,6 @@ const (
 	// State key: resource identifier (e.g., "fleet/gpu", "workspace/lib/schema")
 	// Room: any room the ticket service is a member of
 	EventTypeStewardship ref.EventType = "m.bureau.stewardship"
-
-	// EventTypeArtifactScope configures artifact integration for a
-	// room. Declares which artifact service principal manages this
-	// room's artifacts and which tag patterns the room subscribes to
-	// for notifications. Per-artifact metadata and per-tag mappings
-	// live in the artifact service's own persistent store, not in
-	// Matrix state events.
-	//
-	// State key: "" (singleton per room)
-	// Room: any room that works with artifacts
-	EventTypeArtifactScope ref.EventType = "m.bureau.artifact_scope"
-
-	// EventTypeLog tracks raw output capture from a sandboxed process.
-	// Each log entity indexes CAS artifact chunks containing the
-	// process's stdout/stderr byte stream. The telemetry service
-	// creates this event when the first output delta arrives and
-	// updates it as chunks are stored. Status transitions from
-	// "active" (process running) to "complete" (process exited) or
-	// "rotating" (long-lived process with eviction).
-	//
-	// State key: "log-<id>" (session/principal identifier)
-	// Room: #<machine-localpart>:<server> (per-machine config room)
-	EventTypeLog ref.EventType = "m.bureau.log"
 )
 
 // Standard Matrix event type constants. These are Matrix spec types

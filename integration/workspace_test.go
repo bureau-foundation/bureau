@@ -519,14 +519,14 @@ func verifyPipelineResult(t *testing.T, session *messaging.DirectSession, roomID
 	watch := watchRoom(t, session, roomID)
 
 	// Check if the result already exists.
-	content, err := session.GetStateEvent(t.Context(), roomID, schema.EventTypePipelineResult, pipelineName)
+	content, err := session.GetStateEvent(t.Context(), roomID, pipeline.EventTypePipelineResult, pipelineName)
 	if err == nil {
 		checkPipelineResultContent(t, content, pipelineName, expectedConclusion)
 		return
 	}
 
 	// Wait for the pipeline_result state event to arrive.
-	raw := watch.WaitForStateEvent(t, schema.EventTypePipelineResult, pipelineName)
+	raw := watch.WaitForStateEvent(t, pipeline.EventTypePipelineResult, pipelineName)
 	checkPipelineResultContent(t, raw, pipelineName, expectedConclusion)
 }
 

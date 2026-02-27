@@ -47,7 +47,7 @@ func TestMatchPipelineGateMatches(t *testing.T) {
 	}
 
 	event := messaging.Event{
-		Type:     schema.EventTypePipelineResult,
+		Type:     pipeline.EventTypePipelineResult,
 		StateKey: stringPtr("dev-workspace-init"),
 		Content: map[string]any{
 			"pipeline_ref": "dev-workspace-init",
@@ -70,7 +70,7 @@ func TestMatchPipelineGateWrongRef(t *testing.T) {
 	}
 
 	event := messaging.Event{
-		Type:     schema.EventTypePipelineResult,
+		Type:     pipeline.EventTypePipelineResult,
 		StateKey: stringPtr("other-pipeline"),
 		Content: map[string]any{
 			"pipeline_ref": "other-pipeline",
@@ -93,7 +93,7 @@ func TestMatchPipelineGateWrongConclusion(t *testing.T) {
 	}
 
 	event := messaging.Event{
-		Type:     schema.EventTypePipelineResult,
+		Type:     pipeline.EventTypePipelineResult,
 		StateKey: stringPtr("dev-workspace-init"),
 		Content: map[string]any{
 			"pipeline_ref": "dev-workspace-init",
@@ -116,7 +116,7 @@ func TestMatchPipelineGateAnyConclusionMatches(t *testing.T) {
 	}
 
 	event := messaging.Event{
-		Type:     schema.EventTypePipelineResult,
+		Type:     pipeline.EventTypePipelineResult,
 		StateKey: stringPtr("dev-workspace-init"),
 		Content: map[string]any{
 			"pipeline_ref": "dev-workspace-init",
@@ -1036,7 +1036,7 @@ func TestEvaluateGatesForEventsPipelineGate(t *testing.T) {
 	events := []messaging.Event{
 		{
 			EventID:  ref.MustParseEventID("$pipeline-result-1"),
-			Type:     schema.EventTypePipelineResult,
+			Type:     pipeline.EventTypePipelineResult,
 			StateKey: stringPtr("build-check"),
 			Content: map[string]any{
 				"pipeline_ref": "build-check",
@@ -1148,7 +1148,7 @@ func TestEvaluateGatesForEventsMultipleGatesOnOneTicket(t *testing.T) {
 	events := []messaging.Event{
 		{
 			EventID:  ref.MustParseEventID("$build-result"),
-			Type:     schema.EventTypePipelineResult,
+			Type:     pipeline.EventTypePipelineResult,
 			StateKey: stringPtr("build-check"),
 			Content: map[string]any{
 				"pipeline_ref": "build-check",
@@ -1206,7 +1206,7 @@ func TestEvaluateGatesForEventsBothGatesSatisfiedByBatchEvents(t *testing.T) {
 	events := []messaging.Event{
 		{
 			EventID:  ref.MustParseEventID("$build-result"),
-			Type:     schema.EventTypePipelineResult,
+			Type:     pipeline.EventTypePipelineResult,
 			StateKey: stringPtr("build-check"),
 			Content: map[string]any{
 				"pipeline_ref": "build-check",
@@ -1215,7 +1215,7 @@ func TestEvaluateGatesForEventsBothGatesSatisfiedByBatchEvents(t *testing.T) {
 		},
 		{
 			EventID:  ref.MustParseEventID("$lint-result"),
-			Type:     schema.EventTypePipelineResult,
+			Type:     pipeline.EventTypePipelineResult,
 			StateKey: stringPtr("lint-check"),
 			Content: map[string]any{
 				"pipeline_ref": "lint-check",
@@ -1270,7 +1270,7 @@ func TestEvaluateGatesSkipsAlreadySatisfiedGates(t *testing.T) {
 	events := []messaging.Event{
 		{
 			EventID:  ref.MustParseEventID("$new-result"),
-			Type:     schema.EventTypePipelineResult,
+			Type:     pipeline.EventTypePipelineResult,
 			StateKey: stringPtr("build-check"),
 			Content: map[string]any{
 				"pipeline_ref": "build-check",
@@ -1369,7 +1369,7 @@ func TestProcessRoomSyncTriggersGateEvaluation(t *testing.T) {
 			Events: []messaging.Event{
 				{
 					EventID:  ref.MustParseEventID("$pipeline-done"),
-					Type:     schema.EventTypePipelineResult,
+					Type:     pipeline.EventTypePipelineResult,
 					StateKey: stringPtr("build-check"),
 					Content: map[string]any{
 						"pipeline_ref": "build-check",
@@ -1565,7 +1565,7 @@ func TestCrossRoomGateSatisfiedByWatchedRoomEvent(t *testing.T) {
 					ID:        "cross-ci",
 					Type:      ticket.GateStateEvent,
 					Status:    ticket.GatePending,
-					EventType: schema.EventTypePipelineResult,
+					EventType: pipeline.EventTypePipelineResult,
 					StateKey:  "build-check",
 					RoomAlias: ref.MustParseRoomAlias("#ci/results:bureau.local"),
 				},
@@ -1580,7 +1580,7 @@ func TestCrossRoomGateSatisfiedByWatchedRoomEvent(t *testing.T) {
 				Events: []messaging.Event{
 					{
 						EventID:  ref.MustParseEventID("$ci-result-1"),
-						Type:     schema.EventTypePipelineResult,
+						Type:     pipeline.EventTypePipelineResult,
 						StateKey: stringPtr("build-check"),
 						Content: map[string]any{
 							"pipeline_ref": "build-check",
@@ -1641,7 +1641,7 @@ func TestCrossRoomGateNoEventsFromWatchedRoom(t *testing.T) {
 					ID:        "cross-ci",
 					Type:      ticket.GateStateEvent,
 					Status:    ticket.GatePending,
-					EventType: schema.EventTypePipelineResult,
+					EventType: pipeline.EventTypePipelineResult,
 					RoomAlias: ref.MustParseRoomAlias("#ci/results:bureau.local"),
 				},
 			},
@@ -1704,7 +1704,7 @@ func TestCrossRoomGateUnresolvableAlias(t *testing.T) {
 					ID:        "cross-ci",
 					Type:      ticket.GateStateEvent,
 					Status:    ticket.GatePending,
-					EventType: schema.EventTypePipelineResult,
+					EventType: pipeline.EventTypePipelineResult,
 					RoomAlias: ref.MustParseRoomAlias("#nonexistent:bureau.local"),
 				},
 			},
@@ -1870,7 +1870,7 @@ func TestCrossRoomGateSkipsNonStateEventTypes(t *testing.T) {
 				Events: []messaging.Event{
 					{
 						EventID:  ref.MustParseEventID("$ev1"),
-						Type:     schema.EventTypePipelineResult,
+						Type:     pipeline.EventTypePipelineResult,
 						StateKey: stringPtr("build"),
 						Content: map[string]any{
 							"pipeline_ref": "build",
@@ -2012,7 +2012,7 @@ func TestCrossRoomGateTimelineEvents(t *testing.T) {
 					ID:        "cross-ci",
 					Type:      ticket.GateStateEvent,
 					Status:    ticket.GatePending,
-					EventType: schema.EventTypePipelineResult,
+					EventType: pipeline.EventTypePipelineResult,
 					StateKey:  "lint",
 					RoomAlias: ref.MustParseRoomAlias("#ci/results:bureau.local"),
 				},
@@ -2027,7 +2027,7 @@ func TestCrossRoomGateTimelineEvents(t *testing.T) {
 				Events: []messaging.Event{
 					{
 						EventID:  ref.MustParseEventID("$lint-result"),
-						Type:     schema.EventTypePipelineResult,
+						Type:     pipeline.EventTypePipelineResult,
 						StateKey: stringPtr("lint"),
 						Content: map[string]any{
 							"pipeline_ref": "lint",
@@ -2075,7 +2075,7 @@ func TestCrossRoomGateNilResolverIsNoOp(t *testing.T) {
 					ID:        "cross-ci",
 					Type:      ticket.GateStateEvent,
 					Status:    ticket.GatePending,
-					EventType: schema.EventTypePipelineResult,
+					EventType: pipeline.EventTypePipelineResult,
 					RoomAlias: ref.MustParseRoomAlias("#ci/results:bureau.local"),
 				},
 			},
@@ -2088,7 +2088,7 @@ func TestCrossRoomGateNilResolverIsNoOp(t *testing.T) {
 				Events: []messaging.Event{
 					{
 						EventID:  ref.MustParseEventID("$ev1"),
-						Type:     schema.EventTypePipelineResult,
+						Type:     pipeline.EventTypePipelineResult,
 						StateKey: stringPtr("build"),
 						Content:  map[string]any{"pipeline_ref": "build"},
 					},
@@ -2171,7 +2171,7 @@ func TestHandleSyncCrossRoomGateEvaluation(t *testing.T) {
 					ID:        "cross-ci",
 					Type:      ticket.GateStateEvent,
 					Status:    ticket.GatePending,
-					EventType: schema.EventTypePipelineResult,
+					EventType: pipeline.EventTypePipelineResult,
 					StateKey:  "build-check",
 					RoomAlias: ref.MustParseRoomAlias("#ci/results:bureau.local"),
 				},
@@ -2190,7 +2190,7 @@ func TestHandleSyncCrossRoomGateEvaluation(t *testing.T) {
 						Events: []messaging.Event{
 							{
 								EventID:  ref.MustParseEventID("$ci-result"),
-								Type:     schema.EventTypePipelineResult,
+								Type:     pipeline.EventTypePipelineResult,
 								StateKey: stringPtr("build-check"),
 								Content: map[string]any{
 									"pipeline_ref": "build-check",

@@ -17,6 +17,7 @@ go_library(
         "//lib/bm25",
         "//lib/ref",
         "//lib/schema",
+        "//lib/schema/pipeline",
         "//lib/schema/ticket",
     ],
 )
@@ -32,6 +33,7 @@ go_test(
     deps = [
         "//lib/ref",
         "//lib/schema",
+        "//lib/schema/pipeline",
         "//lib/schema/ticket",
     ],
 )
@@ -50,6 +52,7 @@ go_library(
         "//lib/bm25",
         "//lib/ref",
         "//lib/schema",
+        "//lib/schema/pipeline",
         "//lib/schema/ticket",
     ],
 )
@@ -65,6 +68,7 @@ go_test(
     deps = [
         "//lib/ref",
         "//lib/schema",
+        "//lib/schema/pipeline",
         "//lib/schema/ticket",
     ],
 )

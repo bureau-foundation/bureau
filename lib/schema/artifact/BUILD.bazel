@@ -12,6 +12,7 @@ go_library(
     ],
     importpath = "github.com/bureau-foundation/bureau/lib/schema/artifact",
     visibility = ["//visibility:public"],
+    deps = ["//lib/ref"],
 )
 
 go_test(

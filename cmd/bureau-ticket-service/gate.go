@@ -145,7 +145,7 @@ func matchGateEvent(gate *ticket.TicketGate, event messaging.Event, index *ticke
 // a pipeline gate. Matches on event type, PipelineRef, and optionally
 // Conclusion.
 func matchPipelineGate(gate *ticket.TicketGate, event messaging.Event) bool {
-	if event.Type != schema.EventTypePipelineResult {
+	if event.Type != pipeline.EventTypePipelineResult {
 		return false
 	}
 

@@ -8,7 +8,6 @@ import (
 	"encoding/json"
 
 	"github.com/bureau-foundation/bureau/lib/ref"
-	"github.com/bureau-foundation/bureau/lib/schema"
 	artifactschema "github.com/bureau-foundation/bureau/lib/schema/artifact"
 	"github.com/bureau-foundation/bureau/lib/service"
 	"github.com/bureau-foundation/bureau/messaging"
@@ -107,12 +106,12 @@ func (as *ArtifactService) processRoomState(roomID ref.RoomID, stateEvents, time
 	// Timeline events with a state_key are state changes.
 	var scope *artifactschema.ArtifactScope
 	for _, event := range stateEvents {
-		if event.Type == schema.EventTypeArtifactScope && event.StateKey != nil {
+		if event.Type == artifactschema.EventTypeArtifactScope && event.StateKey != nil {
 			scope = as.parseArtifactScope(event)
 		}
 	}
 	for _, event := range timelineEvents {
-		if event.Type == schema.EventTypeArtifactScope && event.StateKey != nil {
+		if event.Type == artifactschema.EventTypeArtifactScope && event.StateKey != nil {
 			scope = as.parseArtifactScope(event)
 		}
 	}
@@ -161,7 +160,7 @@ func (as *ArtifactService) processRoomSync(roomID ref.RoomID, room messaging.Joi
 	}
 
 	for _, event := range stateEvents {
-		if event.Type == schema.EventTypeArtifactScope {
+		if event.Type == artifactschema.EventTypeArtifactScope {
 			as.handleArtifactScopeChange(roomID, event)
 		}
 	}

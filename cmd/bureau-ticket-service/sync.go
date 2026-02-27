@@ -9,6 +9,7 @@ import (
 
 	"github.com/bureau-foundation/bureau/lib/ref"
 	"github.com/bureau-foundation/bureau/lib/schema"
+	"github.com/bureau-foundation/bureau/lib/schema/pipeline"
 	"github.com/bureau-foundation/bureau/lib/schema/stewardship"
 	"github.com/bureau-foundation/bureau/lib/schema/ticket"
 	"github.com/bureau-foundation/bureau/lib/service"
@@ -36,7 +37,7 @@ func buildSyncFilter() string {
 	stateEventTypes := []ref.EventType{
 		schema.EventTypeTicket,
 		schema.EventTypeTicketConfig,
-		schema.EventTypePipelineResult,
+		pipeline.EventTypePipelineResult,
 		schema.EventTypeStewardship,
 		schema.MatrixEventTypeTombstone,
 		schema.MatrixEventTypeRoomMember,

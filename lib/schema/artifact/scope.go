@@ -6,7 +6,20 @@ package artifact
 import (
 	"errors"
 	"fmt"
+
+	"github.com/bureau-foundation/bureau/lib/ref"
 )
+
+// EventTypeArtifactScope configures artifact integration for a
+// room. Declares which artifact service principal manages this
+// room's artifacts and which tag patterns the room subscribes to
+// for notifications. Per-artifact metadata and per-tag mappings
+// live in the artifact service's own persistent store, not in
+// Matrix state events.
+//
+// State key: "" (singleton per room)
+// Room: any room that works with artifacts
+const EventTypeArtifactScope ref.EventType = "m.bureau.artifact_scope"
 
 // ArtifactScopeVersion is the current schema version for
 // ArtifactScope events. Increment when adding fields that

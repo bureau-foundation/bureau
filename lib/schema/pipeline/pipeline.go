@@ -11,6 +11,25 @@ import (
 	"github.com/bureau-foundation/bureau/lib/ref"
 )
 
+// Pipeline event type constants. These constants are used by the
+// daemon, pipeline executor, and ticket service to reference pipeline
+// state events in Matrix rooms.
+const (
+	// EventTypePipelineResult is published by the pipeline executor when
+	// a pipeline completes (successfully, with failure, or by abort). The
+	// ticket service watches these events to evaluate pipeline gates —
+	// a TicketGate with type "pipeline" matches the PipelineRef and
+	// Conclusion fields from this event.
+	//
+	// Published to the pipeline's log room (PipelineContent.Log.Room).
+	// Pipelines without a log room do not publish result events; the
+	// JSONL result log (BUREAU_RESULT_PATH) covers daemon-internal needs.
+	//
+	// State key: pipeline name/ref (e.g., "dev-workspace-init")
+	// Room: the pipeline's log room
+	EventTypePipelineResult ref.EventType = "m.bureau.pipeline_result"
+)
+
 // PipelineResultContentVersion is the current schema version for
 // PipelineResultContent events. Increment when adding fields that
 // existing code must not silently drop during read-modify-write.

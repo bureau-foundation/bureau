@@ -3,7 +3,21 @@
 
 package pipeline
 
-import "fmt"
+import (
+	"fmt"
+
+	"github.com/bureau-foundation/bureau/lib/ref"
+)
+
+// EventTypePipelineConfig enables and configures pipeline execution
+// for a room. Rooms without this event are not eligible for pipeline
+// execution — the daemon skips pip- tickets in unconfigured rooms.
+// Published by the admin (via "bureau pipeline enable") to each room
+// where pipeline execution should be available.
+//
+// State key: "" (singleton per room)
+// Room: any room that wants pipeline execution
+const EventTypePipelineConfig ref.EventType = "m.bureau.pipeline_config"
 
 // PipelineConfigVersion is the current schema version for
 // PipelineConfigContent events.

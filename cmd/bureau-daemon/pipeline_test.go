@@ -14,6 +14,7 @@ import (
 
 	"github.com/bureau-foundation/bureau/lib/ref"
 	"github.com/bureau-foundation/bureau/lib/schema"
+	"github.com/bureau-foundation/bureau/lib/schema/pipeline"
 	"github.com/bureau-foundation/bureau/lib/service"
 	"github.com/bureau-foundation/bureau/lib/servicetoken"
 	"github.com/bureau-foundation/bureau/lib/testutil"
@@ -396,7 +397,7 @@ func TestHandlePipelineExecute_Accepted(t *testing.T) {
 	// target room. Without it, handlePipelineExecute rejects the
 	// command before discovering the ticket service.
 	harness.matrixState.setStateEvent("!tickets:bureau.local",
-		schema.EventTypePipelineConfig, "", map[string]any{"version": 1})
+		pipeline.EventTypePipelineConfig, "", map[string]any{"version": 1})
 
 	event := buildPipelineCommandEvent(ref.MustParseEventID("$pipe3"), ref.MustParseUserID("@admin:bureau.local"),
 		"bureau/pipeline:dev-init", "!tickets:bureau.local", "req-accepted")

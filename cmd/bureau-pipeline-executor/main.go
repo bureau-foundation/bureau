@@ -567,7 +567,7 @@ func publishPipelineResult(
 		LogEventID:   threadLog.logEventID(),
 	}
 
-	if _, err := session.SendStateEvent(ctx, roomID, schema.EventTypePipelineResult, pipelineName, result); err != nil {
+	if _, err := session.SendStateEvent(ctx, roomID, pipeline.EventTypePipelineResult, pipelineName, result); err != nil {
 		logger.Warn("failed to publish pipeline result event", "error", err)
 	}
 }

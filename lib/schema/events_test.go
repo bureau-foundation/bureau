@@ -8,6 +8,8 @@ import (
 
 	"github.com/bureau-foundation/bureau/lib/ref"
 	"github.com/bureau-foundation/bureau/lib/schema/artifact"
+	"github.com/bureau-foundation/bureau/lib/schema/log"
+	"github.com/bureau-foundation/bureau/lib/schema/pipeline"
 )
 
 func TestEventTypeConstants(t *testing.T) {
@@ -30,11 +32,13 @@ func TestEventTypeConstants(t *testing.T) {
 		{"project", EventTypeProject, "m.bureau.project"},
 		{"workspace", EventTypeWorkspace, "m.bureau.workspace"},
 		{"pipeline", EventTypePipeline, "m.bureau.pipeline"},
-		{"pipeline_result", EventTypePipelineResult, "m.bureau.pipeline_result"},
+		{"pipeline_config", pipeline.EventTypePipelineConfig, "m.bureau.pipeline_config"},
+		{"pipeline_result", pipeline.EventTypePipelineResult, "m.bureau.pipeline_result"},
 		{"service_binding", EventTypeServiceBinding, "m.bureau.service_binding"},
 		{"ticket", EventTypeTicket, "m.bureau.ticket"},
 		{"ticket_config", EventTypeTicketConfig, "m.bureau.ticket_config"},
-		{"artifact_scope", EventTypeArtifactScope, "m.bureau.artifact_scope"},
+		{"artifact_scope", artifact.EventTypeArtifactScope, "m.bureau.artifact_scope"},
+		{"log", log.EventTypeLog, "m.bureau.log"},
 	}
 	for _, test := range tests {
 		t.Run(test.name, func(t *testing.T) {

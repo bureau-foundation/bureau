@@ -21,7 +21,6 @@ go_library(
         "//lib/netutil",
         "//lib/process",
         "//lib/ref",
-        "//lib/schema",
         "//lib/schema/artifact",
         "//lib/secret",
         "//lib/service",

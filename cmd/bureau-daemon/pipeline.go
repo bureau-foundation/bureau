@@ -26,6 +26,7 @@ import (
 	"github.com/bureau-foundation/bureau/lib/ref"
 	"github.com/bureau-foundation/bureau/lib/schema"
 	"github.com/bureau-foundation/bureau/lib/schema/artifact"
+	"github.com/bureau-foundation/bureau/lib/schema/pipeline"
 	"github.com/bureau-foundation/bureau/lib/schema/ticket"
 	"github.com/bureau-foundation/bureau/lib/service"
 	"github.com/bureau-foundation/bureau/lib/servicetoken"
@@ -73,7 +74,7 @@ func handlePipelineExecute(ctx context.Context, d *Daemon, roomID ref.RoomID, ev
 	}
 
 	// Verify the target room has pipeline execution enabled.
-	_, err = d.session.GetStateEvent(ctx, ticketRoomID, schema.EventTypePipelineConfig, "")
+	_, err = d.session.GetStateEvent(ctx, ticketRoomID, pipeline.EventTypePipelineConfig, "")
 	if err != nil {
 		if messaging.IsMatrixError(err, messaging.ErrCodeNotFound) {
 			return nil, fmt.Errorf("pipeline execution not enabled in room %s (run 'bureau pipeline enable' for the space)", d.displayRoom(ticketRoomID))

@@ -5,6 +5,7 @@ package ticket
 
 import (
 	"context"
+	"strings"
 	"time"
 
 	"github.com/spf13/pflag"
@@ -49,13 +50,37 @@ func (c *TicketConnection) AddFlags(flagSet *pflag.FlagSet) {
 // socket path. In direct mode, reads the token from a file.
 func (c *TicketConnection) connect() (*service.ServiceClient, error) {
 	if c.ServiceMode {
-		result, err := c.MintServiceToken()
+		result, err := c.mintTicketToken()
 		if err != nil {
 			return nil, err
 		}
 		return service.NewServiceClientFromToken(result.SocketPath, result.TokenBytes), nil
 	}
-	return service.NewServiceClient(c.SocketPath, c.TokenPath)
+	client, err := service.NewServiceClient(c.SocketPath, c.TokenPath)
+	if err != nil {
+		return nil, cli.Internal("connecting to ticket service: %w", err).
+			WithHint("In direct mode, check that --socket points to a valid ticket service socket " +
+				"and --token-file points to a valid service token.\n" +
+				"From the host, use --service mode instead: 'bureau ticket <command> --service'.")
+	}
+	return client, nil
+}
+
+// mintTicketToken wraps MintServiceToken with ticket-specific error
+// classification. The "no service binding found" error indicates the
+// ticket service isn't enabled for this space — a distinct condition
+// from a generic daemon communication failure.
+func (c *TicketConnection) mintTicketToken() (*cli.MintResult, error) {
+	result, err := c.MintServiceToken()
+	if err == nil {
+		return result, nil
+	}
+
+	if strings.Contains(err.Error(), "no service binding found") {
+		return nil, cli.NotFound("ticket service not enabled on this machine").
+			WithHint("Run 'bureau ticket enable --space <space> --host <machine>' to set up the ticket service.")
+	}
+	return nil, err
 }
 
 // callContext returns a context with a reasonable timeout for service

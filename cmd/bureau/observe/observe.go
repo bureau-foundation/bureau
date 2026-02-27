@@ -259,7 +259,9 @@ display their role identity.`,
 					if diagnosed := cli.DiagnoseSocketError(err, socketPath); diagnosed != nil {
 						return diagnosed
 					}
-					return cli.Internal("query channel layout: %w", err)
+					return cli.Transient("query channel layout: %w", err).
+						WithHint("Check that the Bureau daemon is running on the target machine. " +
+							"The daemon must be started before using dashboard mode.")
 				}
 				// Derive session name from the channel alias. Strip the
 				// sigil and server name to get a clean path:
@@ -285,7 +287,9 @@ display their role identity.`,
 					if diagnosed := cli.DiagnoseSocketError(err, socketPath); diagnosed != nil {
 						return diagnosed
 					}
-					return cli.Internal("query machine layout: %w", err)
+					return cli.Transient("query machine layout: %w", err).
+						WithHint("Check that the Bureau daemon is running on this machine. " +
+							"The daemon must be started before using dashboard mode.")
 				}
 				layout = response.Layout
 				sessionName = "observe/machine/" + response.Machine
@@ -447,7 +451,9 @@ Machine statuses:
 				if diagnosed := cli.DiagnoseSocketError(err, params.SocketPath); diagnosed != nil {
 					return diagnosed
 				}
-				return err
+				return cli.Transient("list observable targets: %w", err).
+					WithHint("Check that the Bureau daemon is running on this machine. " +
+						"The daemon must be started before listing targets.")
 			}
 
 			if done, err := params.EmitJSON(response); done {

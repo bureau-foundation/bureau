@@ -26,6 +26,7 @@ go_library(
         "services.go",
         "shutdown.go",
         "sync.go",
+        "telemetry.go",
         "template.go",
         "token_blacklist.go",
         "token_refresh.go",

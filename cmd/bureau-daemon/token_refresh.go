@@ -153,12 +153,14 @@ func (d *Daemon) tokenRefreshCandidates(now time.Time) []tokenRefreshCandidate {
 	for principal := range d.running {
 		// Combine template-required services with daemon-managed
 		// services (credential provisioning for principals with
-		// credential/* grants) to refresh all tokens together.
+		// credential/* grants, telemetry for all principals when
+		// a relay is deployed) to refresh all tokens together.
 		var allRoles []string
 		if spec := d.lastSpecs[principal]; spec != nil {
 			allRoles = append(allRoles, spec.RequiredServices...)
 		}
 		allRoles = append(allRoles, d.credentialServiceRoles(principal)...)
+		allRoles = append(allRoles, d.telemetryServiceRoles()...)
 		if len(allRoles) == 0 {
 			continue
 		}

@@ -496,32 +496,29 @@ func TestSocketServerTelemetryEmission(t *testing.T) {
 		t.Fatal("status response missing principal")
 	}
 
-	// Read from the subscribe stream. The emitter flushes every 5s
-	// (configured in BootstrapViaProxy). When the batch arrives, the
-	// mock pushes a subscribeFrame containing the spans.
-	var frame telemetryMockSubscribeFrame
-	if err := subscribeDecoder.Decode(&frame); err != nil {
-		t.Fatalf("read subscribe frame from mock: %v", err)
-	}
-
-	// The frame should contain at least one socket.handle span from
-	// our status request. There may be additional spans if the emitter
-	// flushed other requests (e.g., the deployService helper's
-	// readiness probing), so find our span by operation + action.
+	// Read from the subscribe stream until we find the socket.handle
+	// span. The emitter flushes every 5s (configured in
+	// BootstrapViaProxy). Multiple frames may arrive: the proxy also
+	// emits proxy.forward spans for HTTP requests it handles (invite
+	// acceptance, sync calls, etc.), and these may appear in earlier
+	// frames before the socket server's socket.handle span.
 	var found *telemetry.Span
-	for index := range frame.Spans {
-		span := &frame.Spans[index]
-		if span.Operation == "socket.handle" {
-			action, _ := span.Attributes["action"].(string)
-			if action == "status" {
-				found = span
-				break
+	for found == nil {
+		var frame telemetryMockSubscribeFrame
+		if err := subscribeDecoder.Decode(&frame); err != nil {
+			t.Fatalf("read subscribe frame from mock: %v", err)
+		}
+
+		for index := range frame.Spans {
+			span := &frame.Spans[index]
+			if span.Operation == "socket.handle" {
+				action, _ := span.Attributes["action"].(string)
+				if action == "status" {
+					found = span
+					break
+				}
 			}
 		}
-	}
-	if found == nil {
-		t.Fatalf("no socket.handle span with action=status in subscribe frame "+
-			"(got %d spans: %s)", len(frame.Spans), summarizeSpans(frame.Spans))
 	}
 
 	// Verify span fields stamped by the emitter and socket server.
@@ -549,6 +546,125 @@ func TestSocketServerTelemetryEmission(t *testing.T) {
 	}
 	if found.SpanID.IsZero() {
 		t.Fatal("span SpanID is zero")
+	}
+}
+
+// TestProxyTelemetryEmission verifies that the proxy emits telemetry spans
+// through the telemetry relay when the daemon wires up the relay connection.
+//
+// End-to-end flow: daemon resolves telemetry service binding in the config
+// room → mints a telemetry service token for the proxy → passes socket path
+// and token path to the launcher via IPC → launcher pipes them into the
+// proxy's credential payload → proxy creates a TelemetryEmitter and records
+// a proxy.forward span for each HTTP request → emitter flushes spans to the
+// relay socket → telemetry mock's subscribe stream delivers them here.
+func TestProxyTelemetryEmission(t *testing.T) {
+	t.Parallel()
+
+	admin := adminSession(t)
+	defer admin.Close()
+	fleet := createTestFleet(t, admin)
+
+	machine := newTestMachine(t, fleet, "proxytel")
+	startMachine(t, admin, machine, machineOptions{
+		LauncherBinary: resolvedBinary(t, "LAUNCHER_BINARY"),
+		DaemonBinary:   resolvedBinary(t, "DAEMON_BINARY"),
+		ProxyBinary:    resolvedBinary(t, "PROXY_BINARY"),
+		Fleet:          fleet,
+	})
+
+	// Deploy the telemetry mock and publish a service binding so the
+	// daemon resolves the telemetry relay for all subsequent principals.
+	mockService := deployTelemetryMock(t, admin, fleet, machine, "proxytel")
+
+	// Open a subscribe stream on the mock BEFORE deploying the agent.
+	// The subscriber must be registered before the proxy's emitter
+	// flushes so we don't miss spans from the agent's startup activity.
+	callerEntity, err := ref.NewEntityFromAccountLocalpart(fleet.Ref, "agent/proxytel-observer")
+	if err != nil {
+		t.Fatalf("construct caller entity: %v", err)
+	}
+	subscribeToken := mintTestServiceToken(t, machine, callerEntity, "telemetry", nil)
+	subscribeConn := openTelemetryStream(t, mockService.SocketPath, "subscribe", subscribeToken)
+	subscribeDecoder := codec.NewDecoder(subscribeConn)
+
+	// Deploy the test agent. The daemon sees the telemetry service
+	// binding, mints a telemetry token, and passes both the socket
+	// path and token path to the launcher. The proxy starts with
+	// telemetry enabled and emits proxy.forward spans for every HTTP
+	// request it processes.
+	//
+	// SkipWaitForReady: the test exercises the proxy from the host side
+	// (proxyWhoami below), not through the sandboxed agent process.
+	// bureau-test-agent's ready message ("quickstart-test-ready") also
+	// doesn't match deployAgent's "agent-ready" substring check.
+	agent := deployAgent(t, admin, machine, agentOptions{
+		Binary:           resolvedBinary(t, "TEST_AGENT_BINARY"),
+		Localpart:        "agent/proxytel-test",
+		SkipWaitForReady: true,
+	})
+
+	// Make an HTTP request through the proxy. The proxy records a
+	// proxy.forward span for this Matrix whoami call.
+	proxyClient := proxyHTTPClient(agent.ProxySocketPath)
+	userID := proxyWhoami(t, proxyClient)
+	if userID == "" {
+		t.Fatal("proxyWhoami returned empty user ID")
+	}
+
+	// Read from the subscribe stream. The proxy's emitter flushes
+	// every 5 seconds. When the batch arrives, the mock pushes a
+	// frame containing the spans. There may be multiple frames if
+	// the test agent's startup activity triggered earlier flushes.
+	var found *telemetry.Span
+	for found == nil {
+		var frame telemetryMockSubscribeFrame
+		if err := subscribeDecoder.Decode(&frame); err != nil {
+			t.Fatalf("read subscribe frame from mock: %v", err)
+		}
+
+		for index := range frame.Spans {
+			span := &frame.Spans[index]
+			if span.Operation == "proxy.forward" {
+				serviceName, _ := span.Attributes["service"].(string)
+				httpPath, _ := span.Attributes["http.path"].(string)
+				if serviceName == "matrix" && httpPath == "/_matrix/client/v3/account/whoami" {
+					found = span
+					break
+				}
+			}
+		}
+	}
+
+	// Verify the span carries the expected attributes and identity.
+	if found.Status != telemetry.SpanStatusOK {
+		t.Errorf("expected span status OK, got %d", found.Status)
+	}
+	httpMethod, _ := found.Attributes["http.method"].(string)
+	if httpMethod != "GET" {
+		t.Errorf("expected http.method %q, got %q", "GET", httpMethod)
+	}
+	httpStatusCode, _ := found.Attributes["http.status_code"]
+	if statusUint, ok := httpStatusCode.(uint64); !ok || statusUint != 200 {
+		t.Errorf("expected http.status_code 200 (uint64), got %v (%T)", httpStatusCode, httpStatusCode)
+	}
+	if found.Duration <= 0 {
+		t.Errorf("expected positive duration, got %d", found.Duration)
+	}
+	if found.Fleet.IsZero() {
+		t.Error("span Fleet is zero (proxy emitter did not stamp identity)")
+	}
+	if found.Machine.IsZero() {
+		t.Error("span Machine is zero (proxy emitter did not stamp identity)")
+	}
+	if found.Source.IsZero() {
+		t.Error("span Source is zero (proxy emitter did not stamp identity)")
+	}
+	if found.TraceID.IsZero() {
+		t.Error("span TraceID is zero")
+	}
+	if found.SpanID.IsZero() {
+		t.Error("span SpanID is zero")
 	}
 }
 

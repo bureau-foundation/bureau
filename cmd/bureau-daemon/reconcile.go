@@ -271,6 +271,13 @@ func (d *Daemon) reconcile(ctx context.Context) error {
 		d.adoptSurvivingPrincipal(ctx, principal, assignment)
 	}
 
+	// Resolve the telemetry relay socket once per reconcile cycle. The
+	// telemetry relay is a machine-level service: all proxies on this
+	// machine connect to the same relay. The binding is in the config
+	// room. If not found, telemetry is simply not available — proxies
+	// start without telemetry and log a diagnostic at startup.
+	telemetrySocketPath := d.resolveTelemetrySocket(ctx)
+
 	// Create sandboxes for principals that should be running but aren't.
 	// StartConditions were already evaluated when building the desired
 	// set above — only principals with satisfied conditions are here.
@@ -618,14 +625,15 @@ func (d *Daemon) reconcile(ctx context.Context) error {
 		serviceMounts = d.appendCredentialServiceMount(principal, serviceMounts)
 
 		// Compute the full set of service roles that need tokens: the
-		// template's RequiredServices plus any daemon-managed services
-		// the principal qualifies for (currently: credential provisioning
-		// for principals with credential/* grants).
+		// template's RequiredServices, daemon-managed credential
+		// provisioning (for principals with credential/* grants), and
+		// telemetry (when a telemetry relay is deployed on this machine).
 		var allServiceRoles []string
 		if sandboxSpec != nil {
 			allServiceRoles = append(allServiceRoles, sandboxSpec.RequiredServices...)
 		}
 		allServiceRoles = append(allServiceRoles, d.credentialServiceRoles(principal)...)
+		allServiceRoles = append(allServiceRoles, d.telemetryServiceRoles()...)
 
 		// Mint service tokens for each role. The tokens carry pre-resolved
 		// grants scoped to the service namespace. Written to disk and
@@ -663,6 +671,16 @@ func (d *Daemon) reconcile(ctx context.Context) error {
 			tokenDirectory = pipelineTicketTokenDir
 		}
 
+		// Derive the telemetry token path for the proxy. The proxy
+		// reads this specific file at startup to authenticate with the
+		// telemetry relay. The token was minted as part of
+		// allServiceRoles above and lives in the standard token
+		// directory alongside other service tokens.
+		var telemetryTokenPath string
+		if telemetrySocketPath != "" && tokenDirectory != "" {
+			telemetryTokenPath = filepath.Join(tokenDirectory, telemetryServiceRole+".token")
+		}
+
 		// Resolve authorization grants before sandbox creation so the
 		// proxy starts with enforcement from the first request. The
 		// launcher pipes these to the proxy's stdin alongside credentials.
@@ -678,6 +696,8 @@ func (d *Daemon) reconcile(ctx context.Context) error {
 			TriggerContent:       triggerContents[principal],
 			ServiceMounts:        serviceMounts,
 			TokenDirectory:       tokenDirectory,
+			TelemetrySocketPath:  telemetrySocketPath,
+			TelemetryTokenPath:   telemetryTokenPath,
 		})
 		if err != nil {
 			d.logger.Error("create-sandbox IPC failed", "principal", principal, "error", err)

@@ -620,6 +620,14 @@ type Daemon struct {
 	// both exec() transitions and process restarts.
 	stateDir string
 
+	// telemetrySocketPath caches the host-side path to the telemetry
+	// relay's Unix socket. Resolved from the config room's
+	// m.bureau.service_binding state event (key "telemetry") once per
+	// reconcile cycle. Empty when no telemetry relay is deployed. Used
+	// by the token refresh loop to include "telemetry" in the set of
+	// roles that need periodic re-minting. Protected by reconcileMu.
+	telemetrySocketPath string
+
 	// failedExecPaths tracks store paths where exec() has already been
 	// attempted and failed during this process lifetime. Prevents retry
 	// loops where the daemon repeatedly tries to exec a broken binary on

@@ -220,7 +220,7 @@ func (t *ProxyTelemetry) recordRequest(
 	}
 
 	spanStatus := telemetry.SpanStatusOK
-	if status >= 400 {
+	if status >= 400 || status == 0 {
 		spanStatus = telemetry.SpanStatusError
 	}
 

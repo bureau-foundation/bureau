@@ -398,9 +398,19 @@ func (s *HTTPService) recordTelemetry(traceID telemetry.TraceID, spanID telemetr
 // ResponseWriter, this returns the raw response for programmatic use by
 // structured API handlers (e.g., the /v1/matrix/* endpoints).
 //
+// Records a proxy.forward telemetry span and injects a W3C Traceparent
+// header, matching the telemetry behaviour of ServeHTTP. The span
+// measures the time from request start to response headers — body read
+// time is the caller's responsibility.
+//
 // The caller is responsible for closing the response body.
 func (s *HTTPService) ForwardRequest(ctx context.Context, method, path string, body io.Reader) (*http.Response, error) {
+	startTime := time.Now()
+	traceID := telemetry.NewTraceID()
+	spanID := telemetry.NewSpanID()
+
 	// Validate credentials are available before making request.
+	credentialCount := len(s.injectHeaders)
 	var missingCredentials []string
 	for _, credentialName := range s.injectHeaders {
 		if s.credential == nil || s.credential.Get(credentialName) == nil {
@@ -432,10 +442,20 @@ func (s *HTTPService) ForwardRequest(ctx context.Context, method, path string, b
 		request.Header.Set(headerName, value.String())
 	}
 
+	// Inject W3C Traceparent header for distributed tracing.
+	request.Header.Set("Traceparent", formatTraceparent(traceID, spanID))
+
 	response, err := s.client.Do(request)
 	if err != nil {
+		s.recordTelemetry(traceID, spanID, method, path, 0, startTime, credentialCount, err.Error())
 		return nil, fmt.Errorf("upstream request: %w", err)
 	}
+
+	var statusMessage string
+	if response.StatusCode >= 400 {
+		statusMessage = fmt.Sprintf("HTTP %d", response.StatusCode)
+	}
+	s.recordTelemetry(traceID, spanID, method, path, response.StatusCode, startTime, credentialCount, statusMessage)
 
 	return response, nil
 }

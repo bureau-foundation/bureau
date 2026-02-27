@@ -27,19 +27,26 @@ func main() {
 
 // rootCommand returns the complete CLI command tree. Delegates to
 // [commands.Root] for the shared tree (used by both bureau CLI and
-// bureau-agent), then adds the interactive ticket viewer. The viewer
-// is added here rather than in commands.Root() because it depends on
-// charmbracelet/bubbletea (~9 MB of transitive dependencies), which
-// is useless in bureau-agent (a TUI cannot run over MCP).
+// bureau-agent), then adds interactive commands that require a
+// terminal. These are kept out of commands.Root() so bureau-agent
+// avoids linking TUI dependencies it can never use.
 func rootCommand() *cli.Command {
 	root := commands.Root()
+	addInteractiveCommands(root)
+	return root
+}
+
+// addInteractiveCommands appends CLI-only commands that depend on TUI
+// libraries (charmbracelet/bubbletea, lib/ticketui). These commands
+// require a terminal and cannot run over MCP, so they are excluded
+// from the shared command tree in [commands.Root].
+func addInteractiveCommands(root *cli.Command) {
 	for _, sub := range root.Subcommands {
 		if sub.Name == "ticket" {
 			sub.Subcommands = append(sub.Subcommands, viewercmd.Command())
-			break
+			return
 		}
 	}
-	return root
 }
 
 func run() error {

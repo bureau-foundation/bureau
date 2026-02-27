@@ -1,8 +1,8 @@
 // Copyright 2026 The Bureau Authors
 // SPDX-License-Identifier: Apache-2.0
 
-// Package commands builds the complete Bureau CLI command tree. Both
-// the bureau CLI binary and the bureau-agent binary import this
+// Package commands builds the agent-compatible Bureau CLI command tree.
+// Both the bureau CLI binary and the bureau-agent binary import this
 // package to share a single source of truth for tool discovery.
 //
 // This creates a cross-binary dependency: bureau-agent's driver
@@ -11,6 +11,11 @@
 // executes the same CLI commands as tools. The agent's core loop
 // logic depends on the [toolserver.Server] interface in lib/, not
 // on the concrete MCP types; only the driver layer imports from cmd/.
+//
+// Because bureau-agent links this tree, subcommand packages imported
+// here must not depend on TUI libraries (charmbracelet, lib/ticketui,
+// lib/tui). Interactive commands that need a terminal are added by the
+// bureau CLI binary's main.go after calling [Root].
 package commands
 
 import (

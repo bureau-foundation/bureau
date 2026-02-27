@@ -4,12 +4,14 @@
 package template
 
 import (
+	"bytes"
 	"context"
 	"encoding/json"
 	"fmt"
 	"log/slog"
+	"maps"
 	"os"
-	"reflect"
+	"slices"
 	"strings"
 	"text/tabwriter"
 
@@ -466,37 +468,37 @@ func classifyTemplateChange(current, proposed *schema.TemplateContent) (string, 
 	if current.Description != proposed.Description {
 		changedFields = append(changedFields, "description")
 	}
-	if !reflect.DeepEqual(current.Command, proposed.Command) {
+	if !slices.Equal(current.Command, proposed.Command) {
 		changedFields = append(changedFields, "command")
 	}
 	if current.Environment != proposed.Environment {
 		changedFields = append(changedFields, "environment")
 	}
-	if !reflect.DeepEqual(current.EnvironmentVariables, proposed.EnvironmentVariables) {
+	if !maps.Equal(current.EnvironmentVariables, proposed.EnvironmentVariables) {
 		changedFields = append(changedFields, "environment_variables")
 	}
-	if !reflect.DeepEqual(current.Filesystem, proposed.Filesystem) {
+	if !jsonEqual(current.Filesystem, proposed.Filesystem) {
 		changedFields = append(changedFields, "filesystem")
 	}
-	if !reflect.DeepEqual(current.Namespaces, proposed.Namespaces) {
+	if !jsonEqual(current.Namespaces, proposed.Namespaces) {
 		changedFields = append(changedFields, "namespaces")
 	}
-	if !reflect.DeepEqual(current.Resources, proposed.Resources) {
+	if !jsonEqual(current.Resources, proposed.Resources) {
 		changedFields = append(changedFields, "resources")
 	}
-	if !reflect.DeepEqual(current.Security, proposed.Security) {
+	if !jsonEqual(current.Security, proposed.Security) {
 		changedFields = append(changedFields, "security")
 	}
-	if !reflect.DeepEqual(current.CreateDirs, proposed.CreateDirs) {
+	if !slices.Equal(current.CreateDirs, proposed.CreateDirs) {
 		changedFields = append(changedFields, "create_dirs")
 	}
-	if !reflect.DeepEqual(current.Roles, proposed.Roles) {
+	if !jsonEqual(current.Roles, proposed.Roles) {
 		changedFields = append(changedFields, "roles")
 	}
-	if !reflect.DeepEqual(current.RequiredCredentials, proposed.RequiredCredentials) {
+	if !slices.Equal(current.RequiredCredentials, proposed.RequiredCredentials) {
 		changedFields = append(changedFields, "required_credentials")
 	}
-	if !reflect.DeepEqual(current.DefaultPayload, proposed.DefaultPayload) {
+	if !jsonEqual(current.DefaultPayload, proposed.DefaultPayload) {
 		changedFields = append(changedFields, "default_payload")
 	}
 
@@ -597,4 +599,21 @@ func printImpactResults(logger *slog.Logger, results []*impactResult, targetRef 
 	}
 
 	return nil
+}
+
+// jsonEqual compares two values by JSON serialization. Used for
+// TemplateContent fields with non-comparable types (structs containing
+// slices, maps, pointers) where adding typed Equal methods would
+// create a fragile maintenance surface across many nested types.
+// Go's encoding/json sorts map keys deterministically.
+func jsonEqual(a, b any) bool {
+	jsonA, errA := json.Marshal(a)
+	if errA != nil {
+		return false
+	}
+	jsonB, errB := json.Marshal(b)
+	if errB != nil {
+		return false
+	}
+	return bytes.Equal(jsonA, jsonB)
 }

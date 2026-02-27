@@ -127,6 +127,11 @@ pre-commit:
       glob: "*_test.go"
       priority: 2
 
+    check-banned-imports:
+      run: script/check-banned-imports
+      glob: "*.go"
+      priority: 2
+
     # ===================================================================
     # Tier 3: Build and test verification (Bazel)
     # ===================================================================

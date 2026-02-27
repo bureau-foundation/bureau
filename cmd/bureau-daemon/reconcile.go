@@ -13,7 +13,7 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
-	"reflect"
+	"slices"
 	"strconv"
 	"strings"
 	"syscall"
@@ -191,7 +191,7 @@ func (d *Daemon) reconcile(ctx context.Context) error {
 		}
 		newGrants := d.resolveGrantsForProxy(principal.UserID())
 		oldGrants := d.lastGrants[principal]
-		if !reflect.DeepEqual(oldGrants, newGrants) {
+		if !slices.EqualFunc(oldGrants, newGrants, schema.Grant.Equal) {
 			d.logger.Info("authorization grants changed, updating proxy",
 				"principal", principal)
 			if err := d.pushAuthorizationToProxy(ctx, principal, newGrants); err != nil {
@@ -227,7 +227,7 @@ func (d *Daemon) reconcile(ctx context.Context) error {
 		}
 		newAllowances := d.authorizationIndex.Allowances(principal.UserID())
 		oldAllowances := d.lastObserveAllowances[principal]
-		if !reflect.DeepEqual(oldAllowances, newAllowances) {
+		if !slices.EqualFunc(oldAllowances, newAllowances, schema.Allowance.Equal) {
 			d.lastObserveAllowances[principal] = newAllowances
 			d.enforceObserveAllowanceChange(principal.UserID())
 		}
@@ -1023,8 +1023,19 @@ func (d *Daemon) adoptSurvivingPrincipal(ctx context.Context, principal ref.Enti
 }
 
 // payloadChanged returns true if the payloads of two SandboxSpecs differ.
+// Compares via JSON serialization since Payload is map[string]any (values
+// are not comparable with ==). Go's encoding/json sorts map keys
+// deterministically, so identical payloads produce identical bytes.
 func payloadChanged(old, new *schema.SandboxSpec) bool {
-	return !reflect.DeepEqual(old.Payload, new.Payload)
+	oldJSON, err := json.Marshal(old.Payload)
+	if err != nil {
+		return true // Assume changed on marshal error.
+	}
+	newJSON, err := json.Marshal(new.Payload)
+	if err != nil {
+		return true
+	}
+	return string(oldJSON) != string(newJSON)
 }
 
 // structurallyChanged returns true if any non-payload fields of two

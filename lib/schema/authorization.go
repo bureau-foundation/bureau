@@ -3,7 +3,11 @@
 
 package schema
 
-import "github.com/bureau-foundation/bureau/lib/ref"
+import (
+	"slices"
+
+	"github.com/bureau-foundation/bureau/lib/ref"
+)
 
 // Bureau authorization event type constants. These are state event types
 // used by the authorization framework to store grants, allowances, and
@@ -135,6 +139,18 @@ type Grant struct {
 	Source string `json:"source,omitempty" cbor:"7,keyasint,omitempty"`
 }
 
+// Equal returns true if two Grants have identical fields. Used by
+// the daemon to detect authorization changes without importing reflect.
+func (g Grant) Equal(other Grant) bool {
+	return slices.Equal(g.Actions, other.Actions) &&
+		slices.Equal(g.Targets, other.Targets) &&
+		g.ExpiresAt == other.ExpiresAt &&
+		g.Ticket == other.Ticket &&
+		g.GrantedBy == other.GrantedBy &&
+		g.GrantedAt == other.GrantedAt &&
+		g.Source == other.Source
+}
+
 // Denial explicitly blocks actions. Evaluated after grants — a matching
 // denial overrides any matching grant. Use sparingly: prefer narrow
 // grants over broad grants + denials.
@@ -168,6 +184,15 @@ type Allowance struct {
 
 	// Source identifies where this allowance came from. See Grant.Source.
 	Source string `json:"source,omitempty" cbor:"3,keyasint,omitempty"`
+}
+
+// Equal returns true if two Allowances have identical fields. Used
+// by the daemon to detect observation allowance changes without
+// importing reflect.
+func (a Allowance) Equal(other Allowance) bool {
+	return slices.Equal(a.Actions, other.Actions) &&
+		slices.Equal(a.Actors, other.Actors) &&
+		a.Source == other.Source
 }
 
 // AllowanceDenial explicitly blocks specific actors from specific

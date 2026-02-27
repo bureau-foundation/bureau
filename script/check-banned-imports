@@ -1,0 +1,110 @@
+#!/bin/bash
+# Copyright 2026 The Bureau Authors
+# SPDX-License-Identifier: Apache-2.0
+
+# Reject direct imports of reflect, text/template, and html/template in
+# non-test Go source files.
+#
+# These packages disable dead code elimination in the Go linker, inflating
+# binary sizes. Bureau has 10+ binaries deployed to remote machines where
+# transfer time matters.
+#
+# - reflect: encoding/json, fmt, and log/slog already pull reflect in
+#   transitively, but direct imports add ~75 KB of additional reflect
+#   internals (e.g., reflect.DeepEqual) and reference more types that
+#   the linker must retain. Use typed comparisons instead (slices.Equal,
+#   maps.Equal, bytes.Equal, or JSON-marshal-and-compare).
+#
+# - text/template and html/template: these import reflect AND add their
+#   own template engines that reference arbitrary methods on arbitrary
+#   types, defeating nearly all dead code elimination. Absolute ban.
+#
+# Allowed exceptions (files that structurally require reflect):
+#   - lib/codec/cbor.go: fxamacker/cbor API requires reflect.TypeOf for
+#     DefaultMapType configuration. The cbor library itself imports reflect,
+#     so this adds zero marginal cost.
+#   - cmd/bureau/cli/params.go: struct-tag reflection engine for CLI flag
+#     binding. Would require code generation to replace. CLI-only binary.
+#   - cmd/bureau/cli/schema.go: JSON Schema generation from struct types
+#     for MCP. Same rationale as params.go.
+#   - cmd/bureau/cli/json.go: normalizeNilSlice checks if an any value is
+#     a nil slice. CLI-only binary.
+#   - cmd/bureau/mcp/server.go: reflect.SetZero to reset closure-captured
+#     params between MCP tool calls. CLI-only binary.
+#
+# Test files (*_test.go) are exempt — test binary size doesn't matter.
+#
+# Only checks lines ADDED in the staged diff, so existing violations do not
+# block commits. New violations must use alternatives or add to the allowed
+# list above with justification.
+
+set -euo pipefail
+
+# Banned import strings. Each is a full import path that should not appear
+# in non-test Go source files.
+banned='"(reflect|text/template|html/template)"'
+
+# Files where reflect is structurally required and allowed.
+allowed_files=(
+    'lib/codec/cbor.go'
+    'cmd/bureau/cli/params.go'
+    'cmd/bureau/cli/schema.go'
+    'cmd/bureau/cli/json.go'
+    'cmd/bureau/mcp/server.go'
+)
+
+# Build a grep exclusion pattern from the allowed files.
+exclude_pattern=$(printf '%s\|' "${allowed_files[@]}")
+exclude_pattern="${exclude_pattern%\\|}"  # Remove trailing \|
+
+# Get added lines from staged non-test Go files, excluding allowed files.
+violations=$(
+    git diff --cached --unified=0 --diff-filter=ACM -- '*.go' \
+        ':!*_test.go' \
+        ':!vendor/' |
+    awk '
+        /^--- /    { next }
+        /^\+\+\+ / { file = substr($0, 7); next }
+        /^@@ /     { split($3, a, /[,+]/); lineno = a[2] - 1; next }
+        /^\+[^+]/ {
+            lineno++
+            line = substr($0, 2)
+            print file ":" lineno ":" line
+            next
+        }
+        /^ / { lineno++; next }
+    ' |
+    grep -E "$banned" |
+    grep -v '//nolint:bannedimport' |
+    grep -v "$exclude_pattern" || true
+)
+
+if [ -z "$violations" ]; then
+    exit 0
+fi
+
+echo ""
+echo "ERROR: Banned import in non-test Go source file."
+echo ""
+echo "The following packages are banned from production code because they"
+echo "disable dead code elimination, inflating binary sizes:"
+echo ""
+echo "  - reflect: use slices.Equal, maps.Equal, bytes.Equal, or"
+echo "    JSON-marshal-and-compare instead of reflect.DeepEqual."
+echo "    Use typed field access instead of reflect.ValueOf."
+echo "  - text/template: use fmt.Sprintf or string concatenation."
+echo "  - html/template: use html.EscapeString or a template-free approach."
+echo ""
+echo "Violations:"
+while IFS= read -r line; do
+    echo "  $line"
+done <<< "$violations"
+echo ""
+echo "To fix:"
+echo "  1. Replace reflect.DeepEqual with typed comparisons"
+echo "     (see lib/schema/authorization.go Grant.Equal for the pattern)"
+echo "  2. If reflect is structurally required (framework code), add the"
+echo "     file to the allowed list in script/check-banned-imports"
+echo "  3. Test files (*_test.go) are exempt — no changes needed there"
+echo ""
+exit 1

@@ -5,6 +5,7 @@ package proxy
 
 import (
 	"encoding/json"
+	"errors"
 	"fmt"
 	"log/slog"
 	"net/http"
@@ -210,8 +211,9 @@ func (h *Handler) HandleProxy(w http.ResponseWriter, r *http.Request) {
 	// Parse request
 	var req Request
 	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
-		// Check if it was a size limit error
-		if strings.Contains(err.Error(), "http: request body too large") {
+		// Check if it was a size limit error.
+		var maxBytesError *http.MaxBytesError
+		if errors.As(err, &maxBytesError) {
 			h.sendError(w, http.StatusRequestEntityTooLarge, "request body too large (max %d bytes)", maxRequestBodySize)
 			return
 		}
@@ -260,11 +262,12 @@ func (h *Handler) handleBufferedRequest(w http.ResponseWriter, r *http.Request, 
 			"error", err,
 			"duration", time.Since(startTime),
 		)
-		// Return 403 for blocked commands, 500 for other errors
+		// Return 403 for blocked commands, 503 for missing credentials,
+		// 500 for other errors.
 		status := http.StatusInternalServerError
-		if strings.Contains(err.Error(), "request blocked") {
+		if errors.Is(err, ErrRequestBlocked) {
 			status = http.StatusForbidden
-		} else if strings.Contains(err.Error(), "missing credentials") {
+		} else if errors.Is(err, ErrMissingCredentials) {
 			status = http.StatusServiceUnavailable
 		}
 		h.sendError(w, status, "%v", err)

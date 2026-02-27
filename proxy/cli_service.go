@@ -5,12 +5,23 @@ package proxy
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"io"
 	"os"
 	"os/exec"
 	"strings"
 )
+
+// ErrRequestBlocked indicates a CLI service request was rejected by the
+// service's filter policy. The wrapped error describes which filter
+// rule triggered the rejection.
+var ErrRequestBlocked = errors.New("request blocked")
+
+// ErrMissingCredentials indicates that one or more credentials
+// required by the CLI service are not available from the credential
+// source. The service cannot execute the command without them.
+var ErrMissingCredentials = errors.New("missing credentials")
 
 // CLIService proxies requests to a command-line tool.
 // Examples: gh, gcloud, az, kubectl, docker, etc.
@@ -71,7 +82,7 @@ func (s *CLIService) checkAndPrepareCommand(ctx context.Context, args []string) 
 	// Check filter first
 	if s.filter != nil {
 		if err := s.filter.Check(args); err != nil {
-			return nil, nil, fmt.Errorf("request blocked: %w", err)
+			return nil, nil, fmt.Errorf("%w: %w", ErrRequestBlocked, err)
 		}
 	}
 
@@ -85,7 +96,7 @@ func (s *CLIService) checkAndPrepareCommand(ctx context.Context, args []string) 
 		}
 	}
 	if len(missingCredentials) > 0 {
-		return nil, nil, fmt.Errorf("missing credentials: %v", missingCredentials)
+		return nil, nil, fmt.Errorf("%w: %v", ErrMissingCredentials, missingCredentials)
 	}
 
 	cmd := exec.CommandContext(ctx, s.binary, args...)

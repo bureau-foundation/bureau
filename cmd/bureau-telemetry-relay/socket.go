@@ -6,6 +6,7 @@ package main
 import (
 	"context"
 	"errors"
+	"fmt"
 	"time"
 
 	"github.com/bureau-foundation/bureau/lib/codec"
@@ -49,7 +50,7 @@ func (r *Relay) registerActions(server *service.SocketServer) {
 func (r *Relay) handleSubmit(_ context.Context, _ *servicetoken.Token, raw []byte) (any, error) {
 	var request telemetry.SubmitRequest
 	if err := codec.Unmarshal(raw, &request); err != nil {
-		return nil, errors.New("invalid submit request")
+		return nil, fmt.Errorf("invalid submit request: %w", err)
 	}
 
 	if request.Fleet.IsZero() || request.Machine.IsZero() || request.Source.IsZero() {

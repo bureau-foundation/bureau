@@ -16,6 +16,7 @@ import (
 
 	"github.com/bureau-foundation/bureau/lib/artifactstore"
 	"github.com/bureau-foundation/bureau/lib/codec"
+	"github.com/bureau-foundation/bureau/lib/netutil"
 	"github.com/bureau-foundation/bureau/lib/schema/artifact"
 	"github.com/bureau-foundation/bureau/lib/service"
 	"github.com/bureau-foundation/bureau/lib/servicetoken"
@@ -71,7 +72,7 @@ func (as *ArtifactService) serve(ctx context.Context, socketPath string) error {
 			if ctx.Err() != nil {
 				break
 			}
-			if errors.Is(err, net.ErrClosed) {
+			if netutil.IsExpectedCloseError(err) {
 				break
 			}
 			as.logger.Error("accept failed", "error", err)

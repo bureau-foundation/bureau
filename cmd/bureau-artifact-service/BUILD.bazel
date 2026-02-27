@@ -18,6 +18,7 @@ go_library(
         "//lib/artifactstore/fuse",
         "//lib/clock",
         "//lib/codec",
+        "//lib/netutil",
         "//lib/process",
         "//lib/ref",
         "//lib/schema",

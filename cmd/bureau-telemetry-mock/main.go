@@ -25,6 +25,7 @@ import (
 	"context"
 	"errors"
 	"flag"
+	"fmt"
 	"net"
 	"os/signal"
 	"strings"
@@ -223,7 +224,7 @@ func (m *telemetryMock) handleStatus(_ context.Context, _ []byte) (any, error) {
 func (m *telemetryMock) handleSubmit(_ context.Context, _ *servicetoken.Token, raw []byte) (any, error) {
 	var request telemetry.SubmitRequest
 	if err := codec.Unmarshal(raw, &request); err != nil {
-		return nil, errors.New("invalid submit request")
+		return nil, fmt.Errorf("invalid submit request: %w", err)
 	}
 
 	if len(request.Spans) == 0 && len(request.Metrics) == 0 && len(request.Logs) == 0 && len(request.OutputDeltas) == 0 {
@@ -254,7 +255,7 @@ func (m *telemetryMock) handleSubmit(_ context.Context, _ *servicetoken.Token, r
 func (m *telemetryMock) handleQuerySpans(_ context.Context, _ *servicetoken.Token, raw []byte) (any, error) {
 	var query spanQuery
 	if err := codec.Unmarshal(raw, &query); err != nil {
-		return nil, errors.New("invalid span query")
+		return nil, fmt.Errorf("invalid span query: %w", err)
 	}
 
 	m.mu.Lock()
@@ -286,7 +287,7 @@ func (m *telemetryMock) handleQuerySpans(_ context.Context, _ *servicetoken.Toke
 func (m *telemetryMock) handleQueryMetrics(_ context.Context, _ *servicetoken.Token, raw []byte) (any, error) {
 	var query metricQuery
 	if err := codec.Unmarshal(raw, &query); err != nil {
-		return nil, errors.New("invalid metric query")
+		return nil, fmt.Errorf("invalid metric query: %w", err)
 	}
 
 	m.mu.Lock()
@@ -314,7 +315,7 @@ func (m *telemetryMock) handleQueryMetrics(_ context.Context, _ *servicetoken.To
 func (m *telemetryMock) handleQueryLogs(_ context.Context, _ *servicetoken.Token, raw []byte) (any, error) {
 	var query logQuery
 	if err := codec.Unmarshal(raw, &query); err != nil {
-		return nil, errors.New("invalid log query")
+		return nil, fmt.Errorf("invalid log query: %w", err)
 	}
 
 	m.mu.Lock()

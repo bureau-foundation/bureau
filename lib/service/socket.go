@@ -17,6 +17,7 @@ import (
 
 	"github.com/bureau-foundation/bureau/lib/clock"
 	"github.com/bureau-foundation/bureau/lib/codec"
+	"github.com/bureau-foundation/bureau/lib/netutil"
 	"github.com/bureau-foundation/bureau/lib/schema/telemetry"
 	"github.com/bureau-foundation/bureau/lib/servicetoken"
 )
@@ -256,7 +257,7 @@ func (s *SocketServer) Serve(ctx context.Context) error {
 			if ctx.Err() != nil {
 				break
 			}
-			if errors.Is(err, net.ErrClosed) {
+			if netutil.IsExpectedCloseError(err) {
 				break
 			}
 			s.logger.Error("accept failed", "error", err)

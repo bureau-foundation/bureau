@@ -9,6 +9,7 @@ import (
 
 	"github.com/bureau-foundation/bureau/cmd/bureau/cli"
 	"github.com/bureau-foundation/bureau/cmd/bureau/commands"
+	viewercmd "github.com/bureau-foundation/bureau/cmd/bureau/ticket/viewer"
 )
 
 func main() {
@@ -25,10 +26,20 @@ func main() {
 }
 
 // rootCommand returns the complete CLI command tree. Delegates to
-// [commands.Root] so the tree definition lives in one place, shared
-// by both the bureau CLI and the bureau-agent binary.
+// [commands.Root] for the shared tree (used by both bureau CLI and
+// bureau-agent), then adds the interactive ticket viewer. The viewer
+// is added here rather than in commands.Root() because it depends on
+// charmbracelet/bubbletea (~9 MB of transitive dependencies), which
+// is useless in bureau-agent (a TUI cannot run over MCP).
 func rootCommand() *cli.Command {
-	return commands.Root()
+	root := commands.Root()
+	for _, sub := range root.Subcommands {
+		if sub.Name == "ticket" {
+			sub.Subcommands = append(sub.Subcommands, viewercmd.Command())
+			break
+		}
+	}
+	return root
 }
 
 func run() error {

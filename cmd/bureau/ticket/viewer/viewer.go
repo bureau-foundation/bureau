@@ -1,7 +1,16 @@
 // Copyright 2026 The Bureau Authors
 // SPDX-License-Identifier: Apache-2.0
 
-package ticket
+// Package viewer provides the interactive ticket viewer TUI command.
+// This is a separate package from cmd/bureau/ticket so that the
+// charmbracelet/bubbletea dependency (and its transitive closure:
+// lipgloss, termenv, fzf, goldmark, chroma, cellbuf) is only linked
+// into binaries that actually import this package.
+//
+// The bureau CLI imports this package; bureau-agent does not. This
+// saves ~9 MB and ~1,500 transitive dependencies from the agent
+// binary, which can never use a TUI.
+package viewer
 
 import (
 	"context"
@@ -13,15 +22,16 @@ import (
 	"github.com/spf13/pflag"
 
 	"github.com/bureau-foundation/bureau/cmd/bureau/cli"
+	ticketcmd "github.com/bureau-foundation/bureau/cmd/bureau/ticket"
 	"github.com/bureau-foundation/bureau/lib/service"
 	"github.com/bureau-foundation/bureau/lib/ticketui"
 	tea "github.com/charmbracelet/bubbletea"
 )
 
-// ViewerCommand returns the "viewer" subcommand that launches the
+// Command returns the "viewer" subcommand that launches the
 // interactive ticket viewer TUI.
-func ViewerCommand() *cli.Command {
-	var connection TicketConnection
+func Command() *cli.Command {
+	var connection ticketcmd.TicketConnection
 	var filePath string
 	var roomFlag string
 	var logOutput string
@@ -105,7 +115,7 @@ available rooms.`,
 // the status bar instead of writing to stderr (which would corrupt
 // the alt-screen display). An optional file logger captures all
 // records to a JSONL file for post-mortem debugging.
-func runServiceViewer(ctx context.Context, logger *slog.Logger, connection *TicketConnection, roomFlag string, logOutput string) error {
+func runServiceViewer(ctx context.Context, logger *slog.Logger, connection *ticketcmd.TicketConnection, roomFlag string, logOutput string) error {
 	// Mint initial service token via the daemon.
 	mintResult, err := connection.MintServiceToken()
 	if err != nil {
@@ -246,7 +256,7 @@ func resolveViewerRoom(ctx context.Context, logger *slog.Logger, socketPath stri
 func refreshServiceToken(
 	ctx context.Context,
 	source *ticketui.ServiceSource,
-	connection *TicketConnection,
+	connection *ticketcmd.TicketConnection,
 	ttlSeconds int,
 	logger *slog.Logger,
 ) {

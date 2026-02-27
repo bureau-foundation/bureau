@@ -20,7 +20,6 @@ go_library(
         "review.go",
         "stewardship.go",
         "transfer.go",
-        "viewer.go",
     ],
     importpath = "github.com/bureau-foundation/bureau/cmd/bureau/ticket",
     visibility = ["//visibility:public"],
@@ -37,9 +36,7 @@ go_library(
         "//lib/service",
         "//lib/templatedef",
         "//lib/ticketindex",
-        "//lib/ticketui",
         "//messaging",
-        "@com_github_charmbracelet_bubbletea//:bubbletea",
         "@com_github_spf13_pflag//:pflag",
     ],
 )

@@ -156,9 +156,10 @@ func (l *Launcher) handleConnection(ctx context.Context, conn net.Conn) {
 	switch request.Action {
 	case ipc.ActionStatus:
 		response = IPCResponse{
-			OK:              true,
-			BinaryHash:      l.launcherBinaryHash,
-			ProxyBinaryPath: l.proxyBinaryPath,
+			OK:                 true,
+			BinaryHash:         l.launcherBinaryHash,
+			ProxyBinaryPath:    l.proxyBinaryPath,
+			LogRelayBinaryPath: l.logRelayBinaryPath,
 		}
 
 	case ipc.ActionListSandboxes:
@@ -178,6 +179,9 @@ func (l *Launcher) handleConnection(ctx context.Context, conn net.Conn) {
 
 	case ipc.ActionUpdateProxyBinary:
 		response = l.handleUpdateProxyBinary(ctx, &request)
+
+	case ipc.ActionUpdateLogRelayBinary:
+		response = l.handleUpdateLogRelayBinary(ctx, &request)
 
 	case ipc.ActionProvisionCredential:
 		response = l.handleProvisionCredential(&request)
@@ -657,6 +661,39 @@ func (l *Launcher) handleUpdateProxyBinary(ctx context.Context, request *IPCRequ
 	l.proxyBinaryPath = request.BinaryPath
 
 	l.logger.Info("proxy binary path updated",
+		"previous", previousPath,
+		"new", request.BinaryPath,
+	)
+
+	return IPCResponse{OK: true}
+}
+
+// handleUpdateLogRelayBinary validates and applies a new log-relay binary
+// path. The daemon sends this when BureauVersion.LogRelayStorePath changes.
+// The launcher validates that the new path exists and is a regular executable
+// file, then switches to it for future sandbox creation. Existing sandboxes
+// are unaffected — they continue running their current log-relay binary
+// until recycled.
+func (l *Launcher) handleUpdateLogRelayBinary(ctx context.Context, request *IPCRequest) IPCResponse {
+	if request.BinaryPath == "" {
+		return IPCResponse{OK: false, Error: "binary_path is required for update-log-relay-binary"}
+	}
+
+	info, err := os.Stat(request.BinaryPath)
+	if err != nil {
+		return IPCResponse{OK: false, Error: fmt.Sprintf("log-relay binary path %q: %v", request.BinaryPath, err)}
+	}
+	if !info.Mode().IsRegular() {
+		return IPCResponse{OK: false, Error: fmt.Sprintf("log-relay binary path %q is not a regular file", request.BinaryPath)}
+	}
+	if info.Mode()&0111 == 0 {
+		return IPCResponse{OK: false, Error: fmt.Sprintf("log-relay binary path %q is not executable", request.BinaryPath)}
+	}
+
+	previousPath := l.logRelayBinaryPath
+	l.logRelayBinaryPath = request.BinaryPath
+
+	l.logger.Info("log-relay binary path updated",
 		"previous", previousPath,
 		"new", request.BinaryPath,
 	)

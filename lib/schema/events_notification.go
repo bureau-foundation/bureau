@@ -583,6 +583,7 @@ type BureauVersionUpdateMessage struct {
 	Error           string              `json:"error,omitempty"`
 	ProxyChanged    bool                `json:"proxy_changed,omitempty"`
 	LauncherChanged bool                `json:"launcher_changed,omitempty"`
+	LogRelayChanged bool                `json:"log_relay_changed,omitempty"`
 }
 
 // NewBureauVersionPrefetchFailedMessage constructs a BureauVersionUpdateMessage
@@ -598,7 +599,7 @@ func NewBureauVersionPrefetchFailedMessage(errorMessage string) BureauVersionUpd
 
 // NewBureauVersionReconciledMessage constructs a BureauVersionUpdateMessage
 // summarizing which binary updates were applied.
-func NewBureauVersionReconciledMessage(proxyChanged, launcherChanged bool) BureauVersionUpdateMessage {
+func NewBureauVersionReconciledMessage(proxyChanged, launcherChanged, logRelayChanged bool) BureauVersionUpdateMessage {
 	var parts []string
 	if proxyChanged {
 		parts = append(parts, "proxy binary updated for future sandbox creation")
@@ -606,11 +607,15 @@ func NewBureauVersionReconciledMessage(proxyChanged, launcherChanged bool) Burea
 	if launcherChanged {
 		parts = append(parts, "launcher exec() initiated")
 	}
+	if logRelayChanged {
+		parts = append(parts, "log-relay binary updated for future sandbox creation")
+	}
 	return BureauVersionUpdateMessage{
 		MsgType:         MsgTypeBureauVersionUpdate,
 		Body:            "BureauVersion: " + strings.Join(parts, "; ") + ".",
 		Status:          VersionUpdateReconciled,
 		ProxyChanged:    proxyChanged,
 		LauncherChanged: launcherChanged,
+		LogRelayChanged: logRelayChanged,
 	}
 }

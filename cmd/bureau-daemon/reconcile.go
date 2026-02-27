@@ -2166,21 +2166,20 @@ type (
 )
 
 // queryLauncherStatus sends a "status" IPC request to the launcher and
-// returns the launcher's binary hash and the proxy binary path it is currently
-// using for new sandbox creation. These values are needed by
-// version.Compare to determine whether launcher or proxy updates are
-// required.
-func (d *Daemon) queryLauncherStatus(ctx context.Context) (launcherHash string, proxyBinaryPath string, err error) {
+// returns the launcher's binary hash, proxy binary path, and log-relay
+// binary path. These values are needed by version.Compare to determine
+// which component updates are required.
+func (d *Daemon) queryLauncherStatus(ctx context.Context) (launcherHash, proxyBinaryPath, logRelayBinaryPath string, err error) {
 	response, err := d.launcherRequest(ctx, launcherIPCRequest{
 		Action: ipc.ActionStatus,
 	})
 	if err != nil {
-		return "", "", fmt.Errorf("launcher status IPC: %w", err)
+		return "", "", "", fmt.Errorf("launcher status IPC: %w", err)
 	}
 	if !response.OK {
-		return "", "", fmt.Errorf("launcher status rejected: %s", response.Error)
+		return "", "", "", fmt.Errorf("launcher status rejected: %s", response.Error)
 	}
-	return response.BinaryHash, response.ProxyBinaryPath, nil
+	return response.BinaryHash, response.ProxyBinaryPath, response.LogRelayBinaryPath, nil
 }
 
 // adoptPreExistingSandboxes queries the launcher for running sandboxes and
@@ -2233,10 +2232,10 @@ func (d *Daemon) adoptPreExistingSandboxes(ctx context.Context) error {
 // reconcileBureauVersion compares the desired BureauVersion from MachineConfig
 // against the currently running binaries and takes action on any differences.
 //
-// Proxy binary changes are applied immediately by telling the launcher to use
-// the new binary path for future sandbox creation. Daemon and launcher binary
-// changes are detected and logged but not yet acted upon — the exec()
-// self-update flow is a separate capability.
+// Proxy and log-relay binary changes are applied immediately by telling the
+// launcher to use the new binary path for future sandbox creation. Existing
+// sandboxes continue running their current binaries until recycled. Daemon
+// and launcher binary changes trigger exec() self-update.
 func (d *Daemon) reconcileBureauVersion(ctx context.Context, desired *schema.BureauVersion) {
 	// Prefetch all store paths so they're available locally for hashing.
 	if err := d.prefetchBureauVersion(ctx, desired); err != nil {
@@ -2248,15 +2247,20 @@ func (d *Daemon) reconcileBureauVersion(ctx context.Context, desired *schema.Bur
 		return
 	}
 
-	// Query the launcher for its current binary hash and proxy binary path.
-	launcherHash, proxyBinaryPath, err := d.queryLauncherStatus(ctx)
+	// Query the launcher for its current binary hash and binary paths.
+	launcherHash, proxyBinaryPath, logRelayBinaryPath, err := d.queryLauncherStatus(ctx)
 	if err != nil {
 		d.logger.Error("querying launcher status for version comparison", "error", err)
 		return
 	}
 
 	// Compare desired versions against running versions.
-	diff, err := version.Compare(desired, d.daemonBinaryHash, launcherHash, proxyBinaryPath)
+	diff, err := version.Compare(desired, version.CurrentState{
+		DaemonHash:         d.daemonBinaryHash,
+		LauncherHash:       launcherHash,
+		ProxyBinaryPath:    proxyBinaryPath,
+		LogRelayBinaryPath: logRelayBinaryPath,
+	})
 	if err != nil {
 		d.logger.Error("comparing bureau versions", "error", err)
 		return
@@ -2269,6 +2273,7 @@ func (d *Daemon) reconcileBureauVersion(ctx context.Context, desired *schema.Bur
 		"daemon_changed", diff.DaemonChanged,
 		"launcher_changed", diff.LauncherChanged,
 		"proxy_changed", diff.ProxyChanged,
+		"log_relay_changed", diff.LogRelayChanged,
 	)
 
 	// Handle proxy binary update: tell the launcher to use the new binary
@@ -2286,6 +2291,24 @@ func (d *Daemon) reconcileBureauVersion(ctx context.Context, desired *schema.Bur
 		} else {
 			d.logger.Info("proxy binary updated on launcher",
 				"new_path", desired.ProxyStorePath)
+		}
+	}
+
+	// Handle log-relay binary update: same pattern as proxy. Tell the
+	// launcher to use the new binary for future sandbox creation.
+	// Existing sandboxes continue running their current log-relay.
+	if diff.LogRelayChanged {
+		response, err := d.launcherRequest(ctx, launcherIPCRequest{
+			Action:     ipc.ActionUpdateLogRelayBinary,
+			BinaryPath: desired.LogRelayStorePath,
+		})
+		if err != nil {
+			d.logger.Error("update-log-relay-binary IPC failed", "error", err)
+		} else if !response.OK {
+			d.logger.Error("update-log-relay-binary rejected", "error", response.Error)
+		} else {
+			d.logger.Info("log-relay binary updated on launcher",
+				"new_path", desired.LogRelayStorePath)
 		}
 	}
 
@@ -2326,9 +2349,9 @@ func (d *Daemon) reconcileBureauVersion(ctx context.Context, desired *schema.Bur
 	// Report non-daemon version changes to the config room. Daemon
 	// changes are reported by execDaemon (pre-exec message) and
 	// checkDaemonWatchdog (post-exec success/failure).
-	if diff.ProxyChanged || diff.LauncherChanged {
+	if diff.ProxyChanged || diff.LauncherChanged || diff.LogRelayChanged {
 		if _, err := d.sendEventRetry(ctx, d.configRoomID, schema.MatrixEventTypeMessage,
-			schema.NewBureauVersionReconciledMessage(diff.ProxyChanged, diff.LauncherChanged)); err != nil {
+			schema.NewBureauVersionReconciledMessage(diff.ProxyChanged, diff.LauncherChanged, diff.LogRelayChanged)); err != nil {
 			d.logger.Error("failed to post bureau version summary", "error", err)
 		}
 	}

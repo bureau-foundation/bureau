@@ -14,7 +14,10 @@ import (
 )
 
 func TestCompareNil(t *testing.T) {
-	diff, err := Compare(nil, "abc", "def", "/some/path")
+	diff, err := Compare(nil, CurrentState{
+		DaemonHash:   "abc",
+		LauncherHash: "def",
+	})
 	if err != nil {
 		t.Fatalf("Compare: %v", err)
 	}
@@ -43,6 +46,14 @@ func TestCompareAllIdentical(t *testing.T) {
 	if err := os.WriteFile(proxyCurrentPath, content, 0755); err != nil {
 		t.Fatalf("WriteFile proxy current: %v", err)
 	}
+	logRelayDesiredPath := filepath.Join(directory, "bureau-log-relay-desired")
+	if err := os.WriteFile(logRelayDesiredPath, content, 0755); err != nil {
+		t.Fatalf("WriteFile log-relay desired: %v", err)
+	}
+	logRelayCurrentPath := filepath.Join(directory, "bureau-log-relay-current")
+	if err := os.WriteFile(logRelayCurrentPath, content, 0755); err != nil {
+		t.Fatalf("WriteFile log-relay current: %v", err)
+	}
 
 	digest := sha256.Sum256(content)
 	hexHash := binhash.FormatDigest(digest)
@@ -51,9 +62,15 @@ func TestCompareAllIdentical(t *testing.T) {
 		DaemonStorePath:   daemonPath,
 		LauncherStorePath: launcherPath,
 		ProxyStorePath:    proxyDesiredPath,
+		LogRelayStorePath: logRelayDesiredPath,
 	}
 
-	diff, err := Compare(desired, hexHash, hexHash, proxyCurrentPath)
+	diff, err := Compare(desired, CurrentState{
+		DaemonHash:         hexHash,
+		LauncherHash:       hexHash,
+		ProxyBinaryPath:    proxyCurrentPath,
+		LogRelayBinaryPath: logRelayCurrentPath,
+	})
 	if err != nil {
 		t.Fatalf("Compare: %v", err)
 	}
@@ -65,6 +82,9 @@ func TestCompareAllIdentical(t *testing.T) {
 	}
 	if diff.ProxyChanged {
 		t.Error("proxy should not be changed (identical content)")
+	}
+	if diff.LogRelayChanged {
+		t.Error("log-relay should not be changed (identical content)")
 	}
 	if diff.NeedsUpdate() {
 		t.Error("NeedsUpdate should be false when all binaries are identical")
@@ -88,7 +108,7 @@ func TestCompareDaemonChanged(t *testing.T) {
 		DaemonStorePath: desiredPath,
 	}
 
-	diff, err := Compare(desired, currentHash, "", "")
+	diff, err := Compare(desired, CurrentState{DaemonHash: currentHash})
 	if err != nil {
 		t.Fatalf("Compare: %v", err)
 	}
@@ -100,6 +120,9 @@ func TestCompareDaemonChanged(t *testing.T) {
 	}
 	if diff.ProxyChanged {
 		t.Error("proxy should not be changed (empty store path)")
+	}
+	if diff.LogRelayChanged {
+		t.Error("log-relay should not be changed (empty store path)")
 	}
 	if !diff.NeedsUpdate() {
 		t.Error("NeedsUpdate should be true when daemon changed")
@@ -122,7 +145,7 @@ func TestCompareLauncherChanged(t *testing.T) {
 		LauncherStorePath: desiredPath,
 	}
 
-	diff, err := Compare(desired, "", currentHash, "")
+	diff, err := Compare(desired, CurrentState{LauncherHash: currentHash})
 	if err != nil {
 		t.Fatalf("Compare: %v", err)
 	}
@@ -153,12 +176,43 @@ func TestCompareProxyChanged(t *testing.T) {
 		ProxyStorePath: desiredPath,
 	}
 
-	diff, err := Compare(desired, "", "", currentPath)
+	diff, err := Compare(desired, CurrentState{ProxyBinaryPath: currentPath})
 	if err != nil {
 		t.Fatalf("Compare: %v", err)
 	}
 	if !diff.ProxyChanged {
 		t.Error("proxy should be changed (different content)")
+	}
+}
+
+func TestCompareLogRelayChanged(t *testing.T) {
+	directory := t.TempDir()
+
+	desiredContent := []byte("new log-relay binary")
+	desiredPath := filepath.Join(directory, "bureau-log-relay-new")
+	if err := os.WriteFile(desiredPath, desiredContent, 0755); err != nil {
+		t.Fatalf("WriteFile desired: %v", err)
+	}
+
+	currentContent := []byte("old log-relay binary")
+	currentPath := filepath.Join(directory, "bureau-log-relay-current")
+	if err := os.WriteFile(currentPath, currentContent, 0755); err != nil {
+		t.Fatalf("WriteFile current: %v", err)
+	}
+
+	desired := &schema.BureauVersion{
+		LogRelayStorePath: desiredPath,
+	}
+
+	diff, err := Compare(desired, CurrentState{LogRelayBinaryPath: currentPath})
+	if err != nil {
+		t.Fatalf("Compare: %v", err)
+	}
+	if !diff.LogRelayChanged {
+		t.Error("log-relay should be changed (different content)")
+	}
+	if diff.ProxyChanged {
+		t.Error("proxy should not be changed (empty store path)")
 	}
 }
 
@@ -188,7 +242,7 @@ func TestCompareProxyIdenticalDifferentPath(t *testing.T) {
 		ProxyStorePath: desiredPath,
 	}
 
-	diff, err := Compare(desired, "", "", currentPath)
+	diff, err := Compare(desired, CurrentState{ProxyBinaryPath: currentPath})
 	if err != nil {
 		t.Fatalf("Compare: %v", err)
 	}
@@ -209,12 +263,33 @@ func TestCompareProxyNoCurrentPath(t *testing.T) {
 		ProxyStorePath: desiredPath,
 	}
 
-	diff, err := Compare(desired, "", "", "")
+	diff, err := Compare(desired, CurrentState{})
 	if err != nil {
 		t.Fatalf("Compare: %v", err)
 	}
 	if !diff.ProxyChanged {
 		t.Error("proxy should be changed when no current path is known")
+	}
+}
+
+func TestCompareLogRelayNoCurrentPath(t *testing.T) {
+	directory := t.TempDir()
+
+	desiredPath := filepath.Join(directory, "bureau-log-relay")
+	if err := os.WriteFile(desiredPath, []byte("log-relay"), 0755); err != nil {
+		t.Fatalf("WriteFile: %v", err)
+	}
+
+	desired := &schema.BureauVersion{
+		LogRelayStorePath: desiredPath,
+	}
+
+	diff, err := Compare(desired, CurrentState{})
+	if err != nil {
+		t.Fatalf("Compare: %v", err)
+	}
+	if !diff.LogRelayChanged {
+		t.Error("log-relay should be changed when no current path is known")
 	}
 }
 
@@ -237,7 +312,7 @@ func TestCompareEmptyCurrentHashes(t *testing.T) {
 
 	// Empty current hashes indicate the hash was not computed (e.g.,
 	// startup failure). Treat as changed to ensure an update is attempted.
-	diff, err := Compare(desired, "", "", "")
+	diff, err := Compare(desired, CurrentState{})
 	if err != nil {
 		t.Fatalf("Compare: %v", err)
 	}
@@ -254,7 +329,7 @@ func TestCompareDesiredPathMissing(t *testing.T) {
 		DaemonStorePath: "/nonexistent/path/bureau-daemon",
 	}
 
-	_, err := Compare(desired, "abc123", "", "")
+	_, err := Compare(desired, CurrentState{DaemonHash: "abc123"})
 	if err == nil {
 		t.Fatal("Compare should fail when desired path doesn't exist")
 	}
@@ -278,7 +353,7 @@ func TestComparePartialConfig(t *testing.T) {
 		DaemonStorePath: daemonPath,
 	}
 
-	diff, err := Compare(desired, hexHash, "", "")
+	diff, err := Compare(desired, CurrentState{DaemonHash: hexHash})
 	if err != nil {
 		t.Fatalf("Compare: %v", err)
 	}
@@ -290,6 +365,9 @@ func TestComparePartialConfig(t *testing.T) {
 	}
 	if diff.ProxyChanged {
 		t.Error("proxy should not be changed (empty store path)")
+	}
+	if diff.LogRelayChanged {
+		t.Error("log-relay should not be changed (empty store path)")
 	}
 	if diff.NeedsUpdate() {
 		t.Error("NeedsUpdate should be false")
@@ -331,7 +409,8 @@ func TestDiffNeedsUpdate(t *testing.T) {
 		{"daemon changed", Diff{DaemonChanged: true}, true},
 		{"launcher changed", Diff{LauncherChanged: true}, true},
 		{"proxy changed", Diff{ProxyChanged: true}, true},
-		{"all changed", Diff{DaemonChanged: true, LauncherChanged: true, ProxyChanged: true}, true},
+		{"log-relay changed", Diff{LogRelayChanged: true}, true},
+		{"all changed", Diff{DaemonChanged: true, LauncherChanged: true, ProxyChanged: true, LogRelayChanged: true}, true},
 	}
 
 	for _, test := range tests {

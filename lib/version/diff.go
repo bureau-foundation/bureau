@@ -14,8 +14,9 @@ import (
 // Diff describes which Bureau core binaries have changed between
 // the currently running versions and the desired versions from a
 // BureauVersion config. The daemon uses this to decide which components
-// to restart: daemon via exec(), launcher via exec-update IPC, proxy by
-// updating the launcher's binary path for future sandbox creation.
+// to restart: daemon via exec(), launcher via exec-update IPC, proxy
+// and log-relay by updating the launcher's binary paths for future
+// sandbox creation.
 type Diff struct {
 	// DaemonChanged is true when the binary at the desired daemon
 	// store path has different content (SHA256) than the running daemon.
@@ -31,11 +32,38 @@ type Diff struct {
 	// are not affected — they continue running their current binary
 	// until their sandbox is recycled.
 	ProxyChanged bool
+
+	// LogRelayChanged is true when the binary at the desired log-relay
+	// store path has different content than the log-relay binary the
+	// launcher is currently using for new sandbox creation. Existing
+	// sandboxes are not affected — they continue running their current
+	// log-relay binary until recycled.
+	LogRelayChanged bool
 }
 
 // NeedsUpdate returns true if any component needs updating.
 func (d *Diff) NeedsUpdate() bool {
-	return d.DaemonChanged || d.LauncherChanged || d.ProxyChanged
+	return d.DaemonChanged || d.LauncherChanged || d.ProxyChanged || d.LogRelayChanged
+}
+
+// CurrentState groups the running binary hashes and paths needed by
+// Compare. Using a struct instead of positional parameters prevents
+// mix-ups when multiple components share the same type (string) and
+// makes adding future binaries trivial.
+type CurrentState struct {
+	// DaemonHash is the hex-encoded SHA256 of the running daemon binary.
+	DaemonHash string
+
+	// LauncherHash is the hex-encoded SHA256 of the running launcher binary.
+	LauncherHash string
+
+	// ProxyBinaryPath is the filesystem path of the proxy binary the
+	// launcher is currently using for new sandbox creation.
+	ProxyBinaryPath string
+
+	// LogRelayBinaryPath is the filesystem path of the log-relay binary
+	// the launcher is currently using for new sandbox creation.
+	LogRelayBinaryPath string
 }
 
 // ComputeSelfHash returns the SHA256 hex digest and absolute filesystem
@@ -56,23 +84,15 @@ func ComputeSelfHash() (hash string, binaryPath string, err error) {
 }
 
 // Compare compares desired BureauVersion store paths against currently
-// running binary hashes. For each component (daemon, launcher, proxy),
-// it hashes the binary at the desired store path and compares against
-// the corresponding current hash. The desired store paths must already
-// exist in the local Nix store (the caller must prefetch first).
-//
-// currentDaemonHash and currentLauncherHash are hex-encoded SHA256
-// digests of the running binaries. currentProxyBinaryPath is the
-// filesystem path of the proxy binary the launcher is currently using;
-// it is hashed on the fly for comparison against the desired proxy.
+// running binary hashes and paths. For hash-compared components (daemon,
+// launcher), it hashes the desired store path binary and compares against
+// the current hash. For path-compared components (proxy, log-relay), it
+// hashes both the desired and current binary paths and compares digests.
+// The desired store paths must already exist in the local Nix store (the
+// caller must prefetch first).
 //
 // Returns nil when desired is nil (no version management configured).
-func Compare(
-	desired *schema.BureauVersion,
-	currentDaemonHash string,
-	currentLauncherHash string,
-	currentProxyBinaryPath string,
-) (*Diff, error) {
+func Compare(desired *schema.BureauVersion, current CurrentState) (*Diff, error) {
 	if desired == nil {
 		return nil, nil
 	}
@@ -80,7 +100,7 @@ func Compare(
 	diff := &Diff{}
 
 	if desired.DaemonStorePath != "" {
-		unchanged, err := binaryUnchanged(desired.DaemonStorePath, currentDaemonHash)
+		unchanged, err := binaryUnchanged(desired.DaemonStorePath, current.DaemonHash)
 		if err != nil {
 			return nil, fmt.Errorf("comparing daemon binary: %w", err)
 		}
@@ -88,31 +108,56 @@ func Compare(
 	}
 
 	if desired.LauncherStorePath != "" {
-		unchanged, err := binaryUnchanged(desired.LauncherStorePath, currentLauncherHash)
+		unchanged, err := binaryUnchanged(desired.LauncherStorePath, current.LauncherHash)
 		if err != nil {
 			return nil, fmt.Errorf("comparing launcher binary: %w", err)
 		}
 		diff.LauncherChanged = !unchanged
 	}
 
-	if desired.ProxyStorePath != "" && currentProxyBinaryPath != "" {
-		desiredHash, err := binhash.HashFile(desired.ProxyStorePath)
-		if err != nil {
-			return nil, fmt.Errorf("hashing desired proxy at %s: %w", desired.ProxyStorePath, err)
-		}
-		currentHash, err := binhash.HashFile(currentProxyBinaryPath)
-		if err != nil {
-			return nil, fmt.Errorf("hashing current proxy at %s: %w", currentProxyBinaryPath, err)
-		}
-		diff.ProxyChanged = desiredHash != currentHash
-	} else if desired.ProxyStorePath != "" && currentProxyBinaryPath == "" {
-		// No current proxy binary known (launcher status not yet queried,
-		// or proxy binary not configured). Treat as changed so the daemon
-		// informs the launcher of the desired path.
-		diff.ProxyChanged = true
+	changed, err := pathBinaryChanged(desired.ProxyStorePath, current.ProxyBinaryPath)
+	if err != nil {
+		return nil, fmt.Errorf("comparing proxy binary: %w", err)
 	}
+	diff.ProxyChanged = changed
+
+	changed, err = pathBinaryChanged(desired.LogRelayStorePath, current.LogRelayBinaryPath)
+	if err != nil {
+		return nil, fmt.Errorf("comparing log-relay binary: %w", err)
+	}
+	diff.LogRelayChanged = changed
 
 	return diff, nil
+}
+
+// pathBinaryChanged compares a desired store path against a current
+// binary path. Returns true (changed) when:
+//   - desired is set and current is empty (new binary to push)
+//   - desired and current both exist but have different SHA256 content
+//
+// Returns false (unchanged) when:
+//   - desired is empty (not configured)
+//   - desired and current have identical content
+func pathBinaryChanged(desiredStorePath, currentBinaryPath string) (bool, error) {
+	if desiredStorePath == "" {
+		return false, nil
+	}
+	if currentBinaryPath == "" {
+		// No current binary known (launcher status not yet queried,
+		// or binary not configured). Treat as changed so the daemon
+		// informs the launcher of the desired path.
+		return true, nil
+	}
+
+	desiredHash, err := binhash.HashFile(desiredStorePath)
+	if err != nil {
+		return false, fmt.Errorf("hashing desired at %s: %w", desiredStorePath, err)
+	}
+	currentHash, err := binhash.HashFile(currentBinaryPath)
+	if err != nil {
+		return false, fmt.Errorf("hashing current at %s: %w", currentBinaryPath, err)
+	}
+	return desiredHash != currentHash, nil
 }
 
 // binaryUnchanged hashes the file at desiredPath and compares it against

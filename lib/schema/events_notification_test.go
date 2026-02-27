@@ -564,7 +564,7 @@ func TestBureauVersionUpdatePrefetchFailedRoundTrip(t *testing.T) {
 	assertField(t, raw, "error", "store path not found")
 
 	// Boolean fields omitted when false.
-	for _, field := range []string{"proxy_changed", "launcher_changed"} {
+	for _, field := range []string{"proxy_changed", "launcher_changed", "log_relay_changed"} {
 		if _, exists := raw[field]; exists {
 			t.Errorf("field %q should be omitted for prefetch failure", field)
 		}
@@ -573,7 +573,7 @@ func TestBureauVersionUpdatePrefetchFailedRoundTrip(t *testing.T) {
 
 func TestBureauVersionUpdateReconciledRoundTrip(t *testing.T) {
 	t.Parallel()
-	original := NewBureauVersionReconciledMessage(true, false)
+	original := NewBureauVersionReconciledMessage(true, false, true)
 
 	data, err := json.Marshal(original)
 	if err != nil {
@@ -587,6 +587,7 @@ func TestBureauVersionUpdateReconciledRoundTrip(t *testing.T) {
 	assertField(t, raw, "msgtype", MsgTypeBureauVersionUpdate)
 	assertField(t, raw, "status", "reconciled")
 	assertField(t, raw, "proxy_changed", true)
+	assertField(t, raw, "log_relay_changed", true)
 
 	// Error and launcher_changed omitted.
 	for _, field := range []string{"error", "launcher_changed"} {
@@ -604,5 +605,8 @@ func TestBureauVersionUpdateReconciledRoundTrip(t *testing.T) {
 	}
 	if decoded.LauncherChanged {
 		t.Error("LauncherChanged = true, want false")
+	}
+	if !decoded.LogRelayChanged {
+		t.Error("LogRelayChanged = false, want true")
 	}
 }

@@ -25,12 +25,13 @@ import (
 func TestWriteAndReadStateFile(t *testing.T) {
 	runDir := testutil.SocketDir(t)
 	launcher := &Launcher{
-		runDir:          runDir,
-		stateDir:        t.TempDir(),
-		proxyBinaryPath: "/nix/store/abc-bureau-proxy/bin/bureau-proxy",
-		sandboxes:       make(map[string]*managedSandbox),
-		failedExecPaths: make(map[string]bool),
-		logger:          slog.New(slog.NewJSONHandler(os.Stderr, nil)),
+		runDir:             runDir,
+		stateDir:           t.TempDir(),
+		proxyBinaryPath:    "/nix/store/abc-bureau-proxy/bin/bureau-proxy",
+		logRelayBinaryPath: "/nix/store/abc-bureau-log-relay/bin/bureau-log-relay",
+		sandboxes:          make(map[string]*managedSandbox),
+		failedExecPaths:    make(map[string]bool),
+		logger:             slog.New(slog.NewJSONHandler(os.Stderr, nil)),
 	}
 
 	// Add some sandbox entries.
@@ -78,6 +79,9 @@ func TestWriteAndReadStateFile(t *testing.T) {
 
 	if state.ProxyBinaryPath != "/nix/store/abc-bureau-proxy/bin/bureau-proxy" {
 		t.Errorf("ProxyBinaryPath = %q, want /nix/store/abc-bureau-proxy/bin/bureau-proxy", state.ProxyBinaryPath)
+	}
+	if state.LogRelayBinaryPath != "/nix/store/abc-bureau-log-relay/bin/bureau-log-relay" {
+		t.Errorf("LogRelayBinaryPath = %q, want /nix/store/abc-bureau-log-relay/bin/bureau-log-relay", state.LogRelayBinaryPath)
 	}
 
 	// Only the two alive sandboxes should be present.
@@ -181,7 +185,8 @@ func TestReconnectSandboxes(t *testing.T) {
 				Roles:     map[string][]string{"worker": {"sleep", "60"}},
 			},
 		},
-		ProxyBinaryPath: "/test/proxy/binary",
+		ProxyBinaryPath:    "/test/proxy/binary",
+		LogRelayBinaryPath: "/test/log-relay/binary",
 	}
 	stateData, _ := codec.Marshal(state)
 	statePath := filepath.Join(runDir, "launcher-state.cbor")
@@ -225,6 +230,11 @@ func TestReconnectSandboxes(t *testing.T) {
 	// Verify the proxy binary path was restored.
 	if launcher.proxyBinaryPath != "/test/proxy/binary" {
 		t.Errorf("proxyBinaryPath = %q, want /test/proxy/binary", launcher.proxyBinaryPath)
+	}
+
+	// Verify the log-relay binary path was restored.
+	if launcher.logRelayBinaryPath != "/test/log-relay/binary" {
+		t.Errorf("logRelayBinaryPath = %q, want /test/log-relay/binary", launcher.logRelayBinaryPath)
 	}
 
 	// Verify the state file was deleted.
@@ -372,24 +382,26 @@ func TestReconnectNoStateFile(t *testing.T) {
 	}
 }
 
-func TestReconnectPreservesProxyBinaryPath(t *testing.T) {
+func TestReconnectPreservesBinaryPaths(t *testing.T) {
 	runDir := testutil.SocketDir(t)
 
 	state := launcherState{
-		Sandboxes:       make(map[string]*sandboxEntry),
-		ProxyBinaryPath: "/nix/store/updated-proxy/bin/bureau-proxy",
+		Sandboxes:          make(map[string]*sandboxEntry),
+		ProxyBinaryPath:    "/nix/store/updated-proxy/bin/bureau-proxy",
+		LogRelayBinaryPath: "/nix/store/updated-log-relay/bin/bureau-log-relay",
 	}
 	stateData, _ := codec.Marshal(state)
 	statePath := filepath.Join(runDir, "launcher-state.cbor")
 	os.WriteFile(statePath, stateData, 0600)
 
 	launcher := &Launcher{
-		runDir:          runDir,
-		stateDir:        t.TempDir(),
-		proxyBinaryPath: "/nix/store/old-proxy/bin/bureau-proxy",
-		sandboxes:       make(map[string]*managedSandbox),
-		failedExecPaths: make(map[string]bool),
-		logger:          slog.New(slog.NewJSONHandler(os.Stderr, nil)),
+		runDir:             runDir,
+		stateDir:           t.TempDir(),
+		proxyBinaryPath:    "/nix/store/old-proxy/bin/bureau-proxy",
+		logRelayBinaryPath: "/nix/store/old-log-relay/bin/bureau-log-relay",
+		sandboxes:          make(map[string]*managedSandbox),
+		failedExecPaths:    make(map[string]bool),
+		logger:             slog.New(slog.NewJSONHandler(os.Stderr, nil)),
 	}
 
 	if err := launcher.reconnectSandboxes(); err != nil {
@@ -399,6 +411,10 @@ func TestReconnectPreservesProxyBinaryPath(t *testing.T) {
 	if launcher.proxyBinaryPath != "/nix/store/updated-proxy/bin/bureau-proxy" {
 		t.Errorf("proxyBinaryPath = %q, want /nix/store/updated-proxy/bin/bureau-proxy",
 			launcher.proxyBinaryPath)
+	}
+	if launcher.logRelayBinaryPath != "/nix/store/updated-log-relay/bin/bureau-log-relay" {
+		t.Errorf("logRelayBinaryPath = %q, want /nix/store/updated-log-relay/bin/bureau-log-relay",
+			launcher.logRelayBinaryPath)
 	}
 }
 

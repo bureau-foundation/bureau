@@ -62,6 +62,7 @@ func (d *Daemon) prefetchBureauVersion(ctx context.Context, version *schema.Bure
 		{"daemon", version.DaemonStorePath},
 		{"launcher", version.LauncherStorePath},
 		{"proxy", version.ProxyStorePath},
+		{"log-relay", version.LogRelayStorePath},
 	}
 
 	for _, entry := range paths {

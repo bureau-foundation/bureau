@@ -40,6 +40,11 @@ const (
 	// creation. Existing proxies continue running their current binary.
 	ActionUpdateProxyBinary LauncherAction = "update-proxy-binary"
 
+	// ActionUpdateLogRelayBinary switches the log-relay binary for future
+	// sandbox creation. Existing sandboxes continue running their current
+	// log-relay binary.
+	ActionUpdateLogRelayBinary LauncherAction = "update-log-relay-binary"
+
 	// ActionProvisionCredential upserts a key-value pair into a principal's
 	// encrypted credential bundle and returns the re-encrypted ciphertext.
 	ActionProvisionCredential LauncherAction = "provision-credential"
@@ -63,7 +68,8 @@ func (a LauncherAction) IsKnown() bool {
 	switch a {
 	case ActionStatus, ActionListSandboxes, ActionCreateSandbox,
 		ActionDestroySandbox, ActionSignalSandbox, ActionUpdatePayload,
-		ActionUpdateProxyBinary, ActionProvisionCredential, ActionExecUpdate,
+		ActionUpdateProxyBinary, ActionUpdateLogRelayBinary,
+		ActionProvisionCredential, ActionExecUpdate,
 		ActionWaitSandbox, ActionWaitProxy:
 		return true
 	}
@@ -213,6 +219,12 @@ type Response struct {
 	// the "status" action so the daemon can hash-compare the current
 	// proxy against the desired version.
 	ProxyBinaryPath string `cbor:"proxy_binary_path,omitempty"`
+
+	// LogRelayBinaryPath is the filesystem path of the log-relay binary
+	// the launcher is currently using for new sandbox creation. Returned
+	// by the "status" action so the daemon can hash-compare the current
+	// log-relay against the desired version.
+	LogRelayBinaryPath string `cbor:"log_relay_binary_path,omitempty"`
 
 	// ExitCode is the process exit code returned by "wait-sandbox".
 	// Uses a pointer to distinguish "exit code 0" (success) from

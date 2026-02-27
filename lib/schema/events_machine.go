@@ -357,11 +357,12 @@ type MachineConfig struct {
 // restarts when an unrelated dependency change produces a new store path
 // but a byte-identical binary.
 //
-// Only the three persistent/recurring process types are tracked here:
-// daemon (runs continuously), launcher (runs continuously), and proxy
-// (spawned per-sandbox by the launcher). Other Bureau binaries (bridge,
-// sandbox, credentials, proxy-call, observe-relay) are short-lived
-// utilities resolved from PATH or the Nix environment at invocation time.
+// Four persistent/recurring process types are tracked: daemon (runs
+// continuously), launcher (runs continuously), proxy (spawned per-sandbox
+// by the launcher), and log-relay (wraps each sandbox process, lives for
+// the sandbox's lifetime). Other Bureau binaries (bridge, sandbox,
+// credentials, proxy-call, observe-relay) are short-lived utilities
+// resolved from PATH or the Nix environment at invocation time.
 type BureauVersion struct {
 	// DaemonStorePath is the Nix store path containing the bureau-daemon
 	// binary (e.g., "/nix/store/abc123-bureau-daemon/bin/bureau-daemon").
@@ -382,6 +383,13 @@ type BureauVersion struct {
 	// processes for sandbox creation. Existing proxies continue running
 	// their current binary until their sandbox is recycled.
 	ProxyStorePath string `json:"proxy_store_path"`
+
+	// LogRelayStorePath is the Nix store path containing the
+	// bureau-log-relay binary. The launcher uses this path when
+	// generating sandbox scripts for new sandbox creation. Existing
+	// sandboxes continue running their current log-relay binary until
+	// recycled.
+	LogRelayStorePath string `json:"log_relay_store_path,omitempty"`
 }
 
 // CredentialsVersion is the current schema version for

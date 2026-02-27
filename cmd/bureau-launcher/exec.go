@@ -37,6 +37,12 @@ type launcherState struct {
 	// it via "update-proxy-binary" IPC since the launcher started —
 	// os.Args has the stale flag value.
 	ProxyBinaryPath string `cbor:"proxy_binary_path"`
+
+	// LogRelayBinaryPath is the log-relay binary the launcher was using
+	// at the time of exec(). Preserved for the same reason as
+	// ProxyBinaryPath: the daemon may have updated it via
+	// "update-log-relay-binary" IPC.
+	LogRelayBinaryPath string `cbor:"log_relay_binary_path"`
 }
 
 // sandboxEntry captures the per-sandbox state needed to reconnect after
@@ -70,8 +76,9 @@ func (l *Launcher) launcherStatePath() string {
 // write. Called immediately before exec().
 func (l *Launcher) writeStateFile() error {
 	state := launcherState{
-		Sandboxes:       make(map[string]*sandboxEntry, len(l.sandboxes)),
-		ProxyBinaryPath: l.proxyBinaryPath,
+		Sandboxes:          make(map[string]*sandboxEntry, len(l.sandboxes)),
+		ProxyBinaryPath:    l.proxyBinaryPath,
+		LogRelayBinaryPath: l.logRelayBinaryPath,
 	}
 
 	for localpart, sandbox := range l.sandboxes {
@@ -259,11 +266,14 @@ func (l *Launcher) reconnectSandboxes() error {
 		return fmt.Errorf("parsing state file: %w", err)
 	}
 
-	// Restore the proxy binary path from the state file. The daemon
-	// may have updated it via "update-proxy-binary" IPC after the
-	// launcher started, so os.Args has the stale flag value.
+	// Restore binary paths from the state file. The daemon may have
+	// updated them via IPC after the launcher started, so os.Args has
+	// the stale flag values.
 	if state.ProxyBinaryPath != "" {
 		l.proxyBinaryPath = state.ProxyBinaryPath
+	}
+	if state.LogRelayBinaryPath != "" {
+		l.logRelayBinaryPath = state.LogRelayBinaryPath
 	}
 
 	for localpart, entry := range state.Sandboxes {

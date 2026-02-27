@@ -412,9 +412,10 @@ func TestQueryLauncherStatus(t *testing.T) {
 			return launcherIPCResponse{OK: false, Error: "unexpected action: " + string(request.Action)}
 		}
 		return launcherIPCResponse{
-			OK:              true,
-			BinaryHash:      "abc123def456",
-			ProxyBinaryPath: "/nix/store/xyz-bureau-proxy/bin/bureau-proxy",
+			OK:                 true,
+			BinaryHash:         "abc123def456",
+			ProxyBinaryPath:    "/nix/store/xyz-bureau-proxy/bin/bureau-proxy",
+			LogRelayBinaryPath: "/nix/store/xyz-bureau-log-relay/bin/bureau-log-relay",
 		}
 	})
 	t.Cleanup(func() { listener.Close() })
@@ -424,7 +425,7 @@ func TestQueryLauncherStatus(t *testing.T) {
 	daemon.launcherSocket = socketPath
 	daemon.logger = slog.New(slog.NewJSONHandler(os.Stderr, nil))
 
-	hash, proxyPath, err := daemon.queryLauncherStatus(context.Background())
+	hash, proxyPath, logRelayPath, err := daemon.queryLauncherStatus(context.Background())
 	if err != nil {
 		t.Fatalf("queryLauncherStatus() error: %v", err)
 	}
@@ -433,6 +434,9 @@ func TestQueryLauncherStatus(t *testing.T) {
 	}
 	if proxyPath != "/nix/store/xyz-bureau-proxy/bin/bureau-proxy" {
 		t.Errorf("proxy binary path = %q, want /nix/store/xyz-bureau-proxy/bin/bureau-proxy", proxyPath)
+	}
+	if logRelayPath != "/nix/store/xyz-bureau-log-relay/bin/bureau-log-relay" {
+		t.Errorf("log-relay binary path = %q, want /nix/store/xyz-bureau-log-relay/bin/bureau-log-relay", logRelayPath)
 	}
 }
 

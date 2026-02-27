@@ -160,6 +160,13 @@ func (s *Server) SetServiceDirectory(entries []ServiceDirectoryEntry) {
 	s.handler.SetServiceDirectory(entries)
 }
 
+// SetTelemetry configures telemetry instrumentation for the proxy server
+// and all its HTTP services. Must be called before Start. Pass nil to
+// disable telemetry (the default).
+func (s *Server) SetTelemetry(telemetry *ProxyTelemetry) {
+	s.handler.SetTelemetry(telemetry)
+}
+
 // SetObserveConfig configures the observation proxy. When called before
 // Start(), the server will listen on the observation socket and forward
 // observation requests to the daemon with injected credentials. The

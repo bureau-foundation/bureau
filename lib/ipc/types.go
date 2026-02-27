@@ -3,7 +3,10 @@
 
 package ipc
 
-import "github.com/bureau-foundation/bureau/lib/schema"
+import (
+	"github.com/bureau-foundation/bureau/lib/ref"
+	"github.com/bureau-foundation/bureau/lib/schema"
+)
 
 // LauncherAction identifies the type of IPC request from the daemon to the
 // launcher. Using a typed enum gives compile-time checking for typos that
@@ -152,6 +155,20 @@ type Request struct {
 	// host) is visible inside the sandbox via VFS path traversal.
 	TokenDirectory string `cbor:"token_directory,omitempty"`
 
+	// TelemetrySocketPath is the host-side path to the telemetry
+	// relay's CBOR socket. The launcher passes this to the proxy
+	// subprocess via the credential payload so the proxy can submit
+	// spans and metrics directly to the relay. Empty when telemetry
+	// is not deployed.
+	TelemetrySocketPath string `cbor:"telemetry_socket_path,omitempty"`
+
+	// TelemetryTokenPath is the host-side path to a service token
+	// file that authenticates the proxy to the telemetry relay.
+	// The proxy reads this file at startup and includes the token
+	// in its CBOR submit requests. Empty when telemetry is not
+	// deployed.
+	TelemetryTokenPath string `cbor:"telemetry_token_path,omitempty"`
+
 	// BinaryPath is a filesystem path used by the "update-proxy-binary"
 	// action. The launcher validates the path exists and is executable,
 	// then switches to it for future sandbox creation. Existing proxy
@@ -288,4 +305,24 @@ type ProxyCredentialPayload struct {
 	// matrix/invite, matrix/create-room) and service directory filtering
 	// (service/discover).
 	Grants []schema.Grant `cbor:"grants,omitempty"`
+
+	// Fleet identifies the fleet this proxy belongs to. Used as the
+	// envelope-level identity when submitting telemetry to the relay.
+	// Zero when telemetry is not configured.
+	Fleet ref.Fleet `cbor:"fleet,omitempty"`
+
+	// Machine identifies the machine this proxy runs on. Used as the
+	// envelope-level identity when submitting telemetry to the relay.
+	// Zero when telemetry is not configured.
+	Machine ref.Machine `cbor:"machine,omitempty"`
+
+	// TelemetrySocketPath is the host path to the telemetry relay's
+	// Unix socket. Empty when telemetry is not configured for this
+	// proxy.
+	TelemetrySocketPath string `cbor:"telemetry_socket_path,omitempty"`
+
+	// TelemetryTokenPath is the host path to the service token file
+	// for authenticating with the telemetry relay. Empty when
+	// telemetry is not configured.
+	TelemetryTokenPath string `cbor:"telemetry_token_path,omitempty"`
 }

@@ -15,6 +15,7 @@ import (
 	"time"
 
 	"github.com/bureau-foundation/bureau/lib/netutil"
+	"github.com/bureau-foundation/bureau/lib/schema/telemetry"
 )
 
 // HTTPService proxies HTTP requests to an upstream API with credential injection.
@@ -29,6 +30,7 @@ type HTTPService struct {
 	credential    CredentialSource
 	logger        *slog.Logger
 	client        *http.Client
+	telemetry     *ProxyTelemetry // nil when telemetry is not configured
 }
 
 // HTTPServiceConfig holds configuration for creating an HTTPService.
@@ -138,10 +140,24 @@ func (s *HTTPService) Name() string {
 	return s.name
 }
 
+// SetTelemetry attaches telemetry instrumentation. When set, every
+// forwarded request produces a span and updates request counters and
+// duration histograms. Pass nil to disable telemetry (the default).
+func (s *HTTPService) SetTelemetry(telemetry *ProxyTelemetry) {
+	s.telemetry = telemetry
+}
+
 // ServeHTTP handles proxied HTTP requests.
 // This implements http.Handler for direct use with HTTP routers.
 func (s *HTTPService) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	startTime := time.Now()
+
+	// Generate trace context for this request. IDs are generated
+	// unconditionally (cheap: 24 bytes of crypto/rand) so the
+	// traceparent header is always propagated to upstreams regardless
+	// of whether local telemetry recording is enabled.
+	traceID := telemetry.NewTraceID()
+	spanID := telemetry.NewSpanID()
 
 	// Check path filter if configured
 	if s.filter != nil {
@@ -155,6 +171,7 @@ func (s *HTTPService) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 				"error", err,
 			)
 			http.Error(w, fmt.Sprintf("request blocked: %v", err), http.StatusForbidden)
+			s.recordTelemetry(traceID, spanID, r.Method, r.URL.Path, http.StatusForbidden, startTime, 0, "request blocked by filter")
 			return
 		}
 	}
@@ -172,6 +189,7 @@ func (s *HTTPService) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 			"missing", missingCredentials,
 		)
 		http.Error(w, fmt.Sprintf("missing credentials: %v", missingCredentials), http.StatusServiceUnavailable)
+		s.recordTelemetry(traceID, spanID, r.Method, r.URL.Path, http.StatusServiceUnavailable, startTime, 0, "missing credentials")
 		return
 	}
 
@@ -188,6 +206,7 @@ func (s *HTTPService) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 			"error", err,
 		)
 		http.Error(w, "failed to create request", http.StatusInternalServerError)
+		s.recordTelemetry(traceID, spanID, r.Method, r.URL.Path, http.StatusInternalServerError, startTime, 0, "failed to create upstream request")
 		return
 	}
 
@@ -207,10 +226,16 @@ func (s *HTTPService) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	}
 
 	// Inject credential headers
+	credentialCount := len(s.injectHeaders)
 	for headerName, credName := range s.injectHeaders {
 		value := s.credential.Get(credName)
 		upstreamReq.Header.Set(headerName, value.String())
 	}
+
+	// Inject W3C traceparent header for distributed trace correlation.
+	// Downstream services that support W3C Trace Context can use this
+	// to link their spans into the same trace.
+	upstreamReq.Header.Set("Traceparent", formatTraceparent(traceID, spanID))
 
 	// Set standard proxy headers
 	if clientIP := r.RemoteAddr; clientIP != "" {
@@ -223,17 +248,20 @@ func (s *HTTPService) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		"method", r.Method,
 		"path", r.URL.Path,
 		"upstream", upstreamURL.String(),
+		"trace_id", traceID.String(),
 	)
 
 	// Make the upstream request
 	resp, err := s.client.Do(upstreamReq)
 	if err != nil {
+		duration := time.Since(startTime)
 		s.logger.Error("upstream request failed",
 			"service", s.name,
 			"error", err,
-			"duration", time.Since(startTime),
+			"duration", duration,
 		)
 		http.Error(w, fmt.Sprintf("upstream request failed: %v", err), http.StatusBadGateway)
+		s.recordTelemetry(traceID, spanID, r.Method, r.URL.Path, http.StatusBadGateway, startTime, credentialCount, err.Error())
 		return
 	}
 	defer resp.Body.Close()
@@ -253,12 +281,13 @@ func (s *HTTPService) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 
 	if isSSE {
 		// For SSE, we need to flush after each chunk
-		s.streamSSE(w, resp, startTime)
+		s.streamSSE(w, resp, startTime, traceID, spanID, credentialCount)
 	} else {
 		// For regular responses, just copy
 		w.WriteHeader(resp.StatusCode)
 		bytesCopied, copyError := io.Copy(w, resp.Body)
 
+		duration := time.Since(startTime)
 		if copyError != nil && !netutil.IsExpectedCloseError(copyError) {
 			s.logger.Warn("http proxy response copy error",
 				"service", s.name,
@@ -267,7 +296,7 @@ func (s *HTTPService) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 				"status", resp.StatusCode,
 				"bytes", bytesCopied,
 				"error", copyError,
-				"duration", time.Since(startTime),
+				"duration", duration,
 			)
 		} else {
 			s.logger.Info("http proxy complete",
@@ -276,15 +305,21 @@ func (s *HTTPService) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 				"path", r.URL.Path,
 				"status", resp.StatusCode,
 				"bytes", bytesCopied,
-				"duration", time.Since(startTime),
+				"duration", duration,
 			)
 		}
+
+		var statusMessage string
+		if resp.StatusCode >= 400 {
+			statusMessage = fmt.Sprintf("HTTP %d", resp.StatusCode)
+		}
+		s.recordTelemetry(traceID, spanID, r.Method, r.URL.Path, resp.StatusCode, startTime, credentialCount, statusMessage)
 	}
 }
 
 // streamSSE handles Server-Sent Events streaming responses.
 // It reads from the upstream and flushes each chunk immediately to the client.
-func (s *HTTPService) streamSSE(w http.ResponseWriter, resp *http.Response, startTime time.Time) {
+func (s *HTTPService) streamSSE(w http.ResponseWriter, resp *http.Response, startTime time.Time, traceID telemetry.TraceID, spanID telemetry.SpanID, credentialCount int) {
 	// Ensure we can flush
 	flusher, ok := w.(http.Flusher)
 	if !ok {
@@ -334,12 +369,28 @@ func (s *HTTPService) streamSSE(w http.ResponseWriter, resp *http.Response, star
 		}
 	}
 
+	duration := time.Since(startTime)
 	s.logger.Info("http proxy SSE complete",
 		"service", s.name,
 		"status", resp.StatusCode,
 		"bytes", totalBytes,
-		"duration", time.Since(startTime),
+		"duration", duration,
 	)
+
+	var statusMessage string
+	if resp.StatusCode >= 400 {
+		statusMessage = fmt.Sprintf("HTTP %d", resp.StatusCode)
+	}
+	s.recordTelemetry(traceID, spanID, "SSE", "/stream", resp.StatusCode, startTime, credentialCount, statusMessage)
+}
+
+// recordTelemetry records a span and metrics for a completed request.
+// No-op when telemetry is not configured.
+func (s *HTTPService) recordTelemetry(traceID telemetry.TraceID, spanID telemetry.SpanID, method, path string, status int, startTime time.Time, credentialCount int, statusMessage string) {
+	if s.telemetry == nil {
+		return
+	}
+	s.telemetry.recordRequest(traceID, spanID, s.name, method, path, status, startTime, time.Since(startTime), credentialCount, statusMessage)
 }
 
 // ForwardRequest sends an HTTP request through this service's upstream with

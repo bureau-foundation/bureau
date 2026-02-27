@@ -54,6 +54,12 @@ type Handler struct {
 	// socket whenever the directory changes.
 	serviceDirectory []ServiceDirectoryEntry
 
+	// telemetry is the proxy's telemetry instrumentation. Nil when
+	// telemetry is not configured. Set via SetTelemetry before
+	// registering HTTP services (or call SetTelemetry before Start
+	// and it propagates to subsequently registered services).
+	telemetry *ProxyTelemetry
+
 	mu     sync.RWMutex
 	logger *slog.Logger
 }
@@ -100,6 +106,18 @@ func NewHandler(logger *slog.Logger) *Handler {
 	}
 }
 
+// SetTelemetry configures telemetry instrumentation for the handler and
+// all currently registered HTTP services. Subsequently registered HTTP
+// services also receive the telemetry reference. Pass nil to disable.
+func (h *Handler) SetTelemetry(telemetry *ProxyTelemetry) {
+	h.mu.Lock()
+	defer h.mu.Unlock()
+	h.telemetry = telemetry
+	for _, service := range h.httpServices {
+		service.SetTelemetry(telemetry)
+	}
+}
+
 // RegisterService registers a CLI service that can be proxied.
 func (h *Handler) RegisterService(name string, service Service) {
 	h.mu.Lock()
@@ -112,6 +130,9 @@ func (h *Handler) RegisterService(name string, service Service) {
 func (h *Handler) RegisterHTTPService(name string, service *HTTPService) {
 	h.mu.Lock()
 	defer h.mu.Unlock()
+	if h.telemetry != nil {
+		service.SetTelemetry(h.telemetry)
+	}
 	h.httpServices[name] = service
 	h.logger.Info("registered http service", "name", name, "upstream", service.upstream.String())
 }

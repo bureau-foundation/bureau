@@ -622,7 +622,7 @@ func TestBuildCredentialPayload(t *testing.T) {
 			"GITHUB_PAT":            "ghp_test",
 		}
 
-		payload, err := launcher.buildCredentialPayload(principalEntity, credentials, nil)
+		payload, err := launcher.buildCredentialPayload(principalEntity, credentials, nil, proxyTelemetryConfig{})
 		if err != nil {
 			t.Fatalf("buildCredentialPayload() error: %v", err)
 		}
@@ -654,7 +654,7 @@ func TestBuildCredentialPayload(t *testing.T) {
 			"OPENAI_API_KEY": "sk-test",
 		}
 
-		_, err := launcher.buildCredentialPayload(principalEntity, credentials, nil)
+		_, err := launcher.buildCredentialPayload(principalEntity, credentials, nil, proxyTelemetryConfig{})
 		if err == nil {
 			t.Error("expected error for missing MATRIX_TOKEN")
 		}
@@ -668,7 +668,7 @@ func TestBuildCredentialPayload(t *testing.T) {
 			"MATRIX_TOKEN": "syt_test",
 		}
 
-		payload, err := launcher.buildCredentialPayload(principalEntity, credentials, nil)
+		payload, err := launcher.buildCredentialPayload(principalEntity, credentials, nil, proxyTelemetryConfig{})
 		if err != nil {
 			t.Fatalf("buildCredentialPayload() error: %v", err)
 		}
@@ -684,7 +684,7 @@ func TestBuildCredentialPayload(t *testing.T) {
 			"MATRIX_TOKEN": "syt_test",
 		}
 
-		payload, err := launcher.buildCredentialPayload(principalEntity, credentials, nil)
+		payload, err := launcher.buildCredentialPayload(principalEntity, credentials, nil, proxyTelemetryConfig{})
 		if err != nil {
 			t.Fatalf("buildCredentialPayload() error: %v", err)
 		}
@@ -692,6 +692,53 @@ func TestBuildCredentialPayload(t *testing.T) {
 		// Should derive from principal localpart and server name.
 		if payload.MatrixUserID != "@bureau/fleet/test/agent/echo:bureau.local" {
 			t.Errorf("MatrixUserID = %q, want %q", payload.MatrixUserID, "@bureau/fleet/test/agent/echo:bureau.local")
+		}
+	})
+
+	t.Run("telemetry config passthrough", func(t *testing.T) {
+		credentials := map[string]string{
+			"MATRIX_TOKEN": "syt_test",
+		}
+
+		telemetry := proxyTelemetryConfig{
+			socketPath: "/run/bureau/fleet/test/service/telemetry/relay.sock",
+			tokenPath:  "/var/bureau/tokens/agent-echo/telemetry.token",
+		}
+
+		payload, err := launcher.buildCredentialPayload(principalEntity, credentials, nil, telemetry)
+		if err != nil {
+			t.Fatalf("buildCredentialPayload() error: %v", err)
+		}
+
+		if payload.TelemetrySocketPath != telemetry.socketPath {
+			t.Errorf("TelemetrySocketPath = %q, want %q", payload.TelemetrySocketPath, telemetry.socketPath)
+		}
+		if payload.TelemetryTokenPath != telemetry.tokenPath {
+			t.Errorf("TelemetryTokenPath = %q, want %q", payload.TelemetryTokenPath, telemetry.tokenPath)
+		}
+		if payload.Fleet != launcher.machine.Fleet() {
+			t.Errorf("Fleet = %v, want %v", payload.Fleet, launcher.machine.Fleet())
+		}
+		if payload.Machine != launcher.machine {
+			t.Errorf("Machine = %v, want %v", payload.Machine, launcher.machine)
+		}
+	})
+
+	t.Run("telemetry config empty when not configured", func(t *testing.T) {
+		credentials := map[string]string{
+			"MATRIX_TOKEN": "syt_test",
+		}
+
+		payload, err := launcher.buildCredentialPayload(principalEntity, credentials, nil, proxyTelemetryConfig{})
+		if err != nil {
+			t.Fatalf("buildCredentialPayload() error: %v", err)
+		}
+
+		if payload.TelemetrySocketPath != "" {
+			t.Errorf("TelemetrySocketPath = %q, want empty", payload.TelemetrySocketPath)
+		}
+		if payload.TelemetryTokenPath != "" {
+			t.Errorf("TelemetryTokenPath = %q, want empty", payload.TelemetryTokenPath)
 		}
 	})
 }

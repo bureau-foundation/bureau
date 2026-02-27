@@ -61,12 +61,24 @@ type TelemetryConfig struct {
 	Logger *slog.Logger
 }
 
-// TelemetryEmitter buffers telemetry spans and periodically flushes
-// them to the telemetry relay via CBOR socket protocol. It stamps each
-// recorded span with the emitter's Fleet, Machine, and Source identity.
+// MetricsCollector is a function that produces metric points for
+// inclusion in the next telemetry flush. The emitter calls this
+// function during each flush cycle. The returned MetricPoints are
+// submitted alongside buffered spans.
 //
-// The emitter is safe for concurrent use. RecordSpan is a no-op on a
-// nil receiver, giving zero-cost opt-out when telemetry is unavailable.
+// Implementations must be safe for concurrent use and return quickly
+// (the call happens on the flush path). Typical implementations
+// snapshot in-memory counters and histograms.
+type MetricsCollector func() []telemetry.MetricPoint
+
+// TelemetryEmitter buffers telemetry spans and metrics, periodically
+// flushing them to the telemetry relay via CBOR socket protocol. It
+// stamps each recorded span with the emitter's Fleet, Machine, and
+// Source identity.
+//
+// The emitter is safe for concurrent use. RecordSpan and RecordMetric
+// are no-ops on a nil receiver, giving zero-cost opt-out when
+// telemetry is unavailable.
 //
 // Lifecycle: call [TelemetryEmitter.Run] in a goroutine to start the
 // flush loop, then cancel the context to stop it. Run performs a final
@@ -79,8 +91,10 @@ type TelemetryEmitter struct {
 	machine ref.Machine
 	source  ref.Entity
 
-	mu    sync.Mutex
-	spans []telemetry.Span
+	mu               sync.Mutex
+	spans            []telemetry.Span
+	metrics          []telemetry.MetricPoint
+	metricsCollector MetricsCollector
 
 	done chan struct{}
 }
@@ -150,6 +164,34 @@ func (e *TelemetryEmitter) RecordSpan(span telemetry.Span) {
 	e.mu.Unlock()
 }
 
+// RecordMetric buffers a metric point for the next flush cycle.
+// Like RecordSpan, identity fields are carried at the submit envelope
+// level, not per-metric.
+//
+// Safe to call on a nil receiver (no-op).
+func (e *TelemetryEmitter) RecordMetric(metric telemetry.MetricPoint) {
+	if e == nil {
+		return
+	}
+
+	e.mu.Lock()
+	e.metrics = append(e.metrics, metric)
+	e.mu.Unlock()
+}
+
+// SetMetricsCollector registers a function that the emitter calls
+// during each flush to collect additional metric points. This is the
+// integration point for services that maintain in-memory counters or
+// histograms and want them flushed alongside buffered spans.
+//
+// The collector is called under the emitter's lock, so it must not
+// call back into the emitter (RecordSpan, RecordMetric).
+//
+// Must be called before Run.
+func (e *TelemetryEmitter) SetMetricsCollector(collector MetricsCollector) {
+	e.metricsCollector = collector
+}
+
 // Run starts the flush loop, sending buffered spans to the relay at
 // the given interval. Blocks until ctx is cancelled, then performs one
 // final drain flush with a short deadline to capture any late spans
@@ -183,33 +225,42 @@ func (e *TelemetryEmitter) Done() <-chan struct{} {
 	return e.done
 }
 
-// flush drains the span buffer and sends it to the relay as a
-// [telemetry.SubmitRequest] with envelope-level identity. Per-span
+// flush drains the span and metric buffers, collects metrics from
+// the optional MetricsCollector, and sends everything to the relay as
+// a [telemetry.SubmitRequest] with envelope-level identity. Per-record
 // identity fields are zero — the relay re-stamps them from the
-// envelope after receiving. The buffer is swapped under the lock so
-// RecordSpan does not block during network I/O. Flush failures are
-// logged but do not retry — the spans are dropped. Lost telemetry is
-// preferable to unbounded memory growth or degraded service latency.
+// envelope after receiving. Buffers are swapped under the lock so
+// RecordSpan/RecordMetric do not block during network I/O. Flush
+// failures are logged but do not retry — the data is dropped. Lost
+// telemetry is preferable to unbounded memory growth or degraded
+// service latency.
 func (e *TelemetryEmitter) flush(ctx context.Context) {
 	e.mu.Lock()
-	if len(e.spans) == 0 {
-		e.mu.Unlock()
-		return
-	}
 	spans := e.spans
 	e.spans = nil
+	metrics := e.metrics
+	e.metrics = nil
+	if e.metricsCollector != nil {
+		metrics = append(metrics, e.metricsCollector()...)
+	}
 	e.mu.Unlock()
+
+	if len(spans) == 0 && len(metrics) == 0 {
+		return
+	}
 
 	request := telemetry.SubmitRequest{
 		Fleet:   e.fleet,
 		Machine: e.machine,
 		Source:  e.source,
 		Spans:   spans,
+		Metrics: metrics,
 	}
 	if err := e.client.Call(ctx, "submit", request, nil); err != nil {
 		e.logger.Error("telemetry flush failed",
 			"error", err,
 			"dropped_spans", len(spans),
+			"dropped_metrics", len(metrics),
 		)
 	}
 }

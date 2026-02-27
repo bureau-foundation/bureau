@@ -14,6 +14,7 @@ import (
 
 	"github.com/bureau-foundation/bureau/lib/codec"
 	"github.com/bureau-foundation/bureau/lib/ipc"
+	"github.com/bureau-foundation/bureau/lib/ref"
 	"github.com/bureau-foundation/bureau/lib/schema"
 	"github.com/bureau-foundation/bureau/lib/secret"
 )
@@ -313,6 +314,13 @@ func (s *ChainCredentialSource) Close() error {
 type PipeCredentialSource struct {
 	credentials map[string]*secret.Buffer
 	grants      []schema.Grant
+
+	// Telemetry identity and relay configuration, extracted from the
+	// credential payload. Zero/empty when telemetry is not configured.
+	fleet               ref.Fleet
+	machine             ref.Machine
+	telemetrySocketPath string
+	telemetryTokenPath  string
 }
 
 // ReadPipeCredentials reads a CBOR-encoded [ipc.ProxyCredentialPayload]
@@ -383,8 +391,12 @@ func ReadPipeCredentials(reader io.Reader) (*PipeCredentialSource, error) {
 	}
 
 	return &PipeCredentialSource{
-		credentials: credentials,
-		grants:      payload.Grants,
+		credentials:         credentials,
+		grants:              payload.Grants,
+		fleet:               payload.Fleet,
+		machine:             payload.Machine,
+		telemetrySocketPath: payload.TelemetrySocketPath,
+		telemetryTokenPath:  payload.TelemetryTokenPath,
 	}, nil
 }
 
@@ -408,6 +420,30 @@ func (s *PipeCredentialSource) Close() error {
 // payload. Returns nil if no grants were specified (default-deny).
 func (s *PipeCredentialSource) Grants() []schema.Grant {
 	return s.grants
+}
+
+// Fleet returns the fleet identity from the credential payload.
+// Zero when telemetry is not configured.
+func (s *PipeCredentialSource) Fleet() ref.Fleet {
+	return s.fleet
+}
+
+// Machine returns the machine identity from the credential payload.
+// Zero when telemetry is not configured.
+func (s *PipeCredentialSource) Machine() ref.Machine {
+	return s.machine
+}
+
+// TelemetrySocketPath returns the host path to the telemetry relay
+// socket. Empty when telemetry is not configured.
+func (s *PipeCredentialSource) TelemetrySocketPath() string {
+	return s.telemetrySocketPath
+}
+
+// TelemetryTokenPath returns the host path to the telemetry relay
+// service token. Empty when telemetry is not configured.
+func (s *PipeCredentialSource) TelemetryTokenPath() string {
+	return s.telemetryTokenPath
 }
 
 // Verify credential sources implement CredentialSource interface.

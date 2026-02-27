@@ -11,5 +11,8 @@ go_library(
     ],
     importpath = "github.com/bureau-foundation/bureau/lib/ipc",
     visibility = ["//visibility:public"],
-    deps = ["//lib/schema"],
+    deps = [
+        "//lib/ref",
+        "//lib/schema",
+    ],
 )

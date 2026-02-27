@@ -33,7 +33,16 @@ import (
 //
 // A background goroutine reaps the proxy process to avoid zombies and logs
 // the exit, but the sandbox lifecycle is driven by the tmux session.
-func (l *Launcher) spawnProxy(principalLocalpart string, credentials map[string]string, grants []schema.Grant) (int, error) {
+// proxyTelemetryConfig carries telemetry relay connection info from the
+// daemon's IPC request through to the proxy's credential payload. The
+// proxy uses these to submit spans and metrics directly to the
+// per-machine telemetry relay.
+type proxyTelemetryConfig struct {
+	socketPath string
+	tokenPath  string
+}
+
+func (l *Launcher) spawnProxy(principalLocalpart string, credentials map[string]string, grants []schema.Grant, telemetryConfig proxyTelemetryConfig) (int, error) {
 	if l.proxyBinaryPath == "" {
 		return 0, fmt.Errorf("proxy binary path not configured (set --proxy-binary or install bureau-proxy on PATH)")
 	}
@@ -117,7 +126,7 @@ func (l *Launcher) spawnProxy(principalLocalpart string, credentials map[string]
 
 	// Write credential payload to the proxy's stdin and close.
 	if credentials != nil {
-		payload, err := l.buildCredentialPayload(principalRef, credentials, grants)
+		payload, err := l.buildCredentialPayload(principalRef, credentials, grants, telemetryConfig)
 		if err != nil {
 			cmd.Process.Kill()
 			cmd.Wait()
@@ -210,7 +219,7 @@ func (l *Launcher) spawnProxy(principalLocalpart string, credentials map[string]
 // structure expected by the proxy's PipeCredentialSource. The Matrix-specific
 // keys (MATRIX_HOMESERVER_URL, MATRIX_TOKEN, MATRIX_USER_ID) are extracted
 // into top-level fields; everything else goes under "credentials".
-func (l *Launcher) buildCredentialPayload(principalEntity ref.Entity, credentials map[string]string, grants []schema.Grant) (*ipc.ProxyCredentialPayload, error) {
+func (l *Launcher) buildCredentialPayload(principalEntity ref.Entity, credentials map[string]string, grants []schema.Grant, telemetryConfig proxyTelemetryConfig) (*ipc.ProxyCredentialPayload, error) {
 	homeserverURL := credentials["MATRIX_HOMESERVER_URL"]
 	if homeserverURL == "" {
 		// Fall back to the launcher's homeserver URL (the principal is
@@ -245,6 +254,10 @@ func (l *Launcher) buildCredentialPayload(principalEntity ref.Entity, credential
 		MatrixUserID:        matrixUserID,
 		Credentials:         remaining,
 		Grants:              grants,
+		Fleet:               l.machine.Fleet(),
+		Machine:             l.machine,
+		TelemetrySocketPath: telemetryConfig.socketPath,
+		TelemetryTokenPath:  telemetryConfig.tokenPath,
 	}, nil
 }
 

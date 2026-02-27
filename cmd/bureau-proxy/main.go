@@ -14,9 +14,11 @@ import (
 	"syscall"
 	"time"
 
+	"github.com/bureau-foundation/bureau/lib/clock"
 	"github.com/bureau-foundation/bureau/lib/process"
 	"github.com/bureau-foundation/bureau/lib/ref"
 	"github.com/bureau-foundation/bureau/lib/secret"
+	"github.com/bureau-foundation/bureau/lib/service"
 	"github.com/bureau-foundation/bureau/lib/version"
 	"github.com/bureau-foundation/bureau/messaging"
 	"github.com/bureau-foundation/bureau/proxy"
@@ -202,6 +204,14 @@ func run() error {
 		server.SetGrants(pipeSource.Grants())
 	}
 
+	// Set up telemetry if the credential payload includes relay config.
+	// The emitter runs a background flush goroutine that periodically
+	// submits buffered spans and metrics to the relay socket.
+	var telemetryCancel context.CancelFunc
+	if credentialStdin && pipeSource != nil {
+		telemetryCancel = setupTelemetry(server, pipeSource, credentialSource, logger)
+	}
+
 	// Accept any pending room invites before starting the server. The
 	// daemon invites principals to workspace rooms during reconciliation
 	// (before create-sandbox), so by the time the proxy starts, the invite
@@ -220,6 +230,12 @@ func run() error {
 
 	<-ctx.Done()
 	logger.Info("received shutdown signal")
+
+	// Stop the telemetry flush goroutine. This triggers a final
+	// drain flush to capture any spans from in-flight requests.
+	if telemetryCancel != nil {
+		telemetryCancel()
+	}
 
 	// Graceful shutdown with timeout
 	shutdownCtx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
@@ -449,6 +465,70 @@ func acceptPendingInvites(credentials proxy.CredentialSource, logger *slog.Logge
 		}
 		logger.Info("accepted room invite", "room_id", roomID)
 	}
+}
+
+// setupTelemetry creates a TelemetryEmitter from the credential payload's
+// telemetry config and wires it into the proxy server. Returns a cancel
+// function that stops the flush goroutine (triggers a final drain), or nil
+// if telemetry could not be configured (logged as a warning, not fatal).
+func setupTelemetry(server *proxy.Server, pipeSource *proxy.PipeCredentialSource, credentialSource proxy.CredentialSource, logger *slog.Logger) context.CancelFunc {
+	socketPath := pipeSource.TelemetrySocketPath()
+	tokenPath := pipeSource.TelemetryTokenPath()
+	if socketPath == "" || tokenPath == "" {
+		logger.Info("telemetry not configured (no relay socket/token in credential payload)")
+		return nil
+	}
+
+	fleet := pipeSource.Fleet()
+	machine := pipeSource.Machine()
+	if fleet.IsZero() || machine.IsZero() {
+		logger.Warn("telemetry not configured: fleet or machine identity missing in credential payload")
+		return nil
+	}
+
+	// Derive the Source entity from the proxy's Matrix user ID.
+	matrixUserIDBuffer := credentialSource.Get("MATRIX_USER_ID")
+	if matrixUserIDBuffer == nil {
+		logger.Warn("telemetry not configured: MATRIX_USER_ID not available")
+		return nil
+	}
+	source, err := ref.ParseEntityUserID(matrixUserIDBuffer.String())
+	if err != nil {
+		// The user ID may be a simple localpart that doesn't conform
+		// to the fleet entity format (e.g., a dev-mode admin account).
+		// Telemetry isn't worth blocking proxy startup over.
+		logger.Warn("telemetry not configured: MATRIX_USER_ID not a fleet entity", "error", err)
+		return nil
+	}
+
+	emitter, err := service.NewTelemetryEmitter(service.TelemetryConfig{
+		SocketPath: socketPath,
+		TokenPath:  tokenPath,
+		Fleet:      fleet,
+		Machine:    machine,
+		Source:     source,
+		Clock:      clock.Real(),
+		Logger:     logger.With("component", "telemetry"),
+	})
+	if err != nil {
+		logger.Warn("telemetry not configured: failed to create emitter", "error", err)
+		return nil
+	}
+
+	proxyTelemetry := proxy.NewProxyTelemetry(emitter)
+	server.SetTelemetry(proxyTelemetry)
+
+	telemetryContext, telemetryCancel := context.WithCancel(context.Background())
+	go emitter.Run(telemetryContext, 5*time.Second)
+
+	logger.Info("telemetry configured",
+		"relay_socket", socketPath,
+		"fleet", fleet.String(),
+		"machine", machine.String(),
+		"source", source.String(),
+	)
+
+	return telemetryCancel
 }
 
 // bufferStringOrEmpty returns the string value of a secret buffer, or an

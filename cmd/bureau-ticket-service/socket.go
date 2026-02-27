@@ -7,6 +7,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"strings"
 
 	"github.com/bureau-foundation/bureau/lib/ref"
 	"github.com/bureau-foundation/bureau/lib/schema"
@@ -159,17 +160,18 @@ func requireGrant(token *servicetoken.Token, action string) error {
 	return nil
 }
 
-// requireRoom validates the "room" field from a request, parses it as
-// a ref.RoomID, and returns the corresponding room state and parsed ID.
-// Returns an error if the room field is empty, unparseable, or the room
-// is not tracked.
-func (ts *TicketService) requireRoom(roomIDString string) (ref.RoomID, *roomState, error) {
-	if roomIDString == "" {
+// requireRoom validates the "room" field from a request and returns
+// the corresponding room ID and state. The room string may be a room
+// ID (starts with "!"), a full alias ("#localpart:server"), a bare
+// alias localpart, or a "#"-prefixed localpart. Returns an error if
+// the room field is empty, unresolvable, or the room is not tracked.
+func (ts *TicketService) requireRoom(room string) (ref.RoomID, *roomState, error) {
+	if room == "" {
 		return ref.RoomID{}, nil, errors.New("missing required field: room")
 	}
-	roomID, err := ref.ParseRoomID(roomIDString)
-	if err != nil {
-		return ref.RoomID{}, nil, fmt.Errorf("invalid room ID %q: %w", roomIDString, err)
+	roomID, found := ts.resolveRoomString(room)
+	if !found {
+		return ref.RoomID{}, nil, fmt.Errorf("room %q is not tracked by this service", room)
 	}
 	state, exists := ts.rooms[roomID]
 	if !exists {
@@ -256,20 +258,36 @@ func (ts *TicketService) resolveRoomRef(ticketRef ticketindex.TicketRef) (ref.Ro
 
 // resolveRoomString resolves a room string (from the Room field on a
 // request) to a room ID. The string may be a room ID (starts with
-// "!"), a room alias localpart, or empty.
+// "!"), a full room alias (starts with "#"), a bare alias localpart,
+// or empty.
 func (ts *TicketService) resolveRoomString(room string) (ref.RoomID, bool) {
 	if room == "" {
 		return ref.RoomID{}, false
 	}
 	// Room IDs start with "!" and are used directly.
-	if len(room) > 0 && room[0] == '!' {
+	if room[0] == '!' {
 		roomID, err := ref.ParseRoomID(room)
 		if err != nil {
 			return ref.RoomID{}, false
 		}
 		return roomID, true
 	}
-	// Otherwise treat as an alias localpart on this server.
+	// Full aliases start with "#". Strip the prefix and optionally
+	// extract the server name if present (e.g., "#ns/room:server").
+	if room[0] == '#' {
+		room = room[1:]
+		if colonIndex := strings.LastIndexByte(room, ':'); colonIndex != -1 {
+			localpart := room[:colonIndex]
+			serverStr := room[colonIndex+1:]
+			serverName, err := ref.ParseServerName(serverStr)
+			if err != nil {
+				return ref.RoomID{}, false
+			}
+			return ts.matchRoomAlias(localpart, serverName)
+		}
+		// "#localpart" without server name — fall through to localpart match.
+	}
+	// Bare alias localpart — match against this server's name.
 	return ts.matchRoomAlias(room, ref.ServerName{})
 }
 

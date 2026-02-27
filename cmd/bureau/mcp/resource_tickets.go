@@ -201,23 +201,54 @@ func (p *TicketProvider) Read(ctx context.Context, uri string) ([]resourceConten
 		return nil, fmt.Errorf("unknown ticket sub-resource: %s", parsed.SubResource)
 	}
 
-	// The ticket service expects a room ID or alias string in the
-	// "room" field. Pass the alias localpart with a "#" prefix so the
-	// ticket service can resolve it.
+	// The ticket service expects a room ID or alias localpart in the
+	// "room" field. The alias localpart is passed without a "#" prefix
+	// — the ticket service's resolveRoomString builds the full alias
+	// by calling FullRoomAlias (which adds the "#" and server name).
 	fields := map[string]any{
-		"room": "#" + parsed.RoomAlias,
+		"room": parsed.RoomAlias,
 	}
 
-	var result json.RawMessage
-	if err := client.Call(ctx, action, fields, &result); err != nil {
+	// Decode into typed entries. The ticket service returns CBOR-encoded
+	// []ticketindex.Entry (ID + Content struct). We decode into the typed
+	// struct to get correct field mapping, then produce flat JSON for the
+	// MCP resource text — agents shouldn't need to navigate Go struct
+	// nesting or deal with inconsistent casing.
+	var entries []ticketindex.Entry
+	if err := client.Call(ctx, action, fields, &entries); err != nil {
 		return nil, fmt.Errorf("ticket service %s: %w", action, err)
+	}
+
+	flat := make([]ticketResourceEntry, len(entries))
+	for i, entry := range entries {
+		content := entry.Content
+		flat[i] = ticketResourceEntry{
+			ID:        entry.ID,
+			Title:     content.Title,
+			Body:      content.Body,
+			Status:    string(content.Status),
+			Type:      string(content.Type),
+			Priority:  content.Priority,
+			Labels:    content.Labels,
+			Parent:    content.Parent,
+			BlockedBy: content.BlockedBy,
+			Deadline:  content.Deadline,
+		}
+		if !content.Assignee.IsZero() {
+			flat[i].Assignee = content.Assignee.String()
+		}
+	}
+
+	jsonBytes, err := json.Marshal(flat)
+	if err != nil {
+		return nil, fmt.Errorf("marshaling ticket data to JSON: %w", err)
 	}
 
 	return []resourceContent{
 		{
 			URI:      uri,
 			MIMEType: "application/json",
-			Text:     string(result),
+			Text:     string(jsonBytes),
 		},
 	}, nil
 }
@@ -305,7 +336,7 @@ func (p *TicketProvider) subscribeOnce(ctx context.Context, uri, roomAlias strin
 	request := map[string]any{
 		"action": "subscribe",
 		"token":  tokenBytes,
-		"room":   "#" + roomAlias,
+		"room":   roomAlias,
 	}
 	if err := codec.NewEncoder(conn).Encode(request); err != nil {
 		return fmt.Errorf("sending subscribe request: %w", err)
@@ -370,6 +401,25 @@ type subscribeFrame struct {
 	Content  ticket.TicketContent `cbor:"content,omitempty"`
 	Stats    *ticketindex.Stats   `cbor:"stats,omitempty"`
 	Message  string               `cbor:"message,omitempty"`
+}
+
+// ticketResourceEntry is the flat, agent-friendly JSON representation
+// of a ticket for MCP resource responses. The ticket service returns
+// CBOR-encoded ticketindex.Entry structs (nested ID + Content); this
+// type flattens the structure and uses consistent lowercase keys for
+// agents that consume the resource as JSON.
+type ticketResourceEntry struct {
+	ID        string   `json:"id"`
+	Title     string   `json:"title"`
+	Body      string   `json:"body,omitempty"`
+	Status    string   `json:"status"`
+	Type      string   `json:"type"`
+	Priority  int      `json:"priority"`
+	Assignee  string   `json:"assignee,omitempty"`
+	Labels    []string `json:"labels,omitempty"`
+	Parent    string   `json:"parent,omitempty"`
+	BlockedBy []string `json:"blocked_by,omitempty"`
+	Deadline  string   `json:"deadline,omitempty"`
 }
 
 // roomInfo mirrors the ticket service's room info response for

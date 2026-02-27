@@ -149,6 +149,9 @@ func (c *ServiceConnection) MintServiceToken() (*MintResult, error) {
 		operatorSession.AccessToken,
 	)
 	if err != nil {
+		if diagnosed := DiagnoseSocketError(err, c.DaemonSocket); diagnosed != nil {
+			return nil, diagnosed
+		}
 		return nil, Transient("mint %s service token via daemon at %s: %w", c.serviceRole, c.DaemonSocket, err).
 			WithHint("Is the Bureau daemon running? Check with 'bureau service list'. " +
 				"The daemon must be started before using --service mode.")

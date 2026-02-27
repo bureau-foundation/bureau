@@ -102,6 +102,9 @@ admin to add an observe allowance for your identity on the target.`,
 				Token:     operatorSession.AccessToken,
 			})
 			if err != nil {
+				if diagnosed := cli.DiagnoseSocketError(err, socketPath); diagnosed != nil {
+					return diagnosed
+				}
 				return cli.Transient("connect to observation relay for %s: %w", target, err).
 					WithHint("Check that the Bureau daemon is running on the target machine " +
 						"and that the principal is active. Run 'bureau observe list' to see available targets.")
@@ -253,6 +256,9 @@ display their role identity.`,
 					Token:    operatorSession.AccessToken,
 				})
 				if err != nil {
+					if diagnosed := cli.DiagnoseSocketError(err, socketPath); diagnosed != nil {
+						return diagnosed
+					}
 					return cli.Internal("query channel layout: %w", err)
 				}
 				// Derive session name from the channel alias. Strip the
@@ -276,6 +282,9 @@ display their role identity.`,
 					Token:    operatorSession.AccessToken,
 				})
 				if err != nil {
+					if diagnosed := cli.DiagnoseSocketError(err, socketPath); diagnosed != nil {
+						return diagnosed
+					}
 					return cli.Internal("query machine layout: %w", err)
 				}
 				layout = response.Layout
@@ -435,6 +444,9 @@ Machine statuses:
 				Token:      operatorSession.AccessToken,
 			})
 			if err != nil {
+				if diagnosed := cli.DiagnoseSocketError(err, params.SocketPath); diagnosed != nil {
+					return diagnosed
+				}
 				return err
 			}
 

@@ -45,6 +45,38 @@ func LookupOperatorsGID(groupName string) int {
 	return gid
 }
 
+// CurrentUserInGroup reports whether the current process has the named
+// group in its supplementary group list. This checks the kernel-level
+// process credentials (the GID set from login/initgroups), which is
+// what determines filesystem access. If the user was recently added to
+// the group in /etc/group but hasn't re-logged, this returns false —
+// correctly reflecting that the process can't actually access
+// group-owned files yet.
+//
+// Returns false if the group doesn't exist, the GID can't be parsed,
+// or os.Getgroups fails.
+func CurrentUserInGroup(groupName string) bool {
+	gid := LookupOperatorsGID(groupName)
+	if gid < 0 {
+		return false
+	}
+	// Also check the primary GID — os.Getgroups may or may not
+	// include it depending on the platform.
+	if os.Getgid() == gid {
+		return true
+	}
+	groups, err := os.Getgroups()
+	if err != nil {
+		return false
+	}
+	for _, processGID := range groups {
+		if processGID == gid {
+			return true
+		}
+	}
+	return false
+}
+
 // SetOperatorGroupOwnership changes the group of a file to the
 // bureau-operators group, making it accessible to operators. The
 // file owner is left unchanged (-1).

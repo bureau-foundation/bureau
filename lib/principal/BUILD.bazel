@@ -28,6 +28,7 @@ go_test(
     name = "principal_test",
     srcs = [
         "match_test.go",
+        "permissions_test.go",
         "principal_test.go",
     ],
     embed = [":principal"],

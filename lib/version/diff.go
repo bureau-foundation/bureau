@@ -46,6 +46,16 @@ func (d *Diff) NeedsUpdate() bool {
 	return d.DaemonChanged || d.LauncherChanged || d.ProxyChanged || d.LogRelayChanged
 }
 
+// NeedsNonDaemonNotification returns true if any non-daemon component
+// changed. Daemon changes are reported separately (pre-exec message and
+// post-exec watchdog), so the reconcile notification covers everything
+// else. Having this as a method on Diff means adding a new component
+// only requires updating this method — callers don't need to maintain
+// their own OR chains.
+func (d *Diff) NeedsNonDaemonNotification() bool {
+	return d.LauncherChanged || d.ProxyChanged || d.LogRelayChanged
+}
+
 // CurrentState groups the running binary hashes and paths needed by
 // Compare. Using a struct instead of positional parameters prevents
 // mix-ups when multiple components share the same type (string) and

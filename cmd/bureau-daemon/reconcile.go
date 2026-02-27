@@ -2349,7 +2349,7 @@ func (d *Daemon) reconcileBureauVersion(ctx context.Context, desired *schema.Bur
 	// Report non-daemon version changes to the config room. Daemon
 	// changes are reported by execDaemon (pre-exec message) and
 	// checkDaemonWatchdog (post-exec success/failure).
-	if diff.ProxyChanged || diff.LauncherChanged || diff.LogRelayChanged {
+	if diff.NeedsNonDaemonNotification() {
 		if _, err := d.sendEventRetry(ctx, d.configRoomID, schema.MatrixEventTypeMessage,
 			schema.NewBureauVersionReconciledMessage(diff.ProxyChanged, diff.LauncherChanged, diff.LogRelayChanged)); err != nil {
 			d.logger.Error("failed to post bureau version summary", "error", err)

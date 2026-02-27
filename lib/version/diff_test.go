@@ -7,6 +7,8 @@ import (
 	"crypto/sha256"
 	"os"
 	"path/filepath"
+	"reflect"
+	"strings"
 	"testing"
 
 	"github.com/bureau-foundation/bureau/lib/binhash"
@@ -419,5 +421,88 @@ func TestDiffNeedsUpdate(t *testing.T) {
 				t.Errorf("NeedsUpdate() = %v, want %v", got, test.expected)
 			}
 		})
+	}
+}
+
+func TestDiffNeedsNonDaemonNotification(t *testing.T) {
+	tests := []struct {
+		name     string
+		diff     Diff
+		expected bool
+	}{
+		{"nothing changed", Diff{}, false},
+		{"daemon only", Diff{DaemonChanged: true}, false},
+		{"launcher changed", Diff{LauncherChanged: true}, true},
+		{"proxy changed", Diff{ProxyChanged: true}, true},
+		{"log-relay changed", Diff{LogRelayChanged: true}, true},
+		{"daemon + proxy", Diff{DaemonChanged: true, ProxyChanged: true}, true},
+	}
+
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			if got := test.diff.NeedsNonDaemonNotification(); got != test.expected {
+				t.Errorf("NeedsNonDaemonNotification() = %v, want %v", got, test.expected)
+			}
+		})
+	}
+}
+
+// TestNeedsUpdateCoversAllChangedFields verifies that NeedsUpdate returns
+// true for every *Changed field in Diff. This catches the case where a
+// new component is added to Diff but forgotten in the NeedsUpdate OR chain.
+func TestNeedsUpdateCoversAllChangedFields(t *testing.T) {
+	diffType := reflect.TypeOf(Diff{})
+	for i := range diffType.NumField() {
+		field := diffType.Field(i)
+		if !strings.HasSuffix(field.Name, "Changed") {
+			continue
+		}
+		if field.Type.Kind() != reflect.Bool {
+			t.Errorf("Diff.%s is %v, expected bool", field.Name, field.Type)
+			continue
+		}
+
+		// Create a Diff with only this one field set to true.
+		diff := reflect.New(diffType).Elem()
+		diff.Field(i).SetBool(true)
+		diffPtr := diff.Addr().Interface().(*Diff)
+
+		if !diffPtr.NeedsUpdate() {
+			t.Errorf("NeedsUpdate() = false when Diff.%s = true; add %s to the NeedsUpdate OR chain",
+				field.Name, field.Name)
+		}
+	}
+}
+
+// TestBureauVersionDiffStructuralCompleteness verifies that every store
+// path field in BureauVersion has a corresponding Changed field in Diff.
+// This is the primary guard against adding a new managed binary to the
+// schema without wiring it through the version diff layer.
+//
+// Convention: BureauVersion field "FooStorePath" must have a
+// corresponding Diff field "FooChanged".
+func TestBureauVersionDiffStructuralCompleteness(t *testing.T) {
+	versionType := reflect.TypeOf(schema.BureauVersion{})
+	diffType := reflect.TypeOf(Diff{})
+
+	for i := range versionType.NumField() {
+		field := versionType.Field(i)
+		if !strings.HasSuffix(field.Name, "StorePath") {
+			continue
+		}
+
+		// FooStorePath → FooChanged
+		componentName := strings.TrimSuffix(field.Name, "StorePath")
+		changedFieldName := componentName + "Changed"
+
+		changedField, found := diffType.FieldByName(changedFieldName)
+		if !found {
+			t.Errorf("BureauVersion has field %s but Diff is missing %s",
+				field.Name, changedFieldName)
+			continue
+		}
+		if changedField.Type.Kind() != reflect.Bool {
+			t.Errorf("Diff.%s is %v, expected bool", changedFieldName, changedField.Type)
+		}
 	}
 }

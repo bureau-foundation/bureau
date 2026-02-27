@@ -14,6 +14,7 @@ import (
 	"os"
 	"reflect"
 	"strings"
+	"sync"
 
 	"github.com/bureau-foundation/bureau/cmd/bureau/cli"
 	"github.com/bureau-foundation/bureau/lib/authorization"
@@ -27,7 +28,8 @@ import (
 )
 
 // Server is an MCP server that exposes Bureau CLI commands as tools
-// over JSON-RPC 2.0 on newline-delimited stdio.
+// and Bureau service state as resources over JSON-RPC 2.0 on
+// newline-delimited stdio.
 type Server struct {
 	tools       []tool
 	toolsByName map[string]*tool
@@ -46,6 +48,23 @@ type Server struct {
 	// query time). Used by the bureau_tools_list meta-tool's query
 	// parameter and by CallTool dispatch for meta-tools.
 	searchIndex *bm25.Index
+
+	// providers holds registered resource providers. Each provider
+	// handles a URI prefix and knows how to list, read, and
+	// subscribe to resources within its domain.
+	providers []ResourceProvider
+
+	// subscriptions maps subscribed resource URIs to their cancel
+	// functions. When a client sends resources/unsubscribe, the
+	// cancel function is called and the entry removed. When the
+	// server shuts down, all active subscriptions are cancelled.
+	subscriptions   map[string]func()
+	subscriptionsMu sync.Mutex
+
+	// encoder is the locked encoder for concurrent-safe writes to
+	// the output stream. Set during Run() and used by both the main
+	// request loop and background notification goroutines.
+	encoder *lockedEncoder
 }
 
 // ServerOption configures optional server behavior.
@@ -58,6 +77,15 @@ type ServerOption func(*Server)
 func WithLogger(logger *slog.Logger) ServerOption {
 	return func(s *Server) {
 		s.logger = logger
+	}
+}
+
+// WithResourceProvider registers a resource provider on the server.
+// Multiple providers can be registered; each handles a different URI
+// prefix. Providers are checked in registration order for URI routing.
+func WithResourceProvider(provider ResourceProvider) ServerOption {
+	return func(s *Server) {
+		s.providers = append(s.providers, provider)
 	}
 }
 
@@ -145,12 +173,20 @@ func (s *Server) Serve() error {
 // Run processes JSON-RPC 2.0 requests from input and writes responses
 // to output until input reaches EOF. Each request occupies a single
 // line (newline-delimited JSON-RPC, not Content-Length framed).
+//
+// The output writer is wrapped in a lockedEncoder so that background
+// notification goroutines (from resource subscriptions) can write to
+// the same stream without interleaving with request-response traffic.
 func (s *Server) Run(input io.Reader, output io.Writer) error {
 	scanner := bufio.NewScanner(input)
 	// MCP messages can be large (tool results with verbose output).
 	scanner.Buffer(make([]byte, 0, 64*1024), 1024*1024)
 
-	encoder := json.NewEncoder(output)
+	s.encoder = &lockedEncoder{encoder: json.NewEncoder(output)}
+	s.subscriptions = make(map[string]func())
+
+	// Cancel all active subscriptions when Run exits.
+	defer s.cancelAllSubscriptions()
 
 	for scanner.Scan() {
 		line := scanner.Bytes()
@@ -160,7 +196,7 @@ func (s *Server) Run(input io.Reader, output io.Writer) error {
 
 		var req request
 		if err := json.Unmarshal(line, &req); err != nil {
-			if writeErr := writeError(encoder, json.RawMessage("null"), codeParseError, "parse error: "+err.Error()); writeErr != nil {
+			if writeErr := writeError(s.encoder, json.RawMessage("null"), codeParseError, "parse error: "+err.Error()); writeErr != nil {
 				return cli.Internal("writing parse error response: %w", writeErr)
 			}
 			continue
@@ -168,7 +204,7 @@ func (s *Server) Run(input io.Reader, output io.Writer) error {
 
 		if req.JSONRPC != "2.0" {
 			if !req.isNotification() {
-				if writeErr := writeError(encoder, req.ID, codeInvalidRequest, "unsupported JSON-RPC version"); writeErr != nil {
+				if writeErr := writeError(s.encoder, req.ID, codeInvalidRequest, "unsupported JSON-RPC version"); writeErr != nil {
 					return cli.Internal("writing version error response: %w", writeErr)
 				}
 			}
@@ -180,7 +216,7 @@ func (s *Server) Run(input io.Reader, output io.Writer) error {
 			continue
 		}
 
-		if err := s.dispatch(encoder, &req); err != nil {
+		if err := s.dispatch(s.encoder, &req); err != nil {
 			return err
 		}
 	}
@@ -188,8 +224,19 @@ func (s *Server) Run(input io.Reader, output io.Writer) error {
 	return scanner.Err()
 }
 
+// cancelAllSubscriptions cancels all active resource subscriptions.
+// Called when Run exits to clean up background goroutines.
+func (s *Server) cancelAllSubscriptions() {
+	s.subscriptionsMu.Lock()
+	defer s.subscriptionsMu.Unlock()
+	for uri, cancel := range s.subscriptions {
+		cancel()
+		delete(s.subscriptions, uri)
+	}
+}
+
 // dispatch routes a JSON-RPC request to the appropriate handler.
-func (s *Server) dispatch(encoder *json.Encoder, req *request) error {
+func (s *Server) dispatch(encoder *lockedEncoder, req *request) error {
 	switch req.Method {
 	case "initialize":
 		return s.handleInitialize(encoder, req)
@@ -205,12 +252,32 @@ func (s *Server) dispatch(encoder *json.Encoder, req *request) error {
 			return writeError(encoder, req.ID, codeInvalidRequest, "server not initialized (call initialize first)")
 		}
 		return s.handleToolsCall(encoder, req)
+	case "resources/list":
+		if !s.initialized {
+			return writeError(encoder, req.ID, codeInvalidRequest, "server not initialized (call initialize first)")
+		}
+		return s.handleResourcesList(encoder, req)
+	case "resources/read":
+		if !s.initialized {
+			return writeError(encoder, req.ID, codeInvalidRequest, "server not initialized (call initialize first)")
+		}
+		return s.handleResourcesRead(encoder, req)
+	case "resources/subscribe":
+		if !s.initialized {
+			return writeError(encoder, req.ID, codeInvalidRequest, "server not initialized (call initialize first)")
+		}
+		return s.handleResourcesSubscribe(encoder, req)
+	case "resources/unsubscribe":
+		if !s.initialized {
+			return writeError(encoder, req.ID, codeInvalidRequest, "server not initialized (call initialize first)")
+		}
+		return s.handleResourcesUnsubscribe(encoder, req)
 	default:
 		return writeError(encoder, req.ID, codeMethodNotFound, "unknown method: "+req.Method)
 	}
 }
 
-func (s *Server) handleInitialize(encoder *json.Encoder, req *request) error {
+func (s *Server) handleInitialize(encoder *lockedEncoder, req *request) error {
 	if len(req.Params) == 0 {
 		return writeError(encoder, req.ID, codeInvalidParams, "params required for initialize")
 	}
@@ -227,11 +294,19 @@ func (s *Server) handleInitialize(encoder *json.Encoder, req *request) error {
 	// ignore fields they don't recognize.
 	s.initialized = true
 
+	capabilities := serverCapabilities{
+		Tools: &toolCapability{ListChanged: true},
+	}
+	if len(s.providers) > 0 {
+		capabilities.Resources = &resourceCapability{
+			Subscribe:   true,
+			ListChanged: true,
+		}
+	}
+
 	return writeResult(encoder, req.ID, initializeResult{
 		ProtocolVersion: protocolVersion,
-		Capabilities: serverCapabilities{
-			Tools: &toolCapability{},
-		},
+		Capabilities:    capabilities,
 		ServerInfo: serverInfo{
 			Name:    "bureau",
 			Version: version.Short(),
@@ -239,11 +314,11 @@ func (s *Server) handleInitialize(encoder *json.Encoder, req *request) error {
 	})
 }
 
-func (s *Server) handlePing(encoder *json.Encoder, req *request) error {
+func (s *Server) handlePing(encoder *lockedEncoder, req *request) error {
 	return writeResult(encoder, req.ID, map[string]any{})
 }
 
-func (s *Server) handleToolsList(encoder *json.Encoder, req *request) error {
+func (s *Server) handleToolsList(encoder *lockedEncoder, req *request) error {
 	if s.progressive {
 		return writeResult(encoder, req.ID, toolsListResult{
 			Tools: metaToolDescriptions(),
@@ -270,7 +345,7 @@ func (s *Server) handleToolsList(encoder *json.Encoder, req *request) error {
 	return writeResult(encoder, req.ID, toolsListResult{Tools: descriptions})
 }
 
-func (s *Server) handleToolsCall(encoder *json.Encoder, req *request) error {
+func (s *Server) handleToolsCall(encoder *lockedEncoder, req *request) error {
 	if len(req.Params) == 0 {
 		return writeError(encoder, req.ID, codeInvalidParams, "params required for tools/call")
 	}
@@ -748,8 +823,149 @@ func boolPtr(value bool) *bool {
 	return &value
 }
 
+// --- Resource request handlers ---
+
+// handleResourcesList returns all available resources and resource
+// templates from registered providers, filtered by the principal's
+// grants.
+func (s *Server) handleResourcesList(encoder *lockedEncoder, req *request) error {
+	var allResources []resourceDescription
+	var allTemplates []resourceTemplate
+
+	for _, provider := range s.providers {
+		if !resourceAuthorized(s.grants, provider) {
+			continue
+		}
+		resources, templates := provider.List(context.Background(), s.grants)
+		allResources = append(allResources, resources...)
+		allTemplates = append(allTemplates, templates...)
+	}
+
+	if allResources == nil {
+		allResources = []resourceDescription{}
+	}
+
+	return writeResult(encoder, req.ID, resourcesListResult{
+		Resources:         allResources,
+		ResourceTemplates: allTemplates,
+	})
+}
+
+// handleResourcesRead reads the current content of a resource by URI.
+// Routes to the first provider that handles the URI.
+func (s *Server) handleResourcesRead(encoder *lockedEncoder, req *request) error {
+	if len(req.Params) == 0 {
+		return writeError(encoder, req.ID, codeInvalidParams, "params required for resources/read")
+	}
+
+	var params resourcesReadParams
+	if err := json.Unmarshal(req.Params, &params); err != nil {
+		return writeError(encoder, req.ID, codeInvalidParams, "invalid resources/read params: "+err.Error())
+	}
+	if params.URI == "" {
+		return writeError(encoder, req.ID, codeInvalidParams, "uri is required")
+	}
+
+	for _, provider := range s.providers {
+		if !provider.Handles(params.URI) {
+			continue
+		}
+		if !resourceAuthorized(s.grants, provider) {
+			return writeError(encoder, req.ID, codeInvalidParams, "resource not authorized: "+params.URI)
+		}
+
+		contents, err := provider.Read(context.Background(), params.URI)
+		if err != nil {
+			return writeError(encoder, req.ID, codeInternalError, err.Error())
+		}
+
+		return writeResult(encoder, req.ID, resourcesReadResult{Contents: contents})
+	}
+
+	return writeError(encoder, req.ID, codeInvalidParams, "unknown resource: "+params.URI)
+}
+
+// handleResourcesSubscribe subscribes to change notifications for a
+// resource. The server sends notifications/resources/updated when the
+// resource's content changes.
+func (s *Server) handleResourcesSubscribe(encoder *lockedEncoder, req *request) error {
+	if len(req.Params) == 0 {
+		return writeError(encoder, req.ID, codeInvalidParams, "params required for resources/subscribe")
+	}
+
+	var params resourcesSubscribeParams
+	if err := json.Unmarshal(req.Params, &params); err != nil {
+		return writeError(encoder, req.ID, codeInvalidParams, "invalid resources/subscribe params: "+err.Error())
+	}
+	if params.URI == "" {
+		return writeError(encoder, req.ID, codeInvalidParams, "uri is required")
+	}
+
+	// Check if already subscribed.
+	s.subscriptionsMu.Lock()
+	if _, exists := s.subscriptions[params.URI]; exists {
+		s.subscriptionsMu.Unlock()
+		// Already subscribed — success (idempotent).
+		return writeResult(encoder, req.ID, map[string]any{})
+	}
+	s.subscriptionsMu.Unlock()
+
+	for _, provider := range s.providers {
+		if !provider.Handles(params.URI) {
+			continue
+		}
+		if !resourceAuthorized(s.grants, provider) {
+			return writeError(encoder, req.ID, codeInvalidParams, "resource not authorized: "+params.URI)
+		}
+
+		cancel, err := provider.Subscribe(context.Background(), params.URI, func(uri string) {
+			if notifyErr := sendResourceNotification(s.encoder, uri); notifyErr != nil {
+				s.logger.Error("failed to send resource notification",
+					"uri", uri, "error", notifyErr)
+			}
+		})
+		if err != nil {
+			return writeError(encoder, req.ID, codeInternalError, err.Error())
+		}
+
+		s.subscriptionsMu.Lock()
+		s.subscriptions[params.URI] = cancel
+		s.subscriptionsMu.Unlock()
+
+		return writeResult(encoder, req.ID, map[string]any{})
+	}
+
+	return writeError(encoder, req.ID, codeInvalidParams, "unknown resource: "+params.URI)
+}
+
+// handleResourcesUnsubscribe cancels a resource subscription.
+func (s *Server) handleResourcesUnsubscribe(encoder *lockedEncoder, req *request) error {
+	if len(req.Params) == 0 {
+		return writeError(encoder, req.ID, codeInvalidParams, "params required for resources/unsubscribe")
+	}
+
+	var params resourcesUnsubscribeParams
+	if err := json.Unmarshal(req.Params, &params); err != nil {
+		return writeError(encoder, req.ID, codeInvalidParams, "invalid resources/unsubscribe params: "+err.Error())
+	}
+	if params.URI == "" {
+		return writeError(encoder, req.ID, codeInvalidParams, "uri is required")
+	}
+
+	s.subscriptionsMu.Lock()
+	cancel, exists := s.subscriptions[params.URI]
+	if exists {
+		cancel()
+		delete(s.subscriptions, params.URI)
+	}
+	s.subscriptionsMu.Unlock()
+
+	// Unsubscribe is idempotent — succeeds even if not subscribed.
+	return writeResult(encoder, req.ID, map[string]any{})
+}
+
 // writeResult sends a JSON-RPC 2.0 success response.
-func writeResult(encoder *json.Encoder, id json.RawMessage, result any) error {
+func writeResult(encoder *lockedEncoder, id json.RawMessage, result any) error {
 	return encoder.Encode(response{
 		JSONRPC: "2.0",
 		ID:      id,
@@ -758,7 +974,7 @@ func writeResult(encoder *json.Encoder, id json.RawMessage, result any) error {
 }
 
 // writeError sends a JSON-RPC 2.0 error response.
-func writeError(encoder *json.Encoder, id json.RawMessage, code int, message string) error {
+func writeError(encoder *lockedEncoder, id json.RawMessage, code int, message string) error {
 	return encoder.Encode(response{
 		JSONRPC: "2.0",
 		ID:      id,

@@ -74,7 +74,8 @@ type initializeResult struct {
 
 // serverCapabilities declares what the server supports.
 type serverCapabilities struct {
-	Tools *toolCapability `json:"tools,omitempty"`
+	Tools     *toolCapability     `json:"tools,omitempty"`
+	Resources *resourceCapability `json:"resources,omitempty"`
 }
 
 // toolCapability indicates the server supports tool operations.
@@ -171,4 +172,103 @@ type errorInfo struct {
 type contentBlock struct {
 	Type string `json:"type"`
 	Text string `json:"text"`
+}
+
+// --- MCP resource protocol types ---
+
+// resourceCapability indicates the server supports resource operations.
+// Subscribe declares whether the server supports resource subscriptions
+// (resources/subscribe and notifications/resources/updated). ListChanged
+// declares whether the server sends notifications/resources/list_changed
+// when the set of available resources changes.
+type resourceCapability struct {
+	Subscribe   bool `json:"subscribe,omitempty"`
+	ListChanged bool `json:"listChanged,omitempty"`
+}
+
+// resourceDescription describes a single concrete resource for the
+// resources/list response. Each resource has a unique URI that clients
+// use for resources/read and resources/subscribe. Annotations carry
+// audience and priority hints per the MCP specification.
+type resourceDescription struct {
+	URI         string              `json:"uri"`
+	Name        string              `json:"name"`
+	Description string              `json:"description,omitempty"`
+	MIMEType    string              `json:"mimeType,omitempty"`
+	Annotations *resourceAnnotation `json:"annotations,omitempty"`
+}
+
+// resourceTemplate describes a parameterized resource using an RFC 6570
+// URI template. Clients fill in template parameters to construct concrete
+// resource URIs for resources/read. Templates appear in resources/list
+// alongside concrete resource descriptions.
+type resourceTemplate struct {
+	URITemplate string              `json:"uriTemplate"`
+	Name        string              `json:"name"`
+	Description string              `json:"description,omitempty"`
+	MIMEType    string              `json:"mimeType,omitempty"`
+	Annotations *resourceAnnotation `json:"annotations,omitempty"`
+}
+
+// resourceAnnotation carries audience and priority hints. Audience
+// indicates who the resource is for ("user", "assistant", or both).
+// Priority ranges from 0.0 (optional/background) to 1.0 (required).
+type resourceAnnotation struct {
+	Audience []string `json:"audience,omitempty"`
+	Priority float64  `json:"priority,omitempty"`
+}
+
+// resourcesListResult is the result for resources/list. Includes both
+// concrete resources (with final URIs) and resource templates (with
+// URI templates that clients fill in with parameters).
+type resourcesListResult struct {
+	Resources         []resourceDescription `json:"resources"`
+	ResourceTemplates []resourceTemplate    `json:"resourceTemplates,omitempty"`
+	NextCursor        string                `json:"nextCursor,omitempty"`
+}
+
+// resourcesReadParams is the client's resources/read request parameters.
+type resourcesReadParams struct {
+	URI string `json:"uri"`
+}
+
+// resourcesReadResult is the server's resources/read response.
+type resourcesReadResult struct {
+	Contents []resourceContent `json:"contents"`
+}
+
+// resourceContent carries the content of a single resource. For Bureau
+// resources, the Text field contains JSON-serialized structured data
+// with a MIMEType of "application/json".
+type resourceContent struct {
+	URI      string `json:"uri"`
+	MIMEType string `json:"mimeType,omitempty"`
+	Text     string `json:"text,omitempty"`
+}
+
+// resourcesSubscribeParams is the client's resources/subscribe request.
+type resourcesSubscribeParams struct {
+	URI string `json:"uri"`
+}
+
+// resourcesUnsubscribeParams is the client's resources/unsubscribe request.
+type resourcesUnsubscribeParams struct {
+	URI string `json:"uri"`
+}
+
+// notification is a JSON-RPC 2.0 notification (no ID, no response
+// expected). Used for server-initiated messages like
+// notifications/resources/updated and notifications/tools/list_changed.
+type notification struct {
+	JSONRPC string `json:"jsonrpc"`
+	Method  string `json:"method"`
+	Params  any    `json:"params,omitempty"`
+}
+
+// resourceUpdatedParams is the params for the
+// notifications/resources/updated notification. Sent to clients that
+// have subscribed to a resource via resources/subscribe when the
+// resource's content changes.
+type resourceUpdatedParams struct {
+	URI string `json:"uri"`
 }

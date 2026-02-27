@@ -194,7 +194,7 @@ func metaToolDescriptions() []toolDescription {
 
 // dispatchMetaTool routes a meta-tool invocation to the appropriate
 // handler.
-func (s *Server) dispatchMetaTool(encoder *json.Encoder, req *request, name string, arguments json.RawMessage) error {
+func (s *Server) dispatchMetaTool(encoder *lockedEncoder, req *request, name string, arguments json.RawMessage) error {
 	switch name {
 	case metaToolList:
 		return s.handleMetaList(encoder, req, arguments)
@@ -208,7 +208,7 @@ func (s *Server) dispatchMetaTool(encoder *json.Encoder, req *request, name stri
 }
 
 // handleMetaList is the JSON-RPC handler for bureau_tools_list.
-func (s *Server) handleMetaList(encoder *json.Encoder, req *request, arguments json.RawMessage) error {
+func (s *Server) handleMetaList(encoder *lockedEncoder, req *request, arguments json.RawMessage) error {
 	result, err := s.executeMetaList(arguments)
 	if err != nil {
 		return writeError(encoder, req.ID, codeInvalidParams, err.Error())
@@ -217,7 +217,7 @@ func (s *Server) handleMetaList(encoder *json.Encoder, req *request, arguments j
 }
 
 // handleMetaDescribe is the JSON-RPC handler for bureau_tools_describe.
-func (s *Server) handleMetaDescribe(encoder *json.Encoder, req *request, arguments json.RawMessage) error {
+func (s *Server) handleMetaDescribe(encoder *lockedEncoder, req *request, arguments json.RawMessage) error {
 	result, err := s.executeMetaDescribe(arguments)
 	if err != nil {
 		return writeError(encoder, req.ID, codeInvalidParams, err.Error())
@@ -229,7 +229,7 @@ func (s *Server) handleMetaDescribe(encoder *json.Encoder, req *request, argumen
 // Uses resolveMetaCallTarget for parameter validation, then
 // executeTool + buildToolResult for execution with full error
 // classification.
-func (s *Server) handleMetaCall(encoder *json.Encoder, req *request, arguments json.RawMessage) error {
+func (s *Server) handleMetaCall(encoder *lockedEncoder, req *request, arguments json.RawMessage) error {
 	target, innerArguments, err := s.resolveMetaCallTarget(arguments)
 	if err != nil {
 		return writeError(encoder, req.ID, codeInvalidParams, err.Error())
@@ -409,7 +409,7 @@ func (s *Server) executeMetaCall(arguments json.RawMessage) (string, bool, error
 // writeMetaToolResult marshals a value to JSON and returns it as both
 // a text content block and structuredContent. Used by meta-tools that
 // declare output schemas (bureau_tools_list, bureau_tools_describe).
-func writeMetaToolResult(encoder *json.Encoder, id json.RawMessage, value any) error {
+func writeMetaToolResult(encoder *lockedEncoder, id json.RawMessage, value any) error {
 	jsonBytes, err := json.Marshal(value)
 	if err != nil {
 		return writeError(encoder, id, codeInternalError, "marshaling result: "+err.Error())

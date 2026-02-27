@@ -2,8 +2,10 @@
 // SPDX-License-Identifier: Apache-2.0
 
 // Package mcp implements a Model Context Protocol server that exposes
-// Bureau CLI commands as MCP tools over newline-delimited JSON-RPC 2.0
-// on stdin/stdout.
+// Bureau CLI commands as MCP tools and Bureau service state as MCP
+// resources over newline-delimited JSON-RPC 2.0 on stdin/stdout.
+//
+// # Tools
 //
 // The server discovers tools by walking the CLI command tree and
 // collecting leaf commands that have a [cli.Command.Params] function.
@@ -31,7 +33,7 @@
 // meta-tools instead of the full tool catalog:
 //
 //   - bureau_tools_list: lightweight listing of tool names, summaries,
-//     and categories, with optional category filtering.
+//     and categories, with optional category filtering and BM25 search.
 //   - bureau_tools_describe: full tool description including
 //     inputSchema, outputSchema, annotations, and examples.
 //   - bureau_tools_call: invoke a tool by name with arguments.
@@ -40,6 +42,35 @@
 // to 3 fixed entries, which matters for agents with tight context
 // budgets. Authorization grants still apply: meta-tools only expose
 // and execute tools the principal is authorized to use.
+//
+// # Resources
+//
+// The server exposes Bureau service state as MCP resources via the
+// [ResourceProvider] interface. Resources use bureau:// URIs:
+//
+//   - bureau://identity: principal identity, grants, and services.
+//     Static for the sandbox lifetime. No subscription support.
+//   - bureau://tickets/{room_alias}: tickets in a room.
+//   - bureau://tickets/{room_alias}/ready: actionable tickets.
+//   - bureau://tickets/{room_alias}/blocked: blocked tickets.
+//
+// Resources support subscriptions (resources/subscribe). The ticket
+// provider streams changes from the ticket service's subscribe
+// protocol and translates mutations into notifications/resources/updated
+// notifications. The agent's MCP client receives these notifications
+// and can re-read the resource to get updated state.
+//
+// Resource providers are discovered at startup by probing for
+// well-known service sockets in the sandbox. Providers that are not
+// available (missing socket or token) are silently skipped.
+//
+// # Authorization
+//
+// Tools use "command/" grant action patterns (e.g., "command/ticket/list").
+// Resources use "resource/" grant action patterns (e.g., "resource/ticket/**").
+// The two namespaces are independent: a principal can have resource access
+// without tool access, and vice versa. Service tokens independently enforce
+// their own grants on the socket side, providing defense in depth.
 //
 // This package implements the 2025-11-25 MCP protocol specification.
 package mcp

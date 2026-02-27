@@ -506,7 +506,7 @@ func TestServer_UnknownMethod(t *testing.T) {
 	responses := session(t, map[string]any{
 		"jsonrpc": "2.0",
 		"id":      1,
-		"method":  "resources/list",
+		"method":  "completions/complete",
 	})
 	resp := responses[1]
 	if resp.Error == nil {

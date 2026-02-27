@@ -58,7 +58,8 @@ func TestMachineLifecycle(t *testing.T) {
 	stateDir := t.TempDir()
 	bootstrapPath := filepath.Join(stateDir, "bootstrap.json")
 	client := adminClient(t)
-	provisionMachine(t, client, admin, machineRef, bootstrapPath)
+	hsAdmin := homeserverAdmin(t)
+	provisionMachine(t, client, admin, hsAdmin, machineRef, bootstrapPath)
 
 	// Read the bootstrap config to capture the one-time password.
 	bootstrapConfig, err := bootstrap.ReadConfig(bootstrapPath)
@@ -299,6 +300,202 @@ func TestMachineLifecycle(t *testing.T) {
 	}
 
 	t.Log("machine lifecycle complete: provision → bootstrap → run → restart → decommission")
+}
+
+// TestMachineReProvision exercises the full decommission-then-re-provision
+// lifecycle. This is the proof point for the HomeserverAdmin interface:
+// re-provisioning a decommissioned machine requires resetting the existing
+// account's password via server-specific admin operations (Synapse HTTP API
+// or Continuwuity admin room commands).
+//
+// Sequence:
+//   - Provision a machine, first boot, start launcher + daemon
+//   - Verify machine is operational (status heartbeat)
+//   - Stop launcher + daemon
+//   - Decommission the machine (clear state, kick from rooms)
+//   - Re-provision the same machine name (hits M_USER_IN_USE →
+//     verifyFullDecommission → HomeserverAdmin.ResetUserPassword)
+//   - First boot again with new bootstrap config
+//   - Start launcher + daemon, verify new status heartbeat
+//   - Decommission again (cleanup)
+func TestMachineReProvision(t *testing.T) {
+	t.Parallel()
+
+	launcherBinary := resolvedBinary(t, "LAUNCHER_BINARY")
+	daemonBinary := resolvedBinary(t, "DAEMON_BINARY")
+	proxyBinary := resolvedBinary(t, "PROXY_BINARY")
+	logRelayBinary := resolvedBinary(t, "LOG_RELAY_BINARY")
+
+	ctx := t.Context()
+	admin := adminSession(t)
+	defer admin.Close()
+
+	fleet := createTestFleet(t, admin)
+	machineRef, err := ref.NewMachine(fleet.Ref, "reprovision")
+	if err != nil {
+		t.Fatalf("create machine ref: %v", err)
+	}
+	machineName := machineRef.Localpart()
+	machineRoomID := fleet.MachineRoomID
+
+	client := adminClient(t)
+	hsAdmin := homeserverAdmin(t)
+
+	// --- Phase 1: Initial provision and boot ---
+	stateDir := t.TempDir()
+	bootstrapPath := filepath.Join(stateDir, "bootstrap.json")
+	provisionMachine(t, client, admin, hsAdmin, machineRef, bootstrapPath)
+
+	runDir := tempSocketDir(t)
+	launcherSocket := principal.LauncherSocketPath(runDir)
+	workspaceRoot := filepath.Join(stateDir, "workspace")
+	cacheRoot := filepath.Join(stateDir, "cache")
+
+	// First boot.
+	firstBootCmd := exec.Command(launcherBinary,
+		"--bootstrap-file", bootstrapPath,
+		"--first-boot-only",
+		"--machine-name", machineName,
+		"--server-name", testServerName,
+		"--fleet", fleet.Prefix,
+		"--run-dir", runDir,
+		"--state-dir", stateDir,
+		"--workspace-root", workspaceRoot,
+		"--cache-root", cacheRoot,
+		"--operators-group", "",
+	)
+	firstBootCmd.Stdout = os.Stderr
+	firstBootCmd.Stderr = os.Stderr
+	if err := firstBootCmd.Run(); err != nil {
+		t.Fatalf("first boot failed: %v", err)
+	}
+	t.Log("initial first boot completed")
+
+	// Start launcher + daemon and verify operational.
+	t.Run("InitialRun", func(t *testing.T) {
+		startProcess(t, "launcher", launcherBinary,
+			"--homeserver", testHomeserverURL,
+			"--machine-name", machineName,
+			"--server-name", testServerName,
+			"--fleet", fleet.Prefix,
+			"--run-dir", runDir,
+			"--state-dir", stateDir,
+			"--workspace-root", workspaceRoot,
+			"--cache-root", cacheRoot,
+			"--proxy-binary", proxyBinary,
+			"--log-relay-binary", logRelayBinary,
+			"--operators-group", "",
+		)
+		waitForFile(t, launcherSocket)
+
+		statusWatch := watchRoom(t, admin, machineRoomID)
+		startProcess(t, "daemon", daemonBinary,
+			"--homeserver", testHomeserverURL,
+			"--machine-name", machineName,
+			"--server-name", testServerName,
+			"--run-dir", runDir,
+			"--state-dir", stateDir,
+			"--admin-user", admin.UserID().Localpart(),
+			"--status-interval", "2s",
+			"--fleet", fleet.Prefix,
+			"--operators-group", "",
+		)
+
+		statusWatch.WaitForStateEvent(t,
+			schema.EventTypeMachineStatus, machineName)
+		t.Log("machine operational after initial provision")
+	})
+	// Subtest cleanup stops daemon and launcher.
+
+	// --- Phase 2: Decommission ---
+	decommissionMachine(t, admin, machineRef)
+	t.Log("machine decommissioned")
+
+	// Verify state is cleared.
+	clearedKeyJSON, err := admin.GetStateEvent(ctx, machineRoomID,
+		schema.EventTypeMachineKey, machineName)
+	if err != nil {
+		t.Fatalf("get machine key after decommission: %v", err)
+	}
+	var clearedKey struct {
+		PublicKey string `json:"public_key"`
+	}
+	if json.Unmarshal(clearedKeyJSON, &clearedKey) == nil && clearedKey.PublicKey != "" {
+		t.Fatalf("machine key should be cleared after decommission, got %q", clearedKey.PublicKey)
+	}
+
+	// --- Phase 3: Re-provision the same machine name ---
+	// This is the critical path: Register returns M_USER_IN_USE,
+	// verifyFullDecommission passes (we just decommissioned), and
+	// HomeserverAdmin.ResetUserPassword sets the new one-time password.
+	stateDir2 := t.TempDir()
+	bootstrapPath2 := filepath.Join(stateDir2, "bootstrap.json")
+	provisionMachine(t, client, admin, hsAdmin, machineRef, bootstrapPath2)
+	t.Log("machine re-provisioned successfully")
+
+	// --- Phase 4: Second first boot and verify operational ---
+	runDir2 := tempSocketDir(t)
+	launcherSocket2 := principal.LauncherSocketPath(runDir2)
+	workspaceRoot2 := filepath.Join(stateDir2, "workspace")
+	cacheRoot2 := filepath.Join(stateDir2, "cache")
+
+	secondBootCmd := exec.Command(launcherBinary,
+		"--bootstrap-file", bootstrapPath2,
+		"--first-boot-only",
+		"--machine-name", machineName,
+		"--server-name", testServerName,
+		"--fleet", fleet.Prefix,
+		"--run-dir", runDir2,
+		"--state-dir", stateDir2,
+		"--workspace-root", workspaceRoot2,
+		"--cache-root", cacheRoot2,
+		"--operators-group", "",
+	)
+	secondBootCmd.Stdout = os.Stderr
+	secondBootCmd.Stderr = os.Stderr
+	if err := secondBootCmd.Run(); err != nil {
+		t.Fatalf("second first boot failed: %v", err)
+	}
+	t.Log("second first boot completed")
+
+	// Start launcher + daemon and verify the re-provisioned machine works.
+	t.Run("ReProvisionedRun", func(t *testing.T) {
+		startProcess(t, "launcher-2", launcherBinary,
+			"--homeserver", testHomeserverURL,
+			"--machine-name", machineName,
+			"--server-name", testServerName,
+			"--fleet", fleet.Prefix,
+			"--run-dir", runDir2,
+			"--state-dir", stateDir2,
+			"--workspace-root", workspaceRoot2,
+			"--cache-root", cacheRoot2,
+			"--proxy-binary", proxyBinary,
+			"--log-relay-binary", logRelayBinary,
+			"--operators-group", "",
+		)
+		waitForFile(t, launcherSocket2)
+
+		statusWatch := watchRoom(t, admin, machineRoomID)
+		startProcess(t, "daemon-2", daemonBinary,
+			"--homeserver", testHomeserverURL,
+			"--machine-name", machineName,
+			"--server-name", testServerName,
+			"--run-dir", runDir2,
+			"--state-dir", stateDir2,
+			"--admin-user", admin.UserID().Localpart(),
+			"--status-interval", "2s",
+			"--fleet", fleet.Prefix,
+			"--operators-group", "",
+		)
+
+		statusWatch.WaitForStateEvent(t,
+			schema.EventTypeMachineStatus, machineName)
+		t.Log("machine operational after re-provision")
+	})
+
+	// --- Phase 5: Final decommission (cleanup) ---
+	decommissionMachine(t, admin, machineRef)
+	t.Log("re-provision lifecycle complete: provision → boot → decommission → re-provision → boot → decommission")
 }
 
 // TestTwoMachineFleet provisions two machines, bootstraps both, verifies

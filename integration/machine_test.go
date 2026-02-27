@@ -253,7 +253,8 @@ func startMachineLauncher(t *testing.T, admin *messaging.DirectSession, machine 
 	// and writes a bootstrap config with the one-time password.
 	bootstrapFile := filepath.Join(machine.StateDir, "bootstrap.json")
 	client := adminClient(t)
-	provisionMachine(t, client, admin, machine.Ref, bootstrapFile)
+	hsAdmin := homeserverAdmin(t)
+	provisionMachine(t, client, admin, hsAdmin, machine.Ref, bootstrapFile)
 
 	// The daemon publishes MachineStatus to the fleet's machine room.
 	machine.MachineRoomID = options.Fleet.MachineRoomID

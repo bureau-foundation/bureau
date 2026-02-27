@@ -5,8 +5,6 @@ package machine
 
 import (
 	"context"
-	"crypto/rand"
-	"encoding/hex"
 	"log/slog"
 	"time"
 
@@ -116,7 +114,14 @@ depending on the homeserver — this is by design for emergency revocation.`,
 				"machine", machine.Localpart(),
 			)
 
-			return Revoke(ctx, adminSession, RevokeParams{
+			hsAdmin, err := messaging.NewHomeserverAdmin(ctx, adminSession)
+			if err != nil {
+				return cli.Transient("detect homeserver admin interface: %w", err).
+					WithHint("The homeserver admin interface is needed for account deactivation.\n" +
+						"Check that the homeserver is running. Run 'bureau matrix doctor' to diagnose.")
+			}
+
+			return Revoke(ctx, adminSession, hsAdmin, RevokeParams{
 				Machine: machine,
 				Reason:  params.Reason,
 			}, logger)
@@ -130,9 +135,10 @@ depending on the homeserver — this is by design for emergency revocation.`,
 //   - Layer 2: Kicks from all rooms, then clears credential state events
 //   - Layer 3: Outstanding service tokens expire via natural TTL
 //
-// The caller provides a DirectSession (required for account deactivation,
-// password reset, and KickUser) and a context with an appropriate deadline.
-func Revoke(ctx context.Context, adminSession *messaging.DirectSession, params RevokeParams, logger *slog.Logger) error {
+// The caller provides a DirectSession (required for KickUser, room
+// management), a HomeserverAdmin (for account deactivation/force logout),
+// and a context with an appropriate deadline.
+func Revoke(ctx context.Context, adminSession *messaging.DirectSession, admin messaging.HomeserverAdmin, params RevokeParams, logger *slog.Logger) error {
 	machine := params.Machine
 	fleet := machine.Fleet()
 	adminUserID := adminSession.UserID()
@@ -144,37 +150,25 @@ func Revoke(ctx context.Context, adminSession *messaging.DirectSession, params R
 		"reason", params.Reason,
 	)
 
-	// Layer 1: Deactivate the Matrix account. This causes the daemon to
-	// detect an auth failure on its next /sync, triggering emergency
-	// shutdown (sandbox destruction + exit). No cooperation needed from
-	// the compromised machine.
+	// Layer 1: Deactivate the Matrix account via the homeserver admin
+	// interface. This causes the daemon to detect an auth failure on its
+	// next /sync, triggering emergency shutdown (sandbox destruction +
+	// exit). No cooperation from the compromised machine is needed.
 	//
-	// Try the deactivate endpoint first (Synapse). If the homeserver
-	// doesn't support it (Continuwuity returns M_UNRECOGNIZED), fall
-	// back to resetting the password with logout_devices=true. The
-	// password reset invalidates all access tokens, producing the same
-	// M_UNKNOWN_TOKEN auth failure on the daemon's next /sync.
+	// The HomeserverAdmin interface handles server differences: Synapse
+	// uses the HTTP admin API, Continuwuity uses admin room commands.
+	// If deactivation fails, fall back to force logout (invalidates all
+	// tokens without deactivating the account).
 	accountDeactivated := true
 	logger.Info("deactivating machine account", "layer", 1)
-	if err := adminSession.DeactivateUser(ctx, machineUserID, false); err != nil {
-		if messaging.IsMatrixError(err, messaging.ErrCodeUnrecognized) {
-			logger.Info("deactivate endpoint not supported, falling back to password reset")
-			randomPassword, passwordErr := generateRandomPassword()
-			if passwordErr != nil {
-				accountDeactivated = false
-				logger.Warn("could not generate random password for fallback", "error", passwordErr)
-			} else if resetErr := adminSession.ResetUserPassword(ctx, machineUserID, randomPassword, true); resetErr != nil {
-				accountDeactivated = false
-				logger.Warn("password reset failed", "error", resetErr)
-			} else {
-				logger.Info("password reset with token invalidation applied")
-			}
-		} else {
+	if err := admin.DeactivateUser(ctx, machineUserID, false); err != nil {
+		logger.Warn("account deactivation failed, trying force logout", "error", err)
+		if logoutErr := admin.ForceLogout(ctx, machineUserID); logoutErr != nil {
 			accountDeactivated = false
-			logger.Warn("account deactivation failed", "error", err)
-		}
-		if !accountDeactivated {
+			logger.Warn("force logout also failed", "error", logoutErr)
 			logger.Info("continuing with state cleanup", "layer", 2)
+		} else {
+			logger.Info("force logout applied — tokens invalidated")
 		}
 	} else {
 		logger.Info("account deactivated")
@@ -321,15 +315,4 @@ func Revoke(ctx context.Context, adminSession *messaging.DirectSession, params R
 	}
 
 	return nil
-}
-
-// generateRandomPassword returns a 64-character hex string from 32 random
-// bytes. Used as the replacement password when falling back to password
-// reset for account invalidation.
-func generateRandomPassword() (string, error) {
-	randomBytes := make([]byte, 32)
-	if _, err := rand.Read(randomBytes); err != nil {
-		return "", cli.Internal("generate random bytes: %w", err)
-	}
-	return hex.EncodeToString(randomBytes), nil
 }

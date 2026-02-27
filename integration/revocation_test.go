@@ -4,89 +4,35 @@
 package integration_test
 
 import (
-	"crypto/rand"
-	"encoding/hex"
 	"encoding/json"
-	"os"
-	"path/filepath"
 	"testing"
 
 	"github.com/bureau-foundation/bureau/lib/ref"
 	"github.com/bureau-foundation/bureau/lib/schema"
-	"github.com/bureau-foundation/bureau/lib/service"
 	"github.com/bureau-foundation/bureau/messaging"
 )
 
 // invalidateMachineTokens invalidates all access tokens for a machine so
 // the daemon's next /sync receives M_UNKNOWN_TOKEN and triggers emergency
-// shutdown. Tries three approaches in order:
+// shutdown. Uses the HomeserverAdmin interface to handle server differences
+// (Synapse HTTP admin API vs Continuwuity admin room commands).
 //
-//   - DeactivateUser (Synapse admin API)
-//   - ResetUserPassword with logout_devices=true (Synapse admin API)
-//   - LogoutAll via the machine's own saved session (standard Matrix client API)
-//
-// The first two are Synapse-specific and may not be supported by all
-// homeservers (Continuwuity returns M_UNRECOGNIZED for both). LogoutAll
-// uses the core Matrix spec and works everywhere, but requires access to
-// the machine's session file.
-func invalidateMachineTokens(t *testing.T, admin *messaging.DirectSession, machine *testMachine) {
+// Tries DeactivateUser first (permanent, strongest response), then falls
+// back to ForceLogout (invalidates tokens without deactivation).
+func invalidateMachineTokens(t *testing.T, hsAdmin messaging.HomeserverAdmin, machine *testMachine) {
 	t.Helper()
 	ctx := t.Context()
 
-	// Try DeactivateUser (Synapse).
-	if err := admin.DeactivateUser(ctx, machine.UserID, false); err == nil {
+	if err := hsAdmin.DeactivateUser(ctx, machine.UserID, false); err == nil {
 		t.Log("invalidated machine tokens via DeactivateUser")
 		return
-	} else if !messaging.IsMatrixError(err, messaging.ErrCodeUnrecognized) {
-		t.Fatalf("deactivate user: %v", err)
 	}
-	t.Log("DeactivateUser not supported, trying ResetUserPassword")
+	t.Log("DeactivateUser failed, trying ForceLogout")
 
-	// Try ResetUserPassword (Synapse).
-	randomBytes := make([]byte, 32)
-	if _, err := rand.Read(randomBytes); err != nil {
-		t.Fatalf("generate random password: %v", err)
+	if err := hsAdmin.ForceLogout(ctx, machine.UserID); err != nil {
+		t.Fatalf("could not invalidate machine tokens: %v", err)
 	}
-	randomPassword := hex.EncodeToString(randomBytes)
-	if err := admin.ResetUserPassword(ctx, machine.UserID, randomPassword, true); err == nil {
-		t.Log("invalidated machine tokens via ResetUserPassword")
-		return
-	} else if !messaging.IsMatrixError(err, messaging.ErrCodeUnrecognized) {
-		t.Fatalf("reset user password: %v", err)
-	}
-	t.Log("ResetUserPassword not supported, using LogoutAll via machine session")
-
-	// Fall back to LogoutAll via the machine's own access token (core spec).
-	sessionPath := filepath.Join(machine.StateDir, "session.json")
-	sessionJSON, err := os.ReadFile(sessionPath)
-	if err != nil {
-		t.Fatalf("read machine session file %s: %v", sessionPath, err)
-	}
-	var sessionData service.SessionData
-	if err := json.Unmarshal(sessionJSON, &sessionData); err != nil {
-		t.Fatalf("parse machine session file: %v", err)
-	}
-
-	machineClient, err := messaging.NewClient(messaging.ClientConfig{
-		HomeserverURL: sessionData.HomeserverURL,
-	})
-	if err != nil {
-		t.Fatalf("create machine client: %v", err)
-	}
-	parsedUserID, err := ref.ParseUserID(sessionData.UserID)
-	if err != nil {
-		t.Fatalf("parse machine user ID from session: %v", err)
-	}
-	machineSession, err := machineClient.SessionFromToken(parsedUserID, sessionData.AccessToken)
-	if err != nil {
-		t.Fatalf("create machine session from saved token: %v", err)
-	}
-	defer machineSession.Close()
-
-	if err := machineSession.LogoutAll(ctx); err != nil {
-		t.Fatalf("logout all machine sessions: %v", err)
-	}
-	t.Log("invalidated machine tokens via LogoutAll")
+	t.Log("invalidated machine tokens via ForceLogout")
 }
 
 // TestMachineRevocation_DaemonSelfDestruct proves that invalidating a
@@ -143,7 +89,8 @@ func TestMachineRevocation_DaemonSelfDestruct(t *testing.T) {
 	// /sync attempt will receive M_UNKNOWN_TOKEN, triggering
 	// emergencyShutdown which destroys all sandboxes and exits.
 	t.Log("invalidating machine account tokens to trigger daemon self-destruct")
-	invalidateMachineTokens(t, admin, machine)
+	hsAdmin := homeserverAdmin(t)
+	invalidateMachineTokens(t, hsAdmin, machine)
 
 	// Wait for the proxy socket to disappear. This proves the daemon
 	// detected the auth failure, called emergencyShutdown, and
@@ -230,13 +177,15 @@ func TestMachineRevocation_CLIRevoke(t *testing.T) {
 	// can detect the revocation event published by the CLI.
 	machineRoomWatch := watchRoom(t, admin, machine.MachineRoomID)
 
-	// Run the revoke command. On Continuwuity, Layer 1 (account
-	// deactivation) fails because the Synapse admin APIs aren't
-	// supported. Layer 2 (state cleanup) still runs and tombstones
-	// all credentials, causing the daemon to reconcile and remove
-	// principals.
+	// Run the revoke command. The HomeserverAdmin interface handles
+	// server differences — on Synapse it uses the HTTP admin API, on
+	// Continuwuity it uses admin room commands. Layer 1 (account
+	// deactivation) invalidates the machine's tokens. Layer 2 (state
+	// cleanup) tombstones credentials, causing the daemon to reconcile
+	// and remove principals.
 	const revokeReason = "integration test: emergency revocation"
-	revokeMachine(t, admin, machine.Ref, revokeReason)
+	hsAdmin := homeserverAdmin(t)
+	revokeMachine(t, admin, hsAdmin, machine.Ref, revokeReason)
 	t.Log("bureau machine revoke completed")
 
 	// Wait for both proxy sockets to disappear. On homeservers with

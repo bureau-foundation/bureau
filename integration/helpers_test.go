@@ -966,10 +966,25 @@ func adminClient(t *testing.T) *messaging.Client {
 	return client
 }
 
+// homeserverAdmin creates a HomeserverAdmin using the shared @bureau-admin
+// session. HomeserverAdmin operations (password reset, account deactivation,
+// force logout) require actual server admin privileges, which per-test admin
+// accounts do not have. On Continuwuity, only the server admin can access the
+// #admins room where admin commands are processed.
+func homeserverAdmin(t *testing.T) messaging.HomeserverAdmin {
+	t.Helper()
+	shared := getSharedAdminSession(t)
+	hsAdmin, err := messaging.NewHomeserverAdmin(t.Context(), shared)
+	if err != nil {
+		t.Fatalf("create homeserver admin: %v", err)
+	}
+	return hsAdmin
+}
+
 // provisionMachine provisions a machine via the production API (not the
 // CLI subprocess). Returns the bootstrap config path. The caller typically
 // passes this path to the launcher's --bootstrap-file flag.
-func provisionMachine(t *testing.T, client *messaging.Client, admin *messaging.DirectSession, machineRef ref.Machine, bootstrapPath string) {
+func provisionMachine(t *testing.T, client *messaging.Client, admin *messaging.DirectSession, hsAdmin messaging.HomeserverAdmin, machineRef ref.Machine, bootstrapPath string) {
 	t.Helper()
 	ctx := t.Context()
 
@@ -984,7 +999,7 @@ func provisionMachine(t *testing.T, client *messaging.Client, admin *messaging.D
 		"machine", machineRef.Localpart(),
 	)
 
-	result, err := machine.Provision(ctx, client, admin, machine.ProvisionParams{
+	result, err := machine.Provision(ctx, client, admin, hsAdmin, machine.ProvisionParams{
 		Machine:           machineRef,
 		HomeserverURL:     testHomeserverURL,
 		RegistrationToken: registrationToken,
@@ -1018,7 +1033,7 @@ func decommissionMachine(t *testing.T, admin *messaging.DirectSession, machineRe
 
 // revokeMachine performs emergency credential revocation via the production
 // API (not the CLI subprocess).
-func revokeMachine(t *testing.T, admin *messaging.DirectSession, machineRef ref.Machine, reason string) {
+func revokeMachine(t *testing.T, admin *messaging.DirectSession, hsAdmin messaging.HomeserverAdmin, machineRef ref.Machine, reason string) {
 	t.Helper()
 	ctx := t.Context()
 
@@ -1027,7 +1042,7 @@ func revokeMachine(t *testing.T, admin *messaging.DirectSession, machineRef ref.
 		"machine", machineRef.Localpart(),
 	)
 
-	if err := machine.Revoke(ctx, admin, machine.RevokeParams{
+	if err := machine.Revoke(ctx, admin, hsAdmin, machine.RevokeParams{
 		Machine: machineRef,
 		Reason:  reason,
 	}, logger); err != nil {

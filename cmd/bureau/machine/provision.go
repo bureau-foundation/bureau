@@ -180,7 +180,14 @@ accidental or intentional spoofing of active machines.`,
 				"machine", machine.Localpart(),
 			)
 
-			result, err := Provision(ctx, client, adminSession, ProvisionParams{
+			hsAdmin, err := messaging.NewHomeserverAdmin(ctx, adminSession)
+			if err != nil {
+				return cli.Transient("detect homeserver admin interface: %w", err).
+					WithHint("The homeserver admin interface is needed for re-provisioning.\n" +
+						"Check that the homeserver is running. Run 'bureau matrix doctor' to diagnose.")
+			}
+
+			result, err := Provision(ctx, client, adminSession, hsAdmin, ProvisionParams{
 				Machine:           machine,
 				HomeserverURL:     homeserverURL,
 				RegistrationToken: registrationTokenBuffer,
@@ -211,15 +218,16 @@ accidental or intentional spoofing of active machines.`,
 // Provision creates a machine account, sets up its Bureau rooms, and returns
 // a bootstrap config. The caller provides:
 //   - A *messaging.Client for account registration
-//   - A *messaging.DirectSession for admin operations (room management,
-//     password reset during re-provisioning)
+//   - A *messaging.DirectSession for admin operations (room management)
+//   - A messaging.HomeserverAdmin for server-specific admin operations
+//     (password reset during re-provisioning)
 //   - A ProvisionParams with the fleet localpart, machine name, and
 //     registration token
 //
 // This function does not read credential files or create sessions. The CLI
 // wrapper handles credential acquisition; integration tests and other
 // programmatic callers provide their own client and session.
-func Provision(ctx context.Context, client *messaging.Client, adminSession *messaging.DirectSession, params ProvisionParams, logger *slog.Logger) (*ProvisionResult, error) {
+func Provision(ctx context.Context, client *messaging.Client, adminSession *messaging.DirectSession, admin messaging.HomeserverAdmin, params ProvisionParams, logger *slog.Logger) (*ProvisionResult, error) {
 	machine := params.Machine
 	fleet := machine.Fleet()
 	server := fleet.Server()
@@ -263,15 +271,10 @@ func Provision(ctx context.Context, client *messaging.Client, adminSession *mess
 				return nil, err
 			}
 			// Decommission verified. Reset the password to our one-time
-			// password so the bootstrap file will work.
-			resetErr := adminSession.ResetUserPassword(ctx, machineUserID, oneTimePassword.String(), true)
-			if resetErr != nil {
-				if messaging.IsMatrixError(resetErr, messaging.ErrCodeUnrecognized) {
-					return nil, cli.Conflict("this homeserver does not support admin password reset — "+
-						"the decommissioned machine %q cannot be reused", machineUsername).
-						WithHint("The homeserver lacks the Synapse admin API for password reset.\n" +
-							"Choose a new machine name, or use a homeserver that supports the /_synapse/admin/v1/reset_password endpoint.")
-				}
+			// password so the bootstrap file will work. Uses the
+			// HomeserverAdmin interface to handle server differences
+			// (Synapse HTTP API vs Continuwuity admin room commands).
+			if resetErr := admin.ResetUserPassword(ctx, machineUserID, oneTimePassword.String(), true); resetErr != nil {
 				return nil, cli.Transient("reset password for re-provisioned machine: %w", resetErr).
 					WithHint("Check that the homeserver is running. Run 'bureau matrix doctor' to diagnose.")
 			}

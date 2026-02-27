@@ -86,7 +86,8 @@ func TestBootstrapScript(t *testing.T) {
 
 	bootstrapPath := filepath.Join(t.TempDir(), "bootstrap.json")
 	bootstrapClient := adminClient(t)
-	provisionMachine(t, bootstrapClient, admin, machineRef, bootstrapPath)
+	hsAdmin := homeserverAdmin(t)
+	provisionMachine(t, bootstrapClient, admin, hsAdmin, machineRef, bootstrapPath)
 
 	bootstrapConfig, err := bootstrap.ReadConfig(bootstrapPath)
 	if err != nil {

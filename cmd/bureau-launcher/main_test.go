@@ -819,16 +819,17 @@ func newTestLauncher(t *testing.T, proxyBinaryPath string) *Launcher {
 	machine := testMachine(t)
 
 	launcher := &Launcher{
-		keypair:         keypair,
-		machine:         machine,
-		homeserverURL:   "http://localhost:9999",
-		runDir:          tempDir,
-		fleetRunDir:     machine.Fleet().RunDir(tempDir),
-		stateDir:        filepath.Join(tempDir, "state"),
-		proxyBinaryPath: proxyBinaryPath,
-		tmuxServer:      tmux.NewServer(principal.TmuxSocketPath(tempDir), "/dev/null"),
-		sandboxes:       make(map[string]*managedSandbox),
-		logger:          slog.New(slog.NewJSONHandler(os.Stderr, nil)),
+		keypair:            keypair,
+		machine:            machine,
+		homeserverURL:      "http://localhost:9999",
+		runDir:             tempDir,
+		fleetRunDir:        machine.Fleet().RunDir(tempDir),
+		stateDir:           filepath.Join(tempDir, "state"),
+		proxyBinaryPath:    proxyBinaryPath,
+		tmuxServer:         tmux.NewServer(principal.TmuxSocketPath(tempDir), "/dev/null"),
+		destroyGracePeriod: 100 * time.Millisecond,
+		sandboxes:          make(map[string]*managedSandbox),
+		logger:             slog.New(slog.NewJSONHandler(os.Stderr, nil)),
 	}
 
 	t.Cleanup(launcher.shutdownAllSandboxes)
@@ -2536,5 +2537,124 @@ func TestValidateBinary(t *testing.T) {
 				}
 			}
 		})
+	}
+}
+
+// newDestroyTestLauncher creates a minimal launcher with a tmux server for
+// testing the destroy-sandbox grace period behavior. Unlike newTestLauncher,
+// it does not require a proxy binary or keypair — the tests create tmux
+// sessions directly rather than through the full create-sandbox flow.
+func newDestroyTestLauncher(t *testing.T) *Launcher {
+	t.Helper()
+	socketDir := testutil.SocketDir(t)
+	launcher := &Launcher{
+		tmuxServer:         tmux.NewServer(filepath.Join(socketDir, "tmux.sock"), "/dev/null"),
+		destroyGracePeriod: 100 * time.Millisecond,
+		sandboxes:          make(map[string]*managedSandbox),
+		logger:             slog.New(slog.NewJSONHandler(os.Stderr, nil)),
+	}
+	t.Cleanup(launcher.shutdownAllSandboxes)
+	return launcher
+}
+
+// createTestSandbox creates a tmux session running the given command and
+// registers it in the launcher's sandbox map. Returns the managed sandbox.
+func createTestSandbox(t *testing.T, launcher *Launcher, localpart string, command ...string) *managedSandbox {
+	t.Helper()
+
+	sessionName := tmuxSessionName(localpart)
+	if err := launcher.tmuxServer.NewSession(sessionName, command...); err != nil {
+		t.Fatalf("creating tmux session for %q: %v", localpart, err)
+	}
+
+	sb := &managedSandbox{
+		localpart:    localpart,
+		proxyProcess: &os.Process{Pid: 0}, // no real proxy
+		done:         make(chan struct{}),
+	}
+	launcher.sandboxes[localpart] = sb
+
+	// Start the session watcher so that when the process exits
+	// (gracefully or not), sb.done is closed with the real exit info.
+	launcher.startSessionWatcher(localpart, sb)
+
+	return sb
+}
+
+func TestDestroySandbox_GracefulExit(t *testing.T) {
+	launcher := newDestroyTestLauncher(t)
+	localpart := "bureau/fleet/test/agent/graceful"
+
+	// Start a process that sleeps forever but exits cleanly on SIGTERM.
+	// /bin/sleep handles SIGTERM by default (exits 0).
+	createTestSandbox(t, launcher, localpart, "/bin/sleep", "300")
+
+	response := launcher.handleDestroySandbox(context.Background(), &IPCRequest{
+		Action:    "destroy-sandbox",
+		Principal: localpart,
+		Force:     false,
+	})
+
+	if !response.OK {
+		t.Fatalf("destroy-sandbox failed: %s", response.Error)
+	}
+
+	if _, exists := launcher.sandboxes[localpart]; exists {
+		t.Error("sandbox should be removed from map after destroy")
+	}
+}
+
+func TestDestroySandbox_ForceKillImmediate(t *testing.T) {
+	launcher := newDestroyTestLauncher(t)
+	localpart := "bureau/fleet/test/agent/forced"
+
+	// Start a process that ignores SIGTERM: trap SIGTERM to a no-op
+	// and sleep. Force=true should SIGKILL immediately.
+	createTestSandbox(t, launcher, localpart, "/bin/sh", "-c",
+		"trap '' TERM; sleep 300")
+
+	response := launcher.handleDestroySandbox(context.Background(), &IPCRequest{
+		Action:    "destroy-sandbox",
+		Principal: localpart,
+		Force:     true,
+	})
+
+	if !response.OK {
+		t.Fatalf("destroy-sandbox failed: %s", response.Error)
+	}
+
+	// The SIGTERM-ignoring process can only be killed by SIGKILL. If the
+	// handler returned OK, SIGKILL was sent (the graceful SIGTERM path
+	// would have waited then escalated, but Force bypasses it entirely).
+	if _, exists := launcher.sandboxes[localpart]; exists {
+		t.Error("sandbox should be removed from map after force destroy")
+	}
+}
+
+func TestDestroySandbox_GracePeriodTimeout(t *testing.T) {
+	launcher := newDestroyTestLauncher(t)
+	localpart := "bureau/fleet/test/agent/stubborn"
+
+	// Start a process that ignores SIGTERM. The grace period (100ms)
+	// should expire, then SIGKILL terminates the process.
+	createTestSandbox(t, launcher, localpart, "/bin/sh", "-c",
+		"trap '' TERM; sleep 300")
+
+	response := launcher.handleDestroySandbox(context.Background(), &IPCRequest{
+		Action:    "destroy-sandbox",
+		Principal: localpart,
+		Force:     false,
+	})
+
+	if !response.OK {
+		t.Fatalf("destroy-sandbox failed: %s", response.Error)
+	}
+
+	// The SIGTERM-ignoring process can only be killed by SIGKILL. The
+	// handler returning OK proves the escalation path worked: SIGTERM
+	// was sent, the grace period expired (100ms, set by the test
+	// launcher), and SIGKILL terminated the process.
+	if _, exists := launcher.sandboxes[localpart]; exists {
+		t.Error("sandbox should be removed from map after destroy")
 	}
 }

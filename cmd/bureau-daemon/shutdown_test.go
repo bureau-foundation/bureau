@@ -79,6 +79,9 @@ func TestEmergencyShutdown_DestroysAllSandboxes(t *testing.T) {
 	destroyedPrincipals := make(chan string, 10)
 	listener := startMockLauncher(t, launcherSocket, func(request launcherIPCRequest) launcherIPCResponse {
 		if request.Action == ipc.ActionDestroySandbox {
+			if !request.Force {
+				t.Errorf("emergency shutdown should use Force=true for principal %q", request.Principal)
+			}
 			destroyedPrincipals <- request.Principal
 			return launcherIPCResponse{OK: true}
 		}

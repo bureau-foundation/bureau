@@ -361,6 +361,9 @@ func TestHealthMonitorThresholdTriggersRollback(t *testing.T) {
 		ipcPrincipals = append(ipcPrincipals, request.Principal)
 		lastSpec = request.SandboxSpec
 		launcherMu.Unlock()
+		if request.Action == ipc.ActionDestroySandbox && request.Force {
+			t.Errorf("health rollback should use Force=false (graceful), got Force=true")
+		}
 		if request.Action == ipc.ActionCreateSandbox {
 			select {
 			case rollbackDone <- struct{}{}:
@@ -563,6 +566,9 @@ func TestRollbackNoPreviousSpec(t *testing.T) {
 		launcherMu.Lock()
 		ipcActions = append(ipcActions, string(request.Action))
 		launcherMu.Unlock()
+		if request.Action == ipc.ActionDestroySandbox && request.Force {
+			t.Errorf("health rollback should use Force=false (graceful), got Force=true")
+		}
 		return launcherIPCResponse{OK: true}
 	})
 	t.Cleanup(func() { listener.Close() })
@@ -1216,6 +1222,9 @@ func TestReconcileStopsHealthMonitorOnDestroy(t *testing.T) {
 	destroySandboxReceived := make(chan struct{}, 1)
 	listener := startMockLauncher(t, launcherSocket, func(request launcherIPCRequest) launcherIPCResponse {
 		if request.Action == ipc.ActionDestroySandbox {
+			if !request.Force {
+				t.Errorf("drain timeout should use Force=true, got Force=false")
+			}
 			select {
 			case destroySandboxReceived <- struct{}{}:
 			default:
@@ -1799,6 +1808,9 @@ func TestDestroyExtrasCleansPreviousSpecs(t *testing.T) {
 	destroySandboxReceived := make(chan struct{}, 1)
 	listener := startMockLauncher(t, launcherSocket, func(request launcherIPCRequest) launcherIPCResponse {
 		if request.Action == ipc.ActionDestroySandbox {
+			if !request.Force {
+				t.Errorf("drain timeout should use Force=true, got Force=false")
+			}
 			select {
 			case destroySandboxReceived <- struct{}{}:
 			default:
@@ -2192,17 +2204,22 @@ func TestCheckHealth_DispatchesOnType(t *testing.T) {
 
 // --- Test helpers ---
 
-// waitForServiceSocket polls until a service socket file exists.
-// Uses t.Context() (bounded by test timeout) and runtime.Gosched()
-// instead of wall-clock deadlines.
+// waitForServiceSocket polls until a service socket is accepting
+// connections. Uses an actual connect attempt rather than os.Stat
+// because the socket file exists after bind(2) but connections are
+// only accepted after listen(2) — goroutine preemption between the
+// two syscalls causes a race where os.Stat succeeds but connect
+// returns ECONNREFUSED. Bounded by the test context timeout.
 func waitForServiceSocket(t *testing.T, path string) {
 	t.Helper()
 	for {
-		if _, err := os.Stat(path); err == nil {
+		conn, err := net.DialTimeout("unix", path, 100*time.Millisecond)
+		if err == nil {
+			conn.Close()
 			return
 		}
 		if t.Context().Err() != nil {
-			t.Fatalf("service socket %s did not appear before test timeout", path)
+			t.Fatalf("service socket %s not accepting connections before test timeout", path)
 		}
 		runtime.Gosched()
 	}

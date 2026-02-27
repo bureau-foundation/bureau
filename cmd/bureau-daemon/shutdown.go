@@ -33,7 +33,7 @@ func (d *Daemon) emergencyShutdown() {
 		principals = append(principals, principal)
 	}
 	for _, principal := range principals {
-		if err := d.destroyPrincipal(ctx, principal); err != nil {
+		if err := d.destroyPrincipal(ctx, principal, true); err != nil {
 			d.logger.Error("emergency shutdown: failed to destroy sandbox",
 				"principal", principal, "error", err)
 			// Continue — best effort, destroy as many as possible.

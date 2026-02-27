@@ -325,7 +325,7 @@ func (d *Daemon) rollbackPrincipal(ctx context.Context, principal ref.Entity) {
 	delete(d.healthMonitors, principal)
 	d.healthMonitorsMu.Unlock()
 
-	if err := d.destroyPrincipal(ctx, principal); err != nil {
+	if err := d.destroyPrincipal(ctx, principal, false); err != nil {
 		d.logger.Error("health rollback: failed to destroy sandbox, sandbox may be orphaned",
 			"principal", principal, "error", err)
 		return

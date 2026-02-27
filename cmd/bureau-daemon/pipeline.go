@@ -686,6 +686,7 @@ func (d *Daemon) destroyPipelineSandbox(ctx context.Context, principal ref.Entit
 	response, err := d.launcherRequest(ctx, launcherIPCRequest{
 		Action:    ipc.ActionDestroySandbox,
 		Principal: principal.AccountLocalpart(),
+		Force:     true, // Pipeline executor already exited.
 	})
 	if err != nil {
 		d.logger.Error("destroy-sandbox IPC failed for pipeline executor",

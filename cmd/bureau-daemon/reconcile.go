@@ -156,7 +156,7 @@ func (d *Daemon) reconcile(ctx context.Context) error {
 		savedSpec := d.lastSpecs[principal]
 		savedTemplate := d.lastTemplates[principal]
 
-		if err := d.destroyPrincipal(ctx, principal); err != nil {
+		if err := d.destroyPrincipal(ctx, principal, false); err != nil {
 			d.logger.Error("failed to destroy sandbox during credential rotation",
 				"principal", principal, "error", err)
 			continue
@@ -814,7 +814,7 @@ func (d *Daemon) reconcile(ctx context.Context) error {
 		// shells mask SIGTERM by default).
 		if d.lastSpecs[principal] == nil {
 			d.logger.Info("stopping proxy-only principal", "principal", principal)
-			if err := d.destroyPrincipal(ctx, principal); err != nil {
+			if err := d.destroyPrincipal(ctx, principal, true); err != nil {
 				d.logger.Error("failed to destroy proxy-only principal",
 					"principal", principal, "error", err)
 			}
@@ -826,7 +826,7 @@ func (d *Daemon) reconcile(ctx context.Context) error {
 		if err := d.drainPrincipal(ctx, principal); err != nil {
 			d.logger.Error("drain signal failed, force destroying",
 				"principal", principal, "error", err)
-			if destroyErr := d.destroyPrincipal(ctx, principal); destroyErr != nil {
+			if destroyErr := d.destroyPrincipal(ctx, principal, true); destroyErr != nil {
 				d.logger.Error("force destroy after drain failure also failed",
 					"principal", principal, "error", destroyErr)
 			}
@@ -905,7 +905,7 @@ func (d *Daemon) reconcileRunningPrincipal(ctx context.Context, principal ref.En
 		// previous working configuration.
 		rollbackSpec := d.lastSpecs[principal]
 
-		if err := d.destroyPrincipal(ctx, principal); err != nil {
+		if err := d.destroyPrincipal(ctx, principal, false); err != nil {
 			d.logger.Error("failed to destroy sandbox during structural restart",
 				"principal", principal, "error", err)
 			return
@@ -1849,7 +1849,7 @@ func (d *Daemon) cancelProxyExitWatcher(principal ref.Entity) {
 // tokens will expire via their natural 5-minute TTL. The error is returned
 // so callers can log it and decide whether to continue (emergency shutdown
 // paths must continue past errors).
-func (d *Daemon) destroyPrincipal(ctx context.Context, principal ref.Entity) error {
+func (d *Daemon) destroyPrincipal(ctx context.Context, principal ref.Entity, force bool) error {
 	d.cancelExitWatcher(principal)
 	d.cancelProxyExitWatcher(principal)
 	d.stopHealthMonitor(principal)
@@ -1859,6 +1859,7 @@ func (d *Daemon) destroyPrincipal(ctx context.Context, principal ref.Entity) err
 	response, err := d.launcherRequest(ctx, launcherIPCRequest{
 		Action:    ipc.ActionDestroySandbox,
 		Principal: principal.AccountLocalpart(),
+		Force:     force,
 	})
 	if err != nil {
 		destroyError = fmt.Errorf("destroy-sandbox IPC failed: %w", err)
@@ -2045,6 +2046,7 @@ func (d *Daemon) watchSandboxExit(ctx context.Context, principal ref.Entity) {
 		response, err := d.launcherRequest(ctx, launcherIPCRequest{
 			Action:    ipc.ActionDestroySandbox,
 			Principal: principal.AccountLocalpart(),
+			Force:     true, // Sandbox already exited, just cleaning up proxy.
 		})
 		if err != nil {
 			d.logger.Error("failed to destroy proxy after drain",
@@ -2165,7 +2167,7 @@ func (d *Daemon) drainPrincipal(ctx context.Context, principal ref.Entity) error
 			"principal", principal,
 			"grace_period", d.drainGracePeriod,
 		)
-		if err := d.destroyPrincipal(ctx, principal); err != nil {
+		if err := d.destroyPrincipal(ctx, principal, true); err != nil {
 			d.logger.Error("force-kill after drain timeout failed",
 				"principal", principal, "error", err)
 		}
@@ -2594,7 +2596,7 @@ func (d *Daemon) watchProxyExit(ctx context.Context, principal ref.Entity) {
 	// the entry first makes cancelProxyExitWatcher a no-op for us.
 	delete(d.proxyExitWatchers, principal)
 
-	if err := d.destroyPrincipal(ctx, principal); err != nil {
+	if err := d.destroyPrincipal(ctx, principal, true); err != nil {
 		d.logger.Error("proxy exit handler: failed to destroy sandbox",
 			"principal", principal, "error", err)
 	}

@@ -255,6 +255,7 @@ func run() error {
 		cacheRoot:          cacheRoot,
 		tmuxServer:         tmux.NewServer(principal.TmuxSocketPath(runDir), writeTmuxConfig(runDir)),
 		operatorsGID:       operatorsGID,
+		destroyGracePeriod: defaultDestroyGracePeriod,
 		sandboxes:          make(map[string]*managedSandbox),
 		failedExecPaths:    make(map[string]bool),
 		logger:             logger,

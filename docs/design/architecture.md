@@ -307,10 +307,21 @@ request-response: one request per connection, one response, then close
   principal localpart, sandbox spec (resolved from template), encrypted
   or direct credentials, MatrixPolicy, service mounts, payload, and
   optional trigger content. Returns the proxy PID.
-- **destroy-sandbox** — tear down a sandbox. Kills the tmux session and
-  proxy, cleans up the sandbox filesystem.
+- **destroy-sandbox** — tear down a sandbox. The `force` field controls
+  shutdown behavior:
+  - **Graceful** (`force=false`): sends SIGTERM to the pane process
+    (bureau-log-relay), which forwards it through bwrap to the agent.
+    The agent has up to `destroyGracePeriod` (5 seconds) to run cleanup
+    (final checkpoint, session log upload, end session). If the process
+    hasn't exited after the grace period, the launcher sends SIGKILL.
+  - **Force** (`force=true`): sends SIGKILL immediately. The relay
+    can't catch SIGKILL, so it dies, triggering bwrap's
+    `--die-with-parent` (PR_SET_PDEATHSIG → SIGKILL), which cascades
+    through PID namespace reaping.
+  After the process is dead, kills the tmux session for state cleanup,
+  cleans up the proxy, and removes the sandbox filesystem.
 - **update-payload** — rewrite `/run/bureau/payload.json` inside a
-  running sandbox. The principle receives SIGHUP to trigger reload.
+  running sandbox. The principal receives SIGHUP to trigger reload.
 - **list-sandboxes** — return all running sandboxes. Used by the daemon
   on restart to adopt pre-existing sandboxes.
 - **wait-sandbox** — block until a sandbox's tmux session exits. Returns
@@ -732,8 +743,10 @@ loop receives `M_UNKNOWN_TOKEN` from `/sync`, at which point the daemon:
 
 1. Logs the auth failure at ERROR level
 2. Acquires the reconciliation lock
-3. Destroys every running sandbox via launcher IPC (best-effort — IPC
-   failures are logged but don't stop the shutdown)
+3. Force-destroys every running sandbox via launcher IPC (`force=true` —
+   SIGKILL, no grace period, since the Matrix session is dead and agent
+   cleanup calls would fail anyway). IPC failures are logged but don't
+   stop the shutdown.
 4. Cancels the daemon's top-level context, unblocking the main run loop
 5. Exits
 
@@ -741,6 +754,13 @@ This is Layer 1 of the emergency credential revocation defense (see
 credentials.md). No cooperation from the compromised machine is needed —
 deactivating its Matrix account is sufficient to trigger sandbox
 destruction and daemon exit within one sync cycle.
+
+The daemon uses `force=false` (graceful destroy) for health rollbacks,
+credential rotation restarts, and structural change restarts — cases
+where the agent may be running and should have a chance to clean up.
+It uses `force=true` for emergency shutdown, drain timeout expiry
+(agent already had 10 seconds to exit), proxy crashes, and pipeline
+sandbox cleanup (executor already exited).
 
 All local state is ephemeral: sandbox rootfs is built from Nix,
 persistent data lives in Matrix, credentials are in-memory only. A

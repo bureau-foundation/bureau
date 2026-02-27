@@ -198,6 +198,15 @@ type Request struct {
 	// The launcher converts to syscall.Signal before delivery via
 	// tmux.Server.SignalPane.
 	Signal int `cbor:"signal,omitempty"`
+
+	// Force requests immediate termination without a grace period (for
+	// "destroy-sandbox"). When false, the launcher sends SIGTERM to the
+	// sandbox process and waits up to its configured grace period for
+	// the process to exit cleanly before force-killing with SIGKILL.
+	// When true, the launcher sends SIGKILL immediately. Use true when
+	// the agent is already dead (emergency shutdown, proxy crash, drain
+	// timeout) and a grace period would be wasted time.
+	Force bool `cbor:"force,omitempty"`
 }
 
 // ServiceMount describes a service socket to bind-mount into a sandbox.

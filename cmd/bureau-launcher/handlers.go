@@ -57,22 +57,25 @@ type Launcher struct {
 	keypair            *sealed.Keypair
 	machine            ref.Machine
 	homeserverURL      string
-	runDir             string       // base runtime directory (e.g., /run/bureau)
-	fleetRunDir        string       // fleet-scoped runtime directory (e.g., /run/bureau/fleet/prod), computed from machine.Fleet().RunDir(runDir)
-	stateDir           string       // persistent state directory (e.g., /var/lib/bureau)
-	workspaceRoot      string       // root directory for project workspaces; the launcher ensures this and its .cache/ subdirectory exist
-	cacheRoot          string       // root directory for machine-level tool/model cache; sysadmin has rw, agents get ro subdirectory mounts
-	launcherBinaryHash string       // SHA256 hex digest of the launcher binary, computed at startup for version management
-	launcherBinaryPath string       // absolute filesystem path of the running launcher binary (for watchdog PreviousBinary)
-	logRelayBinaryPath string       // path to bureau-log-relay binary; wraps sandbox commands to hold the outer PTY open until exit code is collected
-	tmuxServer         *tmux.Server // Bureau's dedicated tmux server (socket at <runDir>/tmux.sock, -f /dev/null)
-	operatorsGID       int          // GID of bureau-operators group (-1 if not found); used to chown service listen sockets for operator access
+	runDir             string        // base runtime directory (e.g., /run/bureau)
+	fleetRunDir        string        // fleet-scoped runtime directory (e.g., /run/bureau/fleet/prod), computed from machine.Fleet().RunDir(runDir)
+	stateDir           string        // persistent state directory (e.g., /var/lib/bureau)
+	workspaceRoot      string        // root directory for project workspaces; the launcher ensures this and its .cache/ subdirectory exist
+	cacheRoot          string        // root directory for machine-level tool/model cache; sysadmin has rw, agents get ro subdirectory mounts
+	launcherBinaryHash string        // SHA256 hex digest of the launcher binary, computed at startup for version management
+	launcherBinaryPath string        // absolute filesystem path of the running launcher binary (for watchdog PreviousBinary)
+	logRelayBinaryPath string        // path to bureau-log-relay binary; wraps sandbox commands to hold the outer PTY open until exit code is collected
+	tmuxServer         *tmux.Server  // Bureau's dedicated tmux server (socket at <runDir>/tmux.sock, -f /dev/null)
+	operatorsGID       int           // GID of bureau-operators group (-1 if not found); used to chown service listen sockets for operator access
+	destroyGracePeriod time.Duration // how long to wait after SIGTERM before SIGKILL during destroy-sandbox (default 5s)
 	logger             *slog.Logger
 
 	// mu serializes access to mutable state: sandboxes, failedExecPaths,
 	// and proxyBinaryPath. Acquired at the top of handleConnection (after
-	// decoding the request) so all IPC handler methods run under the lock.
-	// Also acquired by shutdownAllSandboxes during graceful shutdown.
+	// decoding the request) for most IPC handlers. Long-running handlers
+	// (wait-sandbox, wait-proxy, destroy-sandbox) manage their own
+	// locking. Also acquired by shutdownAllSandboxes during graceful
+	// shutdown.
 	mu              sync.Mutex
 	proxyBinaryPath string
 	sandboxes       map[string]*managedSandbox
@@ -87,6 +90,16 @@ type Launcher struct {
 	// capture the arguments without actually exec'ing.
 	execFunc func(argv0 string, argv []string, envv []string) error
 }
+
+// defaultDestroyGracePeriod is the time the launcher waits after sending
+// SIGTERM before sending SIGKILL during destroy-sandbox. 5 seconds is
+// enough for the agent's interrupt path: SIGTERM cancels the context via
+// agentdriver's signal handler, the agent finishes its current turn,
+// posts agent-complete, and exits. This is shorter than the daemon's
+// drain grace period (10s) because drain handles the full lifecycle
+// (agent may be mid-turn), while destroy-sandbox fires when the daemon
+// has already decided to tear down.
+const defaultDestroyGracePeriod = 5 * time.Second
 
 // Type aliases for the shared IPC types. The canonical definitions live
 // in lib/ipc; these aliases keep the rest of this file unchanged.
@@ -136,16 +149,23 @@ func (l *Launcher) handleConnection(ctx context.Context, conn net.Conn) {
 
 	l.logger.Info("IPC request", "action", request.Action, "principal", request.Principal)
 
-	// wait-sandbox and wait-proxy block until a sandbox or proxy process
-	// exits, potentially for hours. Handle them before acquiring the
-	// mutex so that other IPC requests (create-sandbox, destroy-sandbox,
-	// status, etc.) are not blocked while a wait is pending.
+	// Long-running handlers are dispatched before acquiring the mutex
+	// so they can manage their own locking. wait-sandbox and wait-proxy
+	// block until a process exits (potentially hours). destroy-sandbox
+	// waits up to the grace period for graceful shutdown (up to 5s).
 	if request.Action == ipc.ActionWaitSandbox {
 		l.handleWaitSandbox(ctx, conn, encoder, &request)
 		return
 	}
 	if request.Action == ipc.ActionWaitProxy {
 		l.handleWaitProxy(ctx, conn, encoder, &request)
+		return
+	}
+	if request.Action == ipc.ActionDestroySandbox {
+		response := l.handleDestroySandbox(ctx, &request)
+		if err := encoder.Encode(response); err != nil {
+			l.logger.Error("encoding destroy-sandbox response", "error", err)
+		}
 		return
 	}
 
@@ -167,9 +187,6 @@ func (l *Launcher) handleConnection(ctx context.Context, conn net.Conn) {
 
 	case ipc.ActionCreateSandbox:
 		response = l.handleCreateSandbox(ctx, &request)
-
-	case ipc.ActionDestroySandbox:
-		response = l.handleDestroySandbox(ctx, &request)
 
 	case ipc.ActionSignalSandbox:
 		response = l.handleSignalSandbox(&request)
@@ -342,8 +359,21 @@ func (l *Launcher) handleListSandboxes() IPCResponse {
 	return IPCResponse{OK: true, Sandboxes: entries}
 }
 
-// handleDestroySandbox terminates a sandbox by killing its tmux session and
-// proxy process, then cleans up config files and socket files.
+// handleDestroySandbox terminates a sandbox, optionally giving the sandboxed
+// process time to shut down gracefully. Manages its own locking (not called
+// under the connection-level mu) because the grace period wait must not
+// block other IPC requests.
+//
+// When Force is false, the launcher sends SIGTERM to the pane process
+// (bureau-log-relay, which forwards to bwrap, which forwards to the agent)
+// and waits up to destroyGracePeriod for the process to exit. If the process
+// exits within the grace period, the session watcher captures the real exit
+// code and output. If the grace period expires, SIGKILL is sent to the pane
+// PID — this is the only reliable kill because the relay catches SIGTERM and
+// SIGHUP via signal.Notify. SIGKILL triggers bwrap's --die-with-parent
+// (PR_SET_PDEATHSIG), cascading to PID namespace reaping.
+//
+// When Force is true, SIGKILL is sent immediately with no grace period.
 func (l *Launcher) handleDestroySandbox(ctx context.Context, request *IPCRequest) IPCResponse {
 	if request.Principal == "" {
 		return IPCResponse{OK: false, Error: "principal is required"}
@@ -353,33 +383,115 @@ func (l *Launcher) handleDestroySandbox(ctx context.Context, request *IPCRequest
 		return IPCResponse{OK: false, Error: fmt.Sprintf("invalid principal: %v", err)}
 	}
 
+	l.mu.Lock()
+
 	sb, exists := l.sandboxes[request.Principal]
 	if !exists {
+		l.mu.Unlock()
 		return IPCResponse{OK: false, Error: fmt.Sprintf("no sandbox running for principal %q", request.Principal)}
 	}
 
-	l.logger.Info("destroying sandbox", "principal", request.Principal, "proxy_pid", sb.proxyProcess.Pid)
+	l.logger.Info("destroying sandbox",
+		"principal", request.Principal,
+		"proxy_pid", sb.proxyProcess.Pid,
+		"force", request.Force,
+	)
 
-	// Kill the tmux session first. This stops the bwrap/command inside it.
-	// The session watcher will also detect this and call finishSandbox,
-	// but we call it explicitly below so the IPC response doesn't have to
-	// wait for the next poll interval.
-	l.destroyTmuxSession(request.Principal)
+	sessionName := tmuxSessionName(request.Principal)
 
-	// Close the done channel and kill the proxy. finishSandbox is
-	// idempotent (via doneOnce), so it's safe even if the session
-	// watcher fires concurrently. No output capture — the session was
-	// killed before we could capture, and explicit destruction is not
-	// an error path that needs diagnostics.
+	// Check if the sandbox has already exited (session watcher fired).
+	alreadyDone := false
+	select {
+	case <-sb.done:
+		alreadyDone = true
+	default:
+	}
+
+	if request.Force || alreadyDone {
+		if !alreadyDone {
+			l.forceKillPane(request.Principal, sessionName)
+		}
+		l.destroyTmuxSession(request.Principal)
+		l.finishSandbox(sb, -1, fmt.Errorf("destroyed by IPC request"), "")
+		<-sb.done
+		l.cleanupSandbox(request.Principal)
+		l.mu.Unlock()
+
+		l.logger.Info("sandbox destroyed", "principal", request.Principal, "force", true)
+		return IPCResponse{OK: true}
+	}
+
+	// Graceful path: send SIGTERM, wait for the process to exit.
+	if err := l.tmuxServer.SignalPane(sessionName, syscall.SIGTERM); err != nil {
+		// SignalPane failed — the process may have already exited, or
+		// the tmux session may be in a broken state. Fall through to
+		// force-kill rather than returning an error: the caller asked
+		// for the sandbox to be destroyed, so destroy it.
+		l.logger.Warn("SIGTERM failed, falling through to force-kill",
+			"principal", request.Principal, "error", err)
+		l.forceKillPane(request.Principal, sessionName)
+		l.destroyTmuxSession(request.Principal)
+		l.finishSandbox(sb, -1, fmt.Errorf("destroyed by IPC request"), "")
+		<-sb.done
+		l.cleanupSandbox(request.Principal)
+		l.mu.Unlock()
+
+		l.logger.Info("sandbox destroyed", "principal", request.Principal, "force", true)
+		return IPCResponse{OK: true}
+	}
+
+	// Release the lock during the grace period wait. Other IPC requests
+	// (create-sandbox, signal-sandbox, etc.) can proceed while we wait.
+	l.mu.Unlock()
+
+	gracefulExit := false
+	select {
+	case <-sb.done:
+		// Process exited during the grace period. The session watcher
+		// already called finishSandbox with the real exit code and
+		// output — our finishSandbox call below is a no-op via doneOnce.
+		gracefulExit = true
+	case <-time.After(l.destroyGracePeriod):
+	case <-ctx.Done():
+	}
+
+	l.mu.Lock()
+	defer l.mu.Unlock()
+
+	if !gracefulExit {
+		l.logger.Warn("grace period expired, sending SIGKILL",
+			"principal", request.Principal,
+			"grace_period", l.destroyGracePeriod,
+		)
+		l.forceKillPane(request.Principal, sessionName)
+		l.destroyTmuxSession(request.Principal)
+	}
+
+	// finishSandbox is idempotent via doneOnce: if the session watcher
+	// already finished the sandbox (graceful exit or concurrent pane
+	// death detection), this is a no-op and the real exit info is
+	// preserved. If we force-killed, this sets exit code -1.
 	l.finishSandbox(sb, -1, fmt.Errorf("destroyed by IPC request"), "")
-
-	// Wait for done to ensure everything has settled before cleanup.
 	<-sb.done
-
 	l.cleanupSandbox(request.Principal)
 
-	l.logger.Info("sandbox destroyed", "principal", request.Principal)
+	l.logger.Info("sandbox destroyed",
+		"principal", request.Principal,
+		"graceful", gracefulExit,
+	)
 	return IPCResponse{OK: true}
+}
+
+// forceKillPane sends SIGKILL to the pane process (bureau-log-relay). SIGKILL
+// is uncatchable — the relay dies immediately, triggering bwrap's
+// --die-with-parent (PR_SET_PDEATHSIG sends SIGKILL to bwrap), which
+// cascades to PID namespace reaping of the sandboxed process. Errors are
+// logged but not fatal: the process may have already exited.
+func (l *Launcher) forceKillPane(principalLocalpart, sessionName string) {
+	if err := l.tmuxServer.SignalPane(sessionName, syscall.SIGKILL); err != nil {
+		l.logger.Debug("SIGKILL to pane failed (process may have already exited)",
+			"principal", principalLocalpart, "error", err)
+	}
 }
 
 // handleSignalSandbox sends a signal to a running sandbox's process. The

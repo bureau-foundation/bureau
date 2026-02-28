@@ -13,6 +13,7 @@ import (
 	"sync"
 	"time"
 
+	"github.com/bureau-foundation/bureau/lib/clock"
 	"github.com/bureau-foundation/bureau/lib/tmux"
 )
 
@@ -55,18 +56,31 @@ type ControlClient struct {
 	server           *tmux.Server
 	sessionName      string
 	debounceInterval time.Duration
+	clock            clock.Clock
 	events           chan LayoutChanged
 
 	// cancel stops the control mode subprocess and all goroutines.
 	cancel context.CancelFunc
 
-	// ready is closed when the control mode subprocess is attached
-	// and the notification reader goroutine has started scanning.
-	ready chan struct{}
+	// ready is closed when the initial attach-session response
+	// completes and the control mode client is fully connected.
+	// Notifications are only delivered after this point.
+	ready     chan struct{}
+	readyOnce sync.Once
 
 	// done is closed when the reader goroutine exits. Wait on this
 	// after cancelling to ensure clean shutdown.
 	done chan struct{}
+
+	// notificationsProcessed counts layout-relevant notifications
+	// that have been received and processed (debounce timer reset).
+	notificationsProcessed uint64
+	// scannerDone is set when the scanner goroutine exits (EOF or
+	// context cancellation). WaitForNotifications checks this to
+	// avoid blocking forever when the tmux server dies.
+	scannerDone          bool
+	notificationsMu      sync.Mutex
+	notificationsChanged *sync.Cond
 }
 
 // ControlClientOption configures a ControlClient.
@@ -77,6 +91,14 @@ type ControlClientOption func(*ControlClient)
 func WithDebounceInterval(interval time.Duration) ControlClientOption {
 	return func(client *ControlClient) {
 		client.debounceInterval = interval
+	}
+}
+
+// WithClock sets the clock used for debounce timers. The default is
+// clock.Real(). Tests inject clock.Fake() for deterministic control.
+func WithClock(c clock.Clock) ControlClientOption {
+	return func(client *ControlClient) {
+		client.clock = c
 	}
 }
 
@@ -93,11 +115,13 @@ func NewControlClient(ctx context.Context, server *tmux.Server, sessionName stri
 		server:           server,
 		sessionName:      sessionName,
 		debounceInterval: DefaultDebounceInterval,
+		clock:            clock.Real(),
 		events:           make(chan LayoutChanged, 16),
 		cancel:           cancel,
 		ready:            make(chan struct{}),
 		done:             make(chan struct{}),
 	}
+	client.notificationsChanged = sync.NewCond(&client.notificationsMu)
 	for _, option := range options {
 		option(client)
 	}
@@ -130,6 +154,28 @@ func (client *ControlClient) Stop() {
 	<-client.done
 }
 
+// NotificationsProcessed returns the number of layout-relevant
+// notifications that have been received and processed (debounce
+// timer created or reset).
+func (client *ControlClient) NotificationsProcessed() uint64 {
+	client.notificationsMu.Lock()
+	defer client.notificationsMu.Unlock()
+	return client.notificationsProcessed
+}
+
+// WaitForNotifications blocks until at least n layout-relevant
+// notifications have been processed, or the scanner goroutine exits.
+// Returns true if n notifications were reached, false if the scanner
+// exited first (tmux server died or context was cancelled).
+func (client *ControlClient) WaitForNotifications(n uint64) bool {
+	client.notificationsMu.Lock()
+	defer client.notificationsMu.Unlock()
+	for client.notificationsProcessed < n && !client.scannerDone {
+		client.notificationsChanged.Wait()
+	}
+	return client.notificationsProcessed >= n
+}
+
 // start launches the tmux control mode subprocess and the reader
 // goroutine. Called once from NewControlClient.
 func (client *ControlClient) start(ctx context.Context) error {
@@ -160,10 +206,29 @@ func (client *ControlClient) start(ctx context.Context) error {
 func (client *ControlClient) readNotifications(ctx context.Context, stdout io.Reader, stdin io.WriteCloser, cmd *exec.Cmd) {
 	defer close(client.done)
 	defer close(client.events)
-	defer stdin.Close()
-	defer cmd.Wait()
-
-	close(client.ready)
+	// cmd.Wait() waits for the process to exit and for I/O pipes to
+	// close. We must close stdin before Wait to prevent deadlock when
+	// the process is killed but stdin's write end is still open.
+	defer func() {
+		stdin.Close()
+		cmd.Wait()
+	}()
+	// Broadcast scannerDone before cmd.Wait() (LIFO: last defer
+	// runs first). This unblocks WaitForNotifications even if the
+	// tmux subprocess hasn't exited yet (e.g., server crashed but
+	// the control mode process is still alive).
+	//
+	// Also close client.ready if the scanner exits before the initial
+	// attach response completes. Without this, callers blocking on
+	// Ready() would hang forever if the tmux process dies during
+	// attach (e.g., the tmux server crashed under load).
+	defer func() {
+		client.readyOnce.Do(func() { close(client.ready) })
+		client.notificationsMu.Lock()
+		client.scannerDone = true
+		client.notificationsMu.Unlock()
+		client.notificationsChanged.Broadcast()
+	}()
 
 	scanner := bufio.NewScanner(stdout)
 
@@ -173,7 +238,16 @@ func (client *ControlClient) readNotifications(ctx context.Context, stdout io.Re
 	// track state.
 	insideResponseBlock := false
 
-	var debounceTimer *time.Timer
+	// Wait for the initial attach-session response to complete before
+	// signalling readiness. When tmux -C attach-session connects, the
+	// server sends a %begin/%end response block containing session info.
+	// Until that block completes, the control mode client is not fully
+	// attached and won't receive real-time notifications. If we signal
+	// ready too early, tests can send tmux commands whose notifications
+	// arrive before the client is listening — causing missed events.
+	attachComplete := false
+
+	var debounceTimer *clock.Timer
 	// Guard against firing a stale timer after reset. Each layout-
 	// relevant notification increments the generation; the fire
 	// handler checks that the generation hasn't changed.
@@ -190,6 +264,10 @@ func (client *ControlClient) readNotifications(ctx context.Context, stdout io.Re
 		}
 		if strings.HasPrefix(line, "%end ") || strings.HasPrefix(line, "%error ") {
 			insideResponseBlock = false
+			if !attachComplete {
+				attachComplete = true
+				client.readyOnce.Do(func() { close(client.ready) })
+			}
 			continue
 		}
 		if insideResponseBlock {
@@ -210,7 +288,7 @@ func (client *ControlClient) readNotifications(ctx context.Context, stdout io.Re
 		if debounceTimer != nil {
 			debounceTimer.Stop()
 		}
-		debounceTimer = time.AfterFunc(client.debounceInterval, func() {
+		debounceTimer = client.clock.AfterFunc(client.debounceInterval, func() {
 			generationMutex.Lock()
 			latestGeneration := debounceGeneration
 			generationMutex.Unlock()
@@ -225,15 +303,24 @@ func (client *ControlClient) readNotifications(ctx context.Context, stdout io.Re
 			select {
 			case client.events <- LayoutChanged{
 				SessionName: client.sessionName,
-				Timestamp:   time.Now(),
+				Timestamp:   client.clock.Now(),
 			}:
 			case <-ctx.Done():
 			}
 		})
+
+		// Broadcast after AfterFunc so that WaitForNotifications
+		// callers see both the incremented counter and the
+		// registered timer on the clock.
+		client.notificationsMu.Lock()
+		client.notificationsProcessed++
+		client.notificationsMu.Unlock()
+		client.notificationsChanged.Broadcast()
 	}
 
 	// Scanner finished — either EOF (tmux exited) or context cancelled
 	// (which kills the process, closing stdout). Stop any pending timer.
+	// The scannerDone broadcast is handled by the deferred function above.
 	if debounceTimer != nil {
 		debounceTimer.Stop()
 	}

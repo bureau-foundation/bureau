@@ -184,6 +184,60 @@ mock the *dependency*, never the *subject*. If a test is hard to write without
 mocking the subject, the code's interfaces need improvement — fix the interfaces,
 do not paper over them with mocks.
 
+## Test flakes are production bugs
+
+A flaky test is not noise. It is a production bug that only manifests under
+specific scheduling. The test is doing you a favor by exposing a real race
+condition, a real missing synchronization, or a real ordering assumption that
+will eventually bite production. Treat every flake with the same urgency as a
+test that fails 100% of the time — the only difference is how often the
+universe aligns to show you the problem.
+
+**The wrong reflexes (never do these):**
+
+- Increase a timeout. This makes the flake rarer, not fixed. You have traded
+  a 5% failure rate for a 0.5% failure rate and a slower test suite. The bug
+  is still there. Worse: you've made it harder to reproduce, which makes it
+  harder for the next person to fix.
+- Add a retry loop or `time.Sleep`. Same problem — you're adding latency to
+  paper over a race. If the test needs a sleep, the synchronization is wrong.
+- Blame "parallel test load" or "CI contention." Bureau's test infrastructure
+  is event-driven. There is no legitimate reason for load-sensitivity. If a
+  test passes alone but fails in the suite, that's a data hazard or missing
+  synchronization — find it.
+- Skip it with `--no-verify` because "it's not in my change." This is the
+  tragedy of the commons. If every agent says "not my problem," nobody fixes
+  it, and the team loses minutes on every iteration — sometimes hours when
+  a flake triggers a 30-minute debugging session that concludes with "oh,
+  that's the known flake."
+
+**The right approach:**
+
+- **Identify what the test is actually waiting for.** Usually the answer is
+  "a goroutine to process an event" or "a timer to fire" or "a subprocess to
+  reach a certain state." Find the specific synchronization point.
+- **Make it deterministic.** If the code uses time, inject `lib/clock.Clock`
+  and use `clock.Fake()` in the test. If the code uses a goroutine, add a
+  synchronization signal (channel, condition variable, counter) that lets
+  the test wait for the exact event it needs.
+- **Fix the production code, not just the test.** Flakes almost always reveal
+  that the production code's readiness contract is wrong. A "ready" signal
+  that fires before the component is actually ready is a production bug —
+  the test is just the first consumer to notice.
+- **Stress test the fix.** Run `--runs_per_test=50`. If it's not 50/50, the
+  fix is incomplete.
+
+**When you encounter a flake you can't fix right now:** file a bead with the
+exact failure message, which test, and your best hypothesis about the race.
+A well-described bead is infinitely more useful than `--no-verify`.
+
+**The production code side:** `script/check-real-clock` catches wall-clock
+usage in test files, but the actual bug is usually in production code that
+doesn't accept a `clock.Clock`. When you write production code that uses
+timers, tickers, or time-based decisions, accept a `clock.Clock` parameter.
+This is not over-engineering — it is the difference between a component that
+can be tested deterministically and one that produces flaky tests forever.
+
 ## Diagnosing runtime failures
 
 When a test fails, hangs, or produces unexpected behavior:

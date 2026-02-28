@@ -8,47 +8,61 @@ import (
 	"testing"
 	"time"
 
+	"github.com/bureau-foundation/bureau/lib/clock"
 	"github.com/bureau-foundation/bureau/lib/testutil"
 )
 
 // TestControlClientDebounce verifies that rapid layout notifications
 // coalesce into a single LayoutChanged event after the debounce interval.
+// Uses FakeClock for deterministic timing: the debounce timer only fires
+// when the test explicitly advances the clock, eliminating scheduling
+// races under parallel test load.
 func TestControlClientDebounce(t *testing.T) {
 	t.Parallel()
 	server := TmuxServer(t)
 	sessionName := TmuxSession(t, server, "control/debounce", "")
 
-	ctx, cancel := context.WithCancel(context.Background())
+	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
 	defer cancel()
 
-	// Use a 1 second debounce so the sequential split-window commands
-	// (each spawns a tmux subprocess taking ~50-100ms) all land within
-	// a single debounce window.
+	debounceInterval := 500 * time.Millisecond
+	fakeClock := clock.Fake(time.Unix(1000000000, 0))
+
 	client, err := NewControlClient(ctx, server, sessionName,
-		WithDebounceInterval(1*time.Second))
+		WithDebounceInterval(debounceInterval),
+		WithClock(fakeClock))
 	if err != nil {
 		t.Fatalf("NewControlClient: %v", err)
 	}
 	defer client.Stop()
 
-	// Wait for the control client to attach before triggering events.
 	testutil.RequireClosed(t, client.Ready(), 5*time.Second, "control client ready")
 
 	// Split the window three times in rapid succession. Each split
-	// produces a %layout-change notification. With 1s debounce,
-	// they should coalesce into one event.
+	// produces a %layout-change notification. With a frozen fake clock,
+	// none of the debounce timers fire — the scanner goroutine processes
+	// all three, stopping and replacing the timer each time.
 	for range 3 {
 		mustTmux(t, server, "split-window", "-t", sessionName, "-v")
 	}
 
-	// Wait for exactly one event.
-	event := testutil.RequireReceive(t, client.Events(), 5*time.Second, "waiting for layout change event")
+	// Wait for all three notifications to be processed by the scanner
+	// goroutine before advancing the clock. WaitForNotifications blocks
+	// on a condition variable — no polling.
+	requireNotifications(t, client, 3)
+
+	// Advance past the debounce interval. The AfterFunc callback fires
+	// synchronously during Advance, sending the coalesced event.
+	fakeClock.Advance(debounceInterval)
+
+	event := testutil.RequireReceive(t, client.Events(), 1*time.Second, "waiting for layout change event")
 	if event.SessionName != sessionName {
 		t.Errorf("event session = %q, want %q", event.SessionName, sessionName)
 	}
 
-	// Verify no second event arrives within a reasonable window.
-	assertNoEvent(t, client, 2*time.Second)
+	// Verify no second event arrives. With the fake clock frozen again,
+	// no timers can fire, so this is deterministic.
+	assertNoEvent(t, client, 200*time.Millisecond)
 }
 
 // TestControlClientWindowAdd verifies that creating a new window
@@ -58,11 +72,15 @@ func TestControlClientWindowAdd(t *testing.T) {
 	server := TmuxServer(t)
 	sessionName := TmuxSession(t, server, "control/winadd", "")
 
-	ctx, cancel := context.WithCancel(context.Background())
+	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
 	defer cancel()
 
+	debounceInterval := 500 * time.Millisecond
+	fakeClock := clock.Fake(time.Unix(1000000000, 0))
+
 	client, err := NewControlClient(ctx, server, sessionName,
-		WithDebounceInterval(100*time.Millisecond))
+		WithDebounceInterval(debounceInterval),
+		WithClock(fakeClock))
 	if err != nil {
 		t.Fatalf("NewControlClient: %v", err)
 	}
@@ -72,7 +90,9 @@ func TestControlClientWindowAdd(t *testing.T) {
 
 	// Create a new window — triggers %window-add.
 	mustTmux(t, server, "new-window", "-t", sessionName)
-	testutil.RequireReceive(t, client.Events(), 3*time.Second, "waiting for window-add event")
+	requireNotifications(t, client, 1)
+	fakeClock.Advance(debounceInterval)
+	testutil.RequireReceive(t, client.Events(), 1*time.Second, "waiting for window-add event")
 }
 
 // TestControlClientWindowRename verifies that renaming a window
@@ -82,11 +102,15 @@ func TestControlClientWindowRename(t *testing.T) {
 	server := TmuxServer(t)
 	sessionName := TmuxSession(t, server, "control/winrename", "")
 
-	ctx, cancel := context.WithCancel(context.Background())
+	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
 	defer cancel()
 
+	debounceInterval := 500 * time.Millisecond
+	fakeClock := clock.Fake(time.Unix(1000000000, 0))
+
 	client, err := NewControlClient(ctx, server, sessionName,
-		WithDebounceInterval(100*time.Millisecond))
+		WithDebounceInterval(debounceInterval),
+		WithClock(fakeClock))
 	if err != nil {
 		t.Fatalf("NewControlClient: %v", err)
 	}
@@ -95,7 +119,9 @@ func TestControlClientWindowRename(t *testing.T) {
 	testutil.RequireClosed(t, client.Ready(), 5*time.Second, "control client ready")
 
 	mustTmux(t, server, "rename-window", "-t", sessionName, "renamed")
-	testutil.RequireReceive(t, client.Events(), 3*time.Second, "waiting for window-rename event")
+	requireNotifications(t, client, 1)
+	fakeClock.Advance(debounceInterval)
+	testutil.RequireReceive(t, client.Events(), 1*time.Second, "waiting for window-rename event")
 }
 
 // TestControlClientWindowClose verifies that closing a window triggers
@@ -106,14 +132,18 @@ func TestControlClientWindowClose(t *testing.T) {
 	server := TmuxServer(t)
 	sessionName := TmuxSession(t, server, "control/winclose", "")
 
-	ctx, cancel := context.WithCancel(context.Background())
+	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
 	defer cancel()
 
 	// Create a second window so we can close it.
 	mustTmux(t, server, "new-window", "-t", sessionName)
 
+	debounceInterval := 500 * time.Millisecond
+	fakeClock := clock.Fake(time.Unix(1000000000, 0))
+
 	client, err := NewControlClient(ctx, server, sessionName,
-		WithDebounceInterval(100*time.Millisecond))
+		WithDebounceInterval(debounceInterval),
+		WithClock(fakeClock))
 	if err != nil {
 		t.Fatalf("NewControlClient: %v", err)
 	}
@@ -135,7 +165,9 @@ func TestControlClientWindowClose(t *testing.T) {
 	// session; when we kill a non-current window, tmux sends
 	// %unlinked-window-close.
 	mustTmux(t, server, "kill-window", "-t", sessionName+":"+secondWindowIndex)
-	testutil.RequireReceive(t, client.Events(), 3*time.Second, "waiting for window-close event")
+	requireNotifications(t, client, 1)
+	fakeClock.Advance(debounceInterval)
+	testutil.RequireReceive(t, client.Events(), 1*time.Second, "waiting for window-close event")
 }
 
 // TestControlClientIgnoresNonLayoutEvents verifies that notifications
@@ -145,11 +177,14 @@ func TestControlClientIgnoresNonLayoutEvents(t *testing.T) {
 	server := TmuxServer(t)
 	sessionName := TmuxSession(t, server, "control/ignore", "")
 
-	ctx, cancel := context.WithCancel(context.Background())
+	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
 	defer cancel()
 
+	fakeClock := clock.Fake(time.Unix(1000000000, 0))
+
 	client, err := NewControlClient(ctx, server, sessionName,
-		WithDebounceInterval(100*time.Millisecond))
+		WithDebounceInterval(500*time.Millisecond),
+		WithClock(fakeClock))
 	if err != nil {
 		t.Fatalf("NewControlClient: %v", err)
 	}
@@ -160,7 +195,12 @@ func TestControlClientIgnoresNonLayoutEvents(t *testing.T) {
 	testutil.RequireClosed(t, client.Ready(), 5*time.Second, "control client ready")
 	TmuxSendKeys(t, server, sessionName, "hello")
 
-	assertNoEvent(t, client, 500*time.Millisecond)
+	// Advance the clock well past the debounce interval. If %output
+	// notifications were incorrectly classified as layout events, the
+	// debounce timer would fire and produce an event.
+	fakeClock.Advance(5 * time.Second)
+
+	assertNoEvent(t, client, 200*time.Millisecond)
 }
 
 // TestControlClientCleanShutdown verifies that cancelling the context
@@ -171,11 +211,12 @@ func TestControlClientCleanShutdown(t *testing.T) {
 	server := TmuxServer(t)
 	sessionName := TmuxSession(t, server, "control/shutdown", "")
 
-	ctx, cancel := context.WithCancel(context.Background())
+	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
 
 	client, err := NewControlClient(ctx, server, sessionName,
-		WithDebounceInterval(100*time.Millisecond))
+		WithClock(clock.Fake(time.Unix(1000000000, 0))))
 	if err != nil {
+		cancel()
 		t.Fatalf("NewControlClient: %v", err)
 	}
 
@@ -204,14 +245,20 @@ func TestControlClientSessionExit(t *testing.T) {
 	server := TmuxServer(t)
 	sessionName := TmuxSession(t, server, "control/exit", "")
 
-	ctx, cancel := context.WithCancel(context.Background())
+	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
 	defer cancel()
 
 	client, err := NewControlClient(ctx, server, sessionName,
-		WithDebounceInterval(100*time.Millisecond))
+		WithClock(clock.Fake(time.Unix(1000000000, 0))))
 	if err != nil {
 		t.Fatalf("NewControlClient: %v", err)
 	}
+
+	// Wait for the control client to fully attach before killing
+	// the session. The test verifies that killing a session causes
+	// a clean shutdown — the control client must be attached and
+	// scanning notifications for this to be meaningful.
+	testutil.RequireClosed(t, client.Ready(), 5*time.Second, "control client ready")
 
 	// Kill the session. The control mode client should detect the
 	// exit and shut down.
@@ -240,11 +287,11 @@ func TestControlClientNoSizeConstraint(t *testing.T) {
 		server.Run("kill-session", "-t", "control/size")
 	})
 
-	ctx, cancel := context.WithCancel(context.Background())
+	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
 	defer cancel()
 
 	client, err := NewControlClient(ctx, server, "control/size",
-		WithDebounceInterval(100*time.Millisecond))
+		WithClock(clock.Fake(time.Unix(1000000000, 0))))
 	if err != nil {
 		t.Fatalf("NewControlClient: %v", err)
 	}
@@ -268,24 +315,32 @@ func TestControlClientResponseBlockFiltering(t *testing.T) {
 	server := TmuxServer(t)
 	sessionName := TmuxSession(t, server, "control/blocks", "")
 
-	ctx, cancel := context.WithCancel(context.Background())
+	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
 	defer cancel()
 
+	debounceInterval := 500 * time.Millisecond
+	fakeClock := clock.Fake(time.Unix(1000000000, 0))
+
 	client, err := NewControlClient(ctx, server, sessionName,
-		WithDebounceInterval(100*time.Millisecond))
+		WithDebounceInterval(debounceInterval),
+		WithClock(fakeClock))
 	if err != nil {
 		t.Fatalf("NewControlClient: %v", err)
 	}
 	defer client.Stop()
 
 	// Wait for initial attach to complete. No layout events should
-	// fire from the control mode attach sequence.
+	// fire from the control mode attach sequence. Advancing the clock
+	// would fire any incorrectly registered timers.
 	testutil.RequireClosed(t, client.Ready(), 5*time.Second, "control client ready")
-	assertNoEvent(t, client, 300*time.Millisecond)
+	fakeClock.Advance(5 * time.Second)
+	assertNoEvent(t, client, 200*time.Millisecond)
 
 	// Now trigger a real layout change to prove events still work.
 	mustTmux(t, server, "split-window", "-t", sessionName, "-v")
-	testutil.RequireReceive(t, client.Events(), 3*time.Second, "waiting for layout change event")
+	requireNotifications(t, client, 1)
+	fakeClock.Advance(debounceInterval)
+	testutil.RequireReceive(t, client.Events(), 1*time.Second, "waiting for layout change event")
 }
 
 // TestIsLayoutNotification exercises the notification classifier.
@@ -321,6 +376,17 @@ func TestIsLayoutNotification(t *testing.T) {
 			t.Errorf("isLayoutNotification(%q) = %v, want %v",
 				test.line, result, test.expected)
 		}
+	}
+}
+
+// requireNotifications waits for n notifications to be processed, failing
+// the test if the scanner goroutine exits before reaching the target
+// (e.g., tmux server died).
+func requireNotifications(t *testing.T, client *ControlClient, n uint64) {
+	t.Helper()
+	if !client.WaitForNotifications(n) {
+		t.Fatalf("scanner exited before %d notifications were processed (got %d)",
+			n, client.NotificationsProcessed())
 	}
 }
 

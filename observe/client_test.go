@@ -290,7 +290,9 @@ func TestSessionRunSendsInput(t *testing.T) {
 	t.Parallel()
 	daemon, socketPath, accepted := newTestDaemon(t, testMetadata, nil)
 
+	daemonDone := make(chan struct{})
 	go func() {
+		defer close(daemonDone)
 		<-accepted
 		daemon.handshake(t)
 
@@ -332,6 +334,12 @@ func TestSessionRunSendsInput(t *testing.T) {
 	if err != nil {
 		t.Fatalf("Run: %v", err)
 	}
+
+	// Wait for the daemon goroutine to finish reading the input
+	// message before the test returns. Without this, t.Cleanup
+	// (registered by newTestDaemon) races to close daemon.conn
+	// while the daemon goroutine is still in readMessage.
+	<-daemonDone
 }
 
 func TestSessionRunWithPipe(t *testing.T) {

@@ -25,6 +25,7 @@ go_library(
     importpath = "github.com/bureau-foundation/bureau/observe",
     visibility = ["//visibility:public"],
     deps = [
+        "//lib/clock",
         "//lib/schema",
         "//lib/schema/observation",
         "//lib/tmux",
@@ -53,6 +54,7 @@ go_test(
     ],
     embed = [":observe"],
     deps = [
+        "//lib/clock",
         "//lib/schema",
         "//lib/schema/observation",
         "//lib/testutil",

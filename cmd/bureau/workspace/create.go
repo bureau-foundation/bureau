@@ -33,7 +33,7 @@ type createParams struct {
 	Param      []string `json:"param"       flag:"param"       desc:"key=value parameter (repeatable; recognized: repository, branch)"`
 	ServerName string   `json:"server_name" flag:"server-name" desc:"Matrix server name (auto-detected from machine.conf)"`
 	AgentCount int      `json:"agent_count" flag:"agent-count" desc:"number of agent principals to create" default:"1"`
-	DevTeam    string   `json:"dev_team"    flag:"dev-team"    desc:"dev team room alias localpart (e.g., iree/amdgpu/dev); defaults to <namespace>/dev"`
+	DevTeam    string   `json:"dev_team"    flag:"dev-team"    desc:"dev team room alias (e.g., #iree/dev:bureau.local); defaults to #<namespace>/dev:<server>"`
 }
 
 // CreateParams holds the parameters for workspace creation. Callers that
@@ -59,9 +59,9 @@ type CreateParams struct {
 	// AgentCount is the number of agent principals to create.
 	AgentCount int
 
-	// DevTeam overrides the dev team room alias localpart for this
-	// workspace (e.g., "iree/amdgpu/dev"). When empty, defaults to
-	// the namespace convention: #<project>/dev:<server>.
+	// DevTeam overrides the dev team room alias for this workspace
+	// (e.g., "#iree/dev:bureau.local"). When empty, defaults to the
+	// namespace convention: #<project>/dev:<server>.
 	DevTeam string
 }
 
@@ -291,9 +291,9 @@ func Create(ctx context.Context, session messaging.Session, params CreateParams,
 	// which is the namespace by convention.
 	var devTeamAlias ref.RoomAlias
 	if params.DevTeam != "" {
-		devTeamAlias, err = ref.ParseRoomAlias(schema.FullRoomAlias(params.DevTeam, serverName))
+		devTeamAlias, err = ref.ParseRoomAlias(params.DevTeam)
 		if err != nil {
-			return nil, cli.Validation("invalid --dev-team alias %q: %w", params.DevTeam, err)
+			return nil, cli.Validation("invalid --dev-team alias %q: %v", params.DevTeam, err)
 		}
 	} else {
 		namespace, namespaceError := ref.NewNamespace(serverName, project)

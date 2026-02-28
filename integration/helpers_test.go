@@ -1166,7 +1166,7 @@ func createTestFleet(t *testing.T, admin *messaging.DirectSession) *testFleet {
 	}
 
 	logger := slog.New(slog.NewJSONHandler(os.Stderr, nil)).With("test", t.Name())
-	rooms, err := fleet.EnsureFleetRooms(ctx, admin, fleetRef, logger)
+	rooms, err := fleet.EnsureFleetRooms(ctx, admin, fleetRef, ref.RoomAlias{}, logger)
 	if err != nil {
 		t.Fatalf("ensure fleet rooms: %v", err)
 	}

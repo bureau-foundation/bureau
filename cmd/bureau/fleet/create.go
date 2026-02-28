@@ -19,7 +19,8 @@ import (
 type createParams struct {
 	cli.SessionConfig
 	cli.JSONOutput
-	Invite []string `json:"invite" flag:"invite" desc:"Matrix user ID to invite to fleet rooms (repeatable)"`
+	Invite  []string `json:"invite"   flag:"invite"   desc:"Matrix user ID to invite to fleet rooms (repeatable)"`
+	DevTeam string   `json:"dev_team" flag:"dev-team" desc:"dev team room alias (e.g., #bureau/dev:bureau.local); defaults to #<namespace>/dev:<server>"`
 }
 
 // createResult is the JSON output of the fleet create command.
@@ -57,7 +58,13 @@ This command:
       #<ns>/fleet/<name>/machine   machine keys, heartbeats, WebRTC
       #<ns>/fleet/<name>/service   service registrations
   - Adds all three rooms as children of the namespace space
+  - Publishes dev team metadata (m.bureau.dev_team) on all fleet rooms
   - Optionally invites users to all fleet rooms
+
+By default, dev team metadata points to #<namespace>/dev:<server> — the
+namespace's primary dev team room. Use --dev-team to override this for
+multi-team organizations where different fleets are maintained by
+different teams.
 
 Safe to re-run: all operations are idempotent (existing rooms are left
 unchanged).`,
@@ -70,6 +77,10 @@ unchanged).`,
 			{
 				Description: "Create a fleet and invite a user",
 				Command:     "bureau fleet create bureau/fleet/staging --credential-file ./creds --invite @alice:bureau.local",
+			},
+			{
+				Description: "Create a fleet with a custom dev team",
+				Command:     "bureau fleet create bureau/fleet/staging --dev-team '#infra/dev:bureau.local'",
 			},
 		},
 		Params:         func() any { return &params },
@@ -111,7 +122,15 @@ func runCreate(ctx context.Context, logger *slog.Logger, fleetLocalpart string, 
 		return cli.Validation("%v", err)
 	}
 
-	rooms, err := EnsureFleetRooms(ctx, session, fleet, logger)
+	var devTeamOverride ref.RoomAlias
+	if params.DevTeam != "" {
+		devTeamOverride, err = ref.ParseRoomAlias(params.DevTeam)
+		if err != nil {
+			return cli.Validation("invalid --dev-team alias %q: %v", params.DevTeam, err)
+		}
+	}
+
+	rooms, err := EnsureFleetRooms(ctx, session, fleet, devTeamOverride, logger)
 	if err != nil {
 		return err
 	}
@@ -159,7 +178,12 @@ type FleetRooms struct {
 // if they don't exist and adds them as children of the namespace space. All
 // identity information comes from the fleet ref — no string decomposition
 // at the call site.
-func EnsureFleetRooms(ctx context.Context, session messaging.Session, fleet ref.Fleet, logger *slog.Logger) (FleetRooms, error) {
+//
+// devTeamOverride, when non-zero, overrides the conventional dev team room
+// alias (#<namespace>/dev:<server>) published as m.bureau.dev_team on all
+// fleet rooms. This supports multi-team organizations where a fleet is
+// maintained by a team other than the namespace's primary dev team.
+func EnsureFleetRooms(ctx context.Context, session messaging.Session, fleet ref.Fleet, devTeamOverride ref.RoomAlias, logger *slog.Logger) (FleetRooms, error) {
 	// Resolve the namespace space that will parent these rooms.
 	spaceAlias := fleet.Namespace().SpaceAlias()
 	spaceRoomID, err := session.ResolveAlias(ctx, spaceAlias)
@@ -218,11 +242,15 @@ func EnsureFleetRooms(ctx context.Context, session messaging.Session, fleet ref.
 		return FleetRooms{}, err
 	}
 
-	// Publish dev team metadata on all fleet rooms. The convention
-	// alias #<namespace>/dev:<server> points to the namespace's dev
-	// team room. Idempotent — re-publishing identical content is a
-	// no-op at the homeserver level.
-	devTeamContent := schema.DevTeamContent{Room: schema.DevTeamRoomAlias(fleet.Namespace())}
+	// Publish dev team metadata on all fleet rooms. When an override
+	// is provided, it takes precedence over the namespace convention
+	// alias (#<namespace>/dev:<server>). Idempotent — re-publishing
+	// identical content is a no-op at the homeserver level.
+	devTeamAlias := devTeamOverride
+	if devTeamAlias.IsZero() {
+		devTeamAlias = schema.DevTeamRoomAlias(fleet.Namespace())
+	}
+	devTeamContent := schema.DevTeamContent{Room: devTeamAlias}
 	for _, roomID := range []ref.RoomID{configRoomID, machineRoomID, serviceRoomID} {
 		if _, err := session.SendStateEvent(ctx, roomID, schema.EventTypeDevTeam, "", devTeamContent); err != nil {
 			return FleetRooms{}, cli.Transient("publish dev team metadata: %w", err)

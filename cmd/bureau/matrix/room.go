@@ -51,7 +51,7 @@ type roomCreateParams struct {
 	Topic             string   `json:"topic"              flag:"topic"              desc:"room topic"`
 	ServerName        string   `json:"server_name"        flag:"server-name"        desc:"Matrix server name for m.space.child via field (auto-detected from machine.conf)"`
 	MemberStateEvents []string `json:"member_state_events" flag:"member-state-event" desc:"state event type that members can set (repeatable)"`
-	DevTeam           string   `json:"dev_team"            flag:"dev-team"            desc:"dev team room alias localpart (e.g., iree/dev); defaults to <first-alias-segment>/dev"`
+	DevTeam           string   `json:"dev_team"            flag:"dev-team"            desc:"dev team room alias (e.g., #iree/dev:bureau.local); defaults to #<first-alias-segment>/dev:<server>"`
 	cli.JSONOutput
 }
 
@@ -183,10 +183,10 @@ such as m.bureau.machine_key or m.bureau.service.`,
 }
 
 // publishDevTeamMetadata publishes m.bureau.dev_team on a newly created room.
-// If devTeamOverride is non-empty, it is used as the dev team alias localpart.
-// Otherwise the first segment of the room alias (namespace by convention) is
-// used to derive #<namespace>/dev:<server>. Single-segment aliases have no
-// namespace — dev team metadata is skipped.
+// If devTeamOverride is non-empty, it is parsed as a full room alias
+// (e.g., "#iree/dev:bureau.local"). Otherwise the first segment of the room
+// alias (namespace by convention) is used to derive #<namespace>/dev:<server>.
+// Single-segment aliases have no namespace — dev team metadata is skipped.
 func publishDevTeamMetadata(ctx context.Context, session messaging.Session, roomID ref.RoomID, alias, devTeamOverride, serverNameString string) error {
 	serverName, err := ref.ParseServerName(serverNameString)
 	if err != nil {
@@ -195,9 +195,9 @@ func publishDevTeamMetadata(ctx context.Context, session messaging.Session, room
 
 	var devTeamAlias ref.RoomAlias
 	if devTeamOverride != "" {
-		devTeamAlias, err = ref.ParseRoomAlias(schema.FullRoomAlias(devTeamOverride, serverName))
+		devTeamAlias, err = ref.ParseRoomAlias(devTeamOverride)
 		if err != nil {
-			return cli.Validation("invalid --dev-team alias %q: %w", devTeamOverride, err)
+			return cli.Validation("invalid --dev-team alias %q: %v", devTeamOverride, err)
 		}
 	} else if namespaceName, _, hasSlash := strings.Cut(alias, "/"); hasSlash {
 		namespace, namespaceError := ref.NewNamespace(serverName, namespaceName)

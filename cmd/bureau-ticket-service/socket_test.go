@@ -41,6 +41,10 @@ type testServerOpts struct {
 	grants []servicetoken.Grant
 	// noGrants mints a token with no grants at all.
 	noGrants bool
+	// subject overrides the token subject localpart suffix.
+	// Default: "agent/tester" (expands to
+	// @bureau/fleet/prod/agent/tester:bureau.local).
+	subject string
 	// withTimers starts the timer loop and uses a 30-day token
 	// so clock advancement doesn't expire the token.
 	withTimers bool
@@ -127,9 +131,13 @@ func newTestServer(t *testing.T, rooms map[ref.RoomID]*roomState, opts testServe
 	// Determine grants and subject.
 	grants := opts.grants
 	subject := "agent/tester"
+	if opts.subject != "" {
+		subject = opts.subject
+	} else if opts.noGrants {
+		subject = "agent/unauthorized"
+	}
 	if opts.noGrants {
 		grants = nil
-		subject = "agent/unauthorized"
 	} else if grants == nil {
 		grants = []servicetoken.Grant{{Actions: []string{"ticket/*"}}}
 	}
@@ -632,6 +640,20 @@ func mutationRooms() map[ref.RoomID]*roomState {
 			Status:    ticket.StatusBlocked,
 			Priority:  2,
 			Type:      ticket.TypeTask,
+			CreatedBy: ref.MustParseUserID("@agent/creator:bureau.local"),
+			CreatedAt: "2026-01-01T00:00:00Z",
+			UpdatedAt: "2026-01-02T00:00:00Z",
+		},
+		// tkt-mywork is assigned to the default test token subject
+		// (@bureau/fleet/prod/agent/tester:bureau.local). Used by
+		// assignee floor permission tests.
+		"tkt-mywork": {
+			Version:   1,
+			Title:     "my assigned ticket",
+			Status:    ticket.StatusInProgress,
+			Priority:  2,
+			Type:      ticket.TypeTask,
+			Assignee:  ref.MustParseUserID("@bureau/fleet/prod/agent/tester:bureau.local"),
 			CreatedBy: ref.MustParseUserID("@agent/creator:bureau.local"),
 			CreatedAt: "2026-01-01T00:00:00Z",
 			UpdatedAt: "2026-01-02T00:00:00Z",

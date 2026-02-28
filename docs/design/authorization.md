@@ -769,6 +769,47 @@ Room-level policy in the workstream room grants `ticket/create` and
 `ticket/reopen` to power level 50+. Any room member can create
 tickets; only the TPM or admin can close them.
 
+### Assignee floor
+
+Assignment is delegation of work authority. When a principal is the
+current assignee of a ticket, the ticket system grants implicit
+permission to perform the operations needed to do that work — no
+explicit grants required beyond room membership. This applies to all
+principals: agents, pipelines, humans.
+
+The **assignee floor** covers operations on the assigned ticket only:
+
+- Status transitions (claim, submit for review, close)
+- Body and label updates
+- Adding notes
+- Closing with a reason
+- Setting context ID (agent session linkage)
+- Relinquishing: clearing own assignee, returning the ticket to open
+
+Everything above the floor requires explicit grants:
+
+- Creating tickets (`ticket/create`)
+- Modifying any ticket broadly (`ticket/update`)
+- Reopening closed tickets (`ticket/reopen`)
+- Structural fields: title, priority, type, parent, blocked_by,
+  gates, review, pipeline, affects, deadline
+- Reassigning to a different principal
+
+The security chain: only principals with a broad `ticket/update`
+grant can set the assignee field. The PM assigns a ticket, and the
+assignee gets the floor. The PM is the gatekeeper. Room membership
+plus assignment equals work authority.
+
+When a principal has a broad grant (e.g. `ticket/update`), the grant
+system applies with no field restrictions — existing behavior is
+unchanged. The floor is a fallback for principals who lack grants
+but are the assigned worker.
+
+Relinquishment allows an assignee to un-assign themselves (clearing
+assignee to zero, status back to open) but never to reassign to
+another principal. This prevents delegation chains without central
+oversight while letting agents return tickets they cannot complete.
+
 ### Operator access
 
 An operator's authorization comes from room membership and power

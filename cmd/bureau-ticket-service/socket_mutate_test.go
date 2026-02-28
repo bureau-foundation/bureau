@@ -1062,6 +1062,400 @@ func TestWildcardGrantCoversCloseAndReopen(t *testing.T) {
 	}
 }
 
+// --- Assignee floor permission tests ---
+//
+// The assignee floor grants implicit write permission to the current
+// assignee of a ticket without requiring any explicit grants. Floor
+// operations: status transitions, body, labels, context_id, notes,
+// close, and relinquish (clear own assignee).
+
+// noGrantsAssigneeEnv creates a test environment with no grants and
+// the default subject (@bureau/fleet/prod/agent/tester:bureau.local),
+// which is the assignee of tkt-mywork.
+func noGrantsAssigneeEnv(t *testing.T) *testEnv {
+	t.Helper()
+	return newTestServer(t, mutationRooms(), testServerOpts{
+		grants: []servicetoken.Grant{},
+	})
+}
+
+func TestAssigneeFloorUpdateBody(t *testing.T) {
+	env := noGrantsAssigneeEnv(t)
+	defer env.cleanup()
+
+	var result mutationResponse
+	err := env.client.Call(context.Background(), "update", map[string]any{
+		"ticket": "tkt-mywork",
+		"room":   "!room:bureau.local",
+		"body":   "updated by assignee",
+	}, &result)
+	if err != nil {
+		t.Fatalf("assignee floor body update should succeed: %v", err)
+	}
+	if result.Content.Body != "updated by assignee" {
+		t.Errorf("body: got %q, want %q", result.Content.Body, "updated by assignee")
+	}
+}
+
+func TestAssigneeFloorUpdateLabels(t *testing.T) {
+	env := noGrantsAssigneeEnv(t)
+	defer env.cleanup()
+
+	var result mutationResponse
+	err := env.client.Call(context.Background(), "update", map[string]any{
+		"ticket": "tkt-mywork",
+		"room":   "!room:bureau.local",
+		"labels": []string{"needs-escalation"},
+	}, &result)
+	if err != nil {
+		t.Fatalf("assignee floor labels update should succeed: %v", err)
+	}
+	if len(result.Content.Labels) != 1 || result.Content.Labels[0] != "needs-escalation" {
+		t.Errorf("labels: got %v, want [needs-escalation]", result.Content.Labels)
+	}
+}
+
+func TestAssigneeFloorUpdateContextID(t *testing.T) {
+	env := noGrantsAssigneeEnv(t)
+	defer env.cleanup()
+
+	var result mutationResponse
+	err := env.client.Call(context.Background(), "update", map[string]any{
+		"ticket":     "tkt-mywork",
+		"room":       "!room:bureau.local",
+		"context_id": "session-42",
+	}, &result)
+	if err != nil {
+		t.Fatalf("assignee floor context_id update should succeed: %v", err)
+	}
+	if result.Content.ContextID != "session-42" {
+		t.Errorf("context_id: got %q, want %q", result.Content.ContextID, "session-42")
+	}
+}
+
+func TestAssigneeFloorClose(t *testing.T) {
+	env := noGrantsAssigneeEnv(t)
+	defer env.cleanup()
+
+	var result mutationResponse
+	err := env.client.Call(context.Background(), "close", map[string]any{
+		"ticket": "tkt-mywork",
+		"room":   "!room:bureau.local",
+		"reason": "work complete",
+	}, &result)
+	if err != nil {
+		t.Fatalf("assignee floor close should succeed: %v", err)
+	}
+	if result.Content.Status != ticket.StatusClosed {
+		t.Errorf("status: got %q, want %q", result.Content.Status, ticket.StatusClosed)
+	}
+	if result.Content.CloseReason != "work complete" {
+		t.Errorf("close_reason: got %q, want %q", result.Content.CloseReason, "work complete")
+	}
+}
+
+func TestAssigneeFloorCloseViaUpdate(t *testing.T) {
+	env := noGrantsAssigneeEnv(t)
+	defer env.cleanup()
+
+	var result mutationResponse
+	err := env.client.Call(context.Background(), "update", map[string]any{
+		"ticket": "tkt-mywork",
+		"room":   "!room:bureau.local",
+		"status": "closed",
+	}, &result)
+	if err != nil {
+		t.Fatalf("assignee floor close via update should succeed: %v", err)
+	}
+	if result.Content.Status != ticket.StatusClosed {
+		t.Errorf("status: got %q, want %q", result.Content.Status, ticket.StatusClosed)
+	}
+}
+
+func TestAssigneeFloorAddNote(t *testing.T) {
+	env := noGrantsAssigneeEnv(t)
+	defer env.cleanup()
+
+	var result mutationResponse
+	err := env.client.Call(context.Background(), "add-note", map[string]any{
+		"ticket": "tkt-mywork",
+		"room":   "!room:bureau.local",
+		"body":   "investigation findings",
+	}, &result)
+	if err != nil {
+		t.Fatalf("assignee floor add-note should succeed: %v", err)
+	}
+	if len(result.Content.Notes) != 1 {
+		t.Fatalf("notes: got %d, want 1", len(result.Content.Notes))
+	}
+	if result.Content.Notes[0].Body != "investigation findings" {
+		t.Errorf("note body: got %q, want %q", result.Content.Notes[0].Body, "investigation findings")
+	}
+}
+
+func TestAssigneeFloorRelinquish(t *testing.T) {
+	env := noGrantsAssigneeEnv(t)
+	defer env.cleanup()
+
+	var result mutationResponse
+	err := env.client.Call(context.Background(), "update", map[string]any{
+		"ticket":   "tkt-mywork",
+		"room":     "!room:bureau.local",
+		"status":   "open",
+		"assignee": "",
+	}, &result)
+	if err != nil {
+		t.Fatalf("assignee floor relinquish should succeed: %v", err)
+	}
+	if result.Content.Status != ticket.StatusOpen {
+		t.Errorf("status: got %q, want %q", result.Content.Status, ticket.StatusOpen)
+	}
+	if !result.Content.Assignee.IsZero() {
+		t.Errorf("assignee: got %v, want zero", result.Content.Assignee)
+	}
+}
+
+// --- Assignee floor field restriction tests ---
+
+func TestAssigneeFloorDeniesTitle(t *testing.T) {
+	env := noGrantsAssigneeEnv(t)
+	defer env.cleanup()
+
+	err := env.client.Call(context.Background(), "update", map[string]any{
+		"ticket": "tkt-mywork",
+		"room":   "!room:bureau.local",
+		"title":  "new title",
+	}, nil)
+	serviceErr := requireServiceError(t, err)
+	if !strings.Contains(serviceErr.Message, "title") {
+		t.Errorf("error should mention 'title': %s", serviceErr.Message)
+	}
+}
+
+func TestAssigneeFloorDeniesPriority(t *testing.T) {
+	env := noGrantsAssigneeEnv(t)
+	defer env.cleanup()
+
+	err := env.client.Call(context.Background(), "update", map[string]any{
+		"ticket":   "tkt-mywork",
+		"room":     "!room:bureau.local",
+		"priority": 0,
+	}, nil)
+	serviceErr := requireServiceError(t, err)
+	if !strings.Contains(serviceErr.Message, "priority") {
+		t.Errorf("error should mention 'priority': %s", serviceErr.Message)
+	}
+}
+
+func TestAssigneeFloorDeniesType(t *testing.T) {
+	env := noGrantsAssigneeEnv(t)
+	defer env.cleanup()
+
+	err := env.client.Call(context.Background(), "update", map[string]any{
+		"ticket": "tkt-mywork",
+		"room":   "!room:bureau.local",
+		"type":   "bug",
+	}, nil)
+	serviceErr := requireServiceError(t, err)
+	if !strings.Contains(serviceErr.Message, "type") {
+		t.Errorf("error should mention 'type': %s", serviceErr.Message)
+	}
+}
+
+func TestAssigneeFloorDeniesParent(t *testing.T) {
+	env := noGrantsAssigneeEnv(t)
+	defer env.cleanup()
+
+	err := env.client.Call(context.Background(), "update", map[string]any{
+		"ticket": "tkt-mywork",
+		"room":   "!room:bureau.local",
+		"parent": "tkt-open",
+	}, nil)
+	serviceErr := requireServiceError(t, err)
+	if !strings.Contains(serviceErr.Message, "parent") {
+		t.Errorf("error should mention 'parent': %s", serviceErr.Message)
+	}
+}
+
+func TestAssigneeFloorDeniesBlockedBy(t *testing.T) {
+	env := noGrantsAssigneeEnv(t)
+	defer env.cleanup()
+
+	err := env.client.Call(context.Background(), "update", map[string]any{
+		"ticket":     "tkt-mywork",
+		"room":       "!room:bureau.local",
+		"blocked_by": []string{"tkt-open"},
+	}, nil)
+	serviceErr := requireServiceError(t, err)
+	if !strings.Contains(serviceErr.Message, "blocked_by") {
+		t.Errorf("error should mention 'blocked_by': %s", serviceErr.Message)
+	}
+}
+
+func TestAssigneeFloorDeniesAffects(t *testing.T) {
+	env := noGrantsAssigneeEnv(t)
+	defer env.cleanup()
+
+	err := env.client.Call(context.Background(), "update", map[string]any{
+		"ticket":  "tkt-mywork",
+		"room":    "!room:bureau.local",
+		"affects": []string{"proxy/**"},
+	}, nil)
+	serviceErr := requireServiceError(t, err)
+	if !strings.Contains(serviceErr.Message, "affects") {
+		t.Errorf("error should mention 'affects': %s", serviceErr.Message)
+	}
+}
+
+func TestAssigneeFloorDeniesDeadline(t *testing.T) {
+	env := noGrantsAssigneeEnv(t)
+	defer env.cleanup()
+
+	err := env.client.Call(context.Background(), "update", map[string]any{
+		"ticket":   "tkt-mywork",
+		"room":     "!room:bureau.local",
+		"deadline": "2026-03-01T00:00:00Z",
+	}, nil)
+	serviceErr := requireServiceError(t, err)
+	if !strings.Contains(serviceErr.Message, "deadline") {
+		t.Errorf("error should mention 'deadline': %s", serviceErr.Message)
+	}
+}
+
+func TestAssigneeFloorDeniesReview(t *testing.T) {
+	env := noGrantsAssigneeEnv(t)
+	defer env.cleanup()
+
+	err := env.client.Call(context.Background(), "update", map[string]any{
+		"ticket": "tkt-mywork",
+		"room":   "!room:bureau.local",
+		"review": map[string]any{
+			"reviewers": []map[string]any{
+				{"user_id": "@agent/reviewer:bureau.local", "disposition": "pending"},
+			},
+		},
+	}, nil)
+	serviceErr := requireServiceError(t, err)
+	if !strings.Contains(serviceErr.Message, "review") {
+		t.Errorf("error should mention 'review': %s", serviceErr.Message)
+	}
+}
+
+func TestAssigneeFloorDeniesReassign(t *testing.T) {
+	env := noGrantsAssigneeEnv(t)
+	defer env.cleanup()
+
+	err := env.client.Call(context.Background(), "update", map[string]any{
+		"ticket":   "tkt-mywork",
+		"room":     "!room:bureau.local",
+		"assignee": "@agent/someone-else:bureau.local",
+	}, nil)
+	serviceErr := requireServiceError(t, err)
+	if !strings.Contains(serviceErr.Message, "reassigning") {
+		t.Errorf("error should mention 'reassigning': %s", serviceErr.Message)
+	}
+}
+
+func TestAssigneeFloorDeniesReopen(t *testing.T) {
+	// Use a custom subject that matches tkt-closed's... wait, tkt-closed
+	// has no assignee. We need a closed ticket assigned to us. Create one
+	// by closing tkt-mywork first, then trying to reopen.
+	env := noGrantsAssigneeEnv(t)
+	defer env.cleanup()
+
+	// Close the ticket (floor allows this).
+	err := env.client.Call(context.Background(), "close", map[string]any{
+		"ticket": "tkt-mywork",
+		"room":   "!room:bureau.local",
+		"reason": "done",
+	}, nil)
+	if err != nil {
+		t.Fatalf("close: %v", err)
+	}
+
+	// Reopen requires ticket/reopen grant, not in the floor.
+	err = env.client.Call(context.Background(), "reopen", map[string]any{
+		"ticket": "tkt-mywork",
+		"room":   "!room:bureau.local",
+	}, nil)
+	requireServiceError(t, err)
+}
+
+// --- Non-assignee denial tests ---
+
+func TestNonAssigneeNoGrantDeniedUpdate(t *testing.T) {
+	// Token subject is agent/tester, ticket is assigned to agent/worker.
+	env := noGrantsAssigneeEnv(t)
+	defer env.cleanup()
+
+	err := env.client.Call(context.Background(), "update", map[string]any{
+		"ticket": "tkt-inprog",
+		"room":   "!room:bureau.local",
+		"body":   "should fail",
+	}, nil)
+	serviceErr := requireServiceError(t, err)
+	if !strings.Contains(serviceErr.Message, "access denied") {
+		t.Errorf("error should contain 'access denied': %s", serviceErr.Message)
+	}
+}
+
+func TestNonAssigneeNoGrantDeniedClose(t *testing.T) {
+	env := noGrantsAssigneeEnv(t)
+	defer env.cleanup()
+
+	err := env.client.Call(context.Background(), "close", map[string]any{
+		"ticket": "tkt-inprog",
+		"room":   "!room:bureau.local",
+		"reason": "should fail",
+	}, nil)
+	serviceErr := requireServiceError(t, err)
+	if !strings.Contains(serviceErr.Message, "access denied") {
+		t.Errorf("error should contain 'access denied': %s", serviceErr.Message)
+	}
+}
+
+func TestNonAssigneeNoGrantDeniedAddNote(t *testing.T) {
+	env := noGrantsAssigneeEnv(t)
+	defer env.cleanup()
+
+	err := env.client.Call(context.Background(), "add-note", map[string]any{
+		"ticket": "tkt-inprog",
+		"room":   "!room:bureau.local",
+		"body":   "should fail",
+	}, nil)
+	serviceErr := requireServiceError(t, err)
+	if !strings.Contains(serviceErr.Message, "access denied") {
+		t.Errorf("error should contain 'access denied': %s", serviceErr.Message)
+	}
+}
+
+// --- Broad grant regression test ---
+
+func TestBroadGrantStillAllowsAllFields(t *testing.T) {
+	// Broad ticket/* grant should allow modifying any field, including
+	// those outside the assignee floor. This is regression coverage.
+	env := testMutationServer(t, mutationRooms())
+	defer env.cleanup()
+
+	var result mutationResponse
+	err := env.client.Call(context.Background(), "update", map[string]any{
+		"ticket":   "tkt-mywork",
+		"room":     "!room:bureau.local",
+		"title":    "updated title",
+		"priority": 0,
+		"body":     "updated body",
+	}, &result)
+	if err != nil {
+		t.Fatalf("broad grant update should succeed: %v", err)
+	}
+	if result.Content.Title != "updated title" {
+		t.Errorf("title: got %q, want %q", result.Content.Title, "updated title")
+	}
+	if result.Content.Priority != 0 {
+		t.Errorf("priority: got %d, want 0", result.Content.Priority)
+	}
+}
+
 // --- Pipeline ticket tests ---
 
 // TestHandleCreatePipelineTicket verifies that creating a ticket with

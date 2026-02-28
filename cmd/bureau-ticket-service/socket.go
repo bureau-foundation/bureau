@@ -160,6 +160,64 @@ func requireGrant(token *servicetoken.Token, action string) error {
 	return nil
 }
 
+// checkGrant reports whether the token carries a grant for the given
+// action. Unlike requireGrant, it does not return an error — callers
+// use this when the grant check is one of multiple authorization
+// paths (e.g., broad grant OR assignee floor).
+func checkGrant(token *servicetoken.Token, action string) bool {
+	return servicetoken.GrantsAllow(token.Grants, action, "")
+}
+
+// isAssignee reports whether the token's subject is the current
+// assignee of the ticket. Returns false when the ticket has no
+// assignee (zero value).
+func isAssignee(token *servicetoken.Token, content *ticket.TicketContent) bool {
+	return !content.Assignee.IsZero() && token.Subject == content.Assignee
+}
+
+// validateAssigneeFloorUpdate checks that an update request only
+// touches fields permitted by the assignee floor. The assignee floor
+// allows: status, body, labels, context_id, and assignee (clear only
+// or no-op). All other fields require a broad ticket/update grant.
+//
+// Returns nil if all requested fields are within the floor, or an
+// error naming the specific denied field.
+func validateAssigneeFloorUpdate(request *updateRequest, callerSubject ref.UserID) error {
+	if request.Title != nil {
+		return errors.New("assignee floor does not allow modifying title; requires ticket/update grant")
+	}
+	if request.Priority != nil {
+		return errors.New("assignee floor does not allow modifying priority; requires ticket/update grant")
+	}
+	if request.Type != nil {
+		return errors.New("assignee floor does not allow modifying type; requires ticket/update grant")
+	}
+	if request.Parent != nil {
+		return errors.New("assignee floor does not allow modifying parent; requires ticket/update grant")
+	}
+	if request.BlockedBy != nil {
+		return errors.New("assignee floor does not allow modifying blocked_by; requires ticket/update grant")
+	}
+	if request.Affects != nil {
+		return errors.New("assignee floor does not allow modifying affects; requires ticket/update grant")
+	}
+	if request.Deadline != nil {
+		return errors.New("assignee floor does not allow modifying deadline; requires ticket/update grant")
+	}
+	if request.Review != nil {
+		return errors.New("assignee floor does not allow modifying review; requires ticket/update grant")
+	}
+	if request.Pipeline != nil {
+		return errors.New("assignee floor does not allow modifying pipeline; requires ticket/update grant")
+	}
+	// Assignee field: allowed to clear (relinquish) or leave unchanged.
+	// Setting to a different principal requires a broad grant.
+	if request.Assignee != nil && !request.Assignee.IsZero() && *request.Assignee != callerSubject {
+		return errors.New("assignee floor does not allow reassigning to another principal; requires ticket/update grant")
+	}
+	return nil
+}
+
 // requireRoom validates the "room" field from a request and returns
 // the corresponding room ID and state. The room string may be a room
 // ID (starts with "!"), a full alias ("#localpart:server"), a bare

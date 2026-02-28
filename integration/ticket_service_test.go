@@ -456,7 +456,10 @@ func TestTicketLifecycleAgent(t *testing.T) {
 			t.Errorf("after worker claim: status = %q, want %s", content.Status, ticket.StatusInProgress)
 		}
 
-		// Worker tries to close — service rejects (no ticket/close grant).
+		// Worker closes — assignee floor grants implicit close
+		// permission even without a ticket/close grant. Assignment
+		// is delegation of work authority; closing is how the
+		// assignee signals completion.
 		sendStep(t, workerSocket, workerAccount.UserID, []mockToolStep{{
 			ToolName: "bureau_ticket_close",
 			ToolInput: func() map[string]any {
@@ -466,34 +469,16 @@ func TestTicketLifecycleAgent(t *testing.T) {
 					"reason": "done",
 				}
 			},
-		}}, "Worker: close ticket")
-
-		content = readTicketState(t, admin, roomAlphaID, ticketID)
-		if content.Status != ticket.StatusInProgress {
-			t.Errorf("after worker close attempt: status = %q, want %s (close should be denied)", content.Status, ticket.StatusInProgress)
-		}
-		t.Log("worker close correctly denied by service")
-
-		// Switch to PM — close and reopen succeed.
-		pmSocket := deployAgent(t, pmAccount, pmGrants)
-
-		sendStep(t, pmSocket, pmAccount.UserID, []mockToolStep{{
-			ToolName: "bureau_ticket_close",
-			ToolInput: func() map[string]any {
-				return map[string]any{
-					"room":   roomAlphaID,
-					"ticket": ticketID,
-					"reason": "PM approved",
-				}
-			},
-		}}, "PM: close ticket")
+		}}, "Worker: close ticket (assignee floor)")
 
 		content = readTicketState(t, admin, roomAlphaID, ticketID)
 		if content.Status != ticket.StatusClosed {
-			t.Errorf("after PM close: status = %q, want %s", content.Status, ticket.StatusClosed)
+			t.Errorf("after worker close: status = %q, want %s (assignee floor should allow close)", content.Status, ticket.StatusClosed)
 		}
+		t.Log("worker close succeeded via assignee floor")
 
-		// Switch back to worker — reopen should fail.
+		// Worker tries to reopen — reopen is not in the assignee
+		// floor and the worker has no ticket/reopen grant.
 		workerSocket = deployAgent(t, workerAccount, workerGrants)
 
 		sendStep(t, workerSocket, workerAccount.UserID, []mockToolStep{{
@@ -513,7 +498,7 @@ func TestTicketLifecycleAgent(t *testing.T) {
 		t.Log("worker reopen correctly denied by service")
 
 		// Switch to PM — reopen succeeds.
-		pmSocket = deployAgent(t, pmAccount, pmGrants)
+		pmSocket := deployAgent(t, pmAccount, pmGrants)
 
 		sendStep(t, pmSocket, pmAccount.UserID, []mockToolStep{{
 			ToolName: "bureau_ticket_reopen",

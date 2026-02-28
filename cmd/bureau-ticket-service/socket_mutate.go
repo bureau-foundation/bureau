@@ -634,9 +634,9 @@ func (ts *TicketService) handleCreate(ctx context.Context, token *servicetoken.T
 // validated and lifecycle fields (closed_at, assignee) are managed
 // automatically.
 func (ts *TicketService) handleUpdate(ctx context.Context, token *servicetoken.Token, raw []byte) (any, error) {
-	if err := requireGrant(token, ticket.ActionUpdate); err != nil {
-		return nil, err
-	}
+	// Broad permission check is deferred: we need the ticket content
+	// to evaluate the assignee floor fallback.
+	hasBroadUpdate := checkGrant(token, ticket.ActionUpdate)
 
 	var request updateRequest
 	if err := codec.Unmarshal(raw, &request); err != nil {
@@ -650,6 +650,17 @@ func (ts *TicketService) handleUpdate(ctx context.Context, token *servicetoken.T
 	roomID, state, ticketID, content, err := ts.resolveTicket(request.Room, request.Ticket)
 	if err != nil {
 		return nil, err
+	}
+
+	// Resolve effective permission: broad grant or assignee floor.
+	assigneeFloor := !hasBroadUpdate && isAssignee(token, &content)
+	if !hasBroadUpdate && !assigneeFloor {
+		return nil, fmt.Errorf("access denied: missing grant for %s", ticket.ActionUpdate)
+	}
+	if assigneeFloor {
+		if err := validateAssigneeFloorUpdate(&request, token.Subject); err != nil {
+			return nil, err
+		}
 	}
 
 	if err := content.CanModify(); err != nil {
@@ -759,12 +770,19 @@ func (ts *TicketService) handleUpdate(ctx context.Context, token *servicetoken.T
 		// them close or reopen. Without these checks, a caller
 		// could bypass handleClose's ticket/close check by calling
 		// update with status:"closed".
+		//
+		// The assignee floor includes close (the assignee finished
+		// the work) but not reopen (a PM decision).
 		if proposedStatus == ticket.StatusClosed && content.Status != ticket.StatusClosed {
-			if err := requireGrant(token, ticket.ActionClose); err != nil {
-				return nil, err
+			if hasBroadUpdate {
+				if err := requireGrant(token, ticket.ActionClose); err != nil {
+					return nil, err
+				}
 			}
+			// Assignee floor: close is implicit, no grant needed.
 		}
 		if content.Status == ticket.StatusClosed && proposedStatus != ticket.StatusClosed {
+			// Reopen is never in the assignee floor.
 			if err := requireGrant(token, ticket.ActionReopen); err != nil {
 				return nil, err
 			}
@@ -928,9 +946,9 @@ func (ts *TicketService) handleUpdate(ctx context.Context, token *servicetoken.T
 // when true, recurring gates are removed and the ticket closes
 // permanently regardless of schedule.
 func (ts *TicketService) handleClose(ctx context.Context, token *servicetoken.Token, raw []byte) (any, error) {
-	if err := requireGrant(token, ticket.ActionClose); err != nil {
-		return nil, err
-	}
+	// Broad permission check is deferred: we need the ticket content
+	// to evaluate the assignee floor fallback.
+	hasBroadClose := checkGrant(token, ticket.ActionClose)
 
 	var request closeRequest
 	if err := codec.Unmarshal(raw, &request); err != nil {
@@ -944,6 +962,13 @@ func (ts *TicketService) handleClose(ctx context.Context, token *servicetoken.To
 	roomID, state, ticketID, content, err := ts.resolveTicket(request.Room, request.Ticket)
 	if err != nil {
 		return nil, err
+	}
+
+	// Resolve effective permission: broad grant or assignee floor.
+	// The assignee floor includes close — the assignee finished the
+	// work and is reporting completion.
+	if !hasBroadClose && !isAssignee(token, &content) {
+		return nil, fmt.Errorf("access denied: missing grant for %s", ticket.ActionClose)
 	}
 
 	if err := content.CanModify(); err != nil {
@@ -1552,9 +1577,9 @@ func (ts *TicketService) handleSetDisposition(ctx context.Context, token *servic
 // warnings, references. The note ID is assigned sequentially
 // ("n-1", "n-2", ...) and the author is taken from the token subject.
 func (ts *TicketService) handleAddNote(ctx context.Context, token *servicetoken.Token, raw []byte) (any, error) {
-	if err := requireGrant(token, ticket.ActionUpdate); err != nil {
-		return nil, err
-	}
+	// Broad permission check is deferred: we need the ticket content
+	// to evaluate the assignee floor fallback.
+	hasBroadUpdate := checkGrant(token, ticket.ActionUpdate)
 
 	var request addNoteRequest
 	if err := codec.Unmarshal(raw, &request); err != nil {
@@ -1571,6 +1596,13 @@ func (ts *TicketService) handleAddNote(ctx context.Context, token *servicetoken.
 	roomID, state, ticketID, content, err := ts.resolveTicket(request.Room, request.Ticket)
 	if err != nil {
 		return nil, err
+	}
+
+	// Resolve effective permission: broad grant or assignee floor.
+	// Notes are core to the assignee workflow — documenting findings,
+	// diagnostic data, and progress annotations.
+	if !hasBroadUpdate && !isAssignee(token, &content) {
+		return nil, fmt.Errorf("access denied: missing grant for %s", ticket.ActionUpdate)
 	}
 
 	if err := content.CanModify(); err != nil {

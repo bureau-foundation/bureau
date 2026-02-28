@@ -205,6 +205,10 @@ func TestTicketLifecycleAgent(t *testing.T) {
 	pushCredentials(t, admin, machine, workerAccount)
 	joinConfigRoom(t, admin, machine.ConfigRoomID, workerAccount)
 
+	floorWorkerAccount := registerFleetPrincipal(t, fleet, "agent/lifecycle-floor", "floor-password")
+	pushCredentials(t, admin, machine, floorWorkerAccount)
+	joinConfigRoom(t, admin, machine.ConfigRoomID, floorWorkerAccount)
+
 	pmGrants := []string{schema.ActionCommandTicketAll, ticket.ActionAll}
 	workerGrants := []string{
 		schema.ActionCommandTicketAll,
@@ -221,6 +225,17 @@ func TestTicketLifecycleAgent(t *testing.T) {
 		ticket.ActionChildren,
 		ticket.ActionEpicHealth,
 		ticket.ActionInfo,
+	}
+
+	// The floor worker has MCP tool access but zero ticket mutation
+	// grants. All mutation authority comes from the assignee floor:
+	// if the floor worker is the current assignee, it can update
+	// body/status/labels, add notes, and close — but cannot modify
+	// structural fields (title, priority, type, etc.) or reopen.
+	floorWorkerGrants := []string{
+		schema.ActionCommandTicketAll,
+		ticket.ActionList,
+		ticket.ActionShow,
 	}
 
 	templateRef := "bureau/template:ticket-lifecycle-agent"
@@ -578,6 +593,151 @@ func TestTicketLifecycleAgent(t *testing.T) {
 		}
 
 		t.Log("contention correctly detected")
+	})
+
+	t.Run("AssigneeFloor", func(t *testing.T) {
+		projectWatch := watchRoom(t, admin, roomAlphaID)
+
+		// PM creates a ticket and assigns it to the floor worker.
+		// The floor worker has zero mutation grants — all write
+		// authority comes from being the ticket's assignee.
+		pmSocket := deployAgent(t, pmAccount, pmGrants)
+
+		floorWorkerUserID := floorWorkerAccount.UserID
+		sendStep(t, pmSocket, pmAccount.UserID, []mockToolStep{{
+			ToolName: "bureau_ticket_create",
+			ToolInput: func() map[string]any {
+				return map[string]any{
+					"room":     roomAlphaID,
+					"title":    "Assignee floor test",
+					"type":     "task",
+					"priority": 2,
+				}
+			},
+		}}, "PM: create ticket")
+
+		ticketID, _ := waitForTicket(t, &projectWatch, "Assignee floor test")
+		t.Logf("PM created %s", ticketID)
+
+		sendStep(t, pmSocket, pmAccount.UserID, []mockToolStep{{
+			ToolName: "bureau_ticket_update",
+			ToolInput: func() map[string]any {
+				return map[string]any{
+					"room":     roomAlphaID,
+					"ticket":   ticketID,
+					"status":   "in_progress",
+					"assignee": floorWorkerUserID,
+				}
+			},
+		}}, "PM: assign to floor worker")
+
+		content := readTicketState(t, admin, roomAlphaID, ticketID)
+		if content.Assignee != floorWorkerUserID {
+			t.Fatalf("setup: assignee = %s, want %s", content.Assignee, floorWorkerUserID)
+		}
+		t.Logf("PM assigned %s to floor worker", ticketID)
+
+		// Deploy floor worker (zero mutation grants). The daemon
+		// mints a service token with only list/show — no ticket/update,
+		// ticket/close, or ticket/reopen. The assignee floor in the
+		// ticket service is the only thing allowing mutations.
+		floorSocket := deployAgent(t, floorWorkerAccount, floorWorkerGrants)
+
+		// Floor worker updates body — allowed by assignee floor.
+		sendStep(t, floorSocket, floorWorkerUserID, []mockToolStep{{
+			ToolName: "bureau_ticket_update",
+			ToolInput: func() map[string]any {
+				return map[string]any{
+					"room":   roomAlphaID,
+					"ticket": ticketID,
+					"body":   "Floor worker added context",
+				}
+			},
+		}}, "Floor worker: update body")
+
+		content = readTicketState(t, admin, roomAlphaID, ticketID)
+		if content.Body != "Floor worker added context" {
+			t.Errorf("after body update: body = %q, want %q", content.Body, "Floor worker added context")
+		}
+		t.Log("floor worker body update succeeded via assignee floor")
+
+		// Floor worker closes — allowed by assignee floor.
+		sendStep(t, floorSocket, floorWorkerUserID, []mockToolStep{{
+			ToolName: "bureau_ticket_close",
+			ToolInput: func() map[string]any {
+				return map[string]any{
+					"room":   roomAlphaID,
+					"ticket": ticketID,
+					"reason": "completed via floor",
+				}
+			},
+		}}, "Floor worker: close ticket")
+
+		content = readTicketState(t, admin, roomAlphaID, ticketID)
+		if content.Status != ticket.StatusClosed {
+			t.Errorf("after close: status = %q, want %s", content.Status, ticket.StatusClosed)
+		}
+		t.Log("floor worker close succeeded via assignee floor")
+
+		// Floor worker tries to update title — denied by assignee
+		// floor field restriction (title is structural, not floor).
+		// The tool call returns an error; ticket state is unchanged.
+		floorSocket = deployAgent(t, floorWorkerAccount, floorWorkerGrants)
+
+		sendStep(t, floorSocket, floorWorkerUserID, []mockToolStep{{
+			ToolName: "bureau_ticket_update",
+			ToolInput: func() map[string]any {
+				return map[string]any{
+					"room":   roomAlphaID,
+					"ticket": ticketID,
+					"title":  "Hijacked title",
+				}
+			},
+		}}, "Floor worker: update title (should fail)")
+
+		content = readTicketState(t, admin, roomAlphaID, ticketID)
+		if content.Title != "Assignee floor test" {
+			t.Errorf("after title update attempt: title = %q, want %q (should be denied)", content.Title, "Assignee floor test")
+		}
+		t.Log("floor worker title update correctly denied")
+
+		// Floor worker tries to reopen — denied (reopen is not in
+		// the assignee floor).
+		sendStep(t, floorSocket, floorWorkerUserID, []mockToolStep{{
+			ToolName: "bureau_ticket_reopen",
+			ToolInput: func() map[string]any {
+				return map[string]any{
+					"room":   roomAlphaID,
+					"ticket": ticketID,
+				}
+			},
+		}}, "Floor worker: reopen (should fail)")
+
+		content = readTicketState(t, admin, roomAlphaID, ticketID)
+		if content.Status != ticket.StatusClosed {
+			t.Errorf("after reopen attempt: status = %q, want %s (reopen should be denied)", content.Status, ticket.StatusClosed)
+		}
+		t.Log("floor worker reopen correctly denied")
+
+		// PM reopens — full grants allow it.
+		pmSocket = deployAgent(t, pmAccount, pmGrants)
+
+		sendStep(t, pmSocket, pmAccount.UserID, []mockToolStep{{
+			ToolName: "bureau_ticket_reopen",
+			ToolInput: func() map[string]any {
+				return map[string]any{
+					"room":   roomAlphaID,
+					"ticket": ticketID,
+				}
+			},
+		}}, "PM: reopen ticket")
+
+		content = readTicketState(t, admin, roomAlphaID, ticketID)
+		if content.Status != ticket.StatusOpen {
+			t.Errorf("after PM reopen: status = %q, want %s", content.Status, ticket.StatusOpen)
+		}
+
+		t.Logf("assignee floor permissions verified for %s", ticketID)
 	})
 }
 

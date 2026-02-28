@@ -341,11 +341,12 @@ const (
 	PowerLevelAdmin = 100
 )
 
-// AdminProtectedEvents returns the set of standard Matrix room-level events
-// that Bureau restricts to admin power level (100) in all rooms. Every
-// power level function uses this as its base events map, adding
-// Bureau-specific overrides on top. Returns a fresh map each call so
-// callers can safely merge their own entries.
+// AdminProtectedEvents returns the set of room-level events that Bureau
+// restricts to admin power level (100) in all rooms. This includes standard
+// Matrix room metadata events and Bureau room metadata (dev team assignment).
+// Every power level function uses this as its base events map, adding
+// domain-specific overrides on top. Returns a fresh map each call so callers
+// can safely merge their own entries.
 func AdminProtectedEvents() map[ref.EventType]any {
 	return map[ref.EventType]any{
 		MatrixEventTypeRoomAvatar:        100,
@@ -359,6 +360,7 @@ func AdminProtectedEvents() map[ref.EventType]any {
 		MatrixEventTypeTombstone:         100,
 		MatrixEventTypeRoomTopic:         100,
 		MatrixEventTypeSpaceChild:        100,
+		EventTypeDevTeam:                 100,
 	}
 }
 
@@ -434,7 +436,6 @@ func WorkspaceRoomPowerLevels(adminUserID, machineUserID ref.UserID) map[string]
 	events := AdminProtectedEvents()
 	events[EventTypeProject] = 100
 	events[EventTypeStewardship] = 100
-	events[EventTypeDevTeam] = 100
 	events[EventTypeWorkspace] = 0
 	events[EventTypeWorktree] = 0
 	events[EventTypeLayout] = 0

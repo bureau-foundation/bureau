@@ -114,6 +114,7 @@ func TestAdminProtectedEventsUsesConstants(t *testing.T) {
 		MatrixEventTypeTombstone,
 		MatrixEventTypeRoomTopic,
 		MatrixEventTypeSpaceChild,
+		EventTypeDevTeam,
 	}
 	for _, eventType := range expectedTypes {
 		powerLevel, exists := events[eventType]

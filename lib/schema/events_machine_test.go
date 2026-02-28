@@ -682,6 +682,7 @@ func TestAdminProtectedEvents(t *testing.T) {
 		ref.EventType("m.room.tombstone"),
 		ref.EventType("m.room.topic"),
 		ref.EventType("m.space.child"),
+		EventTypeDevTeam,
 	}
 
 	for _, eventType := range expectedEvents {

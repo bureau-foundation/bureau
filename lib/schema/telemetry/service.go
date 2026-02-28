@@ -31,6 +31,7 @@ type LogManagerStats struct {
 	StateEventWrites     uint64 `cbor:"state_event_writes"`
 	StateEventErrors     uint64 `cbor:"state_event_errors"`
 	RoomResolutionErrors uint64 `cbor:"room_resolution_errors"`
+	EvictionCount        uint64 `cbor:"eviction_count"`
 	ActiveSessions       int    `cbor:"active_sessions"`
 	LastError            string `cbor:"last_error,omitempty"`
 }

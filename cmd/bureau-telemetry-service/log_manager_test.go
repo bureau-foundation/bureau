@@ -1014,3 +1014,410 @@ func TestEmptyDeltasSkipped(t *testing.T) {
 		t.Errorf("expected 0 sessions for empty deltas, got %d", sessionCount)
 	}
 }
+
+// flushChunks sends enough deltas to produce the specified number of
+// flushed chunks in a session. Each chunk is chunkSize bytes. Returns
+// the next sequence number for continuing the session.
+func flushChunks(t *testing.T, ctx context.Context, mgr *logManager, refs testRefs, sessionID string, count int, chunkSize int, startSequence uint64) uint64 {
+	t.Helper()
+	sequence := startSequence
+	for range count {
+		deltas := makeDeltas(refs, sessionID, 1, chunkSize)
+		deltas[0].Sequence = sequence
+		mgr.HandleDeltas(ctx, deltas)
+		sequence += 100
+	}
+	return sequence
+}
+
+// getSession retrieves a session from the log manager by session ID.
+// Uses the test refs' source localpart as the session key prefix.
+func getSession(t *testing.T, mgr *logManager, refs testRefs, sessionID string) *sessionBuffer {
+	t.Helper()
+	key := sessionKey{source: refs.source.Localpart(), sessionID: sessionID}
+	mgr.sessionsMu.RLock()
+	session := mgr.sessions[key]
+	mgr.sessionsMu.RUnlock()
+	if session == nil {
+		t.Fatalf("expected session %q to exist", sessionID)
+	}
+	return session
+}
+
+func TestEvictionRemovesOldestChunks(t *testing.T) {
+	refs := newTestRefs(t)
+	mgr, _, mockWriter, fakeClock := newTestLogManager(t, refs)
+
+	// Each flush produces a 250-byte chunk. Set threshold so each
+	// batch triggers an immediate flush.
+	mgr.chunkSizeThreshold = 200
+	// Max 500 bytes per session: after 5 chunks (1250 bytes), eviction
+	// should trim from the front.
+	mgr.maxBytesPerSession = 500
+
+	ctx := context.Background()
+	flushChunks(t, ctx, mgr, refs, "session-1", 5, 250, 1)
+
+	// Verify pre-eviction state: 5 chunks, 1250 bytes.
+	session := getSession(t, mgr, refs, "session-1")
+	session.mu.Lock()
+	preChunkCount := len(session.chunks)
+	preTotalBytes := session.totalBytes
+	preStatus := session.status
+	session.mu.Unlock()
+
+	if preChunkCount != 5 {
+		t.Fatalf("expected 5 chunks before eviction, got %d", preChunkCount)
+	}
+	if preTotalBytes != 1250 {
+		t.Fatalf("expected 1250 total bytes before eviction, got %d", preTotalBytes)
+	}
+	if preStatus != log.LogStatusActive {
+		t.Fatalf("expected active status before eviction, got %q", preStatus)
+	}
+
+	// Advance time so the reaper runs but doesn't mark as stale.
+	fakeClock.Advance(30 * time.Second)
+	mgr.tickReaper(ctx)
+
+	// Post-eviction: should have 2 chunks (500 bytes), status rotating.
+	session.mu.Lock()
+	postChunkCount := len(session.chunks)
+	postTotalBytes := session.totalBytes
+	postStatus := session.status
+	session.mu.Unlock()
+
+	if postChunkCount != 2 {
+		t.Errorf("expected 2 chunks after eviction, got %d", postChunkCount)
+	}
+	if postTotalBytes != 500 {
+		t.Errorf("expected 500 total bytes after eviction, got %d", postTotalBytes)
+	}
+	if postStatus != log.LogStatusRotating {
+		t.Errorf("expected rotating status after eviction, got %q", postStatus)
+	}
+
+	// Verify a state event was written with the trimmed chunks.
+	stateEvents := mockWriter.getStateEventCalls()
+	var evictionEvent *mockStateEventCall
+	for i := range stateEvents {
+		if stateEvents[i].Content.Status == log.LogStatusRotating {
+			evictionEvent = &stateEvents[i]
+		}
+	}
+	if evictionEvent == nil {
+		t.Fatal("expected a state event with rotating status")
+	}
+	if len(evictionEvent.Content.Chunks) != 2 {
+		t.Errorf("expected 2 chunks in eviction state event, got %d", len(evictionEvent.Content.Chunks))
+	}
+	if evictionEvent.Content.TotalBytes != 500 {
+		t.Errorf("expected 500 total bytes in eviction state event, got %d", evictionEvent.Content.TotalBytes)
+	}
+}
+
+func TestEvictionPreservesLastChunk(t *testing.T) {
+	refs := newTestRefs(t)
+	mgr, _, _, fakeClock := newTestLogManager(t, refs)
+
+	mgr.chunkSizeThreshold = 200
+	// Impossibly small: even one chunk exceeds this. Eviction should
+	// keep exactly the last chunk.
+	mgr.maxBytesPerSession = 1
+
+	ctx := context.Background()
+	flushChunks(t, ctx, mgr, refs, "session-1", 3, 250, 1)
+
+	fakeClock.Advance(30 * time.Second)
+	mgr.tickReaper(ctx)
+
+	session := getSession(t, mgr, refs, "session-1")
+	session.mu.Lock()
+	chunkCount := len(session.chunks)
+	totalBytes := session.totalBytes
+	session.mu.Unlock()
+
+	if chunkCount != 1 {
+		t.Errorf("expected 1 chunk preserved after max eviction, got %d", chunkCount)
+	}
+	// The last chunk is 250 bytes — totalBytes reflects this even
+	// though it exceeds maxBytesPerSession (we never evict the last).
+	if totalBytes != 250 {
+		t.Errorf("expected 250 total bytes (last chunk), got %d", totalBytes)
+	}
+}
+
+func TestEvictionTransitionsActiveToRotating(t *testing.T) {
+	refs := newTestRefs(t)
+	mgr, _, _, fakeClock := newTestLogManager(t, refs)
+
+	mgr.chunkSizeThreshold = 200
+	mgr.maxBytesPerSession = 400
+
+	ctx := context.Background()
+	flushChunks(t, ctx, mgr, refs, "session-1", 3, 250, 1)
+
+	session := getSession(t, mgr, refs, "session-1")
+	session.mu.Lock()
+	statusBefore := session.status
+	session.mu.Unlock()
+	if statusBefore != log.LogStatusActive {
+		t.Fatalf("expected active before eviction, got %q", statusBefore)
+	}
+
+	fakeClock.Advance(30 * time.Second)
+	mgr.tickReaper(ctx)
+
+	session.mu.Lock()
+	statusAfter := session.status
+	session.mu.Unlock()
+	if statusAfter != log.LogStatusRotating {
+		t.Errorf("expected rotating after eviction, got %q", statusAfter)
+	}
+}
+
+func TestEvictionStaysRotatingOnSubsequentRuns(t *testing.T) {
+	refs := newTestRefs(t)
+	mgr, _, _, fakeClock := newTestLogManager(t, refs)
+
+	mgr.chunkSizeThreshold = 200
+	mgr.maxBytesPerSession = 400
+
+	ctx := context.Background()
+
+	// First round: flush 3 chunks (750 bytes), trigger eviction.
+	nextSequence := flushChunks(t, ctx, mgr, refs, "session-1", 3, 250, 1)
+	fakeClock.Advance(30 * time.Second)
+	mgr.tickReaper(ctx)
+
+	session := getSession(t, mgr, refs, "session-1")
+	session.mu.Lock()
+	status1 := session.status
+	session.mu.Unlock()
+	if status1 != log.LogStatusRotating {
+		t.Fatalf("expected rotating after first eviction, got %q", status1)
+	}
+
+	// Second round: flush 3 more chunks, trigger eviction again.
+	// Need to update lastActivity so the reaper doesn't mark as stale.
+	flushChunks(t, ctx, mgr, refs, "session-1", 3, 250, nextSequence)
+	fakeClock.Advance(30 * time.Second)
+	mgr.tickReaper(ctx)
+
+	session.mu.Lock()
+	status2 := session.status
+	session.mu.Unlock()
+	if status2 != log.LogStatusRotating {
+		t.Errorf("expected still rotating after second eviction, got %q", status2)
+	}
+}
+
+func TestEvictionDoesNotAffectSmallSessions(t *testing.T) {
+	refs := newTestRefs(t)
+	mgr, _, _, fakeClock := newTestLogManager(t, refs)
+
+	mgr.chunkSizeThreshold = 200
+	mgr.maxBytesPerSession = 10000
+
+	ctx := context.Background()
+	flushChunks(t, ctx, mgr, refs, "session-1", 3, 250, 1)
+
+	session := getSession(t, mgr, refs, "session-1")
+	session.mu.Lock()
+	chunksBefore := len(session.chunks)
+	session.mu.Unlock()
+
+	fakeClock.Advance(30 * time.Second)
+	mgr.tickReaper(ctx)
+
+	session.mu.Lock()
+	chunksAfter := len(session.chunks)
+	statusAfter := session.status
+	session.mu.Unlock()
+
+	if chunksAfter != chunksBefore {
+		t.Errorf("expected %d chunks (unchanged), got %d", chunksBefore, chunksAfter)
+	}
+	if statusAfter != log.LogStatusActive {
+		t.Errorf("expected active status (no eviction needed), got %q", statusAfter)
+	}
+}
+
+func TestEvictionWithStateEventFailure(t *testing.T) {
+	refs := newTestRefs(t)
+	mgr, _, mockWriter, fakeClock := newTestLogManager(t, refs)
+
+	mgr.chunkSizeThreshold = 200
+	mgr.maxBytesPerSession = 400
+
+	ctx := context.Background()
+	flushChunks(t, ctx, mgr, refs, "session-1", 4, 250, 1)
+
+	// Make state event writes fail before running eviction.
+	mockWriter.setStateEventError(fmt.Errorf("homeserver down"))
+	fakeClock.Advance(30 * time.Second)
+	mgr.tickReaper(ctx)
+
+	// In-memory state should still be trimmed even though the
+	// state event write failed.
+	session := getSession(t, mgr, refs, "session-1")
+	session.mu.Lock()
+	chunkCount := len(session.chunks)
+	totalBytes := session.totalBytes
+	status := session.status
+	session.mu.Unlock()
+
+	// 4 chunks of 250 = 1000 bytes. Max 400 bytes. Should keep 1 chunk
+	// (250 bytes) — trimming 3 chunks brings us to 250 which is ≤ 400.
+	if chunkCount > 2 {
+		t.Errorf("expected at most 2 chunks after eviction, got %d", chunkCount)
+	}
+	if totalBytes > 500 {
+		t.Errorf("expected at most 500 total bytes after eviction, got %d", totalBytes)
+	}
+	if status != log.LogStatusRotating {
+		t.Errorf("expected rotating status after eviction, got %q", status)
+	}
+
+	// Clear the error. Next flush should persist the trimmed state.
+	mockWriter.setStateEventError(nil)
+
+	// Add new data and trigger a flush to verify the trimmed state
+	// propagates to the state event.
+	flushChunks(t, ctx, mgr, refs, "session-1", 1, 250, 1000)
+
+	stateEvents := mockWriter.getStateEventCalls()
+	if len(stateEvents) == 0 {
+		t.Fatal("expected at least one state event after clearing error")
+	}
+	lastEvent := stateEvents[len(stateEvents)-1]
+	if lastEvent.Content.Status != log.LogStatusRotating {
+		t.Errorf("expected rotating in state event, got %q", lastEvent.Content.Status)
+	}
+}
+
+func TestEvictionStatCounter(t *testing.T) {
+	refs := newTestRefs(t)
+	mgr, _, _, fakeClock := newTestLogManager(t, refs)
+
+	mgr.chunkSizeThreshold = 200
+	mgr.maxBytesPerSession = 400
+
+	ctx := context.Background()
+	flushChunks(t, ctx, mgr, refs, "session-1", 3, 250, 1)
+
+	statsBefore := mgr.Stats()
+	if statsBefore.EvictionCount != 0 {
+		t.Fatalf("expected 0 evictions before reaper, got %d", statsBefore.EvictionCount)
+	}
+
+	fakeClock.Advance(30 * time.Second)
+	mgr.tickReaper(ctx)
+
+	statsAfter := mgr.Stats()
+	if statsAfter.EvictionCount != 1 {
+		t.Errorf("expected 1 eviction after reaper, got %d", statsAfter.EvictionCount)
+	}
+}
+
+func TestCompleteLogAfterRotating(t *testing.T) {
+	refs := newTestRefs(t)
+	mgr, _, mockWriter, fakeClock := newTestLogManager(t, refs)
+
+	mgr.chunkSizeThreshold = 200
+	mgr.maxBytesPerSession = 400
+
+	ctx := context.Background()
+	flushChunks(t, ctx, mgr, refs, "session-1", 3, 250, 1)
+
+	// Trigger eviction to move to rotating.
+	fakeClock.Advance(30 * time.Second)
+	mgr.tickReaper(ctx)
+
+	session := getSession(t, mgr, refs, "session-1")
+	session.mu.Lock()
+	status := session.status
+	session.mu.Unlock()
+	if status != log.LogStatusRotating {
+		t.Fatalf("expected rotating before complete, got %q", status)
+	}
+
+	// Complete the session.
+	err := mgr.CompleteLog(ctx, refs.source.Localpart(), "session-1")
+	if err != nil {
+		t.Fatalf("CompleteLog failed: %v", err)
+	}
+
+	// Session should be removed.
+	key := sessionKey{source: refs.source.Localpart(), sessionID: "session-1"}
+	mgr.sessionsMu.RLock()
+	_, exists := mgr.sessions[key]
+	mgr.sessionsMu.RUnlock()
+	if exists {
+		t.Error("expected session to be removed after completion")
+	}
+
+	// Should have a state event with status complete.
+	stateEvents := mockWriter.getStateEventCalls()
+	found := false
+	for _, event := range stateEvents {
+		if event.Content.Status == log.LogStatusComplete {
+			found = true
+			break
+		}
+	}
+	if !found {
+		t.Error("expected state event with status complete after completing rotated session")
+	}
+}
+
+func TestStaleReaperCompletesRotatingSessions(t *testing.T) {
+	refs := newTestRefs(t)
+	mgr, _, mockWriter, fakeClock := newTestLogManager(t, refs)
+
+	mgr.chunkSizeThreshold = 200
+	mgr.maxBytesPerSession = 400
+	mgr.staleTimeout = 5 * time.Minute
+
+	ctx := context.Background()
+	flushChunks(t, ctx, mgr, refs, "session-1", 3, 250, 1)
+
+	// Trigger eviction to move to rotating.
+	fakeClock.Advance(30 * time.Second)
+	mgr.tickReaper(ctx)
+
+	session := getSession(t, mgr, refs, "session-1")
+	session.mu.Lock()
+	status := session.status
+	session.mu.Unlock()
+	if status != log.LogStatusRotating {
+		t.Fatalf("expected rotating after eviction, got %q", status)
+	}
+
+	// Advance past the stale timeout with no new activity.
+	fakeClock.Advance(6 * time.Minute)
+	mgr.tickReaper(ctx)
+
+	// Session should be completed and removed — rotating sessions
+	// that go idle are reaped just like active sessions.
+	key := sessionKey{source: refs.source.Localpart(), sessionID: "session-1"}
+	mgr.sessionsMu.RLock()
+	_, exists := mgr.sessions[key]
+	mgr.sessionsMu.RUnlock()
+	if exists {
+		t.Error("expected stale rotating session to be removed by reaper")
+	}
+
+	// Should have a state event with status complete.
+	stateEvents := mockWriter.getStateEventCalls()
+	found := false
+	for _, event := range stateEvents {
+		if event.Content.Status == log.LogStatusComplete {
+			found = true
+			break
+		}
+	}
+	if !found {
+		t.Error("expected state event with status complete for reaped rotating session")
+	}
+}

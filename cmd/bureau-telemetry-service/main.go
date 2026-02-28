@@ -34,6 +34,13 @@ func main() {
 func run() error {
 	var showVersion bool
 	flag.BoolVar(&showVersion, "version", false, "print version information and exit")
+
+	// Log manager tuning flags, passed via the template Command field.
+	chunkSizeThreshold := flag.Int("chunk-size-threshold", defaultChunkSizeThreshold,
+		"buffer size in bytes that triggers an immediate flush to artifact storage")
+	maxBytesPerSession := flag.Int64("max-bytes-per-session", defaultMaxBytesPerSession,
+		"maximum stored output bytes per session before old chunks are evicted")
+
 	flag.Parse()
 
 	if showVersion {
@@ -66,6 +73,8 @@ func run() error {
 	}
 
 	logMgr := newLogManager(artifactClient, boot.Session, boot.Clock, boot.Logger)
+	logMgr.chunkSizeThreshold = *chunkSizeThreshold
+	logMgr.maxBytesPerSession = *maxBytesPerSession
 
 	telemetryService := &TelemetryService{
 		authConfig:          boot.AuthConfig,
@@ -97,6 +106,8 @@ func run() error {
 		"principal", boot.PrincipalName,
 		"socket", boot.SocketPath,
 		"artifact_persistence", artifactClient != nil,
+		"chunk_size_threshold", *chunkSizeThreshold,
+		"max_bytes_per_session", *maxBytesPerSession,
 	)
 
 	// Wait for shutdown signal.
@@ -208,6 +219,12 @@ func (s *TelemetryService) registerActions(server *service.SocketServer) {
 	// a sandbox exits to flush remaining output and mark the log
 	// entity as complete.
 	server.HandleAuth("complete-log", s.handleCompleteLog)
+
+	// Authenticated operational actions for deterministic testing.
+	// These trigger the same logic as the background tickers but
+	// on demand, so callers don't need to wait for timer intervals.
+	server.HandleAuth("flush", s.handleFlush)
+	server.HandleAuth("reap", s.handleReap)
 }
 
 // handleStatus returns aggregate ingestion stats. This is the only
@@ -259,4 +276,30 @@ func (s *TelemetryService) handleCompleteLog(ctx context.Context, token *service
 	)
 
 	return telemetry.CompleteLogResponse{Completed: true}, nil
+}
+
+// handleFlush triggers an immediate flush of all session buffers that
+// have pending data. Equivalent to the background flush ticker firing.
+// Used by integration tests for deterministic state event verification
+// without waiting on timer intervals.
+func (s *TelemetryService) handleFlush(ctx context.Context, token *servicetoken.Token, _ []byte) (any, error) {
+	if !servicetoken.GrantsAllow(token.Grants, "telemetry/ingest", "") {
+		return nil, fmt.Errorf("access denied: missing grant for telemetry/ingest")
+	}
+
+	s.logManager.tickFlush(ctx)
+	return nil, nil
+}
+
+// handleReap triggers an immediate reaper scan: stale session completion
+// and oversized session eviction. Equivalent to the background reaper
+// ticker firing. Used by integration tests for deterministic eviction
+// verification without waiting on the 1-minute reaper interval.
+func (s *TelemetryService) handleReap(ctx context.Context, token *servicetoken.Token, _ []byte) (any, error) {
+	if !servicetoken.GrantsAllow(token.Grants, "telemetry/ingest", "") {
+		return nil, fmt.Errorf("access denied: missing grant for telemetry/ingest")
+	}
+
+	s.logManager.tickReaper(ctx)
+	return nil, nil
 }

@@ -974,3 +974,269 @@ func TestTelemetryOutputDeltaPersistence(t *testing.T) {
 		t.Errorf("output_deltas_received = %d, want 1", status.OutputDeltasReceived)
 	}
 }
+
+// TestTelemetryOutputRotation exercises the log manager's eviction
+// pipeline end-to-end: ingest enough output to exceed a small
+// --max-bytes-per-session limit, trigger the reaper via the explicit
+// "reap" action, and verify the m.bureau.log state event reflects
+// chunk eviction (trimmed chunk list, reduced totalBytes, "rotating"
+// status).
+//
+// The telemetry service is deployed with --chunk-size-threshold=5000
+// and --max-bytes-per-session=12000. Each batch sends 6000 bytes,
+// which immediately exceeds the threshold and triggers a synchronous
+// flush. After 4 batches (24000 bytes across 4 chunks), the reaper
+// evicts the oldest 2 chunks to bring the session back under 12000.
+func TestTelemetryOutputRotation(t *testing.T) {
+	t.Parallel()
+
+	admin := adminSession(t)
+	defer admin.Close()
+	fleet := createTestFleet(t, admin)
+	ctx := t.Context()
+
+	machine := newTestMachine(t, fleet, "logrotate")
+	startMachine(t, admin, machine, machineOptions{
+		LauncherBinary: resolvedBinary(t, "LAUNCHER_BINARY"),
+		DaemonBinary:   resolvedBinary(t, "DAEMON_BINARY"),
+		ProxyBinary:    resolvedBinary(t, "PROXY_BINARY"),
+		Fleet:          fleet,
+	})
+
+	// --- Deploy artifact service ---
+
+	artifactBinary := testutil.DataBinary(t, "ARTIFACT_SERVICE_BINARY")
+	artifactSvc := deployService(t, admin, fleet, machine, serviceDeployOptions{
+		Binary:    artifactBinary,
+		Name:      "artifact-rotate",
+		Localpart: "service/artifact/rotate",
+		Command:   []string{artifactBinary, "--store-dir", "/tmp/artifacts"},
+	})
+
+	if _, err := admin.SendStateEvent(ctx, machine.ConfigRoomID,
+		schema.EventTypeServiceBinding, "artifact",
+		schema.ServiceBindingContent{Principal: artifactSvc.Entity}); err != nil {
+		t.Fatalf("publish artifact service binding: %v", err)
+	}
+
+	// --- Deploy telemetry service with small limits ---
+
+	telemetryBinary := resolvedBinary(t, "TELEMETRY_SERVICE_BINARY")
+	telemetrySvc := deployService(t, admin, fleet, machine, serviceDeployOptions{
+		Binary:    telemetryBinary,
+		Name:      "telemetry-rotate",
+		Localpart: "service/telemetry/rotate",
+		Command: []string{
+			telemetryBinary,
+			"--chunk-size-threshold", "5000",
+			"--max-bytes-per-session", "12000",
+		},
+		RequiredServices: []string{"artifact"},
+		Authorization: &schema.AuthorizationPolicy{
+			Grants: []schema.Grant{
+				{Actions: []string{artifact.ActionStore}},
+			},
+		},
+	})
+
+	if _, err := admin.SendStateEvent(ctx, machine.ConfigRoomID,
+		schema.EventTypeServiceBinding, "telemetry",
+		schema.ServiceBindingContent{Principal: telemetrySvc.Entity}); err != nil {
+		t.Fatalf("publish telemetry service binding: %v", err)
+	}
+
+	// Verify artifact persistence is active.
+	telemetryStatus := queryTelemetryStatus(t, telemetrySvc.SocketPath)
+	if !telemetryStatus.ArtifactPersistence {
+		t.Fatal("telemetry service started without artifact persistence")
+	}
+
+	// --- Mint tokens ---
+
+	callerEntity, err := ref.NewEntityFromAccountLocalpart(fleet.Ref, "agent/rotate-caller")
+	if err != nil {
+		t.Fatalf("construct caller entity: %v", err)
+	}
+
+	ingestToken := mintTestServiceToken(t, machine, callerEntity, "telemetry",
+		[]servicetoken.Grant{{Actions: []string{"telemetry/ingest"}}})
+
+	// --- Send 4 batches of 6000 bytes each ---
+
+	const chunkSize = 6000
+	const batchCount = 4
+	sessionID := "rotate-session-001"
+
+	ingestConn := openTelemetryStream(t, telemetrySvc.SocketPath, "ingest", ingestToken)
+	ingestEncoder := codec.NewEncoder(ingestConn)
+	ingestDecoder := codec.NewDecoder(ingestConn)
+
+	for batchIndex := 0; batchIndex < batchCount; batchIndex++ {
+		// Each batch has a unique pattern so we can identify which
+		// chunks survived eviction by fetching their artifact content.
+		pattern := fmt.Sprintf("batch-%d-data-", batchIndex)
+		deltaData := bytes.Repeat([]byte(pattern), chunkSize/len(pattern)+1)
+		deltaData = deltaData[:chunkSize]
+
+		batch := telemetry.TelemetryBatch{
+			Fleet:          fleet.Ref,
+			Machine:        machine.Ref,
+			SequenceNumber: uint64(batchIndex + 1),
+			OutputDeltas: []telemetry.OutputDelta{{
+				Fleet:     fleet.Ref,
+				Machine:   machine.Ref,
+				Source:    callerEntity,
+				SessionID: sessionID,
+				Sequence:  uint64(batchIndex * chunkSize),
+				Stream:    telemetry.OutputStreamCombined,
+				Timestamp: int64(1000000000 + batchIndex*1000),
+				Data:      deltaData,
+			}},
+		}
+
+		if err := ingestEncoder.Encode(batch); err != nil {
+			t.Fatalf("send ingest batch %d: %v", batchIndex, err)
+		}
+
+		var batchAck telemetry.StreamAck
+		if err := ingestDecoder.Decode(&batchAck); err != nil {
+			t.Fatalf("read ingest batch %d ack: %v", batchIndex, err)
+		}
+		if !batchAck.OK {
+			t.Fatalf("ingest batch %d ack rejected: %s", batchIndex, batchAck.Error)
+		}
+	}
+
+	// --- Verify pre-eviction state ---
+
+	// Each 6000-byte batch exceeds the 5000-byte chunk threshold, so
+	// HandleDeltas flushes synchronously on every batch. After 4
+	// batches the state event should have 4 chunks totaling 24000 bytes.
+	rawLogContent, err := admin.GetStateEvent(ctx, machine.ConfigRoomID, log.EventTypeLog, sessionID)
+	if err != nil {
+		t.Fatalf("read m.bureau.log state event: %v", err)
+	}
+
+	var preEvictionLog log.LogContent
+	if err := json.Unmarshal(rawLogContent, &preEvictionLog); err != nil {
+		t.Fatalf("unmarshal pre-eviction log content: %v", err)
+	}
+
+	if preEvictionLog.Status != log.LogStatusActive {
+		t.Errorf("pre-eviction status = %q, want %q", preEvictionLog.Status, log.LogStatusActive)
+	}
+	if length := len(preEvictionLog.Chunks); length != batchCount {
+		t.Fatalf("pre-eviction chunks = %d, want %d", length, batchCount)
+	}
+	expectedPreTotalBytes := int64(chunkSize * batchCount)
+	if preEvictionLog.TotalBytes != expectedPreTotalBytes {
+		t.Errorf("pre-eviction total_bytes = %d, want %d", preEvictionLog.TotalBytes, expectedPreTotalBytes)
+	}
+
+	// Record the last two chunk refs — these should survive eviction.
+	survivingRefs := make([]string, 2)
+	survivingRefs[0] = preEvictionLog.Chunks[2].Ref
+	survivingRefs[1] = preEvictionLog.Chunks[3].Ref
+
+	// --- Trigger eviction via the reap action ---
+
+	telemetryClient := service.NewServiceClientFromToken(telemetrySvc.SocketPath, ingestToken)
+	if err := telemetryClient.Call(ctx, "reap", nil, nil); err != nil {
+		t.Fatalf("reap call: %v", err)
+	}
+
+	// --- Verify post-eviction state ---
+
+	rawLogContent, err = admin.GetStateEvent(ctx, machine.ConfigRoomID, log.EventTypeLog, sessionID)
+	if err != nil {
+		t.Fatalf("read m.bureau.log state event after eviction: %v", err)
+	}
+
+	var postEvictionLog log.LogContent
+	if err := json.Unmarshal(rawLogContent, &postEvictionLog); err != nil {
+		t.Fatalf("unmarshal post-eviction log content: %v", err)
+	}
+
+	// With max=12000 and chunks of 6000, eviction removes the oldest
+	// 2 chunks (24000-6000=18000 > 12000, 18000-6000=12000 ≤ 12000).
+	if postEvictionLog.Status != log.LogStatusRotating {
+		t.Errorf("post-eviction status = %q, want %q", postEvictionLog.Status, log.LogStatusRotating)
+	}
+	if length := len(postEvictionLog.Chunks); length != 2 {
+		t.Fatalf("post-eviction chunks = %d, want 2", length)
+	}
+	expectedPostTotalBytes := int64(chunkSize * 2)
+	if postEvictionLog.TotalBytes != expectedPostTotalBytes {
+		t.Errorf("post-eviction total_bytes = %d, want %d", postEvictionLog.TotalBytes, expectedPostTotalBytes)
+	}
+
+	// Verify the surviving chunks are the last two (most recent).
+	if postEvictionLog.Chunks[0].Ref != survivingRefs[0] {
+		t.Errorf("surviving chunk[0] ref = %q, want %q", postEvictionLog.Chunks[0].Ref, survivingRefs[0])
+	}
+	if postEvictionLog.Chunks[1].Ref != survivingRefs[1] {
+		t.Errorf("surviving chunk[1] ref = %q, want %q", postEvictionLog.Chunks[1].Ref, survivingRefs[1])
+	}
+
+	// Verify the eviction counter in the status endpoint.
+	postEvictionStatus := queryTelemetryStatus(t, telemetrySvc.SocketPath)
+	if postEvictionStatus.LogManager.EvictionCount == 0 {
+		t.Error("eviction_count is 0 after reap — eviction did not fire")
+	}
+
+	// --- Verify surviving artifacts are still fetchable ---
+
+	artifactFetchToken := mintTestServiceToken(t, machine, callerEntity, "artifact",
+		[]servicetoken.Grant{{Actions: []string{artifact.ActionFetch}}})
+	artifactClient := artifactstore.NewClientFromToken(artifactSvc.SocketPath, artifactFetchToken)
+
+	for index, chunkRef := range survivingRefs {
+		fetchResult, err := artifactClient.Fetch(ctx, chunkRef)
+		if err != nil {
+			t.Fatalf("fetch surviving chunk[%d] artifact %s: %v", index, chunkRef, err)
+		}
+		fetchedData, err := io.ReadAll(fetchResult.Content)
+		fetchResult.Content.Close()
+		if err != nil {
+			t.Fatalf("read surviving chunk[%d] content: %v", index, err)
+		}
+		if len(fetchedData) != chunkSize {
+			t.Errorf("surviving chunk[%d] size = %d, want %d", index, len(fetchedData), chunkSize)
+		}
+	}
+
+	// --- Complete the session and verify final state ---
+
+	var completeResponse telemetry.CompleteLogResponse
+	if err := telemetryClient.Call(ctx, "complete-log", telemetry.CompleteLogRequest{
+		Source:    callerEntity.Localpart(),
+		SessionID: sessionID,
+	}, &completeResponse); err != nil {
+		t.Fatalf("complete-log call: %v", err)
+	}
+	if !completeResponse.Completed {
+		t.Error("complete-log response: completed = false, want true")
+	}
+
+	rawLogContent, err = admin.GetStateEvent(ctx, machine.ConfigRoomID, log.EventTypeLog, sessionID)
+	if err != nil {
+		t.Fatalf("read m.bureau.log state event after complete: %v", err)
+	}
+
+	var completedLog log.LogContent
+	if err := json.Unmarshal(rawLogContent, &completedLog); err != nil {
+		t.Fatalf("unmarshal completed log content: %v", err)
+	}
+
+	if completedLog.Status != log.LogStatusComplete {
+		t.Errorf("completed status = %q, want %q", completedLog.Status, log.LogStatusComplete)
+	}
+	// After completion, the chunk list should still be the 2 surviving
+	// chunks (complete-log doesn't re-add evicted chunks).
+	if length := len(completedLog.Chunks); length != 2 {
+		t.Errorf("completed chunks = %d, want 2", length)
+	}
+	if completedLog.TotalBytes != expectedPostTotalBytes {
+		t.Errorf("completed total_bytes = %d, want %d", completedLog.TotalBytes, expectedPostTotalBytes)
+	}
+}

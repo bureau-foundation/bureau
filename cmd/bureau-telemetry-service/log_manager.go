@@ -50,6 +50,14 @@ const (
 	// artifactContentType is the content type used when storing
 	// output delta chunks in the artifact service.
 	artifactContentType = "application/vnd.bureau.terminal-output"
+
+	// defaultMaxBytesPerSession is the maximum stored output per
+	// session before the eviction loop starts removing old chunks
+	// from the front. 1 GB is generous for most services while
+	// preventing unbounded state event growth. Per-session template
+	// hints (OutputCapture.MaxSize) will override this when fleet
+	// config propagation is implemented.
+	defaultMaxBytesPerSession int64 = 1 << 30
 )
 
 // artifactStorer is the subset of artifactstore.Client needed by the
@@ -99,6 +107,7 @@ type logManager struct {
 	chunkSizeThreshold int
 	flushInterval      time.Duration
 	staleTimeout       time.Duration
+	maxBytesPerSession int64
 
 	// Operational counters for the status endpoint.
 	flushCount           atomic.Uint64
@@ -108,6 +117,7 @@ type logManager struct {
 	stateEventWrites     atomic.Uint64
 	stateEventErrors     atomic.Uint64
 	roomResolutionErrors atomic.Uint64
+	evictionCount        atomic.Uint64
 
 	// lastError stores the most recent error message for
 	// diagnostic surfacing via the status endpoint. Protected
@@ -130,6 +140,7 @@ func newLogManager(artifact artifactStorer, writer logEntityWriter, clk clock.Cl
 		chunkSizeThreshold: defaultChunkSizeThreshold,
 		flushInterval:      defaultFlushInterval,
 		staleTimeout:       defaultStaleTimeout,
+		maxBytesPerSession: defaultMaxBytesPerSession,
 	}
 }
 
@@ -157,6 +168,7 @@ func (m *logManager) Stats() telemetry.LogManagerStats {
 		StateEventWrites:     m.stateEventWrites.Load(),
 		StateEventErrors:     m.stateEventErrors.Load(),
 		RoomResolutionErrors: m.roomResolutionErrors.Load(),
+		EvictionCount:        m.evictionCount.Load(),
 		ActiveSessions:       sessionCount,
 		LastError:            lastErr,
 	}
@@ -570,7 +582,9 @@ func (m *logManager) tickFlush(ctx context.Context) {
 }
 
 // tickReaper scans all sessions and completes any that have been
-// idle for longer than staleTimeout.
+// idle for longer than staleTimeout. After the stale scan, it runs
+// the eviction loop: sessions whose totalBytes exceeds the max are
+// trimmed from the front.
 func (m *logManager) tickReaper(ctx context.Context) {
 	now := m.clock.Now()
 	staleThreshold := now.Add(-m.staleTimeout)
@@ -578,13 +592,21 @@ func (m *logManager) tickReaper(ctx context.Context) {
 	m.sessionsMu.RLock()
 	var stale []*sessionBuffer
 	var staleKeys []sessionKey
+	var oversized []*sessionBuffer
 	for key, session := range m.sessions {
 		session.mu.Lock()
-		isStale := session.status == log.LogStatusActive && session.lastActivity.Before(staleThreshold)
+		isStale := (session.status == log.LogStatusActive || session.status == log.LogStatusRotating) &&
+			session.lastActivity.Before(staleThreshold)
+		needsEviction := (session.status == log.LogStatusActive || session.status == log.LogStatusRotating) &&
+			session.totalBytes > m.maxBytesPerSession
 		session.mu.Unlock()
 		if isStale {
 			stale = append(stale, session)
 			staleKeys = append(staleKeys, key)
+		} else if needsEviction {
+			// Only evict non-stale sessions. Stale sessions are
+			// being completed, which removes them entirely.
+			oversized = append(oversized, session)
 		}
 	}
 	m.sessionsMu.RUnlock()
@@ -596,6 +618,120 @@ func (m *logManager) tickReaper(ctx context.Context) {
 			"session_id", session.sessionID,
 		)
 	}
+
+	for _, session := range oversized {
+		m.evictSession(ctx, session)
+	}
+}
+
+// evictSession removes the oldest chunks from a session until its
+// totalBytes is at or below maxBytesPerSession. The last chunk is
+// never removed (so the session always has some recent output). After
+// trimming the in-memory state, writes the updated m.bureau.log state
+// event.
+func (m *logManager) evictSession(ctx context.Context, session *sessionBuffer) {
+	session.mu.Lock()
+
+	// Re-check under lock — a concurrent flush may have changed totalBytes.
+	if session.totalBytes <= m.maxBytesPerSession {
+		session.mu.Unlock()
+		return
+	}
+
+	// Remove chunks from the front until totalBytes is within the
+	// limit. Keep at least one chunk (never evict everything).
+	evicted := 0
+	evictedBytes := int64(0)
+	for evicted < len(session.chunks)-1 && session.totalBytes-evictedBytes > m.maxBytesPerSession {
+		evictedBytes += session.chunks[evicted].Size
+		evicted++
+	}
+
+	if evicted == 0 {
+		session.mu.Unlock()
+		return
+	}
+
+	// Trim the chunk list and update totalBytes.
+	session.chunks = session.chunks[evicted:]
+	session.totalBytes -= evictedBytes
+	if session.status == log.LogStatusActive {
+		session.status = log.LogStatusRotating
+	}
+
+	roomID := session.configRoomID
+	roomResolved := session.roomResolved
+
+	m.logger.Info("evicting old output chunks",
+		"source", session.source,
+		"session_id", session.sessionID,
+		"chunks_evicted", evicted,
+		"bytes_evicted", evictedBytes,
+		"chunks_remaining", len(session.chunks),
+		"total_bytes_remaining", session.totalBytes,
+	)
+
+	session.mu.Unlock()
+
+	m.evictionCount.Add(1)
+
+	if !roomResolved || roomID.IsZero() {
+		return
+	}
+
+	m.writeEvictedEntity(ctx, session, roomID)
+}
+
+// writeEvictedEntity writes the m.bureau.log state event after chunk
+// eviction. Builds the event from the session's current in-memory
+// state (chunks + pendingChunks, which reflects the post-eviction
+// trim). On success, updates the session's persisted state.
+func (m *logManager) writeEvictedEntity(ctx context.Context, session *sessionBuffer, roomID ref.RoomID) {
+	session.mu.Lock()
+
+	allChunks := make([]log.LogChunk, 0, len(session.chunks)+len(session.pendingChunks))
+	allChunks = append(allChunks, session.chunks...)
+	allChunks = append(allChunks, session.pendingChunks...)
+
+	var totalBytes int64
+	for i := range allChunks {
+		totalBytes += allChunks[i].Size
+	}
+
+	content := log.LogContent{
+		Version:    log.LogContentVersion,
+		SessionID:  session.sessionID,
+		Source:     session.source,
+		Format:     log.LogFormatRaw,
+		Status:     session.status,
+		TotalBytes: totalBytes,
+		Chunks:     allChunks,
+	}
+
+	session.mu.Unlock()
+
+	_, err := m.writer.SendStateEvent(ctx, roomID, log.EventTypeLog, session.sessionID, content)
+
+	session.mu.Lock()
+	defer session.mu.Unlock()
+
+	if err != nil {
+		m.stateEventErrors.Add(1)
+		m.recordError(fmt.Errorf("eviction state event write: %w", err))
+		m.logger.Error("eviction state event write failed",
+			"source", session.source,
+			"session_id", session.sessionID,
+			"error", err,
+		)
+		return
+	}
+
+	m.stateEventWrites.Add(1)
+	session.chunks = allChunks
+	session.totalBytes = totalBytes
+	session.pendingChunks = session.pendingChunks[:0]
+	session.pendingOverflow = false
+	session.entityExists = true
 }
 
 // CompleteLog flushes remaining data and transitions sessions to

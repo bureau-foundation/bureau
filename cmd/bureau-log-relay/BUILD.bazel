@@ -11,6 +11,12 @@ go_library(
     ],
     importpath = "github.com/bureau-foundation/bureau/cmd/bureau-log-relay",
     visibility = ["//visibility:private"],
+    deps = [
+        "//lib/ref",
+        "//lib/schema/telemetry",
+        "//lib/service",
+        "@org_golang_x_sys//unix",
+    ],
 )
 
 go_binary(

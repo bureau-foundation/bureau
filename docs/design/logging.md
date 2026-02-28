@@ -81,7 +81,13 @@ tmux new-session -d -s bureau/agent/foo "/path/to/sandbox-script.sh"
 With capture:
 ```
 tmux new-session -d -s bureau/agent/foo \
-  "bureau-log-relay --relay /run/bureau/telemetry.sock --principal agent/foo \
+  "bureau-log-relay \
+   --relay=/run/bureau/telemetry.sock \
+   --token=/run/bureau/telemetry-token \
+   --fleet='#bureau/fleet/prod:bureau.local' \
+   --machine='@bureau/fleet/prod/machine/workstation:bureau.local' \
+   --source='@bureau/fleet/prod/agent/foo:bureau.local' \
+   --session-id=sess-abc123 \
    -- /path/to/sandbox-script.sh"
 ```
 
@@ -114,11 +120,12 @@ two conditions:
   This ensures low-latency tailing even for processes that produce
   output slowly.
 
-Each flush produces a single CBOR output delta message sent to the
-telemetry relay socket. The message includes the principal identity,
-a monotonically increasing sequence number, a stream identifier
-(stdout vs stderr if distinguishable, or combined), a timestamp, and
-the raw bytes.
+Each flush produces a CBOR SubmitRequest sent to the telemetry relay
+socket. The request contains fleet, machine, and source identity at
+the envelope level (deduped across records) and an OutputDelta with a
+monotonically increasing sequence number, a stream identifier (combined
+for PTY output), a session ID, a nanosecond timestamp, and the raw
+bytes.
 
 #### PTY semantics
 

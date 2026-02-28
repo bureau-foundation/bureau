@@ -61,10 +61,11 @@ type mockDoctorServer struct {
 	devTeamID  string
 
 	// Configurable state. Nil means healthy defaults.
-	spaceChildren map[string]bool           // room IDs that are space children; nil = all standard rooms
-	joinRules     map[string]string         // roomID -> join_rule; nil = "invite" for all
-	powerLevels   map[string]map[string]any // roomID -> PL content; nil = correct defaults
-	roomMembers   map[string][]string       // roomID -> joined member user IDs; nil = admin only
+	spaceChildren  map[string]bool                   // room IDs that are space children; nil = all standard rooms
+	joinRules      map[string]string                 // roomID -> join_rule; nil = "invite" for all
+	powerLevels    map[string]map[string]any         // roomID -> PL content; nil = correct defaults
+	roomMembers    map[string][]string               // roomID -> joined member user IDs; nil = admin only
+	devTeamContent map[string]*schema.DevTeamContent // roomID -> dev team content; nil = convention alias for all
 
 	// Mutation tracking.
 	mu             sync.Mutex
@@ -265,6 +266,27 @@ func (m *mockDoctorServer) handle(t *testing.T) http.HandlerFunc {
 			}
 			writer.WriteHeader(http.StatusNotFound)
 			json.NewEncoder(writer).Encode(messaging.MatrixError{Code: "M_NOT_FOUND", Message: "State event not found"})
+			return
+		}
+
+		// GET specific state event: m.bureau.dev_team.
+		if method == http.MethodGet && strings.Contains(rawPath, "/state/m.bureau.dev_team") {
+			roomID := extractRoomIDFromStatePath(rawPath)
+			if m.devTeamContent != nil {
+				content, ok := m.devTeamContent[roomID]
+				if !ok || content == nil {
+					// Key absent or explicitly nil: return 404 (simulates missing metadata).
+					writer.WriteHeader(http.StatusNotFound)
+					json.NewEncoder(writer).Encode(messaging.MatrixError{Code: "M_NOT_FOUND", Message: "State event not found"})
+					return
+				}
+				json.NewEncoder(writer).Encode(content)
+				return
+			}
+			// Default healthy state: convention alias for all rooms.
+			json.NewEncoder(writer).Encode(schema.DevTeamContent{
+				Room: ref.MustParseRoomAlias("#bureau/dev:local"),
+			})
 			return
 		}
 
@@ -483,6 +505,12 @@ func TestRunDoctor_AllHealthy(t *testing.T) {
 		"dev team room join rules",
 		`template "base"`,
 		`template "base-networked"`,
+		"bureau space dev team",
+		"system room dev team",
+		"template room dev team",
+		"pipeline room dev team",
+		"artifact room dev team",
+		"dev team room dev team",
 	}
 	// Add expected pipeline checks dynamically from embedded content.
 	pipelines, err := content.Pipelines()
@@ -836,6 +864,65 @@ func TestRunDoctor_FixPowerLevels(t *testing.T) {
 	}
 	if !powerLevelsFound {
 		t.Error("expected m.room.power_levels state event for system room")
+	}
+}
+
+func TestRunDoctor_FixMissingDevTeamMetadata(t *testing.T) {
+	adminUserID := ref.MustParseUserID("@bureau-admin:local")
+	mock := newHealthyMock(adminUserID)
+	// System room and space are missing dev team metadata.
+	mock.devTeamContent = map[string]*schema.DevTeamContent{
+		"!space:local":    nil, // missing
+		"!system:local":   nil, // missing
+		"!template:local": {Room: ref.MustParseRoomAlias("#bureau/dev:local")},
+		"!pipeline:local": {Room: ref.MustParseRoomAlias("#bureau/dev:local")},
+		"!artifact:local": {Room: ref.MustParseRoomAlias("#bureau/dev:local")},
+		"!devteam:local":  {Room: ref.MustParseRoomAlias("#bureau/dev:local")},
+	}
+	server := mock.httpServer(t)
+	defer server.Close()
+
+	client, err := messaging.NewClient(messaging.ClientConfig{HomeserverURL: server.URL})
+	if err != nil {
+		t.Fatalf("NewClient: %v", err)
+	}
+	session, err := client.SessionFromToken(adminUserID, "test-token")
+	if err != nil {
+		t.Fatalf("SessionFromToken: %v", err)
+	}
+	defer session.Close()
+
+	results := runDoctor(t.Context(), client, session, ref.MustParseServerName("local"), nil, "", testLogger())
+
+	// Space and system room dev team checks should fail.
+	for _, result := range results {
+		switch result.Name {
+		case "bureau space dev team", "system room dev team":
+			if result.Status != doctor.StatusFail {
+				t.Errorf("expected %s to FAIL, got %s: %s", result.Name, result.Status, result.Message)
+			}
+			if !result.HasFix() {
+				t.Errorf("expected %s to have a fix function", result.Name)
+			}
+		case "template room dev team", "pipeline room dev team", "artifact room dev team", "dev team room dev team":
+			if result.Status != doctor.StatusPass {
+				t.Errorf("expected %s to PASS, got %s: %s", result.Name, result.Status, result.Message)
+			}
+		}
+	}
+
+	doctor.ExecuteFixes(t.Context(), results, false, isMatrixPermissionDenied)
+
+	// Verify dev team state events were sent for the two broken rooms.
+	stateEvents := mock.getStateEvents()
+	devTeamEventCount := 0
+	for _, event := range stateEvents {
+		if event.eventType == schema.EventTypeDevTeam.String() {
+			devTeamEventCount++
+		}
+	}
+	if devTeamEventCount != 2 {
+		t.Errorf("expected 2 m.bureau.dev_team state events (space + system), got %d", devTeamEventCount)
 	}
 }
 

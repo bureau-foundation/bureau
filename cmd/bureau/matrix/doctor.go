@@ -465,6 +465,9 @@ func runDoctor(ctx context.Context, client *messaging.Client, session messaging.
 		results = append(results, checkBasePipelines(ctx, session, pipelineRoomID)...)
 	}
 
+	// Section 11: Dev team metadata on all Bureau rooms.
+	results = append(results, checkDevTeamMetadata(ctx, session, serverName, spaceRoomID, roomIDs)...)
+
 	return results
 }
 
@@ -869,4 +872,75 @@ func checkBasePipelines(ctx context.Context, session messaging.Session, pipeline
 		})
 	}
 	return checkPublishedStateEvents(ctx, session, pipelineRoomID, items)
+}
+
+// checkDevTeamMetadata verifies that all Bureau rooms carry m.bureau.dev_team
+// state events pointing to the convention dev team room alias
+// (#bureau/dev:<server>). This catches setups bootstrapped before the dev team
+// feature was added, or rooms where the metadata was accidentally removed.
+func checkDevTeamMetadata(ctx context.Context, session messaging.Session, serverName ref.ServerName, spaceRoomID ref.RoomID, roomIDs map[string]ref.RoomID) []doctor.Result {
+	bureauNamespace, err := ref.NewNamespace(serverName, "bureau")
+	if err != nil {
+		return []doctor.Result{doctor.Fail("dev team metadata", fmt.Sprintf("construct bureau namespace: %v", err))}
+	}
+	expectedAlias := schema.DevTeamRoomAlias(bureauNamespace)
+	expectedContent := schema.DevTeamContent{Room: expectedAlias}
+
+	type roomCheck struct {
+		name   string
+		roomID ref.RoomID
+	}
+
+	var rooms []roomCheck
+	if !spaceRoomID.IsZero() {
+		rooms = append(rooms, roomCheck{"bureau space", spaceRoomID})
+	}
+	for _, room := range standardRooms {
+		if roomID, ok := roomIDs[room.alias]; ok {
+			rooms = append(rooms, roomCheck{room.name, roomID})
+		}
+	}
+
+	var results []doctor.Result
+	for _, room := range rooms {
+		checkName := room.name + " dev team"
+		content, err := messaging.GetState[schema.DevTeamContent](ctx, session, room.roomID, schema.EventTypeDevTeam, "")
+		if err != nil {
+			if messaging.IsMatrixError(err, messaging.ErrCodeNotFound) {
+				capturedRoomID := room.roomID
+				capturedName := room.name
+				results = append(results, doctor.FailWithFix(
+					checkName,
+					"m.bureau.dev_team not set",
+					fmt.Sprintf("publish dev team metadata on %s", capturedName),
+					func(ctx context.Context) error {
+						_, err := session.SendStateEvent(ctx, capturedRoomID, schema.EventTypeDevTeam, "", expectedContent)
+						return err
+					},
+				))
+				continue
+			}
+			results = append(results, doctor.Fail(checkName, fmt.Sprintf("cannot read: %v", err)))
+			continue
+		}
+
+		if content.Room != expectedAlias {
+			capturedRoomID := room.roomID
+			capturedName := room.name
+			results = append(results, doctor.FailWithFix(
+				checkName,
+				fmt.Sprintf("points to %s, expected %s", content.Room, expectedAlias),
+				fmt.Sprintf("fix dev team metadata on %s", capturedName),
+				func(ctx context.Context) error {
+					_, err := session.SendStateEvent(ctx, capturedRoomID, schema.EventTypeDevTeam, "", expectedContent)
+					return err
+				},
+			))
+			continue
+		}
+
+		results = append(results, doctor.Pass(checkName, fmt.Sprintf("points to %s", content.Room)))
+	}
+
+	return results
 }

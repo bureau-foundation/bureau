@@ -34,6 +34,7 @@ import (
 	"github.com/bureau-foundation/bureau/lib/ref"
 	"github.com/bureau-foundation/bureau/lib/schema"
 	"github.com/bureau-foundation/bureau/lib/schema/observation"
+	"github.com/bureau-foundation/bureau/messaging"
 	"github.com/bureau-foundation/bureau/observe"
 )
 
@@ -447,17 +448,10 @@ func (d *Daemon) handleQueryLayout(clientConnection net.Conn, request observeReq
 	// Fetch the m.bureau.layout state event from the channel room.
 	// Channel-level layouts use an empty state key (as opposed to
 	// per-principal layouts which use the principal's localpart).
-	rawLayout, err := d.session.GetStateEvent(ctx, roomID, schema.EventTypeLayout, "")
+	layoutContent, err := messaging.GetState[observation.LayoutContent](ctx, d.session, roomID, schema.EventTypeLayout, "")
 	if err != nil {
 		d.sendObserveError(clientConnection,
 			fmt.Sprintf("fetch layout for %q: %v", request.Channel, err))
-		return
-	}
-
-	var layoutContent observation.LayoutContent
-	if err := json.Unmarshal(rawLayout, &layoutContent); err != nil {
-		d.sendObserveError(clientConnection,
-			fmt.Sprintf("parse layout for %q: %v", request.Channel, err))
 		return
 	}
 

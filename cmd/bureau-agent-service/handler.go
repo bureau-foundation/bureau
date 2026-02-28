@@ -5,7 +5,6 @@ package main
 
 import (
 	"context"
-	"encoding/json"
 	"fmt"
 	"sort"
 	"strings"
@@ -933,66 +932,39 @@ func (agentService *AgentService) handleMaterializeContext(ctx context.Context, 
 // readSessionState reads the m.bureau.agent_session state event for a
 // principal from the config room. Returns nil if no event exists.
 func (agentService *AgentService) readSessionState(ctx context.Context, principalLocal string) (*agent.AgentSessionContent, error) {
-	raw, err := agentService.session.GetStateEvent(
-		ctx, agentService.configRoomID,
-		agent.EventTypeAgentSession, principalLocal,
-	)
+	content, err := messaging.GetState[agent.AgentSessionContent](ctx, agentService.session, agentService.configRoomID, agent.EventTypeAgentSession, principalLocal)
 	if err != nil {
 		if messaging.IsMatrixError(err, messaging.ErrCodeNotFound) {
 			return nil, nil
 		}
 		return nil, fmt.Errorf("reading session state for %s: %w", principalLocal, err)
 	}
-
-	var content agent.AgentSessionContent
-	if unmarshalError := json.Unmarshal(raw, &content); unmarshalError != nil {
-		return nil, fmt.Errorf("unmarshaling agent session content: %w", unmarshalError)
-	}
-
 	return &content, nil
 }
 
 // readContextState reads the m.bureau.agent_context state event for a
 // principal from the config room. Returns nil if no event exists.
 func (agentService *AgentService) readContextState(ctx context.Context, principalLocal string) (*agent.AgentContextContent, error) {
-	raw, err := agentService.session.GetStateEvent(
-		ctx, agentService.configRoomID,
-		agent.EventTypeAgentContext, principalLocal,
-	)
+	content, err := messaging.GetState[agent.AgentContextContent](ctx, agentService.session, agentService.configRoomID, agent.EventTypeAgentContext, principalLocal)
 	if err != nil {
 		if messaging.IsMatrixError(err, messaging.ErrCodeNotFound) {
 			return nil, nil
 		}
 		return nil, fmt.Errorf("reading context state for %s: %w", principalLocal, err)
 	}
-
-	var content agent.AgentContextContent
-	if unmarshalError := json.Unmarshal(raw, &content); unmarshalError != nil {
-		return nil, fmt.Errorf("unmarshaling agent context content: %w", unmarshalError)
-	}
-
 	return &content, nil
 }
 
 // readMetricsState reads the m.bureau.agent_metrics state event for a
 // principal from the config room. Returns nil if no event exists.
 func (agentService *AgentService) readMetricsState(ctx context.Context, principalLocal string) (*agent.AgentMetricsContent, error) {
-	raw, err := agentService.session.GetStateEvent(
-		ctx, agentService.configRoomID,
-		agent.EventTypeAgentMetrics, principalLocal,
-	)
+	content, err := messaging.GetState[agent.AgentMetricsContent](ctx, agentService.session, agentService.configRoomID, agent.EventTypeAgentMetrics, principalLocal)
 	if err != nil {
 		if messaging.IsMatrixError(err, messaging.ErrCodeNotFound) {
 			return nil, nil
 		}
 		return nil, fmt.Errorf("reading metrics state for %s: %w", principalLocal, err)
 	}
-
-	var content agent.AgentMetricsContent
-	if unmarshalError := json.Unmarshal(raw, &content); unmarshalError != nil {
-		return nil, fmt.Errorf("unmarshaling agent metrics content: %w", unmarshalError)
-	}
-
 	return &content, nil
 }
 
@@ -1002,22 +974,13 @@ func (agentService *AgentService) readMetricsState(ctx context.Context, principa
 // missing commits — a missing commit in a chain is a broken chain,
 // never an expected "nothing here yet" case.
 func (agentService *AgentService) readContextCommit(ctx context.Context, commitID string) (*agent.ContextCommitContent, error) {
-	raw, err := agentService.session.GetStateEvent(
-		ctx, agentService.configRoomID,
-		agent.EventTypeAgentContextCommit, commitID,
-	)
+	content, err := messaging.GetState[agent.ContextCommitContent](ctx, agentService.session, agentService.configRoomID, agent.EventTypeAgentContextCommit, commitID)
 	if err != nil {
 		if messaging.IsMatrixError(err, messaging.ErrCodeNotFound) {
 			return nil, fmt.Errorf("context commit %q not found", commitID)
 		}
 		return nil, fmt.Errorf("reading context commit %q: %w", commitID, err)
 	}
-
-	var content agent.ContextCommitContent
-	if unmarshalError := json.Unmarshal(raw, &content); unmarshalError != nil {
-		return nil, fmt.Errorf("unmarshaling context commit %q: %w", commitID, unmarshalError)
-	}
-
 	return &content, nil
 }
 

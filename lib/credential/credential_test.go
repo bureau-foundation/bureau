@@ -276,7 +276,7 @@ func TestProvision_MachineKeyFetchFails(t *testing.T) {
 	if err == nil {
 		t.Fatal("expected error when machine key fetch fails, got nil")
 	}
-	expected := `fetching machine key for "my_bureau/fleet/prod/machine/workstation": homeserver unreachable`
+	expected := `reading m.bureau.machine_key["my_bureau/fleet/prod/machine/workstation"] from room !room:bureau.local: homeserver unreachable`
 	if got := err.Error(); got != expected {
 		t.Errorf("error = %q, want %q", got, expected)
 	}

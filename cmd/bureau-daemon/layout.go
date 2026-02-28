@@ -23,8 +23,6 @@ package main
 
 import (
 	"context"
-	"encoding/json"
-	"fmt"
 
 	"github.com/bureau-foundation/bureau/lib/ref"
 	"github.com/bureau-foundation/bureau/lib/schema"
@@ -232,14 +230,9 @@ func (d *Daemon) runLayoutWatcher(ctx context.Context, principal ref.Entity, rea
 // config room and returns it as a runtime Layout.
 func (d *Daemon) readLayoutEvent(ctx context.Context, principal ref.Entity) (*observe.Layout, error) {
 	stateKey := principal.AccountLocalpart()
-	raw, err := d.session.GetStateEvent(ctx, d.configRoomID, schema.EventTypeLayout, stateKey)
+	content, err := messaging.GetState[observation.LayoutContent](ctx, d.session, d.configRoomID, schema.EventTypeLayout, stateKey)
 	if err != nil {
 		return nil, err
-	}
-
-	var content observation.LayoutContent
-	if err := json.Unmarshal(raw, &content); err != nil {
-		return nil, fmt.Errorf("parsing layout event for %q: %w", stateKey, err)
 	}
 
 	return observe.SchemaToLayout(content), nil

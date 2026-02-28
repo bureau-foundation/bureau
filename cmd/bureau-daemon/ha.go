@@ -250,16 +250,9 @@ func (w *haWatchdog) fetchMachineLabels() map[string]string {
 	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
 	defer cancel()
 
-	raw, err := w.daemon.session.GetStateEvent(ctx, w.daemon.machineRoomID,
-		schema.EventTypeMachineInfo, w.daemon.machine.Localpart())
+	info, err := messaging.GetState[schema.MachineInfo](ctx, w.daemon.session, w.daemon.machineRoomID, schema.EventTypeMachineInfo, w.daemon.machine.Localpart())
 	if err != nil {
 		w.logger.Debug("failed to fetch machine info for eligibility check", "error", err)
-		return nil
-	}
-
-	var info schema.MachineInfo
-	if err := json.Unmarshal(raw, &info); err != nil {
-		w.logger.Debug("failed to parse machine info for eligibility check", "error", err)
 		return nil
 	}
 
@@ -394,18 +387,12 @@ func (w *haWatchdog) attemptAcquisition(ctx context.Context, serviceLocalpart st
 // readLease fetches the current HALeaseContent for a service from Matrix.
 // Returns nil (not an error) if no lease event exists.
 func (w *haWatchdog) readLease(ctx context.Context, serviceLocalpart string) (*fleet.HALeaseContent, error) {
-	raw, err := w.daemon.session.GetStateEvent(ctx, w.daemon.fleetRoomID,
-		schema.EventTypeHALease, serviceLocalpart)
+	lease, err := messaging.GetState[fleet.HALeaseContent](ctx, w.daemon.session, w.daemon.fleetRoomID, schema.EventTypeHALease, serviceLocalpart)
 	if err != nil {
 		if messaging.IsMatrixError(err, messaging.ErrCodeNotFound) {
 			return nil, nil
 		}
 		return nil, err
-	}
-
-	var lease fleet.HALeaseContent
-	if err := json.Unmarshal(raw, &lease); err != nil {
-		return nil, fmt.Errorf("parsing lease: %w", err)
 	}
 	return &lease, nil
 }
@@ -460,21 +447,11 @@ func (w *haWatchdog) startHosting(ctx context.Context, serviceLocalpart string, 
 // config room, adds or updates the PrincipalAssignment for the given
 // service, and writes the updated config back.
 func (w *haWatchdog) writePrincipalAssignment(ctx context.Context, serviceLocalpart string, assignment schema.PrincipalAssignment) {
-	raw, err := w.daemon.session.GetStateEvent(ctx, w.daemon.configRoomID,
-		schema.EventTypeMachineConfig, w.daemon.machine.Localpart())
+	config, err := messaging.GetState[schema.MachineConfig](ctx, w.daemon.session, w.daemon.configRoomID, schema.EventTypeMachineConfig, w.daemon.machine.Localpart())
 	if err != nil && !messaging.IsMatrixError(err, messaging.ErrCodeNotFound) {
 		w.logger.Error("reading machine config for HA assignment",
 			"service", serviceLocalpart, "error", err)
 		return
-	}
-
-	var config schema.MachineConfig
-	if raw != nil {
-		if err := json.Unmarshal(raw, &config); err != nil {
-			w.logger.Error("parsing machine config for HA assignment",
-				"service", serviceLocalpart, "error", err)
-			return
-		}
 	}
 
 	// Check if the assignment already exists.

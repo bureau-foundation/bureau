@@ -5,13 +5,13 @@ package pipeline
 
 import (
 	"context"
-	"encoding/json"
 	"log/slog"
 
 	"github.com/bureau-foundation/bureau/cmd/bureau/cli"
 	"github.com/bureau-foundation/bureau/lib/ref"
 	"github.com/bureau-foundation/bureau/lib/schema"
 	pipelineschema "github.com/bureau-foundation/bureau/lib/schema/pipeline"
+	"github.com/bureau-foundation/bureau/messaging"
 )
 
 // pipelineShowParams holds the parameters for the pipeline show command.
@@ -83,14 +83,9 @@ see is what the executor runs.`,
 				return cli.NotFound("resolving room alias %q: %w", roomAlias, err)
 			}
 
-			raw, err := session.GetStateEvent(ctx, roomID, schema.EventTypePipeline, pipelineRef.Pipeline)
+			content, err := messaging.GetState[pipelineschema.PipelineContent](ctx, session, roomID, schema.EventTypePipeline, pipelineRef.Pipeline)
 			if err != nil {
 				return cli.NotFound("fetching pipeline %q from %s: %w", pipelineRef.Pipeline, roomAlias, err)
-			}
-
-			var content pipelineschema.PipelineContent
-			if err := json.Unmarshal(raw, &content); err != nil {
-				return cli.Internal("parsing pipeline content: %w", err)
 			}
 
 			return printPipelineJSON(&content)

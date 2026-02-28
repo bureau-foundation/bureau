@@ -5,7 +5,6 @@ package agent
 
 import (
 	"context"
-	"encoding/json"
 	"fmt"
 	"log/slog"
 	"os"
@@ -199,21 +198,13 @@ func readAgentServiceState(ctx context.Context, session messaging.Session, locat
 	roomID := location.ConfigRoomID
 
 	var sessionContent *agentschema.AgentSessionContent
-	sessionRaw, err := session.GetStateEvent(ctx, roomID, agentschema.EventTypeAgentSession, localpart)
-	if err == nil {
-		var content agentschema.AgentSessionContent
-		if json.Unmarshal(sessionRaw, &content) == nil {
-			sessionContent = &content
-		}
+	if content, err := messaging.GetState[agentschema.AgentSessionContent](ctx, session, roomID, agentschema.EventTypeAgentSession, localpart); err == nil {
+		sessionContent = &content
 	}
 
 	var metricsContent *agentschema.AgentMetricsContent
-	metricsRaw, err := session.GetStateEvent(ctx, roomID, agentschema.EventTypeAgentMetrics, localpart)
-	if err == nil {
-		var content agentschema.AgentMetricsContent
-		if json.Unmarshal(metricsRaw, &content) == nil {
-			metricsContent = &content
-		}
+	if content, err := messaging.GetState[agentschema.AgentMetricsContent](ctx, session, roomID, agentschema.EventTypeAgentMetrics, localpart); err == nil {
+		metricsContent = &content
 	}
 
 	return sessionContent, metricsContent

@@ -7,7 +7,6 @@ import (
 	"context"
 	"crypto/rand"
 	"encoding/hex"
-	"encoding/json"
 	"fmt"
 
 	"github.com/bureau-foundation/bureau/lib/ref"
@@ -387,13 +386,8 @@ func registerAndProvision(ctx context.Context, client *messaging.Client, session
 func AssignPrincipals(ctx context.Context, session messaging.Session, configRoomID ref.RoomID, params []CreateParams) (ref.EventID, error) {
 	machineLocalpart := params[0].Machine.Localpart()
 
-	var config schema.MachineConfig
-	existingContent, err := session.GetStateEvent(ctx, configRoomID, schema.EventTypeMachineConfig, machineLocalpart)
-	if err == nil {
-		if err := json.Unmarshal(existingContent, &config); err != nil {
-			return ref.EventID{}, fmt.Errorf("parse existing machine config for %s: %w", machineLocalpart, err)
-		}
-	} else if !messaging.IsMatrixError(err, messaging.ErrCodeNotFound) {
+	config, err := messaging.GetState[schema.MachineConfig](ctx, session, configRoomID, schema.EventTypeMachineConfig, machineLocalpart)
+	if err != nil && !messaging.IsMatrixError(err, messaging.ErrCodeNotFound) {
 		return ref.EventID{}, fmt.Errorf("read machine config for %s: %w", machineLocalpart, err)
 	}
 

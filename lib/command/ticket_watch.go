@@ -54,12 +54,9 @@ func WatchTicket(ctx context.Context, params WatchTicketParams) (*ticket.TicketC
 
 	// Check if the ticket is already closed. This avoids a /sync watch
 	// when the pipeline finished before we started watching.
-	existing, err := params.Session.GetStateEvent(ctx, params.RoomID, schema.EventTypeTicket, stateKey)
-	if err == nil {
-		var content ticket.TicketContent
-		if parseErr := json.Unmarshal(existing, &content); parseErr == nil && content.Status == ticket.StatusClosed {
-			return &content, nil
-		}
+	content, err := messaging.GetState[ticket.TicketContent](ctx, params.Session, params.RoomID, schema.EventTypeTicket, stateKey)
+	if err == nil && content.Status == ticket.StatusClosed {
+		return &content, nil
 	}
 	// If GetStateEvent fails (ticket doesn't exist yet) or the ticket
 	// isn't closed, fall through to the /sync watch.

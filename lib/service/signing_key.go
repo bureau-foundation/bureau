@@ -7,7 +7,6 @@ import (
 	"context"
 	"crypto/ed25519"
 	"encoding/hex"
-	"encoding/json"
 	"fmt"
 
 	"github.com/bureau-foundation/bureau/lib/ref"
@@ -25,23 +24,18 @@ import (
 // the hex decoding produces a key of the wrong length.
 func LoadTokenSigningKey(ctx context.Context, session messaging.Session, systemRoomID ref.RoomID, machine ref.Machine) (ed25519.PublicKey, error) {
 	stateKey := machine.UserID().String()
-	raw, err := session.GetStateEvent(ctx, systemRoomID, schema.EventTypeTokenSigningKey, stateKey)
+	content, err := messaging.GetState[schema.TokenSigningKeyContent](ctx, session, systemRoomID, schema.EventTypeTokenSigningKey, stateKey)
 	if err != nil {
 		return nil, fmt.Errorf("fetching token signing key for %s from %s: %w", stateKey, systemRoomID, err)
 	}
 
-	return parseTokenSigningKey(raw, stateKey)
+	return validateTokenSigningKey(content, stateKey)
 }
 
-// parseTokenSigningKey decodes a TokenSigningKeyContent JSON payload
-// into an Ed25519 public key. Validates that the key is present,
+// validateTokenSigningKey validates a TokenSigningKeyContent and decodes
+// its hex-encoded Ed25519 public key. Validates that the key is present,
 // valid hex, and the correct length.
-func parseTokenSigningKey(raw json.RawMessage, machineLocalpart string) (ed25519.PublicKey, error) {
-	var content schema.TokenSigningKeyContent
-	if err := json.Unmarshal(raw, &content); err != nil {
-		return nil, fmt.Errorf("parsing token signing key event: %w", err)
-	}
-
+func validateTokenSigningKey(content schema.TokenSigningKeyContent, machineLocalpart string) (ed25519.PublicKey, error) {
 	if content.PublicKey == "" {
 		return nil, fmt.Errorf("token signing key event for %s has empty public_key field", machineLocalpart)
 	}

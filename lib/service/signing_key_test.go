@@ -6,7 +6,6 @@ package service
 import (
 	"crypto/ed25519"
 	"encoding/hex"
-	"encoding/json"
 	"strings"
 	"testing"
 
@@ -14,20 +13,20 @@ import (
 	"github.com/bureau-foundation/bureau/lib/schema"
 )
 
-func TestParseTokenSigningKeyValid(t *testing.T) {
+func TestValidateTokenSigningKeyValid(t *testing.T) {
 	publicKey, _, err := ed25519.GenerateKey(nil)
 	if err != nil {
 		t.Fatalf("GenerateKey: %v", err)
 	}
 
-	raw := marshalSigningKeyContent(t, schema.TokenSigningKeyContent{
+	content := schema.TokenSigningKeyContent{
 		PublicKey: hex.EncodeToString(publicKey),
 		Machine:   ref.MustParseUserID("@machine/test:test.local"),
-	})
+	}
 
-	result, err := parseTokenSigningKey(raw, "machine/test")
+	result, err := validateTokenSigningKey(content, "machine/test")
 	if err != nil {
-		t.Fatalf("parseTokenSigningKey: %v", err)
+		t.Fatalf("validateTokenSigningKey: %v", err)
 	}
 
 	if !result.Equal(publicKey) {
@@ -35,13 +34,13 @@ func TestParseTokenSigningKeyValid(t *testing.T) {
 	}
 }
 
-func TestParseTokenSigningKeyEmptyPublicKey(t *testing.T) {
-	raw := marshalSigningKeyContent(t, schema.TokenSigningKeyContent{
+func TestValidateTokenSigningKeyEmptyPublicKey(t *testing.T) {
+	content := schema.TokenSigningKeyContent{
 		PublicKey: "",
 		Machine:   ref.MustParseUserID("@machine/test:test.local"),
-	})
+	}
 
-	_, err := parseTokenSigningKey(raw, "machine/test")
+	_, err := validateTokenSigningKey(content, "machine/test")
 	if err == nil {
 		t.Fatal("expected error for empty public_key")
 	}
@@ -53,13 +52,13 @@ func TestParseTokenSigningKeyEmptyPublicKey(t *testing.T) {
 	}
 }
 
-func TestParseTokenSigningKeyInvalidHex(t *testing.T) {
-	raw := marshalSigningKeyContent(t, schema.TokenSigningKeyContent{
+func TestValidateTokenSigningKeyInvalidHex(t *testing.T) {
+	content := schema.TokenSigningKeyContent{
 		PublicKey: "zzzz-not-hex",
 		Machine:   ref.MustParseUserID("@machine/test:test.local"),
-	})
+	}
 
-	_, err := parseTokenSigningKey(raw, "machine/test")
+	_, err := validateTokenSigningKey(content, "machine/test")
 	if err == nil {
 		t.Fatal("expected error for invalid hex")
 	}
@@ -68,15 +67,15 @@ func TestParseTokenSigningKeyInvalidHex(t *testing.T) {
 	}
 }
 
-func TestParseTokenSigningKeyWrongLength(t *testing.T) {
+func TestValidateTokenSigningKeyWrongLength(t *testing.T) {
 	// 16 bytes instead of 32 — valid hex but wrong key size.
 	shortKey := hex.EncodeToString(make([]byte, 16))
-	raw := marshalSigningKeyContent(t, schema.TokenSigningKeyContent{
+	content := schema.TokenSigningKeyContent{
 		PublicKey: shortKey,
 		Machine:   ref.MustParseUserID("@machine/test:test.local"),
-	})
+	}
 
-	_, err := parseTokenSigningKey(raw, "machine/test")
+	_, err := validateTokenSigningKey(content, "machine/test")
 	if err == nil {
 		t.Fatal("expected error for wrong key length")
 	}
@@ -88,40 +87,19 @@ func TestParseTokenSigningKeyWrongLength(t *testing.T) {
 	}
 }
 
-func TestParseTokenSigningKeyInvalidJSON(t *testing.T) {
-	_, err := parseTokenSigningKey([]byte(`{not json`), "machine/test")
-	if err == nil {
-		t.Fatal("expected error for invalid JSON")
-	}
-	if !strings.Contains(err.Error(), "parsing token signing key") {
-		t.Errorf("error should mention parsing, got: %v", err)
-	}
-}
-
-func TestParseTokenSigningKeyTooLong(t *testing.T) {
+func TestValidateTokenSigningKeyTooLong(t *testing.T) {
 	// 64 bytes instead of 32 — valid hex, wrong size.
 	longKey := hex.EncodeToString(make([]byte, 64))
-	raw := marshalSigningKeyContent(t, schema.TokenSigningKeyContent{
+	content := schema.TokenSigningKeyContent{
 		PublicKey: longKey,
 		Machine:   ref.MustParseUserID("@machine/test:test.local"),
-	})
+	}
 
-	_, err := parseTokenSigningKey(raw, "machine/test")
+	_, err := validateTokenSigningKey(content, "machine/test")
 	if err == nil {
 		t.Fatal("expected error for oversized key")
 	}
 	if !strings.Contains(err.Error(), "wrong length") {
 		t.Errorf("error should mention wrong length, got: %v", err)
 	}
-}
-
-// marshalSigningKeyContent marshals a TokenSigningKeyContent to JSON,
-// matching how the homeserver delivers state events.
-func marshalSigningKeyContent(t *testing.T, content schema.TokenSigningKeyContent) json.RawMessage {
-	t.Helper()
-	data, err := json.Marshal(content)
-	if err != nil {
-		t.Fatalf("marshaling signing key content: %v", err)
-	}
-	return data
 }

@@ -5,7 +5,6 @@ package main
 
 import (
 	"context"
-	"encoding/json"
 	"time"
 
 	"github.com/bureau-foundation/bureau/lib/ref"
@@ -38,7 +37,7 @@ const telemetryServiceRole = "telemetry"
 // can include the telemetry role without re-resolving the binding.
 // The caller must hold reconcileMu (which reconcile() always does).
 func (d *Daemon) resolveTelemetrySocket(ctx context.Context) string {
-	content, err := d.session.GetStateEvent(ctx, d.configRoomID, schema.EventTypeServiceBinding, telemetryServiceRole)
+	binding, err := messaging.GetState[schema.ServiceBindingContent](ctx, d.session, d.configRoomID, schema.EventTypeServiceBinding, telemetryServiceRole)
 	if err != nil {
 		if messaging.IsMatrixError(err, messaging.ErrCodeNotFound) {
 			// No telemetry binding — relay not deployed on this machine.
@@ -46,15 +45,6 @@ func (d *Daemon) resolveTelemetrySocket(ctx context.Context) string {
 			return ""
 		}
 		d.logger.Warn("failed to resolve telemetry service binding",
-			"error", err,
-		)
-		d.telemetrySocketPath = ""
-		return ""
-	}
-
-	var binding schema.ServiceBindingContent
-	if err := json.Unmarshal(content, &binding); err != nil {
-		d.logger.Warn("failed to parse telemetry service binding",
 			"error", err,
 		)
 		d.telemetrySocketPath = ""

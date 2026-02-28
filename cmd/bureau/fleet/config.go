@@ -5,7 +5,6 @@ package fleet
 
 import (
 	"context"
-	"encoding/json"
 	"fmt"
 	"log/slog"
 	"os"
@@ -145,13 +144,8 @@ func runConfig(ctx context.Context, logger *slog.Logger, fleetLocalpart string, 
 	}
 
 	// Read existing config.
-	var config fleetschema.FleetConfigContent
-	existingContent, err := session.GetStateEvent(ctx, fleetRoomID, schema.EventTypeFleetConfig, stateKey)
-	if err == nil {
-		if unmarshalErr := json.Unmarshal(existingContent, &config); unmarshalErr != nil {
-			return cli.Internal("parsing existing fleet config: %w", unmarshalErr)
-		}
-	} else if !messaging.IsMatrixError(err, messaging.ErrCodeNotFound) {
+	config, err := messaging.GetState[fleetschema.FleetConfigContent](ctx, session, fleetRoomID, schema.EventTypeFleetConfig, stateKey)
+	if err != nil && !messaging.IsMatrixError(err, messaging.ErrCodeNotFound) {
 		return cli.Transient("reading fleet config from room %s: %w", fleetRoomID, err)
 	}
 

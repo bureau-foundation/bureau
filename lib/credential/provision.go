@@ -107,14 +107,9 @@ func Provision(ctx context.Context, session messaging.Session, params ProvisionP
 	}
 
 	// Fetch the machine's public key from the fleet machine room.
-	machineKeyContent, err := session.GetStateEvent(ctx, params.MachineRoomID, schema.EventTypeMachineKey, machineLocalpart)
+	machineKey, err := messaging.GetState[schema.MachineKey](ctx, session, params.MachineRoomID, schema.EventTypeMachineKey, machineLocalpart)
 	if err != nil {
-		return nil, fmt.Errorf("fetching machine key for %q: %w", machineLocalpart, err)
-	}
-
-	var machineKey schema.MachineKey
-	if err := json.Unmarshal(machineKeyContent, &machineKey); err != nil {
-		return nil, fmt.Errorf("parsing machine key: %w", err)
+		return nil, err
 	}
 
 	if machineKey.Algorithm != "age-x25519" {

@@ -5,7 +5,6 @@ package workspace
 
 import (
 	"context"
-	"encoding/json"
 	"strings"
 
 	"github.com/bureau-foundation/bureau/cmd/bureau/cli"
@@ -100,14 +99,9 @@ func extractSubpath(alias, workspaceAlias string) (string, error) {
 // event from a room. Returns an error if the event doesn't exist or
 // can't be parsed.
 func readWorkspaceState(ctx context.Context, session messaging.Session, roomID ref.RoomID) (*workspace.WorkspaceState, error) {
-	raw, err := session.GetStateEvent(ctx, roomID, schema.EventTypeWorkspace, "")
+	state, err := messaging.GetState[workspace.WorkspaceState](ctx, session, roomID, schema.EventTypeWorkspace, "")
 	if err != nil {
 		return nil, cli.Internal("reading workspace state: %w", err)
-	}
-
-	var state workspace.WorkspaceState
-	if err := json.Unmarshal(raw, &state); err != nil {
-		return nil, cli.Internal("parsing workspace state: %w", err)
 	}
 	return &state, nil
 }

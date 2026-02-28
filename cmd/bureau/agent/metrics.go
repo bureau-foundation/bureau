@@ -5,7 +5,6 @@ package agent
 
 import (
 	"context"
-	"encoding/json"
 	"fmt"
 	"log/slog"
 	"time"
@@ -14,6 +13,7 @@ import (
 	"github.com/bureau-foundation/bureau/lib/principal"
 	"github.com/bureau-foundation/bureau/lib/ref"
 	agentschema "github.com/bureau-foundation/bureau/lib/schema/agent"
+	"github.com/bureau-foundation/bureau/messaging"
 )
 
 type agentMetricsParams struct {
@@ -103,15 +103,10 @@ func runMetrics(ctx context.Context, localpart string, logger *slog.Logger, para
 		logger.Info("resolved agent location", "localpart", localpart, "machine", location.Machine.Localpart(), "machines_scanned", machineCount)
 	}
 
-	metricsRaw, err := session.GetStateEvent(ctx, location.ConfigRoomID, agentschema.EventTypeAgentMetrics, localpart)
+	content, err := messaging.GetState[agentschema.AgentMetricsContent](ctx, session, location.ConfigRoomID, agentschema.EventTypeAgentMetrics, localpart)
 	if err != nil {
 		return cli.NotFound("no metrics data for agent %q: %w", localpart, err).
 			WithHint(fmt.Sprintf("The agent may not have started a session yet. Run 'bureau agent show %s' to check its status.", localpart))
-	}
-
-	var content agentschema.AgentMetricsContent
-	if err := json.Unmarshal(metricsRaw, &content); err != nil {
-		return cli.Internal("parse metrics data: %w", err)
 	}
 
 	if done, err := params.EmitJSON(content); done {

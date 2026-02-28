@@ -244,14 +244,9 @@ func runProvision(args []string) error {
 		return fmt.Errorf("resolving fleet machine room: %w", err)
 	}
 
-	machineKeyContent, err := session.GetStateEvent(ctx, machineRoomID, schema.EventTypeMachineKey, machineName)
+	machineKey, err := messaging.GetState[schema.MachineKey](ctx, session, machineRoomID, schema.EventTypeMachineKey, machineName)
 	if err != nil {
 		return fmt.Errorf("fetching machine key for %q: %w", machineName, err)
-	}
-
-	var machineKey schema.MachineKey
-	if err := json.Unmarshal(machineKeyContent, &machineKey); err != nil {
-		return fmt.Errorf("parsing machine key: %w", err)
 	}
 
 	if machineKey.Algorithm != "age-x25519" {
@@ -387,13 +382,8 @@ func runAssign(args []string) error {
 	}
 
 	// Read the current MachineConfig (if any) to merge the new assignment.
-	var config schema.MachineConfig
-	existingContent, err := session.GetStateEvent(ctx, configRoomID, schema.EventTypeMachineConfig, machineName)
-	if err == nil {
-		if err := json.Unmarshal(existingContent, &config); err != nil {
-			return fmt.Errorf("parsing existing machine config: %w", err)
-		}
-	} else if !messaging.IsMatrixError(err, messaging.ErrCodeNotFound) {
+	config, err := messaging.GetState[schema.MachineConfig](ctx, session, configRoomID, schema.EventTypeMachineConfig, machineName)
+	if err != nil && !messaging.IsMatrixError(err, messaging.ErrCodeNotFound) {
 		return fmt.Errorf("reading machine config: %w", err)
 	}
 

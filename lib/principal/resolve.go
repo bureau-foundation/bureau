@@ -5,7 +5,6 @@ package principal
 
 import (
 	"context"
-	"encoding/json"
 	"fmt"
 
 	"github.com/bureau-foundation/bureau/lib/ref"
@@ -148,17 +147,12 @@ func readMachineConfig(ctx context.Context, session messaging.Session, machine r
 		return ref.RoomID{}, nil, fmt.Errorf("resolve config room for %s: %w", machine.Localpart(), err)
 	}
 
-	configRaw, err := session.GetStateEvent(ctx, configRoomID, schema.EventTypeMachineConfig, machine.Localpart())
+	config, err := messaging.GetState[schema.MachineConfig](ctx, session, configRoomID, schema.EventTypeMachineConfig, machine.Localpart())
 	if err != nil {
 		if messaging.IsMatrixError(err, messaging.ErrCodeNotFound) {
 			return configRoomID, &schema.MachineConfig{}, nil
 		}
 		return ref.RoomID{}, nil, fmt.Errorf("read machine config for %s: %w", machine.Localpart(), err)
-	}
-
-	var config schema.MachineConfig
-	if err := json.Unmarshal(configRaw, &config); err != nil {
-		return ref.RoomID{}, nil, fmt.Errorf("parse machine config for %s: %w", machine.Localpart(), err)
 	}
 
 	return configRoomID, &config, nil

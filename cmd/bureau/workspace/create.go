@@ -5,7 +5,6 @@ package workspace
 
 import (
 	"context"
-	"encoding/json"
 	"log/slog"
 	"strconv"
 	"strings"
@@ -618,13 +617,8 @@ func updateMachineConfig(ctx context.Context, session messaging.Session, machine
 	}
 
 	// Read the existing MachineConfig.
-	var config schema.MachineConfig
-	existingContent, err := session.GetStateEvent(ctx, configRoomID, schema.EventTypeMachineConfig, machine.Localpart())
-	if err == nil {
-		if unmarshalError := json.Unmarshal(existingContent, &config); unmarshalError != nil {
-			return cli.Internal("parsing existing machine config: %w", unmarshalError)
-		}
-	} else if !messaging.IsMatrixError(err, messaging.ErrCodeNotFound) {
+	config, err := messaging.GetState[schema.MachineConfig](ctx, session, configRoomID, schema.EventTypeMachineConfig, machine.Localpart())
+	if err != nil && !messaging.IsMatrixError(err, messaging.ErrCodeNotFound) {
 		return cli.Internal("reading machine config: %w", err)
 	}
 

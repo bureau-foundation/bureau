@@ -203,13 +203,9 @@ func Destroy(ctx context.Context, session messaging.Session, params DestroyParam
 	}
 
 	// Read the current workspace state and verify status is "active".
-	workspaceContent, err := session.GetStateEvent(ctx, workspaceRoomID, schema.EventTypeWorkspace, "")
+	workspaceState, err := messaging.GetState[workspace.WorkspaceState](ctx, session, workspaceRoomID, schema.EventTypeWorkspace, "")
 	if err != nil {
 		return cli.Internal("reading workspace state: %w", err)
-	}
-	var workspaceState workspace.WorkspaceState
-	if err := json.Unmarshal(workspaceContent, &workspaceState); err != nil {
-		return cli.Internal("parsing workspace state: %w", err)
 	}
 	if workspaceState.Status != workspace.WorkspaceStatusActive {
 		return cli.Conflict("workspace %s is in status %q, expected %q", params.Alias, workspaceState.Status, workspace.WorkspaceStatusActive)

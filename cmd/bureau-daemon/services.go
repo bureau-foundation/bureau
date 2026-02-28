@@ -22,6 +22,7 @@ import (
 	"github.com/bureau-foundation/bureau/lib/ref"
 	"github.com/bureau-foundation/bureau/lib/schema"
 	"github.com/bureau-foundation/bureau/lib/servicetoken"
+	"github.com/bureau-foundation/bureau/messaging"
 )
 
 // syncServiceDirectory fetches all m.bureau.service state events from the
@@ -675,19 +676,11 @@ func (d *Daemon) unregisterProxyRoute(ctx context.Context, consumer ref.Entity, 
 // machine): creates a transport tunnel socket that bridges connections
 // to the remote service.
 func (d *Daemon) discoverSharedCache(ctx context.Context) {
-	content, err := d.session.GetStateEvent(ctx, d.serviceRoomID, schema.EventTypeServiceBinding, "artifact-cache")
+	binding, err := messaging.GetState[schema.ServiceBindingContent](ctx, d.session, d.serviceRoomID, schema.EventTypeServiceBinding, "artifact-cache")
 	if err != nil {
 		// No artifact-cache binding is normal — not all fleets have
 		// a shared cache. Only log at debug level.
 		d.logger.Debug("no artifact-cache binding in service room",
-			"error", err,
-		)
-		return
-	}
-
-	var binding schema.ServiceBindingContent
-	if err := json.Unmarshal(content, &binding); err != nil {
-		d.logger.Error("failed to parse artifact-cache binding",
 			"error", err,
 		)
 		return

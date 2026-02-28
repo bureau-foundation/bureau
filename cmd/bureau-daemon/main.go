@@ -1613,15 +1613,11 @@ func (d *Daemon) publishTokenSigningKey(ctx context.Context, keyWasGenerated boo
 
 	if !keyWasGenerated {
 		// Check whether the current state event already has our key.
-		existing, err := d.session.GetStateEvent(ctx, d.systemRoomID,
-			schema.EventTypeTokenSigningKey, d.machine.UserID().String())
+		existing, err := messaging.GetState[schema.TokenSigningKeyContent](ctx, d.session, d.systemRoomID, schema.EventTypeTokenSigningKey, d.machine.UserID().String())
 		if err == nil {
-			var content schema.TokenSigningKeyContent
-			if parseErr := json.Unmarshal(existing, &content); parseErr == nil {
-				if content.PublicKey == publicKeyHex {
-					d.logger.Info("token signing key already published, skipping")
-					return
-				}
+			if existing.PublicKey == publicKeyHex {
+				d.logger.Info("token signing key already published, skipping")
+				return
 			}
 		} else if !messaging.IsMatrixError(err, messaging.ErrCodeNotFound) {
 			d.logger.Error("checking existing token signing key", "error", err)

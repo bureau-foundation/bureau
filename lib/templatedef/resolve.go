@@ -5,7 +5,6 @@ package templatedef
 
 import (
 	"context"
-	"encoding/json"
 	"fmt"
 
 	"github.com/bureau-foundation/bureau/lib/ref"
@@ -110,14 +109,9 @@ func Fetch(ctx context.Context, session messaging.Session, templateRef schema.Te
 		return nil, fmt.Errorf("resolving room alias %q for template %q: %w", roomAlias, templateRef.String(), err)
 	}
 
-	content, err := session.GetStateEvent(ctx, roomID, schema.EventTypeTemplate, templateRef.Template)
+	template, err := messaging.GetState[schema.TemplateContent](ctx, session, roomID, schema.EventTypeTemplate, templateRef.Template)
 	if err != nil {
 		return nil, fmt.Errorf("fetching template %q from room %q (%s): %w", templateRef.Template, roomAlias, roomID, err)
-	}
-
-	var template schema.TemplateContent
-	if err := json.Unmarshal(content, &template); err != nil {
-		return nil, fmt.Errorf("parsing template %q from room %q: %w", templateRef.Template, roomAlias, err)
 	}
 
 	return &template, nil

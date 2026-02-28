@@ -5,7 +5,6 @@ package agent
 
 import (
 	"context"
-	"encoding/json"
 	"fmt"
 	"log/slog"
 	"os"
@@ -18,6 +17,7 @@ import (
 	"github.com/bureau-foundation/bureau/lib/principal"
 	"github.com/bureau-foundation/bureau/lib/ref"
 	agentschema "github.com/bureau-foundation/bureau/lib/schema/agent"
+	"github.com/bureau-foundation/bureau/messaging"
 )
 
 // contextCommand returns the "context" parent command with list and show
@@ -130,15 +130,10 @@ func runContextList(ctx context.Context, localpart string, logger *slog.Logger, 
 		logger.Info("resolved agent location", "localpart", localpart, "machine", location.Machine.Localpart(), "machines_scanned", machineCount)
 	}
 
-	contextRaw, err := session.GetStateEvent(ctx, location.ConfigRoomID, agentschema.EventTypeAgentContext, localpart)
+	content, err := messaging.GetState[agentschema.AgentContextContent](ctx, session, location.ConfigRoomID, agentschema.EventTypeAgentContext, localpart)
 	if err != nil {
 		return cli.NotFound("no context data for agent %q: %w", localpart, err).
 			WithHint(fmt.Sprintf("The agent may not have published context entries yet. Run 'bureau agent show %s' to check its status.", localpart))
-	}
-
-	var content agentschema.AgentContextContent
-	if err := json.Unmarshal(contextRaw, &content); err != nil {
-		return cli.Internal("parse context data: %w", err)
 	}
 
 	// Apply prefix filter.
@@ -285,15 +280,10 @@ func runContextShow(ctx context.Context, localpart, key string, logger *slog.Log
 		logger.Info("resolved agent location", "localpart", localpart, "machine", location.Machine.Localpart(), "machines_scanned", machineCount)
 	}
 
-	contextRaw, err := session.GetStateEvent(ctx, location.ConfigRoomID, agentschema.EventTypeAgentContext, localpart)
+	content, err := messaging.GetState[agentschema.AgentContextContent](ctx, session, location.ConfigRoomID, agentschema.EventTypeAgentContext, localpart)
 	if err != nil {
 		return cli.NotFound("no context data for agent %q: %w", localpart, err).
 			WithHint(fmt.Sprintf("The agent may not have published context entries yet. Run 'bureau agent show %s' to check its status.", localpart))
-	}
-
-	var content agentschema.AgentContextContent
-	if err := json.Unmarshal(contextRaw, &content); err != nil {
-		return cli.Internal("parse context data: %w", err)
 	}
 
 	entry, exists := content.Entries[key]

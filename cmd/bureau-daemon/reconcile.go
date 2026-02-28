@@ -1198,14 +1198,9 @@ func (d *Daemon) evaluateStartCondition(ctx context.Context, principal ref.Entit
 
 // readMachineConfig reads the MachineConfig state event from the config room.
 func (d *Daemon) readMachineConfig(ctx context.Context) (*schema.MachineConfig, error) {
-	content, err := d.session.GetStateEvent(ctx, d.configRoomID, schema.EventTypeMachineConfig, d.machine.Localpart())
+	config, err := messaging.GetState[schema.MachineConfig](ctx, d.session, d.configRoomID, schema.EventTypeMachineConfig, d.machine.Localpart())
 	if err != nil {
 		return nil, err
-	}
-
-	var config schema.MachineConfig
-	if err := json.Unmarshal(content, &config); err != nil {
-		return nil, fmt.Errorf("parsing machine config: %w", err)
 	}
 	return &config, nil
 }
@@ -1271,14 +1266,9 @@ func (d *Daemon) applyPipelineExecutorOverlay(spec *schema.SandboxSpec) bool {
 // readCredentials reads the Credentials state event for a principal.
 func (d *Daemon) readCredentials(ctx context.Context, principal ref.Entity) (*schema.Credentials, error) {
 	stateKey := principal.Localpart()
-	content, err := d.session.GetStateEvent(ctx, d.configRoomID, schema.EventTypeCredentials, stateKey)
+	credentials, err := messaging.GetState[schema.Credentials](ctx, d.session, d.configRoomID, schema.EventTypeCredentials, stateKey)
 	if err != nil {
 		return nil, err
-	}
-
-	var credentials schema.Credentials
-	if err := json.Unmarshal(content, &credentials); err != nil {
-		return nil, fmt.Errorf("parsing credentials for %s: %w", principal, err)
 	}
 	return &credentials, nil
 }
@@ -1325,7 +1315,7 @@ func (d *Daemon) fetchRoomAuthorizationPolicies(
 	result := make(map[ref.RoomID]*fetchedRoomPolicy)
 	for roomID := range rooms {
 		// Fetch the authorization policy.
-		rawPolicy, err := d.session.GetStateEvent(ctx, roomID, schema.EventTypeAuthorization, "")
+		policy, err := messaging.GetState[schema.RoomAuthorizationPolicy](ctx, d.session, roomID, schema.EventTypeAuthorization, "")
 		if err != nil {
 			if messaging.IsMatrixError(err, messaging.ErrCodeNotFound) {
 				// No authorization policy in this room — skip it.
@@ -1338,20 +1328,11 @@ func (d *Daemon) fetchRoomAuthorizationPolicies(
 			continue
 		}
 
-		var policy schema.RoomAuthorizationPolicy
-		if err := json.Unmarshal(rawPolicy, &policy); err != nil {
-			d.logger.Warn("failed to parse room authorization policy",
-				"room_id", roomID, "room", d.displayRoom(roomID),
-				"error", err,
-			)
-			continue
-		}
-
 		fetched := &fetchedRoomPolicy{policy: policy}
 
 		// Fetch power levels if the policy has PowerLevelGrants.
 		if len(policy.PowerLevelGrants) > 0 {
-			rawPowerLevels, err := d.session.GetStateEvent(ctx, roomID, schema.MatrixEventTypePowerLevels, "")
+			powerLevels, err := messaging.GetState[schema.PowerLevels](ctx, d.session, roomID, schema.MatrixEventTypePowerLevels, "")
 			if err != nil {
 				d.logger.Warn("failed to fetch power levels for room with PowerLevelGrants",
 					"room_id", roomID, "room", d.displayRoom(roomID),
@@ -1360,11 +1341,8 @@ func (d *Daemon) fetchRoomAuthorizationPolicies(
 				// Proceed without power levels — MemberGrants still apply,
 				// but PowerLevelGrants cannot be evaluated without knowing
 				// each user's power level.
-			} else if err := json.Unmarshal(rawPowerLevels, &fetched.powerLevels); err != nil {
-				d.logger.Warn("failed to parse power levels",
-					"room_id", roomID, "room", d.displayRoom(roomID),
-					"error", err,
-				)
+			} else {
+				fetched.powerLevels = powerLevels
 			}
 		}
 
@@ -1635,7 +1613,7 @@ func (d *Daemon) resolveServiceMounts(ctx context.Context, requiredServices []st
 // the binding's principal localpart.
 func (d *Daemon) resolveServiceSocket(ctx context.Context, role string, rooms []ref.RoomID) (string, error) {
 	for _, roomID := range rooms {
-		content, err := d.session.GetStateEvent(ctx, roomID, schema.EventTypeServiceBinding, role)
+		binding, err := messaging.GetState[schema.ServiceBindingContent](ctx, d.session, roomID, schema.EventTypeServiceBinding, role)
 		if err != nil {
 			if messaging.IsMatrixError(err, messaging.ErrCodeNotFound) {
 				d.logger.Debug("no service binding in room",
@@ -1645,11 +1623,6 @@ func (d *Daemon) resolveServiceSocket(ctx context.Context, role string, rooms []
 				continue // Not bound in this room, try next.
 			}
 			return "", fmt.Errorf("fetching service binding in room %s: %w", d.displayRoom(roomID), err)
-		}
-
-		var binding schema.ServiceBindingContent
-		if err := json.Unmarshal(content, &binding); err != nil {
-			return "", fmt.Errorf("parsing service binding for role %q in room %s: %w", role, d.displayRoom(roomID), err)
 		}
 
 		if binding.Principal.IsZero() {

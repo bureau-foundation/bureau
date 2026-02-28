@@ -5,7 +5,6 @@ package machine
 
 import (
 	"context"
-	"encoding/json"
 	"fmt"
 	"log/slog"
 	"os"
@@ -173,14 +172,8 @@ func runUpgrade(ctx context.Context, args []string, params *upgradeParams, logge
 	// means no config yet), set BureauVersion, and publish. This
 	// preserves existing Principals and DefaultPolicy.
 	machineLocalpart := machine.Localpart()
-	var config schema.MachineConfig
-
-	existingContent, err := session.GetStateEvent(ctx, configRoomID, schema.EventTypeMachineConfig, machineLocalpart)
-	if err == nil {
-		if unmarshalErr := json.Unmarshal(existingContent, &config); unmarshalErr != nil {
-			return cli.Internal("parsing existing machine config: %w", unmarshalErr)
-		}
-	} else if !messaging.IsMatrixError(err, messaging.ErrCodeNotFound) {
+	config, err := messaging.GetState[schema.MachineConfig](ctx, session, configRoomID, schema.EventTypeMachineConfig, machineLocalpart)
+	if err != nil && !messaging.IsMatrixError(err, messaging.ErrCodeNotFound) {
 		return cli.Transient("reading machine config: %w", err).
 			WithHint("Check that the homeserver is running. Run 'bureau matrix doctor' to diagnose.")
 	}

@@ -43,6 +43,9 @@ func (agentService *AgentService) registerActions(server *service.SocketServer) 
 	server.HandleAuth("update-context-metadata", agentService.withWriteLock(agentService.handleUpdateContextMetadata))
 	server.HandleAuth("resolve-context", agentService.withWriteLock(agentService.handleResolveContext))
 
+	// Authenticated artifact actions.
+	server.HandleAuth("archive-artifact", agentService.withReadLock(agentService.handleArchiveArtifact))
+
 	// Authenticated metrics actions.
 	server.HandleAuth("get-metrics", agentService.withReadLock(agentService.handleGetMetrics))
 }
@@ -410,6 +413,78 @@ func (agentService *AgentService) handleStoreSessionLog(ctx context.Context, tok
 	)
 
 	return storeSessionLogResponse{Ref: artifactRef}, nil
+}
+
+// --- Archive artifact handler ---
+
+// archiveArtifactRequest is the wire format for "archive-artifact".
+type archiveArtifactRequest struct {
+	Action      string `cbor:"action"`
+	Data        []byte `cbor:"data"`
+	ContentType string `cbor:"content_type"`
+	Label       string `cbor:"label"`
+	Description string `cbor:"description,omitempty"`
+}
+
+// archiveArtifactResponse is returned after the artifact is stored.
+type archiveArtifactResponse struct {
+	Ref  string `cbor:"ref"`
+	Size int64  `cbor:"size"`
+}
+
+// handleArchiveArtifact stores arbitrary content as an artifact and
+// returns the content-addressed ref. This is the general-purpose
+// storage primitive for agents — any binary content with a label and
+// content type. The returned ref can be used for ticket attachments,
+// context associations, or passed to other services.
+//
+// Unlike store-session-log (which requires an active session) and
+// checkpoint-context (which builds commit chains), archive-artifact
+// has no preconditions beyond authentication. It is a stateless
+// store-and-return-ref operation.
+func (agentService *AgentService) handleArchiveArtifact(ctx context.Context, token *servicetoken.Token, raw []byte) (any, error) {
+	var request archiveArtifactRequest
+	if err := codec.Unmarshal(raw, &request); err != nil {
+		return nil, fmt.Errorf("invalid request: %w", err)
+	}
+
+	if len(request.Data) == 0 {
+		return nil, fmt.Errorf("data is required")
+	}
+	if request.ContentType == "" {
+		return nil, fmt.Errorf("content_type is required")
+	}
+	if request.Label == "" {
+		return nil, fmt.Errorf("label is required")
+	}
+
+	principalLocal := token.Subject.Localpart()
+
+	header := &artifactstore.StoreHeader{
+		Action:      "store",
+		ContentType: request.ContentType,
+		Size:        int64(len(request.Data)),
+		Data:        request.Data,
+		Labels:      []string{request.Label},
+		Description: request.Description,
+	}
+	storeResponse, err := agentService.artifactClient.Store(ctx, header, nil)
+	if err != nil {
+		return nil, fmt.Errorf("storing artifact: %w", err)
+	}
+
+	agentService.logger.Info("artifact archived",
+		"principal", principalLocal,
+		"ref", storeResponse.Ref,
+		"label", request.Label,
+		"content_type", request.ContentType,
+		"size", len(request.Data),
+	)
+
+	return archiveArtifactResponse{
+		Ref:  storeResponse.Ref,
+		Size: storeResponse.Size,
+	}, nil
 }
 
 // --- Metrics handler ---

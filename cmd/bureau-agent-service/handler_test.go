@@ -629,6 +629,204 @@ func TestHandleUpdateContextMetadata(t *testing.T) {
 	})
 }
 
+// --- Archive artifact tests ---
+
+func TestHandleArchiveArtifact(t *testing.T) {
+	t.Parallel()
+
+	t.Run("stores artifact and returns ref", func(t *testing.T) {
+		t.Parallel()
+
+		mock := newMockArtifactClient()
+		service := newTestAgentServiceWithArtifacts(mock)
+		token := testToken("agent/test")
+
+		request := archiveArtifactRequest{
+			Action:      "archive-artifact",
+			Data:        []byte("# Design Document\n\nThis is a plan."),
+			ContentType: "text/markdown",
+			Label:       "plan",
+			Description: "Sprint planning document for auth refactor",
+		}
+		raw, err := codec.Marshal(request)
+		if err != nil {
+			t.Fatalf("marshal request: %v", err)
+		}
+
+		result, err := service.handleArchiveArtifact(context.Background(), token, raw)
+		if err != nil {
+			t.Fatalf("handleArchiveArtifact: %v", err)
+		}
+
+		response, ok := result.(archiveArtifactResponse)
+		if !ok {
+			t.Fatalf("unexpected response type: %T", result)
+		}
+
+		if response.Ref == "" {
+			t.Fatal("expected non-empty artifact ref")
+		}
+		if response.Size != int64(len(request.Data)) {
+			t.Errorf("response size = %d, want %d", response.Size, len(request.Data))
+		}
+
+		// Verify the artifact was stored with correct content.
+		stored, exists := mock.artifacts[response.Ref]
+		if !exists {
+			t.Fatalf("artifact %q not found in mock store", response.Ref)
+		}
+		if !bytes.Equal(stored, request.Data) {
+			t.Errorf("stored data = %q, want %q", stored, request.Data)
+		}
+
+		// Verify the store header fields were passed correctly.
+		if mock.lastStoredContentType != "text/markdown" {
+			t.Errorf("content type = %q, want %q", mock.lastStoredContentType, "text/markdown")
+		}
+		if len(mock.lastStoredLabels) != 1 || mock.lastStoredLabels[0] != "plan" {
+			t.Errorf("labels = %v, want [plan]", mock.lastStoredLabels)
+		}
+		if mock.lastStoredDescription != "Sprint planning document for auth refactor" {
+			t.Errorf("description = %q, want %q",
+				mock.lastStoredDescription, "Sprint planning document for auth refactor")
+		}
+	})
+
+	t.Run("stores binary data", func(t *testing.T) {
+		t.Parallel()
+
+		mock := newMockArtifactClient()
+		service := newTestAgentServiceWithArtifacts(mock)
+		token := testToken("agent/test")
+
+		// Binary content (CBOR, protobuf, compressed data, etc.)
+		binaryData := []byte{0x00, 0x01, 0x02, 0xff, 0xfe, 0xfd}
+
+		request := archiveArtifactRequest{
+			Action:      "archive-artifact",
+			Data:        binaryData,
+			ContentType: "application/octet-stream",
+			Label:       "checkpoint",
+		}
+		raw, err := codec.Marshal(request)
+		if err != nil {
+			t.Fatalf("marshal request: %v", err)
+		}
+
+		result, err := service.handleArchiveArtifact(context.Background(), token, raw)
+		if err != nil {
+			t.Fatalf("handleArchiveArtifact: %v", err)
+		}
+
+		response := result.(archiveArtifactResponse)
+		stored := mock.artifacts[response.Ref]
+		if !bytes.Equal(stored, binaryData) {
+			t.Errorf("stored binary data mismatch: got %x, want %x", stored, binaryData)
+		}
+	})
+
+	t.Run("description is optional", func(t *testing.T) {
+		t.Parallel()
+
+		mock := newMockArtifactClient()
+		service := newTestAgentServiceWithArtifacts(mock)
+		token := testToken("agent/test")
+
+		request := archiveArtifactRequest{
+			Action:      "archive-artifact",
+			Data:        []byte("content"),
+			ContentType: "text/plain",
+			Label:       "note",
+		}
+		raw, err := codec.Marshal(request)
+		if err != nil {
+			t.Fatalf("marshal request: %v", err)
+		}
+
+		result, err := service.handleArchiveArtifact(context.Background(), token, raw)
+		if err != nil {
+			t.Fatalf("handleArchiveArtifact: %v", err)
+		}
+
+		response := result.(archiveArtifactResponse)
+		if response.Ref == "" {
+			t.Fatal("expected non-empty artifact ref")
+		}
+		if mock.lastStoredDescription != "" {
+			t.Errorf("description should be empty, got %q", mock.lastStoredDescription)
+		}
+	})
+
+	t.Run("rejects empty data", func(t *testing.T) {
+		t.Parallel()
+
+		service := newTestAgentService()
+		token := testToken("agent/test")
+
+		request := archiveArtifactRequest{
+			Action:      "archive-artifact",
+			Data:        nil,
+			ContentType: "text/plain",
+			Label:       "empty",
+		}
+		raw, err := codec.Marshal(request)
+		if err != nil {
+			t.Fatalf("marshal request: %v", err)
+		}
+
+		_, err = service.handleArchiveArtifact(context.Background(), token, raw)
+		if err == nil {
+			t.Fatal("expected error for empty data")
+		}
+	})
+
+	t.Run("rejects empty content_type", func(t *testing.T) {
+		t.Parallel()
+
+		service := newTestAgentService()
+		token := testToken("agent/test")
+
+		request := archiveArtifactRequest{
+			Action:      "archive-artifact",
+			Data:        []byte("content"),
+			ContentType: "",
+			Label:       "note",
+		}
+		raw, err := codec.Marshal(request)
+		if err != nil {
+			t.Fatalf("marshal request: %v", err)
+		}
+
+		_, err = service.handleArchiveArtifact(context.Background(), token, raw)
+		if err == nil {
+			t.Fatal("expected error for empty content_type")
+		}
+	})
+
+	t.Run("rejects empty label", func(t *testing.T) {
+		t.Parallel()
+
+		service := newTestAgentService()
+		token := testToken("agent/test")
+
+		request := archiveArtifactRequest{
+			Action:      "archive-artifact",
+			Data:        []byte("content"),
+			ContentType: "text/plain",
+			Label:       "",
+		}
+		raw, err := codec.Marshal(request)
+		if err != nil {
+			t.Fatalf("marshal request: %v", err)
+		}
+
+		_, err = service.handleArchiveArtifact(context.Background(), token, raw)
+		if err == nil {
+			t.Fatal("expected error for empty label")
+		}
+	})
+}
+
 // --- Mock artifact client ---
 
 // mockArtifactClient is an in-memory implementation of artifactAccess
@@ -648,6 +846,17 @@ type mockArtifactClient struct {
 	// lastStoredTag records the tag from the most recent Store call
 	// (via StoreHeader.Tag). Empty if the last Store had no tag.
 	lastStoredTag string
+
+	// lastStoredLabels records the labels from the most recent Store call.
+	lastStoredLabels []string
+
+	// lastStoredContentType records the content type from the most
+	// recent Store call.
+	lastStoredContentType string
+
+	// lastStoredDescription records the description from the most
+	// recent Store call.
+	lastStoredDescription string
 }
 
 func newMockArtifactClient() *mockArtifactClient {
@@ -677,7 +886,13 @@ func (m *mockArtifactClient) Store(_ context.Context, header *artifactstore.Stor
 		m.tags[header.Tag] = artifactRef
 		m.lastStoredTag = header.Tag
 	}
-	return &artifactstore.StoreResponse{Ref: artifactRef}, nil
+	m.lastStoredLabels = header.Labels
+	m.lastStoredContentType = header.ContentType
+	m.lastStoredDescription = header.Description
+	return &artifactstore.StoreResponse{
+		Ref:  artifactRef,
+		Size: int64(len(header.Data)),
+	}, nil
 }
 
 func (m *mockArtifactClient) Fetch(_ context.Context, artifactRef string) (*artifactstore.FetchResult, error) {

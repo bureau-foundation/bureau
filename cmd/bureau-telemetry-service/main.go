@@ -261,7 +261,7 @@ func (s *TelemetryService) handleCompleteLog(ctx context.Context, token *service
 	if err := codec.Unmarshal(raw, &request); err != nil {
 		return nil, fmt.Errorf("decoding complete-log request: %w", err)
 	}
-	if request.Source == "" {
+	if request.Source.IsZero() {
 		return nil, fmt.Errorf("source is required")
 	}
 

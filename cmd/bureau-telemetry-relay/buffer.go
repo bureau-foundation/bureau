@@ -4,6 +4,7 @@
 package main
 
 import (
+	"context"
 	"fmt"
 	"sync"
 )
@@ -26,6 +27,12 @@ type Buffer struct {
 	maxSize   int
 	dropped   uint64
 	notify    chan struct{}
+
+	// drainCh is closed when the buffer transitions from non-empty
+	// to empty (Pop removes the last entry). Re-created by Push when
+	// the buffer transitions from empty to non-empty. WaitForEmpty
+	// captures this channel under lock and selects on it.
+	drainCh chan struct{}
 }
 
 // bufferEntry is a single CBOR-encoded batch with its byte size
@@ -41,9 +48,16 @@ func NewBuffer(maxSize int) *Buffer {
 	if maxSize <= 0 {
 		panic(fmt.Sprintf("buffer: maxSize must be positive, got %d", maxSize))
 	}
+	// Start with a closed drainCh: the buffer begins empty (already
+	// "drained"). Push re-creates the channel when adding the first
+	// entry; Pop closes it when removing the last.
+	initialDrain := make(chan struct{})
+	close(initialDrain)
+
 	return &Buffer{
 		maxSize: maxSize,
 		notify:  make(chan struct{}, 1),
+		drainCh: initialDrain,
 	}
 }
 
@@ -74,6 +88,12 @@ func (b *Buffer) Push(data []byte) error {
 		b.dropped++
 	}
 
+	// If the buffer was empty, create a fresh drain channel. The old
+	// one was closed by the last Pop (or by initialization).
+	if len(b.entries) == 0 {
+		b.drainCh = make(chan struct{})
+	}
+
 	b.entries = append(b.entries, bufferEntry{data: data, size: size})
 	b.totalSize += size
 
@@ -98,6 +118,8 @@ func (b *Buffer) Peek() []byte {
 }
 
 // Pop removes the oldest entry. No-op if the buffer is empty.
+// When Pop removes the last entry (buffer becomes empty), it
+// closes the drain channel to wake any WaitForEmpty callers.
 func (b *Buffer) Pop() {
 	b.mu.Lock()
 	defer b.mu.Unlock()
@@ -108,6 +130,10 @@ func (b *Buffer) Pop() {
 	b.entries[0] = bufferEntry{} // release data for GC
 	b.entries = b.entries[1:]
 	b.totalSize -= evicted.size
+
+	if len(b.entries) == 0 {
+		close(b.drainCh)
+	}
 }
 
 // Len returns the number of entries in the buffer.
@@ -137,4 +163,29 @@ func (b *Buffer) Dropped() uint64 {
 // this channel alongside its context to wake up for shipping.
 func (b *Buffer) Notify() <-chan struct{} {
 	return b.notify
+}
+
+// WaitForEmpty blocks until the buffer has zero entries or the
+// context is cancelled. Used by the complete-log handler to ensure
+// all buffered batches have been shipped before proxying the
+// completion request to the telemetry service.
+//
+// If the buffer is already empty when called, returns nil
+// immediately. Otherwise, captures the current drain channel (which
+// Pop closes when the last entry is removed) and selects on it.
+func (b *Buffer) WaitForEmpty(ctx context.Context) error {
+	b.mu.Lock()
+	if len(b.entries) == 0 {
+		b.mu.Unlock()
+		return nil
+	}
+	channel := b.drainCh
+	b.mu.Unlock()
+
+	select {
+	case <-channel:
+		return nil
+	case <-ctx.Done():
+		return ctx.Err()
+	}
 }

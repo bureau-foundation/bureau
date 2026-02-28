@@ -15,40 +15,63 @@ import (
 	"github.com/bureau-foundation/bureau/messaging"
 )
 
-// telemetryServiceRole is the service role name for the per-machine
-// telemetry relay. The daemon resolves this role from the config room's
-// m.bureau.service_binding state to find the relay's socket path. The
-// proxy uses a token with this audience to authenticate its telemetry
-// submissions.
+// telemetryServiceRole is the token audience for telemetry services.
+// Both the telemetry relay and the telemetry service bootstrap with
+// this audience, so tokens minted with this audience are accepted by
+// either. Used for proxy telemetry tokens and complete-log tokens.
 const telemetryServiceRole = "telemetry"
 
-// resolveTelemetrySocket looks up the telemetry service binding in the
-// machine's config room and returns the host-side socket path to the
-// telemetry relay. Returns an empty string if no binding exists (telemetry
-// relay not deployed) or if resolution fails (logged as a warning — not
-// a fatal condition).
+// telemetryRelayRole is the service binding key for the per-machine
+// telemetry relay. When a relay is deployed, the config room has a
+// "telemetry-relay" binding pointing to it. The relay's
+// RequiredServices: ["telemetry"] separately resolves the "telemetry"
+// binding to find the upstream telemetry service — no circular
+// dependency because the two binding keys are distinct.
+const telemetryRelayRole = "telemetry-relay"
+
+// resolveTelemetrySocket looks up the telemetry binding in the
+// machine's config room and returns the host-side socket path for
+// output capture and complete-log. Checks two bindings in order:
 //
-// Unlike resolveServiceSocket, this method treats all failures as
-// non-fatal: telemetry is an optional enhancement, not a required
-// dependency. Proxies start without telemetry when the relay is absent
-// and log a diagnostic message at startup.
+//  1. "telemetry-relay" — the per-machine relay (preferred when
+//     deployed, because sandboxes submit output to it and
+//     complete-log must flush the relay's buffer first).
+//  2. "telemetry" — the telemetry service directly (used when no
+//     relay is deployed, e.g., mock deployments in tests).
 //
-// Caches the result in d.telemetrySocketPath so the token refresh loop
-// can include the telemetry role without re-resolving the binding.
-// The caller must hold reconcileMu (which reconcile() always does).
+// Returns an empty string if neither binding exists (telemetry not
+// deployed) or if resolution fails (logged as a warning — not a
+// fatal condition). Telemetry is an optional enhancement.
+//
+// Caches the result in d.telemetrySocketPath so the token refresh
+// loop can include the telemetry role without re-resolving the
+// binding. The caller must hold reconcileMu (which reconcile()
+// always does).
 func (d *Daemon) resolveTelemetrySocket(ctx context.Context) string {
-	binding, err := messaging.GetState[schema.ServiceBindingContent](ctx, d.session, d.configRoomID, schema.EventTypeServiceBinding, telemetryServiceRole)
+	// Try the relay binding first. When the relay is deployed,
+	// sandboxes submit output to it and complete-log must go through
+	// it to flush buffered data before the service marks the session
+	// complete.
+	binding, err := messaging.GetState[schema.ServiceBindingContent](ctx, d.session, d.configRoomID, schema.EventTypeServiceBinding, telemetryRelayRole)
 	if err != nil {
-		if messaging.IsMatrixError(err, messaging.ErrCodeNotFound) {
-			// No telemetry binding — relay not deployed on this machine.
+		if !messaging.IsMatrixError(err, messaging.ErrCodeNotFound) {
+			d.logger.Warn("failed to resolve telemetry-relay service binding",
+				"error", err,
+			)
+		}
+		// Fall through to the "telemetry" binding.
+		binding, err = messaging.GetState[schema.ServiceBindingContent](ctx, d.session, d.configRoomID, schema.EventTypeServiceBinding, telemetryServiceRole)
+		if err != nil {
+			if messaging.IsMatrixError(err, messaging.ErrCodeNotFound) {
+				d.telemetrySocketPath = ""
+				return ""
+			}
+			d.logger.Warn("failed to resolve telemetry service binding",
+				"error", err,
+			)
 			d.telemetrySocketPath = ""
 			return ""
 		}
-		d.logger.Warn("failed to resolve telemetry service binding",
-			"error", err,
-		)
-		d.telemetrySocketPath = ""
-		return ""
 	}
 
 	if binding.Principal.IsZero() {
@@ -59,7 +82,7 @@ func (d *Daemon) resolveTelemetrySocket(ctx context.Context) string {
 
 	socketPath := binding.Principal.ServiceSocketPath(d.fleetRunDir)
 
-	// Invite the telemetry service to the config room so it can
+	// Invite the telemetry principal to the config room so it can
 	// observe principals on this machine. On a single-machine fleet
 	// this is redundant (ensurePrincipalRoomAccess already invites
 	// locally-deployed services), but on multi-machine fleets the
@@ -126,7 +149,7 @@ func (d *Daemon) completeLogForPrincipal(ctx context.Context, principal ref.Enti
 	client := service.NewServiceClientFromToken(d.telemetrySocketPath, tokenBytes)
 
 	request := telemetry.CompleteLogRequest{
-		Source: principal.AccountLocalpart(),
+		Source: principal.UserID(),
 	}
 
 	callContext, cancel := context.WithTimeout(ctx, 10*time.Second)

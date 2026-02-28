@@ -8,6 +8,8 @@ import (
 	"fmt"
 	"io"
 	"net"
+	"runtime"
+	"strings"
 	"testing"
 
 	"github.com/bureau-foundation/bureau/lib/artifactstore"
@@ -20,6 +22,7 @@ import (
 	"github.com/bureau-foundation/bureau/lib/service"
 	"github.com/bureau-foundation/bureau/lib/servicetoken"
 	"github.com/bureau-foundation/bureau/lib/testutil"
+	"github.com/bureau-foundation/bureau/messaging"
 )
 
 // --- Wire protocol types for streaming telemetry actions ---
@@ -954,7 +957,7 @@ func TestTelemetryOutputDeltaPersistence(t *testing.T) {
 
 	var completeResponse telemetry.CompleteLogResponse
 	if err := telemetryClient.Call(ctx, "complete-log", telemetry.CompleteLogRequest{
-		Source:    callerEntity.Localpart(),
+		Source:    callerEntity.UserID(),
 		SessionID: sessionID,
 	}, &completeResponse); err != nil {
 		t.Fatalf("complete-log call: %v", err)
@@ -1206,7 +1209,7 @@ func TestTelemetryOutputRotation(t *testing.T) {
 
 	var completeResponse telemetry.CompleteLogResponse
 	if err := telemetryClient.Call(ctx, "complete-log", telemetry.CompleteLogRequest{
-		Source:    callerEntity.Localpart(),
+		Source:    callerEntity.UserID(),
 		SessionID: sessionID,
 	}, &completeResponse); err != nil {
 		t.Fatalf("complete-log call: %v", err)
@@ -1227,5 +1230,458 @@ func TestTelemetryOutputRotation(t *testing.T) {
 	}
 	if completedLog.TotalBytes != expectedPostTotalBytes {
 		t.Errorf("completed total_bytes = %d, want %d", completedLog.TotalBytes, expectedPostTotalBytes)
+	}
+}
+
+// --- Full-stack output capture tests (relay + service + artifact persistence) ---
+
+// telemetryLogInfra holds the deployed three-service stack for
+// full-stack output capture tests: artifact service → telemetry
+// service → telemetry relay.
+type telemetryLogInfra struct {
+	artifactService  serviceDeployResult
+	telemetryService serviceDeployResult
+	telemetryRelay   serviceDeployResult
+
+	// artifactClient is pre-authenticated for fetching artifacts and
+	// resolving tags. Tests use it to verify persisted output data
+	// and log metadata.
+	artifactClient *artifactstore.Client
+}
+
+// deployTelemetryLogInfra deploys the three-service stack for full
+// output capture persistence:
+//
+//  1. Artifact service (CAS storage)
+//  2. Telemetry service (log manager + persistence, RequiredServices: ["artifact"])
+//  3. Telemetry relay (accumulate + ship, RequiredServices: ["telemetry"])
+//
+// The relay is bound as "telemetry-relay" in the config room so the
+// daemon's resolveTelemetrySocket finds it (preferring relay over
+// service). The service is bound as "telemetry" so the relay's
+// RequiredServices resolution finds the service (no circular
+// dependency). The relay runs with --flush-threshold-bytes=1 for
+// immediate shipping.
+func deployTelemetryLogInfra(
+	t *testing.T,
+	admin *messaging.DirectSession,
+	fleet *testFleet,
+	machine *testMachine,
+	suffix string,
+) telemetryLogInfra {
+	t.Helper()
+	ctx := t.Context()
+
+	// --- Deploy the artifact service ---
+
+	artifactBinary := testutil.DataBinary(t, "ARTIFACT_SERVICE_BINARY")
+	artifactSvc := deployService(t, admin, fleet, machine, serviceDeployOptions{
+		Binary:    artifactBinary,
+		Name:      "artifact-" + suffix,
+		Localpart: "service/artifact/" + suffix,
+		Command:   []string{artifactBinary, "--store-dir", "/tmp/artifacts"},
+	})
+
+	if _, err := admin.SendStateEvent(ctx, machine.ConfigRoomID,
+		schema.EventTypeServiceBinding, "artifact",
+		schema.ServiceBindingContent{Principal: artifactSvc.Entity}); err != nil {
+		t.Fatalf("publish artifact service binding: %v", err)
+	}
+
+	// --- Deploy the telemetry service ---
+
+	telemetrySvc := deployService(t, admin, fleet, machine, serviceDeployOptions{
+		Binary:           resolvedBinary(t, "TELEMETRY_SERVICE_BINARY"),
+		Name:             "telemetry-" + suffix,
+		Localpart:        "service/telemetry/" + suffix,
+		RequiredServices: []string{"artifact"},
+		Authorization: &schema.AuthorizationPolicy{
+			Grants: []schema.Grant{
+				{Actions: []string{artifact.ActionStore}},
+			},
+		},
+	})
+
+	if _, err := admin.SendStateEvent(ctx, machine.ConfigRoomID,
+		schema.EventTypeServiceBinding, "telemetry",
+		schema.ServiceBindingContent{Principal: telemetrySvc.Entity}); err != nil {
+		t.Fatalf("publish telemetry service binding: %v", err)
+	}
+
+	// Verify artifact persistence is active before deploying the
+	// relay. If this fails, the artifact socket or token was not
+	// correctly bind-mounted into the telemetry service sandbox.
+	telemetryStatus := queryTelemetryStatus(t, telemetrySvc.SocketPath)
+	if !telemetryStatus.ArtifactPersistence {
+		t.Fatal("telemetry service started without artifact persistence — artifact socket or token not available inside sandbox")
+	}
+
+	// --- Deploy the telemetry relay ---
+
+	relayBinary := resolvedBinary(t, "TELEMETRY_RELAY_BINARY")
+	relayService := deployService(t, admin, fleet, machine, serviceDeployOptions{
+		Binary:           relayBinary,
+		Name:             "relay-" + suffix,
+		Localpart:        "service/telemetry-relay/" + suffix,
+		Command:          []string{relayBinary, "--flush-threshold-bytes", "1"},
+		RequiredServices: []string{"telemetry"},
+		Authorization: &schema.AuthorizationPolicy{
+			Grants: []schema.Grant{
+				{Actions: []string{"telemetry/ingest"}},
+			},
+		},
+		ExtraEnvironmentVariables: map[string]string{
+			"BUREAU_TELEMETRY_SERVICE_SOCKET": "/run/bureau/service/telemetry.sock",
+			"BUREAU_TELEMETRY_TOKEN_PATH":     "/run/bureau/service/token/telemetry.token",
+		},
+	})
+
+	// Publish the relay binding as "telemetry-relay" so the daemon's
+	// resolveTelemetrySocket finds it. This is the socket path the
+	// daemon passes to sandboxes for output capture and sends
+	// complete-log to on sandbox exit.
+	if _, err := admin.SendStateEvent(ctx, machine.ConfigRoomID,
+		schema.EventTypeServiceBinding, "telemetry-relay",
+		schema.ServiceBindingContent{Principal: relayService.Entity}); err != nil {
+		t.Fatalf("publish telemetry-relay service binding: %v", err)
+	}
+
+	// --- Mint artifact fetch token for verification ---
+
+	callerEntity, err := ref.NewEntityFromAccountLocalpart(fleet.Ref, "agent/"+suffix+"-verifier")
+	if err != nil {
+		t.Fatalf("construct verifier entity: %v", err)
+	}
+
+	artifactFetchToken := mintTestServiceToken(t, machine, callerEntity, "artifact",
+		[]servicetoken.Grant{{Actions: []string{artifact.ActionFetch}}})
+
+	return telemetryLogInfra{
+		artifactService:  artifactSvc,
+		telemetryService: telemetrySvc,
+		telemetryRelay:   relayService,
+		artifactClient:   artifactstore.NewClientFromToken(artifactSvc.SocketPath, artifactFetchToken),
+	}
+}
+
+// waitForLogStoreCount polls the telemetry service status until the
+// log manager's StoreCount reaches or exceeds the target. Used to
+// confirm that the output capture chain is active and data is being
+// persisted before proceeding with drain or exit verification.
+func waitForLogStoreCount(t *testing.T, socketPath string, target uint64) {
+	t.Helper()
+	for {
+		status := queryTelemetryStatus(t, socketPath)
+		if status.LogManager.StoreCount >= target {
+			return
+		}
+		if t.Context().Err() != nil {
+			t.Fatalf("timed out waiting for log manager store count >= %d (current: %d, flush_errors: %d, last_error: %q)",
+				target, status.LogManager.StoreCount, status.LogManager.FlushErrors, status.LogManager.LastError)
+		}
+		runtime.Gosched()
+	}
+}
+
+// discoverLogTag uses the artifact service's tag listing to find
+// the log metadata tag for a given source entity. The tag prefix
+// is "log/<entity-localpart>/" matching the log manager's tag
+// naming scheme. Returns the full tag name and the session ID
+// extracted from it.
+func discoverLogTag(t *testing.T, artifactClient *artifactstore.Client, source ref.Entity) (string, string) {
+	t.Helper()
+	ctx := t.Context()
+
+	prefix := "log/" + source.Localpart() + "/"
+
+	for {
+		tags, err := artifactClient.Tags(ctx, prefix)
+		if err != nil {
+			t.Fatalf("list tags with prefix %q: %v", prefix, err)
+		}
+		if len(tags.Tags) > 0 {
+			tagName := tags.Tags[0].Name
+			sessionID := strings.TrimPrefix(tagName, prefix)
+			return tagName, sessionID
+		}
+		if ctx.Err() != nil {
+			t.Fatalf("timed out waiting for log tag with prefix %q", prefix)
+		}
+		runtime.Gosched()
+	}
+}
+
+// TestTelemetryOutputLogPipeline exercises the full production output
+// capture path end-to-end:
+//
+//	sandbox process → bureau-log-relay (PTY capture)
+//	→ bureau-telemetry-relay (accumulate, ingest stream)
+//	→ bureau-telemetry-service (log manager → artifact store → CAS metadata)
+//	→ daemon watchSandboxExit → completeLogForPrincipal → status=complete
+//
+// Two scenarios run sequentially on the same infrastructure:
+//   - Normal exit (exit code 0): agent produces ~1.7MB output and exits cleanly
+//   - Crash exit (exit code 42): agent produces output and crashes
+//
+// Both verify: SandboxExitedMessage is received, log metadata tag
+// exists with status=complete, chunks are non-empty, artifact content
+// is retrievable.
+func TestTelemetryOutputLogPipeline(t *testing.T) {
+	t.Parallel()
+
+	admin := adminSession(t)
+	defer admin.Close()
+	fleet := createTestFleet(t, admin)
+
+	runnerEnv := findRunnerEnv(t)
+	testAgentBinary := resolvedBinary(t, "TEST_AGENT_BINARY")
+
+	machine := newTestMachine(t, fleet, "logpipe")
+	startMachine(t, admin, machine, machineOptions{
+		LauncherBinary: resolvedBinary(t, "LAUNCHER_BINARY"),
+		DaemonBinary:   resolvedBinary(t, "DAEMON_BINARY"),
+		ProxyBinary:    resolvedBinary(t, "PROXY_BINARY"),
+		Fleet:          fleet,
+	})
+
+	infra := deployTelemetryLogInfra(t, admin, fleet, machine, "logpipe")
+
+	// --- Scenario A: Normal exit (exit code 0) ---
+
+	t.Run("normal-exit", func(t *testing.T) {
+		exitWatch := watchRoom(t, admin, machine.ConfigRoomID)
+
+		deployAgent(t, admin, machine, agentOptions{
+			Binary:    testAgentBinary,
+			Localpart: "agent/logpipe-normal",
+			Command: []string{
+				"sh", "-c",
+				"dd if=/dev/urandom bs=64k count=20 2>/dev/null | base64; echo LOGTEST_NORMAL_DONE",
+			},
+			OutputCapture:    &schema.OutputCapture{Enabled: true},
+			EnvironmentPath:  runnerEnv,
+			RestartPolicy:    schema.RestartPolicyNever,
+			SkipWaitForReady: true,
+		})
+
+		// Wait for the sandbox exit notification. The daemon fires
+		// completeLogForPrincipal as part of the exit handling, so
+		// by the time we see this message the complete-log request
+		// has been sent to the relay (and proxied to the service).
+		exitMessage := waitForNotification[schema.SandboxExitedMessage](
+			t, &exitWatch, schema.MsgTypeSandboxExited, machine.UserID,
+			func(message schema.SandboxExitedMessage) bool {
+				return strings.Contains(message.Principal, "logpipe-normal")
+			}, "sandbox exit for logpipe-normal")
+
+		if exitMessage.ExitCode != 0 {
+			t.Errorf("expected exit code 0, got %d", exitMessage.ExitCode)
+		}
+
+		// Verify the telemetry service status reflects successful persistence.
+		status := queryTelemetryStatus(t, infra.telemetryService.SocketPath)
+		t.Logf("post-exit status: store=%d metadata=%d flush_errors=%d active=%d last_error=%q",
+			status.LogManager.StoreCount,
+			status.LogManager.MetadataWrites,
+			status.LogManager.FlushErrors,
+			status.LogManager.ActiveSessions,
+			status.LogManager.LastError)
+
+		if status.LogManager.StoreCount == 0 {
+			t.Fatal("log manager store_count is 0 — no artifacts were stored")
+		}
+		if status.LogManager.FlushErrors > 0 {
+			t.Fatalf("log manager had %d flush errors (last: %q)",
+				status.LogManager.FlushErrors, status.LogManager.LastError)
+		}
+
+		// Discover the log metadata tag and verify content.
+		agentEntity, err := ref.NewEntityFromAccountLocalpart(fleet.Ref, "agent/logpipe-normal")
+		if err != nil {
+			t.Fatalf("construct agent entity: %v", err)
+		}
+		tagName, sessionID := discoverLogTag(t, infra.artifactClient, agentEntity)
+		t.Logf("discovered log tag: %s (session: %s)", tagName, sessionID)
+
+		logContent := fetchLogMetadata(t, infra.artifactClient, tagName)
+
+		if logContent.Status != log.LogStatusComplete {
+			t.Errorf("log status = %q, want %q", logContent.Status, log.LogStatusComplete)
+		}
+		if logContent.TotalBytes < 1_000_000 {
+			t.Errorf("log total_bytes = %d, want >= 1,000,000", logContent.TotalBytes)
+		}
+		if length := len(logContent.Chunks); length < 1 {
+			t.Fatalf("log chunks length = %d, want >= 1", length)
+		}
+
+		// Fetch the first data chunk and verify it has content.
+		firstChunk := logContent.Chunks[0]
+		fetchResult, err := infra.artifactClient.Fetch(t.Context(), firstChunk.Ref)
+		if err != nil {
+			t.Fatalf("fetch chunk artifact %s: %v", firstChunk.Ref, err)
+		}
+		chunkData, err := io.ReadAll(fetchResult.Content)
+		fetchResult.Content.Close()
+		if err != nil {
+			t.Fatalf("read chunk content: %v", err)
+		}
+		if len(chunkData) == 0 {
+			t.Fatal("first chunk artifact has empty content")
+		}
+		t.Logf("first chunk: %d bytes, hash=%s", len(chunkData), firstChunk.Ref)
+	})
+
+	// --- Scenario B: Crash exit (exit code 42) ---
+
+	t.Run("crash-exit", func(t *testing.T) {
+		exitWatch := watchRoom(t, admin, machine.ConfigRoomID)
+
+		deployAgent(t, admin, machine, agentOptions{
+			Binary:    testAgentBinary,
+			Localpart: "agent/logpipe-crash",
+			Command: []string{
+				"sh", "-c",
+				"dd if=/dev/urandom bs=64k count=20 2>/dev/null | base64; exit 42",
+			},
+			OutputCapture:    &schema.OutputCapture{Enabled: true},
+			EnvironmentPath:  runnerEnv,
+			RestartPolicy:    schema.RestartPolicyNever,
+			SkipWaitForReady: true,
+		})
+
+		exitMessage := waitForNotification[schema.SandboxExitedMessage](
+			t, &exitWatch, schema.MsgTypeSandboxExited, machine.UserID,
+			func(message schema.SandboxExitedMessage) bool {
+				return strings.Contains(message.Principal, "logpipe-crash")
+			}, "sandbox exit for logpipe-crash")
+
+		if exitMessage.ExitCode != 42 {
+			t.Errorf("expected exit code 42, got %d", exitMessage.ExitCode)
+		}
+
+		// Verify log metadata was persisted with status=complete.
+		crashEntity, err := ref.NewEntityFromAccountLocalpart(fleet.Ref, "agent/logpipe-crash")
+		if err != nil {
+			t.Fatalf("construct agent entity: %v", err)
+		}
+		tagName, sessionID := discoverLogTag(t, infra.artifactClient, crashEntity)
+		t.Logf("discovered log tag: %s (session: %s)", tagName, sessionID)
+
+		logContent := fetchLogMetadata(t, infra.artifactClient, tagName)
+
+		if logContent.Status != log.LogStatusComplete {
+			t.Errorf("log status = %q, want %q", logContent.Status, log.LogStatusComplete)
+		}
+		if logContent.TotalBytes < 1_000_000 {
+			t.Errorf("log total_bytes = %d, want >= 1,000,000", logContent.TotalBytes)
+		}
+		if length := len(logContent.Chunks); length < 1 {
+			t.Fatalf("log chunks length = %d, want >= 1", length)
+		}
+	})
+}
+
+// TestTelemetryOutputLogDrain exercises the graceful drain path:
+// removing a principal from the machine config triggers the daemon
+// to send SIGTERM and call completeLogForPrincipal, which flushes
+// the relay and transitions the log session to "complete".
+//
+// This is the drain path in watchSandboxExit (wasDraining=true),
+// which destroys the proxy first, then calls completeLogForPrincipal.
+func TestTelemetryOutputLogDrain(t *testing.T) {
+	t.Parallel()
+
+	admin := adminSession(t)
+	defer admin.Close()
+	fleet := createTestFleet(t, admin)
+
+	runnerEnv := findRunnerEnv(t)
+	testAgentBinary := resolvedBinary(t, "TEST_AGENT_BINARY")
+
+	machine := newTestMachine(t, fleet, "logdrain")
+	startMachine(t, admin, machine, machineOptions{
+		LauncherBinary: resolvedBinary(t, "LAUNCHER_BINARY"),
+		DaemonBinary:   resolvedBinary(t, "DAEMON_BINARY"),
+		ProxyBinary:    resolvedBinary(t, "PROXY_BINARY"),
+		Fleet:          fleet,
+	})
+
+	infra := deployTelemetryLogInfra(t, admin, fleet, machine, "logdrain")
+
+	// Deploy a long-running agent that continuously produces output.
+	exitWatch := watchRoom(t, admin, machine.ConfigRoomID)
+
+	deployment := deployAgent(t, admin, machine, agentOptions{
+		Binary:    testAgentBinary,
+		Localpart: "agent/logdrain-producer",
+		Command: []string{
+			"sh", "-c",
+			// Initial burst crosses the 1MB chunk threshold for
+			// immediate artifact storage. The loop keeps the
+			// process alive so the drain path can be exercised.
+			"dd if=/dev/urandom bs=64k count=20 2>/dev/null | base64; while true; do sleep 1; done",
+		},
+		OutputCapture:    &schema.OutputCapture{Enabled: true},
+		EnvironmentPath:  runnerEnv,
+		RestartPolicy:    schema.RestartPolicyNever,
+		SkipWaitForReady: true,
+	})
+
+	// Wait for output to actually reach the telemetry service and
+	// be stored as an artifact. This confirms the full capture chain
+	// (sandbox → log relay → telemetry relay → service → artifact)
+	// is functioning before we trigger the drain.
+	waitForLogStoreCount(t, infra.telemetryService.SocketPath, 1)
+	t.Log("output persistence confirmed, triggering drain")
+
+	// Trigger drain: push a machine config that excludes the agent.
+	// The daemon will send SIGTERM, wait for exit, and call
+	// completeLogForPrincipal.
+	_ = deployment // suppress unused warning; we just need the side effects
+
+	pushMachineConfig(t, admin, machine, deploymentConfig{})
+
+	// Wait for the sandbox exit notification.
+	waitForNotification[schema.SandboxExitedMessage](
+		t, &exitWatch, schema.MsgTypeSandboxExited, machine.UserID,
+		func(message schema.SandboxExitedMessage) bool {
+			return strings.Contains(message.Principal, "logdrain-producer")
+		}, "sandbox exit for logdrain-producer")
+
+	// Verify the session was completed.
+	status := queryTelemetryStatus(t, infra.telemetryService.SocketPath)
+	t.Logf("post-drain status: store=%d metadata=%d flush_errors=%d active=%d",
+		status.LogManager.StoreCount,
+		status.LogManager.MetadataWrites,
+		status.LogManager.FlushErrors,
+		status.LogManager.ActiveSessions)
+
+	if status.LogManager.StoreCount == 0 {
+		t.Fatal("log manager store_count is 0 — no artifacts stored before drain")
+	}
+	if status.LogManager.FlushErrors > 0 {
+		t.Fatalf("log manager had %d flush errors (last: %q)",
+			status.LogManager.FlushErrors, status.LogManager.LastError)
+	}
+
+	// Discover and verify the log metadata.
+	drainEntity, err := ref.NewEntityFromAccountLocalpart(fleet.Ref, "agent/logdrain-producer")
+	if err != nil {
+		t.Fatalf("construct agent entity: %v", err)
+	}
+	tagName, sessionID := discoverLogTag(t, infra.artifactClient, drainEntity)
+	t.Logf("discovered log tag: %s (session: %s)", tagName, sessionID)
+
+	logContent := fetchLogMetadata(t, infra.artifactClient, tagName)
+
+	if logContent.Status != log.LogStatusComplete {
+		t.Errorf("log status = %q, want %q", logContent.Status, log.LogStatusComplete)
+	}
+	if logContent.TotalBytes == 0 {
+		t.Error("log total_bytes = 0, expected some output before drain")
+	}
+	if length := len(logContent.Chunks); length < 1 {
+		t.Fatalf("log chunks length = %d, want >= 1", length)
 	}
 }

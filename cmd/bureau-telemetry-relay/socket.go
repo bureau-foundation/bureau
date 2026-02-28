@@ -31,10 +31,13 @@ type relayStatusResponse struct {
 // registerActions registers the relay's socket API actions.
 //
 // "submit" is authenticated — only services with valid tokens can
-// push telemetry to the relay. "status" is unauthenticated for
-// liveness probing.
+// push telemetry to the relay. "complete-log" is authenticated —
+// the daemon sends it on sandbox exit to flush buffered data and
+// proxy the completion to the upstream telemetry service. "status"
+// is unauthenticated for liveness probing.
 func (r *Relay) registerActions(server *service.SocketServer) {
 	server.HandleAuth("submit", r.handleSubmit)
+	server.HandleAuth("complete-log", r.handleCompleteLog)
 	server.Handle("status", r.handleStatus)
 }
 
@@ -125,6 +128,61 @@ func (r *Relay) handleStatus(_ context.Context, _ []byte) (any, error) {
 		BatchesDropped:       r.buffer.Dropped(),
 		SequenceNumber:       r.accumulator.SequenceNumber(),
 	}, nil
+}
+
+// handleCompleteLog flushes buffered data to the telemetry service
+// and proxies the complete-log request. Called by the daemon when a
+// sandbox exits. The sequence is:
+//
+//  1. Flush the accumulator (any pending records become a buffer entry)
+//  2. Wait for the buffer to drain (shipper ships all entries)
+//  3. Proxy the complete-log request to the upstream telemetry service
+//
+// This ensures all output data that arrived at the relay before the
+// complete-log request reaches the service before the session is
+// marked complete. The handler does not hold any mutex, so concurrent
+// submits can still arrive and be processed normally.
+func (r *Relay) handleCompleteLog(ctx context.Context, token *servicetoken.Token, raw []byte) (any, error) {
+	if !servicetoken.GrantsAllow(token.Grants, "telemetry/ingest", "") {
+		return nil, fmt.Errorf("access denied: missing grant for telemetry/ingest")
+	}
+
+	var request telemetry.CompleteLogRequest
+	if err := codec.Unmarshal(raw, &request); err != nil {
+		return nil, fmt.Errorf("decoding complete-log request: %w", err)
+	}
+	if request.Source.IsZero() {
+		return nil, fmt.Errorf("source is required")
+	}
+
+	// Flush any pending accumulator data into the buffer.
+	r.flushToBuffer()
+
+	// Wait for the shipper to drain all buffered entries. With
+	// --flush-threshold-bytes=1, the buffer typically has at most
+	// one entry. The WaitForEmpty call returns immediately when the
+	// buffer is already empty.
+	if err := r.buffer.WaitForEmpty(ctx); err != nil {
+		return nil, fmt.Errorf("waiting for buffer drain: %w", err)
+	}
+
+	// Proxy the request to the upstream telemetry service. The
+	// service token was read at relay startup and is shared with
+	// the shipper's ingest stream.
+	serviceClient := service.NewServiceClientFromToken(r.serviceSocketPath, r.serviceTokenBytes)
+
+	var response telemetry.CompleteLogResponse
+	if err := serviceClient.Call(ctx, "complete-log", request, &response); err != nil {
+		return nil, fmt.Errorf("proxying complete-log to service: %w", err)
+	}
+
+	r.logger.Info("complete-log proxied to service",
+		"source", request.Source,
+		"session_id", request.SessionID,
+		"completed", response.Completed,
+	)
+
+	return response, nil
 }
 
 // flushToBuffer drains the accumulator into a TelemetryBatch,

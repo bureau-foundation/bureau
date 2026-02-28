@@ -883,6 +883,24 @@ type agentOptions struct {
 	// SkipWaitForReady skips waiting for "agent-ready" after deployment.
 	// Set to true for agents expected to exit/fail before posting ready.
 	SkipWaitForReady bool
+
+	// OutputCapture enables PTY-based output capture for this agent.
+	// When non-nil and Enabled is true, the daemon sets up the log
+	// relay to capture stdout/stderr and ship it to the telemetry
+	// relay/service. Requires a telemetry binding in the config room.
+	OutputCapture *schema.OutputCapture
+
+	// EnvironmentPath is the Nix closure path that provides the
+	// sandbox filesystem (e.g., /bin/sh, standard utilities). When
+	// non-empty, set as the template's Environment field. The daemon
+	// resolves the closure and bind-mounts it into the sandbox.
+	EnvironmentPath string
+
+	// Command overrides the default sandbox command (which is
+	// []string{binary}). Use for agents that run shell scripts
+	// instead of Go binaries (e.g., output capture tests that need
+	// dd, base64, etc. from the Nix environment).
+	Command []string
 }
 
 // agentDeployment holds the result of deployAgent: account details, socket
@@ -930,9 +948,14 @@ func agentTemplateContent(binary string, options agentOptions) schema.TemplateCo
 	}
 	filesystem = append(filesystem, options.ExtraMounts...)
 
-	return schema.TemplateContent{
+	command := options.Command
+	if len(command) == 0 {
+		command = []string{binary}
+	}
+
+	content := schema.TemplateContent{
 		Description:      description,
-		Command:          []string{binary},
+		Command:          command,
 		RequiredServices: options.RequiredServices,
 		Namespaces:       &schema.TemplateNamespaces{PID: true},
 		Security: &schema.TemplateSecurity{
@@ -944,6 +967,15 @@ func agentTemplateContent(binary string, options agentOptions) schema.TemplateCo
 		CreateDirs:           []string{"/tmp", "/var/tmp", "/run/bureau"},
 		EnvironmentVariables: environmentVariables,
 	}
+
+	if options.OutputCapture != nil {
+		content.OutputCapture = options.OutputCapture
+	}
+	if options.EnvironmentPath != "" {
+		content.Environment = options.EnvironmentPath
+	}
+
+	return content
 }
 
 // deployAgent performs the full agent deployment flow using lib/agent.Create:

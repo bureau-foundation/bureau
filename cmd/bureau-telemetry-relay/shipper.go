@@ -8,7 +8,6 @@ import (
 	"fmt"
 	"log/slog"
 	"net"
-	"os"
 	"sync/atomic"
 	"time"
 
@@ -45,16 +44,13 @@ type streamShipper struct {
 // the telemetry service socket.
 const streamDialTimeout = 5 * time.Second
 
-// newStreamShipper creates a BatchShipper that maintains a persistent
-// streaming connection to the telemetry service. The service token is
-// read from tokenPath once at creation time.
-func newStreamShipper(socketPath, tokenPath string) (BatchShipper, error) {
-	tokenBytes, err := os.ReadFile(tokenPath)
-	if err != nil {
-		return nil, fmt.Errorf("reading service token from %s: %w", tokenPath, err)
-	}
+// newStreamShipperFromToken creates a BatchShipper that maintains a
+// persistent streaming connection to the telemetry service. The caller
+// provides pre-read token bytes (the relay reads the token once at
+// startup and shares it between the shipper and complete-log handler).
+func newStreamShipperFromToken(socketPath string, tokenBytes []byte) (BatchShipper, error) {
 	if len(tokenBytes) == 0 {
-		return nil, fmt.Errorf("service token file %s is empty", tokenPath)
+		return nil, fmt.Errorf("service token is empty")
 	}
 	return &streamShipper{
 		socketPath: socketPath,

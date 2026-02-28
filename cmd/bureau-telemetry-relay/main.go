@@ -69,21 +69,34 @@ func run() error {
 	}
 	defer cleanup()
 
+	// Read the service token for authenticating to the upstream
+	// telemetry service. Both the shipper (ingest stream) and the
+	// complete-log handler (proxied request) use this token.
+	serviceTokenBytes, err := os.ReadFile(telemetryTokenPath)
+	if err != nil {
+		return fmt.Errorf("reading service token from %s: %w", telemetryTokenPath, err)
+	}
+	if len(serviceTokenBytes) == 0 {
+		return fmt.Errorf("service token file %s is empty", telemetryTokenPath)
+	}
+
 	// Create the outgoing shipper that maintains a persistent
 	// streaming connection to the telemetry service's "ingest"
 	// action.
-	shipper, err := newStreamShipper(telemetryServiceSocket, telemetryTokenPath)
+	shipper, err := newStreamShipperFromToken(telemetryServiceSocket, serviceTokenBytes)
 	if err != nil {
 		return fmt.Errorf("creating shipper: %w", err)
 	}
 
 	relay := &Relay{
-		accumulator: NewAccumulator(boot.Fleet, boot.Machine, *flushThresholdBytes),
-		buffer:      NewBuffer(*bufferMaxBytes),
-		shipper:     shipper,
-		clock:       boot.Clock,
-		startedAt:   boot.Clock.Now(),
-		logger:      boot.Logger,
+		accumulator:       NewAccumulator(boot.Fleet, boot.Machine, *flushThresholdBytes),
+		buffer:            NewBuffer(*bufferMaxBytes),
+		shipper:           shipper,
+		clock:             boot.Clock,
+		startedAt:         boot.Clock.Now(),
+		logger:            boot.Logger,
+		serviceSocketPath: telemetryServiceSocket,
+		serviceTokenBytes: serviceTokenBytes,
 	}
 
 	// Start the socket server.
@@ -151,4 +164,12 @@ type Relay struct {
 	// shipper goroutine, so it uses atomic operations.
 	shipped atomic.Uint64
 	logger  *slog.Logger
+
+	// serviceSocketPath and serviceTokenBytes hold the connection
+	// info for the upstream telemetry service. Used by the
+	// complete-log handler to proxy requests after flushing and
+	// draining the buffer. The shipper uses the same socket/token
+	// via its own streamShipper instance.
+	serviceSocketPath string
+	serviceTokenBytes []byte
 }

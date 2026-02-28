@@ -235,8 +235,8 @@ func TestHandleDeltasRoutesToCorrectSession(t *testing.T) {
 	}
 
 	// Verify each session has the right amount of data.
-	key1 := sessionKey{source: refs.source.Localpart(), sessionID: "session-1"}
-	key2 := sessionKey{source: refs.source.Localpart(), sessionID: "session-2"}
+	key1 := sessionKey{source: refs.source.UserID(), sessionID: "session-1"}
+	key2 := sessionKey{source: refs.source.UserID(), sessionID: "session-2"}
 
 	mgr.sessionsMu.RLock()
 	session1 := mgr.sessions[key1]
@@ -357,7 +357,7 @@ func TestArtifactStoreFailureDoesNotCreatePendingChunk(t *testing.T) {
 	}
 
 	// Check the session has no pending chunks.
-	key := sessionKey{source: refs.source.Localpart(), sessionID: "session-1"}
+	key := sessionKey{source: refs.source.UserID(), sessionID: "session-1"}
 	mgr.sessionsMu.RLock()
 	session := mgr.sessions[key]
 	mgr.sessionsMu.RUnlock()
@@ -397,7 +397,7 @@ func TestMetadataWriteFailureAddsToPendingChunks(t *testing.T) {
 	}
 
 	// The chunk should be in pendingChunks.
-	key := sessionKey{source: refs.source.Localpart(), sessionID: "session-1"}
+	key := sessionKey{source: refs.source.UserID(), sessionID: "session-1"}
 	mgr.sessionsMu.RLock()
 	session := mgr.sessions[key]
 	mgr.sessionsMu.RUnlock()
@@ -472,7 +472,7 @@ func TestPendingChunksCap(t *testing.T) {
 		mgr.HandleDeltas(ctx, deltas)
 	}
 
-	key := sessionKey{source: refs.source.Localpart(), sessionID: "session-1"}
+	key := sessionKey{source: refs.source.UserID(), sessionID: "session-1"}
 	mgr.sessionsMu.RLock()
 	session := mgr.sessions[key]
 	mgr.sessionsMu.RUnlock()
@@ -508,7 +508,7 @@ func TestCompleteLogFlushesAndTransitions(t *testing.T) {
 	}
 
 	// Complete the session.
-	err := mgr.CompleteLog(ctx, refs.source.Localpart(), "session-1")
+	err := mgr.CompleteLog(ctx, refs.source.UserID(), "session-1")
 	if err != nil {
 		t.Fatalf("CompleteLog failed: %v", err)
 	}
@@ -534,7 +534,7 @@ func TestCompleteLogFlushesAndTransitions(t *testing.T) {
 	}
 
 	// Session should be removed.
-	key := sessionKey{source: refs.source.Localpart(), sessionID: "session-1"}
+	key := sessionKey{source: refs.source.UserID(), sessionID: "session-1"}
 	mgr.sessionsMu.RLock()
 	_, exists := mgr.sessions[key]
 	mgr.sessionsMu.RUnlock()
@@ -563,7 +563,7 @@ func TestCompleteLogBySourceCompletesAllSessions(t *testing.T) {
 	mgr.sessionsMu.RLock()
 	sessionCount := 0
 	for key := range mgr.sessions {
-		if key.source == refs.source.Localpart() {
+		if key.source == refs.source.UserID() {
 			sessionCount++
 		}
 	}
@@ -573,7 +573,7 @@ func TestCompleteLogBySourceCompletesAllSessions(t *testing.T) {
 	}
 
 	// Complete by source only (empty session ID).
-	err := mgr.CompleteLog(ctx, refs.source.Localpart(), "")
+	err := mgr.CompleteLog(ctx, refs.source.UserID(), "")
 	if err != nil {
 		t.Fatalf("CompleteLog by source failed: %v", err)
 	}
@@ -612,7 +612,7 @@ func TestCompleteLogIdempotent(t *testing.T) {
 	ctx := context.Background()
 
 	// Complete a session that never existed.
-	err := mgr.CompleteLog(ctx, refs.source.Localpart(), "nonexistent")
+	err := mgr.CompleteLog(ctx, refs.source.UserID(), "nonexistent")
 	if err != nil {
 		t.Fatalf("CompleteLog for nonexistent session should succeed, got: %v", err)
 	}
@@ -621,12 +621,12 @@ func TestCompleteLogIdempotent(t *testing.T) {
 	deltas := makeDeltas(refs, "session-1", 1, 100)
 	mgr.HandleDeltas(ctx, deltas)
 
-	err = mgr.CompleteLog(ctx, refs.source.Localpart(), "session-1")
+	err = mgr.CompleteLog(ctx, refs.source.UserID(), "session-1")
 	if err != nil {
 		t.Fatalf("first CompleteLog failed: %v", err)
 	}
 
-	err = mgr.CompleteLog(ctx, refs.source.Localpart(), "session-1")
+	err = mgr.CompleteLog(ctx, refs.source.UserID(), "session-1")
 	if err != nil {
 		t.Fatalf("second CompleteLog should succeed idempotently, got: %v", err)
 	}
@@ -648,7 +648,7 @@ func TestStaleReaperCompletesIdleSessions(t *testing.T) {
 	mgr.tickReaper(ctx)
 
 	// Session should be completed and removed.
-	key := sessionKey{source: refs.source.Localpart(), sessionID: "session-1"}
+	key := sessionKey{source: refs.source.UserID(), sessionID: "session-1"}
 	mgr.sessionsMu.RLock()
 	_, exists := mgr.sessions[key]
 	mgr.sessionsMu.RUnlock()
@@ -687,7 +687,7 @@ func TestReaperDoesNotCompleteActiveSessions(t *testing.T) {
 	mgr.tickReaper(ctx)
 
 	// Session should still exist.
-	key := sessionKey{source: refs.source.Localpart(), sessionID: "session-1"}
+	key := sessionKey{source: refs.source.UserID(), sessionID: "session-1"}
 	mgr.sessionsMu.RLock()
 	_, exists := mgr.sessions[key]
 	mgr.sessionsMu.RUnlock()
@@ -763,7 +763,7 @@ func TestDeltaForCompletedSessionDropped(t *testing.T) {
 	mgr.HandleDeltas(ctx, deltas)
 
 	// Complete the session.
-	err := mgr.CompleteLog(ctx, refs.source.Localpart(), "session-1")
+	err := mgr.CompleteLog(ctx, refs.source.UserID(), "session-1")
 	if err != nil {
 		t.Fatalf("CompleteLog failed: %v", err)
 	}
@@ -902,7 +902,7 @@ func flushChunks(t *testing.T, ctx context.Context, mgr *logManager, refs testRe
 // Uses the test refs' source localpart as the session key prefix.
 func getSession(t *testing.T, mgr *logManager, refs testRefs, sessionID string) *sessionBuffer {
 	t.Helper()
-	key := sessionKey{source: refs.source.Localpart(), sessionID: sessionID}
+	key := sessionKey{source: refs.source.UserID(), sessionID: sessionID}
 	mgr.sessionsMu.RLock()
 	session := mgr.sessions[key]
 	mgr.sessionsMu.RUnlock()
@@ -1214,13 +1214,13 @@ func TestCompleteLogAfterRotating(t *testing.T) {
 	}
 
 	// Complete the session.
-	err := mgr.CompleteLog(ctx, refs.source.Localpart(), "session-1")
+	err := mgr.CompleteLog(ctx, refs.source.UserID(), "session-1")
 	if err != nil {
 		t.Fatalf("CompleteLog failed: %v", err)
 	}
 
 	// Session should be removed.
-	key := sessionKey{source: refs.source.Localpart(), sessionID: "session-1"}
+	key := sessionKey{source: refs.source.UserID(), sessionID: "session-1"}
 	mgr.sessionsMu.RLock()
 	_, exists := mgr.sessions[key]
 	mgr.sessionsMu.RUnlock()
@@ -1271,7 +1271,7 @@ func TestStaleReaperCompletesRotatingSessions(t *testing.T) {
 
 	// Session should be completed and removed — rotating sessions
 	// that go idle are reaped just like active sessions.
-	key := sessionKey{source: refs.source.Localpart(), sessionID: "session-1"}
+	key := sessionKey{source: refs.source.UserID(), sessionID: "session-1"}
 	mgr.sessionsMu.RLock()
 	_, exists := mgr.sessions[key]
 	mgr.sessionsMu.RUnlock()

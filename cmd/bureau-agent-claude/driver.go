@@ -41,11 +41,28 @@ func (process *claudeProcess) Signal(signal os.Signal) error {
 	return process.command.Process.Signal(signal)
 }
 
-// Start spawns a Claude Code process with stream-json output.
+// Start spawns a Claude Code process with stream-json output. Before
+// starting the process, it writes hook configuration so Claude Code
+// invokes this same binary for PreToolUse and PostToolUse events.
 func (driver *claudeDriver) Start(ctx context.Context, config agentdriver.DriverConfig) (agentdriver.Process, io.ReadCloser, error) {
 	binaryPath := os.Getenv("CLAUDE_BINARY")
 	if binaryPath == "" {
 		binaryPath = "claude"
+	}
+
+	// Write Claude Code hook configuration before starting the
+	// process. Hooks point back to this binary in hook handler mode
+	// (bureau-agent-claude hook <event-type>). This must happen
+	// before command.Start() so Claude Code reads the hooks at
+	// initialization.
+	hookBinaryPath, err := os.Executable()
+	if err != nil {
+		// Fall back to os.Args[0] if /proc/self/exe is unavailable
+		// (shouldn't happen on Linux, but defense-in-depth).
+		hookBinaryPath = os.Args[0]
+	}
+	if writeError := writeHookSettings(config.WorkingDirectory, hookBinaryPath); writeError != nil {
+		return nil, nil, fmt.Errorf("writing hook settings: %w", writeError)
 	}
 
 	arguments := []string{

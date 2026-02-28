@@ -34,6 +34,7 @@ type createParams struct {
 	Param      []string `json:"param"       flag:"param"       desc:"key=value parameter (repeatable; recognized: repository, branch)"`
 	ServerName string   `json:"server_name" flag:"server-name" desc:"Matrix server name (auto-detected from machine.conf)"`
 	AgentCount int      `json:"agent_count" flag:"agent-count" desc:"number of agent principals to create" default:"1"`
+	DevTeam    string   `json:"dev_team"    flag:"dev-team"    desc:"dev team room alias localpart (e.g., iree/amdgpu/dev); defaults to <namespace>/dev"`
 }
 
 // CreateParams holds the parameters for workspace creation. Callers that
@@ -58,6 +59,11 @@ type CreateParams struct {
 
 	// AgentCount is the number of agent principals to create.
 	AgentCount int
+
+	// DevTeam overrides the dev team room alias localpart for this
+	// workspace (e.g., "iree/amdgpu/dev"). When empty, defaults to
+	// the namespace convention: #<project>/dev:<server>.
+	DevTeam string
 }
 
 // CreateResult holds the result of workspace creation.
@@ -146,14 +152,14 @@ All worktrees in a project share a single bare git object store at
 
 			params.ServerName = cli.ResolveServerName(params.ServerName)
 
-			return runCreate(ctx, logger, params.Alias, &params.SessionConfig, params.Machine, params.Template, params.Param, params.ServerName, params.AgentCount, &params.JSONOutput)
+			return runCreate(ctx, logger, params.Alias, &params.SessionConfig, params.Machine, params.Template, params.Param, params.ServerName, params.AgentCount, params.DevTeam, &params.JSONOutput)
 		},
 	}
 }
 
 // runCreate is the CLI wrapper: resolves "local" machine, parses raw
 // params, connects a session, calls Create, and formats the output.
-func runCreate(ctx context.Context, logger *slog.Logger, alias string, sessionConfig *cli.SessionConfig, machineName, templateRef string, rawParams []string, serverNameString string, agentCount int, jsonOutput *cli.JSONOutput) error {
+func runCreate(ctx context.Context, logger *slog.Logger, alias string, sessionConfig *cli.SessionConfig, machineName, templateRef string, rawParams []string, serverNameString string, agentCount int, devTeam string, jsonOutput *cli.JSONOutput) error {
 	serverName, err := ref.ParseServerName(serverNameString)
 	if err != nil {
 		return cli.Validation("invalid --server-name %q: %w", serverNameString, err)
@@ -197,6 +203,7 @@ func runCreate(ctx context.Context, logger *slog.Logger, alias string, sessionCo
 		Template:   templateRef,
 		Params:     paramMap,
 		AgentCount: agentCount,
+		DevTeam:    devTeam,
 	}, logger)
 	if err != nil {
 		return err
@@ -278,6 +285,26 @@ func Create(ctx context.Context, session messaging.Session, params CreateParams,
 	workspaceRoomID, err := ensureWorkspaceRoom(ctx, session, params.Alias, serverName, adminUserID, machineUserID, spaceRoomID)
 	if err != nil {
 		return nil, cli.Internal("ensuring workspace room: %w", err)
+	}
+
+	// Publish dev team metadata. If --dev-team was specified, use that
+	// alias. Otherwise derive from the project name (first alias segment),
+	// which is the namespace by convention.
+	var devTeamAlias ref.RoomAlias
+	if params.DevTeam != "" {
+		devTeamAlias, err = ref.ParseRoomAlias(schema.FullRoomAlias(params.DevTeam, serverName))
+		if err != nil {
+			return nil, cli.Validation("invalid --dev-team alias %q: %w", params.DevTeam, err)
+		}
+	} else {
+		namespace, namespaceError := ref.NewNamespace(serverName, project)
+		if namespaceError != nil {
+			return nil, cli.Internal("deriving namespace from project %q: %w", project, namespaceError)
+		}
+		devTeamAlias = schema.DevTeamRoomAlias(namespace)
+	}
+	if _, err := session.SendStateEvent(ctx, workspaceRoomID, schema.EventTypeDevTeam, "", schema.DevTeamContent{Room: devTeamAlias}); err != nil {
+		return nil, cli.Internal("publishing dev team metadata: %w", err)
 	}
 
 	// Publish the ProjectConfig state event.

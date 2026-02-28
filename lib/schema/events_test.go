@@ -4,6 +4,7 @@
 package schema
 
 import (
+	"encoding/json"
 	"testing"
 
 	"github.com/bureau-foundation/bureau/lib/ref"
@@ -37,6 +38,7 @@ func TestEventTypeConstants(t *testing.T) {
 		{"service_binding", EventTypeServiceBinding, "m.bureau.service_binding"},
 		{"ticket", EventTypeTicket, "m.bureau.ticket"},
 		{"ticket_config", EventTypeTicketConfig, "m.bureau.ticket_config"},
+		{"dev_team", EventTypeDevTeam, "m.bureau.dev_team"},
 		{"artifact_scope", artifact.EventTypeArtifactScope, "m.bureau.artifact_scope"},
 		{"log", log.EventTypeLog, "m.bureau.log"},
 	}
@@ -194,6 +196,73 @@ func TestSystemRoomPowerLevels(t *testing.T) {
 	}
 	if levels["kick"] != 100 {
 		t.Errorf("kick = %v, want 100", levels["kick"])
+	}
+}
+
+func TestDevTeamContentRoundTrip(t *testing.T) {
+	t.Parallel()
+	aliasString := "#bureau/dev-team:bureau.local"
+	alias, err := ref.ParseRoomAlias(aliasString)
+	if err != nil {
+		t.Fatalf("parse room alias %q: %v", aliasString, err)
+	}
+
+	original := DevTeamContent{Room: alias}
+	data, err := json.Marshal(original)
+	if err != nil {
+		t.Fatalf("Marshal: %v", err)
+	}
+
+	// Verify wire format.
+	var raw map[string]any
+	if err := json.Unmarshal(data, &raw); err != nil {
+		t.Fatalf("Unmarshal to map: %v", err)
+	}
+	assertField(t, raw, "room", aliasString)
+	if len(raw) != 1 {
+		t.Errorf("JSON has %d fields, want 1 (room only)", len(raw))
+	}
+
+	// Round-trip through typed struct.
+	var decoded DevTeamContent
+	if err := json.Unmarshal(data, &decoded); err != nil {
+		t.Fatalf("Unmarshal: %v", err)
+	}
+	if decoded.Room != original.Room {
+		t.Errorf("Room: got %v, want %v", decoded.Room, original.Room)
+	}
+}
+
+func TestDevTeamContentZeroValue(t *testing.T) {
+	t.Parallel()
+	// Zero value should marshal as {"room":""} — the room alias zero
+	// value produces an empty string via MarshalText.
+	var content DevTeamContent
+	data, err := json.Marshal(content)
+	if err != nil {
+		t.Fatalf("Marshal zero value: %v", err)
+	}
+	var raw map[string]any
+	if err := json.Unmarshal(data, &raw); err != nil {
+		t.Fatalf("Unmarshal to map: %v", err)
+	}
+	assertField(t, raw, "room", "")
+}
+
+func TestWorkspaceRoomPowerLevelsDevTeam(t *testing.T) {
+	t.Parallel()
+	adminUserID := ref.MustParseUserID("@bureau-admin:bureau.local")
+	machineUserID := ref.MustParseUserID("@bureau/fleet/prod/machine/gpu-box:bureau.local")
+	levels := WorkspaceRoomPowerLevels(adminUserID, machineUserID)
+
+	events, ok := levels["events"].(map[ref.EventType]any)
+	if !ok {
+		t.Fatal("power levels missing 'events' map")
+	}
+
+	// Dev team metadata is admin-only in workspace rooms.
+	if events[EventTypeDevTeam] != 100 {
+		t.Errorf("%s power level = %v, want 100", EventTypeDevTeam, events[EventTypeDevTeam])
 	}
 }
 

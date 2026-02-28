@@ -112,6 +112,17 @@ func TestRoomCreate_Success(t *testing.T) {
 			}
 			json.NewEncoder(writer).Encode(messaging.SendEventResponse{EventID: ref.MustParseEventID("$evt1")})
 
+		case request.Method == http.MethodPut && strings.Contains(request.URL.Path, "/state/m.bureau.dev_team/"):
+			// Verify the dev team content points to the convention alias.
+			var content map[string]any
+			if err := json.NewDecoder(request.Body).Decode(&content); err != nil {
+				t.Fatalf("decode m.bureau.dev_team: %v", err)
+			}
+			if room, ok := content["room"].(string); !ok || room != "#bureau/dev:bureau.local" {
+				t.Errorf("dev_team room = %q, want #bureau/dev:bureau.local", content["room"])
+			}
+			json.NewEncoder(writer).Encode(messaging.SendEventResponse{EventID: ref.MustParseEventID("$evt2")})
+
 		default:
 			t.Errorf("unexpected request: %s %s", request.Method, request.URL.Path)
 			http.Error(writer, `{"errcode":"M_UNKNOWN"}`, http.StatusNotFound)
@@ -170,6 +181,10 @@ func TestRoomCreate_DefaultNameFromAlias(t *testing.T) {
 			json.NewEncoder(writer).Encode(messaging.SendEventResponse{EventID: ref.MustParseEventID("$e1")})
 			return
 		}
+		if strings.Contains(request.URL.Path, "/state/m.bureau.dev_team/") {
+			json.NewEncoder(writer).Encode(messaging.SendEventResponse{EventID: ref.MustParseEventID("$e2")})
+			return
+		}
 		http.Error(writer, `{"errcode":"M_UNKNOWN"}`, http.StatusNotFound)
 	}))
 	defer server.Close()
@@ -209,6 +224,10 @@ func TestRoomCreate_SpaceResolvedByAlias(t *testing.T) {
 		}
 		if strings.Contains(request.URL.Path, "/state/m.space.child/") {
 			json.NewEncoder(writer).Encode(messaging.SendEventResponse{EventID: ref.MustParseEventID("$e1")})
+			return
+		}
+		if strings.Contains(request.URL.Path, "/state/m.bureau.dev_team/") {
+			json.NewEncoder(writer).Encode(messaging.SendEventResponse{EventID: ref.MustParseEventID("$e2")})
 			return
 		}
 		http.Error(writer, `{"errcode":"M_UNKNOWN"}`, http.StatusNotFound)

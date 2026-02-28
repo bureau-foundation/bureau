@@ -10,6 +10,7 @@ import (
 
 	"github.com/bureau-foundation/bureau/lib/ref"
 	"github.com/bureau-foundation/bureau/lib/schema"
+	"github.com/bureau-foundation/bureau/messaging"
 )
 
 func TestDoctorPassesAfterSetup(t *testing.T) {
@@ -174,6 +175,42 @@ func TestJoinRulesAreInviteOnly(t *testing.T) {
 
 		if rule, _ := joinRules["join_rule"].(string); rule != "invite" {
 			t.Errorf("room %s: join_rule is %q, expected invite", alias, rule)
+		}
+	}
+}
+
+// TestDevTeamMetadataOnSetupRooms verifies that "bureau matrix setup"
+// publishes m.bureau.dev_team state events on the Bureau space and all
+// standard rooms (system, template, pipeline, artifact). Each event
+// should point to the conventional dev team room alias:
+// #bureau/dev:<server>.
+func TestDevTeamMetadataOnSetupRooms(t *testing.T) {
+	session := adminSession(t)
+	defer session.Close()
+
+	ctx := t.Context()
+	expectedAlias := schema.DevTeamRoomAlias(testNamespace)
+
+	// Verify all global rooms created by setup carry dev team metadata.
+	rooms := []struct {
+		name   string
+		roomID ref.RoomID
+	}{
+		{"space", globalSpaceRoomID},
+		{"system", globalSystemRoomID},
+		{"template", globalTemplateRoomID},
+		{"pipeline", globalPipelineRoomID},
+		{"artifact", globalArtifactRoomID},
+	}
+
+	for _, room := range rooms {
+		devTeam, err := messaging.GetState[schema.DevTeamContent](ctx, session, room.roomID, schema.EventTypeDevTeam, "")
+		if err != nil {
+			t.Errorf("%s room: %v", room.name, err)
+			continue
+		}
+		if devTeam.Room != expectedAlias {
+			t.Errorf("%s room: dev team = %s, want %s", room.name, devTeam.Room, expectedAlias)
 		}
 	}
 }

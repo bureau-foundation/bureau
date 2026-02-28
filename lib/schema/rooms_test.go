@@ -59,3 +59,47 @@ func TestFullRoomAlias(t *testing.T) {
 		})
 	}
 }
+
+func TestDevTeamRoomAlias(t *testing.T) {
+	t.Parallel()
+	tests := []struct {
+		name      string
+		namespace string
+		server    string
+		want      string
+	}{
+		{
+			"bureau_namespace",
+			"bureau",
+			"bureau.local",
+			"#bureau/dev:bureau.local",
+		},
+		{
+			"project_namespace",
+			"iree",
+			"bureau.local",
+			"#iree/dev:bureau.local",
+		},
+		{
+			"different_server",
+			"stories",
+			"example.com",
+			"#stories/dev:example.com",
+		},
+	}
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			t.Parallel()
+			server := ref.MustParseServerName(test.server)
+			namespace, err := ref.NewNamespace(server, test.namespace)
+			if err != nil {
+				t.Fatalf("NewNamespace(%q, %q): %v", test.server, test.namespace, err)
+			}
+			got := DevTeamRoomAlias(namespace)
+			if got.String() != test.want {
+				t.Errorf("DevTeamRoomAlias(%q) = %q, want %q",
+					test.namespace, got.String(), test.want)
+			}
+		})
+	}
+}

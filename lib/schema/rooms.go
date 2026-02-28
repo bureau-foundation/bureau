@@ -14,3 +14,12 @@ import "github.com/bureau-foundation/bureau/lib/ref"
 func FullRoomAlias(localpart string, serverName ref.ServerName) string {
 	return "#" + localpart + ":" + serverName.String()
 }
+
+// DevTeamRoomAlias returns the conventional dev team room alias for a
+// namespace: #<namespace>/dev:<server>. This is the naming convention
+// for a namespace's primary development team room. Not every namespace
+// has a dev team room — this returns the conventional alias whether or
+// not the room exists. Callers should resolve the alias before using it.
+func DevTeamRoomAlias(namespace ref.Namespace) ref.RoomAlias {
+	return ref.MustParseRoomAlias(FullRoomAlias(namespace.Name()+"/dev", namespace.Server()))
+}

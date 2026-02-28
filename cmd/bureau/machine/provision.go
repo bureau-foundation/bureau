@@ -366,6 +366,7 @@ func Provision(ctx context.Context, client *messaging.Client, adminSession *mess
 	configAlias := machine.RoomAlias()
 
 	logger.Info("creating config room", "alias", configAlias)
+	var configRoomID ref.RoomID
 	configRoom, createError := adminSession.CreateRoom(ctx, messaging.CreateRoomRequest{
 		Name:       "Config: " + machineUsername,
 		Topic:      "Machine configuration and credentials for " + machineUsername,
@@ -379,7 +380,7 @@ func Provision(ctx context.Context, client *messaging.Client, adminSession *mess
 			// Config room already exists from a previous provision. Resolve
 			// it and re-invite the machine (it was kicked during decommission).
 			logger.Info("config room already exists, re-inviting machine")
-			configRoomID, err := adminSession.ResolveAlias(ctx, configAlias)
+			configRoomID, err = adminSession.ResolveAlias(ctx, configAlias)
 			if err != nil {
 				return nil, cli.Transient("resolve existing config room %q: %w", configAlias, err)
 			}
@@ -395,15 +396,23 @@ func Provision(ctx context.Context, client *messaging.Client, adminSession *mess
 			return nil, cli.Transient("create config room: %w", createError)
 		}
 	} else {
+		configRoomID = configRoom.RoomID
 		// Set power levels: admin=100, machine=50. Machine can write
 		// MachineConfig, layouts, and invites but cannot modify
 		// credentials, power levels, or room metadata.
-		_, err = adminSession.SendStateEvent(ctx, configRoom.RoomID, "m.room.power_levels", "",
+		_, err = adminSession.SendStateEvent(ctx, configRoomID, "m.room.power_levels", "",
 			schema.ConfigRoomPowerLevels(adminUserID, machineUserID))
 		if err != nil {
 			return nil, cli.Transient("set config room power levels: %w", err)
 		}
-		logger.Info("config room created", "room_id", configRoom.RoomID.String())
+		logger.Info("config room created", "room_id", configRoomID.String())
+	}
+
+	// Publish dev team metadata. The namespace's conventional dev team
+	// room applies to all machine config rooms within the namespace.
+	devTeamAlias := schema.DevTeamRoomAlias(fleet.Namespace())
+	if _, err := adminSession.SendStateEvent(ctx, configRoomID, schema.EventTypeDevTeam, "", schema.DevTeamContent{Room: devTeamAlias}); err != nil {
+		return nil, cli.Transient("publish dev team metadata on config room: %w", err)
 	}
 
 	// Build the bootstrap config. The MachineName and FleetPrefix fields

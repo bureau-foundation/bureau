@@ -218,6 +218,17 @@ func EnsureFleetRooms(ctx context.Context, session messaging.Session, fleet ref.
 		return FleetRooms{}, err
 	}
 
+	// Publish dev team metadata on all fleet rooms. The convention
+	// alias #<namespace>/dev:<server> points to the namespace's dev
+	// team room. Idempotent — re-publishing identical content is a
+	// no-op at the homeserver level.
+	devTeamContent := schema.DevTeamContent{Room: schema.DevTeamRoomAlias(fleet.Namespace())}
+	for _, roomID := range []ref.RoomID{configRoomID, machineRoomID, serviceRoomID} {
+		if _, err := session.SendStateEvent(ctx, roomID, schema.EventTypeDevTeam, "", devTeamContent); err != nil {
+			return FleetRooms{}, cli.Transient("publish dev team metadata: %w", err)
+		}
+	}
+
 	return FleetRooms{
 		ConfigRoomID:  configRoomID,
 		MachineRoomID: machineRoomID,

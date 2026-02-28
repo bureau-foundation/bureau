@@ -17,6 +17,7 @@ import (
 	"github.com/bureau-foundation/bureau/lib/schema"
 	"github.com/bureau-foundation/bureau/lib/schema/observation"
 	"github.com/bureau-foundation/bureau/lib/service"
+	"github.com/bureau-foundation/bureau/messaging"
 	"github.com/bureau-foundation/bureau/observe"
 )
 
@@ -108,6 +109,31 @@ func TestMachineJoinsFleet(t *testing.T) {
 	}
 	if level, ok := powerLevels.Users[machine.UserID.String()]; !ok || level != 50 {
 		t.Errorf("machine power level = %d (present=%v), want 50", level, ok)
+	}
+
+	// Verify dev team metadata on fleet rooms and config room.
+	// EnsureFleetRooms publishes m.bureau.dev_team on all three fleet
+	// rooms, and machine.Provision publishes it on the config room.
+	// All should point to the namespace's conventional dev team alias.
+	expectedDevTeam := schema.DevTeamRoomAlias(fleet.Ref.Namespace())
+	devTeamRooms := []struct {
+		name   string
+		roomID ref.RoomID
+	}{
+		{"fleet config", fleet.FleetRoomID},
+		{"fleet machine", fleet.MachineRoomID},
+		{"fleet service", fleet.ServiceRoomID},
+		{"machine config", machine.ConfigRoomID},
+	}
+	for _, room := range devTeamRooms {
+		devTeam, err := messaging.GetState[schema.DevTeamContent](ctx, admin, room.roomID, schema.EventTypeDevTeam, "")
+		if err != nil {
+			t.Errorf("%s room: %v", room.name, err)
+			continue
+		}
+		if devTeam.Room != expectedDevTeam {
+			t.Errorf("%s room: dev team = %s, want %s", room.name, devTeam.Room, expectedDevTeam)
+		}
 	}
 }
 

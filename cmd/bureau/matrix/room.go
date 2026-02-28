@@ -11,8 +11,11 @@ import (
 	"text/tabwriter"
 	"time"
 
+	"strings"
+
 	"github.com/bureau-foundation/bureau/cmd/bureau/cli"
 	"github.com/bureau-foundation/bureau/lib/ref"
+	"github.com/bureau-foundation/bureau/lib/schema"
 	"github.com/bureau-foundation/bureau/messaging"
 )
 
@@ -48,6 +51,7 @@ type roomCreateParams struct {
 	Topic             string   `json:"topic"              flag:"topic"              desc:"room topic"`
 	ServerName        string   `json:"server_name"        flag:"server-name"        desc:"Matrix server name for m.space.child via field (auto-detected from machine.conf)"`
 	MemberStateEvents []string `json:"member_state_events" flag:"member-state-event" desc:"state event type that members can set (repeatable)"`
+	DevTeam           string   `json:"dev_team"            flag:"dev-team"            desc:"dev team room alias localpart (e.g., iree/dev); defaults to <first-alias-segment>/dev"`
 	cli.JSONOutput
 }
 
@@ -156,6 +160,14 @@ such as m.bureau.machine_key or m.bureau.service.`,
 				return cli.Internal("add room as child of space %s: %w", spaceRoomID, err)
 			}
 
+			// Publish dev team metadata. If --dev-team was specified, use
+			// that alias. Otherwise derive from the alias's first segment
+			// (namespace by convention). Single-segment aliases have no
+			// namespace to derive from — skip automatic derivation.
+			if err := publishDevTeamMetadata(ctx, sess, response.RoomID, alias, params.DevTeam, params.ServerName); err != nil {
+				return err
+			}
+
 			if done, err := params.EmitJSON(roomCreateResult{
 				RoomID:  response.RoomID.String(),
 				Alias:   alias,
@@ -168,6 +180,41 @@ such as m.bureau.machine_key or m.bureau.service.`,
 			return nil
 		},
 	}
+}
+
+// publishDevTeamMetadata publishes m.bureau.dev_team on a newly created room.
+// If devTeamOverride is non-empty, it is used as the dev team alias localpart.
+// Otherwise the first segment of the room alias (namespace by convention) is
+// used to derive #<namespace>/dev:<server>. Single-segment aliases have no
+// namespace — dev team metadata is skipped.
+func publishDevTeamMetadata(ctx context.Context, session messaging.Session, roomID ref.RoomID, alias, devTeamOverride, serverNameString string) error {
+	serverName, err := ref.ParseServerName(serverNameString)
+	if err != nil {
+		return cli.Validation("invalid server name %q: %w", serverNameString, err)
+	}
+
+	var devTeamAlias ref.RoomAlias
+	if devTeamOverride != "" {
+		devTeamAlias, err = ref.ParseRoomAlias(schema.FullRoomAlias(devTeamOverride, serverName))
+		if err != nil {
+			return cli.Validation("invalid --dev-team alias %q: %w", devTeamOverride, err)
+		}
+	} else if namespaceName, _, hasSlash := strings.Cut(alias, "/"); hasSlash {
+		namespace, namespaceError := ref.NewNamespace(serverName, namespaceName)
+		if namespaceError != nil {
+			// Non-standard alias structure — skip automatic derivation.
+			return nil
+		}
+		devTeamAlias = schema.DevTeamRoomAlias(namespace)
+	} else {
+		// Single-segment alias — no namespace to derive from.
+		return nil
+	}
+
+	if _, err := session.SendStateEvent(ctx, roomID, schema.EventTypeDevTeam, "", schema.DevTeamContent{Room: devTeamAlias}); err != nil {
+		return cli.Internal("publish dev team metadata: %w", err)
+	}
+	return nil
 }
 
 // roomListParams holds the parameters for the matrix room list command.

@@ -274,6 +274,35 @@ const (
 	EventTypeStewardship ref.EventType = "m.bureau.stewardship"
 )
 
+// Room ownership metadata. DevTeamContent is defined here because
+// the type is cross-cutting (not specific to any subsystem) and tiny.
+const (
+	// EventTypeDevTeam declares which development team room is
+	// responsible for maintaining a room's content. For example,
+	// #bureau/template points to #bureau/dev-team, so the AR
+	// advocate (or any service discovering maintainers) knows where
+	// to file improvement tickets for templates in that room.
+	//
+	// This is a general-purpose "who maintains this?" pointer.
+	// When absent, consumers should fall back to the ticket service
+	// bound in the room itself (if any).
+	//
+	// State key: "" (singleton per room)
+	// Room: any room
+	EventTypeDevTeam ref.EventType = "m.bureau.dev_team"
+)
+
+// DevTeamContent is the content of an EventTypeDevTeam state event.
+// It points a room to the development team room responsible for
+// maintaining the room's content.
+type DevTeamContent struct {
+	// Room is the alias of the development team room that maintains
+	// this room's content (e.g., "#bureau/dev-team:bureau.local").
+	// Aliases are preferred over room IDs because they are
+	// human-readable and survive room recreation.
+	Room ref.RoomAlias `json:"room"`
+}
+
 // Standard Matrix event type constants. These are Matrix spec types
 // (not Bureau-specific) that Bureau code references frequently. Defined
 // here so that callers avoid hardcoding matrix protocol strings.
@@ -405,6 +434,7 @@ func WorkspaceRoomPowerLevels(adminUserID, machineUserID ref.UserID) map[string]
 	events := AdminProtectedEvents()
 	events[EventTypeProject] = 100
 	events[EventTypeStewardship] = 100
+	events[EventTypeDevTeam] = 100
 	events[EventTypeWorkspace] = 0
 	events[EventTypeWorktree] = 0
 	events[EventTypeLayout] = 0

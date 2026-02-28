@@ -380,6 +380,23 @@ func TestWorkspaceCLILifecycle(t *testing.T) {
 	}
 	t.Logf("workspace state verified: project=%s, machine=%s, status=%s", activeState.Project, activeState.Machine, activeState.Status)
 
+	// Verify dev team metadata on the workspace room. workspace.Create
+	// derives the dev team alias from the project name (first alias
+	// segment): "wscli/main" → project "wscli" → #wscli/dev:<server>.
+	workspaceNamespace, err := ref.NewNamespace(testServer, "wscli")
+	if err != nil {
+		t.Fatalf("construct workspace namespace: %v", err)
+	}
+	expectedDevTeam := schema.DevTeamRoomAlias(workspaceNamespace)
+	devTeam, err := messaging.GetState[schema.DevTeamContent](ctx, admin, workspaceRoomID, schema.EventTypeDevTeam, "")
+	if err != nil {
+		t.Fatalf("get workspace dev team metadata: %v", err)
+	}
+	if devTeam.Room != expectedDevTeam {
+		t.Errorf("workspace dev team = %s, want %s", devTeam.Room, expectedDevTeam)
+	}
+	t.Logf("workspace dev team verified: %s", devTeam.Room)
+
 	// Verify the scratch directory was created by the init pipeline.
 	// The launcher mounts this at /scratch inside agent sandboxes for
 	// durable, non-git working state shared across all project agents.

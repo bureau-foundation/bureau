@@ -185,6 +185,27 @@ func runSetup(ctx context.Context, logger *slog.Logger, config setupConfig) erro
 		roomIDs[room.alias] = roomID
 	}
 
+	// Publish dev team metadata on all standard rooms. The convention
+	// alias #bureau/dev:<server> points to the Bureau project's own
+	// dev team room. The room may not exist yet — the alias is a
+	// stable pointer that resolves when the dev team is created.
+	bureauNamespace, err := ref.NewNamespace(config.serverName, "bureau")
+	if err != nil {
+		return cli.Internal("construct bureau namespace: %w", err)
+	}
+	devTeamContent := schema.DevTeamContent{Room: schema.DevTeamRoomAlias(bureauNamespace)}
+	for _, room := range standardRooms {
+		roomID := roomIDs[room.alias]
+		if _, err := session.SendStateEvent(ctx, roomID, schema.EventTypeDevTeam, "", devTeamContent); err != nil {
+			return cli.Internal("publish dev team metadata on %s: %w", room.alias, err)
+		}
+	}
+	// Also publish on the Bureau space itself.
+	if _, err := session.SendStateEvent(ctx, spaceRoomID, schema.EventTypeDevTeam, "", devTeamContent); err != nil {
+		return cli.Internal("publish dev team metadata on bureau space: %w", err)
+	}
+	logger.Info("dev team metadata published on all bureau rooms", "dev_team", devTeamContent.Room.String())
+
 	// Publish base templates into the template room.
 	if templateRoomID, ok := roomIDs["bureau/template"]; ok {
 		if err := publishBaseTemplates(ctx, session, templateRoomID, logger); err != nil {

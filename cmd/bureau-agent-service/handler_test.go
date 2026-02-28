@@ -11,8 +11,11 @@ import (
 	"log/slog"
 	"sync/atomic"
 	"testing"
+	"time"
 
+	"github.com/bureau-foundation/bureau/lib/agentdriver"
 	"github.com/bureau-foundation/bureau/lib/artifactstore"
+	"github.com/bureau-foundation/bureau/lib/clock"
 	"github.com/bureau-foundation/bureau/lib/codec"
 	"github.com/bureau-foundation/bureau/lib/ref"
 	"github.com/bureau-foundation/bureau/lib/schema/agent"
@@ -28,8 +31,10 @@ import (
 func newTestAgentService() *AgentService {
 	return &AgentService{
 		artifactClient:     newMockArtifactClient(),
+		clock:              clock.Fake(time.Date(2026, 2, 28, 12, 0, 0, 0, time.UTC)),
 		commitIndex:        make(map[string]agent.ContextCommitContent),
 		principalTimelines: make(map[string][]timelineEntry),
+		liveMetrics:        make(map[string]*liveSessionMetrics),
 		timelinesLoaded:    true,
 		logger:             slog.Default(),
 	}
@@ -41,8 +46,10 @@ func newTestAgentService() *AgentService {
 func newTestAgentServiceWithArtifacts(mock *mockArtifactClient) *AgentService {
 	return &AgentService{
 		artifactClient:     mock,
+		clock:              clock.Fake(time.Date(2026, 2, 28, 12, 0, 0, 0, time.UTC)),
 		commitIndex:        make(map[string]agent.ContextCommitContent),
 		principalTimelines: make(map[string][]timelineEntry),
+		liveMetrics:        make(map[string]*liveSessionMetrics),
 		timelinesLoaded:    true,
 		logger:             slog.Default(),
 	}
@@ -823,6 +830,189 @@ func TestHandleArchiveArtifact(t *testing.T) {
 		_, err = service.handleArchiveArtifact(context.Background(), token, raw)
 		if err == nil {
 			t.Fatal("expected error for empty label")
+		}
+	})
+}
+
+// --- Live session metrics tests ---
+
+func TestAccumulateLiveMetrics(t *testing.T) {
+	t.Parallel()
+
+	t.Run("counts events by type", func(t *testing.T) {
+		t.Parallel()
+
+		service := newTestAgentService()
+		service.liveMetrics["agent/test"] = &liveSessionMetrics{
+			SessionID: "session-1",
+			StartedAt: "2026-02-28T10:00:00Z",
+		}
+
+		events := []agentdriver.Event{
+			{Timestamp: time.Date(2026, 2, 28, 10, 0, 1, 0, time.UTC), Type: agentdriver.EventTypeToolCall, ToolCall: &agentdriver.ToolCallEvent{Name: "Read"}},
+			{Timestamp: time.Date(2026, 2, 28, 10, 0, 2, 0, time.UTC), Type: agentdriver.EventTypeToolCall, ToolCall: &agentdriver.ToolCallEvent{Name: "Bash"}},
+			{Timestamp: time.Date(2026, 2, 28, 10, 0, 3, 0, time.UTC), Type: agentdriver.EventTypeResponse, Response: &agentdriver.ResponseEvent{Content: "hello"}},
+			{Timestamp: time.Date(2026, 2, 28, 10, 0, 4, 0, time.UTC), Type: agentdriver.EventTypeError, Error: &agentdriver.ErrorEvent{Message: "oops"}},
+			{Timestamp: time.Date(2026, 2, 28, 10, 0, 5, 0, time.UTC), Type: agentdriver.EventTypeToolCall, ToolCall: &agentdriver.ToolCallEvent{Name: "Edit"}},
+			{Timestamp: time.Date(2026, 2, 28, 10, 0, 6, 0, time.UTC), Type: agentdriver.EventTypeResponse, Response: &agentdriver.ResponseEvent{Content: "done"}},
+		}
+
+		data, err := codec.Marshal(events)
+		if err != nil {
+			t.Fatalf("marshal events: %v", err)
+		}
+
+		service.accumulateLiveMetrics("agent/test", "session-1", data)
+
+		live := service.liveMetrics["agent/test"]
+		if live.ToolCalls != 3 {
+			t.Errorf("ToolCalls = %d, want 3", live.ToolCalls)
+		}
+		if live.Turns != 2 {
+			t.Errorf("Turns = %d, want 2", live.Turns)
+		}
+		if live.Errors != 1 {
+			t.Errorf("Errors = %d, want 1", live.Errors)
+		}
+		expectedLastActivity := time.Date(2026, 2, 28, 10, 0, 6, 0, time.UTC)
+		if !live.LastActivityAt.Equal(expectedLastActivity) {
+			t.Errorf("LastActivityAt = %v, want %v", live.LastActivityAt, expectedLastActivity)
+		}
+	})
+
+	t.Run("accumulates across multiple checkpoints", func(t *testing.T) {
+		t.Parallel()
+
+		service := newTestAgentService()
+		service.liveMetrics["agent/test"] = &liveSessionMetrics{
+			SessionID: "session-1",
+			StartedAt: "2026-02-28T10:00:00Z",
+		}
+
+		// First checkpoint: 2 tool calls, 1 turn.
+		events1 := []agentdriver.Event{
+			{Timestamp: time.Date(2026, 2, 28, 10, 0, 1, 0, time.UTC), Type: agentdriver.EventTypeToolCall, ToolCall: &agentdriver.ToolCallEvent{Name: "Read"}},
+			{Timestamp: time.Date(2026, 2, 28, 10, 0, 2, 0, time.UTC), Type: agentdriver.EventTypeToolCall, ToolCall: &agentdriver.ToolCallEvent{Name: "Bash"}},
+			{Timestamp: time.Date(2026, 2, 28, 10, 0, 3, 0, time.UTC), Type: agentdriver.EventTypeResponse, Response: &agentdriver.ResponseEvent{Content: "done"}},
+		}
+		data1, err := codec.Marshal(events1)
+		if err != nil {
+			t.Fatalf("marshal events1: %v", err)
+		}
+		service.accumulateLiveMetrics("agent/test", "session-1", data1)
+
+		// Second checkpoint: 1 tool call, 1 turn.
+		events2 := []agentdriver.Event{
+			{Timestamp: time.Date(2026, 2, 28, 10, 1, 0, 0, time.UTC), Type: agentdriver.EventTypeToolCall, ToolCall: &agentdriver.ToolCallEvent{Name: "Edit"}},
+			{Timestamp: time.Date(2026, 2, 28, 10, 1, 1, 0, time.UTC), Type: agentdriver.EventTypeResponse, Response: &agentdriver.ResponseEvent{Content: "done"}},
+		}
+		data2, err := codec.Marshal(events2)
+		if err != nil {
+			t.Fatalf("marshal events2: %v", err)
+		}
+		service.accumulateLiveMetrics("agent/test", "session-1", data2)
+
+		live := service.liveMetrics["agent/test"]
+		if live.ToolCalls != 3 {
+			t.Errorf("ToolCalls = %d, want 3", live.ToolCalls)
+		}
+		if live.Turns != 2 {
+			t.Errorf("Turns = %d, want 2", live.Turns)
+		}
+	})
+
+	t.Run("extracts MetricEvent data", func(t *testing.T) {
+		t.Parallel()
+
+		service := newTestAgentService()
+		service.liveMetrics["agent/test"] = &liveSessionMetrics{
+			SessionID: "session-1",
+			StartedAt: "2026-02-28T10:00:00Z",
+		}
+
+		events := []agentdriver.Event{
+			{
+				Timestamp: time.Date(2026, 2, 28, 10, 5, 0, 0, time.UTC),
+				Type:      agentdriver.EventTypeMetric,
+				Metric: &agentdriver.MetricEvent{
+					InputTokens:     50000,
+					OutputTokens:    12000,
+					CacheReadTokens: 30000,
+					CostUSD:         4.5,
+					TurnCount:       10,
+					Status:          "success",
+				},
+			},
+		}
+
+		data, err := codec.Marshal(events)
+		if err != nil {
+			t.Fatalf("marshal events: %v", err)
+		}
+		service.accumulateLiveMetrics("agent/test", "session-1", data)
+
+		live := service.liveMetrics["agent/test"]
+		if live.InputTokens != 50000 {
+			t.Errorf("InputTokens = %d, want 50000", live.InputTokens)
+		}
+		if live.OutputTokens != 12000 {
+			t.Errorf("OutputTokens = %d, want 12000", live.OutputTokens)
+		}
+		if live.CacheReadTokens != 30000 {
+			t.Errorf("CacheReadTokens = %d, want 30000", live.CacheReadTokens)
+		}
+		if live.CostMilliUSD != 4500 {
+			t.Errorf("CostMilliUSD = %d, want 4500", live.CostMilliUSD)
+		}
+		if live.Status != "success" {
+			t.Errorf("Status = %q, want %q", live.Status, "success")
+		}
+	})
+
+	t.Run("creates entry on first checkpoint if missing", func(t *testing.T) {
+		t.Parallel()
+
+		service := newTestAgentService()
+		// No liveMetrics entry pre-created (simulates service restart).
+
+		events := []agentdriver.Event{
+			{Timestamp: time.Date(2026, 2, 28, 10, 0, 1, 0, time.UTC), Type: agentdriver.EventTypeToolCall, ToolCall: &agentdriver.ToolCallEvent{Name: "Read"}},
+		}
+		data, err := codec.Marshal(events)
+		if err != nil {
+			t.Fatalf("marshal events: %v", err)
+		}
+
+		service.accumulateLiveMetrics("agent/test", "session-1", data)
+
+		live := service.liveMetrics["agent/test"]
+		if live == nil {
+			t.Fatal("expected liveMetrics entry to be created")
+		}
+		if live.SessionID != "session-1" {
+			t.Errorf("SessionID = %q, want %q", live.SessionID, "session-1")
+		}
+		if live.ToolCalls != 1 {
+			t.Errorf("ToolCalls = %d, want 1", live.ToolCalls)
+		}
+	})
+
+	t.Run("handles malformed CBOR gracefully", func(t *testing.T) {
+		t.Parallel()
+
+		service := newTestAgentService()
+		service.liveMetrics["agent/test"] = &liveSessionMetrics{
+			SessionID: "session-1",
+			StartedAt: "2026-02-28T10:00:00Z",
+		}
+
+		// Pass garbage data — should log a warning but not panic.
+		service.accumulateLiveMetrics("agent/test", "session-1", []byte{0xff, 0xfe, 0xfd})
+
+		// Live metrics should be unchanged.
+		live := service.liveMetrics["agent/test"]
+		if live.ToolCalls != 0 {
+			t.Errorf("ToolCalls = %d, want 0 (should be unchanged after decode failure)", live.ToolCalls)
 		}
 	})
 }

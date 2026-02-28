@@ -15,6 +15,7 @@ go_library(
     importpath = "github.com/bureau-foundation/bureau/cmd/bureau-agent-service",
     visibility = ["//visibility:private"],
     deps = [
+        "//lib/agentdriver",
         "//lib/artifactstore",
         "//lib/clock",
         "//lib/codec",
@@ -39,7 +40,9 @@ go_test(
     srcs = ["handler_test.go"],
     embed = [":bureau-agent-service_lib"],
     deps = [
+        "//lib/agentdriver",
         "//lib/artifactstore",
+        "//lib/clock",
         "//lib/codec",
         "//lib/ref",
         "//lib/schema/agent",

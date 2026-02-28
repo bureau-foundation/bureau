@@ -107,6 +107,7 @@ func run() error {
 		startedAt:          boot.Clock.Now(),
 		commitIndex:        make(map[string]agent.ContextCommitContent),
 		principalTimelines: make(map[string][]timelineEntry),
+		liveMetrics:        make(map[string]*liveSessionMetrics),
 		logger:             boot.Logger,
 	}
 
@@ -187,7 +188,61 @@ type AgentService struct {
 	// "haven't loaded yet".
 	timelinesLoaded bool
 
+	// liveMetrics tracks per-principal running session metrics
+	// accumulated from checkpoint event deltas. Populated as a side
+	// effect of handleCheckpointContext when the checkpoint format
+	// is "events-v1" (CBOR-encoded agentdriver.Event slices). The
+	// entry for a principal is created on first checkpoint and
+	// cleared when handleEndSession completes (the data is folded
+	// into the lifetime m.bureau.agent_metrics state event).
+	//
+	// This gives external observers (PM, operators, CLI tools) a
+	// real-time view of agent session progress without any new
+	// Matrix events — queryable via the get-metrics action.
+	liveMetrics map[string]*liveSessionMetrics
+
 	logger *slog.Logger
+}
+
+// liveSessionMetrics tracks running counters for an active agent
+// session, accumulated from checkpoint event deltas. Fields are
+// derived by decoding the CBOR []agentdriver.Event payload in each
+// checkpoint-context call and counting events by type.
+//
+// Token and cost data arrive only when the agent emits a MetricEvent
+// (typically at session end). During an active session, tool calls,
+// turns, errors, and last activity are the primary signals.
+type liveSessionMetrics struct {
+	// SessionID is the active session's identifier, from start-session.
+	SessionID string
+
+	// StartedAt is the ISO 8601 timestamp when the session started.
+	StartedAt string
+
+	// ToolCalls counts EventTypeToolCall events across all checkpoints.
+	ToolCalls int64
+
+	// Turns counts EventTypeResponse events (one response per LLM
+	// turn/API round-trip).
+	Turns int64
+
+	// Errors counts EventTypeError events.
+	Errors int64
+
+	// LastActivityAt is the timestamp of the most recent event from
+	// any checkpoint delta. Indicates when the agent was last doing
+	// something observable.
+	LastActivityAt time.Time
+
+	// Fields below are populated from MetricEvent (typically session
+	// end). Zero during an active session until the agent emits a
+	// summary metric event.
+	InputTokens      int64
+	OutputTokens     int64
+	CacheReadTokens  int64
+	CacheWriteTokens int64
+	CostMilliUSD     int64
+	Status           string
 }
 
 // timelineEntry maps a timestamp to a context commit ID in a

@@ -183,6 +183,15 @@ func Run(ctx context.Context, driver Driver, config RunConfig) error {
 	}
 	session := proxyclient.NewProxySession(proxy, identityUserID)
 
+	// Set presence to online. Presence is the canonical agent liveness
+	// signal — the fleet controller uses m.presence events for fast
+	// crash detection (TCP drop detected in seconds vs heartbeat
+	// staleness). Errors are logged but non-fatal: presence is
+	// best-effort observability, not a correctness requirement.
+	if presenceError := proxy.SetPresence(ctx, "online", "starting"); presenceError != nil {
+		logger.Warn("setting initial presence", "error", presenceError)
+	}
+
 	// Write system prompt to temp file.
 	systemPromptFile, err := agentContext.WriteSystemPromptFile()
 	if err != nil {
@@ -402,8 +411,18 @@ func Run(ctx context.Context, driver Driver, config RunConfig) error {
 
 	// Consumer goroutine: drains the events channel into the session
 	// log and, when enabled, into the event checkpoint tracker.
+	// Also updates presence status_msg on meaningful state transitions,
+	// rate-limited to avoid excessive proxy calls.
 	go func() {
 		defer close(eventsDone)
+
+		// Presence status updates are rate-limited: at most one
+		// update per presenceUpdateInterval. Tool calls can arrive
+		// in rapid bursts; updating presence on every call would
+		// overwhelm the proxy socket with redundant information.
+		const presenceUpdateInterval = 5 * time.Second
+		var lastPresenceUpdate time.Time
+
 		for event := range events {
 			if sessionLog != nil {
 				if writeError := sessionLog.Write(event); writeError != nil {
@@ -422,6 +441,21 @@ func Run(ctx context.Context, driver Driver, config RunConfig) error {
 					tracker.checkpointDelta(ctx, agent.CheckpointCompaction)
 				case event.Type == EventTypeMetric:
 					tracker.checkpointDelta(ctx, agent.CheckpointSessionEnd)
+				}
+			}
+
+			// Update presence status_msg on tool calls. The tool
+			// name tells observers what the agent is doing right
+			// now ("Read", "Bash", "Edit", etc.). Rate-limited to
+			// avoid redundant updates during rapid tool sequences.
+			if event.Type == EventTypeToolCall && event.ToolCall != nil {
+				if time.Since(lastPresenceUpdate) >= presenceUpdateInterval {
+					statusMessage := "tool: " + event.ToolCall.Name
+					if presenceError := proxy.SetPresence(ctx, "online", statusMessage); presenceError != nil {
+						logger.Warn("updating presence status", "error", presenceError)
+					} else {
+						lastPresenceUpdate = time.Now()
+					}
 				}
 			}
 		}
@@ -457,6 +491,9 @@ func Run(ctx context.Context, driver Driver, config RunConfig) error {
 	if _, err := session.SendMessage(ctx, agentContext.ConfigRoomID, messaging.NewTextMessage("agent-ready")); err != nil {
 		logger.Warn("failed to send ready message", "error", err)
 	}
+	if presenceError := proxy.SetPresence(ctx, "online", "ready"); presenceError != nil {
+		logger.Warn("updating presence to ready", "error", presenceError)
+	}
 
 	// Signal handling.
 	signalChannel := make(chan os.Signal, 2)
@@ -467,6 +504,14 @@ func Run(ctx context.Context, driver Driver, config RunConfig) error {
 			count++
 			if count == 1 {
 				logger.Info("received signal, interrupting agent")
+				// Best-effort presence update so observers see
+				// the agent going offline immediately, rather
+				// than waiting for homeserver TCP timeout.
+				presenceCtx, presenceCancel := context.WithTimeout(context.Background(), 3*time.Second)
+				if presenceError := proxy.SetPresence(presenceCtx, "offline", "interrupted"); presenceError != nil {
+					logger.Warn("setting presence on interrupt", "error", presenceError)
+				}
+				presenceCancel()
 				if interruptError := driver.Interrupt(process); interruptError != nil {
 					logger.Warn("interrupting agent", "error", interruptError)
 				}
@@ -548,6 +593,17 @@ func Run(ctx context.Context, driver Driver, config RunConfig) error {
 			logger.Info("agent service session ended", "session_id", sessionID)
 		}
 	}
+
+	// Set presence to offline before posting the completion summary.
+	// Uses context.Background() because the main context may be
+	// cancelled during shutdown. The signal handler may have already
+	// set presence to "offline"/"interrupted" — this is idempotent
+	// (the homeserver accepts redundant state transitions).
+	presenceCtx, presenceCancel := context.WithTimeout(context.Background(), 3*time.Second)
+	if presenceError := proxy.SetPresence(presenceCtx, "offline", "session ended"); presenceError != nil {
+		logger.Warn("setting presence to offline", "error", presenceError)
+	}
+	presenceCancel()
 
 	// Post completion summary to config room. This is the last action
 	// the agent takes — observers use "agent-complete" as a signal

@@ -10,6 +10,7 @@ import (
 	"sort"
 	"strings"
 
+	"github.com/bureau-foundation/bureau/lib/agentdriver"
 	"github.com/bureau-foundation/bureau/lib/artifactstore"
 	"github.com/bureau-foundation/bureau/lib/codec"
 	"github.com/bureau-foundation/bureau/lib/schema/agent"
@@ -201,6 +202,13 @@ func (agentService *AgentService) handleStartSession(ctx context.Context, token 
 		return nil, fmt.Errorf("writing session state: %w", err)
 	}
 
+	// Initialize the live session metrics entry. Checkpoint events
+	// arriving via checkpoint-context will accumulate into this.
+	agentService.liveMetrics[principalLocal] = &liveSessionMetrics{
+		SessionID: request.SessionID,
+		StartedAt: current.ActiveSessionStartedAt,
+	}
+
 	agentService.logger.Info("session started",
 		"principal", principalLocal,
 		"session_id", request.SessionID,
@@ -329,6 +337,12 @@ func (agentService *AgentService) handleEndSession(ctx context.Context, token *s
 			return nil, fmt.Errorf("writing metrics state: %w", err)
 		}
 	}
+
+	// Clear live session metrics for this principal. The running
+	// counters have been folded into the lifetime m.bureau.agent_metrics
+	// state event above — keeping them around would show stale data
+	// for the completed session.
+	delete(agentService.liveMetrics, principalLocal)
 
 	agentService.logger.Info("session ended",
 		"principal", principalLocal,
@@ -490,8 +504,34 @@ func (agentService *AgentService) handleArchiveArtifact(ctx context.Context, tok
 // --- Metrics handler ---
 
 // getMetricsResponse is the wire format for the "get-metrics" response.
+// Contains both lifetime aggregated metrics (from the Matrix state event)
+// and live session metrics (from in-memory checkpoint event accumulation).
 type getMetricsResponse struct {
-	Metrics *agent.AgentMetricsContent `cbor:"metrics,omitempty"`
+	Metrics     *agent.AgentMetricsContent `cbor:"metrics,omitempty"`
+	LiveSession *liveSessionMetricsWire    `cbor:"live_session,omitempty"`
+}
+
+// liveSessionMetricsWire is the wire format for live session metrics
+// returned by the get-metrics action. Mirrors the in-memory
+// liveSessionMetrics type with CBOR tags and string timestamps for
+// wire compatibility.
+type liveSessionMetricsWire struct {
+	SessionID      string `cbor:"session_id"`
+	StartedAt      string `cbor:"started_at"`
+	ToolCalls      int64  `cbor:"tool_calls"`
+	Turns          int64  `cbor:"turns"`
+	Errors         int64  `cbor:"errors"`
+	LastActivityAt string `cbor:"last_activity_at,omitempty"`
+
+	// Token and cost fields are populated from MetricEvent, which
+	// agents typically emit at session end. Zero during active
+	// sessions until a summary metric event arrives via checkpoint.
+	InputTokens      int64  `cbor:"input_tokens,omitempty"`
+	OutputTokens     int64  `cbor:"output_tokens,omitempty"`
+	CacheReadTokens  int64  `cbor:"cache_read_tokens,omitempty"`
+	CacheWriteTokens int64  `cbor:"cache_write_tokens,omitempty"`
+	CostMilliUSD     int64  `cbor:"cost_milliusd,omitempty"`
+	Status           string `cbor:"status,omitempty"`
 }
 
 func (agentService *AgentService) handleGetMetrics(ctx context.Context, token *servicetoken.Token, raw []byte) (any, error) {
@@ -505,7 +545,85 @@ func (agentService *AgentService) handleGetMetrics(ctx context.Context, token *s
 		return nil, fmt.Errorf("reading metrics state: %w", err)
 	}
 
-	return getMetricsResponse{Metrics: content}, nil
+	response := getMetricsResponse{Metrics: content}
+
+	// Include live session metrics if an active session is accumulating
+	// checkpoint data for this principal.
+	if live := agentService.liveMetrics[principalLocal]; live != nil {
+		var lastActivity string
+		if !live.LastActivityAt.IsZero() {
+			lastActivity = live.LastActivityAt.UTC().Format("2006-01-02T15:04:05Z")
+		}
+		response.LiveSession = &liveSessionMetricsWire{
+			SessionID:        live.SessionID,
+			StartedAt:        live.StartedAt,
+			ToolCalls:        live.ToolCalls,
+			Turns:            live.Turns,
+			Errors:           live.Errors,
+			LastActivityAt:   lastActivity,
+			InputTokens:      live.InputTokens,
+			OutputTokens:     live.OutputTokens,
+			CacheReadTokens:  live.CacheReadTokens,
+			CacheWriteTokens: live.CacheWriteTokens,
+			CostMilliUSD:     live.CostMilliUSD,
+			Status:           live.Status,
+		}
+	}
+
+	return response, nil
+}
+
+// accumulateLiveMetrics decodes a CBOR events-v1 checkpoint payload and
+// updates the per-principal running session metrics. Called from
+// handleCheckpointContext for each inline data checkpoint.
+//
+// Decode failures are logged as warnings — live metrics are best-effort
+// observability and must not block checkpoint persistence.
+func (agentService *AgentService) accumulateLiveMetrics(principalLocal, sessionID string, data []byte) {
+	var events []agentdriver.Event
+	if err := codec.Unmarshal(data, &events); err != nil {
+		agentService.logger.Warn("decoding checkpoint events for live metrics",
+			"principal", principalLocal,
+			"error", err,
+		)
+		return
+	}
+
+	live := agentService.liveMetrics[principalLocal]
+	if live == nil {
+		// No entry from start-session (agent service may have
+		// restarted mid-session). Create one with the current time
+		// as a fallback — not ideal, but better than dropping data.
+		live = &liveSessionMetrics{
+			SessionID: sessionID,
+			StartedAt: agentService.clock.Now().UTC().Format("2006-01-02T15:04:05Z"),
+		}
+		agentService.liveMetrics[principalLocal] = live
+	}
+
+	for _, event := range events {
+		if !event.Timestamp.IsZero() {
+			live.LastActivityAt = event.Timestamp
+		}
+
+		switch event.Type {
+		case agentdriver.EventTypeToolCall:
+			live.ToolCalls++
+		case agentdriver.EventTypeResponse:
+			live.Turns++
+		case agentdriver.EventTypeError:
+			live.Errors++
+		case agentdriver.EventTypeMetric:
+			if event.Metric != nil {
+				live.InputTokens = event.Metric.InputTokens
+				live.OutputTokens = event.Metric.OutputTokens
+				live.CacheReadTokens = event.Metric.CacheReadTokens
+				live.CacheWriteTokens = event.Metric.CacheWriteTokens
+				live.CostMilliUSD = int64(event.Metric.CostUSD * 1000)
+				live.Status = event.Metric.Status
+			}
+		}
+	}
 }
 
 // --- Context handlers ---
@@ -853,6 +971,18 @@ func (agentService *AgentService) handleCheckpointContext(ctx context.Context, t
 	// resolve-context see the commit immediately without waiting
 	// for a subsequent CAS fetch.
 	agentService.indexCommit(commitID, content)
+
+	// Accumulate live session metrics from checkpoint event deltas.
+	// When the format is "events-v1", the CBOR payload is a
+	// []agentdriver.Event slice that we can decode and count by
+	// type. Decode failures are logged but non-fatal — live metrics
+	// are best-effort observability and must not block checkpoint
+	// persistence.
+	if hasData && request.Format == "events-v1" {
+		agentService.accumulateLiveMetrics(
+			token.Subject.Localpart(), request.SessionID, request.Data,
+		)
+	}
 
 	agentService.logger.Info("context commit created",
 		"principal", token.Subject.Localpart(),

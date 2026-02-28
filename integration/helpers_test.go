@@ -87,6 +87,7 @@ var (
 	globalTemplateRoomID ref.RoomID
 	globalPipelineRoomID ref.RoomID
 	globalArtifactRoomID ref.RoomID
+	globalDevTeamRoomID  ref.RoomID
 )
 
 // Shared admin session infrastructure. The original @bureau-admin user
@@ -513,6 +514,7 @@ func cacheGlobalRoomIDs() error {
 		{"MATRIX_TEMPLATE_ROOM", &globalTemplateRoomID},
 		{"MATRIX_PIPELINE_ROOM", &globalPipelineRoomID},
 		{"MATRIX_ARTIFACT_ROOM", &globalArtifactRoomID},
+		{"MATRIX_DEV_TEAM_ROOM", &globalDevTeamRoomID},
 	}
 	for _, entry := range entries {
 		raw := credentials[entry.key]
@@ -746,6 +748,7 @@ func adminSession(t *testing.T) *messaging.DirectSession {
 		globalTemplateRoomID,
 		globalPipelineRoomID,
 		globalArtifactRoomID,
+		globalDevTeamRoomID,
 	}
 
 	for _, roomID := range globalRooms {

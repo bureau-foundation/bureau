@@ -55,6 +55,7 @@ Standard rooms created:
   bureau/template    Sandbox templates (base, base-networked)
   bureau/pipeline    Pipeline definitions (dev-workspace-init, dev-workspace-deinit)
   bureau/artifact    Artifact coordination
+  bureau/dev         Development team coordination and work routing
 
 Fleet-scoped rooms (machine, service, fleet config) are created per-fleet
 by "bureau fleet enable" and resolved via the fleet prefix.`,

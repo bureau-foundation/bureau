@@ -260,6 +260,13 @@ var standardRooms = []standardRoom{
 		credentialKey:   "MATRIX_ARTIFACT_ROOM",
 		powerLevelsFunc: schema.ArtifactRoomPowerLevels,
 	},
+	{
+		alias:         "bureau/dev",
+		displayName:   "Bureau Dev Team",
+		topic:         "Development team coordination and work routing",
+		name:          "dev team room",
+		credentialKey: "MATRIX_DEV_TEAM_ROOM",
+	},
 }
 
 // runDoctor executes all health checks and returns the results. Fixable

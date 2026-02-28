@@ -58,6 +58,7 @@ type mockDoctorServer struct {
 	templateID string
 	pipelineID string
 	artifactID string
+	devTeamID  string
 
 	// Configurable state. Nil means healthy defaults.
 	spaceChildren map[string]bool           // room IDs that are space children; nil = all standard rooms
@@ -85,6 +86,7 @@ func newHealthyMock(adminUserID ref.UserID) *mockDoctorServer {
 		templateID:  "!template:local",
 		pipelineID:  "!pipeline:local",
 		artifactID:  "!artifact:local",
+		devTeamID:   "!devteam:local",
 		invitesSent: make(map[string][]string),
 	}
 }
@@ -144,6 +146,7 @@ func (m *mockDoctorServer) handle(t *testing.T) http.HandlerFunc {
 				"#bureau/template:local": m.templateID,
 				"#bureau/pipeline:local": m.pipelineID,
 				"#bureau/artifact:local": m.artifactID,
+				"#bureau/dev:local":      m.devTeamID,
 			}
 
 			encodedAlias := strings.TrimPrefix(rawPath, aliasPrefix)
@@ -304,6 +307,7 @@ func (m *mockDoctorServer) handle(t *testing.T) http.HandlerFunc {
 						m.templateID: true,
 						m.pipelineID: true,
 						m.artifactID: true,
+						m.devTeamID:  true,
 					}
 				}
 				for childID := range childIDs {
@@ -367,6 +371,7 @@ func extractRoomIDFromStatePath(path string) string {
 		"template": "!template:local",
 		"pipeline": "!pipeline:local",
 		"artifact": "!artifact:local",
+		"devteam":  "!devteam:local",
 	}
 	for name, roomID := range knownRooms {
 		encoded := "%21" + name + "%3Alocal"
@@ -471,6 +476,11 @@ func TestRunDoctor_AllHealthy(t *testing.T) {
 		"artifact room admin power",
 		"artifact room state_default",
 		"artifact room join rules",
+		"dev team room",
+		"dev team room in space",
+		"dev team room admin power",
+		"dev team room state_default",
+		"dev team room join rules",
 		`template "base"`,
 		`template "base-networked"`,
 	}
@@ -510,6 +520,7 @@ func TestRunDoctor_WithCredentials(t *testing.T) {
 		"MATRIX_TEMPLATE_ROOM": "!template:local",
 		"MATRIX_PIPELINE_ROOM": "!pipeline:local",
 		"MATRIX_ARTIFACT_ROOM": "!artifact:local",
+		"MATRIX_DEV_TEAM_ROOM": "!devteam:local",
 	}
 
 	results := runDoctor(t.Context(), client, session, ref.MustParseServerName("local"), credentials, "", testLogger())
@@ -542,6 +553,7 @@ func TestRunDoctor_StaleCredentials(t *testing.T) {
 		"MATRIX_TEMPLATE_ROOM": "!template:local",
 		"MATRIX_PIPELINE_ROOM": "!pipeline:local",
 		"MATRIX_ARTIFACT_ROOM": "!artifact:local",
+		"MATRIX_DEV_TEAM_ROOM": "!devteam:local",
 	}
 
 	results := runDoctor(t.Context(), client, session, ref.MustParseServerName("local"), credentials, "", testLogger())
@@ -898,6 +910,7 @@ func TestRunDoctor_FixCredentialFile(t *testing.T) {
 		"MATRIX_TEMPLATE_ROOM": "!template:local",
 		"MATRIX_PIPELINE_ROOM": "!pipeline:local",
 		"MATRIX_ARTIFACT_ROOM": "!artifact:local",
+		"MATRIX_DEV_TEAM_ROOM": "!devteam:local",
 	}
 	for key, expectedValue := range expectedRoomIDs {
 		if updatedCredentials[key] != expectedValue {

@@ -134,6 +134,7 @@ func TestUserCreate_Operator_NewUser(t *testing.T) {
 		"!template:bureau.local": false,
 		"!pipeline:bureau.local": false,
 		"!artifact:bureau.local": false,
+		"!devteam:bureau.local":  false,
 	}
 	for _, roomID := range invitedRoomIDs {
 		if _, ok := expectedRooms[roomID]; !ok {
@@ -499,6 +500,7 @@ func writeTestCredentials(t *testing.T, homeserverURL string) string {
 		"MATRIX_TEMPLATE_ROOM=!template:bureau.local",
 		"MATRIX_PIPELINE_ROOM=!pipeline:bureau.local",
 		"MATRIX_ARTIFACT_ROOM=!artifact:bureau.local",
+		"MATRIX_DEV_TEAM_ROOM=!devteam:bureau.local",
 	}, "\n")
 
 	path := filepath.Join(t.TempDir(), "bureau-creds")

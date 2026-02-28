@@ -201,6 +201,7 @@ func TestDevTeamMetadataOnSetupRooms(t *testing.T) {
 		{"template", globalTemplateRoomID},
 		{"pipeline", globalPipelineRoomID},
 		{"artifact", globalArtifactRoomID},
+		{"dev team", globalDevTeamRoomID},
 	}
 
 	for _, room := range rooms {

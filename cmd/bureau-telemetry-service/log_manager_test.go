@@ -574,6 +574,66 @@ func TestCompleteLogFlushesAndTransitions(t *testing.T) {
 	}
 }
 
+func TestCompleteLogBySourceCompletesAllSessions(t *testing.T) {
+	refs := newTestRefs(t)
+	mgr, mockArtifact, mockWriter, _ := newTestLogManager(t, refs)
+
+	// Large threshold so HandleDeltas doesn't flush.
+	mgr.chunkSizeThreshold = 10 * 1024 * 1024
+
+	ctx := context.Background()
+
+	// Create two sessions for the same source.
+	deltas1 := makeDeltas(refs, "session-alpha", 3, 100)
+	deltas2 := makeDeltas(refs, "session-beta", 3, 200)
+	mgr.HandleDeltas(ctx, deltas1)
+	mgr.HandleDeltas(ctx, deltas2)
+
+	// Verify both sessions exist.
+	mgr.sessionsMu.RLock()
+	sessionCount := 0
+	for key := range mgr.sessions {
+		if key.source == refs.source.Localpart() {
+			sessionCount++
+		}
+	}
+	mgr.sessionsMu.RUnlock()
+	if sessionCount != 2 {
+		t.Fatalf("expected 2 sessions, got %d", sessionCount)
+	}
+
+	// Complete by source only (empty session ID).
+	err := mgr.CompleteLog(ctx, refs.source.Localpart(), "")
+	if err != nil {
+		t.Fatalf("CompleteLog by source failed: %v", err)
+	}
+
+	// Both sessions should have been flushed.
+	storeCalls := mockArtifact.getStoreCalls()
+	if len(storeCalls) != 2 {
+		t.Fatalf("expected 2 store calls (one per session), got %d", len(storeCalls))
+	}
+
+	// Both should have "complete" state events.
+	completeCount := 0
+	for _, event := range mockWriter.getStateEventCalls() {
+		if event.Content.Status == log.LogStatusComplete {
+			completeCount++
+		}
+	}
+	if completeCount != 2 {
+		t.Fatalf("expected 2 complete state events, got %d", completeCount)
+	}
+
+	// No sessions should remain.
+	mgr.sessionsMu.RLock()
+	remaining := len(mgr.sessions)
+	mgr.sessionsMu.RUnlock()
+	if remaining != 0 {
+		t.Fatalf("expected 0 remaining sessions, got %d", remaining)
+	}
+}
+
 func TestCompleteLogIdempotent(t *testing.T) {
 	refs := newTestRefs(t)
 	mgr, _, _, _ := newTestLogManager(t, refs)

@@ -247,9 +247,6 @@ func (s *TelemetryService) handleCompleteLog(ctx context.Context, token *service
 	if request.Source == "" {
 		return nil, fmt.Errorf("source is required")
 	}
-	if request.SessionID == "" {
-		return nil, fmt.Errorf("session_id is required")
-	}
 
 	if err := s.logManager.CompleteLog(ctx, request.Source, request.SessionID); err != nil {
 		return nil, fmt.Errorf("completing log: %w", err)

@@ -2087,6 +2087,10 @@ func (d *Daemon) watchSandboxExit(ctx context.Context, principal ref.Entity) {
 		}
 	}
 
+	// Tell the telemetry service to flush and complete all log sessions
+	// for this principal. Best-effort — errors are logged, not fatal.
+	d.completeLogForPrincipal(ctx, principal)
+
 	// Post exit notification to config room. On failure, include the
 	// captured terminal output so operators can diagnose the problem
 	// from the Matrix room without needing to reproduce the failure.

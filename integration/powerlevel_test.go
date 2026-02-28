@@ -163,6 +163,17 @@ func TestPowerLevelEnforcement(t *testing.T) {
 			}
 		})
 
+		t.Run("AgentCannotSetDevTeam", func(t *testing.T) {
+			// Dev team metadata has an explicit PL 100 entry in the events
+			// map, overriding state_default: 0. Without this, any room
+			// member could reassign which dev team owns the config room.
+			_, err := agentSession.SendStateEvent(ctx, configRoom.RoomID,
+				schema.EventTypeDevTeam, "", map[string]any{
+					"room": "#hijacked/dev:bureau.local",
+				})
+			assertForbidden(t, err, "agent (PL 0) setting m.bureau.dev_team (PL 100)")
+		})
+
 		t.Run("MachineCanSetLayout", func(t *testing.T) {
 			_, err := machineSession.SendStateEvent(ctx, configRoom.RoomID,
 				schema.EventTypeLayout, "test-key", map[string]any{
@@ -264,6 +275,15 @@ func TestPowerLevelEnforcement(t *testing.T) {
 			if err != nil {
 				t.Fatalf("agent should be able to set arbitrary Bureau state (state_default: 0): %v", err)
 			}
+		})
+
+		t.Run("AgentCannotSetDevTeam", func(t *testing.T) {
+			// Dev team metadata is admin-only in workspace rooms (PL 100).
+			_, err := agentSession.SendStateEvent(ctx, workspaceRoom.RoomID,
+				schema.EventTypeDevTeam, "", map[string]any{
+					"room": "#hijacked/dev:bureau.local",
+				})
+			assertForbidden(t, err, "agent (PL 0) setting m.bureau.dev_team (PL 100)")
 		})
 
 		t.Run("AgentCannotSetRoomMetadata", func(t *testing.T) {

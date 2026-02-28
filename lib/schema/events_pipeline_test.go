@@ -39,6 +39,11 @@ func TestPipelineRoomPowerLevels(t *testing.T) {
 		t.Errorf("%s power level = %v, want 100", EventTypePipeline, events[EventTypePipeline])
 	}
 
+	// Dev team metadata is admin-only — explicit regardless of state_default.
+	if events[EventTypeDevTeam] != 100 {
+		t.Errorf("%s power level = %v, want 100", EventTypeDevTeam, events[EventTypeDevTeam])
+	}
+
 	// Room metadata events from AdminProtectedEvents should all be PL 100.
 	for _, eventType := range []ref.EventType{
 		ref.EventType("m.room.encryption"), ref.EventType("m.room.server_acl"),

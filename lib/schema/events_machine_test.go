@@ -767,6 +767,12 @@ func TestConfigRoomPowerLevels(t *testing.T) {
 		t.Errorf("%s power level = %v, want 0", EventTypeLayout, events[EventTypeLayout])
 	}
 
+	// Dev team metadata is admin-only — explicit because state_default is 0 in
+	// config rooms, so without this entry any room member could overwrite it.
+	if events[EventTypeDevTeam] != 100 {
+		t.Errorf("%s power level = %v, want 100", EventTypeDevTeam, events[EventTypeDevTeam])
+	}
+
 	// Messages are writable by anyone in the room (power level 0) so the
 	// daemon can post command results and pipeline results.
 	if events[ref.EventType("m.room.message")] != 0 {

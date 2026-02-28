@@ -114,6 +114,12 @@ func TestConfigRoomPowerLevels(t *testing.T) {
 		t.Errorf("%s power level = %v, want 100", schema.EventTypeCredentials, events[schema.EventTypeCredentials])
 	}
 
+	// Dev team metadata is admin-only — explicit because state_default is 0 in
+	// config rooms, so without this entry any room member could overwrite it.
+	if events[schema.EventTypeDevTeam] != 100 {
+		t.Errorf("%s power level = %v, want 100", schema.EventTypeDevTeam, events[schema.EventTypeDevTeam])
+	}
+
 	// Default event power level should be 100 (admin-only room).
 	if levels["events_default"] != 100 {
 		t.Errorf("events_default = %v, want 100", levels["events_default"])

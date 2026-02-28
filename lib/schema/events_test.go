@@ -170,6 +170,11 @@ func TestSystemRoomPowerLevels(t *testing.T) {
 		t.Errorf("%s power level = %v, want 0", EventTypeTokenSigningKey, events[EventTypeTokenSigningKey])
 	}
 
+	// Dev team metadata is admin-only — explicit regardless of state_default.
+	if events[EventTypeDevTeam] != 100 {
+		t.Errorf("%s power level = %v, want 100", EventTypeDevTeam, events[EventTypeDevTeam])
+	}
+
 	// Admin-protected events must require PL 100.
 	for _, eventType := range []ref.EventType{
 		MatrixEventTypeEncryption, MatrixEventTypeServerACL,

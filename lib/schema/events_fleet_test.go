@@ -51,6 +51,11 @@ func TestMachineRoomPowerLevels(t *testing.T) {
 		}
 	}
 
+	// Dev team metadata is admin-only — explicit regardless of state_default.
+	if events[EventTypeDevTeam] != 100 {
+		t.Errorf("%s power level = %v, want 100", EventTypeDevTeam, events[EventTypeDevTeam])
+	}
+
 	// Admin-protected events must require PL 100.
 	for _, eventType := range []ref.EventType{
 		ref.EventType("m.room.encryption"), ref.EventType("m.room.server_acl"),
@@ -94,6 +99,11 @@ func TestServiceRoomPowerLevels(t *testing.T) {
 		t.Errorf("%s power level = %v, want 0", EventTypeService, events[EventTypeService])
 	}
 
+	// Dev team metadata is admin-only — explicit regardless of state_default.
+	if events[EventTypeDevTeam] != 100 {
+		t.Errorf("%s power level = %v, want 100", EventTypeDevTeam, events[EventTypeDevTeam])
+	}
+
 	// Admin-protected events must require PL 100.
 	for _, eventType := range []ref.EventType{
 		ref.EventType("m.room.encryption"), ref.EventType("m.room.server_acl"),
@@ -115,5 +125,57 @@ func TestServiceRoomPowerLevels(t *testing.T) {
 	// service principals for HA failover and fleet placement.
 	if levels["invite"] != 50 {
 		t.Errorf("invite = %v, want 50", levels["invite"])
+	}
+}
+
+func TestFleetRoomPowerLevels(t *testing.T) {
+	adminUserID := mustUserID(t, "@bureau-admin:bureau.local")
+	levels := FleetRoomPowerLevels(adminUserID)
+
+	users, ok := levels["users"].(map[string]any)
+	if !ok {
+		t.Fatal("power levels missing 'users' map")
+	}
+	if users[adminUserID.String()] != 100 {
+		t.Errorf("admin power level = %v, want 100", users[adminUserID.String()])
+	}
+	if levels["users_default"] != 0 {
+		t.Errorf("users_default = %v, want 0", levels["users_default"])
+	}
+
+	events, ok := levels["events"].(map[ref.EventType]any)
+	if !ok {
+		t.Fatal("power levels missing 'events' map")
+	}
+
+	// Members must be able to write fleet operational events.
+	for _, eventType := range []ref.EventType{
+		EventTypeFleetService,
+		EventTypeMachineDefinition,
+		EventTypeFleetConfig,
+		EventTypeHALease,
+		EventTypeServiceStatus,
+		EventTypeFleetAlert,
+	} {
+		if events[eventType] != 0 {
+			t.Errorf("%s power level = %v, want 0", eventType, events[eventType])
+		}
+	}
+
+	// Dev team metadata is admin-only — explicit regardless of state_default.
+	if events[EventTypeDevTeam] != 100 {
+		t.Errorf("%s power level = %v, want 100", EventTypeDevTeam, events[EventTypeDevTeam])
+	}
+
+	if levels["state_default"] != 100 {
+		t.Errorf("state_default = %v, want 100", levels["state_default"])
+	}
+	if levels["events_default"] != 0 {
+		t.Errorf("events_default = %v, want 0", levels["events_default"])
+	}
+
+	// Fleet rooms are admin-invite-only.
+	if levels["invite"] != 100 {
+		t.Errorf("invite = %v, want 100", levels["invite"])
 	}
 }

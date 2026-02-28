@@ -556,6 +556,11 @@ func TestSpecToProfile_WorkspaceVariableExpansion(t *testing.T) {
 				Dest:   "/workspace/.cache",
 				Mode:   schema.MountModeRW,
 			},
+			{
+				Source: "${WORKSPACE_ROOT}/${PROJECT}/.scratch",
+				Dest:   "/scratch",
+				Mode:   schema.MountModeRW,
+			},
 		},
 		EnvironmentVariables: map[string]string{
 			"HOME":           "/workspace",
@@ -613,6 +618,14 @@ func TestSpecToProfile_WorkspaceVariableExpansion(t *testing.T) {
 	if expanded.Filesystem[3].Source != "/var/bureau/workspace/.cache" {
 		t.Errorf("cache mount source = %q, want /var/bureau/workspace/.cache",
 			expanded.Filesystem[3].Source)
+	}
+	// Fifth mount: scratch directory.
+	if expanded.Filesystem[4].Source != "/var/bureau/workspace/iree/.scratch" {
+		t.Errorf("scratch mount source = %q, want /var/bureau/workspace/iree/.scratch",
+			expanded.Filesystem[4].Source)
+	}
+	if expanded.Filesystem[4].Dest != "/scratch" {
+		t.Errorf("scratch mount dest = %q, want /scratch", expanded.Filesystem[4].Dest)
 	}
 
 	// Verify environment variables expanded.

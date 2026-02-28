@@ -355,6 +355,24 @@ func (l *Launcher) buildSandboxCommand(principalLocalpart string, spec *schema.S
 	}
 	profile = vars.ExpandProfile(profile)
 
+	// Inject the scratch mount for workspace principals. /scratch is a
+	// durable, project-scoped working directory shared across all agents
+	// on the same project. Unlike /workspace (a git worktree), /scratch
+	// is unmanaged — agents use it for cloned repos, plans, design notes,
+	// and any working state that should survive sandbox restarts but
+	// doesn't belong in version control.
+	if project := vars["PROJECT"]; project != "" {
+		scratchHostPath := filepath.Join(l.workspaceRoot, project, ".scratch")
+		if err := os.MkdirAll(scratchHostPath, 0755); err != nil {
+			return nil, fmt.Errorf("creating scratch directory %s: %w", scratchHostPath, err)
+		}
+		profile.Filesystem = append(profile.Filesystem, sandbox.Mount{
+			Source: scratchHostPath,
+			Dest:   "/scratch",
+			Mode:   sandbox.MountModeRW,
+		})
+	}
+
 	// Always create the payload file and bind mount, even when the
 	// initial deployment has no payload. This ensures that
 	// handleUpdatePayload's in-place write is always visible to the

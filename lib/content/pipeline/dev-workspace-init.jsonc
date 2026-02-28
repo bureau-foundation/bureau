@@ -45,7 +45,7 @@
   "steps": [
     {
       "name": "create-project-directory",
-      "run": "mkdir -p /workspace/${PROJECT}"
+      "run": "mkdir -p /workspace/${PROJECT} /workspace/${PROJECT}/.scratch"
     },
     {
       "name": "clone-repository",

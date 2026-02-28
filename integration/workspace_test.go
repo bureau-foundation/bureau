@@ -380,6 +380,14 @@ func TestWorkspaceCLILifecycle(t *testing.T) {
 	}
 	t.Logf("workspace state verified: project=%s, machine=%s, status=%s", activeState.Project, activeState.Machine, activeState.Status)
 
+	// Verify the scratch directory was created by the init pipeline.
+	// The launcher mounts this at /scratch inside agent sandboxes for
+	// durable, non-git working state shared across all project agents.
+	scratchDirectory := machine.WorkspaceRoot + "/wscli/.scratch"
+	if _, err := os.Stat(scratchDirectory); err != nil {
+		t.Errorf("scratch directory %s should exist after workspace init: %v", scratchDirectory, err)
+	}
+
 	// --- Phase 3: Verify agent started and its proxy works ---
 	agentSocket := machine.PrincipalProxySocketPath(t, agentAccount.Localpart)
 	waitForFile(t, agentSocket)

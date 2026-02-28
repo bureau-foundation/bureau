@@ -128,6 +128,33 @@ Test binaries needed by integration tests are declared as `data` dependencies
 in BUILD.bazel and resolved at runtime via `testutil.DataBinary()` (which reads
 `RUNFILES_DIR` + `$(rlocationpath ...)` env vars). Tests do not call `go build`.
 
+## Running Bureau Locally
+
+Get all Bureau host binaries on PATH from the current worktree:
+
+```bash
+eval "$(script/dev-env)"
+```
+
+This builds `bureau-host-env` via Nix (cached after first build) and adds its
+`bin/` directory to PATH. All host binaries end up in the same directory, which
+is required — the launcher finds bureau-proxy, bureau-sandbox, and other
+companions by looking next to its own binary.
+
+For iterative development of a single binary, build and run directly via Bazel:
+
+```bash
+bazel build //cmd/bureau-daemon
+./bazel-bin/cmd/bureau-daemon/bureau-daemon_/bureau-daemon --help
+```
+
+To deploy changes to the running systemd stack (builds, publishes a version
+event, daemon picks it up via /sync and performs atomic exec() transition):
+
+```bash
+script/dev-deploy
+```
+
 ## Testing
 
 **Unit tests** run with `bazel test //...` and require no external services.

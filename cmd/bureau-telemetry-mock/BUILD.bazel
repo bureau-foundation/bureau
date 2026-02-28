@@ -12,6 +12,7 @@ go_library(
         "//lib/codec",
         "//lib/netutil",
         "//lib/process",
+        "//lib/ref",
         "//lib/schema/telemetry",
         "//lib/service",
         "//lib/servicetoken",

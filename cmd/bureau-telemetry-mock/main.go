@@ -9,7 +9,7 @@
 // Other services get the mock's socket via standard m.bureau.service_binding
 // resolution — zero code changes in the service under test.
 //
-// The binary exposes nine actions:
+// The binary exposes ten actions:
 //   - health (unauthenticated): standard HealthResponse controlled by set-health
 //   - status (unauthenticated): relay-compatible operational stats plus stored counts
 //   - set-health (unauthenticated): sets the health state returned by the health action
@@ -21,6 +21,7 @@
 //   - query-spans (authenticated): filter stored spans by source, operation, or trace ID
 //   - query-metrics (authenticated): filter stored metrics by source or name
 //   - query-logs (authenticated): filter stored logs by source, severity, body substring, or trace ID
+//   - query-output-deltas (authenticated): filter stored output deltas by session ID or source
 package main
 
 import (
@@ -30,6 +31,7 @@ import (
 	"fmt"
 	"net"
 	"os/signal"
+	"sort"
 	"strings"
 	"sync"
 	"sync/atomic"
@@ -38,6 +40,7 @@ import (
 	"github.com/bureau-foundation/bureau/lib/codec"
 	"github.com/bureau-foundation/bureau/lib/netutil"
 	"github.com/bureau-foundation/bureau/lib/process"
+	"github.com/bureau-foundation/bureau/lib/ref"
 	"github.com/bureau-foundation/bureau/lib/schema/telemetry"
 	"github.com/bureau-foundation/bureau/lib/service"
 	"github.com/bureau-foundation/bureau/lib/servicetoken"
@@ -96,6 +99,7 @@ func run() error {
 	socketServer.HandleAuth("query-spans", mock.handleQuerySpans)
 	socketServer.HandleAuth("query-metrics", mock.handleQueryMetrics)
 	socketServer.HandleAuth("query-logs", mock.handleQueryLogs)
+	socketServer.HandleAuth("query-output-deltas", mock.handleQueryOutputDeltas)
 	socketServer.HandleAuthStream("ingest", mock.handleIngest)
 	socketServer.HandleAuthStream("subscribe", mock.handleSubscribe)
 
@@ -216,6 +220,19 @@ type logQuery struct {
 type logQueryResponse struct {
 	Logs  []telemetry.LogRecord `cbor:"logs"`
 	Count int                   `cbor:"count"`
+}
+
+// outputDeltaQuery filters stored output deltas. All fields are
+// optional — an empty query returns all output deltas.
+type outputDeltaQuery struct {
+	SessionID string     `cbor:"session_id"`
+	Source    ref.Entity `cbor:"source"`
+}
+
+// outputDeltaQueryResponse is the wire format for query-output-deltas results.
+type outputDeltaQueryResponse struct {
+	OutputDeltas []telemetry.OutputDelta `cbor:"output_deltas"`
+	Count        int                     `cbor:"count"`
 }
 
 func (m *telemetryMock) handleStatus(_ context.Context, _ []byte) (any, error) {
@@ -375,6 +392,38 @@ func (m *telemetryMock) handleQueryLogs(_ context.Context, _ *servicetoken.Token
 	return &logQueryResponse{
 		Logs:  matched,
 		Count: len(matched),
+	}, nil
+}
+
+func (m *telemetryMock) handleQueryOutputDeltas(_ context.Context, _ *servicetoken.Token, raw []byte) (any, error) {
+	var query outputDeltaQuery
+	if err := codec.Unmarshal(raw, &query); err != nil {
+		return nil, fmt.Errorf("invalid output delta query: %w", err)
+	}
+
+	m.mu.Lock()
+	allDeltas := make([]telemetry.OutputDelta, len(m.outputDeltas))
+	copy(allDeltas, m.outputDeltas)
+	m.mu.Unlock()
+
+	var matched []telemetry.OutputDelta
+	for _, delta := range allDeltas {
+		if query.SessionID != "" && delta.SessionID != query.SessionID {
+			continue
+		}
+		if !query.Source.IsZero() && delta.Source != query.Source {
+			continue
+		}
+		matched = append(matched, delta)
+	}
+
+	sort.Slice(matched, func(i, j int) bool {
+		return matched[i].Sequence < matched[j].Sequence
+	})
+
+	return &outputDeltaQueryResponse{
+		OutputDeltas: matched,
+		Count:        len(matched),
 	}, nil
 }
 

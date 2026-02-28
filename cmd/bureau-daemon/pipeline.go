@@ -347,6 +347,37 @@ func (d *Daemon) startPipelineExecutor(
 		}
 	}
 
+	// Resolve telemetry relay socket and mint a token for output
+	// capture. The log relay (running on the host, outside the sandbox)
+	// uses the telemetry socket and token to submit output deltas. The
+	// pipeline executor's SandboxSpec always has OutputCapture.Enabled
+	// set — the telemetry token enables the launcher to activate it.
+	telemetrySocketPath := d.resolveTelemetrySocket(ctx)
+	var telemetryTokenPath string
+	if telemetrySocketPath != "" {
+		telemetryToken := &servicetoken.Token{
+			Subject:   pipelineEntity.UserID(),
+			Machine:   d.machine,
+			Audience:  telemetryServiceRole,
+			Grants:    []servicetoken.Grant{{Actions: []string{"submit"}}},
+			IssuedAt:  d.clock.Now().Unix(),
+			ExpiresAt: d.clock.Now().Add(1 * time.Hour).Unix(),
+		}
+		tokenBytes, mintErr := servicetoken.Mint(d.tokenSigningPrivateKey, telemetryToken)
+		if mintErr != nil {
+			d.logger.Warn("failed to mint telemetry token for pipeline executor",
+				"localpart", localpart, "error", mintErr)
+		} else {
+			path := filepath.Join(tokenDirectory, telemetryServiceRole+".token")
+			if writeErr := os.WriteFile(path, tokenBytes, 0600); writeErr != nil {
+				d.logger.Warn("failed to write telemetry token for pipeline executor",
+					"localpart", localpart, "error", writeErr)
+			} else {
+				telemetryTokenPath = path
+			}
+		}
+	}
+
 	// Build the sandbox spec.
 	spec := d.buildPipelineExecutorSpec(
 		artifactSocketPath, artifactTokenPath,
@@ -370,11 +401,14 @@ func (d *Daemon) startPipelineExecutor(
 	}
 
 	response, err := d.launcherRequest(ctx, launcherIPCRequest{
-		Action:            ipc.ActionCreateSandbox,
-		Principal:         localpart,
-		DirectCredentials: credentials,
-		SandboxSpec:       spec,
-		TriggerContent:    triggerContent,
+		Action:              ipc.ActionCreateSandbox,
+		Principal:           localpart,
+		DirectCredentials:   credentials,
+		SandboxSpec:         spec,
+		TriggerContent:      triggerContent,
+		TokenDirectory:      tokenDirectory,
+		TelemetrySocketPath: telemetrySocketPath,
+		TelemetryTokenPath:  telemetryTokenPath,
 	})
 	if err != nil {
 		d.logger.Error("create-sandbox IPC failed for pipeline executor",
@@ -642,6 +676,11 @@ func (d *Daemon) buildPipelineExecutorSpec(
 			DieWithParent: true,
 			NoNewPrivs:    true,
 		},
+		// Pipeline executor output is always captured when telemetry
+		// infrastructure is available. The launcher checks the telemetry
+		// socket path — if not present, it falls back to passthrough mode
+		// with a warning.
+		OutputCapture: &schema.OutputCapture{Enabled: true},
 	}
 
 	// When a Nix environment is configured, the launcher bind-mounts

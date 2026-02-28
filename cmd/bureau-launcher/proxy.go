@@ -295,10 +295,16 @@ func waitForSocket(socketPath string, processDone <-chan struct{}, timeout time.
 // is non-empty, it is bind-mounted read-only at /run/bureau/service/token/,
 // providing <role>.token files for service authentication.
 //
+// When telemetrySocketPath is non-empty and the SandboxSpec has
+// OutputCapture.Enabled, the generated sandbox script passes capture-mode
+// flags to bureau-log-relay, enabling PTY interposition and output delta
+// streaming. The telemetry socket and token paths are host-side paths
+// that the log relay (running outside the sandbox) reads directly.
+//
 // The returned command is a single-element slice containing the script path.
 // The script handles all bwrap argument quoting internally, avoiding shell
 // escaping issues when tmux invokes the command.
-func (l *Launcher) buildSandboxCommand(principalLocalpart string, spec *schema.SandboxSpec, triggerContent []byte, serviceMounts []ServiceMount, tokenDirectory string) ([]string, error) {
+func (l *Launcher) buildSandboxCommand(principalLocalpart string, spec *schema.SandboxSpec, triggerContent []byte, serviceMounts []ServiceMount, tokenDirectory string, telemetrySocketPath string, telemetryTokenPath string) ([]string, error) {
 	// Find the sandbox's config directory (created by spawnProxy).
 	sb, exists := l.sandboxes[principalLocalpart]
 	if !exists {
@@ -524,11 +530,43 @@ func (l *Launcher) buildSandboxCommand(principalLocalpart string, spec *schema.S
 	exitCodeFilePath := filepath.Join(sb.configDir, "exit-code")
 	sb.exitCodeFilePath = exitCodeFilePath
 
+	// Build output capture configuration. When the template enables
+	// output capture and telemetry infrastructure is deployed, pass
+	// capture-mode flags to bureau-log-relay so it interposes a PTY
+	// and streams output deltas to the telemetry relay. The log relay
+	// runs on the host (outside the sandbox) and reads the telemetry
+	// socket and token directly from host paths.
+	var capture *sandboxCaptureConfig
+	if spec.OutputCapture != nil && spec.OutputCapture.Enabled {
+		if telemetrySocketPath != "" {
+			fleetText, _ := l.machine.Fleet().MarshalText()
+			machineText, _ := l.machine.MarshalText()
+			sourceText, _ := principalRef.MarshalText()
+			capture = &sandboxCaptureConfig{
+				relaySocketPath: telemetrySocketPath,
+				tokenPath:       telemetryTokenPath,
+				fleet:           string(fleetText),
+				machine:         string(machineText),
+				source:          string(sourceText),
+				sessionID:       fmt.Sprintf("%s-%d", principalLocalpart, time.Now().UnixNano()),
+			}
+			l.logger.Info("output capture enabled",
+				"principal", principalLocalpart,
+				"relay", telemetrySocketPath,
+				"session_id", capture.sessionID,
+			)
+		} else {
+			l.logger.Warn("output capture requested but telemetry not deployed, falling back to passthrough",
+				"principal", principalLocalpart,
+			)
+		}
+	}
+
 	// Write the sandbox script. The script exec's bureau-log-relay
 	// wrapping bwrap. The log relay holds the outer PTY open until it
 	// collects the child's exit code, eliminating the tmux 3.4+ race
 	// between PTY EOF and SIGCHLD that causes exit codes to be lost.
-	scriptPath, err := writeSandboxScript(sb.configDir, l.logRelayBinaryPath, exitCodeFilePath, bwrapPath, bwrapArgs)
+	scriptPath, err := writeSandboxScript(sb.configDir, l.logRelayBinaryPath, exitCodeFilePath, capture, bwrapPath, bwrapArgs)
 	if err != nil {
 		return nil, fmt.Errorf("writing sandbox script: %w", err)
 	}
@@ -538,6 +576,7 @@ func (l *Launcher) buildSandboxCommand(principalLocalpart string, spec *schema.S
 		"script", scriptPath,
 		"bwrap", bwrapPath,
 		"command", spec.Command,
+		"output_capture", capture != nil,
 	)
 
 	return []string{scriptPath}, nil

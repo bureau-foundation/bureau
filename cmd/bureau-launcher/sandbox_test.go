@@ -381,7 +381,7 @@ func TestWriteSandboxScript(t *testing.T) {
 
 	directory := t.TempDir()
 
-	path, err := writeSandboxScript(directory, "/usr/bin/bureau-log-relay", "", "/usr/bin/bwrap", []string{
+	path, err := writeSandboxScript(directory, "/usr/bin/bureau-log-relay", "", nil, "/usr/bin/bwrap", []string{
 		"--unshare-pid",
 		"--bind", "/workspace", "/workspace",
 		"--", "/bin/bash",
@@ -445,7 +445,7 @@ func TestWriteSandboxScriptWithExitCodeFile(t *testing.T) {
 	directory := t.TempDir()
 	exitCodeFilePath := filepath.Join(directory, "exit-code")
 
-	path, err := writeSandboxScript(directory, "/usr/bin/bureau-log-relay", exitCodeFilePath, "/usr/bin/bwrap", []string{
+	path, err := writeSandboxScript(directory, "/usr/bin/bureau-log-relay", exitCodeFilePath, nil, "/usr/bin/bwrap", []string{
 		"--unshare-pid",
 		"--", "/bin/bash",
 	})

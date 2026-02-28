@@ -36,6 +36,7 @@ go_test(
         "mock_llm_test.go",
         "native_agent_test.go",
         "operator_journey_test.go",
+        "output_capture_test.go",
         "payload_test.go",
         "pipeline_test.go",
         "powerlevel_test.go",

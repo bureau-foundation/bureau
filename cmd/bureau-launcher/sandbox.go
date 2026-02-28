@@ -169,6 +169,20 @@ func writeTriggerFile(configDir string, content []byte) (string, error) {
 	return triggerPath, nil
 }
 
+// sandboxCaptureConfig holds the parameters for bureau-log-relay's capture
+// mode. When passed to writeSandboxScript, the relay interposes a PTY
+// between the sandboxed process and tmux, tees all output to the
+// telemetry relay as OutputDelta CBOR messages, and passes stdin through
+// transparently. When nil, the relay runs in passthrough mode.
+type sandboxCaptureConfig struct {
+	relaySocketPath string // host path to the telemetry relay Unix socket
+	tokenPath       string // host path to the service token file for relay auth
+	fleet           string // MarshalText format (e.g., "#bureau/fleet/prod:bureau.local")
+	machine         string // MarshalText format (e.g., "@bureau/fleet/prod/machine/workstation:bureau.local")
+	source          string // MarshalText format (e.g., "@bureau/fleet/prod/agent/code-reviewer:bureau.local")
+	sessionID       string // unique per sandbox invocation
+}
+
 // writeSandboxScript writes a shell script that exec's bureau-log-relay
 // wrapping the bwrap command. Using a script avoids shell escaping issues
 // when passing bwrap args through tmux's new-session command parser.
@@ -185,21 +199,44 @@ func writeTriggerFile(configDir string, content []byte) (string, error) {
 // os.Exit(). The launcher's session watcher reads this via inotify,
 // bypassing tmux's #{pane_dead_status} race entirely.
 //
-// Process tree:
+// When capture is non-nil, the relay runs in capture mode: PTY
+// interposition, output delta streaming to the telemetry relay. The
+// capture flags are emitted before the exit-code-file flag in the
+// generated script.
+//
+// Process tree (passthrough):
 //
 //	tmux pane → bureau-log-relay (holds PTY fds) → bwrap → sandboxed process
+//
+// Process tree (capture):
+//
+//	tmux pane → bureau-log-relay (PTY interposition) → bwrap → sandboxed process
 //
 // Signal delivery: SIGTERM sent to the pane PID reaches bureau-log-relay,
 // which forwards it to bwrap, which forwards it to the sandboxed process
 // through its PID-1 signal helper. This is the signal path for graceful drain.
 //
 // Returns the script path.
-func writeSandboxScript(configDir string, logRelayPath string, exitCodeFilePath string, bwrapPath string, bwrapArgs []string) (string, error) {
+func writeSandboxScript(configDir string, logRelayPath string, exitCodeFilePath string, capture *sandboxCaptureConfig, bwrapPath string, bwrapArgs []string) (string, error) {
 	scriptPath := filepath.Join(configDir, "sandbox.sh")
 
 	var script strings.Builder
 	script.WriteString("#!/bin/sh\nexec ")
 	script.WriteString(shellQuote(logRelayPath))
+	if capture != nil {
+		script.WriteString(" --relay=")
+		script.WriteString(shellQuote(capture.relaySocketPath))
+		script.WriteString(" --token=")
+		script.WriteString(shellQuote(capture.tokenPath))
+		script.WriteString(" --fleet=")
+		script.WriteString(shellQuote(capture.fleet))
+		script.WriteString(" --machine=")
+		script.WriteString(shellQuote(capture.machine))
+		script.WriteString(" --source=")
+		script.WriteString(shellQuote(capture.source))
+		script.WriteString(" --session-id=")
+		script.WriteString(shellQuote(capture.sessionID))
+	}
 	if exitCodeFilePath != "" {
 		script.WriteString(" --exit-code-file=")
 		script.WriteString(shellQuote(exitCodeFilePath))

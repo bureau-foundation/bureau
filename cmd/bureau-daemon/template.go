@@ -29,6 +29,7 @@ func resolveInstanceConfig(template *schema.TemplateContent, assignment *schema.
 		Namespaces:       template.Namespaces,
 		Resources:        template.Resources,
 		Security:         template.Security,
+		OutputCapture:    template.OutputCapture,
 		EnvironmentPath:  template.Environment,
 		Roles:            template.Roles,
 		CreateDirs:       template.CreateDirs,

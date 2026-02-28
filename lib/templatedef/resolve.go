@@ -176,6 +176,9 @@ func Merge(parent, child *schema.TemplateContent) schema.TemplateContent {
 	if child.HealthCheck != nil {
 		result.HealthCheck = child.HealthCheck
 	}
+	if child.OutputCapture != nil {
+		result.OutputCapture = child.OutputCapture
+	}
 
 	return result
 }

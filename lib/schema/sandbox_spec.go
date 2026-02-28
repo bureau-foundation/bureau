@@ -53,6 +53,14 @@ type SandboxSpec struct {
 	// no-new-privs).
 	Security *TemplateSecurity `json:"security,omitempty"`
 
+	// OutputCapture configures raw output capture for this sandbox.
+	// When non-nil and Enabled is true, the launcher passes capture-mode
+	// flags to bureau-log-relay in the sandbox script, enabling PTY
+	// interposition and output delta streaming to the telemetry relay.
+	// When nil or Enabled is false, the log relay runs in passthrough
+	// mode with no interposition overhead.
+	OutputCapture *OutputCapture `json:"output_capture,omitempty"`
+
 	// EnvironmentVariables is the complete set of environment variables
 	// for the sandbox process, after merging template variables with
 	// PrincipalAssignment.ExtraEnvironmentVariables. Variable references

@@ -383,6 +383,16 @@ type TemplateContent struct {
 	// unit). When nil, no health monitoring is performed.
 	HealthCheck *HealthCheck `json:"health_check,omitempty"`
 
+	// OutputCapture configures raw output capture for principals
+	// created from this template. When enabled, bureau-log-relay
+	// interposes a PTY between the sandboxed process and tmux, tees
+	// all output to the telemetry relay as OutputDelta CBOR messages,
+	// and passes stdin through transparently. During template
+	// inheritance, child OutputCapture replaces parent OutputCapture
+	// entirely (same semantics as HealthCheck — the parameters form
+	// a coherent unit). When nil, output capture is disabled.
+	OutputCapture *OutputCapture `json:"output_capture,omitempty"`
+
 	// ProxyServices declares external HTTP API upstreams that the proxy
 	// should be configured to forward. The daemon registers these on
 	// the principal's proxy after sandbox creation, enabling credential
@@ -429,6 +439,35 @@ type TemplateProxyService struct {
 	// before forwarding. Use this to prevent agents from injecting
 	// their own authentication headers.
 	StripHeaders []string `json:"strip_headers,omitempty"`
+}
+
+// OutputCapture configures raw output capture for a principal's
+// sandbox. When enabled, bureau-log-relay interposes a PTY between the
+// sandboxed process and tmux, tees all output to the telemetry relay as
+// OutputDelta CBOR messages, and passes stdin through transparently.
+// The captured output is streamed live (tailable through the telemetry
+// service) and stored as CAS artifacts for historical reconstruction.
+//
+// During template inheritance, child OutputCapture replaces parent
+// OutputCapture entirely (no field-level merge — the parameters form a
+// coherent unit, same as HealthCheck, Resources, and Security).
+type OutputCapture struct {
+	// Enabled activates output capture. When false (or when
+	// OutputCapture is nil on the template), the log relay runs in
+	// passthrough mode with no PTY interposition.
+	Enabled bool `json:"enabled"`
+
+	// Retention is a hint to the telemetry service's eviction policy
+	// for how long to keep captured output (e.g., "7d", "24h").
+	// The telemetry service may enforce fleet-wide limits that
+	// override this. Empty means use the fleet default.
+	Retention string `json:"retention,omitempty"`
+
+	// MaxSize is a hint to the telemetry service for the maximum
+	// stored output size (e.g., "1GB", "500MB"). The telemetry
+	// service may enforce fleet-wide limits. Empty means use the
+	// fleet default.
+	MaxSize string `json:"max_size,omitempty"`
 }
 
 // HealthCheckType selects the transport for health check probes.

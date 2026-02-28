@@ -300,7 +300,7 @@ func (l *Launcher) handleCreateSandbox(ctx context.Context, request *IPCRequest)
 	// principal without a bwrap sandbox).
 	var sandboxCommand []string
 	if request.SandboxSpec != nil {
-		sandboxCmd, setupErr := l.buildSandboxCommand(request.Principal, request.SandboxSpec, request.TriggerContent, request.ServiceMounts, request.TokenDirectory)
+		sandboxCmd, setupErr := l.buildSandboxCommand(request.Principal, request.SandboxSpec, request.TriggerContent, request.ServiceMounts, request.TokenDirectory, request.TelemetrySocketPath, request.TelemetryTokenPath)
 		if setupErr != nil {
 			l.logger.Error("sandbox setup failed, rolling back proxy",
 				"principal", request.Principal, "error", setupErr)

@@ -173,6 +173,17 @@ Integration tests must pass before every commit. Run them after any change to:
 daemon, launcher, proxy, messaging, pipeline executor, workspace handling,
 observation, templates, schema, or bootstrap logic. When in doubt, run them.
 
+**Tests must verify real behavior.** The purpose of a test is to prove that the
+production code path works. A test that mocks the very thing it claims to verify
+is not a test — it is a tautology that will stay green while production breaks.
+If the integration test for ticket creation does not call the same API that a
+real agent would call, it is not testing ticket creation. If a unit test stubs
+out the function under test and only asserts the stub, it asserts nothing.
+Prefer integration tests over mocks where feasible. When mocks are necessary,
+mock the *dependency*, never the *subject*. If a test is hard to write without
+mocking the subject, the code's interfaces need improvement — fix the interfaces,
+do not paper over them with mocks.
+
 ## Diagnosing runtime failures
 
 When a test fails, hangs, or produces unexpected behavior:
@@ -197,6 +208,32 @@ Make small changes and run tests after each one. Do not batch large sets
 of changes (new types, new methods, rewritten helpers, updated callers)
 and run the test for the first time only after all of it. Each change
 should be validated before the next one builds on it.
+
+## Streaming and incremental correctness
+
+Bureau processes data incrementally across many subsystems: observation relays
+stream terminal output, telemetry flows through collection pipelines, Matrix
+/sync delivers events as a long-poll stream, pipeline executors report progress
+incrementally, and artifact chunking processes data in CDC windows.
+
+When a system has both a batch path and a streaming/incremental path, the
+incremental path must be as correct as the batch path. This is non-negotiable.
+Specific implications:
+
+- **No buffering where streaming is expected.** If the API contract is streaming,
+  the implementation must stream. Buffering the entire input and then emitting it
+  at once defeats the purpose and breaks backpressure, latency guarantees, and
+  memory bounds. If you find yourself adding a buffer to "simplify" a streaming
+  path, the implementation is wrong.
+- **Partial results must be correct.** An incremental system that produces
+  correct output only after seeing all input is a batch system wearing a
+  streaming costume. Every prefix of the output must be a valid partial result
+  at every point during processing.
+- **No silent truncation.** If a streaming path cannot handle the input (too
+  large, unsupported feature, resource exhaustion), it must fail explicitly, not
+  silently produce a truncated result that looks correct. A failed query that
+  says it failed is infinitely more useful than a truncated result that looks
+  complete.
 
 ## Security principles
 

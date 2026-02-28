@@ -4,15 +4,23 @@
 package integration_test
 
 import (
+	"bytes"
+	"encoding/json"
 	"fmt"
+	"io"
 	"net"
 	"testing"
 
+	"github.com/bureau-foundation/bureau/lib/artifactstore"
 	"github.com/bureau-foundation/bureau/lib/codec"
 	"github.com/bureau-foundation/bureau/lib/ref"
+	"github.com/bureau-foundation/bureau/lib/schema"
+	"github.com/bureau-foundation/bureau/lib/schema/artifact"
+	"github.com/bureau-foundation/bureau/lib/schema/log"
 	"github.com/bureau-foundation/bureau/lib/schema/telemetry"
 	"github.com/bureau-foundation/bureau/lib/service"
 	"github.com/bureau-foundation/bureau/lib/servicetoken"
+	"github.com/bureau-foundation/bureau/lib/testutil"
 )
 
 // --- Wire protocol types for streaming telemetry actions ---
@@ -41,18 +49,6 @@ type telemetryMockSubscribeFrame struct {
 	Metrics      []telemetry.MetricPoint `cbor:"metrics,omitempty"`
 	Logs         []telemetry.LogRecord   `cbor:"logs,omitempty"`
 	OutputDeltas []telemetry.OutputDelta `cbor:"output_deltas,omitempty"`
-}
-
-// telemetryServiceStatus mirrors the telemetry service's CBOR status
-// response. Defined locally in the test file — standard pattern.
-type telemetryServiceStatus struct {
-	BatchesReceived      uint64  `cbor:"batches_received"`
-	SpansReceived        uint64  `cbor:"spans_received"`
-	MetricsReceived      uint64  `cbor:"metrics_received"`
-	LogsReceived         uint64  `cbor:"logs_received"`
-	OutputDeltasReceived uint64  `cbor:"output_deltas_received"`
-	ConnectedRelays      int     `cbor:"connected_relays"`
-	UptimeSeconds        float64 `cbor:"uptime_seconds"`
 }
 
 // openTelemetryStream dials a Unix socket, sends the CBOR streaming
@@ -91,6 +87,18 @@ func openTelemetryStream(t *testing.T, socketPath, action string, token []byte) 
 	}
 
 	return conn
+}
+
+// queryTelemetryStatus queries the telemetry service's unauthenticated
+// status endpoint and returns the parsed response.
+func queryTelemetryStatus(t *testing.T, socketPath string) telemetry.ServiceStatus {
+	t.Helper()
+	client := service.NewServiceClientFromToken(socketPath, nil)
+	var status telemetry.ServiceStatus
+	if err := client.Call(t.Context(), "status", nil, &status); err != nil {
+		t.Fatalf("telemetry status call: %v", err)
+	}
+	return status
 }
 
 // TestTelemetryServiceTail exercises the production telemetry service's
@@ -251,7 +259,7 @@ func TestTelemetryServiceTail(t *testing.T) {
 
 	// Verify the service's status endpoint reflects the ingested data.
 	unauthClient := service.NewServiceClientFromToken(telemetrySvc.SocketPath, nil)
-	var status telemetryServiceStatus
+	var status telemetry.ServiceStatus
 	if err := unauthClient.Call(t.Context(), "status", nil, &status); err != nil {
 		t.Fatalf("status after ingest: %v", err)
 	}
@@ -683,4 +691,286 @@ func summarizeSpans(spans []telemetry.Span) string {
 		result += fmt.Sprintf("%s[action=%s,status=%d]", span.Operation, action, span.Status)
 	}
 	return result
+}
+
+// TestTelemetryOutputDeltaPersistence exercises the full output delta
+// persistence pipeline: ingest → log manager → artifact store → m.bureau.log
+// state event. Verifies:
+//   - Output deltas exceeding the 1 MB chunk threshold trigger an immediate
+//     flush to the artifact service
+//   - The m.bureau.log state event appears in the machine config room with
+//     correct session, source, and chunk metadata
+//   - The artifact content matches the original delta data
+//   - The complete-log action transitions the log entity to "complete"
+func TestTelemetryOutputDeltaPersistence(t *testing.T) {
+	t.Parallel()
+
+	admin := adminSession(t)
+	defer admin.Close()
+	fleet := createTestFleet(t, admin)
+	ctx := t.Context()
+
+	machine := newTestMachine(t, fleet, "logpersist")
+	startMachine(t, admin, machine, machineOptions{
+		LauncherBinary: resolvedBinary(t, "LAUNCHER_BINARY"),
+		DaemonBinary:   resolvedBinary(t, "DAEMON_BINARY"),
+		ProxyBinary:    resolvedBinary(t, "PROXY_BINARY"),
+		Fleet:          fleet,
+	})
+
+	// --- Deploy the artifact service ---
+
+	artifactBinary := testutil.DataBinary(t, "ARTIFACT_SERVICE_BINARY")
+	artifactSvc := deployService(t, admin, fleet, machine, serviceDeployOptions{
+		Binary:    artifactBinary,
+		Name:      "artifact-logtest",
+		Localpart: "service/artifact/logtest",
+		Command:   []string{artifactBinary, "--store-dir", "/tmp/artifacts"},
+	})
+
+	// Publish the artifact service binding so the daemon resolves
+	// RequiredServices: ["artifact"] to this service's socket.
+	if _, err := admin.SendStateEvent(ctx, machine.ConfigRoomID,
+		schema.EventTypeServiceBinding, "artifact",
+		schema.ServiceBindingContent{Principal: artifactSvc.Entity}); err != nil {
+		t.Fatalf("publish artifact service binding: %v", err)
+	}
+
+	// --- Deploy the telemetry service with artifact dependency ---
+
+	telemetrySvc := deployService(t, admin, fleet, machine, serviceDeployOptions{
+		Binary:           resolvedBinary(t, "TELEMETRY_SERVICE_BINARY"),
+		Name:             "telemetry-logtest",
+		Localpart:        "service/telemetry/logtest",
+		RequiredServices: []string{"artifact"},
+		Authorization: &schema.AuthorizationPolicy{
+			Grants: []schema.Grant{
+				{Actions: []string{artifact.ActionStore}},
+			},
+		},
+	})
+
+	// Publish the telemetry service binding so daemon routes
+	// telemetry to this service.
+	if _, err := admin.SendStateEvent(ctx, machine.ConfigRoomID,
+		schema.EventTypeServiceBinding, "telemetry",
+		schema.ServiceBindingContent{Principal: telemetrySvc.Entity}); err != nil {
+		t.Fatalf("publish telemetry service binding: %v", err)
+	}
+
+	// --- Verify artifact persistence is active ---
+
+	// Query the telemetry service status to confirm that the artifact
+	// client was successfully created inside the sandbox. If this is
+	// false, the bind-mount of the artifact socket or token into the
+	// telemetry sandbox failed and all persistence will be skipped.
+	telemetryStatus := queryTelemetryStatus(t, telemetrySvc.SocketPath)
+	if !telemetryStatus.ArtifactPersistence {
+		t.Fatal("telemetry service started without artifact persistence — artifact socket or token not available inside sandbox")
+	}
+
+	// --- Mint tokens ---
+
+	callerEntity, err := ref.NewEntityFromAccountLocalpart(fleet.Ref, "agent/logtest-caller")
+	if err != nil {
+		t.Fatalf("construct caller entity: %v", err)
+	}
+
+	ingestToken := mintTestServiceToken(t, machine, callerEntity, "telemetry",
+		[]servicetoken.Grant{{Actions: []string{"telemetry/ingest"}}})
+
+	artifactFetchToken := mintTestServiceToken(t, machine, callerEntity, "artifact",
+		[]servicetoken.Grant{{Actions: []string{artifact.ActionFetch}}})
+
+	// --- Send output deltas exceeding the 1 MB chunk threshold ---
+
+	// Build a 1.1 MB payload. This exceeds the log manager's default
+	// chunkSizeThreshold (1 MB), triggering an immediate synchronous
+	// flush within HandleDeltas. By the time the batch ack returns,
+	// the artifact is stored and the state event is written.
+	const payloadSize = 1_100_000
+	deltaData := bytes.Repeat([]byte("output-persistence-test\n"), payloadSize/24+1)
+	deltaData = deltaData[:payloadSize]
+
+	sessionID := "logtest-session-001"
+
+	ingestConn := openTelemetryStream(t, telemetrySvc.SocketPath, "ingest", ingestToken)
+	ingestEncoder := codec.NewEncoder(ingestConn)
+	ingestDecoder := codec.NewDecoder(ingestConn)
+
+	batch := telemetry.TelemetryBatch{
+		Fleet:          fleet.Ref,
+		Machine:        machine.Ref,
+		SequenceNumber: 1,
+		OutputDeltas: []telemetry.OutputDelta{{
+			Fleet:     fleet.Ref,
+			Machine:   machine.Ref,
+			Source:    callerEntity,
+			SessionID: sessionID,
+			Sequence:  0,
+			Stream:    telemetry.OutputStreamCombined,
+			Timestamp: 1000000000,
+			Data:      deltaData,
+		}},
+	}
+
+	if err := ingestEncoder.Encode(batch); err != nil {
+		t.Fatalf("send ingest batch: %v", err)
+	}
+
+	var batchAck telemetry.StreamAck
+	if err := ingestDecoder.Decode(&batchAck); err != nil {
+		t.Fatalf("read ingest batch ack: %v", err)
+	}
+	if !batchAck.OK {
+		t.Fatalf("ingest batch ack rejected: %s", batchAck.Error)
+	}
+
+	// --- Verify the log manager stats after ingestion ---
+
+	postIngestStatus := queryTelemetryStatus(t, telemetrySvc.SocketPath)
+	t.Logf("post-ingest status: batches=%d output_deltas=%d log_manager=%+v",
+		postIngestStatus.BatchesReceived,
+		postIngestStatus.OutputDeltasReceived,
+		postIngestStatus.LogManager)
+
+	if postIngestStatus.LogManager.FlushErrors > 0 {
+		t.Fatalf("log manager had %d flush errors (store_errors=%d, state_event_errors=%d, room_resolution_errors=%d, last_error=%q)",
+			postIngestStatus.LogManager.FlushErrors,
+			postIngestStatus.LogManager.StoreErrors,
+			postIngestStatus.LogManager.StateEventErrors,
+			postIngestStatus.LogManager.RoomResolutionErrors,
+			postIngestStatus.LogManager.LastError)
+	}
+	if postIngestStatus.LogManager.FlushCount == 0 {
+		t.Fatal("log manager flush_count is 0 — HandleDeltas did not trigger a flush despite exceeding the 1 MB threshold")
+	}
+	if postIngestStatus.LogManager.StoreCount == 0 {
+		t.Fatal("log manager store_count is 0 — artifact store was never called")
+	}
+
+	// --- Verify the m.bureau.log state event ---
+
+	// HandleDeltas flushes synchronously when the buffer exceeds the
+	// threshold, so by the time we receive the ack the state event
+	// should be persisted. Read it directly from the config room.
+	rawLogContent, err := admin.GetStateEvent(ctx, machine.ConfigRoomID, log.EventTypeLog, sessionID)
+	if err != nil {
+		t.Fatalf("read m.bureau.log state event: %v", err)
+	}
+
+	var logContent log.LogContent
+	if err := json.Unmarshal(rawLogContent, &logContent); err != nil {
+		t.Fatalf("unmarshal log content: %v", err)
+	}
+
+	if logContent.Version != log.LogContentVersion {
+		t.Errorf("log version = %d, want %d", logContent.Version, log.LogContentVersion)
+	}
+	if logContent.SessionID != sessionID {
+		t.Errorf("log session_id = %q, want %q", logContent.SessionID, sessionID)
+	}
+	if logContent.Source.IsZero() {
+		t.Error("log source is zero")
+	}
+	if logContent.Format != log.LogFormatRaw {
+		t.Errorf("log format = %q, want %q", logContent.Format, log.LogFormatRaw)
+	}
+	if logContent.Status != log.LogStatusActive {
+		t.Errorf("log status = %q, want %q", logContent.Status, log.LogStatusActive)
+	}
+	if logContent.TotalBytes != int64(payloadSize) {
+		t.Errorf("log total_bytes = %d, want %d", logContent.TotalBytes, payloadSize)
+	}
+	if length := len(logContent.Chunks); length != 1 {
+		t.Fatalf("log chunks length = %d, want 1", length)
+	}
+
+	chunk := logContent.Chunks[0]
+	if chunk.Ref == "" {
+		t.Fatal("chunk ref is empty")
+	}
+	if chunk.Size != int64(payloadSize) {
+		t.Errorf("chunk size = %d, want %d", chunk.Size, payloadSize)
+	}
+	if chunk.Timestamp != 1000000000 {
+		t.Errorf("chunk timestamp = %d, want 1000000000", chunk.Timestamp)
+	}
+
+	// --- Fetch the artifact and verify content ---
+
+	artifactClient := artifactstore.NewClientFromToken(artifactSvc.SocketPath, artifactFetchToken)
+
+	fetchResult, err := artifactClient.Fetch(ctx, chunk.Ref)
+	if err != nil {
+		t.Fatalf("fetch artifact %s: %v", chunk.Ref, err)
+	}
+	defer fetchResult.Content.Close()
+
+	fetchedData, err := io.ReadAll(fetchResult.Content)
+	if err != nil {
+		t.Fatalf("read artifact content: %v", err)
+	}
+
+	if !bytes.Equal(fetchedData, deltaData) {
+		t.Errorf("artifact content mismatch: got %d bytes, want %d bytes", len(fetchedData), len(deltaData))
+		if len(fetchedData) > 0 && len(deltaData) > 0 {
+			// Show first divergence for diagnostics.
+			for index := 0; index < len(fetchedData) && index < len(deltaData); index++ {
+				if fetchedData[index] != deltaData[index] {
+					t.Errorf("first divergence at byte %d: got 0x%02x, want 0x%02x",
+						index, fetchedData[index], deltaData[index])
+					break
+				}
+			}
+		}
+	}
+
+	// --- Call complete-log and verify status transition ---
+
+	completeLogToken := mintTestServiceToken(t, machine, callerEntity, "telemetry",
+		[]servicetoken.Grant{{Actions: []string{"telemetry/ingest"}}})
+	telemetryClient := service.NewServiceClientFromToken(telemetrySvc.SocketPath, completeLogToken)
+
+	var completeResponse telemetry.CompleteLogResponse
+	if err := telemetryClient.Call(ctx, "complete-log", telemetry.CompleteLogRequest{
+		Source:    callerEntity.Localpart(),
+		SessionID: sessionID,
+	}, &completeResponse); err != nil {
+		t.Fatalf("complete-log call: %v", err)
+	}
+	if !completeResponse.Completed {
+		t.Error("complete-log response: completed = false, want true")
+	}
+
+	// Re-read the state event and verify status transitioned.
+	rawLogContent, err = admin.GetStateEvent(ctx, machine.ConfigRoomID, log.EventTypeLog, sessionID)
+	if err != nil {
+		t.Fatalf("re-read m.bureau.log state event after complete: %v", err)
+	}
+
+	var completedLogContent log.LogContent
+	if err := json.Unmarshal(rawLogContent, &completedLogContent); err != nil {
+		t.Fatalf("unmarshal completed log content: %v", err)
+	}
+
+	if completedLogContent.Status != log.LogStatusComplete {
+		t.Errorf("completed log status = %q, want %q", completedLogContent.Status, log.LogStatusComplete)
+	}
+	if completedLogContent.TotalBytes != int64(payloadSize) {
+		t.Errorf("completed log total_bytes = %d, want %d", completedLogContent.TotalBytes, payloadSize)
+	}
+	if length := len(completedLogContent.Chunks); length != 1 {
+		t.Errorf("completed log chunks length = %d, want 1", length)
+	}
+
+	// Verify status endpoint reflects the output delta count.
+	unauthClient := service.NewServiceClientFromToken(telemetrySvc.SocketPath, nil)
+	var status telemetry.ServiceStatus
+	if err := unauthClient.Call(ctx, "status", nil, &status); err != nil {
+		t.Fatalf("status call: %v", err)
+	}
+	if status.OutputDeltasReceived != 1 {
+		t.Errorf("output_deltas_received = %d, want 1", status.OutputDeltasReceived)
+	}
 }

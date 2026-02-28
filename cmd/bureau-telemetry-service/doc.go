@@ -4,8 +4,9 @@
 // Bureau-telemetry-service is the fleet-wide telemetry aggregation
 // service. It receives CBOR-encoded [telemetry.TelemetryBatch]
 // messages from per-machine relays over streaming connections, verifies
-// service tokens, and logs ingestion statistics. A local Unix socket
-// serves both the streaming ingestion and CBOR query actions.
+// service tokens, persists output deltas as CAS artifacts, and tracks
+// them in m.bureau.log state events. A local Unix socket serves
+// streaming ingestion, query, and session lifecycle actions.
 //
 // The service uses [service.BootstrapViaProxy] with audience "telemetry"
 // and registers in the fleet service directory so relays can discover
@@ -15,9 +16,20 @@
 //
 // The service runs inside a daemon-managed sandbox with a proxy that
 // injects Matrix credentials. It resolves the fleet service room for
-// discovery, registers itself, and starts the Unix socket server with
-// the "ingest" stream handler, the "tail" stream handler, and the
-// "status" query handler.
+// discovery, registers itself, creates an artifact store client for
+// output persistence, and starts the Unix socket server.
+//
+// # Output Delta Persistence
+//
+// OutputDelta messages (raw terminal bytes from sandboxed processes)
+// are buffered per-session and flushed to the artifact store either
+// when the buffer exceeds 1 MB or on a 10-second periodic timer. Each
+// flush stores a CAS artifact and updates the session's m.bureau.log
+// state event in the source's machine config room.
+//
+// Sessions transition through lifecycle states: active (receiving
+// deltas), complete (sandbox exited, all data flushed), or rotating
+// (long-lived service with chunk eviction).
 //
 // # Ingestion Protocol
 //
@@ -25,9 +37,10 @@
 // After the initial CBOR handshake (action + service token), the
 // service sends a readiness ack. The relay then streams TelemetryBatch
 // CBOR values on the connection. The service decodes each batch,
-// updates stats, fans out to tail subscribers, and sends a per-batch
-// ack. The connection stays open until the relay disconnects or the
-// service shuts down.
+// routes output deltas to the log manager for persistence, updates
+// stats, fans out to tail subscribers, and sends a per-batch ack. The
+// connection stays open until the relay disconnects or the service
+// shuts down.
 //
 // # Tail Protocol
 //
@@ -43,11 +56,13 @@
 // # Socket API
 //
 // The CLI and agents connect to the service's Unix socket and send
-// CBOR requests. Currently supports:
+// CBOR requests. Supported actions:
 //
 //   - ingest (authenticated, streaming): relay batch ingestion
 //   - tail (authenticated, streaming): live telemetry subscription
 //     with dynamic glob-pattern source filtering
+//   - complete-log (authenticated): flush remaining output and mark
+//     a session's log entity as complete
 //   - status (unauthenticated): ingestion stats, connected relay
 //     count, uptime
 package main

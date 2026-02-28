@@ -1,0 +1,52 @@
+// Copyright 2026 The Bureau Authors
+// SPDX-License-Identifier: Apache-2.0
+
+package telemetry
+
+// ServiceStatus is the CBOR response for the telemetry service's
+// unauthenticated "status" action. Contains only aggregate operational
+// metrics — no fleet, machine, or source identifiers that could
+// disclose topology.
+type ServiceStatus struct {
+	BatchesReceived      uint64          `cbor:"batches_received"`
+	SpansReceived        uint64          `cbor:"spans_received"`
+	MetricsReceived      uint64          `cbor:"metrics_received"`
+	LogsReceived         uint64          `cbor:"logs_received"`
+	OutputDeltasReceived uint64          `cbor:"output_deltas_received"`
+	ConnectedRelays      int             `cbor:"connected_relays"`
+	UptimeSeconds        float64         `cbor:"uptime_seconds"`
+	ArtifactPersistence  bool            `cbor:"artifact_persistence"`
+	LogManager           LogManagerStats `cbor:"log_manager"`
+}
+
+// LogManagerStats contains operational counters for the log manager's
+// output delta persistence pipeline. Exposed via ServiceStatus so
+// operators and tests can verify the health of artifact storage and
+// state event writes.
+type LogManagerStats struct {
+	FlushCount           uint64 `cbor:"flush_count"`
+	FlushErrors          uint64 `cbor:"flush_errors"`
+	StoreCount           uint64 `cbor:"store_count"`
+	StoreErrors          uint64 `cbor:"store_errors"`
+	StateEventWrites     uint64 `cbor:"state_event_writes"`
+	StateEventErrors     uint64 `cbor:"state_event_errors"`
+	RoomResolutionErrors uint64 `cbor:"room_resolution_errors"`
+	ActiveSessions       int    `cbor:"active_sessions"`
+	LastError            string `cbor:"last_error,omitempty"`
+}
+
+// CompleteLogRequest is the CBOR request for the telemetry service's
+// "complete-log" action. Called by the daemon when a sandbox exits
+// to flush remaining output and mark the log entity as complete.
+type CompleteLogRequest struct {
+	Source    string `cbor:"source"`
+	SessionID string `cbor:"session_id"`
+}
+
+// CompleteLogResponse is the CBOR response for the "complete-log"
+// action. Completed is true if the session was flushed and
+// transitioned to complete, or was already complete / never existed
+// (idempotent).
+type CompleteLogResponse struct {
+	Completed bool `cbor:"completed"`
+}

@@ -6,16 +6,22 @@ package main
 import (
 	"context"
 	"flag"
+	"fmt"
 	"log/slog"
+	"os"
 	"os/signal"
 	"sync"
 	"sync/atomic"
 	"syscall"
 	"time"
 
+	"github.com/bureau-foundation/bureau/lib/artifactstore"
 	"github.com/bureau-foundation/bureau/lib/clock"
+	"github.com/bureau-foundation/bureau/lib/codec"
 	"github.com/bureau-foundation/bureau/lib/process"
+	"github.com/bureau-foundation/bureau/lib/schema/telemetry"
 	"github.com/bureau-foundation/bureau/lib/service"
+	"github.com/bureau-foundation/bureau/lib/servicetoken"
 	"github.com/bureau-foundation/bureau/lib/version"
 )
 
@@ -47,17 +53,40 @@ func run() error {
 	}
 	defer cleanup()
 
+	// Set up the artifact client for output delta persistence.
+	// If the artifact service socket doesn't exist (service not
+	// deployed), log a warning and run without persistence.
+	var artifactClient artifactStorer
+	artifactClient, err = createArtifactClient(boot.Logger)
+	if err != nil {
+		boot.Logger.Warn("artifact service not available, output persistence disabled",
+			"error", err,
+		)
+		artifactClient = nil
+	}
+
+	logMgr := newLogManager(artifactClient, boot.Session, boot.Clock, boot.Logger)
+
 	telemetryService := &TelemetryService{
-		authConfig: boot.AuthConfig,
-		clock:      boot.Clock,
-		logger:     boot.Logger,
-		startedAt:  boot.Clock.Now(),
+		authConfig:          boot.AuthConfig,
+		clock:               boot.Clock,
+		logger:              boot.Logger,
+		startedAt:           boot.Clock.Now(),
+		artifactPersistence: artifactClient != nil,
+		logManager:          logMgr,
 	}
 
 	// Start the CBOR socket server with ingestion and query actions.
 	socketServer := boot.NewSocketServer()
 	socketServer.RegisterRevocationHandler()
 	telemetryService.registerActions(socketServer)
+
+	// Start the log manager's background flush and reaper tickers.
+	logManagerDone := make(chan struct{})
+	go func() {
+		logMgr.Run(ctx)
+		close(logManagerDone)
+	}()
 
 	socketDone := make(chan error, 1)
 	go func() {
@@ -67,6 +96,7 @@ func run() error {
 	boot.Logger.Info("telemetry service running",
 		"principal", boot.PrincipalName,
 		"socket", boot.SocketPath,
+		"artifact_persistence", artifactClient != nil,
 	)
 
 	// Wait for shutdown signal.
@@ -79,7 +109,41 @@ func run() error {
 		boot.Logger.Error("socket server error", "error", err)
 	}
 
+	// Wait for the log manager's background goroutines to stop.
+	<-logManagerDone
+
+	// Drain remaining output buffers.
+	logMgr.Close(context.Background())
+
 	return nil
+}
+
+// Artifact service socket paths, set by the daemon when the telemetry
+// service template includes RequiredServices: ["artifact"].
+const (
+	artifactSocketPath = "/run/bureau/service/artifact.sock"
+	artifactTokenPath  = "/run/bureau/service/token/artifact.token"
+)
+
+// createArtifactClient creates an authenticated artifact store client.
+// Returns an error if the socket or token file doesn't exist.
+func createArtifactClient(logger *slog.Logger) (*artifactstore.Client, error) {
+	if _, err := os.Stat(artifactSocketPath); err != nil {
+		return nil, fmt.Errorf("artifact socket not found: %w", err)
+	}
+	if _, err := os.Stat(artifactTokenPath); err != nil {
+		return nil, fmt.Errorf("artifact token not found: %w", err)
+	}
+
+	client, err := artifactstore.NewClient(artifactSocketPath, artifactTokenPath)
+	if err != nil {
+		return nil, fmt.Errorf("creating artifact client: %w", err)
+	}
+
+	logger.Info("artifact client ready",
+		"socket", artifactSocketPath,
+	)
+	return client, nil
 }
 
 // TelemetryService is the core state for the telemetry aggregation
@@ -94,6 +158,19 @@ type TelemetryService struct {
 	clock      clock.Clock
 	logger     *slog.Logger
 	startedAt  time.Time
+
+	// artifactPersistence records whether the artifact client was
+	// successfully created at startup. Exposed via the status
+	// endpoint so operators and tests can verify that output delta
+	// persistence is active.
+	artifactPersistence bool
+
+	// logManager handles output delta persistence: buffering,
+	// artifact storage, and m.bureau.log state event tracking.
+	// Always non-nil; when the artifact service is unavailable,
+	// the manager's internal artifact client is nil and
+	// HandleDeltas returns early without storing anything.
+	logManager *logManager
 
 	// Ingestion counters, updated atomically by ingest stream handlers.
 	batchesReceived      atomic.Uint64
@@ -114,19 +191,6 @@ type TelemetryService struct {
 	tailSubscribers []*tailSubscriber
 }
 
-// statusResponse is the CBOR response for the unauthenticated "status"
-// action. Contains only aggregate operational metrics — no fleet, machine,
-// or source identifiers that could disclose topology.
-type statusResponse struct {
-	BatchesReceived      uint64  `cbor:"batches_received"`
-	SpansReceived        uint64  `cbor:"spans_received"`
-	MetricsReceived      uint64  `cbor:"metrics_received"`
-	LogsReceived         uint64  `cbor:"logs_received"`
-	OutputDeltasReceived uint64  `cbor:"output_deltas_received"`
-	ConnectedRelays      int     `cbor:"connected_relays"`
-	UptimeSeconds        float64 `cbor:"uptime_seconds"`
-}
-
 // registerActions registers the service's socket actions on the server.
 func (s *TelemetryService) registerActions(server *service.SocketServer) {
 	// Unauthenticated liveness and stats endpoint.
@@ -139,6 +203,11 @@ func (s *TelemetryService) registerActions(server *service.SocketServer) {
 	// Clients subscribe to source patterns and receive matching
 	// batches as they are ingested.
 	server.HandleAuthStream("tail", s.handleTail)
+
+	// Authenticated session completion. Called by the daemon when
+	// a sandbox exits to flush remaining output and mark the log
+	// entity as complete.
+	server.HandleAuth("complete-log", s.handleCompleteLog)
 }
 
 // handleStatus returns aggregate ingestion stats. This is the only
@@ -149,7 +218,7 @@ func (s *TelemetryService) handleStatus(_ context.Context, _ []byte) (any, error
 	relays := s.connectedRelays
 	s.relayMu.Unlock()
 
-	return statusResponse{
+	return telemetry.ServiceStatus{
 		BatchesReceived:      s.batchesReceived.Load(),
 		SpansReceived:        s.spansReceived.Load(),
 		MetricsReceived:      s.metricsReceived.Load(),
@@ -157,5 +226,40 @@ func (s *TelemetryService) handleStatus(_ context.Context, _ []byte) (any, error
 		OutputDeltasReceived: s.outputDeltasReceived.Load(),
 		ConnectedRelays:      relays,
 		UptimeSeconds:        s.clock.Now().Sub(s.startedAt).Seconds(),
+		ArtifactPersistence:  s.artifactPersistence,
+		LogManager:           s.logManager.Stats(),
 	}, nil
+}
+
+// handleCompleteLog flushes remaining output for a session and
+// transitions its m.bureau.log entity to "complete". Called by the
+// daemon when a sandbox exits. Idempotent — returns success if the
+// session was already completed or never existed.
+func (s *TelemetryService) handleCompleteLog(ctx context.Context, token *servicetoken.Token, raw []byte) (any, error) {
+	if !servicetoken.GrantsAllow(token.Grants, "telemetry/ingest", "") {
+		return nil, fmt.Errorf("access denied: missing grant for telemetry/ingest")
+	}
+
+	var request telemetry.CompleteLogRequest
+	if err := codec.Unmarshal(raw, &request); err != nil {
+		return nil, fmt.Errorf("decoding complete-log request: %w", err)
+	}
+	if request.Source == "" {
+		return nil, fmt.Errorf("source is required")
+	}
+	if request.SessionID == "" {
+		return nil, fmt.Errorf("session_id is required")
+	}
+
+	if err := s.logManager.CompleteLog(ctx, request.Source, request.SessionID); err != nil {
+		return nil, fmt.Errorf("completing log: %w", err)
+	}
+
+	s.logger.Info("log session completed",
+		"source", request.Source,
+		"session_id", request.SessionID,
+		"subject", token.Subject,
+	)
+
+	return telemetry.CompleteLogResponse{Completed: true}, nil
 }

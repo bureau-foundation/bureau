@@ -141,6 +141,11 @@ func (s *TelemetryService) handleIngest(ctx context.Context, token *servicetoken
 			"output_deltas", outputDeltaCount,
 		)
 
+		// Route output deltas to the log manager for persistence.
+		if len(batch.OutputDeltas) > 0 && s.logManager != nil {
+			s.logManager.HandleDeltas(ctx, batch.OutputDeltas)
+		}
+
 		// Acknowledge the batch so the relay can pop it from its
 		// outbound buffer.
 		if err := encoder.Encode(telemetry.StreamAck{OK: true}); err != nil {

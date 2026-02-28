@@ -16,8 +16,9 @@ import (
 // existing code must not silently drop during read-modify-write.
 const ContextCommitVersion = 1
 
-// EventTypeAgentContextCommit tracks individual context snapshots in
-// an agent's understanding chain. Each commit holds metadata about a
+// EventTypeAgentContextCommit is the event type identifier for context
+// commit metadata. Context commits track individual snapshots in an
+// agent's understanding chain. Each commit holds metadata about a
 // single delta (or compaction summary, or full snapshot) stored in the
 // artifact service, plus provenance linking it to a parent commit,
 // agent template, principal, and session.
@@ -26,8 +27,10 @@ const ContextCommitVersion = 1
 // commits. The full conversation at any point is the concatenation of
 // all deltas from root to that commit.
 //
-// State key: ctx-* identifier (e.g., "ctx-a1b2c3d4")
-// Room: #<machine-localpart>:<server> (same as other agent events)
+// Commit metadata is stored as CBOR artifacts in the artifact service,
+// tagged as "ctx/<commitID>" (e.g., "ctx/ctx-a1b2c3d4"). The event
+// type constant is retained for schema identification and wire format
+// compatibility.
 const EventTypeAgentContextCommit ref.EventType = "m.bureau.agent_context_commit"
 
 // Context commit type constants. These describe the relationship
@@ -77,26 +80,28 @@ const (
 	CheckpointExplicit = "explicit"
 )
 
-// ContextCommitContent is the content of an EventTypeAgentContextCommit
-// state event. Each context commit is a node in an agent's understanding
-// chain: a delta artifact plus metadata linking it to its parent commit,
-// the agent template that produced it, and the runtime context in which
-// it was created.
+// ContextCommitContent is the metadata for a context commit. Each
+// context commit is a node in an agent's understanding chain: a delta
+// artifact plus metadata linking it to its parent commit, the agent
+// template that produced it, and the runtime context in which it was
+// created.
 //
-// The commit's delta artifact lives in the CAS (content-addressed
-// storage). This event holds only the artifact ref and enough metadata
-// for chain traversal, provenance tracking, and materialization.
+// Both the commit metadata and its delta artifact live in the CAS
+// (content-addressed storage). The metadata is stored as a CBOR
+// artifact tagged as "ctx/<commitID>"; the delta content is stored
+// separately and referenced by ArtifactRef.
 //
 // Summary is the one mutable field: it can be added or updated after
 // creation by a batch summarization service. All other fields are
-// immutable once written.
+// immutable once written. Metadata updates re-store the full content
+// and overwrite the tag.
 type ContextCommitContent struct {
 	// Version is the schema version (see ContextCommitVersion).
-	// Code that modifies this event must call CanModify() first; if
+	// Code that modifies a commit must call CanModify() first; if
 	// Version exceeds ContextCommitVersion, the modification is
 	// refused to prevent silent field loss. Readers may process any
-	// version (unknown fields are harmlessly ignored by Go's JSON
-	// unmarshaler).
+	// version (unknown fields are harmlessly ignored by the CBOR
+	// decoder).
 	Version int `json:"version"`
 
 	// Parent is the ctx-* ID of the parent commit in the chain.
@@ -213,14 +218,14 @@ func (content *ContextCommitContent) Validate() error {
 }
 
 // CanModify checks whether this code version can safely perform a
-// read-modify-write cycle on this event. Returns nil if safe, or an
+// read-modify-write cycle on this commit. Returns nil if safe, or an
 // error explaining why modification would risk data loss.
 func (content *ContextCommitContent) CanModify() error {
 	if content.Version > ContextCommitVersion {
 		return fmt.Errorf(
 			"context commit version %d exceeds supported version %d: "+
 				"modification would lose fields added in newer versions; "+
-				"upgrade before modifying this event",
+				"upgrade before modifying this commit",
 			content.Version, ContextCommitVersion,
 		)
 	}

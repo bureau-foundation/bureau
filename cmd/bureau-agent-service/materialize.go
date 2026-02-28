@@ -71,7 +71,7 @@ func (agentService *AgentService) walkChain(
 			)
 		}
 
-		content, err := agentService.readContextCommit(ctx, currentID)
+		content, err := agentService.getCommit(ctx, currentID)
 		if err != nil {
 			return nil, err
 		}

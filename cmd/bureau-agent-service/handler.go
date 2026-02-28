@@ -6,6 +6,7 @@ package main
 import (
 	"context"
 	"fmt"
+	"io"
 	"sort"
 	"strings"
 
@@ -40,7 +41,7 @@ func (agentService *AgentService) registerActions(server *service.SocketServer) 
 	server.HandleAuth("show-context-commit", agentService.withReadLock(agentService.handleShowContextCommit))
 	server.HandleAuth("history-context", agentService.withReadLock(agentService.handleHistoryContext))
 	server.HandleAuth("update-context-metadata", agentService.withWriteLock(agentService.handleUpdateContextMetadata))
-	server.HandleAuth("resolve-context", agentService.withReadLock(agentService.handleResolveContext))
+	server.HandleAuth("resolve-context", agentService.withWriteLock(agentService.handleResolveContext))
 
 	// Authenticated metrics actions.
 	server.HandleAuth("get-metrics", agentService.withReadLock(agentService.handleGetMetrics))
@@ -769,16 +770,13 @@ func (agentService *AgentService) handleCheckpointContext(ctx context.Context, t
 		request.Parent, artifactRef, createdAt, request.Template,
 	)
 
-	if _, err := agentService.session.SendStateEvent(
-		ctx, agentService.configRoomID,
-		agent.EventTypeAgentContextCommit, commitID, &content,
-	); err != nil {
-		return nil, fmt.Errorf("writing context commit state: %w", err)
+	if err := agentService.storeCommitMetadata(ctx, commitID, &content); err != nil {
+		return nil, err
 	}
 
 	// Update the in-memory index so show-context-commit and
 	// resolve-context see the commit immediately without waiting
-	// for the sync loop to process the resulting state event.
+	// for a subsequent CAS fetch.
 	agentService.indexCommit(commitID, content)
 
 	agentService.logger.Info("context commit created",
@@ -968,30 +966,74 @@ func (agentService *AgentService) readMetricsState(ctx context.Context, principa
 	return &content, nil
 }
 
-// readContextCommit reads a single m.bureau.agent_context_commit state
-// event by its ctx-* ID. Unlike the per-principal state helpers above
-// (which return nil for missing events), this returns an error for
+// fetchCommitMetadata reads a context commit's metadata from the
+// artifact store by resolving its tag. Each context commit is stored
+// as a CBOR artifact tagged as "ctx/<commitID>". Returns an error for
 // missing commits — a missing commit in a chain is a broken chain,
 // never an expected "nothing here yet" case.
-func (agentService *AgentService) readContextCommit(ctx context.Context, commitID string) (*agent.ContextCommitContent, error) {
-	content, err := messaging.GetState[agent.ContextCommitContent](ctx, agentService.session, agentService.configRoomID, agent.EventTypeAgentContextCommit, commitID)
+func (agentService *AgentService) fetchCommitMetadata(ctx context.Context, commitID string) (*agent.ContextCommitContent, error) {
+	tagName := "ctx/" + commitID
+
+	resolved, err := agentService.artifactClient.Resolve(ctx, tagName)
 	if err != nil {
-		if messaging.IsMatrixError(err, messaging.ErrCodeNotFound) {
-			return nil, fmt.Errorf("context commit %q not found", commitID)
-		}
-		return nil, fmt.Errorf("reading context commit %q: %w", commitID, err)
+		return nil, fmt.Errorf("context commit %q not found: %w", commitID, err)
 	}
+
+	result, err := agentService.artifactClient.Fetch(ctx, resolved.Ref)
+	if err != nil {
+		return nil, fmt.Errorf("fetching context commit %q (ref %s): %w", commitID, resolved.Ref, err)
+	}
+	defer result.Content.Close()
+
+	data, err := io.ReadAll(result.Content)
+	if err != nil {
+		return nil, fmt.Errorf("reading context commit %q content: %w", commitID, err)
+	}
+
+	var content agent.ContextCommitContent
+	if err := codec.Unmarshal(data, &content); err != nil {
+		return nil, fmt.Errorf("decoding context commit %q: %w", commitID, err)
+	}
+
 	return &content, nil
 }
 
+// storeCommitMetadata serializes a ContextCommitContent to CBOR and
+// stores it as an artifact with a mutable tag. The tag name is
+// "ctx/<commitID>", using optimistic mode (last writer wins) so that
+// metadata updates (Summary changes) overwrite the previous version.
+func (agentService *AgentService) storeCommitMetadata(ctx context.Context, commitID string, content *agent.ContextCommitContent) error {
+	cborBytes, err := codec.Marshal(content)
+	if err != nil {
+		return fmt.Errorf("encoding context commit %s: %w", commitID, err)
+	}
+
+	header := &artifactstore.StoreHeader{
+		Action:      "store",
+		ContentType: "application/cbor",
+		Size:        int64(len(cborBytes)),
+		Data:        cborBytes,
+		Labels:      []string{"context-commit"},
+		Tag:         "ctx/" + commitID,
+	}
+
+	if _, err := agentService.artifactClient.Store(ctx, header, nil); err != nil {
+		return fmt.Errorf("storing context commit metadata %s: %w", commitID, err)
+	}
+
+	return nil
+}
+
 // getCommit reads a context commit by its ctx-* ID, checking the
-// in-memory index first and falling back to the Matrix API for commits
-// not yet seen by the sync loop.
+// in-memory index first and falling back to the artifact store for
+// commits not in the index. The index is populated write-through by
+// handleCheckpointContext; commits created before the service started
+// (or by other instances) are fetched from CAS on demand.
 func (agentService *AgentService) getCommit(ctx context.Context, commitID string) (*agent.ContextCommitContent, error) {
 	if content, exists := agentService.commitIndex[commitID]; exists {
 		return &content, nil
 	}
-	return agentService.readContextCommit(ctx, commitID)
+	return agentService.fetchCommitMetadata(ctx, commitID)
 }
 
 // --- Show context commit handler ---
@@ -1158,11 +1200,8 @@ func (agentService *AgentService) handleUpdateContextMetadata(ctx context.Contex
 
 	content.Summary = request.Summary
 
-	if _, err := agentService.session.SendStateEvent(
-		ctx, agentService.configRoomID,
-		agent.EventTypeAgentContextCommit, request.CommitID, content,
-	); err != nil {
-		return nil, fmt.Errorf("writing context commit state: %w", err)
+	if err := agentService.storeCommitMetadata(ctx, request.CommitID, content); err != nil {
+		return nil, err
 	}
 
 	// Update the in-memory index.
@@ -1194,7 +1233,7 @@ type resolveContextResponse struct {
 	CommitID string `cbor:"commit_id,omitempty"`
 }
 
-func (agentService *AgentService) handleResolveContext(_ context.Context, token *servicetoken.Token, raw []byte) (any, error) {
+func (agentService *AgentService) handleResolveContext(ctx context.Context, token *servicetoken.Token, raw []byte) (any, error) {
 	var request resolveContextRequest
 	if err := codec.Unmarshal(raw, &request); err != nil {
 		return nil, fmt.Errorf("invalid request: %w", err)
@@ -1211,6 +1250,16 @@ func (agentService *AgentService) handleResolveContext(_ context.Context, token 
 
 	if err := authorizeRead(token, principalLocal); err != nil {
 		return nil, err
+	}
+
+	// Lazy-load timelines from the artifact store on first access
+	// after service restart. Write-through from checkpoint-context
+	// keeps timelines current during normal operation; this handles
+	// commits created before this process started.
+	if !agentService.timelinesLoaded {
+		if err := agentService.loadAllTimelines(ctx); err != nil {
+			return nil, fmt.Errorf("loading timelines from artifact store: %w", err)
+		}
 	}
 
 	timeline := agentService.principalTimelines[principalLocal]
@@ -1232,4 +1281,73 @@ func (agentService *AgentService) handleResolveContext(_ context.Context, token 
 	}
 
 	return resolveContextResponse{CommitID: timeline[position-1].CommitID}, nil
+}
+
+// loadAllTimelines scans all context commit tags in the artifact store
+// and rebuilds the in-memory commit index and principal timelines. This
+// is called lazily on the first resolve-context request after a service
+// restart. Subsequent calls are skipped because timelinesLoaded is true.
+//
+// Must be called under the write lock.
+func (agentService *AgentService) loadAllTimelines(ctx context.Context) error {
+	tagsResponse, err := agentService.artifactClient.Tags(ctx, "ctx/")
+	if err != nil {
+		return fmt.Errorf("listing context commit tags: %w", err)
+	}
+
+	loaded := 0
+	for _, tag := range tagsResponse.Tags {
+		// Extract commit ID from tag name "ctx/<commitID>".
+		commitID := strings.TrimPrefix(tag.Name, "ctx/")
+		if commitID == tag.Name {
+			// Tag didn't have the expected prefix — skip.
+			continue
+		}
+
+		// Skip commits already in the index (populated write-through
+		// by checkpoint-context during this process's lifetime).
+		if _, exists := agentService.commitIndex[commitID]; exists {
+			continue
+		}
+
+		result, err := agentService.artifactClient.Fetch(ctx, tag.Ref)
+		if err != nil {
+			agentService.logger.Warn("failed to fetch context commit during timeline load",
+				"commit_id", commitID,
+				"ref", tag.Ref,
+				"error", err,
+			)
+			continue
+		}
+
+		data, err := io.ReadAll(result.Content)
+		result.Content.Close()
+		if err != nil {
+			agentService.logger.Warn("failed to read context commit during timeline load",
+				"commit_id", commitID,
+				"error", err,
+			)
+			continue
+		}
+
+		var content agent.ContextCommitContent
+		if err := codec.Unmarshal(data, &content); err != nil {
+			agentService.logger.Warn("failed to decode context commit during timeline load",
+				"commit_id", commitID,
+				"error", err,
+			)
+			continue
+		}
+
+		agentService.indexCommit(commitID, content)
+		loaded++
+	}
+
+	agentService.timelinesLoaded = true
+	agentService.logger.Info("loaded context commit timelines from artifact store",
+		"loaded", loaded,
+		"total_indexed", len(agentService.commitIndex),
+	)
+
+	return nil
 }

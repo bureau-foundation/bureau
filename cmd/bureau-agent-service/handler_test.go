@@ -4,37 +4,48 @@
 package main
 
 import (
+	"bytes"
 	"context"
-	"encoding/json"
 	"fmt"
+	"io"
 	"log/slog"
+	"sync/atomic"
 	"testing"
 
+	"github.com/bureau-foundation/bureau/lib/artifactstore"
 	"github.com/bureau-foundation/bureau/lib/codec"
 	"github.com/bureau-foundation/bureau/lib/ref"
 	"github.com/bureau-foundation/bureau/lib/schema/agent"
 	"github.com/bureau-foundation/bureau/lib/servicetoken"
-	"github.com/bureau-foundation/bureau/messaging"
 )
 
 // --- Test helpers ---
 
 // newTestAgentService creates a minimal AgentService with initialized
-// maps and no session (for tests that only use the in-memory index).
+// maps, a mock artifact client, and timelinesLoaded set to true (so
+// tests that pre-populate the index via indexCommit don't trigger a
+// CAS scan on resolve-context calls).
 func newTestAgentService() *AgentService {
 	return &AgentService{
+		artifactClient:     newMockArtifactClient(),
 		commitIndex:        make(map[string]agent.ContextCommitContent),
 		principalTimelines: make(map[string][]timelineEntry),
+		timelinesLoaded:    true,
 		logger:             slog.Default(),
 	}
 }
 
-// newTestAgentServiceWithSession creates an AgentService backed by a
-// mock session for tests that exercise Matrix API fallback paths.
-func newTestAgentServiceWithSession(session messaging.Session) *AgentService {
-	service := newTestAgentService()
-	service.session = session
-	return service
+// newTestAgentServiceWithArtifacts creates an AgentService backed by a
+// specific mock artifact client for tests that exercise CAS fallback
+// paths (e.g., fetching commits not in the in-memory index).
+func newTestAgentServiceWithArtifacts(mock *mockArtifactClient) *AgentService {
+	return &AgentService{
+		artifactClient:     mock,
+		commitIndex:        make(map[string]agent.ContextCommitContent),
+		principalTimelines: make(map[string][]timelineEntry),
+		timelinesLoaded:    true,
+		logger:             slog.Default(),
+	}
 }
 
 // testContextCommit creates a ContextCommitContent with the given
@@ -254,6 +265,49 @@ func TestHandleResolveContext(t *testing.T) {
 		}
 	})
 
+	t.Run("cold start loads timelines from CAS", func(t *testing.T) {
+		t.Parallel()
+
+		// Simulate a service restart: the in-memory index is empty
+		// and timelinesLoaded is false. Commits exist only in CAS.
+		mock := newMockArtifactClient()
+		mock.storeCommit("ctx-aaaa0000", testContextCommit("@agent/test:bureau.local", "2026-01-15T10:00:00Z"))
+		mock.storeCommit("ctx-bbbb0000", testContextCommit("@agent/test:bureau.local", "2026-01-15T11:00:00Z"))
+		mock.storeCommit("ctx-cccc0000", testContextCommit("@agent/test:bureau.local", "2026-01-15T12:00:00Z"))
+
+		coldService := newTestAgentServiceWithArtifacts(mock)
+		coldService.timelinesLoaded = false // simulate cold start
+
+		request := resolveContextRequest{
+			Action:    "resolve-context",
+			Timestamp: "2026-01-15T11:30:00Z",
+		}
+		raw, err := codec.Marshal(request)
+		if err != nil {
+			t.Fatalf("marshal request: %v", err)
+		}
+
+		result, err := coldService.handleResolveContext(context.Background(), token, raw)
+		if err != nil {
+			t.Fatalf("handleResolveContext: %v", err)
+		}
+
+		response := result.(resolveContextResponse)
+		if response.CommitID != "ctx-bbbb0000" {
+			t.Errorf("CommitID = %q, want %q", response.CommitID, "ctx-bbbb0000")
+		}
+
+		// Verify that timelinesLoaded is now true.
+		if !coldService.timelinesLoaded {
+			t.Error("timelinesLoaded should be true after lazy load")
+		}
+
+		// Verify all commits were indexed.
+		if len(coldService.commitIndex) != 3 {
+			t.Errorf("commitIndex size = %d, want 3", len(coldService.commitIndex))
+		}
+	})
+
 	t.Run("requires timestamp", func(t *testing.T) {
 		t.Parallel()
 
@@ -365,16 +419,13 @@ func TestHandleShowContextCommit(t *testing.T) {
 		}
 	})
 
-	t.Run("falls back to Matrix API for unindexed commit", func(t *testing.T) {
+	t.Run("falls back to CAS for unindexed commit", func(t *testing.T) {
 		t.Parallel()
 
 		commitContent := testContextCommit("@agent/test:bureau.local", "2026-01-15T15:00:00Z")
-		mock := &mockSessionForCommit{
-			commits: map[string]agent.ContextCommitContent{
-				"ctx-ffff0000": commitContent,
-			},
-		}
-		serviceWithSession := newTestAgentServiceWithSession(mock)
+		mock := newMockArtifactClient()
+		mock.storeCommit("ctx-ffff0000", commitContent)
+		serviceWithArtifacts := newTestAgentServiceWithArtifacts(mock)
 
 		token := testToken("agent/test")
 		request := showContextCommitRequest{
@@ -386,7 +437,7 @@ func TestHandleShowContextCommit(t *testing.T) {
 			t.Fatalf("marshal request: %v", err)
 		}
 
-		result, err := serviceWithSession.handleShowContextCommit(context.Background(), token, raw)
+		result, err := serviceWithArtifacts.handleShowContextCommit(context.Background(), token, raw)
 		if err != nil {
 			t.Fatalf("handleShowContextCommit: %v", err)
 		}
@@ -521,12 +572,8 @@ func TestHandleUpdateContextMetadata(t *testing.T) {
 		t.Parallel()
 
 		content := testContextCommit("@agent/test:bureau.local", "2026-01-15T10:00:00Z")
-		mock := &mockSessionForCommit{
-			commits: map[string]agent.ContextCommitContent{
-				"ctx-aaaa0000": content,
-			},
-		}
-		service := newTestAgentServiceWithSession(mock)
+		mock := newMockArtifactClient()
+		service := newTestAgentServiceWithArtifacts(mock)
 		service.indexCommit("ctx-aaaa0000", content)
 
 		token := testToken("agent/test")
@@ -551,9 +598,9 @@ func TestHandleUpdateContextMetadata(t *testing.T) {
 			t.Errorf("indexed summary = %q, want %q", indexed.Summary, "new summary")
 		}
 
-		// Verify the mock session received the state event.
-		if mock.lastSentStateKey != "ctx-aaaa0000" {
-			t.Errorf("sent state key = %q, want %q", mock.lastSentStateKey, "ctx-aaaa0000")
+		// Verify the artifact was stored with the correct tag.
+		if mock.lastStoredTag != "ctx/ctx-aaaa0000" {
+			t.Errorf("stored tag = %q, want %q", mock.lastStoredTag, "ctx/ctx-aaaa0000")
 		}
 	})
 
@@ -582,48 +629,95 @@ func TestHandleUpdateContextMetadata(t *testing.T) {
 	})
 }
 
-// --- Mock session ---
+// --- Mock artifact client ---
 
-// mockSessionForCommit is a minimal Session mock that serves
-// context commit state events from an in-memory map. Only methods
-// used by the handlers under test are implemented.
-type mockSessionForCommit struct {
-	messaging.Session // embed to satisfy interface; unused methods panic
+// mockArtifactClient is an in-memory implementation of artifactAccess
+// for testing. Artifacts are stored as raw bytes keyed by ref. Tags
+// map names to artifact refs. Store generates deterministic refs from
+// an atomic counter.
+type mockArtifactClient struct {
+	// artifacts maps artifact ref → content bytes.
+	artifacts map[string][]byte
 
-	commits           map[string]agent.ContextCommitContent
-	lastSentStateKey  string
-	lastSentEventType ref.EventType
+	// tags maps tag name → artifact ref.
+	tags map[string]string
+
+	// storeCount generates unique refs for stored artifacts.
+	storeCount atomic.Int64
+
+	// lastStoredTag records the tag from the most recent Store call
+	// (via StoreHeader.Tag). Empty if the last Store had no tag.
+	lastStoredTag string
 }
 
-func (m *mockSessionForCommit) UserID() ref.UserID {
-	return ref.MustParseUserID("@mock:bureau.local")
-}
-
-func (m *mockSessionForCommit) Close() error {
-	return nil
-}
-
-func (m *mockSessionForCommit) GetStateEvent(_ context.Context, _ ref.RoomID, eventType ref.EventType, stateKey string) (json.RawMessage, error) {
-	if eventType == agent.EventTypeAgentContextCommit {
-		content, exists := m.commits[stateKey]
-		if !exists {
-			return nil, &messaging.MatrixError{
-				Code:       messaging.ErrCodeNotFound,
-				Message:    "not found",
-				StatusCode: 404,
-			}
-		}
-		data, err := json.Marshal(content)
-		if err != nil {
-			return nil, err
-		}
-		return data, nil
+func newMockArtifactClient() *mockArtifactClient {
+	return &mockArtifactClient{
+		artifacts: make(map[string][]byte),
+		tags:      make(map[string]string),
 	}
-	return nil, fmt.Errorf("unexpected event type: %s", eventType)
 }
 
-func (m *mockSessionForCommit) SendStateEvent(_ context.Context, _ ref.RoomID, eventType ref.EventType, stateKey string, _ any) (ref.EventID, error) {
-	m.lastSentEventType = eventType
-	m.lastSentStateKey = stateKey
-	return ref.MustParseEventID("$mock-event-id"), nil
+// storeCommit is a test helper that serializes a ContextCommitContent
+// to CBOR and stores it with a "ctx/<commitID>" tag, mimicking what
+// storeCommitMetadata does in production.
+func (m *mockArtifactClient) storeCommit(commitID string, content agent.ContextCommitContent) {
+	data, err := codec.Marshal(content)
+	if err != nil {
+		panic("mockArtifactClient.storeCommit: marshal failed: " + err.Error())
+	}
+	artifactRef := fmt.Sprintf("art-%04d", m.storeCount.Add(1))
+	m.artifacts[artifactRef] = data
+	m.tags["ctx/"+commitID] = artifactRef
+}
+
+func (m *mockArtifactClient) Store(_ context.Context, header *artifactstore.StoreHeader, _ io.Reader) (*artifactstore.StoreResponse, error) {
+	artifactRef := fmt.Sprintf("art-%04d", m.storeCount.Add(1))
+	m.artifacts[artifactRef] = header.Data
+	if header.Tag != "" {
+		m.tags[header.Tag] = artifactRef
+		m.lastStoredTag = header.Tag
+	}
+	return &artifactstore.StoreResponse{Ref: artifactRef}, nil
+}
+
+func (m *mockArtifactClient) Fetch(_ context.Context, artifactRef string) (*artifactstore.FetchResult, error) {
+	data, exists := m.artifacts[artifactRef]
+	if !exists {
+		return nil, fmt.Errorf("artifact %q not found", artifactRef)
+	}
+	return &artifactstore.FetchResult{
+		Response: artifactstore.FetchResponse{
+			Size: int64(len(data)),
+			Data: data,
+		},
+		Content: io.NopCloser(bytes.NewReader(data)),
+	}, nil
+}
+
+func (m *mockArtifactClient) Resolve(_ context.Context, nameOrRef string) (*artifactstore.ResolveResponse, error) {
+	// Check tags first.
+	if artifactRef, exists := m.tags[nameOrRef]; exists {
+		return &artifactstore.ResolveResponse{
+			Ref: artifactRef,
+			Tag: nameOrRef,
+		}, nil
+	}
+	// Check direct artifact refs.
+	if _, exists := m.artifacts[nameOrRef]; exists {
+		return &artifactstore.ResolveResponse{Ref: nameOrRef}, nil
+	}
+	return nil, fmt.Errorf("ref %q not found", nameOrRef)
+}
+
+func (m *mockArtifactClient) Tags(_ context.Context, prefix string) (*artifactstore.TagsResponse, error) {
+	var entries []artifactstore.TagEntry
+	for name, artifactRef := range m.tags {
+		if len(name) >= len(prefix) && name[:len(prefix)] == prefix {
+			entries = append(entries, artifactstore.TagEntry{
+				Name: name,
+				Ref:  artifactRef,
+			})
+		}
+	}
+	return &artifactstore.TagsResponse{Tags: entries}, nil
 }

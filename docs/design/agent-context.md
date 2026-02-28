@@ -598,9 +598,9 @@ from the wrapper environment and query it like any CLI command.
 For mutations made outside sandboxes (operator CLI, ticket service
 backfill), the agent service's `resolve-context` endpoint finds the
 nearest commit by principal and timestamp. This requires no explicit
-capture — the join uses the principal identity and event timestamp
-that Matrix already records on every state event. Separate
-implementation.
+capture — the join uses the principal identity and the timestamp of
+the ticket mutation (which Matrix records on every state event).
+Separate implementation.
 
 ---
 
@@ -962,6 +962,7 @@ both the persistence layer and the analytics source.
   are bind-mounted into sandboxes.
 
 - [information-architecture.md](information-architecture.md) — context
-  metadata is stored as Matrix state events via the agent service.
-  Thread conversations (Level 3 in the information architecture) are
-  the medium for review discussions that drive context chain branching.
+  commit metadata is stored as CBOR artifacts in the CAS, tagged as
+  `ctx/<commitID>`, managed by the agent service. Thread conversations
+  (Level 3 in the information architecture) are the medium for review
+  discussions that drive context chain branching.

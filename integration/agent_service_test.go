@@ -13,6 +13,7 @@ import (
 	"github.com/bureau-foundation/bureau/lib/schema"
 	agentschema "github.com/bureau-foundation/bureau/lib/schema/agent"
 	"github.com/bureau-foundation/bureau/lib/schema/artifact"
+	"github.com/bureau-foundation/bureau/lib/service"
 	"github.com/bureau-foundation/bureau/lib/testutil"
 	"github.com/bureau-foundation/bureau/messaging"
 )
@@ -207,7 +208,7 @@ func TestAgentServiceSessionTracking(t *testing.T) {
 		metricsContent.TotalOutputTokens,
 	)
 
-	// --- Verify context checkpoint chain ---
+	// --- Verify context checkpoint chain via agent service CAS ---
 
 	// The mock agent's event sequence produces:
 	//   - SystemEvent (init) + ResponseEvent (text1) → turn_boundary checkpoint
@@ -218,77 +219,61 @@ func TestAgentServiceSessionTracking(t *testing.T) {
 	// events after the last trigger. The minimum is 2 checkpoints
 	// (at least one turn boundary + session end).
 	//
-	// Read all agent_context_commit state events from the config room.
-	// Each commit is a state event keyed by its ctx-* identifier.
-	allState, err := admin.GetRoomState(ctx, machine.ConfigRoomID)
-	if err != nil {
-		t.Fatalf("get config room state: %v", err)
+	// Context commits are stored as CBOR artifacts in the artifact
+	// service, tagged as "ctx/<commitID>". Walk the chain from the
+	// tip (LatestContextCommitID) using the agent service's
+	// history-context action.
+	agentToken := mintTestServiceTokenForUser(t, machine, agent.Account.UserID, "agent", nil)
+	agentClient := service.NewServiceClientFromToken(agentSvc.SocketPath, agentToken)
+
+	type historyCommitEntry struct {
+		ID      string                           `json:"id"`
+		Content agentschema.ContextCommitContent `json:"content"`
+	}
+	var historyResponse struct {
+		Commits []historyCommitEntry `json:"commits"`
+	}
+	if err := agentClient.Call(ctx, "history-context", map[string]any{
+		"commit_id": sessionContent.LatestContextCommitID,
+	}, &historyResponse); err != nil {
+		t.Fatalf("history-context from agent service: %v", err)
 	}
 
-	type commitEntry struct {
-		stateKey string
-		content  agentschema.ContextCommitContent
-	}
-	var commits []commitEntry
-	for _, event := range allState {
-		if event.Type != agentschema.EventTypeAgentContextCommit {
-			continue
-		}
-		if event.StateKey == nil {
-			continue
-		}
-		contentJSON, _ := json.Marshal(event.Content)
-		var content agentschema.ContextCommitContent
-		if err := json.Unmarshal(contentJSON, &content); err != nil {
-			t.Fatalf("unmarshal context commit %s: %v", *event.StateKey, err)
-		}
-		// Filter to commits from this agent's session.
-		if content.SessionID != sessionContent.LatestSessionID {
-			continue
-		}
-		commits = append(commits, commitEntry{stateKey: *event.StateKey, content: content})
-	}
-
+	commits := historyResponse.Commits
 	if len(commits) < 2 {
 		t.Fatalf("expected at least 2 context commits, got %d", len(commits))
 	}
 
 	// Verify each commit has the expected format and a non-empty artifact ref.
 	for _, commit := range commits {
-		if commit.content.Format != "events-v1" {
-			t.Errorf("commit %s: format = %q, want %q", commit.stateKey, commit.content.Format, "events-v1")
+		if commit.Content.Format != "events-v1" {
+			t.Errorf("commit %s: format = %q, want %q", commit.ID, commit.Content.Format, "events-v1")
 		}
-		if commit.content.ArtifactRef == "" {
-			t.Errorf("commit %s: artifact_ref is empty", commit.stateKey)
+		if commit.Content.ArtifactRef == "" {
+			t.Errorf("commit %s: artifact_ref is empty", commit.ID)
 		}
-		if commit.content.CommitType == "" {
-			t.Errorf("commit %s: commit_type is empty", commit.stateKey)
+		if commit.Content.CommitType == "" {
+			t.Errorf("commit %s: commit_type is empty", commit.ID)
 		}
-		if commit.content.Checkpoint == "" {
-			t.Errorf("commit %s: checkpoint trigger is empty", commit.stateKey)
+		if commit.Content.Checkpoint == "" {
+			t.Errorf("commit %s: checkpoint trigger is empty", commit.ID)
 		}
 	}
 
-	// Build parent chain map and verify linkage.
-	commitByID := make(map[string]agentschema.ContextCommitContent, len(commits))
-	for _, commit := range commits {
-		commitByID[commit.stateKey] = commit.content
+	// history-context returns commits from tip to root, so the last
+	// commit in the slice is the root (no parent).
+	rootCommit := commits[len(commits)-1]
+	if rootCommit.Content.Parent != "" {
+		t.Errorf("root commit %s has parent %q, want empty", rootCommit.ID, rootCommit.Content.Parent)
 	}
 
-	// Find the root commit (no parent).
-	var rootCount int
-	for _, commit := range commits {
-		if commit.content.Parent == "" {
-			rootCount++
-		} else {
-			if _, exists := commitByID[commit.content.Parent]; !exists {
-				t.Errorf("commit %s references parent %s which is not in the chain",
-					commit.stateKey, commit.content.Parent)
-			}
+	// Verify the chain is properly linked: each commit's parent is
+	// the next commit in the slice (history walks tip → root).
+	for i := 0; i < len(commits)-1; i++ {
+		if commits[i].Content.Parent != commits[i+1].ID {
+			t.Errorf("commit %s parent = %q, want %q (next in chain)",
+				commits[i].ID, commits[i].Content.Parent, commits[i+1].ID)
 		}
-	}
-	if rootCount != 1 {
-		t.Errorf("expected exactly 1 root commit (no parent), got %d", rootCount)
 	}
 
 	t.Logf("checkpoint chain verified: %d commits, format=events-v1", len(commits))
@@ -422,15 +407,9 @@ func TestAgentContextResumption(t *testing.T) {
 		t.Error("debug log does not contain RESUMED — the mock agent did not detect the materialized context file")
 	}
 
-	// --- Verify cross-session checkpoint chain ---
+	// --- Verify cross-session checkpoint chain via agent service CAS ---
 
-	// Read all context commits from the config room.
-	allState, err := admin.GetRoomState(ctx, machine.ConfigRoomID)
-	if err != nil {
-		t.Fatalf("get config room state: %v", err)
-	}
-
-	// Read session state to get the latest session ID for filtering.
+	// Read session state to get the latest context commit ID.
 	sessionRaw, err := admin.GetStateEvent(ctx, machine.ConfigRoomID,
 		agentschema.EventTypeAgentSession, agent.Account.UserID.Localpart())
 	if err != nil {
@@ -441,33 +420,39 @@ func TestAgentContextResumption(t *testing.T) {
 		t.Fatalf("unmarshal agent session: %v", err)
 	}
 
-	type commitEntry struct {
-		stateKey string
-		content  agentschema.ContextCommitContent
-	}
-	var allCommits []commitEntry
-	for _, event := range allState {
-		if event.Type != agentschema.EventTypeAgentContextCommit {
-			continue
-		}
-		if event.StateKey == nil {
-			continue
-		}
-		contentJSON, _ := json.Marshal(event.Content)
-		var content agentschema.ContextCommitContent
-		if json.Unmarshal(contentJSON, &content) != nil {
-			continue
-		}
-		allCommits = append(allCommits, commitEntry{stateKey: *event.StateKey, content: content})
+	if sessionContent.LatestContextCommitID == "" {
+		t.Fatal("LatestContextCommitID is empty after 2 sessions")
 	}
 
-	// Group commits by session ID and build a set of commit IDs per session.
+	// Walk the full commit chain from the tip using history-context.
+	// Context commits are stored as CBOR artifacts in CAS, not Matrix
+	// state events. The agent service reads them from the artifact
+	// service.
+	agentToken := mintTestServiceTokenForUser(t, machine, agent.Account.UserID, "agent", nil)
+	agentClient := service.NewServiceClientFromToken(agentSvc.SocketPath, agentToken)
+
+	type historyCommitEntry struct {
+		ID      string                           `json:"id"`
+		Content agentschema.ContextCommitContent `json:"content"`
+	}
+	var historyResponse struct {
+		Commits []historyCommitEntry `json:"commits"`
+	}
+	if err := agentClient.Call(ctx, "history-context", map[string]any{
+		"commit_id": sessionContent.LatestContextCommitID,
+	}, &historyResponse); err != nil {
+		t.Fatalf("history-context from agent service: %v", err)
+	}
+
+	allCommits := historyResponse.Commits
+
+	// Group commits by session ID.
 	sessionCommits := make(map[string]map[string]bool)
 	for _, commit := range allCommits {
-		if sessionCommits[commit.content.SessionID] == nil {
-			sessionCommits[commit.content.SessionID] = make(map[string]bool)
+		if sessionCommits[commit.Content.SessionID] == nil {
+			sessionCommits[commit.Content.SessionID] = make(map[string]bool)
 		}
-		sessionCommits[commit.content.SessionID][commit.stateKey] = true
+		sessionCommits[commit.Content.SessionID][commit.ID] = true
 	}
 
 	if len(sessionCommits) < 2 {
@@ -481,19 +466,19 @@ func TestAgentContextResumption(t *testing.T) {
 	// tip commit, creating a continuous chain.
 	crossSessionLinks := 0
 	for _, commit := range allCommits {
-		if commit.content.Parent == "" {
+		if commit.Content.Parent == "" {
 			continue
 		}
 		// Check if the parent belongs to a different session.
 		for otherSessionID, commitIDs := range sessionCommits {
-			if otherSessionID == commit.content.SessionID {
+			if otherSessionID == commit.Content.SessionID {
 				continue
 			}
-			if commitIDs[commit.content.Parent] {
+			if commitIDs[commit.Content.Parent] {
 				crossSessionLinks++
 				t.Logf("cross-session link: commit %s (session %s) → parent %s (session %s)",
-					commit.stateKey, commit.content.SessionID,
-					commit.content.Parent, otherSessionID)
+					commit.ID, commit.Content.SessionID,
+					commit.Content.Parent, otherSessionID)
 			}
 		}
 	}
@@ -502,8 +487,8 @@ func TestAgentContextResumption(t *testing.T) {
 		t.Error("no cross-session parent links found — checkpoint chain does not continue across sessions")
 		for _, commit := range allCommits {
 			t.Logf("  commit=%s session=%s parent=%s type=%s",
-				commit.stateKey, commit.content.SessionID,
-				commit.content.Parent, commit.content.CommitType)
+				commit.ID, commit.Content.SessionID,
+				commit.Content.Parent, commit.Content.CommitType)
 		}
 	}
 }

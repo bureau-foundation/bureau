@@ -39,10 +39,10 @@ go_test(
     srcs = ["handler_test.go"],
     embed = [":bureau-agent-service_lib"],
     deps = [
+        "//lib/artifactstore",
         "//lib/codec",
         "//lib/ref",
         "//lib/schema/agent",
         "//lib/servicetoken",
-        "//messaging",
     ],
 )

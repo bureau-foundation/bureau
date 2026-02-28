@@ -13,22 +13,19 @@
 // The service is ephemeral — it holds no persistent local state. All
 // data is stored in two external systems:
 //
-//   - Matrix state events in machine config rooms for metadata:
-//     session lifecycle (m.bureau.agent_session), context pointers
-//     (m.bureau.agent_context), and aggregated metrics
+//   - Matrix state events in machine config rooms for per-principal
+//     metadata: session lifecycle (m.bureau.agent_session), context
+//     pointers (m.bureau.agent_context), and aggregated metrics
 //     (m.bureau.agent_metrics). State events are keyed by principal
 //     localpart.
 //
-//   - Artifact service for bulk content: session logs (JSONL),
-//     serialized conversation context, detailed metrics breakdowns,
-//     and session index files. Referenced by BLAKE3 hex hashes in
-//     the Matrix state events.
-//
-// The service uses write-through ordering: content is stored in the
-// artifact service first, and only after the artifact ref is confirmed
-// does the Matrix state event get updated. This guarantees no dangling
-// refs — every artifact ref in a state event points to content that
-// exists in the artifact service.
+//   - Artifact service (CAS) for bulk content and immutable data:
+//     session logs (JSONL), serialized conversation context deltas,
+//     detailed metrics breakdowns, session index files, and context
+//     commit metadata (tagged as "ctx/<commitID>"). Context commits
+//     are CBOR-encoded artifacts with mutable tags, not Matrix state
+//     events — they are immutable data (except for Summary) and the
+//     artifact store is the correct home.
 //
 // # Scope
 //
@@ -48,9 +45,16 @@
 //   - get-session: read session state for a principal
 //   - start-session: mark a session as active
 //   - end-session: mark a session as complete, store log artifact ref
+//   - store-session-log: store session log data as an artifact
 //   - set-context: write a named context entry (artifact ref + metadata)
 //   - get-context: read a single context entry by key
 //   - delete-context: remove a context entry
 //   - list-context: list context entries, optionally filtered by key prefix
+//   - checkpoint-context: create a context commit (stores metadata in CAS)
+//   - show-context-commit: read a context commit by ID
+//   - history-context: walk a commit chain from tip to root
+//   - materialize-context: concatenate deltas for a commit chain
+//   - update-context-metadata: update a commit's summary
+//   - resolve-context: find the nearest commit at or before a timestamp
 //   - get-metrics: read aggregated metrics for a principal
 package main

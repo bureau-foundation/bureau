@@ -7,6 +7,7 @@ import (
 	"context"
 	"flag"
 	"fmt"
+	"io"
 	"log/slog"
 	"os/signal"
 	"sync"
@@ -22,6 +23,16 @@ import (
 	"github.com/bureau-foundation/bureau/lib/version"
 	"github.com/bureau-foundation/bureau/messaging"
 )
+
+// artifactAccess defines the artifact store operations used by the
+// agent service. The production implementation is *artifactstore.Client;
+// tests provide a mock that stores artifacts in memory.
+type artifactAccess interface {
+	Store(ctx context.Context, header *artifactstore.StoreHeader, content io.Reader) (*artifactstore.StoreResponse, error)
+	Fetch(ctx context.Context, ref string) (*artifactstore.FetchResult, error)
+	Resolve(ctx context.Context, ref string) (*artifactstore.ResolveResponse, error)
+	Tags(ctx context.Context, prefix string) (*artifactstore.TagsResponse, error)
+}
 
 func main() {
 	if err := run(); err != nil {
@@ -68,8 +79,9 @@ func run() error {
 	}
 	boot.Logger.Info("artifact client initialized", "socket", artifactServiceSocketPath)
 
-	// Resolve the machine config room. Agent state events live here as
-	// state events keyed by principal localpart. Room membership is
+	// Resolve the machine config room. Agent session, context pointer,
+	// and metrics state events live here, keyed by principal localpart.
+	// Context commit metadata lives in the artifact service. Room membership is
 	// handled by principal.Create (which invites to the config room)
 	// and the proxy's acceptPendingInvites (which joins at startup).
 	configRoomAlias := boot.Machine.RoomAlias()
@@ -146,7 +158,7 @@ type AgentService struct {
 	mutex sync.RWMutex
 
 	session        messaging.Session
-	artifactClient *artifactstore.Client
+	artifactClient artifactAccess
 	clock          clock.Clock
 
 	principalName string
@@ -156,17 +168,24 @@ type AgentService struct {
 	startedAt     time.Time
 
 	// commitIndex maps ctx-* commit IDs to their deserialized content.
-	// Populated from Matrix state events during sync and updated
-	// inline by checkpoint-context and update-context-metadata
-	// handlers. Used by show-context, history-context, and
-	// resolve-context to avoid per-request Matrix API calls.
+	// Populated write-through by checkpoint-context and
+	// update-context-metadata handlers. Commits not in the index
+	// are fetched on demand from the artifact store (CAS).
 	commitIndex map[string]agent.ContextCommitContent
 
 	// principalTimelines maps principal localparts to their
 	// checkpoint timelines, sorted by CreatedAt ascending. Used by
 	// resolve-context to find the nearest checkpoint at or before a
-	// given timestamp. Updated during sync and by checkpoint-context.
+	// given timestamp. Populated write-through by checkpoint-context
+	// and lazily rebuilt from CAS on resolve-context cache miss.
 	principalTimelines map[string][]timelineEntry
+
+	// timelinesLoaded tracks whether principalTimelines has been
+	// populated from the artifact store. False on startup (timelines
+	// empty); set to true after the first resolve-context triggers a
+	// full scan of ctx/ tags. Distinguishes "no commits exist" from
+	// "haven't loaded yet".
+	timelinesLoaded bool
 
 	logger *slog.Logger
 }

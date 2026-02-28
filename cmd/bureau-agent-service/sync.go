@@ -17,15 +17,15 @@ import (
 
 // syncFilter restricts the /sync response to event types the agent
 // service needs. The service watches the machine config room for agent
-// state events (session, context, context commits, metrics) to maintain
-// awareness of changes made by other instances or manual operator edits.
+// state events (session, context, metrics) to maintain awareness of
+// changes made by other instances or manual operator edits. Context
+// commits are stored in the artifact service (CAS) and not synced.
 var syncFilter = buildSyncFilter()
 
 func buildSyncFilter() string {
 	stateEventTypes := []ref.EventType{
 		agent.EventTypeAgentSession,
 		agent.EventTypeAgentContext,
-		agent.EventTypeAgentContextCommit,
 		agent.EventTypeAgentMetrics,
 	}
 
@@ -135,37 +135,6 @@ func (agentService *AgentService) processStateEvents(events []messaging.Event) {
 			agentService.logger.Debug("observed agent context event",
 				"state_key", event.StateKey,
 				"sender", event.Sender,
-			)
-		case agent.EventTypeAgentContextCommit:
-			if event.StateKey == nil {
-				continue
-			}
-			commitID := *event.StateKey
-
-			// Re-marshal map[string]any content to JSON so we can
-			// unmarshal into the typed struct.
-			contentJSON, err := json.Marshal(event.Content)
-			if err != nil {
-				agentService.logger.Warn("failed to marshal context commit event content",
-					"state_key", commitID,
-					"error", err,
-				)
-				continue
-			}
-			var content agent.ContextCommitContent
-			if err := json.Unmarshal(contentJSON, &content); err != nil {
-				agentService.logger.Warn("failed to unmarshal context commit event",
-					"state_key", commitID,
-					"error", err,
-				)
-				continue
-			}
-
-			agentService.indexCommit(commitID, content)
-			agentService.logger.Debug("indexed context commit event",
-				"state_key", commitID,
-				"principal", content.Principal.Localpart(),
-				"created_at", content.CreatedAt,
 			)
 		case agent.EventTypeAgentMetrics:
 			agentService.logger.Debug("observed agent metrics event",

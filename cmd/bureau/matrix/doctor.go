@@ -227,11 +227,12 @@ func (r standardRoom) powerLevels(adminUserID ref.UserID) map[string]any {
 
 var standardRooms = []standardRoom{
 	{
-		alias:         "bureau/system",
-		displayName:   "Bureau System",
-		topic:         "Operational messages",
-		name:          "system room",
-		credentialKey: "MATRIX_SYSTEM_ROOM",
+		alias:           "bureau/system",
+		displayName:     "Bureau System",
+		topic:           "Operational messages",
+		name:            "system room",
+		credentialKey:   "MATRIX_SYSTEM_ROOM",
+		powerLevelsFunc: schema.SystemRoomPowerLevels,
 		memberSettableEventTypes: []ref.EventType{
 			schema.EventTypeTokenSigningKey,
 		},

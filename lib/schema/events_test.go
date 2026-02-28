@@ -139,6 +139,64 @@ func TestVersionConstants(t *testing.T) {
 	}
 }
 
+func TestSystemRoomPowerLevels(t *testing.T) {
+	adminUserID := ref.MustParseUserID("@bureau-admin:bureau.local")
+	levels := SystemRoomPowerLevels(adminUserID)
+
+	users, ok := levels["users"].(map[string]any)
+	if !ok {
+		t.Fatal("power levels missing 'users' map")
+	}
+	if users[adminUserID.String()] != 100 {
+		t.Errorf("admin power level = %v, want 100", users[adminUserID.String()])
+	}
+	if len(users) != 1 {
+		t.Errorf("users map should have exactly 1 entry (admin only at creation), got %d", len(users))
+	}
+	if levels["users_default"] != 0 {
+		t.Errorf("users_default = %v, want 0", levels["users_default"])
+	}
+
+	events, ok := levels["events"].(map[ref.EventType]any)
+	if !ok {
+		t.Fatal("power levels missing 'events' map")
+	}
+
+	// Members must be able to publish token signing keys.
+	if events[EventTypeTokenSigningKey] != 0 {
+		t.Errorf("%s power level = %v, want 0", EventTypeTokenSigningKey, events[EventTypeTokenSigningKey])
+	}
+
+	// Admin-protected events must require PL 100.
+	for _, eventType := range []ref.EventType{
+		MatrixEventTypeEncryption, MatrixEventTypeServerACL,
+		MatrixEventTypeTombstone, MatrixEventTypeSpaceChild,
+	} {
+		if events[eventType] != 100 {
+			t.Errorf("%s power level = %v, want 100", eventType, events[eventType])
+		}
+	}
+
+	if levels["state_default"] != 100 {
+		t.Errorf("state_default = %v, want 100", levels["state_default"])
+	}
+	if levels["events_default"] != 0 {
+		t.Errorf("events_default = %v, want 0", levels["events_default"])
+	}
+
+	// Invite threshold is 50 so machine daemons (PL 50) can invite
+	// service principals to the system room.
+	if levels["invite"] != 50 {
+		t.Errorf("invite = %v, want 50", levels["invite"])
+	}
+	if levels["ban"] != 100 {
+		t.Errorf("ban = %v, want 100", levels["ban"])
+	}
+	if levels["kick"] != 100 {
+		t.Errorf("kick = %v, want 100", levels["kick"])
+	}
+}
+
 // assertField checks that a JSON object has a field with the expected value.
 // This is a shared test helper used across all events_*_test.go files in
 // this package.

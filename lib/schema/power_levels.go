@@ -6,7 +6,10 @@ package schema
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
+	"math/rand/v2"
+	"time"
 
 	"github.com/bureau-foundation/bureau/lib/ref"
 )
@@ -82,14 +85,89 @@ type PowerLevelGrants struct {
 	Events map[ref.EventType]int
 }
 
+// grantPowerLevelsMaxRetries is the maximum number of read-modify-write
+// attempts for GrantPowerLevels. Concurrent modifications to the same
+// room's power levels (e.g., multiple machines provisioning in parallel)
+// cause M_FORBIDDEN when the write is based on a stale read. Five
+// retries with jitter accommodate heavy parallel provisioning.
+const grantPowerLevelsMaxRetries = 5
+
+// grantPowerLevelsBaseDelay is the base delay for jittered backoff between
+// retry attempts. Each attempt doubles the maximum jitter range (full jitter
+// strategy) to desynchronize concurrent writers: attempt 0 → [0, 50ms),
+// attempt 1 → [0, 100ms), attempt 2 → [0, 200ms), etc.
+const grantPowerLevelsBaseDelay = 50 * time.Millisecond
+
 // GrantPowerLevels reads the current m.room.power_levels state event from
 // a room, applies all user and event type grants, and writes the updated
-// event back. One GET + one PUT regardless of how many grants are included.
+// event back. The operation retries the full read-modify-write cycle when
+// the write fails with M_FORBIDDEN, which indicates a concurrent
+// modification (another writer changed the power levels between this
+// function's read and write, so the write based on the stale read tries
+// to remove users — the Matrix spec rejects removing users at the
+// sender's own power level or above).
 //
 // This is the canonical way to modify power levels in an existing room.
 // For setting power levels at room creation time, use PowerLevelContentOverride
 // in the CreateRoomRequest instead.
 func GrantPowerLevels(ctx context.Context, session StateSession, roomID ref.RoomID, grants PowerLevelGrants) error {
+	var lastError error
+	for attempt := range grantPowerLevelsMaxRetries {
+		err := grantPowerLevelsOnce(ctx, session, roomID, grants)
+		if err == nil {
+			return nil
+		}
+		lastError = err
+
+		// M_FORBIDDEN on a power levels write means the event was
+		// rejected by the authorization rules — typically because a
+		// concurrent writer added users between our read and write.
+		// Re-reading gets the fresh state including those additions.
+		if !isMatrixForbidden(err) {
+			return err
+		}
+
+		// Context cancelled: don't retry.
+		if ctx.Err() != nil {
+			return err
+		}
+
+		// Full jitter backoff: uniform random in [0, baseDelay * 2^attempt).
+		// Desynchronizes concurrent writers so they don't all re-collide on
+		// the immediate retry.
+		maxDelay := grantPowerLevelsBaseDelay << attempt
+		jitter := time.Duration(rand.Int64N(int64(maxDelay)))
+		select {
+		case <-time.After(jitter):
+		case <-ctx.Done():
+			return ctx.Err()
+		}
+	}
+	return fmt.Errorf("power level grant failed after %d attempts: %w", grantPowerLevelsMaxRetries, lastError)
+}
+
+// matrixErrorCoder is satisfied by messaging.MatrixError without importing
+// the messaging package. This keeps lib/schema free of the messaging
+// dependency (which pulls in net/http and the full Matrix client stack),
+// avoiding ~1MB of binary bloat in binaries that depend on schema but not
+// messaging (bureau-bridge, bureau-observe-relay, bureau-sandbox).
+type matrixErrorCoder interface {
+	error
+	ErrCode() string
+}
+
+// isMatrixForbidden returns true if err wraps a Matrix M_FORBIDDEN error.
+func isMatrixForbidden(err error) bool {
+	var matrixErr matrixErrorCoder
+	if errors.As(err, &matrixErr) {
+		return matrixErr.ErrCode() == "M_FORBIDDEN"
+	}
+	return false
+}
+
+// grantPowerLevelsOnce performs a single read-modify-write cycle for
+// power level grants.
+func grantPowerLevelsOnce(ctx context.Context, session StateSession, roomID ref.RoomID, grants PowerLevelGrants) error {
 	content, err := session.GetStateEvent(ctx, roomID, MatrixEventTypePowerLevels, "")
 	if err != nil {
 		return fmt.Errorf("reading power levels for %s: %w", roomID, err)

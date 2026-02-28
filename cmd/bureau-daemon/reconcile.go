@@ -568,6 +568,16 @@ func (d *Daemon) reconcile(ctx context.Context) error {
 		// acceptPendingInvites joins during startup.
 		d.ensurePrincipalRoomAccess(ctx, assignment.Principal, d.configRoomID)
 
+		// Services need system room membership (token signing key
+		// lookup) and fleet service room membership (service
+		// registration). principal.Create invites using the admin
+		// session in the standard path; the daemon handles alternative
+		// paths where no admin session is available.
+		if assignment.Principal.EntityType() == "service" {
+			d.ensurePrincipalRoomAccess(ctx, assignment.Principal, d.systemRoomID)
+			d.ensurePrincipalRoomAccess(ctx, assignment.Principal, d.serviceRoomID)
+		}
+
 		// Invite the principal to any workspace room it references so it
 		// can publish state events after joining. Two sources:
 		// StartCondition.RoomAlias (resolved during condition evaluation)

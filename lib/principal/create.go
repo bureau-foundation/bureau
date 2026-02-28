@@ -338,10 +338,11 @@ func registerAndProvision(ctx context.Context, client *messaging.Client, session
 
 	// Services need membership in the system room (token signing key
 	// lookup) and fleet service room (service registration and
-	// deregistration). Invite here using the admin session — these
-	// rooms have admin-only invite power levels (PL 100), so neither
-	// the daemon (PL 0 machine user) nor the service itself can
-	// invite. The proxy's acceptPendingInvites joins at sandbox startup.
+	// deregistration). Invite here using the admin session for the
+	// standard create path. The daemon also invites service principals
+	// to these rooms during reconciliation (covering HA failover, fleet
+	// placement, and manual config edits). Both invites are idempotent.
+	// The proxy's acceptPendingInvites joins at sandbox startup.
 	if params.Principal.EntityType() == "service" {
 		fleetRef := params.Principal.Fleet()
 

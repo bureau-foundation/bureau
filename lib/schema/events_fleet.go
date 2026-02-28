@@ -99,8 +99,10 @@ func MachineRoomPowerLevels(adminUserID ref.UserID) map[string]any {
 
 // ServiceRoomPowerLevels returns the power level content for service
 // directory rooms (both fleet-scoped and global). Members at power level
-// 0 can register and deregister services. Administrative room events
-// remain locked to admin (PL 100).
+// 0 can register and deregister services. The invite threshold is 50
+// so that machine daemons (granted PL 50 during provisioning) can
+// invite service principals for HA failover and fleet placement.
+// Administrative room events remain locked to admin (PL 100).
 func ServiceRoomPowerLevels(adminUserID ref.UserID) map[string]any {
 	events := AdminProtectedEvents()
 	events[EventTypeService] = 0
@@ -115,7 +117,7 @@ func ServiceRoomPowerLevels(adminUserID ref.UserID) map[string]any {
 		"state_default":  100,
 		"ban":            100,
 		"kick":           100,
-		"invite":         100,
+		"invite":         50,
 		"redact":         50,
 		"notifications":  map[string]any{"room": 50},
 	}

@@ -28,6 +28,13 @@ func (e *MatrixError) Error() string {
 	return fmt.Sprintf("matrix: %s (%d): %s", e.Code, e.StatusCode, e.Message)
 }
 
+// ErrCode returns the Matrix error code (e.g., "M_FORBIDDEN"). This method
+// enables interface-based error matching across packages without requiring
+// a direct dependency on the messaging package.
+func (e *MatrixError) ErrCode() string {
+	return e.Code
+}
+
 // Standard Matrix error codes.
 const (
 	ErrCodeForbidden     = "M_FORBIDDEN"

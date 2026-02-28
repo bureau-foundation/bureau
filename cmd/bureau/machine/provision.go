@@ -299,6 +299,8 @@ func Provision(ctx context.Context, client *messaging.Client, adminSession *mess
 			WithHint("Has 'bureau matrix setup' been run? Check with 'bureau matrix doctor'.")
 	}
 
+	systemRoomAlias := namespace.SystemRoomAlias()
+	var systemRoomID ref.RoomID
 	for _, room := range globalRooms {
 		if err := adminSession.InviteUser(ctx, room.roomID, machineUserID); err != nil {
 			if !messaging.IsMatrixError(err, messaging.ErrCodeForbidden) {
@@ -308,7 +310,20 @@ func Provision(ctx context.Context, client *messaging.Client, adminSession *mess
 		} else {
 			logger.Info("invited to room", "room", room.alias)
 		}
+		if room.alias == systemRoomAlias {
+			systemRoomID = room.roomID
+		}
 	}
+
+	// Grant the machine PL 50 in the system room so its daemon can
+	// invite service principals (token signing key lookup requires
+	// system room membership).
+	if err := schema.GrantPowerLevels(ctx, adminSession, systemRoomID, schema.PowerLevelGrants{
+		Users: map[ref.UserID]int{machineUserID: 50},
+	}); err != nil {
+		return nil, cli.Transient("grant machine power level in system room: %w", err)
+	}
+	logger.Info("granted PL 50 in system room", "machine", machineUserID)
 
 	// Resolve and invite to fleet-scoped rooms.
 	machineRoomID, serviceRoomID, fleetRoomID, err := resolveFleetRooms(ctx, adminSession, fleet)
@@ -333,6 +348,16 @@ func Provision(ctx context.Context, client *messaging.Client, adminSession *mess
 			logger.Info("invited to room", "room", fleetRoom.name)
 		}
 	}
+
+	// Grant the machine PL 50 in the fleet service room so its daemon
+	// can invite service principals during HA failover and fleet
+	// placement (service registration requires service room membership).
+	if err := schema.GrantPowerLevels(ctx, adminSession, serviceRoomID, schema.PowerLevelGrants{
+		Users: map[ref.UserID]int{machineUserID: 50},
+	}); err != nil {
+		return nil, cli.Transient("grant machine power level in fleet service room: %w", err)
+	}
+	logger.Info("granted PL 50 in fleet service room", "machine", machineUserID)
 
 	// Create the per-machine config room. The admin creates it (not the
 	// machine) so the admin has PL 100 from the start. The machine account

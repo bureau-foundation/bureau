@@ -473,3 +473,27 @@ func PipelineRoomPowerLevels(adminUserID ref.UserID) map[string]any {
 		invite:        100,
 	})
 }
+
+// SystemRoomPowerLevels returns the power level content for the
+// namespace-scoped system room (bureau/system). The system room holds
+// operational messages and token signing keys. Members at PL 0 can
+// publish token signing keys. The invite threshold is 50 so that
+// machine daemons (PL 50) can invite service principals — services
+// need system room membership for token signing key lookup.
+func SystemRoomPowerLevels(adminUserID ref.UserID) map[string]any {
+	events := AdminProtectedEvents()
+	events[EventTypeTokenSigningKey] = 0
+
+	return map[string]any{
+		"users":          map[string]any{adminUserID.String(): 100},
+		"users_default":  0,
+		"events":         events,
+		"events_default": 0,
+		"state_default":  100,
+		"ban":            100,
+		"kick":           100,
+		"invite":         50,
+		"redact":         50,
+		"notifications":  map[string]any{"room": 50},
+	}
+}

@@ -110,4 +110,10 @@ func TestServiceRoomPowerLevels(t *testing.T) {
 	if levels["events_default"] != 0 {
 		t.Errorf("events_default = %v, want 0", levels["events_default"])
 	}
+
+	// Invite threshold is 50 so machine daemons (PL 50) can invite
+	// service principals for HA failover and fleet placement.
+	if levels["invite"] != 50 {
+		t.Errorf("invite = %v, want 50", levels["invite"])
+	}
 }

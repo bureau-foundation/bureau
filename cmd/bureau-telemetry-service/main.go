@@ -72,7 +72,7 @@ func run() error {
 		artifactClient = nil
 	}
 
-	logMgr := newLogManager(artifactClient, boot.Session, boot.Clock, boot.Logger)
+	logMgr := newLogManager(artifactClient, boot.Clock, boot.Logger)
 	logMgr.chunkSizeThreshold = *chunkSizeThreshold
 	logMgr.maxBytesPerSession = *maxBytesPerSession
 
@@ -177,7 +177,7 @@ type TelemetryService struct {
 	artifactPersistence bool
 
 	// logManager handles output delta persistence: buffering,
-	// artifact storage, and m.bureau.log state event tracking.
+	// artifact storage, and log metadata tracking via mutable tags.
 	// Always non-nil; when the artifact service is unavailable,
 	// the manager's internal artifact client is nil and
 	// HandleDeltas returns early without storing anything.
@@ -249,9 +249,9 @@ func (s *TelemetryService) handleStatus(_ context.Context, _ []byte) (any, error
 }
 
 // handleCompleteLog flushes remaining output for a session and
-// transitions its m.bureau.log entity to "complete". Called by the
-// daemon when a sandbox exits. Idempotent — returns success if the
-// session was already completed or never existed.
+// transitions its log metadata to "complete". Called by the daemon
+// when a sandbox exits. Idempotent — returns success if the session
+// was already completed or never existed.
 func (s *TelemetryService) handleCompleteLog(ctx context.Context, token *servicetoken.Token, raw []byte) (any, error) {
 	if !servicetoken.GrantsAllow(token.Grants, "telemetry/ingest", "") {
 		return nil, fmt.Errorf("access denied: missing grant for telemetry/ingest")
@@ -280,7 +280,7 @@ func (s *TelemetryService) handleCompleteLog(ctx context.Context, token *service
 
 // handleFlush triggers an immediate flush of all session buffers that
 // have pending data. Equivalent to the background flush ticker firing.
-// Used by integration tests for deterministic state event verification
+// Used by integration tests for deterministic metadata verification
 // without waiting on timer intervals.
 func (s *TelemetryService) handleFlush(ctx context.Context, token *servicetoken.Token, _ []byte) (any, error) {
 	if !servicetoken.GrantsAllow(token.Grants, "telemetry/ingest", "") {

@@ -59,12 +59,12 @@ func (d *Daemon) resolveTelemetrySocket(ctx context.Context) string {
 
 	socketPath := binding.Principal.ServiceSocketPath(d.fleetRunDir)
 
-	// Invite the telemetry service to the config room so it can write
-	// m.bureau.log state events for principals on this machine. On a
-	// single-machine fleet this is redundant (ensurePrincipalRoomAccess
-	// already invites locally-deployed services), but on multi-machine
-	// fleets the telemetry service runs on a different machine and
-	// wouldn't otherwise be a member of this config room.
+	// Invite the telemetry service to the config room so it can
+	// observe principals on this machine. On a single-machine fleet
+	// this is redundant (ensurePrincipalRoomAccess already invites
+	// locally-deployed services), but on multi-machine fleets the
+	// telemetry service runs on a different machine and wouldn't
+	// otherwise be a member of this config room.
 	d.ensurePrincipalRoomAccess(ctx, binding.Principal, d.configRoomID)
 
 	d.logger.Info("resolved telemetry service binding",

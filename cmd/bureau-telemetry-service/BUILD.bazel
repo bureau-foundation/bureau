@@ -43,6 +43,7 @@ go_test(
     deps = [
         "//lib/artifactstore",
         "//lib/clock",
+        "//lib/codec",
         "//lib/ref",
         "//lib/schema/log",
         "//lib/schema/telemetry",

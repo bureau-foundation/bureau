@@ -14,6 +14,7 @@ import (
 
 	"github.com/bureau-foundation/bureau/lib/artifactstore"
 	"github.com/bureau-foundation/bureau/lib/clock"
+	"github.com/bureau-foundation/bureau/lib/codec"
 	"github.com/bureau-foundation/bureau/lib/ref"
 	"github.com/bureau-foundation/bureau/lib/schema/log"
 	"github.com/bureau-foundation/bureau/lib/schema/telemetry"
@@ -27,6 +28,12 @@ type mockArtifactStore struct {
 	storeCalls   []mockStoreCall
 	storeError   error
 	storeCounter int
+
+	// metadataStoreError, if non-nil, is returned only for Store
+	// calls with content type logMetadataContentType. This allows
+	// tests to simulate metadata write failures while data chunk
+	// stores succeed.
+	metadataStoreError error
 }
 
 type mockStoreCall struct {
@@ -40,6 +47,10 @@ func (m *mockArtifactStore) Store(_ context.Context, header *artifactstore.Store
 
 	if m.storeError != nil {
 		return nil, m.storeError
+	}
+
+	if m.metadataStoreError != nil && header.ContentType == logMetadataContentType {
+		return nil, m.metadataStoreError
 	}
 
 	m.storeCounter++
@@ -83,70 +94,10 @@ func (m *mockArtifactStore) setStoreError(err error) {
 	m.storeError = err
 }
 
-// mockLogEntityWriter records SendStateEvent calls and returns
-// configurable results.
-type mockLogEntityWriter struct {
-	mu              sync.Mutex
-	stateEventCalls []mockStateEventCall
-	stateEventError error
-
-	// resolvedAliases maps alias strings to room IDs for
-	// ResolveAlias. Missing entries return an error.
-	resolvedAliases map[string]ref.RoomID
-}
-
-type mockStateEventCall struct {
-	RoomID    ref.RoomID
-	EventType ref.EventType
-	StateKey  string
-	Content   log.LogContent
-}
-
-func (m *mockLogEntityWriter) SendStateEvent(_ context.Context, roomID ref.RoomID, eventType ref.EventType, stateKey string, content any) (ref.EventID, error) {
+func (m *mockArtifactStore) setMetadataStoreError(err error) {
 	m.mu.Lock()
 	defer m.mu.Unlock()
-
-	if m.stateEventError != nil {
-		return ref.EventID{}, m.stateEventError
-	}
-
-	logContent, ok := content.(log.LogContent)
-	if !ok {
-		return ref.EventID{}, fmt.Errorf("expected log.LogContent, got %T", content)
-	}
-
-	m.stateEventCalls = append(m.stateEventCalls, mockStateEventCall{
-		RoomID:    roomID,
-		EventType: eventType,
-		StateKey:  stateKey,
-		Content:   logContent,
-	})
-
-	return ref.EventID{}, nil
-}
-
-func (m *mockLogEntityWriter) ResolveAlias(_ context.Context, alias ref.RoomAlias) (ref.RoomID, error) {
-	m.mu.Lock()
-	defer m.mu.Unlock()
-
-	if roomID, ok := m.resolvedAliases[alias.String()]; ok {
-		return roomID, nil
-	}
-	return ref.RoomID{}, fmt.Errorf("alias not found: %s", alias)
-}
-
-func (m *mockLogEntityWriter) getStateEventCalls() []mockStateEventCall {
-	m.mu.Lock()
-	defer m.mu.Unlock()
-	calls := make([]mockStateEventCall, len(m.stateEventCalls))
-	copy(calls, m.stateEventCalls)
-	return calls
-}
-
-func (m *mockLogEntityWriter) setStateEventError(err error) {
-	m.mu.Lock()
-	defer m.mu.Unlock()
-	m.stateEventError = err
+	m.metadataStoreError = err
 }
 
 // --- Test helpers ---
@@ -158,8 +109,6 @@ type testRefs struct {
 	fleet     ref.Fleet
 	machine   ref.Machine
 	source    ref.Entity
-	roomAlias ref.RoomAlias
-	roomID    ref.RoomID
 }
 
 func newTestRefs(t *testing.T) testRefs {
@@ -188,8 +137,6 @@ func newTestRefs(t *testing.T) testRefs {
 		fleet:     fleet,
 		machine:   machine,
 		source:    source,
-		roomAlias: machine.RoomAlias(),
-		roomID:    ref.MustParseRoomID("!testroom:bureau.local"),
 	}
 }
 
@@ -213,23 +160,48 @@ func makeDeltas(refs testRefs, sessionID string, count int, dataSize int) []tele
 	return deltas
 }
 
-func newTestLogManager(t *testing.T, refs testRefs) (*logManager, *mockArtifactStore, *mockLogEntityWriter, *clock.FakeClock) {
+func newTestLogManager(t *testing.T) (*logManager, *mockArtifactStore, *clock.FakeClock) {
 	t.Helper()
 
 	epoch := time.Date(2026, 1, 1, 0, 0, 0, 0, time.UTC)
 	fakeClock := clock.Fake(epoch)
 
 	mockArtifact := &mockArtifactStore{}
-	mockWriter := &mockLogEntityWriter{
-		resolvedAliases: map[string]ref.RoomID{
-			refs.roomAlias.String(): refs.roomID,
-		},
-	}
 
 	logger := testLogger(t)
-	mgr := newLogManager(mockArtifact, mockWriter, fakeClock, logger)
+	mgr := newLogManager(mockArtifact, fakeClock, logger)
 
-	return mgr, mockArtifact, mockWriter, fakeClock
+	return mgr, mockArtifact, fakeClock
+}
+
+// getMetadataStoreCalls returns only the Store calls that wrote log
+// metadata artifacts (distinguished by content type). Unmarshals the
+// CBOR payload into LogContent for assertion.
+func getMetadataStoreCalls(t *testing.T, mock *mockArtifactStore) []log.LogContent {
+	t.Helper()
+	var results []log.LogContent
+	for _, call := range mock.getStoreCalls() {
+		if call.Header.ContentType != logMetadataContentType {
+			continue
+		}
+		var content log.LogContent
+		if err := codec.Unmarshal(call.Data, &content); err != nil {
+			t.Fatalf("unmarshal metadata store call: %v", err)
+		}
+		results = append(results, content)
+	}
+	return results
+}
+
+// getLastMetadata returns the most recently stored log metadata for
+// assertions. Fails the test if no metadata has been stored.
+func getLastMetadata(t *testing.T, mock *mockArtifactStore) log.LogContent {
+	t.Helper()
+	calls := getMetadataStoreCalls(t, mock)
+	if len(calls) == 0 {
+		t.Fatal("expected at least one metadata store call")
+	}
+	return calls[len(calls)-1]
 }
 
 func testLogger(t *testing.T) *slog.Logger {
@@ -241,7 +213,7 @@ func testLogger(t *testing.T) *slog.Logger {
 
 func TestHandleDeltasRoutesToCorrectSession(t *testing.T) {
 	refs := newTestRefs(t)
-	mgr, _, _, _ := newTestLogManager(t, refs)
+	mgr, _, _ := newTestLogManager(t)
 
 	// Use small threshold so we don't trigger immediate flushes.
 	mgr.chunkSizeThreshold = 10 * 1024 * 1024
@@ -293,7 +265,7 @@ func TestHandleDeltasRoutesToCorrectSession(t *testing.T) {
 
 func TestSizeThresholdTriggersImmediateFlush(t *testing.T) {
 	refs := newTestRefs(t)
-	mgr, mockArtifact, mockWriter, _ := newTestLogManager(t, refs)
+	mgr, mockArtifact, _ := newTestLogManager(t)
 
 	// Set threshold to 500 bytes so 3 deltas of 200 bytes triggers a flush.
 	mgr.chunkSizeThreshold = 500
@@ -302,43 +274,38 @@ func TestSizeThresholdTriggersImmediateFlush(t *testing.T) {
 	ctx := context.Background()
 	mgr.HandleDeltas(ctx, deltas)
 
-	// Should have stored one artifact (600 bytes > 500 threshold).
+	// Should have stored one data artifact (600 bytes > 500 threshold)
+	// plus one metadata artifact.
 	storeCalls := mockArtifact.getStoreCalls()
-	if len(storeCalls) != 1 {
-		t.Fatalf("expected 1 store call, got %d", len(storeCalls))
+	if len(storeCalls) != 2 {
+		t.Fatalf("expected 2 store calls (1 data + 1 metadata), got %d", len(storeCalls))
 	}
 
 	if storeCalls[0].Header.ContentType != artifactContentType {
 		t.Errorf("expected content type %q, got %q", artifactContentType, storeCalls[0].Header.ContentType)
 	}
 
-	// Should have written a state event.
-	stateEvents := mockWriter.getStateEventCalls()
-	if len(stateEvents) != 1 {
-		t.Fatalf("expected 1 state event call, got %d", len(stateEvents))
+	// Should have written a metadata artifact.
+	metadata := getMetadataStoreCalls(t, mockArtifact)
+	if len(metadata) != 1 {
+		t.Fatalf("expected 1 metadata store, got %d", len(metadata))
 	}
 
-	event := stateEvents[0]
-	if event.RoomID != refs.roomID {
-		t.Errorf("expected room ID %v, got %v", refs.roomID, event.RoomID)
+	content := metadata[0]
+	if content.Status != log.LogStatusActive {
+		t.Errorf("expected status active, got %q", content.Status)
 	}
-	if event.StateKey != "session-1" {
-		t.Errorf("expected state key %q, got %q", "session-1", event.StateKey)
+	if len(content.Chunks) != 1 {
+		t.Fatalf("expected 1 chunk, got %d", len(content.Chunks))
 	}
-	if event.Content.Status != log.LogStatusActive {
-		t.Errorf("expected status active, got %q", event.Content.Status)
-	}
-	if len(event.Content.Chunks) != 1 {
-		t.Fatalf("expected 1 chunk, got %d", len(event.Content.Chunks))
-	}
-	if event.Content.Chunks[0].Ref != "fakehash-1" {
-		t.Errorf("expected ref fakehash-1, got %q", event.Content.Chunks[0].Ref)
+	if content.Chunks[0].Ref != "fakehash-1" {
+		t.Errorf("expected ref fakehash-1, got %q", content.Chunks[0].Ref)
 	}
 }
 
 func TestPeriodicFlushForSmallBuffers(t *testing.T) {
 	refs := newTestRefs(t)
-	mgr, mockArtifact, mockWriter, fakeClock := newTestLogManager(t, refs)
+	mgr, mockArtifact, fakeClock := newTestLogManager(t)
 
 	// Large threshold so size doesn't trigger a flush.
 	mgr.chunkSizeThreshold = 10 * 1024 * 1024
@@ -357,22 +324,23 @@ func TestPeriodicFlushForSmallBuffers(t *testing.T) {
 	fakeClock.Advance(11 * time.Second)
 	mgr.tickFlush(ctx)
 
+	// Should have 2 store calls: 1 data artifact + 1 metadata artifact.
 	storeCalls := mockArtifact.getStoreCalls()
-	if len(storeCalls) != 1 {
-		t.Fatalf("expected 1 store call after flush, got %d", len(storeCalls))
+	if len(storeCalls) != 2 {
+		t.Fatalf("expected 2 store calls after flush (data + metadata), got %d", len(storeCalls))
 	}
 
-	stateEvents := mockWriter.getStateEventCalls()
-	if len(stateEvents) != 1 {
-		t.Fatalf("expected 1 state event after flush, got %d", len(stateEvents))
+	metadata := getMetadataStoreCalls(t, mockArtifact)
+	if len(metadata) != 1 {
+		t.Fatalf("expected 1 metadata store after flush, got %d", len(metadata))
 	}
 }
 
 func TestArtifactStoreFailureDoesNotCreatePendingChunk(t *testing.T) {
 	refs := newTestRefs(t)
-	mgr, mockArtifact, mockWriter, _ := newTestLogManager(t, refs)
+	mgr, mockArtifact, _ := newTestLogManager(t)
 
-	// Make artifact store fail.
+	// Make artifact store fail (affects both data and metadata).
 	mockArtifact.setStoreError(fmt.Errorf("disk full"))
 
 	// Set threshold low to trigger immediate flush.
@@ -382,10 +350,10 @@ func TestArtifactStoreFailureDoesNotCreatePendingChunk(t *testing.T) {
 	ctx := context.Background()
 	mgr.HandleDeltas(ctx, deltas)
 
-	// No state events should have been written.
-	stateEvents := mockWriter.getStateEventCalls()
-	if len(stateEvents) != 0 {
-		t.Fatalf("expected 0 state events after artifact failure, got %d", len(stateEvents))
+	// No metadata should have been written.
+	metadata := getMetadataStoreCalls(t, mockArtifact)
+	if len(metadata) != 0 {
+		t.Fatalf("expected 0 metadata after artifact failure, got %d", len(metadata))
 	}
 
 	// Check the session has no pending chunks.
@@ -403,16 +371,16 @@ func TestArtifactStoreFailureDoesNotCreatePendingChunk(t *testing.T) {
 	}
 }
 
-func TestStateEventFailureAddsToPendingChunks(t *testing.T) {
+func TestMetadataWriteFailureAddsToPendingChunks(t *testing.T) {
 	refs := newTestRefs(t)
-	mgr, _, mockWriter, fakeClock := newTestLogManager(t, refs)
+	mgr, mockArtifact, fakeClock := newTestLogManager(t)
 
 	// Large threshold so HandleDeltas doesn't trigger an immediate flush.
 	mgr.chunkSizeThreshold = 10 * 1024 * 1024
 	mgr.flushInterval = 10 * time.Second
 
-	// Make state event writes fail.
-	mockWriter.setStateEventError(fmt.Errorf("homeserver unavailable"))
+	// Make metadata writes fail (data chunk stores succeed).
+	mockArtifact.setMetadataStoreError(fmt.Errorf("tag service unavailable"))
 
 	deltas := makeDeltas(refs, "session-1", 1, 100)
 	ctx := context.Background()
@@ -422,10 +390,10 @@ func TestStateEventFailureAddsToPendingChunks(t *testing.T) {
 	fakeClock.Advance(11 * time.Second)
 	mgr.tickFlush(ctx)
 
-	// State event write should have been attempted but failed.
-	stateEvents := mockWriter.getStateEventCalls()
-	if len(stateEvents) != 0 {
-		t.Fatalf("expected 0 successful state events, got %d", len(stateEvents))
+	// Metadata write should have been attempted but failed.
+	metadata := getMetadataStoreCalls(t, mockArtifact)
+	if len(metadata) != 0 {
+		t.Fatalf("expected 0 successful metadata writes, got %d", len(metadata))
 	}
 
 	// The chunk should be in pendingChunks.
@@ -439,24 +407,24 @@ func TestStateEventFailureAddsToPendingChunks(t *testing.T) {
 	session.mu.Unlock()
 
 	if pendingCount != 1 {
-		t.Errorf("expected 1 pending chunk after state event failure, got %d", pendingCount)
+		t.Errorf("expected 1 pending chunk after metadata write failure, got %d", pendingCount)
 	}
 }
 
 func TestPendingChunksRetryOnNextFlush(t *testing.T) {
 	refs := newTestRefs(t)
-	mgr, _, mockWriter, fakeClock := newTestLogManager(t, refs)
+	mgr, mockArtifact, fakeClock := newTestLogManager(t)
 
 	mgr.chunkSizeThreshold = 50
 
-	// First batch: state event fails, chunk goes to pending.
-	mockWriter.setStateEventError(fmt.Errorf("homeserver unavailable"))
+	// First batch: metadata write fails, chunk goes to pending.
+	mockArtifact.setMetadataStoreError(fmt.Errorf("tag service unavailable"))
 	deltas := makeDeltas(refs, "session-1", 2, 100)
 	ctx := context.Background()
 	mgr.HandleDeltas(ctx, deltas)
 
 	// Clear the error for the next attempt.
-	mockWriter.setStateEventError(nil)
+	mockArtifact.setMetadataStoreError(nil)
 
 	// Send more deltas to trigger another flush.
 	deltas2 := makeDeltas(refs, "session-1", 2, 100)
@@ -470,26 +438,27 @@ func TestPendingChunksRetryOnNextFlush(t *testing.T) {
 	fakeClock.Advance(11 * time.Second)
 	mgr.tickFlush(ctx)
 
-	// Should have at least one successful state event now that includes
-	// both the pending chunk from the failed write and the new chunk.
-	stateEvents := mockWriter.getStateEventCalls()
-	if len(stateEvents) == 0 {
-		t.Fatal("expected at least 1 successful state event after retry")
+	// Should have at least one successful metadata write now that
+	// includes both the pending chunk from the failed write and the
+	// new chunk.
+	metadata := getMetadataStoreCalls(t, mockArtifact)
+	if len(metadata) == 0 {
+		t.Fatal("expected at least 1 successful metadata write after retry")
 	}
 
-	// The most recent state event should contain chunks from both flushes.
-	lastEvent := stateEvents[len(stateEvents)-1]
-	if len(lastEvent.Content.Chunks) < 2 {
-		t.Errorf("expected at least 2 chunks in retried state event, got %d", len(lastEvent.Content.Chunks))
+	// The most recent metadata should contain chunks from both flushes.
+	lastMetadata := metadata[len(metadata)-1]
+	if len(lastMetadata.Chunks) < 2 {
+		t.Errorf("expected at least 2 chunks in retried metadata, got %d", len(lastMetadata.Chunks))
 	}
 }
 
 func TestPendingChunksCap(t *testing.T) {
 	refs := newTestRefs(t)
-	mgr, _, mockWriter, _ := newTestLogManager(t, refs)
+	mgr, mockArtifact, _ := newTestLogManager(t)
 
-	// State events always fail.
-	mockWriter.setStateEventError(fmt.Errorf("permanent failure"))
+	// Metadata writes always fail.
+	mockArtifact.setMetadataStoreError(fmt.Errorf("permanent failure"))
 
 	// Small threshold so each batch triggers a flush.
 	mgr.chunkSizeThreshold = 10
@@ -524,7 +493,7 @@ func TestPendingChunksCap(t *testing.T) {
 
 func TestCompleteLogFlushesAndTransitions(t *testing.T) {
 	refs := newTestRefs(t)
-	mgr, mockArtifact, mockWriter, _ := newTestLogManager(t, refs)
+	mgr, mockArtifact, _ := newTestLogManager(t)
 
 	// Large threshold so HandleDeltas doesn't flush.
 	mgr.chunkSizeThreshold = 10 * 1024 * 1024
@@ -544,23 +513,24 @@ func TestCompleteLogFlushesAndTransitions(t *testing.T) {
 		t.Fatalf("CompleteLog failed: %v", err)
 	}
 
-	// Should have flushed the remaining data.
+	// Should have flushed the remaining data (1 data + 1 metadata from
+	// flush, then 1 metadata from complete).
 	storeCalls := mockArtifact.getStoreCalls()
-	if len(storeCalls) != 1 {
-		t.Fatalf("expected 1 store call after complete-log, got %d", len(storeCalls))
+	if len(storeCalls) < 2 {
+		t.Fatalf("expected at least 2 store calls after complete-log, got %d", len(storeCalls))
 	}
 
-	// Should have written a "complete" state event.
-	stateEvents := mockWriter.getStateEventCalls()
+	// Should have written a "complete" metadata artifact.
+	metadata := getMetadataStoreCalls(t, mockArtifact)
 	found := false
-	for _, event := range stateEvents {
-		if event.Content.Status == log.LogStatusComplete {
+	for _, content := range metadata {
+		if content.Status == log.LogStatusComplete {
 			found = true
 			break
 		}
 	}
 	if !found {
-		t.Error("expected at least one state event with status 'complete'")
+		t.Error("expected at least one metadata with status 'complete'")
 	}
 
 	// Session should be removed.
@@ -576,7 +546,7 @@ func TestCompleteLogFlushesAndTransitions(t *testing.T) {
 
 func TestCompleteLogBySourceCompletesAllSessions(t *testing.T) {
 	refs := newTestRefs(t)
-	mgr, mockArtifact, mockWriter, _ := newTestLogManager(t, refs)
+	mgr, mockArtifact, _ := newTestLogManager(t)
 
 	// Large threshold so HandleDeltas doesn't flush.
 	mgr.chunkSizeThreshold = 10 * 1024 * 1024
@@ -608,21 +578,22 @@ func TestCompleteLogBySourceCompletesAllSessions(t *testing.T) {
 		t.Fatalf("CompleteLog by source failed: %v", err)
 	}
 
-	// Both sessions should have been flushed.
+	// Both sessions should have been flushed (2 data + 2 flush
+	// metadata + 2 complete metadata = 6 store calls).
 	storeCalls := mockArtifact.getStoreCalls()
-	if len(storeCalls) != 2 {
-		t.Fatalf("expected 2 store calls (one per session), got %d", len(storeCalls))
+	if len(storeCalls) < 4 {
+		t.Fatalf("expected at least 4 store calls, got %d", len(storeCalls))
 	}
 
-	// Both should have "complete" state events.
+	// Both should have "complete" metadata.
 	completeCount := 0
-	for _, event := range mockWriter.getStateEventCalls() {
-		if event.Content.Status == log.LogStatusComplete {
+	for _, content := range getMetadataStoreCalls(t, mockArtifact) {
+		if content.Status == log.LogStatusComplete {
 			completeCount++
 		}
 	}
 	if completeCount != 2 {
-		t.Fatalf("expected 2 complete state events, got %d", completeCount)
+		t.Fatalf("expected 2 complete metadata writes, got %d", completeCount)
 	}
 
 	// No sessions should remain.
@@ -636,7 +607,7 @@ func TestCompleteLogBySourceCompletesAllSessions(t *testing.T) {
 
 func TestCompleteLogIdempotent(t *testing.T) {
 	refs := newTestRefs(t)
-	mgr, _, _, _ := newTestLogManager(t, refs)
+	mgr, _, _ := newTestLogManager(t)
 
 	ctx := context.Background()
 
@@ -663,7 +634,7 @@ func TestCompleteLogIdempotent(t *testing.T) {
 
 func TestStaleReaperCompletesIdleSessions(t *testing.T) {
 	refs := newTestRefs(t)
-	mgr, _, mockWriter, fakeClock := newTestLogManager(t, refs)
+	mgr, mockArtifact, fakeClock := newTestLogManager(t)
 
 	mgr.chunkSizeThreshold = 10 * 1024 * 1024
 	mgr.staleTimeout = 5 * time.Minute
@@ -686,23 +657,23 @@ func TestStaleReaperCompletesIdleSessions(t *testing.T) {
 		t.Error("expected stale session to be removed by reaper")
 	}
 
-	// Should have written a state event with status "complete".
-	stateEvents := mockWriter.getStateEventCalls()
+	// Should have written metadata with status "complete".
+	metadata := getMetadataStoreCalls(t, mockArtifact)
 	found := false
-	for _, event := range stateEvents {
-		if event.Content.Status == log.LogStatusComplete {
+	for _, content := range metadata {
+		if content.Status == log.LogStatusComplete {
 			found = true
 			break
 		}
 	}
 	if !found {
-		t.Error("expected state event with status 'complete' from reaper")
+		t.Error("expected metadata with status 'complete' from reaper")
 	}
 }
 
 func TestReaperDoesNotCompleteActiveSessions(t *testing.T) {
 	refs := newTestRefs(t)
-	mgr, _, _, fakeClock := newTestLogManager(t, refs)
+	mgr, _, fakeClock := newTestLogManager(t)
 
 	mgr.chunkSizeThreshold = 10 * 1024 * 1024
 	mgr.staleTimeout = 5 * time.Minute
@@ -728,7 +699,7 @@ func TestReaperDoesNotCompleteActiveSessions(t *testing.T) {
 
 func TestGracefulShutdownFlushesWithoutCompletion(t *testing.T) {
 	refs := newTestRefs(t)
-	mgr, mockArtifact, mockWriter, _ := newTestLogManager(t, refs)
+	mgr, mockArtifact, _ := newTestLogManager(t)
 
 	mgr.chunkSizeThreshold = 10 * 1024 * 1024
 
@@ -739,78 +710,17 @@ func TestGracefulShutdownFlushesWithoutCompletion(t *testing.T) {
 	// Shutdown drain.
 	mgr.Close(ctx)
 
-	// Should have flushed.
+	// Should have flushed (1 data + 1 metadata).
 	storeCalls := mockArtifact.getStoreCalls()
-	if len(storeCalls) != 1 {
-		t.Fatalf("expected 1 store call after shutdown, got %d", len(storeCalls))
+	if len(storeCalls) != 2 {
+		t.Fatalf("expected 2 store calls after shutdown (data + metadata), got %d", len(storeCalls))
 	}
 
 	// Status should NOT be "complete" — just a flush, not a completion.
-	stateEvents := mockWriter.getStateEventCalls()
-	for _, event := range stateEvents {
-		if event.Content.Status == log.LogStatusComplete {
+	for _, content := range getMetadataStoreCalls(t, mockArtifact) {
+		if content.Status == log.LogStatusComplete {
 			t.Error("shutdown should not transition sessions to complete")
 		}
-	}
-}
-
-func TestRoomResolutionCaching(t *testing.T) {
-	refs := newTestRefs(t)
-	mgr, _, _, _ := newTestLogManager(t, refs)
-
-	mgr.chunkSizeThreshold = 50
-
-	ctx := context.Background()
-
-	// Send enough deltas to trigger multiple flushes.
-	for i := range 5 {
-		deltas := makeDeltas(refs, "session-1", 1, 100)
-		deltas[0].Sequence = uint64(i * 100)
-		mgr.HandleDeltas(ctx, deltas)
-	}
-
-	// The room should only be resolved once (on first flush).
-	key := sessionKey{source: refs.source.Localpart(), sessionID: "session-1"}
-	mgr.sessionsMu.RLock()
-	session := mgr.sessions[key]
-	mgr.sessionsMu.RUnlock()
-
-	if session == nil {
-		t.Fatal("expected session to exist")
-	}
-
-	session.mu.Lock()
-	roomResolved := session.roomResolved
-	configRoomID := session.configRoomID
-	session.mu.Unlock()
-
-	if !roomResolved {
-		t.Error("expected room to be resolved")
-	}
-	if configRoomID != refs.roomID {
-		t.Errorf("expected room ID %v, got %v", refs.roomID, configRoomID)
-	}
-}
-
-func TestRoomResolutionFailureSkipsPersistence(t *testing.T) {
-	refs := newTestRefs(t)
-	mgr, mockArtifact, _, _ := newTestLogManager(t, refs)
-
-	// Clear the resolved aliases so resolution fails.
-	mgr.writer.(*mockLogEntityWriter).mu.Lock()
-	mgr.writer.(*mockLogEntityWriter).resolvedAliases = map[string]ref.RoomID{}
-	mgr.writer.(*mockLogEntityWriter).mu.Unlock()
-
-	mgr.chunkSizeThreshold = 50
-
-	deltas := makeDeltas(refs, "session-1", 2, 100)
-	ctx := context.Background()
-	mgr.HandleDeltas(ctx, deltas)
-
-	// Should not have stored any artifacts.
-	storeCalls := mockArtifact.getStoreCalls()
-	if len(storeCalls) != 0 {
-		t.Fatalf("expected 0 store calls when room resolution fails, got %d", len(storeCalls))
 	}
 }
 
@@ -821,7 +731,7 @@ func TestNilArtifactSkipsPersistence(t *testing.T) {
 	logger := testLogger(t)
 
 	// Create manager with nil artifact client.
-	mgr := newLogManager(nil, nil, fakeClock, logger)
+	mgr := newLogManager(nil, fakeClock, logger)
 	mgr.chunkSizeThreshold = 50
 
 	deltas := makeDeltas(refs, "session-1", 2, 100)
@@ -842,7 +752,7 @@ func TestNilArtifactSkipsPersistence(t *testing.T) {
 
 func TestDeltaForCompletedSessionDropped(t *testing.T) {
 	refs := newTestRefs(t)
-	mgr, mockArtifact, _, _ := newTestLogManager(t, refs)
+	mgr, mockArtifact, _ := newTestLogManager(t)
 
 	mgr.chunkSizeThreshold = 10 * 1024 * 1024
 
@@ -882,7 +792,7 @@ func TestDeltaForCompletedSessionDropped(t *testing.T) {
 
 func TestMultipleChunksAccumulate(t *testing.T) {
 	refs := newTestRefs(t)
-	mgr, _, mockWriter, _ := newTestLogManager(t, refs)
+	mgr, mockArtifact, _ := newTestLogManager(t)
 
 	// Threshold of 200 bytes so each 200-byte batch triggers a flush.
 	mgr.chunkSizeThreshold = 200
@@ -896,64 +806,22 @@ func TestMultipleChunksAccumulate(t *testing.T) {
 		mgr.HandleDeltas(ctx, deltas)
 	}
 
-	// The last state event should contain all 3 chunks.
-	stateEvents := mockWriter.getStateEventCalls()
-	if len(stateEvents) == 0 {
-		t.Fatal("expected at least one state event")
-	}
-
-	lastEvent := stateEvents[len(stateEvents)-1]
-	if len(lastEvent.Content.Chunks) != 3 {
-		t.Errorf("expected 3 chunks in final state event, got %d", len(lastEvent.Content.Chunks))
+	// The last metadata should contain all 3 chunks.
+	lastMetadata := getLastMetadata(t, mockArtifact)
+	if len(lastMetadata.Chunks) != 3 {
+		t.Errorf("expected 3 chunks in final metadata, got %d", len(lastMetadata.Chunks))
 	}
 
 	// Total bytes should be the sum of all chunks.
 	expectedTotal := int64(250 * 3)
-	if lastEvent.Content.TotalBytes != expectedTotal {
-		t.Errorf("expected total bytes %d, got %d", expectedTotal, lastEvent.Content.TotalBytes)
-	}
-}
-
-func TestNotFoundErrorClearsRoomCache(t *testing.T) {
-	refs := newTestRefs(t)
-	mgr, _, mockWriter, _ := newTestLogManager(t, refs)
-
-	mgr.chunkSizeThreshold = 50
-
-	ctx := context.Background()
-
-	// First delta resolves the room and flushes successfully.
-	deltas := makeDeltas(refs, "session-1", 2, 100)
-	mgr.HandleDeltas(ctx, deltas)
-
-	// Now make state events fail with M_NOT_FOUND.
-	mockWriter.setStateEventError(fmt.Errorf("messaging: send state event to \"!room\" failed: M_NOT_FOUND: room not found"))
-
-	// Send more deltas to trigger another flush.
-	deltas2 := makeDeltas(refs, "session-1", 2, 100)
-	for i := range deltas2 {
-		deltas2[i].Sequence = uint64(i + 100)
-	}
-	mgr.HandleDeltas(ctx, deltas2)
-
-	// Room cache should be cleared.
-	key := sessionKey{source: refs.source.Localpart(), sessionID: "session-1"}
-	mgr.sessionsMu.RLock()
-	session := mgr.sessions[key]
-	mgr.sessionsMu.RUnlock()
-
-	session.mu.Lock()
-	roomResolved := session.roomResolved
-	session.mu.Unlock()
-
-	if roomResolved {
-		t.Error("expected room cache to be cleared after M_NOT_FOUND")
+	if lastMetadata.TotalBytes != expectedTotal {
+		t.Errorf("expected total bytes %d, got %d", expectedTotal, lastMetadata.TotalBytes)
 	}
 }
 
 func TestFlushTickerDoesNotFlushRecentData(t *testing.T) {
 	refs := newTestRefs(t)
-	mgr, mockArtifact, _, fakeClock := newTestLogManager(t, refs)
+	mgr, mockArtifact, fakeClock := newTestLogManager(t)
 
 	mgr.chunkSizeThreshold = 10 * 1024 * 1024
 	mgr.flushInterval = 10 * time.Second
@@ -977,7 +845,7 @@ func TestFlushTickerDoesNotFlushRecentData(t *testing.T) {
 
 func TestEmptyDeltasSkipped(t *testing.T) {
 	refs := newTestRefs(t)
-	mgr, _, _, _ := newTestLogManager(t, refs)
+	mgr, _, _ := newTestLogManager(t)
 
 	ctx := context.Background()
 
@@ -1046,7 +914,7 @@ func getSession(t *testing.T, mgr *logManager, refs testRefs, sessionID string) 
 
 func TestEvictionRemovesOldestChunks(t *testing.T) {
 	refs := newTestRefs(t)
-	mgr, _, mockWriter, fakeClock := newTestLogManager(t, refs)
+	mgr, mockArtifact, fakeClock := newTestLogManager(t)
 
 	// Each flush produces a 250-byte chunk. Set threshold so each
 	// batch triggers an immediate flush.
@@ -1097,28 +965,28 @@ func TestEvictionRemovesOldestChunks(t *testing.T) {
 		t.Errorf("expected rotating status after eviction, got %q", postStatus)
 	}
 
-	// Verify a state event was written with the trimmed chunks.
-	stateEvents := mockWriter.getStateEventCalls()
-	var evictionEvent *mockStateEventCall
-	for i := range stateEvents {
-		if stateEvents[i].Content.Status == log.LogStatusRotating {
-			evictionEvent = &stateEvents[i]
+	// Verify metadata was written with the trimmed chunks.
+	metadata := getMetadataStoreCalls(t, mockArtifact)
+	var evictionMetadata *log.LogContent
+	for i := range metadata {
+		if metadata[i].Status == log.LogStatusRotating {
+			evictionMetadata = &metadata[i]
 		}
 	}
-	if evictionEvent == nil {
-		t.Fatal("expected a state event with rotating status")
+	if evictionMetadata == nil {
+		t.Fatal("expected metadata with rotating status")
 	}
-	if len(evictionEvent.Content.Chunks) != 2 {
-		t.Errorf("expected 2 chunks in eviction state event, got %d", len(evictionEvent.Content.Chunks))
+	if len(evictionMetadata.Chunks) != 2 {
+		t.Errorf("expected 2 chunks in eviction metadata, got %d", len(evictionMetadata.Chunks))
 	}
-	if evictionEvent.Content.TotalBytes != 500 {
-		t.Errorf("expected 500 total bytes in eviction state event, got %d", evictionEvent.Content.TotalBytes)
+	if evictionMetadata.TotalBytes != 500 {
+		t.Errorf("expected 500 total bytes in eviction metadata, got %d", evictionMetadata.TotalBytes)
 	}
 }
 
 func TestEvictionPreservesLastChunk(t *testing.T) {
 	refs := newTestRefs(t)
-	mgr, _, _, fakeClock := newTestLogManager(t, refs)
+	mgr, _, fakeClock := newTestLogManager(t)
 
 	mgr.chunkSizeThreshold = 200
 	// Impossibly small: even one chunk exceeds this. Eviction should
@@ -1149,7 +1017,7 @@ func TestEvictionPreservesLastChunk(t *testing.T) {
 
 func TestEvictionTransitionsActiveToRotating(t *testing.T) {
 	refs := newTestRefs(t)
-	mgr, _, _, fakeClock := newTestLogManager(t, refs)
+	mgr, _, fakeClock := newTestLogManager(t)
 
 	mgr.chunkSizeThreshold = 200
 	mgr.maxBytesPerSession = 400
@@ -1178,7 +1046,7 @@ func TestEvictionTransitionsActiveToRotating(t *testing.T) {
 
 func TestEvictionStaysRotatingOnSubsequentRuns(t *testing.T) {
 	refs := newTestRefs(t)
-	mgr, _, _, fakeClock := newTestLogManager(t, refs)
+	mgr, _, fakeClock := newTestLogManager(t)
 
 	mgr.chunkSizeThreshold = 200
 	mgr.maxBytesPerSession = 400
@@ -1214,7 +1082,7 @@ func TestEvictionStaysRotatingOnSubsequentRuns(t *testing.T) {
 
 func TestEvictionDoesNotAffectSmallSessions(t *testing.T) {
 	refs := newTestRefs(t)
-	mgr, _, _, fakeClock := newTestLogManager(t, refs)
+	mgr, _, fakeClock := newTestLogManager(t)
 
 	mgr.chunkSizeThreshold = 200
 	mgr.maxBytesPerSession = 10000
@@ -1243,9 +1111,9 @@ func TestEvictionDoesNotAffectSmallSessions(t *testing.T) {
 	}
 }
 
-func TestEvictionWithStateEventFailure(t *testing.T) {
+func TestEvictionWithMetadataWriteFailure(t *testing.T) {
 	refs := newTestRefs(t)
-	mgr, _, mockWriter, fakeClock := newTestLogManager(t, refs)
+	mgr, mockArtifact, fakeClock := newTestLogManager(t)
 
 	mgr.chunkSizeThreshold = 200
 	mgr.maxBytesPerSession = 400
@@ -1253,13 +1121,13 @@ func TestEvictionWithStateEventFailure(t *testing.T) {
 	ctx := context.Background()
 	flushChunks(t, ctx, mgr, refs, "session-1", 4, 250, 1)
 
-	// Make state event writes fail before running eviction.
-	mockWriter.setStateEventError(fmt.Errorf("homeserver down"))
+	// Make metadata writes fail before running eviction.
+	mockArtifact.setMetadataStoreError(fmt.Errorf("tag service down"))
 	fakeClock.Advance(30 * time.Second)
 	mgr.tickReaper(ctx)
 
 	// In-memory state should still be trimmed even though the
-	// state event write failed.
+	// metadata write failed.
 	session := getSession(t, mgr, refs, "session-1")
 	session.mu.Lock()
 	chunkCount := len(session.chunks)
@@ -1280,25 +1148,28 @@ func TestEvictionWithStateEventFailure(t *testing.T) {
 	}
 
 	// Clear the error. Next flush should persist the trimmed state.
-	mockWriter.setStateEventError(nil)
+	mockArtifact.setMetadataStoreError(nil)
 
 	// Add new data and trigger a flush to verify the trimmed state
-	// propagates to the state event.
+	// propagates to the metadata.
 	flushChunks(t, ctx, mgr, refs, "session-1", 1, 250, 1000)
 
-	stateEvents := mockWriter.getStateEventCalls()
-	if len(stateEvents) == 0 {
-		t.Fatal("expected at least one state event after clearing error")
+	metadata := getMetadataStoreCalls(t, mockArtifact)
+	found := false
+	for _, content := range metadata {
+		if content.Status == log.LogStatusRotating {
+			found = true
+			break
+		}
 	}
-	lastEvent := stateEvents[len(stateEvents)-1]
-	if lastEvent.Content.Status != log.LogStatusRotating {
-		t.Errorf("expected rotating in state event, got %q", lastEvent.Content.Status)
+	if !found {
+		t.Fatal("expected metadata with rotating status after clearing error")
 	}
 }
 
 func TestEvictionStatCounter(t *testing.T) {
 	refs := newTestRefs(t)
-	mgr, _, _, fakeClock := newTestLogManager(t, refs)
+	mgr, _, fakeClock := newTestLogManager(t)
 
 	mgr.chunkSizeThreshold = 200
 	mgr.maxBytesPerSession = 400
@@ -1322,7 +1193,7 @@ func TestEvictionStatCounter(t *testing.T) {
 
 func TestCompleteLogAfterRotating(t *testing.T) {
 	refs := newTestRefs(t)
-	mgr, _, mockWriter, fakeClock := newTestLogManager(t, refs)
+	mgr, mockArtifact, fakeClock := newTestLogManager(t)
 
 	mgr.chunkSizeThreshold = 200
 	mgr.maxBytesPerSession = 400
@@ -1357,23 +1228,23 @@ func TestCompleteLogAfterRotating(t *testing.T) {
 		t.Error("expected session to be removed after completion")
 	}
 
-	// Should have a state event with status complete.
-	stateEvents := mockWriter.getStateEventCalls()
+	// Should have metadata with status complete.
+	metadata := getMetadataStoreCalls(t, mockArtifact)
 	found := false
-	for _, event := range stateEvents {
-		if event.Content.Status == log.LogStatusComplete {
+	for _, content := range metadata {
+		if content.Status == log.LogStatusComplete {
 			found = true
 			break
 		}
 	}
 	if !found {
-		t.Error("expected state event with status complete after completing rotated session")
+		t.Error("expected metadata with status complete after completing rotated session")
 	}
 }
 
 func TestStaleReaperCompletesRotatingSessions(t *testing.T) {
 	refs := newTestRefs(t)
-	mgr, _, mockWriter, fakeClock := newTestLogManager(t, refs)
+	mgr, mockArtifact, fakeClock := newTestLogManager(t)
 
 	mgr.chunkSizeThreshold = 200
 	mgr.maxBytesPerSession = 400
@@ -1408,16 +1279,16 @@ func TestStaleReaperCompletesRotatingSessions(t *testing.T) {
 		t.Error("expected stale rotating session to be removed by reaper")
 	}
 
-	// Should have a state event with status complete.
-	stateEvents := mockWriter.getStateEventCalls()
+	// Should have metadata with status complete.
+	metadata := getMetadataStoreCalls(t, mockArtifact)
 	found := false
-	for _, event := range stateEvents {
-		if event.Content.Status == log.LogStatusComplete {
+	for _, content := range metadata {
+		if content.Status == log.LogStatusComplete {
 			found = true
 			break
 		}
 	}
 	if !found {
-		t.Error("expected state event with status complete for reaped rotating session")
+		t.Error("expected metadata with status complete for reaped rotating session")
 	}
 }

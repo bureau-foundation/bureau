@@ -22,18 +22,17 @@ type ServiceStatus struct {
 // LogManagerStats contains operational counters for the log manager's
 // output delta persistence pipeline. Exposed via ServiceStatus so
 // operators and tests can verify the health of artifact storage and
-// state event writes.
+// metadata writes.
 type LogManagerStats struct {
-	FlushCount           uint64 `cbor:"flush_count"`
-	FlushErrors          uint64 `cbor:"flush_errors"`
-	StoreCount           uint64 `cbor:"store_count"`
-	StoreErrors          uint64 `cbor:"store_errors"`
-	StateEventWrites     uint64 `cbor:"state_event_writes"`
-	StateEventErrors     uint64 `cbor:"state_event_errors"`
-	RoomResolutionErrors uint64 `cbor:"room_resolution_errors"`
-	EvictionCount        uint64 `cbor:"eviction_count"`
-	ActiveSessions       int    `cbor:"active_sessions"`
-	LastError            string `cbor:"last_error,omitempty"`
+	FlushCount     uint64 `cbor:"flush_count"`
+	FlushErrors    uint64 `cbor:"flush_errors"`
+	StoreCount     uint64 `cbor:"store_count"`
+	StoreErrors    uint64 `cbor:"store_errors"`
+	MetadataWrites uint64 `cbor:"metadata_writes"`
+	MetadataErrors uint64 `cbor:"metadata_errors"`
+	EvictionCount  uint64 `cbor:"eviction_count"`
+	ActiveSessions int    `cbor:"active_sessions"`
+	LastError      string `cbor:"last_error,omitempty"`
 }
 
 // CompleteLogRequest is the CBOR request for the telemetry service's

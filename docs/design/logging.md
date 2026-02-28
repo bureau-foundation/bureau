@@ -25,7 +25,7 @@ perspective on what happened. Stored in SQLite with full query support.
 sandboxed processes. The process doesn't know or care that it's being
 captured. Pipeline build logs, agent stderr, service stdout. Unstructured
 bytes with timestamps and source identity. Stored as CAS artifacts with
-mutable `log-*` index entities.
+mutable `log-*` artifact tags as the metadata index.
 
 **Live terminal observation** (observation.md) — bidirectional, interactive
 terminal access to a running tmux session. For inhabiting a session:
@@ -54,7 +54,7 @@ Machine                                      Fleet-wide
 |                                           |   |                             |
 |  sandbox process                          |   |  bureau-telemetry-service   |
 |       |                                   |   |  +- stores output deltas    |
-|       | stdout/stderr (PTY)               |   |  +- manages log-* entities  |
+|       | stdout/stderr (PTY)               |   |  +- manages log metadata    |
 |       v                                   |   |  +- artifact write-through  |
 |  bureau-log-relay (PTY interposition)     |   |  +- serves tail/query       |
 |       |               |                   |   |  +- rotation/eviction       |
@@ -159,8 +159,8 @@ The fleet-wide telemetry service gains three responsibilities:
 
 - **Output delta ingestion**: receives batched output deltas from relays.
   Stores the raw bytes as CAS artifacts via the artifact service. Creates
-  or updates the corresponding `log-*` state event in the principal's
-  config room.
+  or updates the corresponding log metadata artifact via a mutable tag
+  (`log/<source-localpart>/<session-id>`).
 - **Tail/query API**: new CBOR socket actions for streaming live output
   and querying historical output. Subscribers receive new chunks as they
   arrive (push via the event subscription mechanism). Historical queries
@@ -191,11 +191,14 @@ records.
 - **Timestamp** — `int64`. Unix nanoseconds at flush time.
 - **Data** — `[]byte`. The raw output bytes.
 
-### log-\* Entity (state event)
+### Log Metadata (artifact tag)
 
-A mutable Matrix state event (type `m.bureau.log`, state key `log-*`)
-in the machine's config room. Tracks the chunk index for one process
-invocation's output.
+A CBOR-encoded `LogContent` struct stored as a CAS artifact with a
+mutable tag. The tag name follows the pattern
+`log/<source-localpart>/<session-id>`, enabling hierarchical listing
+by source principal. The telemetry service creates the metadata
+artifact when the first output delta arrives for a session and updates
+it (via tag overwrite) as chunks are stored.
 
 - **SessionID** — `string`. The process invocation this log belongs to.
 - **Source** — `ref.Entity`. The principal.
@@ -215,9 +218,16 @@ invocation's output.
 The chunk list is append-only during active capture. The telemetry
 service's eviction loop removes entries from the front when rotation
 is needed. At 1 MB per chunk, a 1 GB build log produces ~1000 entries
-(~50 KB of JSON in the state event). For multi-GB logs from long-lived
-services, the telemetry service consolidates old chunk entries into
-larger combined artifacts to keep the index manageable.
+in the metadata artifact. For multi-GB logs from long-lived services,
+the telemetry service consolidates old chunk entries into larger
+combined artifacts to keep the index manageable.
+
+Using artifact tags instead of Matrix state events avoids coupling
+log metadata persistence to Matrix room resolution (which requires
+the telemetry service to know which config room belongs to which
+machine). Tags are addressed by name, with last-writer-wins
+semantics — a natural fit for metadata that is only written by
+one service and updated in place.
 
 ### Why a flat list, not a chain
 
@@ -263,11 +273,11 @@ per-principal settings.
 Pipelines execute as tickets. Each pipeline step runs in a sandbox.
 Output capture integrates with the ticket system:
 
-**Pre-creation.** When the pipeline executor schedules a step, it creates
-the `log-*` state event with status `"active"` before the sandbox starts.
-This means the log entity exists and is observable even before the process
-produces any output. `bureau log tail pip-1234` can attach immediately
-and will see output as soon as the process starts writing.
+**Pre-creation.** When the pipeline executor schedules a step, the
+telemetry service creates the `log-*` metadata artifact with status
+`"active"` when the first output delta arrives. `bureau log tail
+pip-1234` can attach immediately and will see output as soon as the
+process starts writing.
 
 **Ticket attachment.** The pipeline executor attaches the `log-*`
 identifier to the pipeline step's ticket as a note or structured
@@ -393,10 +403,10 @@ sensitive data. Access follows the existing telemetry grant model:
   them to the source principal. The artifact service checks that the
   requester has appropriate access before serving content.
 
-Output capture data never appears in Matrix messages (which go to config
-rooms with broader membership). The `log-*` state event contains only
-metadata (chunk refs, sizes, timestamps) — the actual output bytes are
-in CAS artifacts behind the artifact service's access control.
+Output capture data never appears in Matrix messages. The log metadata
+artifact contains only chunk references, sizes, and timestamps — the
+actual output bytes are in CAS artifacts behind the artifact service's
+access control.
 
 ### Disabling capture
 
@@ -431,7 +441,8 @@ runs directly in tmux with the same behavior as today.
   as `log-*` references. The ticket viewer can display or link to logs.
   Telemetry correlation via ticket ID enables cross-signal queries.
 - [artifacts.md](artifacts.md) — log chunks are stored as CAS artifacts.
-  The telemetry service acts as the write path (agents and services never
+  Log metadata is also stored as CAS artifacts with mutable tags. The
+  telemetry service acts as the write path (agents and services never
   write log artifacts directly). The artifact service provides storage,
   deduplication, and access control.
 - [pipelines.md](pipelines.md) — pipeline executors create `log-*`

@@ -5,8 +5,8 @@
 // service. It receives CBOR-encoded [telemetry.TelemetryBatch]
 // messages from per-machine relays over streaming connections, verifies
 // service tokens, persists output deltas as CAS artifacts, and tracks
-// them in m.bureau.log state events. A local Unix socket serves
-// streaming ingestion, query, and session lifecycle actions.
+// them via mutable artifact tags. A local Unix socket serves streaming
+// ingestion, query, and session lifecycle actions.
 //
 // The service uses [service.BootstrapViaProxy] with audience "telemetry"
 // and registers in the fleet service directory so relays can discover
@@ -24,8 +24,8 @@
 // OutputDelta messages (raw terminal bytes from sandboxed processes)
 // are buffered per-session and flushed to the artifact store either
 // when the buffer exceeds 1 MB or on a 10-second periodic timer. Each
-// flush stores a CAS artifact and updates the session's m.bureau.log
-// state event in the source's machine config room.
+// flush stores a CAS artifact and updates the session's log metadata
+// via a mutable artifact tag.
 //
 // Sessions transition through lifecycle states: active (receiving
 // deltas), complete (sandbox exited, all data flushed), or rotating
@@ -62,7 +62,7 @@
 //   - tail (authenticated, streaming): live telemetry subscription
 //     with dynamic glob-pattern source filtering
 //   - complete-log (authenticated): flush remaining output and mark
-//     a session's log entity as complete
+//     a session's log metadata as complete
 //   - status (unauthenticated): ingestion stats, connected relay
 //     count, uptime
 package main

@@ -5,7 +5,6 @@ package integration_test
 
 import (
 	"bytes"
-	"encoding/json"
 	"fmt"
 	"io"
 	"net"
@@ -99,6 +98,36 @@ func queryTelemetryStatus(t *testing.T, socketPath string) telemetry.ServiceStat
 		t.Fatalf("telemetry status call: %v", err)
 	}
 	return status
+}
+
+// fetchLogMetadata resolves a log metadata tag and returns the
+// deserialized LogContent. The tag names follow the pattern
+// "log/<source-localpart>/<session-id>".
+func fetchLogMetadata(t *testing.T, client *artifactstore.Client, tagName string) log.LogContent {
+	t.Helper()
+	ctx := t.Context()
+
+	resolved, err := client.Resolve(ctx, tagName)
+	if err != nil {
+		t.Fatalf("resolve tag %q: %v", tagName, err)
+	}
+
+	result, err := client.Fetch(ctx, resolved.Hash)
+	if err != nil {
+		t.Fatalf("fetch metadata artifact %s (tag %q): %v", resolved.Hash, tagName, err)
+	}
+	defer result.Content.Close()
+
+	data, err := io.ReadAll(result.Content)
+	if err != nil {
+		t.Fatalf("read metadata artifact content: %v", err)
+	}
+
+	var content log.LogContent
+	if err := codec.Unmarshal(data, &content); err != nil {
+		t.Fatalf("unmarshal log metadata from tag %q: %v", tagName, err)
+	}
+	return content
 }
 
 // TestTelemetryServiceTail exercises the production telemetry service's
@@ -835,11 +864,10 @@ func TestTelemetryOutputDeltaPersistence(t *testing.T) {
 		postIngestStatus.LogManager)
 
 	if postIngestStatus.LogManager.FlushErrors > 0 {
-		t.Fatalf("log manager had %d flush errors (store_errors=%d, state_event_errors=%d, room_resolution_errors=%d, last_error=%q)",
+		t.Fatalf("log manager had %d flush errors (store_errors=%d, metadata_errors=%d, last_error=%q)",
 			postIngestStatus.LogManager.FlushErrors,
 			postIngestStatus.LogManager.StoreErrors,
-			postIngestStatus.LogManager.StateEventErrors,
-			postIngestStatus.LogManager.RoomResolutionErrors,
+			postIngestStatus.LogManager.MetadataErrors,
 			postIngestStatus.LogManager.LastError)
 	}
 	if postIngestStatus.LogManager.FlushCount == 0 {
@@ -849,20 +877,14 @@ func TestTelemetryOutputDeltaPersistence(t *testing.T) {
 		t.Fatal("log manager store_count is 0 — artifact store was never called")
 	}
 
-	// --- Verify the m.bureau.log state event ---
+	// --- Verify the log metadata artifact ---
 
 	// HandleDeltas flushes synchronously when the buffer exceeds the
-	// threshold, so by the time we receive the ack the state event
-	// should be persisted. Read it directly from the config room.
-	rawLogContent, err := admin.GetStateEvent(ctx, machine.ConfigRoomID, log.EventTypeLog, sessionID)
-	if err != nil {
-		t.Fatalf("read m.bureau.log state event: %v", err)
-	}
-
-	var logContent log.LogContent
-	if err := json.Unmarshal(rawLogContent, &logContent); err != nil {
-		t.Fatalf("unmarshal log content: %v", err)
-	}
+	// threshold, so by the time we receive the ack the metadata
+	// artifact should be persisted. Read it via the mutable tag.
+	artifactClient := artifactstore.NewClientFromToken(artifactSvc.SocketPath, artifactFetchToken)
+	tagName := "log/" + callerEntity.Localpart() + "/" + sessionID
+	logContent := fetchLogMetadata(t, artifactClient, tagName)
 
 	if logContent.Version != log.LogContentVersion {
 		t.Errorf("log version = %d, want %d", logContent.Version, log.LogContentVersion)
@@ -897,9 +919,7 @@ func TestTelemetryOutputDeltaPersistence(t *testing.T) {
 		t.Errorf("chunk timestamp = %d, want 1000000000", chunk.Timestamp)
 	}
 
-	// --- Fetch the artifact and verify content ---
-
-	artifactClient := artifactstore.NewClientFromToken(artifactSvc.SocketPath, artifactFetchToken)
+	// --- Fetch the data artifact and verify content ---
 
 	fetchResult, err := artifactClient.Fetch(ctx, chunk.Ref)
 	if err != nil {
@@ -943,16 +963,8 @@ func TestTelemetryOutputDeltaPersistence(t *testing.T) {
 		t.Error("complete-log response: completed = false, want true")
 	}
 
-	// Re-read the state event and verify status transitioned.
-	rawLogContent, err = admin.GetStateEvent(ctx, machine.ConfigRoomID, log.EventTypeLog, sessionID)
-	if err != nil {
-		t.Fatalf("re-read m.bureau.log state event after complete: %v", err)
-	}
-
-	var completedLogContent log.LogContent
-	if err := json.Unmarshal(rawLogContent, &completedLogContent); err != nil {
-		t.Fatalf("unmarshal completed log content: %v", err)
-	}
+	// Re-read the tag and verify status transitioned.
+	completedLogContent := fetchLogMetadata(t, artifactClient, tagName)
 
 	if completedLogContent.Status != log.LogStatusComplete {
 		t.Errorf("completed log status = %q, want %q", completedLogContent.Status, log.LogStatusComplete)
@@ -1111,16 +1123,13 @@ func TestTelemetryOutputRotation(t *testing.T) {
 
 	// Each 6000-byte batch exceeds the 5000-byte chunk threshold, so
 	// HandleDeltas flushes synchronously on every batch. After 4
-	// batches the state event should have 4 chunks totaling 24000 bytes.
-	rawLogContent, err := admin.GetStateEvent(ctx, machine.ConfigRoomID, log.EventTypeLog, sessionID)
-	if err != nil {
-		t.Fatalf("read m.bureau.log state event: %v", err)
-	}
+	// batches the metadata should have 4 chunks totaling 24000 bytes.
+	artifactFetchToken := mintTestServiceToken(t, machine, callerEntity, "artifact",
+		[]servicetoken.Grant{{Actions: []string{artifact.ActionFetch}}})
+	artifactClient := artifactstore.NewClientFromToken(artifactSvc.SocketPath, artifactFetchToken)
 
-	var preEvictionLog log.LogContent
-	if err := json.Unmarshal(rawLogContent, &preEvictionLog); err != nil {
-		t.Fatalf("unmarshal pre-eviction log content: %v", err)
-	}
+	tagName := "log/" + callerEntity.Localpart() + "/" + sessionID
+	preEvictionLog := fetchLogMetadata(t, artifactClient, tagName)
 
 	if preEvictionLog.Status != log.LogStatusActive {
 		t.Errorf("pre-eviction status = %q, want %q", preEvictionLog.Status, log.LogStatusActive)
@@ -1147,15 +1156,7 @@ func TestTelemetryOutputRotation(t *testing.T) {
 
 	// --- Verify post-eviction state ---
 
-	rawLogContent, err = admin.GetStateEvent(ctx, machine.ConfigRoomID, log.EventTypeLog, sessionID)
-	if err != nil {
-		t.Fatalf("read m.bureau.log state event after eviction: %v", err)
-	}
-
-	var postEvictionLog log.LogContent
-	if err := json.Unmarshal(rawLogContent, &postEvictionLog); err != nil {
-		t.Fatalf("unmarshal post-eviction log content: %v", err)
-	}
+	postEvictionLog := fetchLogMetadata(t, artifactClient, tagName)
 
 	// With max=12000 and chunks of 6000, eviction removes the oldest
 	// 2 chunks (24000-6000=18000 > 12000, 18000-6000=12000 ≤ 12000).
@@ -1186,10 +1187,6 @@ func TestTelemetryOutputRotation(t *testing.T) {
 
 	// --- Verify surviving artifacts are still fetchable ---
 
-	artifactFetchToken := mintTestServiceToken(t, machine, callerEntity, "artifact",
-		[]servicetoken.Grant{{Actions: []string{artifact.ActionFetch}}})
-	artifactClient := artifactstore.NewClientFromToken(artifactSvc.SocketPath, artifactFetchToken)
-
 	for index, chunkRef := range survivingRefs {
 		fetchResult, err := artifactClient.Fetch(ctx, chunkRef)
 		if err != nil {
@@ -1218,15 +1215,7 @@ func TestTelemetryOutputRotation(t *testing.T) {
 		t.Error("complete-log response: completed = false, want true")
 	}
 
-	rawLogContent, err = admin.GetStateEvent(ctx, machine.ConfigRoomID, log.EventTypeLog, sessionID)
-	if err != nil {
-		t.Fatalf("read m.bureau.log state event after complete: %v", err)
-	}
-
-	var completedLog log.LogContent
-	if err := json.Unmarshal(rawLogContent, &completedLog); err != nil {
-		t.Fatalf("unmarshal completed log content: %v", err)
-	}
+	completedLog := fetchLogMetadata(t, artifactClient, tagName)
 
 	if completedLog.Status != log.LogStatusComplete {
 		t.Errorf("completed status = %q, want %q", completedLog.Status, log.LogStatusComplete)

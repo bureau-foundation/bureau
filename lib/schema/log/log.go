@@ -9,16 +9,16 @@ import (
 	"github.com/bureau-foundation/bureau/lib/ref"
 )
 
-// EventTypeLog tracks raw output capture from a sandboxed process.
-// Each log entity indexes CAS artifact chunks containing the
-// process's stdout/stderr byte stream. The telemetry service
-// creates this event when the first output delta arrives and
+// EventTypeLog is the schema identifier for raw output capture log
+// metadata. Each log entity indexes CAS artifact chunks containing
+// the process's stdout/stderr byte stream. The telemetry service
+// creates this metadata when the first output delta arrives and
 // updates it as chunks are stored. Status transitions from
 // "active" (process running) to "complete" (process exited) or
 // "rotating" (long-lived process with eviction).
 //
-// State key: "log-<id>" (session/principal identifier)
-// Room: #<machine-localpart>:<server> (per-machine config room)
+// Log metadata is stored as CBOR-encoded LogContent artifacts with
+// mutable tags named "log/<source-localpart>/<session-id>".
 const EventTypeLog ref.EventType = "m.bureau.log"
 
 // LogContentVersion is the current schema version for LogContent

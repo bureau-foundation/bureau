@@ -9,13 +9,13 @@ import (
 	"fmt"
 	"io"
 	"log/slog"
-	"strings"
 	"sync"
 	"sync/atomic"
 	"time"
 
 	"github.com/bureau-foundation/bureau/lib/artifactstore"
 	"github.com/bureau-foundation/bureau/lib/clock"
+	"github.com/bureau-foundation/bureau/lib/codec"
 	"github.com/bureau-foundation/bureau/lib/ref"
 	"github.com/bureau-foundation/bureau/lib/schema/log"
 	"github.com/bureau-foundation/bureau/lib/schema/telemetry"
@@ -42,9 +42,10 @@ const (
 	defaultStaleTimeout = 5 * time.Minute
 
 	// maxPendingChunks is the maximum number of artifact refs that
-	// have been stored but not yet persisted in a state event. If
-	// this limit is reached, the session stops storing new artifacts
-	// until the backlog drains (i.e. a state event write succeeds).
+	// have been stored but not yet included in a metadata artifact.
+	// If this limit is reached, the session stops storing new
+	// artifacts until the backlog drains (i.e. a metadata write
+	// succeeds).
 	maxPendingChunks = 100
 
 	// artifactContentType is the content type used when storing
@@ -54,8 +55,8 @@ const (
 	// defaultMaxBytesPerSession is the maximum stored output per
 	// session before the eviction loop starts removing old chunks
 	// from the front. 1 GB is generous for most services while
-	// preventing unbounded state event growth. Configurable at
-	// startup via the --max-bytes-per-session flag.
+	// preventing unbounded metadata growth. Configurable at startup
+	// via the --max-bytes-per-session flag.
 	defaultMaxBytesPerSession int64 = 1 << 30
 )
 
@@ -67,13 +68,10 @@ type artifactStorer interface {
 	Store(ctx context.Context, header *artifactstore.StoreHeader, content io.Reader) (*artifactstore.StoreResponse, error)
 }
 
-// logEntityWriter is the subset of messaging.Session needed for
-// writing log state events and resolving room aliases. Defined as an
-// interface for testability.
-type logEntityWriter interface {
-	SendStateEvent(ctx context.Context, roomID ref.RoomID, eventType ref.EventType, stateKey string, content any) (ref.EventID, error)
-	ResolveAlias(ctx context.Context, alias ref.RoomAlias) (ref.RoomID, error)
-}
+// logMetadataContentType is the content type for log metadata
+// artifacts. These artifacts contain CBOR-encoded LogContent structs
+// that index the output data chunks.
+const logMetadataContentType = "application/vnd.bureau.log-metadata"
 
 // sessionKey uniquely identifies an output stream. The same source
 // may have multiple sessions if its sandbox is recreated.
@@ -83,9 +81,10 @@ type sessionKey struct {
 }
 
 // logManager manages per-session output buffers, flushes them to the
-// artifact store, and tracks the resulting chunks in m.bureau.log
-// state events. Each session (source + sessionID pair) has its own
-// buffer with independent locking to avoid cross-session contention.
+// artifact store, and tracks the resulting chunks via CAS artifact
+// metadata with mutable tags. Each session (source + sessionID pair)
+// has its own buffer with independent locking to avoid cross-session
+// contention.
 //
 // The lifecycle:
 //   - HandleDeltas routes incoming output deltas to session buffers.
@@ -99,7 +98,6 @@ type logManager struct {
 	sessions   map[sessionKey]*sessionBuffer
 
 	artifact artifactStorer
-	writer   logEntityWriter
 	clock    clock.Clock
 	logger   *slog.Logger
 
@@ -109,14 +107,13 @@ type logManager struct {
 	maxBytesPerSession int64
 
 	// Operational counters for the status endpoint.
-	flushCount           atomic.Uint64
-	flushErrors          atomic.Uint64
-	storeCount           atomic.Uint64
-	storeErrors          atomic.Uint64
-	stateEventWrites     atomic.Uint64
-	stateEventErrors     atomic.Uint64
-	roomResolutionErrors atomic.Uint64
-	evictionCount        atomic.Uint64
+	flushCount     atomic.Uint64
+	flushErrors    atomic.Uint64
+	storeCount     atomic.Uint64
+	storeErrors    atomic.Uint64
+	metadataWrites atomic.Uint64
+	metadataErrors atomic.Uint64
+	evictionCount  atomic.Uint64
 
 	// lastError stores the most recent error message for
 	// diagnostic surfacing via the status endpoint. Protected
@@ -129,11 +126,10 @@ type logManager struct {
 // newLogManager creates a log manager. If artifact is nil, the
 // manager counts deltas and fans out to tail subscribers but skips
 // all persistence (artifact service not available).
-func newLogManager(artifact artifactStorer, writer logEntityWriter, clk clock.Clock, logger *slog.Logger) *logManager {
+func newLogManager(artifact artifactStorer, clk clock.Clock, logger *slog.Logger) *logManager {
 	return &logManager{
 		sessions:           make(map[sessionKey]*sessionBuffer),
 		artifact:           artifact,
-		writer:             writer,
 		clock:              clk,
 		logger:             logger,
 		chunkSizeThreshold: defaultChunkSizeThreshold,
@@ -160,16 +156,15 @@ func (m *logManager) Stats() telemetry.LogManagerStats {
 	m.lastErrorMu.Unlock()
 
 	return telemetry.LogManagerStats{
-		FlushCount:           m.flushCount.Load(),
-		FlushErrors:          m.flushErrors.Load(),
-		StoreCount:           m.storeCount.Load(),
-		StoreErrors:          m.storeErrors.Load(),
-		StateEventWrites:     m.stateEventWrites.Load(),
-		StateEventErrors:     m.stateEventErrors.Load(),
-		RoomResolutionErrors: m.roomResolutionErrors.Load(),
-		EvictionCount:        m.evictionCount.Load(),
-		ActiveSessions:       sessionCount,
-		LastError:            lastErr,
+		FlushCount:     m.flushCount.Load(),
+		FlushErrors:    m.flushErrors.Load(),
+		StoreCount:     m.storeCount.Load(),
+		StoreErrors:    m.storeErrors.Load(),
+		MetadataWrites: m.metadataWrites.Load(),
+		MetadataErrors: m.metadataErrors.Load(),
+		EvictionCount:  m.evictionCount.Load(),
+		ActiveSessions: sessionCount,
+		LastError:      lastErr,
 	}
 }
 
@@ -183,10 +178,6 @@ type sessionBuffer struct {
 	source    ref.Entity
 	sessionID string
 
-	// Room resolution (resolved on first delta, cached).
-	configRoomID ref.RoomID
-	roomResolved bool
-
 	// Current unflushed data. Pre-allocated to chunkSizeThreshold
 	// capacity to avoid repeated growth allocations during append.
 	data           []byte
@@ -194,8 +185,8 @@ type sessionBuffer struct {
 	firstTimestamp int64
 	lastSequence   uint64
 
-	// Chunks stored in artifacts but not yet persisted in the state
-	// event. Drained on each successful state event write.
+	// Chunks stored as data artifacts but not yet included in the
+	// metadata artifact. Drained on each successful metadata write.
 	pendingChunks []log.LogChunk
 
 	// Entity state: the last successfully persisted state. Survives
@@ -326,34 +317,14 @@ func (m *logManager) findOrCreateSession(key sessionKey, delta *telemetry.Output
 }
 
 // flushSession stores buffered data as a CAS artifact and updates
-// the m.bureau.log state event. Called both from HandleDeltas (size
-// threshold) and from the background flush ticker (time threshold).
+// the log metadata artifact via a mutable tag. Called both from
+// HandleDeltas (size threshold) and from the background flush ticker
+// (time threshold).
 //
 // The caller provides the data snapshot — it must not hold the
 // session lock.
 func (m *logManager) flushSession(ctx context.Context, session *sessionBuffer, data []byte, firstSequence uint64, firstTimestamp int64) {
 	if len(data) == 0 {
-		return
-	}
-
-	// Resolve room on first flush.
-	session.mu.Lock()
-	if !session.roomResolved {
-		session.mu.Unlock()
-		m.resolveRoom(ctx, session)
-		session.mu.Lock()
-	}
-	roomID := session.configRoomID
-	roomResolved := session.roomResolved
-	session.mu.Unlock()
-
-	if !roomResolved || roomID.IsZero() {
-		m.logger.Debug("skipping flush: room not resolved",
-			"source", session.source,
-			"session_id", session.sessionID,
-		)
-		m.flushErrors.Add(1)
-		m.roomResolutionErrors.Add(1)
 		return
 	}
 
@@ -411,16 +382,16 @@ func (m *logManager) flushSession(ctx context.Context, session *sessionBuffer, d
 		Timestamp: firstTimestamp,
 	}
 
-	// Build and write the state event.
-	m.writeLogEntity(ctx, session, roomID, newChunk)
+	// Build and write the metadata artifact.
+	m.writeLogEntity(ctx, session, newChunk)
 }
 
-// writeLogEntity builds the m.bureau.log state event content from
-// the session's persisted chunks, pending chunks, and the new chunk,
-// then writes it. On success, pending chunks are drained and the
-// entity state is updated. On failure, the new chunk is added to
-// pending chunks for retry on the next flush.
-func (m *logManager) writeLogEntity(ctx context.Context, session *sessionBuffer, roomID ref.RoomID, newChunk log.LogChunk) {
+// writeLogEntity builds the log metadata from the session's persisted
+// chunks, pending chunks, and the new chunk, then stores it as a
+// tagged metadata artifact. On success, pending chunks are drained
+// and the entity state is updated. On failure, the new chunk is added
+// to pending chunks for retry on the next flush.
+func (m *logManager) writeLogEntity(ctx context.Context, session *sessionBuffer, newChunk log.LogChunk) {
 	session.mu.Lock()
 
 	// Build the full chunk list: persisted + pending + new.
@@ -445,22 +416,23 @@ func (m *logManager) writeLogEntity(ctx context.Context, session *sessionBuffer,
 		Chunks:     allChunks,
 	}
 
+	tagName := logTagName(session.source, session.sessionID)
 	session.mu.Unlock()
 
-	// Write the state event (network call, do not hold lock).
-	_, err := m.writer.SendStateEvent(ctx, roomID, log.EventTypeLog, session.sessionID, content)
+	// Store the metadata artifact (network call, do not hold lock).
+	err := m.storeLogMetadata(ctx, tagName, content)
 
 	session.mu.Lock()
 	defer session.mu.Unlock()
 
 	m.flushCount.Add(1)
 	if err != nil {
-		m.stateEventErrors.Add(1)
-		m.recordError(fmt.Errorf("state event write: %w", err))
-		m.logger.Error("state event write failed",
+		m.metadataErrors.Add(1)
+		m.recordError(fmt.Errorf("metadata write: %w", err))
+		m.logger.Error("metadata write failed",
 			"source", session.source,
 			"session_id", session.sessionID,
-			"room_id", roomID,
+			"tag", tagName,
 			"error", err,
 		)
 
@@ -474,22 +446,11 @@ func (m *logManager) writeLogEntity(ctx context.Context, session *sessionBuffer,
 				"pending_count", len(session.pendingChunks),
 			)
 		}
-
-		// Check for M_NOT_FOUND — invalidate room cache so next flush re-resolves.
-		// The messaging library wraps errors; check the error string.
-		if isNotFoundError(err) {
-			session.roomResolved = false
-			session.configRoomID = ref.RoomID{}
-			m.logger.Warn("room not found, clearing room cache",
-				"source", session.source,
-				"session_id", session.sessionID,
-			)
-		}
 		return
 	}
 
 	// Success: drain pending chunks and update entity state.
-	m.stateEventWrites.Add(1)
+	m.metadataWrites.Add(1)
 	session.chunks = allChunks
 	session.totalBytes = totalBytes
 	session.pendingChunks = session.pendingChunks[:0]
@@ -497,33 +458,32 @@ func (m *logManager) writeLogEntity(ctx context.Context, session *sessionBuffer,
 	session.entityExists = true
 }
 
-// resolveRoom resolves the machine config room alias and caches the
-// result on the session buffer.
-func (m *logManager) resolveRoom(ctx context.Context, session *sessionBuffer) {
-	alias := session.machine.RoomAlias()
+// logTagName builds the mutable tag name for a session's log
+// metadata artifact. The hierarchical format enables prefix-based
+// listing of all sessions for a source.
+func logTagName(source ref.Entity, sessionID string) string {
+	return "log/" + source.Localpart() + "/" + sessionID
+}
 
-	roomID, err := m.writer.ResolveAlias(ctx, alias)
-
-	session.mu.Lock()
-	defer session.mu.Unlock()
-
-	session.roomResolved = true
+// storeLogMetadata serializes content as a CBOR metadata artifact
+// and stores it with a mutable tag. The tag enables lookups by
+// source and session without Matrix room resolution.
+func (m *logManager) storeLogMetadata(ctx context.Context, tagName string, content log.LogContent) error {
+	data, err := codec.Marshal(content)
 	if err != nil {
-		m.logger.Warn("room alias resolution failed",
-			"alias", alias,
-			"source", session.source,
-			"session_id", session.sessionID,
-			"error", err,
-		)
-		return
+		return fmt.Errorf("marshal log metadata: %w", err)
 	}
 
-	session.configRoomID = roomID
-	m.logger.Debug("resolved machine config room",
-		"alias", alias,
-		"room_id", roomID,
-		"source", session.source,
-	)
+	header := &artifactstore.StoreHeader{
+		ContentType: logMetadataContentType,
+		Size:        int64(len(data)),
+		Data:        data,
+		Tag:         tagName,
+		Labels:      []string{"log-metadata", content.Source.Localpart()},
+	}
+
+	_, err = m.artifact.Store(ctx, header, nil)
+	return err
 }
 
 // Run starts the background flush and reaper tickers. Blocks until
@@ -658,9 +618,6 @@ func (m *logManager) evictSession(ctx context.Context, session *sessionBuffer) {
 		session.status = log.LogStatusRotating
 	}
 
-	roomID := session.configRoomID
-	roomResolved := session.roomResolved
-
 	m.logger.Info("evicting old output chunks",
 		"source", session.source,
 		"session_id", session.sessionID,
@@ -673,19 +630,14 @@ func (m *logManager) evictSession(ctx context.Context, session *sessionBuffer) {
 	session.mu.Unlock()
 
 	m.evictionCount.Add(1)
-
-	if !roomResolved || roomID.IsZero() {
-		return
-	}
-
-	m.writeEvictedEntity(ctx, session, roomID)
+	m.writeEvictedEntity(ctx, session)
 }
 
-// writeEvictedEntity writes the m.bureau.log state event after chunk
-// eviction. Builds the event from the session's current in-memory
+// writeEvictedEntity writes the log metadata artifact after chunk
+// eviction. Builds the metadata from the session's current in-memory
 // state (chunks + pendingChunks, which reflects the post-eviction
 // trim). On success, updates the session's persisted state.
-func (m *logManager) writeEvictedEntity(ctx context.Context, session *sessionBuffer, roomID ref.RoomID) {
+func (m *logManager) writeEvictedEntity(ctx context.Context, session *sessionBuffer) {
 	session.mu.Lock()
 
 	allChunks := make([]log.LogChunk, 0, len(session.chunks)+len(session.pendingChunks))
@@ -707,17 +659,18 @@ func (m *logManager) writeEvictedEntity(ctx context.Context, session *sessionBuf
 		Chunks:     allChunks,
 	}
 
+	tagName := logTagName(session.source, session.sessionID)
 	session.mu.Unlock()
 
-	_, err := m.writer.SendStateEvent(ctx, roomID, log.EventTypeLog, session.sessionID, content)
+	err := m.storeLogMetadata(ctx, tagName, content)
 
 	session.mu.Lock()
 	defer session.mu.Unlock()
 
 	if err != nil {
-		m.stateEventErrors.Add(1)
-		m.recordError(fmt.Errorf("eviction state event write: %w", err))
-		m.logger.Error("eviction state event write failed",
+		m.metadataErrors.Add(1)
+		m.recordError(fmt.Errorf("eviction metadata write: %w", err))
+		m.logger.Error("eviction metadata write failed",
 			"source", session.source,
 			"session_id", session.sessionID,
 			"error", err,
@@ -725,7 +678,7 @@ func (m *logManager) writeEvictedEntity(ctx context.Context, session *sessionBuf
 		return
 	}
 
-	m.stateEventWrites.Add(1)
+	m.metadataWrites.Add(1)
 	session.chunks = allChunks
 	session.totalBytes = totalBytes
 	session.pendingChunks = session.pendingChunks[:0]
@@ -809,16 +762,14 @@ func (m *logManager) completeSession(ctx context.Context, session *sessionBuffer
 		m.flushSession(ctx, session, data, firstSequence, firstTimestamp)
 	}
 
-	// Transition to complete and write the final state event.
+	// Transition to complete and write the final metadata artifact.
 	session.mu.Lock()
 	session.status = log.LogStatusComplete
-	roomID := session.configRoomID
-	roomResolved := session.roomResolved
 	hasEntity := session.entityExists || len(session.pendingChunks) > 0
 	session.mu.Unlock()
 
-	if roomResolved && !roomID.IsZero() && hasEntity {
-		m.writeCompleteEntity(ctx, session, roomID)
+	if hasEntity {
+		m.writeCompleteEntity(ctx, session)
 	}
 
 	// Remove from the sessions map.
@@ -827,10 +778,10 @@ func (m *logManager) completeSession(ctx context.Context, session *sessionBuffer
 	m.sessionsMu.Unlock()
 }
 
-// writeCompleteEntity writes the final m.bureau.log state event with
+// writeCompleteEntity writes the final log metadata artifact with
 // status "complete". Does not create a new chunk — just updates the
-// status field of the existing entity.
-func (m *logManager) writeCompleteEntity(ctx context.Context, session *sessionBuffer, roomID ref.RoomID) {
+// status field of the existing metadata.
+func (m *logManager) writeCompleteEntity(ctx context.Context, session *sessionBuffer) {
 	session.mu.Lock()
 
 	// Build the final chunk list from persisted + pending.
@@ -853,11 +804,12 @@ func (m *logManager) writeCompleteEntity(ctx context.Context, session *sessionBu
 		Chunks:     allChunks,
 	}
 
+	tagName := logTagName(session.source, session.sessionID)
 	session.mu.Unlock()
 
-	_, err := m.writer.SendStateEvent(ctx, roomID, log.EventTypeLog, session.sessionID, content)
+	err := m.storeLogMetadata(ctx, tagName, content)
 	if err != nil {
-		m.logger.Error("failed to write complete state event",
+		m.logger.Error("failed to write complete metadata",
 			"source", session.source,
 			"session_id", session.sessionID,
 			"error", err,
@@ -874,7 +826,7 @@ func (m *logManager) writeCompleteEntity(ctx context.Context, session *sessionBu
 }
 
 // Close drains all active session buffers during graceful shutdown.
-// Stores artifacts and updates entities for any non-empty buffers.
+// Stores artifacts and updates metadata for any non-empty buffers.
 // Does NOT transition sessions to "complete" — the processes may
 // still be running; only the telemetry service is shutting down.
 func (m *logManager) Close(ctx context.Context) {
@@ -908,15 +860,4 @@ func (m *logManager) Close(ctx context.Context) {
 	m.logger.Info("log manager shutdown drain complete",
 		"sessions_flushed", flushed,
 	)
-}
-
-// isNotFoundError checks whether an error represents a Matrix
-// M_NOT_FOUND response. The messaging library wraps HTTP errors in
-// fmt.Errorf, so we check the error string.
-func isNotFoundError(err error) bool {
-	if err == nil {
-		return false
-	}
-	message := err.Error()
-	return strings.Contains(message, "M_NOT_FOUND") || strings.Contains(message, "404")
 }

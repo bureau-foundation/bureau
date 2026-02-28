@@ -491,6 +491,11 @@ func (d *Daemon) watchPipelineSandboxExit(ctx context.Context, principal ref.Ent
 	}
 	d.reconcileMu.Unlock()
 
+	// Tell the telemetry service to flush and complete all log sessions
+	// for this principal. Best-effort — errors are logged, not fatal.
+	// Must be called after releasing reconcileMu (blocks on service I/O).
+	d.completeLogForPrincipal(ctx, principal)
+
 	// Destroy the sandbox.
 	d.destroyPipelineSandbox(ctx, principal)
 }

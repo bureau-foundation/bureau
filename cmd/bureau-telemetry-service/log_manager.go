@@ -54,9 +54,8 @@ const (
 	// defaultMaxBytesPerSession is the maximum stored output per
 	// session before the eviction loop starts removing old chunks
 	// from the front. 1 GB is generous for most services while
-	// preventing unbounded state event growth. Per-session template
-	// hints (OutputCapture.MaxSize) will override this when fleet
-	// config propagation is implemented.
+	// preventing unbounded state event growth. Configurable at
+	// startup via the --max-bytes-per-session flag.
 	defaultMaxBytesPerSession int64 = 1 << 30
 )
 

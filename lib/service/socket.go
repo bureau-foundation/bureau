@@ -256,6 +256,17 @@ func (s *SocketServer) Serve(ctx context.Context) error {
 		os.Remove(s.socketPath)
 	}()
 
+	// Make the socket group-writable. Unix domain socket connect()
+	// requires write permission on the socket file. Go creates sockets
+	// with the process umask (typically 0755), which gives group r-x
+	// but not w — blocking operators in the bureau-operators group from
+	// connecting. The listen directory's setgid bit ensures the socket
+	// inherits the bureau-operators group; this chmod grants group write
+	// so those members can connect.
+	if err := os.Chmod(s.socketPath, 0770); err != nil {
+		return fmt.Errorf("setting socket permissions on %s: %w", s.socketPath, err)
+	}
+
 	close(s.ready)
 
 	// Unblock Accept when the context is cancelled.

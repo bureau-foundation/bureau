@@ -597,7 +597,11 @@ func (l *Launcher) buildSandboxCommand(principalLocalpart string, spec *schema.S
 		"output_capture", capture != nil,
 	)
 
-	return []string{scriptPath}, nil
+	// Invoke the script via /bin/sh rather than direct exec. The script
+	// lives under /run/bureau/ which is on a noexec tmpfs (standard
+	// systemd default). Direct exec fails with EACCES; /bin/sh reads
+	// and interprets the file via normal I/O, which noexec doesn't block.
+	return []string{"/bin/sh", scriptPath}, nil
 }
 
 // credentialKeys returns the key names from a credential map (for logging —

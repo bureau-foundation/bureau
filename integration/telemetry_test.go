@@ -200,11 +200,11 @@ func TestTelemetryServiceTail(t *testing.T) {
 	ingestEncoder := codec.NewEncoder(ingestConn)
 	ingestDecoder := codec.NewDecoder(ingestConn)
 
-	// The "top" query computes a lookback window from the service's
-	// real wall clock. The batch timestamps must fall within that
-	// window. The service runs in a separate process with no
-	// injectable clock, so wall time is genuinely required here.
-	nowNanos := time.Now().UnixNano() //nolint:realclock // integration test: service process uses real clock
+	// Fixed timestamp used for all telemetry records. The "top"
+	// query uses Start/End to specify the range, so the actual
+	// timestamp value doesn't need to be "recent" — it just needs
+	// to be consistent with the query's Start parameter.
+	const batchTimestamp int64 = 1_735_689_600_000_000_000 // 2025-01-01T00:00:00Z
 
 	batch := telemetry.TelemetryBatch{
 		Fleet:          fleet.Ref,
@@ -215,7 +215,7 @@ func TestTelemetryServiceTail(t *testing.T) {
 			Machine:   machine.Ref,
 			Source:    callerEntity,
 			Operation: "test.tail.operation",
-			StartTime: nowNanos,
+			StartTime: batchTimestamp,
 			Duration:  500000000,
 			Status:    telemetry.SpanStatusOK,
 		}},
@@ -225,7 +225,7 @@ func TestTelemetryServiceTail(t *testing.T) {
 			Source:    callerEntity,
 			Body:      "tail test log",
 			Severity:  telemetry.SeverityInfo,
-			Timestamp: nowNanos,
+			Timestamp: batchTimestamp,
 		}},
 		OutputDeltas: []telemetry.OutputDelta{{
 			Fleet:     fleet.Ref,
@@ -234,7 +234,7 @@ func TestTelemetryServiceTail(t *testing.T) {
 			SessionID: "tail-test-session",
 			Sequence:  0,
 			Stream:    telemetry.OutputStreamCombined,
-			Timestamp: nowNanos,
+			Timestamp: batchTimestamp,
 			Data:      []byte("tail test output\n"),
 		}},
 	}
@@ -385,10 +385,12 @@ func TestTelemetryServiceTail(t *testing.T) {
 		t.Errorf("metrics: got %d points, want 0", len(metricsResponse.Metrics))
 	}
 
-	// top: 1-hour window, expect the operation from our span.
+	// top: range covering our batch timestamp, expect the operation
+	// from our span.
 	var topResponse telemetry.TopResponse
 	if err := queryClient.Call(t.Context(), "top", telemetry.TopRequest{
-		Window: int64(time.Hour),
+		Start: batchTimestamp - int64(time.Hour),
+		End:   batchTimestamp + int64(time.Hour),
 	}, &topResponse); err != nil {
 		t.Fatalf("top query: %v", err)
 	}

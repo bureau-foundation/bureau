@@ -1152,9 +1152,11 @@ func (s *Store) Stats(ctx context.Context) (telemetry.StorageStats, error) {
 }
 
 // TopFilter specifies the criteria for the aggregated operational
-// overview. Window is required.
+// overview. Start is required (the handler resolves Window→Start
+// before calling QueryTop).
 type TopFilter struct {
-	Window  int64  // Lookback duration in nanoseconds. Required.
+	Start   int64  // Earliest span start_time (Unix nanoseconds). Required.
+	End     int64  // Latest span start_time (0 = unbounded).
 	Machine string // Optional machine localpart filter.
 }
 
@@ -1190,8 +1192,7 @@ func (s *Store) QueryTop(ctx context.Context, filter TopFilter) (telemetry.TopRe
 	}
 	defer s.pool.Put(conn)
 
-	startNanos := s.clock.Now().UnixNano() - filter.Window
-	partitions := s.partitionsInRange(startNanos, 0)
+	partitions := s.partitionsInRange(filter.Start, filter.End)
 
 	var response telemetry.TopResponse
 
@@ -1208,11 +1209,11 @@ func (s *Store) QueryTop(ctx context.Context, filter TopFilter) (telemetry.TopRe
 	machineStats := make(map[string]*topMachineStats)
 
 	for _, suffix := range partitions {
-		if err := s.topAggregateOperations(conn, suffix, startNanos, filter.Machine, operationStats); err != nil {
+		if err := s.topAggregateOperations(conn, suffix, filter.Start, filter.End, filter.Machine, operationStats); err != nil {
 			return telemetry.TopResponse{}, err
 		}
 		if filter.Machine == "" {
-			if err := s.topAggregateMachines(conn, suffix, startNanos, machineStats); err != nil {
+			if err := s.topAggregateMachines(conn, suffix, filter.Start, filter.End, machineStats); err != nil {
 				return telemetry.TopResponse{}, err
 			}
 		}
@@ -1246,7 +1247,7 @@ func (s *Store) QueryTop(ctx context.Context, filter TopFilter) (telemetry.TopRe
 		offset := percentile99Offset(entry.stats.count)
 		var maxP99 int64
 		for _, suffix := range partitions {
-			duration, err := s.topP99ForOperation(conn, suffix, startNanos, filter.Machine, entry.operation, offset)
+			duration, err := s.topP99ForOperation(conn, suffix, filter.Start, filter.End, filter.Machine, entry.operation, offset)
 			if err != nil {
 				return telemetry.TopResponse{}, err
 			}
@@ -1351,12 +1352,17 @@ func (s *Store) QueryTop(ctx context.Context, filter TopFilter) (telemetry.TopRe
 
 // topAggregateOperations runs a GROUP BY operation aggregate query on
 // a single span partition, merging results into the provided map.
-func (s *Store) topAggregateOperations(conn *sqlite.Conn, suffix string, startNanos int64, machine string, stats map[string]*topOperationStats) error {
+func (s *Store) topAggregateOperations(conn *sqlite.Conn, suffix string, startNanos, endNanos int64, machine string, stats map[string]*topOperationStats) error {
 	var conditions []string
 	var args []any
 
 	conditions = append(conditions, "start_time >= ?")
 	args = append(args, startNanos)
+
+	if endNanos != 0 {
+		conditions = append(conditions, "start_time <= ?")
+		args = append(args, endNanos)
+	}
 
 	if machine != "" {
 		conditions = append(conditions, "machine = ?")
@@ -1394,15 +1400,26 @@ func (s *Store) topAggregateOperations(conn *sqlite.Conn, suffix string, startNa
 
 // topAggregateMachines runs a GROUP BY machine aggregate query on
 // a single span partition, merging results into the provided map.
-func (s *Store) topAggregateMachines(conn *sqlite.Conn, suffix string, startNanos int64, stats map[string]*topMachineStats) error {
+func (s *Store) topAggregateMachines(conn *sqlite.Conn, suffix string, startNanos, endNanos int64, stats map[string]*topMachineStats) error {
+	var conditions []string
+	var args []any
+
+	conditions = append(conditions, "start_time >= ?")
+	args = append(args, startNanos)
+
+	if endNanos != 0 {
+		conditions = append(conditions, "start_time <= ?")
+		args = append(args, endNanos)
+	}
+
 	query := "SELECT machine, COUNT(*) AS total, " +
 		"SUM(CASE WHEN status = 2 THEN 1 ELSE 0 END) AS errors " +
 		"FROM spans_" + suffix +
-		" WHERE start_time >= ?" +
+		" WHERE " + strings.Join(conditions, " AND ") +
 		" GROUP BY machine"
 
 	err := sqlitex.ExecuteTransient(conn, query, &sqlitex.ExecOptions{
-		Args: []any{startNanos},
+		Args: args,
 		ResultFunc: func(stmt *sqlite.Stmt) error {
 			machine := stmt.ColumnText(0)
 			total := stmt.ColumnInt64(1)
@@ -1427,7 +1444,7 @@ func (s *Store) topAggregateMachines(conn *sqlite.Conn, suffix string, startNano
 // topP99ForOperation fetches the P99 duration for a specific operation
 // from a single span partition using an indexed offset query.
 // Returns 0 if no spans match (partition has no data for this operation).
-func (s *Store) topP99ForOperation(conn *sqlite.Conn, suffix string, startNanos int64, machine, operation string, offset int64) (int64, error) {
+func (s *Store) topP99ForOperation(conn *sqlite.Conn, suffix string, startNanos, endNanos int64, machine, operation string, offset int64) (int64, error) {
 	var conditions []string
 	var args []any
 
@@ -1436,6 +1453,11 @@ func (s *Store) topP99ForOperation(conn *sqlite.Conn, suffix string, startNanos 
 
 	conditions = append(conditions, "start_time >= ?")
 	args = append(args, startNanos)
+
+	if endNanos != 0 {
+		conditions = append(conditions, "start_time <= ?")
+		args = append(args, endNanos)
+	}
 
 	if machine != "" {
 		conditions = append(conditions, "machine = ?")

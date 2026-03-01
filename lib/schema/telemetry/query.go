@@ -111,12 +111,27 @@ type LogsResponse struct {
 }
 
 // TopRequest is the CBOR request for the telemetry service's "top"
-// action. Returns an aggregated operational overview for a time window.
-// Window is required.
+// action. Returns an aggregated operational overview for a time range.
+//
+// Callers specify the range in one of two ways:
+//   - Start/End: explicit time range (both Unix nanoseconds).
+//   - Window: relative lookback from the service's current time.
+//     The handler resolves Window to Start before querying the store.
+//
+// At least one of Start or Window must be non-zero.
 type TopRequest struct {
-	// Window is the lookback duration in nanoseconds (e.g.,
-	// 3600000000000 for one hour). Required.
-	Window int64 `cbor:"window"`
+	// Window is a lookback duration in nanoseconds (e.g.,
+	// 3600000000000 for one hour). Resolved to Start by the
+	// handler using the service clock. Ignored if Start is set.
+	Window int64 `cbor:"window,omitempty"`
+
+	// Start is the earliest span start_time to include (Unix
+	// nanoseconds). Takes precedence over Window.
+	Start int64 `cbor:"start,omitempty"`
+
+	// End is the latest span start_time to include (Unix
+	// nanoseconds). Zero means unbounded (up to now).
+	End int64 `cbor:"end,omitempty"`
 
 	// Machine restricts the overview to a single machine localpart.
 	Machine string `cbor:"machine,omitempty"`

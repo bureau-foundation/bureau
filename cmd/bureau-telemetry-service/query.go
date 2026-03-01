@@ -129,12 +129,19 @@ func (s *TelemetryService) handleTop(ctx context.Context, token *servicetoken.To
 		return nil, fmt.Errorf("decoding top request: %w", err)
 	}
 
-	if request.Window <= 0 {
-		return nil, fmt.Errorf("window is required and must be positive")
+	// Resolve the time range. Start takes precedence; if absent,
+	// Window is resolved to Start using the service clock.
+	start := request.Start
+	if start == 0 {
+		if request.Window <= 0 {
+			return nil, fmt.Errorf("either start or window is required")
+		}
+		start = s.clock.Now().UnixNano() - request.Window
 	}
 
 	response, err := s.store.QueryTop(ctx, TopFilter{
-		Window:  request.Window,
+		Start:   start,
+		End:     request.End,
 		Machine: request.Machine,
 	})
 	if err != nil {

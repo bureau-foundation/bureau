@@ -607,9 +607,9 @@ func TestQueryTopBasic(t *testing.T) {
 		t.Fatalf("WriteBatch: %v", err)
 	}
 
-	// Query with a 1-hour window.
+	// Query from 1 hour before the epoch — covers all inserted spans.
 	result, err := store.QueryTop(ctx, TopFilter{
-		Window: int64(1 * time.Hour),
+		Start: now - int64(1*time.Hour),
 	})
 	if err != nil {
 		t.Fatalf("QueryTop: %v", err)
@@ -739,7 +739,7 @@ func TestQueryTopMachineFilter(t *testing.T) {
 
 	// Filter to machine 2 only.
 	result, err := store.QueryTop(ctx, TopFilter{
-		Window:  int64(1 * time.Hour),
+		Start:   now - int64(1*time.Hour),
 		Machine: machine2.Localpart(),
 	})
 	if err != nil {
@@ -768,7 +768,7 @@ func TestQueryTopEmptyStore(t *testing.T) {
 	ctx := context.Background()
 
 	result, err := store.QueryTop(ctx, TopFilter{
-		Window: int64(1 * time.Hour),
+		Start: storeTestClockEpoch.Add(-1 * time.Hour).UnixNano(),
 	})
 	if err != nil {
 		t.Fatalf("QueryTop (empty): %v", err)
@@ -792,7 +792,7 @@ func TestQueryTopEmptyStore(t *testing.T) {
 }
 
 func TestQueryTopWindowBoundary(t *testing.T) {
-	store, fakeClock := openTestStore(t)
+	store, _ := openTestStore(t)
 	ctx := context.Background()
 	refs := newStoreTestRefs(t)
 
@@ -814,9 +814,8 @@ func TestQueryTopWindowBoundary(t *testing.T) {
 		t.Fatalf("WriteBatch (old): %v", err)
 	}
 
-	// Advance clock by 2 hours and insert another span.
-	fakeClock.Advance(2 * time.Hour)
-	laterNow := fakeClock.Now().UnixNano()
+	// Insert another span 2 hours later.
+	laterNow := now + int64(2*time.Hour)
 
 	batch2 := &telemetry.TelemetryBatch{
 		Fleet: refs.fleet, Machine: refs.machine,
@@ -833,12 +832,12 @@ func TestQueryTopWindowBoundary(t *testing.T) {
 		t.Fatalf("WriteBatch (new): %v", err)
 	}
 
-	// Query with a 1-hour window — should only see the newer span.
+	// Start = laterNow - 1h: only the newer span is in range.
 	result, err := store.QueryTop(ctx, TopFilter{
-		Window: int64(1 * time.Hour),
+		Start: laterNow - int64(1*time.Hour),
 	})
 	if err != nil {
-		t.Fatalf("QueryTop (1h window): %v", err)
+		t.Fatalf("QueryTop (1h lookback): %v", err)
 	}
 
 	if len(result.HighestThroughput) != 1 {
@@ -848,12 +847,12 @@ func TestQueryTopWindowBoundary(t *testing.T) {
 		t.Errorf("throughput[0].Operation = %q, want new.op", result.HighestThroughput[0].Operation)
 	}
 
-	// Query with a 3-hour window — should see both spans.
+	// Start = laterNow - 3h: both spans are in range.
 	result, err = store.QueryTop(ctx, TopFilter{
-		Window: int64(3 * time.Hour),
+		Start: laterNow - int64(3*time.Hour),
 	})
 	if err != nil {
-		t.Fatalf("QueryTop (3h window): %v", err)
+		t.Fatalf("QueryTop (3h lookback): %v", err)
 	}
 
 	if len(result.HighestThroughput) != 2 {

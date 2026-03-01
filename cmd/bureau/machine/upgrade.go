@@ -224,7 +224,7 @@ func resolveMachineArg(arg string, defaultServer ref.ServerName) (ref.Machine, e
 // Each core binary is resolved via filepath.EvalSymlinks and validated to
 // be under /nix/store/. The host-env path itself is included so the
 // daemon can resolve service binaries from the Nix closure without
-// relying on /usr/local/bin symlinks.
+// relying on /var/bureau/bin symlinks.
 func resolveHostEnvBinaries(hostEnvPath string) (*schema.BureauVersion, error) {
 	binaries := []struct {
 		name  string

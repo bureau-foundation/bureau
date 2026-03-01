@@ -103,6 +103,7 @@ user.
 | `/etc/bureau/` | `root:root` | 0755 | `machine.conf` |
 | `/run/bureau/` | `bureau:bureau-operators` | 0750 | Sockets, tmux |
 | `/var/lib/bureau/` | `bureau:bureau` | 0700 | Keypair, session, state |
+| `/var/bureau/bin/` | `bureau:bureau-operators` | 0775 | Symlinks to Nix store binary paths |
 | `/var/bureau/workspace/` | `bureau:bureau` | 0755 | Git worktrees |
 | `/var/bureau/cache/` | `bureau:bureau-operators` | 0775 | Nix store cache, host-env marker |
 

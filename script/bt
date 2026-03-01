@@ -23,7 +23,7 @@ set -euo pipefail
 # Resolve the Bureau CLI binary. Priority:
 #   1. BUREAU_BIN env var (explicit override)
 #   2. Host-env marker written by dev-deploy (Nix store path)
-#   3. PATH lookup (falls back to /usr/local/bin symlink)
+#   3. PATH lookup (falls back to /var/bureau/bin)
 if [ -z "${BUREAU_BIN:-}" ] && [ -f /var/bureau/cache/current-host-env ]; then
     _HOST_ENV=$(cat /var/bureau/cache/current-host-env)
     if [ -x "$_HOST_ENV/bin/bureau" ]; then

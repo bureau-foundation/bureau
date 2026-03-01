@@ -203,6 +203,10 @@ else
     echo "[2/$TOTAL_STEPS] Skipping binary cache (no --substituter-url)"
 fi
 
+# Create directories before installing binaries (step 3 symlinks into
+# /var/bureau/bin, step 4 uses the rest).
+sudo mkdir -p /var/lib/bureau /run/bureau /var/bureau/bin /var/bureau/workspace /var/bureau/cache /etc/bureau
+
 # Step 3: Install Bureau binaries.
 if [ -n "$BINARY_DIR" ]; then
     echo "[3/$TOTAL_STEPS] Installing Bureau binaries from $BINARY_DIR..."
@@ -234,7 +238,7 @@ if [ -n "$BINARY_DIR" ]; then
     done
 
     for binary in "${HOST_BINARIES[@]}"; do
-        sudo ln -sf "$BINARY_DIR/$binary" "/usr/local/bin/$binary"
+        sudo ln -sf "$BINARY_DIR/$binary" "/var/bureau/bin/$binary"
         printf "  %-30s -> %s/%s\n" "$binary" "$BINARY_DIR" "$binary"
     done
 else
@@ -246,16 +250,15 @@ else
     for binary in bureau-launcher bureau-daemon bureau-proxy bureau-log-relay \
                   bureau-observe-relay bureau-bridge bureau-sandbox bureau-credentials \
                   bureau-agent-service bureau-artifact-service bureau-ticket-service bureau; do
-        sudo ln -sf "$HOST_ENV_PATH/bin/$binary" "/usr/local/bin/$binary"
+        sudo ln -sf "$HOST_ENV_PATH/bin/$binary" "/var/bureau/bin/$binary"
         printf "  %-30s -> %s/bin/%s\n" "$binary" "$HOST_ENV_PATH" "$binary"
     done
 fi
 
-# Step 4: Create directories and run first boot.
+# Step 4: Run first boot.
 echo "[4/$TOTAL_STEPS] Running first boot..."
-sudo mkdir -p /var/lib/bureau /run/bureau /var/bureau/workspace /var/bureau/cache /etc/bureau
 
-sudo bureau-launcher \
+sudo /var/bureau/bin/bureau-launcher \
     --bootstrap-file "$BOOTSTRAP_CONFIG" \
     --machine-name "$MACHINE_NAME" \
     --server-name "$SERVER_NAME" \

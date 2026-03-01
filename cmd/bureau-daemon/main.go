@@ -478,6 +478,18 @@ func run() error {
 		// token, which triggers a fresh initial sync.
 	}
 
+	// Write the daemon status file so operators and the doctor can
+	// verify binary currency and session health without root access.
+	// The initial sync may have populated launcherBinaryHash via
+	// reconcileBureauVersion → queryLauncherStatus. If not (no
+	// BureauVersion event yet), query the launcher directly.
+	if daemon.launcherBinaryHash == "" {
+		if hash, _, _, queryErr := daemon.queryLauncherStatus(ctx); queryErr == nil {
+			daemon.launcherBinaryHash = hash
+		}
+	}
+	daemon.writeDaemonStatus()
+
 	// Start the incremental sync loop, status heartbeat loop, and
 	// token refresh loop.
 	go service.RunSyncLoop(ctx, daemon.session, service.SyncConfig{
@@ -513,6 +525,13 @@ func run() error {
 		if err := daemon.session.SetPresence(presenceCtx, "offline", "shutting down"); err != nil {
 			logger.Error("setting presence to offline on shutdown", "error", err)
 		}
+	}()
+
+	// Remove the daemon status file on shutdown so the doctor doesn't
+	// see stale data from a stopped daemon.
+	defer func() {
+		statusPath := filepath.Join(daemon.runDir, schema.DaemonStatusFilename)
+		os.Remove(statusPath)
 	}()
 
 	// Wait for shutdown.
@@ -615,6 +634,13 @@ type Daemon struct {
 	// by the exec watchdog to record which binary was running before
 	// a transition. On Linux this is the resolved /proc/self/exe target.
 	daemonBinaryPath string
+
+	// launcherBinaryHash is the SHA256 hex digest of the launcher binary
+	// as reported by the launcher's IPC status response. Updated each
+	// time queryLauncherStatus succeeds. Written to the daemon status
+	// file so the doctor can verify binary currency without reading
+	// /proc/PID/exe (which requires root for cross-user processes).
+	launcherBinaryHash string
 
 	// stateDir is the directory for persistent daemon state (session.json,
 	// watchdog files). The exec watchdog is written here so it survives
@@ -1037,7 +1063,7 @@ type Daemon struct {
 	// directory contains all Bureau binaries. When set, the daemon
 	// injects this as EnvironmentPath into service sandbox specs whose
 	// templates use bare command names (like "bureau-ticket-service")
-	// found in the host-env. This eliminates the need for /usr/local/bin
+	// found in the host-env. This eliminates the need for /var/bureau/bin
 	// symlinks and enables fully automated service binary updates:
 	// when BureauVersion publishes a new host-env path, the daemon
 	// detects the structural change and restarts affected sandboxes.
@@ -1538,6 +1564,51 @@ func int64Abs(x int64) int64 {
 		return -x
 	}
 	return x
+}
+
+// writeDaemonStatus writes the daemon status file to the run directory.
+// Operators can read this file to determine what the daemon is running
+// without needing access to /proc/PID/exe or session.json. The file
+// is operator-readable via bureau-operators group ownership.
+//
+// The schema.DaemonStatus type is the shared contract between this writer
+// and the doctor (reader). See lib/schema/daemon_status.go.
+func (d *Daemon) writeDaemonStatus() {
+	statusPath := filepath.Join(d.runDir, schema.DaemonStatusFilename)
+
+	status := schema.DaemonStatus{
+		DaemonBinaryPath:    d.daemonBinaryPath,
+		DaemonBinaryHash:    d.daemonBinaryHash,
+		LauncherBinaryHash:  d.launcherBinaryHash,
+		MachineUserID:       d.session.UserID().String(),
+		HostEnvironmentPath: d.hostEnvironmentPath,
+		StartedAt:           d.clock.Now().UTC().Format(time.RFC3339),
+	}
+
+	data, err := json.MarshalIndent(status, "", "  ")
+	if err != nil {
+		d.logger.Error("marshaling daemon status file", "error", err)
+		return
+	}
+
+	// Write atomically via temp file + rename to avoid partial reads.
+	temporaryPath := statusPath + ".tmp"
+	if err := os.WriteFile(temporaryPath, data, 0644); err != nil {
+		d.logger.Error("writing daemon status file", "error", err, "path", temporaryPath)
+		return
+	}
+	if err := os.Rename(temporaryPath, statusPath); err != nil {
+		d.logger.Error("renaming daemon status file", "error", err)
+		os.Remove(temporaryPath)
+		return
+	}
+
+	// Set group ownership so operators (bureau-operators) can read it.
+	if err := principal.SetOperatorGroupOwnership(statusPath, d.operatorsGID); err != nil {
+		d.logger.Warn("setting daemon status file group ownership", "error", err)
+	}
+
+	d.logger.Debug("daemon status file written", "path", statusPath)
 }
 
 // collectPrincipalResources reads cgroup v2 statistics for each running

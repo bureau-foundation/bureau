@@ -23,7 +23,7 @@ Group=bureau
 SupplementaryGroups=docker
 Environment=SHELL=/bin/sh
 EnvironmentFile=/etc/bureau/machine.conf
-ExecStart=/usr/local/bin/bureau-launcher \
+ExecStart=/var/bureau/bin/bureau-launcher \
     --homeserver ${BUREAU_HOMESERVER_URL} \
     --machine-name ${BUREAU_MACHINE_NAME} \
     --server-name ${BUREAU_SERVER_NAME} \

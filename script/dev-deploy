@@ -95,17 +95,30 @@ fi
 # Publish the BureauVersion state event. The running daemon picks this
 # up via /sync, prefetches the store paths, compares content hashes,
 # and performs the atomic exec() transition. Service binaries are
-# resolved from the host-env path in the event, so no /usr/local/bin
-# symlink updates are needed.
+# resolved from the host-env path in the event, so sandbox binaries
+# update automatically without symlink changes.
 echo "Publishing BureauVersion..."
 "$BUREAU_CLI" machine upgrade --local \
     --host-env "$HOST_ENV" \
     --credential-file "$CREDENTIAL_FILE"
 
 # Write the host-env path so scripts and agents can find Bureau
-# binaries without relying on /usr/local/bin symlinks.
+# binaries without relying on symlinks in /var/bureau/bin.
 HOST_ENV_MARKER="/var/bureau/cache/current-host-env"
 if [ -d "$(dirname "$HOST_ENV_MARKER")" ] && [ -w "$(dirname "$HOST_ENV_MARKER")" ]; then
     echo "$HOST_ENV" > "$HOST_ENV_MARKER"
     echo "Host-env path written to $HOST_ENV_MARKER"
+fi
+
+# Update symlinks in /var/bureau/bin so that systemd ExecStart paths
+# and operator PATH resolve to the new binaries. This directory is
+# bureau:bureau-operators 0775, so no sudo is needed.
+if [ -d /var/bureau/bin ] && [ -w /var/bureau/bin ]; then
+    UPDATED=0
+    for binary in "$HOST_ENV"/bin/bureau*; do
+        name=$(basename "$binary")
+        ln -sf "$binary" "/var/bureau/bin/$name"
+        UPDATED=$((UPDATED + 1))
+    done
+    echo "Updated $UPDATED symlinks in /var/bureau/bin"
 fi

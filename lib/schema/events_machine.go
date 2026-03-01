@@ -396,7 +396,7 @@ type BureauVersion struct {
 	// Its bin/ directory contains symlinks to every Bureau binary. The
 	// daemon uses this to resolve service binary commands (bare names
 	// like "bureau-ticket-service") from the Nix closure instead of
-	// relying on /usr/local/bin symlinks, enabling fully automated
+	// relying on /var/bureau/bin symlinks, enabling fully automated
 	// service binary updates without root privileges.
 	HostEnvironmentPath string `json:"host_environment_path,omitempty"`
 }

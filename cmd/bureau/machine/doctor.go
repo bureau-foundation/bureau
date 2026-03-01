@@ -23,9 +23,10 @@ import (
 
 	"github.com/bureau-foundation/bureau/cmd/bureau/cli"
 	"github.com/bureau-foundation/bureau/cmd/bureau/cli/doctor"
+	"github.com/bureau-foundation/bureau/lib/binhash"
 	"github.com/bureau-foundation/bureau/lib/content"
 	"github.com/bureau-foundation/bureau/lib/principal"
-	"github.com/bureau-foundation/bureau/lib/ref"
+	"github.com/bureau-foundation/bureau/lib/schema"
 	"github.com/bureau-foundation/bureau/messaging"
 )
 
@@ -84,6 +85,7 @@ func buildExpectedDirectories(systemUser, operatorsGroup string) []directorySpec
 		{"/etc/bureau", "root:root", 0755},
 		{"/run/bureau", systemUser + ":" + operatorsGroup, 0750},
 		{"/var/lib/bureau", systemUser + ":" + systemUser, 0700},
+		{"/var/bureau/bin", systemUser + ":" + operatorsGroup, 0775},
 		{"/var/bureau/workspace", systemUser + ":" + systemUser, 0755},
 		{"/var/bureau/cache", systemUser + ":" + operatorsGroup, 0775},
 	}
@@ -109,9 +111,12 @@ var expectedUnits = []systemdUnitSpec{
 	},
 }
 
-// binaryInstallDir is where Bureau host binaries are installed.
+// binaryInstallDir is where Bureau host binaries are installed as
+// symlinks to Nix store paths. This directory is owned by
+// bureau:bureau-operators 0775, so operators and agents can update
+// symlinks without sudo. Systemd ExecStart paths point here.
 // Variable rather than constant to allow test overrides.
-var binaryInstallDir = "/usr/local/bin"
+var binaryInstallDir = "/var/bureau/bin"
 
 // expectedHostBinaries lists Bureau binaries that should be installed on the
 // host machine. This should match the hostBinaries list in flake.nix.
@@ -304,6 +309,12 @@ func checkMachine(ctx context.Context, params machineDoctorParams, logger *slog.
 	// so that any service restarts triggered by unit updates use the new
 	// binaries, not stale ones.
 	results = append(results, checkBinaries(params)...)
+
+	// Section 4b: PATH visibility. Ensure /var/bureau/bin is on PATH
+	// for all login sessions via /etc/profile.d/bureau.sh. Writing to
+	// /etc/profile.d/ requires root — this is a one-time bootstrap
+	// operation, not a per-deploy operation.
+	results = append(results, checkPathProfile()...)
 
 	// Section 5: Systemd units.
 	results = append(results, checkSystemdUnits()...)
@@ -681,7 +692,7 @@ func checkBinaries(params machineDoctorParams) []doctor.Result {
 		// Compare installed binary against source.
 		installInfo, installErr := os.Stat(installPath)
 		if installErr != nil {
-			results = append(results, doctor.FailElevated(
+			results = append(results, doctor.FailWithFix(
 				binaryName+" installed",
 				fmt.Sprintf("%s not found", installPath),
 				fmt.Sprintf("ln -sf %s %s", sourcePath, installPath),
@@ -697,7 +708,7 @@ func checkBinaries(params machineDoctorParams) []doctor.Result {
 			results = append(results, doctor.Pass(binaryName+" installed",
 				fmt.Sprintf("%s current", installPath)))
 		} else {
-			results = append(results, doctor.FailElevated(
+			results = append(results, doctor.FailWithFix(
 				binaryName+" installed",
 				fmt.Sprintf("%s does not match source at %s", installPath, sourcePath),
 				fmt.Sprintf("ln -sf %s %s", sourcePath, installPath),
@@ -716,50 +727,145 @@ func checkBinaries(params machineDoctorParams) []doctor.Result {
 	return results
 }
 
+// daemonStatusPath is the path to the daemon status file. Constructed from
+// the standard run directory and the shared filename constant in schema.
+var daemonStatusPath = filepath.Join("/run/bureau", schema.DaemonStatusFilename)
+
+// readDaemonStatus reads and parses the daemon status file. Returns nil
+// if the file doesn't exist (daemon not running or old version).
+func readDaemonStatus() *schema.DaemonStatus {
+	data, err := os.ReadFile(daemonStatusPath)
+	if err != nil {
+		return nil
+	}
+	var status schema.DaemonStatus
+	if err := json.Unmarshal(data, &status); err != nil {
+		return nil
+	}
+	return &status
+}
+
+// hashInstalledBinary computes the SHA256 hex digest of an installed binary
+// at binaryInstallDir/<name>. Returns empty string on any error (missing
+// binary, broken symlink, permission denied).
+func hashInstalledBinary(name string) string {
+	installPath := filepath.Join(binaryInstallDir, name)
+	// Resolve symlink to the actual file before hashing.
+	resolved, err := filepath.EvalSymlinks(installPath)
+	if err != nil {
+		return ""
+	}
+	digest, err := binhash.HashFile(resolved)
+	if err != nil {
+		return ""
+	}
+	return binhash.FormatDigest(digest)
+}
+
 // checkServicesCurrentBinary verifies that running Bureau services are
-// executing the same binary that is currently installed. This catches the
-// case where symlinks were updated but services weren't restarted.
+// executing the same binary that is currently installed. Uses the daemon
+// status file (written by the daemon to /run/bureau/daemon-status.json)
+// to compare binary hashes without requiring root access.
 func checkServicesCurrentBinary() []doctor.Result {
 	if !isUnitActive("bureau-launcher.service") {
 		return nil
 	}
 
-	pid := getServiceMainPID("bureau-launcher.service")
-	if pid <= 0 {
-		return nil
-	}
-
-	exePath, err := os.Readlink(fmt.Sprintf("/proc/%d/exe", pid))
-	if err != nil {
-		if errors.Is(err, syscall.EACCES) {
-			return []doctor.Result{doctor.Skip("services running current binaries",
-				"cannot read process binary (requires root)")}
-		}
+	status := readDaemonStatus()
+	if status == nil {
+		// Daemon is running (launcher is active → daemon is active via
+		// Requires=) but no status file. This is either an old daemon
+		// that predates the status file, or the daemon hasn't finished
+		// startup yet.
 		return []doctor.Result{doctor.Warn("services running current binaries",
-			fmt.Sprintf("cannot read /proc/%d/exe: %v", pid, err))}
+			"daemon status file not found (upgrade daemon to enable hash-based verification)")}
 	}
 
-	installedPath, err := filepath.EvalSymlinks(filepath.Join(binaryInstallDir, "bureau-launcher"))
+	var results []doctor.Result
+
+	// Check launcher binary hash.
+	if status.LauncherBinaryHash != "" {
+		installedLauncherHash := hashInstalledBinary("bureau-launcher")
+		if installedLauncherHash == "" {
+			results = append(results, doctor.Warn("launcher running current binary",
+				"cannot hash installed bureau-launcher"))
+		} else if installedLauncherHash == status.LauncherBinaryHash {
+			results = append(results, doctor.Pass("launcher running current binary",
+				"hash matches installed binary"))
+		} else {
+			results = append(results, doctor.FailElevated(
+				"launcher running current binary",
+				"running binary hash differs from installed binary",
+				"systemctl restart bureau-launcher",
+				func(ctx context.Context) error {
+					return runCommand("systemctl", "restart", "bureau-launcher.service")
+				},
+			))
+		}
+	}
+
+	// Check daemon binary hash.
+	if status.DaemonBinaryHash != "" {
+		installedDaemonHash := hashInstalledBinary("bureau-daemon")
+		if installedDaemonHash == "" {
+			results = append(results, doctor.Warn("daemon running current binary",
+				"cannot hash installed bureau-daemon"))
+		} else if installedDaemonHash == status.DaemonBinaryHash {
+			results = append(results, doctor.Pass("daemon running current binary",
+				"hash matches installed binary"))
+		} else {
+			results = append(results, doctor.FailElevated(
+				"daemon running current binary",
+				"running binary hash differs from installed binary",
+				"systemctl restart bureau-launcher",
+				func(ctx context.Context) error {
+					return runCommand("systemctl", "restart", "bureau-launcher.service")
+				},
+			))
+		}
+	}
+
+	return results
+}
+
+// --- Section 4b: PATH visibility ---
+
+// profileDPath is the path to the shell profile snippet that adds
+// /var/bureau/bin to PATH for all login sessions.
+const profileDPath = "/etc/profile.d/bureau.sh"
+
+// expectedProfileContent is the content of the profile.d snippet.
+const expectedProfileContent = `# Bureau binary directory. Managed by "bureau machine doctor --fix".
+export PATH="/var/bureau/bin:$PATH"
+`
+
+func checkPathProfile() []doctor.Result {
+	content, err := os.ReadFile(profileDPath)
 	if err != nil {
-		return []doctor.Result{doctor.Fail("services running current binaries",
-			fmt.Sprintf("cannot resolve installed binary: %v", err))}
+		if os.IsNotExist(err) {
+			return []doctor.Result{doctor.FailElevated(
+				"PATH includes /var/bureau/bin",
+				fmt.Sprintf("%s not found", profileDPath),
+				fmt.Sprintf("write %s", profileDPath),
+				func(ctx context.Context) error {
+					return atomicWriteFile(profileDPath, []byte(expectedProfileContent), 0644)
+				},
+			)}
+		}
+		return []doctor.Result{doctor.Fail("PATH includes /var/bureau/bin",
+			fmt.Sprintf("cannot read %s: %v", profileDPath, err))}
 	}
 
-	// /proc/PID/exe may have " (deleted)" suffix if the binary file was
-	// replaced or the store path was garbage-collected.
-	exePath = strings.TrimSuffix(exePath, " (deleted)")
-
-	if exePath == installedPath {
-		return []doctor.Result{doctor.Pass("services running current binaries",
-			fmt.Sprintf("launcher PID %d matches installed binary", pid))}
+	if string(content) == expectedProfileContent {
+		return []doctor.Result{doctor.Pass("PATH includes /var/bureau/bin", profileDPath+" present")}
 	}
 
 	return []doctor.Result{doctor.FailElevated(
-		"services running current binaries",
-		fmt.Sprintf("launcher running %s, installed %s", filepath.Base(exePath), filepath.Base(installedPath)),
-		"systemctl restart bureau-launcher",
+		"PATH includes /var/bureau/bin",
+		fmt.Sprintf("%s content differs from expected", profileDPath),
+		fmt.Sprintf("update %s", profileDPath),
 		func(ctx context.Context) error {
-			return runCommand("systemctl", "restart", "bureau-launcher.service")
+			return atomicWriteFile(profileDPath, []byte(expectedProfileContent), 0644)
 		},
 	)}
 }
@@ -994,10 +1100,10 @@ func checkSockets(operatorsGroupName string) []doctor.Result {
 
 // --- Section 7: Matrix connectivity ---
 
-func checkMatrixConnectivity(ctx context.Context, config *machineConfig, logger *slog.Logger) []doctor.Result {
+func checkMatrixConnectivity(ctx context.Context, config *machineConfig, _ *slog.Logger) []doctor.Result {
 	var results []doctor.Result
 
-	// Check homeserver reachable.
+	// Check homeserver reachable (no auth needed).
 	client, err := messaging.NewClient(messaging.ClientConfig{
 		HomeserverURL: config.HomeserverURL,
 	})
@@ -1017,50 +1123,53 @@ func checkMatrixConnectivity(ctx context.Context, config *machineConfig, logger 
 	}
 	results = append(results, doctor.Pass("homeserver reachable", fmt.Sprintf("%s versions: %s", config.HomeserverURL, strings.Join(versions.Versions, ", "))))
 
-	// Check machine session file exists. The session file lives in
-	// /var/lib/bureau (bureau:bureau 0700), so non-root non-bureau users
-	// cannot read it — that's expected, not a failure.
-	sessionData, err := readLauncherSession()
-	if err != nil {
-		if errors.Is(err, syscall.EACCES) {
-			results = append(results, doctor.Warn("machine session", "permission denied (only bureau user and root can read session)"))
-			results = append(results, doctor.Skip("session valid", "skipped: cannot read session"))
-			return results
-		}
-		results = append(results, doctor.Fail("machine session", fmt.Sprintf("cannot read launcher session: %v", err)))
-		results = append(results, doctor.Skip("session valid", "skipped: no session file"))
-		return results
-	}
-
-	if sessionData.UserID.IsZero() || sessionData.AccessToken == "" {
-		results = append(results, doctor.Fail("machine session", "session file missing user_id or access_token"))
-		results = append(results, doctor.Skip("session valid", "skipped: incomplete session"))
-		return results
-	}
-	results = append(results, doctor.Pass("machine session", fmt.Sprintf("user_id=%s", sessionData.UserID)))
-
-	// Check session is valid via WhoAmI.
-	session, err := client.SessionFromToken(sessionData.UserID, sessionData.AccessToken)
-	if err != nil {
-		results = append(results, doctor.Fail("session valid", fmt.Sprintf("cannot create session: %v", err)))
-		return results
-	}
-	defer session.Close()
-
-	whoami, err := session.WhoAmI(ctx)
-	if err != nil {
-		if messaging.IsMatrixError(err, messaging.ErrCodeUnknownToken) {
-			results = append(results, doctor.Fail("session valid", "access token is invalid or expired"))
+	// Check machine session identity and validity via the daemon status
+	// file. The session file (session.json) contains the access token and
+	// lives in bureau:bureau 0700 — operators can't read it, and shouldn't
+	// need to. The daemon writes its machine_user_id to the status file
+	// (/run/bureau/daemon-status.json, operator-readable). If the daemon
+	// is running, its continuous /sync connection is a stronger validation
+	// of session health than a one-shot WhoAmI — an invalid session would
+	// cause the sync loop to fail and the daemon to exit.
+	status := readDaemonStatus()
+	if status == nil {
+		if isUnitActive("bureau-daemon.service") {
+			// Daemon is running but no status file — old daemon version
+			// or daemon hasn't finished startup.
+			results = append(results, doctor.Warn("machine session",
+				"daemon running but no status file (upgrade daemon for session verification)"))
+			results = append(results, doctor.Skip("session valid",
+				"skipped: no daemon status file"))
 		} else {
-			results = append(results, doctor.Fail("session valid", fmt.Sprintf("WhoAmI failed: %v", err)))
+			results = append(results, doctor.Skip("machine session",
+				"skipped: daemon not running"))
+			results = append(results, doctor.Skip("session valid",
+				"skipped: daemon not running"))
 		}
 		return results
 	}
 
-	if whoami != sessionData.UserID {
-		results = append(results, doctor.Warn("session valid", fmt.Sprintf("WhoAmI returned %s, session has %s", whoami, sessionData.UserID)))
+	if status.MachineUserID == "" {
+		results = append(results, doctor.Fail("machine session",
+			"daemon status file has empty machine_user_id"))
+		results = append(results, doctor.Skip("session valid",
+			"skipped: no machine identity"))
+		return results
+	}
+	results = append(results, doctor.Pass("machine session",
+		fmt.Sprintf("user_id=%s", status.MachineUserID)))
+
+	// The daemon's running /sync connection validates the session
+	// continuously. If it were invalid, the daemon would exit.
+	if isUnitActive("bureau-daemon.service") {
+		results = append(results, doctor.Pass("session valid",
+			fmt.Sprintf("daemon running with active /sync (started %s)", status.StartedAt)))
 	} else {
-		results = append(results, doctor.Pass("session valid", fmt.Sprintf("authenticated as %s", whoami)))
+		// Status file exists but daemon isn't running — stale file
+		// from a previous run (shouldn't happen since the daemon
+		// removes it on shutdown, but handle it anyway).
+		results = append(results, doctor.Warn("session valid",
+			"daemon status file exists but daemon is not running (stale file?)"))
 	}
 
 	return results
@@ -1413,30 +1522,4 @@ func getServiceMainPID(unitName string) int {
 		return 0
 	}
 	return pid
-}
-
-// launcherSession holds the minimal fields from the launcher's session.json.
-type launcherSession struct {
-	UserID      ref.UserID `json:"user_id"`
-	AccessToken string     `json:"access_token"`
-}
-
-// readLauncherSession reads the launcher's session.json file.
-func readLauncherSession() (*launcherSession, error) {
-	sessionPath := os.Getenv("BUREAU_LAUNCHER_SESSION")
-	if sessionPath == "" {
-		sessionPath = cli.DefaultLauncherSessionPath
-	}
-
-	data, err := os.ReadFile(sessionPath)
-	if err != nil {
-		return nil, err
-	}
-
-	var session launcherSession
-	if err := json.Unmarshal(data, &session); err != nil {
-		return nil, fmt.Errorf("parsing session %s: %w", sessionPath, err)
-	}
-
-	return &session, nil
 }

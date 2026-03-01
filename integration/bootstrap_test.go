@@ -15,6 +15,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/bureau-foundation/bureau/lib/binhash"
 	"github.com/bureau-foundation/bureau/lib/bootstrap"
 	"github.com/bureau-foundation/bureau/lib/ref"
 	"github.com/bureau-foundation/bureau/lib/schema"
@@ -132,11 +133,11 @@ func TestBootstrapScript(t *testing.T) {
 	)
 	t.Log("bootstrap-machine completed successfully")
 
-	// Verify: symlinks installed at /usr/local/bin.
+	// Verify: symlinks installed at /var/bureau/bin.
 	for _, binary := range []string{"bureau-launcher", "bureau-daemon", "bureau-proxy"} {
-		dockerExecOrFail(t, containerID, "test", "-L", "/usr/local/bin/"+binary)
+		dockerExecOrFail(t, containerID, "test", "-L", "/var/bureau/bin/"+binary)
 		// Verify the symlink target is readable (binary exists).
-		dockerExecOrFail(t, containerID, "test", "-x", "/usr/local/bin/"+binary)
+		dockerExecOrFail(t, containerID, "test", "-x", "/var/bureau/bin/"+binary)
 	}
 	t.Log("binary symlinks verified")
 
@@ -192,7 +193,7 @@ func TestBootstrapScript(t *testing.T) {
 	t.Log("session and keypair files verified")
 
 	// Verify: directories created.
-	for _, directory := range []string{"/var/lib/bureau", "/run/bureau", "/var/bureau/workspace", "/var/bureau/cache", "/etc/bureau"} {
+	for _, directory := range []string{"/var/lib/bureau", "/run/bureau", "/var/bureau/bin", "/var/bureau/workspace", "/var/bureau/cache", "/etc/bureau"} {
 		dockerExecOrFail(t, containerID, "test", "-d", directory)
 	}
 	t.Log("directories verified")
@@ -213,7 +214,7 @@ func TestBootstrapScript(t *testing.T) {
 		// The machine.conf BUREAU_MACHINE_NAME has the fleet-scoped name;
 		// we pass the same value here so the launcher can reconstruct the ref.
 		dockerExecBackground(t, containerID, "launcher",
-			"/usr/local/bin/bureau-launcher",
+			"/var/bureau/bin/bureau-launcher",
 			"--homeserver", testHomeserverURL,
 			"--machine-name", bootstrapConfig.MachineName,
 			"--server-name", testServerName,
@@ -229,7 +230,7 @@ func TestBootstrapScript(t *testing.T) {
 
 		// Start daemon in the background.
 		dockerExecBackground(t, containerID, "daemon",
-			"/usr/local/bin/bureau-daemon",
+			"/var/bureau/bin/bureau-daemon",
 			"--homeserver", testHomeserverURL,
 			"--machine-name", machineName,
 			"--server-name", testServerName,
@@ -242,6 +243,14 @@ func TestBootstrapScript(t *testing.T) {
 		statusWatch.WaitForStateEvent(t,
 			schema.EventTypeMachineStatus, machineName)
 		t.Log("daemon started and publishing status")
+
+		// --- Verify daemon status file ---
+		// The daemon writes a status file that the doctor reads to verify
+		// binary currency and session validity. This is the contract between
+		// the two binaries — if the daemon writes wrong data or the doctor
+		// reads wrong fields, operator tooling gives incorrect answers about
+		// system health, making rollback/rollforward decisions unreliable.
+		verifyDaemonStatusFile(t, containerID, binaryDir, machineRef)
 
 		// Deploy a principal to verify sandbox creation (bwrap).
 		configAlias := machineRef.RoomAlias()
@@ -278,6 +287,98 @@ func TestBootstrapScript(t *testing.T) {
 	// Decommission the machine from Matrix.
 	decommissionMachine(t, admin, machineRef)
 	t.Log("bootstrap script test complete")
+}
+
+// verifyDaemonStatusFile reads the daemon status file from inside the
+// container and validates that it contains correct, complete data. This
+// is a structural test: it proves the daemon writes the status file in
+// the format the doctor expects to read. If these two disagree (wrong
+// field names, wrong hash format, missing fields), the doctor would give
+// incorrect answers about binary currency — making it impossible to
+// reliably determine whether a deploy succeeded or whether rollback is
+// needed.
+//
+// Specifically verifies:
+//   - The file exists and parses as schema.DaemonStatus (shared type)
+//   - All required fields are populated (not empty)
+//   - The daemon binary hash matches what binhash.HashFile computes for
+//     the same binary (proves hash agreement between writer and reader)
+//   - The launcher binary hash is non-empty (launcher was queried)
+//   - The machine user ID matches the expected machine identity
+func verifyDaemonStatusFile(t *testing.T, containerID, binaryDir string, machineRef ref.Machine) {
+	t.Helper()
+
+	// Read the status file from inside the container.
+	statusFilePath := "/run/bureau/" + schema.DaemonStatusFilename
+	raw := dockerExecOutput(t, containerID, "cat", statusFilePath)
+
+	var status schema.DaemonStatus
+	if err := json.Unmarshal([]byte(raw), &status); err != nil {
+		t.Fatalf("daemon status file at %s is not valid JSON: %v\nraw content: %s",
+			statusFilePath, err, raw)
+	}
+
+	// Verify all required fields are populated. An empty field means the
+	// daemon failed to compute or record that value — the doctor would
+	// silently skip checks instead of catching version mismatches.
+	if status.DaemonBinaryPath == "" {
+		t.Error("daemon status: daemon_binary_path is empty")
+	}
+	if status.DaemonBinaryHash == "" {
+		t.Error("daemon status: daemon_binary_hash is empty")
+	}
+	if status.LauncherBinaryHash == "" {
+		t.Error("daemon status: launcher_binary_hash is empty")
+	}
+	if status.MachineUserID == "" {
+		t.Error("daemon status: machine_user_id is empty")
+	}
+	if status.StartedAt == "" {
+		t.Error("daemon status: started_at is empty")
+	}
+
+	// Verify daemon binary hash matches what the doctor would compute.
+	// The doctor hashes the installed binary at /var/bureau/bin/bureau-daemon.
+	// Inside the container, that's a symlink to /bureau-bin/bureau-daemon,
+	// which is a copy of the binary from binaryDir. Hash the source binary
+	// and compare — if these don't match, the doctor would report a false
+	// mismatch after every deploy.
+	daemonBinaryPath := filepath.Join(binaryDir, "bureau-daemon")
+	expectedDaemonHash, err := binhash.HashFile(daemonBinaryPath)
+	if err != nil {
+		t.Fatalf("hashing daemon binary at %s: %v", daemonBinaryPath, err)
+	}
+	expectedDaemonDigest := binhash.FormatDigest(expectedDaemonHash)
+	if status.DaemonBinaryHash != expectedDaemonDigest {
+		t.Errorf("daemon binary hash mismatch:\n  status file: %s\n  computed:    %s\n"+
+			"The daemon and doctor would disagree on whether the binary is current.",
+			status.DaemonBinaryHash, expectedDaemonDigest)
+	}
+
+	// Verify launcher binary hash the same way.
+	launcherBinaryPath := filepath.Join(binaryDir, "bureau-launcher")
+	expectedLauncherHash, err := binhash.HashFile(launcherBinaryPath)
+	if err != nil {
+		t.Fatalf("hashing launcher binary at %s: %v", launcherBinaryPath, err)
+	}
+	expectedLauncherDigest := binhash.FormatDigest(expectedLauncherHash)
+	if status.LauncherBinaryHash != expectedLauncherDigest {
+		t.Errorf("launcher binary hash mismatch:\n  status file: %s\n  computed:    %s\n"+
+			"The daemon and doctor would disagree on whether the launcher is current.",
+			status.LauncherBinaryHash, expectedLauncherDigest)
+	}
+
+	// Verify machine identity matches the expected machine ref.
+	expectedUserID := machineRef.UserID().String()
+	if status.MachineUserID != expectedUserID {
+		t.Errorf("machine_user_id mismatch:\n  status file: %s\n  expected:    %s\n"+
+			"The doctor would report the wrong machine identity.",
+			status.MachineUserID, expectedUserID)
+	}
+
+	t.Logf("daemon status file verified: hash=%s...%s user=%s",
+		status.DaemonBinaryHash[:8], status.DaemonBinaryHash[len(status.DaemonBinaryHash)-4:],
+		status.MachineUserID)
 }
 
 // --- Docker Helpers ---

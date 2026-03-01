@@ -21,7 +21,7 @@ Type=simple
 User=bureau
 Group=bureau
 EnvironmentFile=/etc/bureau/machine.conf
-ExecStart=/usr/local/bin/bureau-daemon \
+ExecStart=/var/bureau/bin/bureau-daemon \
     --homeserver ${BUREAU_HOMESERVER_URL} \
     --machine-name ${BUREAU_MACHINE_NAME} \
     --server-name ${BUREAU_SERVER_NAME} \

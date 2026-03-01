@@ -123,6 +123,7 @@ go_test(
         "//cmd/bureau/ticket",
         "//cmd/bureau/workspace",
         "//lib/artifactstore",
+        "//lib/binhash",
         "//lib/bootstrap",
         "//lib/codec",
         "//lib/command",

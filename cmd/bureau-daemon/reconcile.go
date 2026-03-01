@@ -2307,7 +2307,8 @@ type (
 // queryLauncherStatus sends a "status" IPC request to the launcher and
 // returns the launcher's binary hash, proxy binary path, and log-relay
 // binary path. These values are needed by version.Compare to determine
-// which component updates are required.
+// which component updates are required. Also caches the launcher hash
+// on the daemon struct for the status file.
 func (d *Daemon) queryLauncherStatus(ctx context.Context) (launcherHash, proxyBinaryPath, logRelayBinaryPath string, err error) {
 	response, err := d.launcherRequest(ctx, launcherIPCRequest{
 		Action: ipc.ActionStatus,
@@ -2318,6 +2319,7 @@ func (d *Daemon) queryLauncherStatus(ctx context.Context) (launcherHash, proxyBi
 	if !response.OK {
 		return "", "", "", fmt.Errorf("launcher status rejected: %s", response.Error)
 	}
+	d.launcherBinaryHash = response.BinaryHash
 	return response.BinaryHash, response.ProxyBinaryPath, response.LogRelayBinaryPath, nil
 }
 
@@ -2406,6 +2408,10 @@ func (d *Daemon) reconcileBureauVersion(ctx context.Context, desired *schema.Bur
 		d.logger.Error("querying launcher status for version comparison", "error", err)
 		return
 	}
+
+	// Update the daemon status file with current binary hashes and
+	// host-env path so the doctor can verify without root access.
+	d.writeDaemonStatus()
 
 	// Compare desired versions against running versions.
 	diff, err := version.Compare(desired, version.CurrentState{

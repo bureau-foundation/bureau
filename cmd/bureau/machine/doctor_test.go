@@ -718,8 +718,8 @@ func TestCheckBinaries_MismatchedBinary(t *testing.T) {
 			if !result.HasFix() {
 				t.Error("mismatched binary should have a fix")
 			}
-			if !result.Elevated {
-				t.Error("binary install should be elevated")
+			if result.Elevated {
+				t.Error("binary install to /var/bureau/bin should not require elevation")
 			}
 		}
 	}
@@ -789,8 +789,8 @@ func TestCheckBinaries_MissingInstalled(t *testing.T) {
 			if !result.HasFix() {
 				t.Error("missing installed binary should have a fix")
 			}
-			if !result.Elevated {
-				t.Error("binary install should be elevated")
+			if result.Elevated {
+				t.Error("binary install to /var/bureau/bin should not require elevation")
 			}
 		}
 	}

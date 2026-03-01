@@ -21,6 +21,7 @@ go_library(
     deps = [
         "//cmd/bureau/cli",
         "//cmd/bureau/cli/doctor",
+        "//lib/binhash",
         "//lib/bootstrap",
         "//lib/content",
         "//lib/principal",

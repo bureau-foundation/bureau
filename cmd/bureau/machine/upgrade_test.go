@@ -201,6 +201,19 @@ func TestResolveHostEnvBinaries_NixStorePaths(t *testing.T) {
 		t.Skip("could not find a usable file under /nix/store/")
 	}
 
+	// Nix store paths frequently contain symlinks between derivations.
+	// Since resolveHostEnvBinaries uses filepath.EvalSymlinks, we must
+	// resolve our reference path too — otherwise a symlink like
+	// .../user-environment/manifest.nix → .../env-manifest.nix would
+	// cause a mismatch between the recorded path and the resolved one.
+	realStorePath, err = filepath.EvalSymlinks(realStorePath)
+	if err != nil {
+		t.Fatalf("EvalSymlinks(%s): %v", realStorePath, err)
+	}
+	if !strings.HasPrefix(realStorePath, "/nix/store/") {
+		t.Skipf("resolved path %s is not under /nix/store/", realStorePath)
+	}
+
 	// Create host-env with symlinks pointing to the real Nix store path.
 	hostEnv := t.TempDir()
 	binDir := filepath.Join(hostEnv, "bin")

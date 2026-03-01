@@ -6,6 +6,8 @@ package main
 import (
 	"encoding/json"
 	"errors"
+	"io"
+	"log/slog"
 	"os"
 	"path/filepath"
 	"strings"
@@ -427,6 +429,282 @@ func TestHandlePostToolUse(t *testing.T) {
 			}
 		}
 	})
+
+	t.Run("ExitPlanMode triggers plan archival attempt", func(t *testing.T) {
+		t.Parallel()
+
+		// Outside a Bureau sandbox, archivePlan will log that the
+		// agent service socket is unavailable and return. This test
+		// confirms the dispatch path works without erroring.
+		event := &hookEvent{
+			SessionID: "sess-plan-1",
+			CWD:       "/workspace/project",
+			ToolName:  "ExitPlanMode",
+			ToolResponse: mustMarshal(t, map[string]string{
+				"plan":     "# My Plan\n\nDo the thing.",
+				"filePath": "/scratch/plans/my-plan.md",
+			}),
+		}
+		err := handlePostToolUse(event)
+		if err != nil {
+			t.Fatalf("handlePostToolUse(ExitPlanMode): %v", err)
+		}
+	})
+}
+
+// --- Plan response extraction tests ---
+
+func TestExtractPlanResponse(t *testing.T) {
+	t.Parallel()
+
+	t.Run("extracts plan content and file path", func(t *testing.T) {
+		t.Parallel()
+
+		toolResponse := mustMarshal(t, map[string]string{
+			"plan":     "# Auth Redesign\n\nSwitch to JWT tokens.",
+			"filePath": "/scratch/plans/auth-redesign.md",
+		})
+		planContent, filePath := extractPlanResponse(toolResponse)
+		if planContent != "# Auth Redesign\n\nSwitch to JWT tokens." {
+			t.Errorf("planContent = %q, want auth redesign content", planContent)
+		}
+		if filePath != "/scratch/plans/auth-redesign.md" {
+			t.Errorf("filePath = %q, want /scratch/plans/auth-redesign.md", filePath)
+		}
+	})
+
+	t.Run("returns empty for nil response", func(t *testing.T) {
+		t.Parallel()
+
+		planContent, filePath := extractPlanResponse(nil)
+		if planContent != "" {
+			t.Errorf("planContent = %q, want empty", planContent)
+		}
+		if filePath != "" {
+			t.Errorf("filePath = %q, want empty", filePath)
+		}
+	})
+
+	t.Run("returns empty for empty response", func(t *testing.T) {
+		t.Parallel()
+
+		planContent, filePath := extractPlanResponse(json.RawMessage{})
+		if planContent != "" {
+			t.Errorf("planContent = %q, want empty", planContent)
+		}
+		if filePath != "" {
+			t.Errorf("filePath = %q, want empty", filePath)
+		}
+	})
+
+	t.Run("returns empty for malformed JSON", func(t *testing.T) {
+		t.Parallel()
+
+		planContent, filePath := extractPlanResponse(json.RawMessage(`not json`))
+		if planContent != "" {
+			t.Errorf("planContent = %q, want empty", planContent)
+		}
+		if filePath != "" {
+			t.Errorf("filePath = %q, want empty", filePath)
+		}
+	})
+
+	t.Run("returns empty plan when field missing", func(t *testing.T) {
+		t.Parallel()
+
+		// Claude Code sends additional fields (isAgent, hasTaskTool)
+		// but the plan and filePath fields are the ones we care about.
+		// If plan is missing, content should be empty.
+		toolResponse := mustMarshal(t, map[string]bool{
+			"isAgent":     false,
+			"hasTaskTool": true,
+		})
+		planContent, filePath := extractPlanResponse(toolResponse)
+		if planContent != "" {
+			t.Errorf("planContent = %q, want empty", planContent)
+		}
+		if filePath != "" {
+			t.Errorf("filePath = %q, want empty", filePath)
+		}
+	})
+
+	t.Run("handles response with extra fields", func(t *testing.T) {
+		t.Parallel()
+
+		// Claude Code's actual ExitPlanMode response includes extra
+		// fields beyond plan and filePath. Verify we extract correctly
+		// and ignore the rest.
+		toolResponse := mustMarshal(t, map[string]any{
+			"plan":        "# Migration Plan\n\nStep 1: backup.",
+			"filePath":    "/scratch/plans/migration.md",
+			"isAgent":     false,
+			"hasTaskTool": true,
+		})
+		planContent, filePath := extractPlanResponse(toolResponse)
+		if planContent != "# Migration Plan\n\nStep 1: backup." {
+			t.Errorf("planContent = %q, want migration plan content", planContent)
+		}
+		if filePath != "/scratch/plans/migration.md" {
+			t.Errorf("filePath = %q, want /scratch/plans/migration.md", filePath)
+		}
+	})
+}
+
+// --- Plan label derivation tests ---
+
+func TestPlanLabel(t *testing.T) {
+	t.Parallel()
+
+	tests := []struct {
+		name     string
+		filePath string
+		expected string
+	}{
+		{
+			name:     "standard plan path",
+			filePath: "/scratch/plans/auth-redesign.md",
+			expected: "plan/auth-redesign",
+		},
+		{
+			name:     "nested path",
+			filePath: "/scratch/plans/sprint-3/database-migration.md",
+			expected: "plan/database-migration",
+		},
+		{
+			name:     "no extension",
+			filePath: "/scratch/plans/quick-fix",
+			expected: "plan/quick-fix",
+		},
+		{
+			name:     "double extension uses outer",
+			filePath: "/scratch/plans/backup.tar.gz",
+			expected: "plan/backup.tar",
+		},
+		{
+			name:     "empty path",
+			filePath: "",
+			expected: "plan/unnamed",
+		},
+		{
+			name:     "claude code style name",
+			filePath: "/scratch/plans/transient-launching-hopper.md",
+			expected: "plan/transient-launching-hopper",
+		},
+	}
+
+	for _, testCase := range tests {
+		t.Run(testCase.name, func(t *testing.T) {
+			t.Parallel()
+			result := planLabel(testCase.filePath)
+			if result != testCase.expected {
+				t.Errorf("planLabel(%q) = %q, want %q",
+					testCase.filePath, result, testCase.expected)
+			}
+		})
+	}
+}
+
+// --- archivePlan early-exit tests ---
+//
+// archivePlan connects to real services (agent service socket, ticket
+// service socket). These tests verify the early-exit paths that run
+// outside a Bureau sandbox — no service sockets available.
+
+func TestArchivePlanNoServiceSocket(t *testing.T) {
+	t.Parallel()
+
+	t.Run("skips archival when agent service socket missing", func(t *testing.T) {
+		t.Parallel()
+
+		// Outside a Bureau sandbox, the agent service socket at
+		// /run/bureau/service/agent.sock does not exist. archivePlan
+		// should log this and return without error.
+		event := &hookEvent{
+			SessionID: "sess-archive-1",
+			CWD:       "/workspace/project",
+			ToolName:  "ExitPlanMode",
+			ToolResponse: mustMarshal(t, map[string]any{
+				"plan":     "# Test Plan\n\nThis is a test.",
+				"filePath": "/scratch/plans/test-plan.md",
+			}),
+		}
+
+		// archivePlan logs to a logger but never returns an error.
+		// We're verifying it doesn't panic or hang.
+		logger := discardLogger()
+		archivePlan(logger, event)
+	})
+
+	t.Run("skips archival when plan content empty", func(t *testing.T) {
+		t.Parallel()
+
+		event := &hookEvent{
+			SessionID:    "sess-archive-2",
+			CWD:          "/workspace/project",
+			ToolName:     "ExitPlanMode",
+			ToolResponse: mustMarshal(t, map[string]any{}),
+		}
+
+		logger := discardLogger()
+		archivePlan(logger, event)
+	})
+
+	t.Run("skips archival when tool response nil", func(t *testing.T) {
+		t.Parallel()
+
+		event := &hookEvent{
+			SessionID:    "sess-archive-3",
+			CWD:          "/workspace/project",
+			ToolName:     "ExitPlanMode",
+			ToolResponse: nil,
+		}
+
+		logger := discardLogger()
+		archivePlan(logger, event)
+	})
+}
+
+// --- attachPlanToTicket early-exit tests ---
+
+// TestAttachPlanToTicketNoEnvVars tests the early-exit paths of
+// attachPlanToTicket. These subtests use t.Setenv to control the
+// BUREAU_TICKET_ID and BUREAU_TICKET_ROOM environment variables,
+// which precludes t.Parallel on subtests.
+func TestAttachPlanToTicketNoEnvVars(t *testing.T) {
+	t.Run("skips when BUREAU_TICKET_ID missing", func(t *testing.T) {
+		t.Setenv("BUREAU_TICKET_ID", "")
+		t.Setenv("BUREAU_TICKET_ROOM", "!room:bureau.local")
+
+		logger := discardLogger()
+		attachPlanToTicket(logger, "ref-abc123", "plan/test")
+	})
+
+	t.Run("skips when BUREAU_TICKET_ROOM missing", func(t *testing.T) {
+		t.Setenv("BUREAU_TICKET_ID", "tkt-test-1")
+		t.Setenv("BUREAU_TICKET_ROOM", "")
+
+		logger := discardLogger()
+		attachPlanToTicket(logger, "ref-abc123", "plan/test")
+	})
+
+	t.Run("skips when both env vars missing", func(t *testing.T) {
+		t.Setenv("BUREAU_TICKET_ID", "")
+		t.Setenv("BUREAU_TICKET_ROOM", "")
+
+		logger := discardLogger()
+		attachPlanToTicket(logger, "ref-abc123", "plan/test")
+	})
+
+	t.Run("skips when ticket service socket missing", func(t *testing.T) {
+		t.Setenv("BUREAU_TICKET_ID", "tkt-test-2")
+		t.Setenv("BUREAU_TICKET_ROOM", "!room:bureau.local")
+
+		// The ticket service socket at /run/bureau/service/ticket.sock
+		// won't exist outside a sandbox. attachPlanToTicket should
+		// log this and return.
+		logger := discardLogger()
+		attachPlanToTicket(logger, "ref-abc123", "plan/test")
+	})
 }
 
 // --- Hook event parsing tests ---
@@ -728,6 +1006,72 @@ func TestWriteClaudeCodeSettings(t *testing.T) {
 	})
 }
 
+// --- hookEvent JSON parsing tests ---
+
+func TestHookEventToolResponse(t *testing.T) {
+	t.Parallel()
+
+	t.Run("parses tool_response field from PostToolUse", func(t *testing.T) {
+		t.Parallel()
+
+		// This is the actual JSON shape Claude Code sends for PostToolUse.
+		// The field is "tool_response" (not "tool_result").
+		input := `{
+			"session_id": "sess-xyz",
+			"cwd": "/workspace",
+			"hook_event_name": "PostToolUse",
+			"tool_name": "ExitPlanMode",
+			"tool_input": {},
+			"tool_response": {
+				"plan": "# Test\n\nContent here.",
+				"filePath": "/scratch/plans/test.md",
+				"isAgent": false,
+				"hasTaskTool": true
+			}
+		}`
+
+		event, err := readHookEvent(strings.NewReader(input))
+		if err != nil {
+			t.Fatalf("readHookEvent: %v", err)
+		}
+		if event.ToolName != "ExitPlanMode" {
+			t.Errorf("ToolName = %q, want ExitPlanMode", event.ToolName)
+		}
+		if len(event.ToolResponse) == 0 {
+			t.Fatal("ToolResponse should not be empty for PostToolUse")
+		}
+
+		// Verify plan content can be extracted from the parsed event.
+		planContent, filePath := extractPlanResponse(event.ToolResponse)
+		if planContent != "# Test\n\nContent here." {
+			t.Errorf("planContent = %q, want test content", planContent)
+		}
+		if filePath != "/scratch/plans/test.md" {
+			t.Errorf("filePath = %q, want /scratch/plans/test.md", filePath)
+		}
+	})
+
+	t.Run("tool_response absent for PreToolUse", func(t *testing.T) {
+		t.Parallel()
+
+		input := `{
+			"session_id": "sess-pre",
+			"cwd": "/workspace",
+			"hook_event_name": "PreToolUse",
+			"tool_name": "Edit",
+			"tool_input": {"file_path": "/workspace/main.go"}
+		}`
+
+		event, err := readHookEvent(strings.NewReader(input))
+		if err != nil {
+			t.Fatalf("readHookEvent: %v", err)
+		}
+		if len(event.ToolResponse) != 0 {
+			t.Errorf("ToolResponse should be empty for PreToolUse, got %s", string(event.ToolResponse))
+		}
+	})
+}
+
 // --- Helpers ---
 
 // mustMarshal marshals v to JSON, failing the test on error.
@@ -738,4 +1082,11 @@ func mustMarshal(t *testing.T, value any) json.RawMessage {
 		t.Fatalf("marshaling test data: %v", err)
 	}
 	return json.RawMessage(data)
+}
+
+// discardLogger returns a slog.Logger that writes to io.Discard.
+// Useful for testing functions that take a logger but whose log output
+// is not under test.
+func discardLogger() *slog.Logger {
+	return slog.New(slog.NewJSONHandler(io.Discard, nil))
 }

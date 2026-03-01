@@ -15,6 +15,7 @@ go_library(
     deps = [
         "//lib/agentdriver",
         "//lib/process",
+        "//lib/service",
     ],
 )
 

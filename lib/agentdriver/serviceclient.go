@@ -471,6 +471,70 @@ func (c *AgentServiceClient) MaterializeContext(ctx context.Context, request Mat
 	return &response, nil
 }
 
+// --- Artifact actions ---
+
+// ArchiveArtifactRequest holds the parameters for archiving arbitrary
+// content as a Bureau artifact. This is the general-purpose storage
+// primitive for agents — any content with a label and content type.
+// The returned ref can be used for ticket attachments, context
+// associations, or passed to other services.
+type ArchiveArtifactRequest struct {
+	// Data is the raw artifact content. Required.
+	Data []byte
+
+	// ContentType is the MIME type of the content (e.g.,
+	// "text/markdown", "application/json"). Required.
+	ContentType string
+
+	// Label identifies this artifact for human consumption and
+	// deduplication (e.g., "plan/transient-launching-hopper",
+	// "session-log/2026-03-01"). Required.
+	Label string
+
+	// Description is an optional human-readable description of the
+	// artifact's purpose or contents.
+	Description string
+}
+
+// ArchiveArtifactResponse holds the content-addressed ref and size
+// returned after the artifact is stored.
+type ArchiveArtifactResponse struct {
+	Ref  string `cbor:"ref"`
+	Size int64  `cbor:"size"`
+}
+
+// ArchiveArtifact stores arbitrary content as a Bureau artifact and
+// returns the content-addressed ref. Unlike StoreSessionLog (which
+// requires an active session) and CheckpointContext (which builds
+// commit chains), ArchiveArtifact has no preconditions beyond
+// authentication.
+func (c *AgentServiceClient) ArchiveArtifact(ctx context.Context, request ArchiveArtifactRequest) (*ArchiveArtifactResponse, error) {
+	if len(request.Data) == 0 {
+		return nil, fmt.Errorf("data is required")
+	}
+	if request.ContentType == "" {
+		return nil, fmt.Errorf("content_type is required")
+	}
+	if request.Label == "" {
+		return nil, fmt.Errorf("label is required")
+	}
+
+	fields := map[string]any{
+		"data":         request.Data,
+		"content_type": request.ContentType,
+		"label":        request.Label,
+	}
+	if request.Description != "" {
+		fields["description"] = request.Description
+	}
+
+	var response ArchiveArtifactResponse
+	if err := c.client.Call(ctx, "archive-artifact", fields, &response); err != nil {
+		return nil, err
+	}
+	return &response, nil
+}
+
 // --- Metrics actions ---
 
 // GetMetrics returns the aggregated metrics for a principal. If

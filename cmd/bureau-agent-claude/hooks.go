@@ -4,6 +4,7 @@
 package main
 
 import (
+	"context"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -12,6 +13,9 @@ import (
 	"os"
 	"path/filepath"
 	"strings"
+
+	"github.com/bureau-foundation/bureau/lib/agentdriver"
+	"github.com/bureau-foundation/bureau/lib/service"
 )
 
 // hookEvent is the JSON envelope Claude Code sends to hook handlers on
@@ -23,7 +27,7 @@ type hookEvent struct {
 	HookEventName string          `json:"hook_event_name"`
 	ToolName      string          `json:"tool_name"`
 	ToolInput     json.RawMessage `json:"tool_input"`
-	ToolResult    json.RawMessage `json:"tool_result,omitempty"`
+	ToolResponse  json.RawMessage `json:"tool_response,omitempty"`
 }
 
 // allowedWritePrefixes are the directories where write operations are
@@ -141,10 +145,11 @@ func handlePreToolUse(event *hookEvent) error {
 	return nil
 }
 
-// handlePostToolUse logs tool execution for audit purposes. This is
-// intentionally minimal — the stream-json parser already captures
-// full tool call/result data. The audit hook adds a Bureau-side
-// record that confirms the tool actually executed.
+// handlePostToolUse logs tool execution for audit purposes and
+// performs plan archival when ExitPlanMode is detected. Audit logging
+// is intentionally minimal — the stream-json parser already captures
+// full tool call/result data. Plan archival is best-effort: failures
+// are logged but do not block Claude Code from continuing.
 func handlePostToolUse(event *hookEvent) error {
 	logger := slog.New(slog.NewJSONHandler(os.Stderr, nil))
 	logger.Info("tool executed",
@@ -153,7 +158,159 @@ func handlePostToolUse(event *hookEvent) error {
 		"tool", event.ToolName,
 		"cwd", event.CWD,
 	)
+
+	if event.ToolName == "ExitPlanMode" {
+		archivePlan(logger, event)
+	}
+
 	return nil
+}
+
+// exitPlanModeResponse holds the fields from ExitPlanMode's
+// tool_response that are relevant for plan archival. Claude Code
+// provides the full plan content and file path in the PostToolUse
+// hook event, so no filesystem scanning is needed.
+type exitPlanModeResponse struct {
+	Plan     string `json:"plan"`
+	FilePath string `json:"filePath"`
+}
+
+// extractPlanResponse extracts plan content and file path from an
+// ExitPlanMode tool_response. Returns empty strings if the response
+// is missing or doesn't contain plan content.
+func extractPlanResponse(toolResponse json.RawMessage) (planContent string, filePath string) {
+	if len(toolResponse) == 0 {
+		return "", ""
+	}
+	var response exitPlanModeResponse
+	if json.Unmarshal(toolResponse, &response) != nil {
+		return "", ""
+	}
+	return response.Plan, response.FilePath
+}
+
+// planLabel derives an artifact label from a plan file path. The
+// label follows the pattern "plan/<name>" where <name> is the file's
+// base name without extension (e.g., "/scratch/plans/auth-redesign.md"
+// becomes "plan/auth-redesign").
+func planLabel(filePath string) string {
+	if filePath == "" {
+		return "plan/unnamed"
+	}
+	base := filepath.Base(filePath)
+	name := strings.TrimSuffix(base, filepath.Ext(base))
+	if name == "" {
+		return "plan/unnamed"
+	}
+	return "plan/" + name
+}
+
+// archivePlan extracts plan content from an ExitPlanMode tool response
+// and archives it as a Bureau artifact via the agent service. If ticket
+// context is available (BUREAU_TICKET_ID, BUREAU_TICKET_ROOM, and the
+// ticket service socket), the artifact is also attached to the ticket.
+//
+// This is best-effort: errors are logged but never returned. The plan
+// file remains on disk at /scratch/plans/ regardless of archival
+// outcome. Plan archival should never block Claude Code.
+func archivePlan(logger *slog.Logger, event *hookEvent) {
+	planContent, planFilePath := extractPlanResponse(event.ToolResponse)
+	if planContent == "" {
+		logger.Warn("ExitPlanMode tool response has no plan content")
+		return
+	}
+
+	label := planLabel(planFilePath)
+
+	// Check if the agent service socket exists. Outside a Bureau
+	// sandbox (e.g., local development), the socket won't be present
+	// and plan archival is silently skipped.
+	if _, err := os.Stat(agentdriver.DefaultAgentServiceSocketPath); err != nil {
+		logger.Info("agent service socket not available, skipping plan archival",
+			"path", agentdriver.DefaultAgentServiceSocketPath)
+		return
+	}
+
+	agentClient, err := agentdriver.NewAgentServiceClient(
+		agentdriver.DefaultAgentServiceSocketPath,
+		agentdriver.DefaultAgentServiceTokenPath,
+	)
+	if err != nil {
+		logger.Warn("connecting to agent service for plan archival", "error", err)
+		return
+	}
+
+	response, err := agentClient.ArchiveArtifact(context.Background(), agentdriver.ArchiveArtifactRequest{
+		Data:        []byte(planContent),
+		ContentType: "text/markdown",
+		Label:       label,
+	})
+	if err != nil {
+		logger.Warn("archiving plan artifact", "error", err)
+		return
+	}
+
+	logger.Info("plan archived",
+		"ref", response.Ref,
+		"size", response.Size,
+		"label", label,
+	)
+
+	attachPlanToTicket(logger, response.Ref, label)
+}
+
+// Ticket service socket paths inside a Bureau sandbox. The ticket
+// service is available when the agent template declares
+// RequiredServices: ["ticket"].
+const (
+	ticketServiceSocketPath = "/run/bureau/service/ticket.sock"
+	ticketServiceTokenPath  = "/run/bureau/service/token/ticket.token"
+)
+
+// attachPlanToTicket attaches a plan artifact to the ticket identified
+// by BUREAU_TICKET_ID and BUREAU_TICKET_ROOM environment variables.
+// These are set by the daemon for ticket-triggered sandboxes. When
+// either is missing or the ticket service socket is unavailable,
+// attachment is silently skipped — many agent sandboxes don't have
+// ticket context, and that's normal.
+func attachPlanToTicket(logger *slog.Logger, artifactRef, label string) {
+	ticketID := os.Getenv("BUREAU_TICKET_ID")
+	ticketRoom := os.Getenv("BUREAU_TICKET_ROOM")
+	if ticketID == "" || ticketRoom == "" {
+		return
+	}
+
+	if _, err := os.Stat(ticketServiceSocketPath); err != nil {
+		logger.Info("ticket service socket not available, skipping attachment",
+			"path", ticketServiceSocketPath)
+		return
+	}
+
+	ticketClient, err := service.NewServiceClient(ticketServiceSocketPath, ticketServiceTokenPath)
+	if err != nil {
+		logger.Warn("connecting to ticket service for plan attachment", "error", err)
+		return
+	}
+
+	err = ticketClient.Call(context.Background(), "add-attachment", map[string]any{
+		"ticket":       ticketID,
+		"room":         ticketRoom,
+		"ref":          artifactRef,
+		"label":        label,
+		"content_type": "text/markdown",
+	}, nil)
+	if err != nil {
+		logger.Warn("attaching plan to ticket", "error", err,
+			"ticket", ticketID,
+			"ref", artifactRef)
+		return
+	}
+
+	logger.Info("plan attached to ticket",
+		"ticket", ticketID,
+		"ref", artifactRef,
+		"label", label,
+	)
 }
 
 // extractTargetPath extracts the filesystem path from a tool's input
@@ -241,8 +398,10 @@ func claudeCodeSettings(binaryPath string) map[string]any {
 
 		// Direct plan files to /scratch/plans/ for durable storage.
 		// /scratch/ is a bind-mounted durable directory that persists
-		// across agent sessions. PostToolUse hooks can detect
-		// ExitPlanMode events and archive plans from this location.
+		// across agent sessions. The PostToolUse hook archives plan
+		// content from the ExitPlanMode tool_response (which includes
+		// the full plan text), so this directory serves as a fallback
+		// — plans survive even if archival fails.
 		"plansDirectory": "/scratch/plans",
 
 		"hooks": map[string]any{

@@ -2020,12 +2020,20 @@ func (d *Daemon) watchSandboxExit(ctx context.Context, principal ref.Entity) {
 	d.reconcileMu.Lock()
 
 	// If the principal is no longer tracked (proxy exit watcher or
-	// reconcile already cleaned it up), we still need to post the
-	// sandbox_exited notification — consumers may be waiting for it.
-	// Skip everything else: state cleanup, crash recording, and
-	// reconciliation were already handled by the other path.
+	// reconcile already cleaned it up), we still need to complete the
+	// log and post the sandbox_exited notification. The proxy exit
+	// watcher races with this goroutine because the launcher kills
+	// the proxy immediately after closing sb.done (which unblocks
+	// wait-sandbox). If the proxy exit watcher wins reconcileMu, it
+	// calls destroyPrincipal which clears d.running — but does not
+	// complete the log session. We must do it here so that log status
+	// transitions to "complete" before the notification is posted.
 	if !d.running[principal] {
+		sessionID := d.logSessionIDs[principal]
+		delete(d.logSessionIDs, principal)
 		d.reconcileMu.Unlock()
+
+		d.completeLogForPrincipal(postExitCtx, principal, sessionID)
 
 		var capturedOutput string
 		if exitCode != 0 && exitOutput != "" {

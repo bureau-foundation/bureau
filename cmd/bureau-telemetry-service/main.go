@@ -303,6 +303,12 @@ func (s *TelemetryService) registerActions(server *service.SocketServer) {
 	// template's OutputCapture.MaxSize.
 	server.HandleAuth("configure-log", s.handleConfigureLog)
 
+	// Authenticated query actions for stored telemetry data.
+	server.HandleAuth("traces", s.handleTraces)
+	server.HandleAuth("metrics", s.handleMetrics)
+	server.HandleAuth("logs", s.handleLogs)
+	server.HandleAuth("top", s.handleTop)
+
 	// Authenticated operational actions for deterministic testing.
 	// These trigger the same logic as the background tickers but
 	// on demand, so callers don't need to wait for timer intervals.

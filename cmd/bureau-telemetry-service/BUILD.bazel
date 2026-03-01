@@ -10,6 +10,7 @@ go_library(
         "ingest.go",
         "log_manager.go",
         "main.go",
+        "query.go",
         "store.go",
         "tail.go",
     ],

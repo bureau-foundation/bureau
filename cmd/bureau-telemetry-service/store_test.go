@@ -555,3 +555,308 @@ func TestPartitionDiscoveryOnReopen(t *testing.T) {
 		t.Errorf("span operation = %q, want %q", spans[0].Operation, "survived.reopen")
 	}
 }
+
+func TestQueryTopBasic(t *testing.T) {
+	store, _ := openTestStore(t)
+	ctx := context.Background()
+	refs := newStoreTestRefs(t)
+
+	now := storeTestClockEpoch.UnixNano()
+
+	// Insert spans with varied operations, durations, and statuses.
+	batch := &telemetry.TelemetryBatch{
+		Fleet:   refs.fleet,
+		Machine: refs.machine,
+		Spans: []telemetry.Span{
+			// "proxy.forward": 3 spans, 1 error. Durations: 5ms, 50ms, 100ms.
+			{
+				TraceID: telemetry.TraceID{1}, SpanID: telemetry.SpanID{1},
+				Fleet: refs.fleet, Machine: refs.machine, Source: refs.source,
+				Operation: "proxy.forward", StartTime: now, Duration: 5_000_000,
+				Status: telemetry.SpanStatusOK,
+			},
+			{
+				TraceID: telemetry.TraceID{2}, SpanID: telemetry.SpanID{2},
+				Fleet: refs.fleet, Machine: refs.machine, Source: refs.source,
+				Operation: "proxy.forward", StartTime: now + 1, Duration: 50_000_000,
+				Status: telemetry.SpanStatusOK,
+			},
+			{
+				TraceID: telemetry.TraceID{3}, SpanID: telemetry.SpanID{3},
+				Fleet: refs.fleet, Machine: refs.machine, Source: refs.source,
+				Operation: "proxy.forward", StartTime: now + 2, Duration: 100_000_000,
+				Status: telemetry.SpanStatusError, StatusMessage: "timeout",
+			},
+			// "db.query": 2 spans, 2 errors. Durations: 200ms, 300ms.
+			{
+				TraceID: telemetry.TraceID{4}, SpanID: telemetry.SpanID{4},
+				Fleet: refs.fleet, Machine: refs.machine, Source: refs.source,
+				Operation: "db.query", StartTime: now + 3, Duration: 200_000_000,
+				Status: telemetry.SpanStatusError, StatusMessage: "connection refused",
+			},
+			{
+				TraceID: telemetry.TraceID{5}, SpanID: telemetry.SpanID{5},
+				Fleet: refs.fleet, Machine: refs.machine, Source: refs.source,
+				Operation: "db.query", StartTime: now + 4, Duration: 300_000_000,
+				Status: telemetry.SpanStatusError, StatusMessage: "deadlock",
+			},
+		},
+	}
+
+	if err := store.WriteBatch(ctx, batch); err != nil {
+		t.Fatalf("WriteBatch: %v", err)
+	}
+
+	// Query with a 1-hour window.
+	result, err := store.QueryTop(ctx, TopFilter{
+		Window: int64(1 * time.Hour),
+	})
+	if err != nil {
+		t.Fatalf("QueryTop: %v", err)
+	}
+
+	// Throughput: proxy.forward=3, db.query=2.
+	if len(result.HighestThroughput) != 2 {
+		t.Fatalf("throughput: got %d entries, want 2", len(result.HighestThroughput))
+	}
+	if result.HighestThroughput[0].Operation != "proxy.forward" {
+		t.Errorf("throughput[0].Operation = %q, want proxy.forward", result.HighestThroughput[0].Operation)
+	}
+	if result.HighestThroughput[0].Count != 3 {
+		t.Errorf("throughput[0].Count = %d, want 3", result.HighestThroughput[0].Count)
+	}
+	if result.HighestThroughput[1].Operation != "db.query" {
+		t.Errorf("throughput[1].Operation = %q, want db.query", result.HighestThroughput[1].Operation)
+	}
+	if result.HighestThroughput[1].Count != 2 {
+		t.Errorf("throughput[1].Count = %d, want 2", result.HighestThroughput[1].Count)
+	}
+
+	// Error rate: db.query=100%, proxy.forward=33%.
+	if len(result.HighestErrorRate) != 2 {
+		t.Fatalf("error rate: got %d entries, want 2", len(result.HighestErrorRate))
+	}
+	if result.HighestErrorRate[0].Operation != "db.query" {
+		t.Errorf("error_rate[0].Operation = %q, want db.query", result.HighestErrorRate[0].Operation)
+	}
+	if result.HighestErrorRate[0].ErrorRate != 1.0 {
+		t.Errorf("error_rate[0].ErrorRate = %f, want 1.0", result.HighestErrorRate[0].ErrorRate)
+	}
+	if result.HighestErrorRate[0].ErrorCount != 2 {
+		t.Errorf("error_rate[0].ErrorCount = %d, want 2", result.HighestErrorRate[0].ErrorCount)
+	}
+
+	// Slowest: db.query has P99=300ms, proxy.forward has P99=100ms.
+	// With small counts, the P99 offset is 0, so the result is the max.
+	if len(result.SlowestOperations) != 2 {
+		t.Fatalf("slowest: got %d entries, want 2", len(result.SlowestOperations))
+	}
+	if result.SlowestOperations[0].Operation != "db.query" {
+		t.Errorf("slowest[0].Operation = %q, want db.query", result.SlowestOperations[0].Operation)
+	}
+	if result.SlowestOperations[0].P99Duration != 300_000_000 {
+		t.Errorf("slowest[0].P99Duration = %d, want 300_000_000", result.SlowestOperations[0].P99Duration)
+	}
+	if result.SlowestOperations[1].Operation != "proxy.forward" {
+		t.Errorf("slowest[1].Operation = %q, want proxy.forward", result.SlowestOperations[1].Operation)
+	}
+	if result.SlowestOperations[1].P99Duration != 100_000_000 {
+		t.Errorf("slowest[1].P99Duration = %d, want 100_000_000", result.SlowestOperations[1].P99Duration)
+	}
+
+	// Machine activity: one machine.
+	if len(result.MachineActivity) != 1 {
+		t.Fatalf("machine activity: got %d entries, want 1", len(result.MachineActivity))
+	}
+	if result.MachineActivity[0].SpanCount != 5 {
+		t.Errorf("machine[0].SpanCount = %d, want 5", result.MachineActivity[0].SpanCount)
+	}
+	if result.MachineActivity[0].ErrorCount != 3 {
+		t.Errorf("machine[0].ErrorCount = %d, want 3", result.MachineActivity[0].ErrorCount)
+	}
+}
+
+func TestQueryTopMachineFilter(t *testing.T) {
+	store, _ := openTestStore(t)
+	ctx := context.Background()
+	refs := newStoreTestRefs(t)
+
+	now := storeTestClockEpoch.UnixNano()
+
+	// Create a second machine ref.
+	server := ref.MustParseServerName("bureau.local")
+	namespace, err := ref.NewNamespace(server, "test_bureau")
+	if err != nil {
+		t.Fatal(err)
+	}
+	fleet, err := ref.NewFleet(namespace, "prod")
+	if err != nil {
+		t.Fatal(err)
+	}
+	machine2, err := ref.NewMachine(fleet, "cpu-box")
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	// Spans on machine 1.
+	batch1 := &telemetry.TelemetryBatch{
+		Fleet: refs.fleet, Machine: refs.machine,
+		Spans: []telemetry.Span{
+			{
+				TraceID: telemetry.TraceID{1}, SpanID: telemetry.SpanID{1},
+				Fleet: refs.fleet, Machine: refs.machine, Source: refs.source,
+				Operation: "proxy.forward", StartTime: now, Duration: 10_000_000,
+				Status: telemetry.SpanStatusOK,
+			},
+		},
+	}
+
+	// Spans on machine 2.
+	batch2 := &telemetry.TelemetryBatch{
+		Fleet: refs.fleet, Machine: machine2,
+		Spans: []telemetry.Span{
+			{
+				TraceID: telemetry.TraceID{2}, SpanID: telemetry.SpanID{2},
+				Fleet: refs.fleet, Machine: machine2, Source: refs.source,
+				Operation: "db.query", StartTime: now + 1, Duration: 200_000_000,
+				Status: telemetry.SpanStatusError,
+			},
+			{
+				TraceID: telemetry.TraceID{3}, SpanID: telemetry.SpanID{3},
+				Fleet: refs.fleet, Machine: machine2, Source: refs.source,
+				Operation: "db.query", StartTime: now + 2, Duration: 300_000_000,
+				Status: telemetry.SpanStatusOK,
+			},
+		},
+	}
+
+	if err := store.WriteBatch(ctx, batch1); err != nil {
+		t.Fatalf("WriteBatch (machine 1): %v", err)
+	}
+	if err := store.WriteBatch(ctx, batch2); err != nil {
+		t.Fatalf("WriteBatch (machine 2): %v", err)
+	}
+
+	// Filter to machine 2 only.
+	result, err := store.QueryTop(ctx, TopFilter{
+		Window:  int64(1 * time.Hour),
+		Machine: machine2.Localpart(),
+	})
+	if err != nil {
+		t.Fatalf("QueryTop (machine filter): %v", err)
+	}
+
+	// Should only see db.query operations.
+	if len(result.HighestThroughput) != 1 {
+		t.Fatalf("throughput: got %d entries, want 1", len(result.HighestThroughput))
+	}
+	if result.HighestThroughput[0].Operation != "db.query" {
+		t.Errorf("throughput[0].Operation = %q, want db.query", result.HighestThroughput[0].Operation)
+	}
+	if result.HighestThroughput[0].Count != 2 {
+		t.Errorf("throughput[0].Count = %d, want 2", result.HighestThroughput[0].Count)
+	}
+
+	// Machine activity is omitted when filtering to a single machine.
+	if len(result.MachineActivity) != 0 {
+		t.Errorf("machine activity: got %d entries, want 0 (single machine filter)", len(result.MachineActivity))
+	}
+}
+
+func TestQueryTopEmptyStore(t *testing.T) {
+	store, _ := openTestStore(t)
+	ctx := context.Background()
+
+	result, err := store.QueryTop(ctx, TopFilter{
+		Window: int64(1 * time.Hour),
+	})
+	if err != nil {
+		t.Fatalf("QueryTop (empty): %v", err)
+	}
+
+	if result.SlowestOperations == nil {
+		t.Error("SlowestOperations is nil, want empty slice")
+	}
+	if result.HighestErrorRate == nil {
+		t.Error("HighestErrorRate is nil, want empty slice")
+	}
+	if result.HighestThroughput == nil {
+		t.Error("HighestThroughput is nil, want empty slice")
+	}
+	if result.MachineActivity == nil {
+		t.Error("MachineActivity is nil, want empty slice")
+	}
+	if len(result.SlowestOperations) != 0 {
+		t.Errorf("SlowestOperations has %d entries, want 0", len(result.SlowestOperations))
+	}
+}
+
+func TestQueryTopWindowBoundary(t *testing.T) {
+	store, fakeClock := openTestStore(t)
+	ctx := context.Background()
+	refs := newStoreTestRefs(t)
+
+	now := storeTestClockEpoch.UnixNano()
+
+	// Insert a span at the epoch.
+	batch := &telemetry.TelemetryBatch{
+		Fleet: refs.fleet, Machine: refs.machine,
+		Spans: []telemetry.Span{
+			{
+				TraceID: telemetry.TraceID{1}, SpanID: telemetry.SpanID{1},
+				Fleet: refs.fleet, Machine: refs.machine, Source: refs.source,
+				Operation: "old.op", StartTime: now, Duration: 1_000_000,
+				Status: telemetry.SpanStatusOK,
+			},
+		},
+	}
+	if err := store.WriteBatch(ctx, batch); err != nil {
+		t.Fatalf("WriteBatch (old): %v", err)
+	}
+
+	// Advance clock by 2 hours and insert another span.
+	fakeClock.Advance(2 * time.Hour)
+	laterNow := fakeClock.Now().UnixNano()
+
+	batch2 := &telemetry.TelemetryBatch{
+		Fleet: refs.fleet, Machine: refs.machine,
+		Spans: []telemetry.Span{
+			{
+				TraceID: telemetry.TraceID{2}, SpanID: telemetry.SpanID{2},
+				Fleet: refs.fleet, Machine: refs.machine, Source: refs.source,
+				Operation: "new.op", StartTime: laterNow, Duration: 2_000_000,
+				Status: telemetry.SpanStatusOK,
+			},
+		},
+	}
+	if err := store.WriteBatch(ctx, batch2); err != nil {
+		t.Fatalf("WriteBatch (new): %v", err)
+	}
+
+	// Query with a 1-hour window — should only see the newer span.
+	result, err := store.QueryTop(ctx, TopFilter{
+		Window: int64(1 * time.Hour),
+	})
+	if err != nil {
+		t.Fatalf("QueryTop (1h window): %v", err)
+	}
+
+	if len(result.HighestThroughput) != 1 {
+		t.Fatalf("throughput: got %d entries, want 1", len(result.HighestThroughput))
+	}
+	if result.HighestThroughput[0].Operation != "new.op" {
+		t.Errorf("throughput[0].Operation = %q, want new.op", result.HighestThroughput[0].Operation)
+	}
+
+	// Query with a 3-hour window — should see both spans.
+	result, err = store.QueryTop(ctx, TopFilter{
+		Window: int64(3 * time.Hour),
+	})
+	if err != nil {
+		t.Fatalf("QueryTop (3h window): %v", err)
+	}
+
+	if len(result.HighestThroughput) != 2 {
+		t.Fatalf("throughput: got %d entries, want 2", len(result.HighestThroughput))
+	}
+}

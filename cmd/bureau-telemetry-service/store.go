@@ -1151,6 +1151,333 @@ func (s *Store) Stats(ctx context.Context) (telemetry.StorageStats, error) {
 	return stats, nil
 }
 
+// TopFilter specifies the criteria for the aggregated operational
+// overview. Window is required.
+type TopFilter struct {
+	Window  int64  // Lookback duration in nanoseconds. Required.
+	Machine string // Optional machine localpart filter.
+}
+
+// topOperationStats accumulates per-operation aggregate counters
+// across partitions for the top overview.
+type topOperationStats struct {
+	count      int64
+	errorCount int64
+}
+
+// topMachineStats accumulates per-machine aggregate counters across
+// partitions for the top overview.
+type topMachineStats struct {
+	spanCount  int64
+	errorCount int64
+}
+
+const topResultLimit = 10
+
+// QueryTop returns an aggregated operational overview for the given
+// time window. It runs two passes over span partitions:
+//
+//  1. Aggregate pass: GROUP BY operation (and machine) to collect
+//     counts and error counts across all partitions in the window.
+//  2. P99 pass: for the top operations by count, fetch the P99
+//     duration using an indexed offset query per partition.
+//
+// Results are limited to the top 10 per category.
+func (s *Store) QueryTop(ctx context.Context, filter TopFilter) (telemetry.TopResponse, error) {
+	conn, err := s.pool.Take(ctx)
+	if err != nil {
+		return telemetry.TopResponse{}, fmt.Errorf("telemetry store: query top: %w", err)
+	}
+	defer s.pool.Put(conn)
+
+	startNanos := s.clock.Now().UnixNano() - filter.Window
+	partitions := s.partitionsInRange(startNanos, 0)
+
+	var response telemetry.TopResponse
+
+	if len(partitions) == 0 {
+		response.SlowestOperations = []telemetry.OperationDuration{}
+		response.HighestErrorRate = []telemetry.OperationErrorRate{}
+		response.HighestThroughput = []telemetry.OperationThroughput{}
+		response.MachineActivity = []telemetry.MachineActivity{}
+		return response, nil
+	}
+
+	// Pass 1: aggregate per-operation and per-machine stats.
+	operationStats := make(map[string]*topOperationStats)
+	machineStats := make(map[string]*topMachineStats)
+
+	for _, suffix := range partitions {
+		if err := s.topAggregateOperations(conn, suffix, startNanos, filter.Machine, operationStats); err != nil {
+			return telemetry.TopResponse{}, err
+		}
+		if filter.Machine == "" {
+			if err := s.topAggregateMachines(conn, suffix, startNanos, machineStats); err != nil {
+				return telemetry.TopResponse{}, err
+			}
+		}
+	}
+
+	// Rank operations by count to identify the top N for P99 queries.
+	type rankedOperation struct {
+		operation string
+		stats     *topOperationStats
+	}
+	ranked := make([]rankedOperation, 0, len(operationStats))
+	for operation, stats := range operationStats {
+		ranked = append(ranked, rankedOperation{operation: operation, stats: stats})
+	}
+	sort.Slice(ranked, func(i, j int) bool {
+		return ranked[i].stats.count > ranked[j].stats.count
+	})
+	if len(ranked) > topResultLimit {
+		ranked = ranked[:topResultLimit]
+	}
+
+	// Pass 2: P99 duration for the top operations.
+	type operationP99 struct {
+		operation string
+		p99       int64
+		count     int64
+	}
+	p99Results := make([]operationP99, 0, len(ranked))
+
+	for _, entry := range ranked {
+		offset := percentile99Offset(entry.stats.count)
+		var maxP99 int64
+		for _, suffix := range partitions {
+			duration, err := s.topP99ForOperation(conn, suffix, startNanos, filter.Machine, entry.operation, offset)
+			if err != nil {
+				return telemetry.TopResponse{}, err
+			}
+			if duration > maxP99 {
+				maxP99 = duration
+			}
+		}
+		p99Results = append(p99Results, operationP99{
+			operation: entry.operation,
+			p99:       maxP99,
+			count:     entry.stats.count,
+		})
+	}
+
+	// Sort by P99 descending for the slowest operations ranking.
+	sort.Slice(p99Results, func(i, j int) bool {
+		return p99Results[i].p99 > p99Results[j].p99
+	})
+	response.SlowestOperations = make([]telemetry.OperationDuration, len(p99Results))
+	for i, entry := range p99Results {
+		response.SlowestOperations[i] = telemetry.OperationDuration{
+			Operation:   entry.operation,
+			P99Duration: entry.p99,
+			Count:       entry.count,
+		}
+	}
+
+	// Build error rate ranking (only operations with errors).
+	type operationError struct {
+		operation  string
+		errorRate  float64
+		errorCount int64
+		totalCount int64
+	}
+	var errorRanked []operationError
+	for operation, stats := range operationStats {
+		if stats.errorCount > 0 {
+			errorRanked = append(errorRanked, operationError{
+				operation:  operation,
+				errorRate:  float64(stats.errorCount) / float64(stats.count),
+				errorCount: stats.errorCount,
+				totalCount: stats.count,
+			})
+		}
+	}
+	sort.Slice(errorRanked, func(i, j int) bool {
+		return errorRanked[i].errorRate > errorRanked[j].errorRate
+	})
+	if len(errorRanked) > topResultLimit {
+		errorRanked = errorRanked[:topResultLimit]
+	}
+	response.HighestErrorRate = make([]telemetry.OperationErrorRate, len(errorRanked))
+	for i, entry := range errorRanked {
+		response.HighestErrorRate[i] = telemetry.OperationErrorRate{
+			Operation:  entry.operation,
+			ErrorRate:  entry.errorRate,
+			ErrorCount: entry.errorCount,
+			TotalCount: entry.totalCount,
+		}
+	}
+
+	// Build throughput ranking (re-use ranked which is already sorted by count).
+	response.HighestThroughput = make([]telemetry.OperationThroughput, len(ranked))
+	for i, entry := range ranked {
+		response.HighestThroughput[i] = telemetry.OperationThroughput{
+			Operation: entry.operation,
+			Count:     entry.stats.count,
+		}
+	}
+
+	// Build machine activity ranking.
+	type machineRanked struct {
+		machine string
+		stats   *topMachineStats
+	}
+	machines := make([]machineRanked, 0, len(machineStats))
+	for machine, stats := range machineStats {
+		machines = append(machines, machineRanked{machine: machine, stats: stats})
+	}
+	sort.Slice(machines, func(i, j int) bool {
+		return machines[i].stats.spanCount > machines[j].stats.spanCount
+	})
+	if len(machines) > topResultLimit {
+		machines = machines[:topResultLimit]
+	}
+	response.MachineActivity = make([]telemetry.MachineActivity, len(machines))
+	for i, entry := range machines {
+		var errorRate float64
+		if entry.stats.spanCount > 0 {
+			errorRate = float64(entry.stats.errorCount) / float64(entry.stats.spanCount)
+		}
+		response.MachineActivity[i] = telemetry.MachineActivity{
+			Machine:    entry.machine,
+			SpanCount:  entry.stats.spanCount,
+			ErrorCount: entry.stats.errorCount,
+			ErrorRate:  errorRate,
+		}
+	}
+
+	return response, nil
+}
+
+// topAggregateOperations runs a GROUP BY operation aggregate query on
+// a single span partition, merging results into the provided map.
+func (s *Store) topAggregateOperations(conn *sqlite.Conn, suffix string, startNanos int64, machine string, stats map[string]*topOperationStats) error {
+	var conditions []string
+	var args []any
+
+	conditions = append(conditions, "start_time >= ?")
+	args = append(args, startNanos)
+
+	if machine != "" {
+		conditions = append(conditions, "machine = ?")
+		args = append(args, machine)
+	}
+
+	query := "SELECT operation, COUNT(*) AS total, " +
+		"SUM(CASE WHEN status = 2 THEN 1 ELSE 0 END) AS errors " +
+		"FROM spans_" + suffix +
+		" WHERE " + strings.Join(conditions, " AND ") +
+		" GROUP BY operation"
+
+	err := sqlitex.ExecuteTransient(conn, query, &sqlitex.ExecOptions{
+		Args: args,
+		ResultFunc: func(stmt *sqlite.Stmt) error {
+			operation := stmt.ColumnText(0)
+			total := stmt.ColumnInt64(1)
+			errors := stmt.ColumnInt64(2)
+
+			entry, exists := stats[operation]
+			if !exists {
+				entry = &topOperationStats{}
+				stats[operation] = entry
+			}
+			entry.count += total
+			entry.errorCount += errors
+			return nil
+		},
+	})
+	if err != nil {
+		return fmt.Errorf("telemetry store: top operations spans_%s: %w", suffix, err)
+	}
+	return nil
+}
+
+// topAggregateMachines runs a GROUP BY machine aggregate query on
+// a single span partition, merging results into the provided map.
+func (s *Store) topAggregateMachines(conn *sqlite.Conn, suffix string, startNanos int64, stats map[string]*topMachineStats) error {
+	query := "SELECT machine, COUNT(*) AS total, " +
+		"SUM(CASE WHEN status = 2 THEN 1 ELSE 0 END) AS errors " +
+		"FROM spans_" + suffix +
+		" WHERE start_time >= ?" +
+		" GROUP BY machine"
+
+	err := sqlitex.ExecuteTransient(conn, query, &sqlitex.ExecOptions{
+		Args: []any{startNanos},
+		ResultFunc: func(stmt *sqlite.Stmt) error {
+			machine := stmt.ColumnText(0)
+			total := stmt.ColumnInt64(1)
+			errors := stmt.ColumnInt64(2)
+
+			entry, exists := stats[machine]
+			if !exists {
+				entry = &topMachineStats{}
+				stats[machine] = entry
+			}
+			entry.spanCount += total
+			entry.errorCount += errors
+			return nil
+		},
+	})
+	if err != nil {
+		return fmt.Errorf("telemetry store: top machines spans_%s: %w", suffix, err)
+	}
+	return nil
+}
+
+// topP99ForOperation fetches the P99 duration for a specific operation
+// from a single span partition using an indexed offset query.
+// Returns 0 if no spans match (partition has no data for this operation).
+func (s *Store) topP99ForOperation(conn *sqlite.Conn, suffix string, startNanos int64, machine, operation string, offset int64) (int64, error) {
+	var conditions []string
+	var args []any
+
+	conditions = append(conditions, "operation = ?")
+	args = append(args, operation)
+
+	conditions = append(conditions, "start_time >= ?")
+	args = append(args, startNanos)
+
+	if machine != "" {
+		conditions = append(conditions, "machine = ?")
+		args = append(args, machine)
+	}
+
+	query := "SELECT duration FROM spans_" + suffix +
+		" WHERE " + strings.Join(conditions, " AND ") +
+		" ORDER BY duration DESC LIMIT 1 OFFSET ?"
+	args = append(args, offset)
+
+	var duration int64
+	err := sqlitex.ExecuteTransient(conn, query, &sqlitex.ExecOptions{
+		Args: args,
+		ResultFunc: func(stmt *sqlite.Stmt) error {
+			duration = stmt.ColumnInt64(0)
+			return nil
+		},
+	})
+	if err != nil {
+		return 0, fmt.Errorf("telemetry store: top p99 spans_%s op=%s: %w", suffix, operation, err)
+	}
+	return duration, nil
+}
+
+// percentile99Offset returns the SQL OFFSET value for fetching the
+// P99 duration from an ORDER BY duration DESC result set. For a count
+// of N, P99 is the value at position ceil(N * 0.01) from the top.
+func percentile99Offset(count int64) int64 {
+	if count <= 0 {
+		return 0
+	}
+	// P99 offset from the top (descending order):
+	// for 100 spans, offset 0 = max, offset 1 = P99.
+	// For N spans, offset = floor(N * 0.01).
+	offset := count / 100
+	if offset < 0 {
+		offset = 0
+	}
+	return offset
+}
+
 func tableRowCount(conn *sqlite.Conn, tableName string) (int64, error) {
 	var count int64
 	query := "SELECT COUNT(*) FROM " + tableName

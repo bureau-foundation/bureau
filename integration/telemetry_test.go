@@ -11,6 +11,7 @@ import (
 	"runtime"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/bureau-foundation/bureau/lib/artifactstore"
 	"github.com/bureau-foundation/bureau/lib/codec"
@@ -199,6 +200,12 @@ func TestTelemetryServiceTail(t *testing.T) {
 	ingestEncoder := codec.NewEncoder(ingestConn)
 	ingestDecoder := codec.NewDecoder(ingestConn)
 
+	// The "top" query computes a lookback window from the service's
+	// real wall clock. The batch timestamps must fall within that
+	// window. The service runs in a separate process with no
+	// injectable clock, so wall time is genuinely required here.
+	nowNanos := time.Now().UnixNano() //nolint:realclock // integration test: service process uses real clock
+
 	batch := telemetry.TelemetryBatch{
 		Fleet:          fleet.Ref,
 		Machine:        machine.Ref,
@@ -208,7 +215,7 @@ func TestTelemetryServiceTail(t *testing.T) {
 			Machine:   machine.Ref,
 			Source:    callerEntity,
 			Operation: "test.tail.operation",
-			StartTime: 1000000000,
+			StartTime: nowNanos,
 			Duration:  500000000,
 			Status:    telemetry.SpanStatusOK,
 		}},
@@ -218,7 +225,7 @@ func TestTelemetryServiceTail(t *testing.T) {
 			Source:    callerEntity,
 			Body:      "tail test log",
 			Severity:  telemetry.SeverityInfo,
-			Timestamp: 1000000000,
+			Timestamp: nowNanos,
 		}},
 		OutputDeltas: []telemetry.OutputDelta{{
 			Fleet:     fleet.Ref,
@@ -227,7 +234,7 @@ func TestTelemetryServiceTail(t *testing.T) {
 			SessionID: "tail-test-session",
 			Sequence:  0,
 			Stream:    telemetry.OutputStreamCombined,
-			Timestamp: 1000000000,
+			Timestamp: nowNanos,
 			Data:      []byte("tail test output\n"),
 		}},
 	}
@@ -332,6 +339,68 @@ func TestTelemetryServiceTail(t *testing.T) {
 	}
 	if status.Storage.NewestPartition == "" {
 		t.Fatal("expected non-empty newest partition suffix")
+	}
+
+	// Exercise the four query actions against the stored data.
+	queryToken := mintTestServiceToken(t, machine, callerEntity, "telemetry",
+		[]servicetoken.Grant{{Actions: []string{
+			"telemetry/traces", "telemetry/metrics",
+			"telemetry/logs", "telemetry/top",
+		}}})
+	queryClient := service.NewServiceClientFromToken(telemetrySvc.SocketPath, queryToken)
+
+	// traces: query all, expect the 1 span we submitted.
+	var tracesResponse telemetry.TracesResponse
+	if err := queryClient.Call(t.Context(), "traces", telemetry.TracesRequest{}, &tracesResponse); err != nil {
+		t.Fatalf("traces query: %v", err)
+	}
+	if len(tracesResponse.Spans) != 1 {
+		t.Fatalf("traces: got %d spans, want 1", len(tracesResponse.Spans))
+	}
+	if tracesResponse.Spans[0].Operation != "test.tail.operation" {
+		t.Errorf("traces[0].Operation = %q, want test.tail.operation",
+			tracesResponse.Spans[0].Operation)
+	}
+
+	// logs: query all, expect the 1 log we submitted.
+	var logsResponse telemetry.LogsResponse
+	if err := queryClient.Call(t.Context(), "logs", telemetry.LogsRequest{}, &logsResponse); err != nil {
+		t.Fatalf("logs query: %v", err)
+	}
+	if len(logsResponse.Logs) != 1 {
+		t.Fatalf("logs: got %d logs, want 1", len(logsResponse.Logs))
+	}
+	if logsResponse.Logs[0].Body != "tail test log" {
+		t.Errorf("logs[0].Body = %q, want %q", logsResponse.Logs[0].Body, "tail test log")
+	}
+
+	// metrics: query by name, expect empty (no metrics in the batch).
+	var metricsResponse telemetry.MetricsResponse
+	if err := queryClient.Call(t.Context(), "metrics", telemetry.MetricsRequest{
+		Name: "nonexistent.metric",
+	}, &metricsResponse); err != nil {
+		t.Fatalf("metrics query: %v", err)
+	}
+	if len(metricsResponse.Metrics) != 0 {
+		t.Errorf("metrics: got %d points, want 0", len(metricsResponse.Metrics))
+	}
+
+	// top: 1-hour window, expect the operation from our span.
+	var topResponse telemetry.TopResponse
+	if err := queryClient.Call(t.Context(), "top", telemetry.TopRequest{
+		Window: int64(time.Hour),
+	}, &topResponse); err != nil {
+		t.Fatalf("top query: %v", err)
+	}
+	if len(topResponse.HighestThroughput) != 1 {
+		t.Fatalf("top throughput: got %d entries, want 1", len(topResponse.HighestThroughput))
+	}
+	if topResponse.HighestThroughput[0].Operation != "test.tail.operation" {
+		t.Errorf("top throughput[0].Operation = %q, want test.tail.operation",
+			topResponse.HighestThroughput[0].Operation)
+	}
+	if topResponse.HighestThroughput[0].Count != 1 {
+		t.Errorf("top throughput[0].Count = %d, want 1", topResponse.HighestThroughput[0].Count)
 	}
 }
 

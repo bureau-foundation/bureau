@@ -213,10 +213,38 @@ func isWritePathAllowed(path string) bool {
 	return false
 }
 
-// hookSettings generates the Claude Code settings.local.json content
-// with hooks pointing to the given binary path.
-func hookSettings(binaryPath string) map[string]any {
+// claudeCodeSettings generates the Claude Code settings.local.json
+// content for sandboxed agent operation. This configures hooks, sandbox
+// behavior, plan storage, and permission defaults. The binary path
+// parameter controls hook commands that point back to this binary.
+func claudeCodeSettings(binaryPath string) map[string]any {
 	return map[string]any{
+		// Autonomous operation: Bureau's bwrap namespace provides
+		// filesystem isolation, PreToolUse hooks enforce write-path
+		// authorization, and the proxy provides credential
+		// authorization. Claude Code's permission system is redundant
+		// inside the sandbox. This setting is belt-and-suspenders
+		// with the --dangerously-skip-permissions CLI flag (the CLI
+		// flag has higher precedence and handles cases where a
+		// project's committed settings.json overrides this value).
+		"permissions": map[string]any{
+			"defaultMode": "bypassPermissions",
+		},
+
+		// Disable Claude Code's own bubblewrap sandbox. Bureau's
+		// bwrap namespace already provides isolation — nested
+		// bubblewrap would either fail (namespace nesting) or
+		// produce confusing double-sandboxing behavior.
+		"sandbox": map[string]any{
+			"enabled": false,
+		},
+
+		// Direct plan files to /scratch/plans/ for durable storage.
+		// /scratch/ is a bind-mounted durable directory that persists
+		// across agent sessions. PostToolUse hooks can detect
+		// ExitPlanMode events and archive plans from this location.
+		"plansDirectory": "/scratch/plans",
+
 		"hooks": map[string]any{
 			"PreToolUse": []map[string]any{
 				{
@@ -244,19 +272,20 @@ func hookSettings(binaryPath string) map[string]any {
 	}
 }
 
-// writeHookSettings writes the Claude Code hook configuration to
-// .claude/settings.local.json in the given working directory. The
-// hooks point to the given binary path for handling hook events.
-func writeHookSettings(workingDirectory, binaryPath string) error {
+// writeClaudeCodeSettings writes the Claude Code configuration to
+// .claude/settings.local.json in the given working directory. This
+// includes hooks, permissions, sandbox behavior, and plan storage
+// configuration for sandboxed agent operation.
+func writeClaudeCodeSettings(workingDirectory, binaryPath string) error {
 	settingsDirectory := filepath.Join(workingDirectory, ".claude")
 	if err := os.MkdirAll(settingsDirectory, 0755); err != nil {
 		return fmt.Errorf("creating .claude directory: %w", err)
 	}
 
-	settings := hookSettings(binaryPath)
+	settings := claudeCodeSettings(binaryPath)
 	data, err := json.MarshalIndent(settings, "", "    ")
 	if err != nil {
-		return fmt.Errorf("marshaling hook settings: %w", err)
+		return fmt.Errorf("marshaling Claude Code settings: %w", err)
 	}
 
 	settingsPath := filepath.Join(settingsDirectory, "settings.local.json")

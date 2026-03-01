@@ -42,18 +42,20 @@ func (process *claudeProcess) Signal(signal os.Signal) error {
 }
 
 // Start spawns a Claude Code process with stream-json output. Before
-// starting the process, it writes hook configuration so Claude Code
-// invokes this same binary for PreToolUse and PostToolUse events.
+// starting the process, it writes .claude/settings.local.json to
+// configure hooks, permissions, sandbox behavior, and plan storage
+// for sandboxed agent operation.
 func (driver *claudeDriver) Start(ctx context.Context, config agentdriver.DriverConfig) (agentdriver.Process, io.ReadCloser, error) {
 	binaryPath := os.Getenv("CLAUDE_BINARY")
 	if binaryPath == "" {
 		binaryPath = "claude"
 	}
 
-	// Write Claude Code hook configuration before starting the
-	// process. Hooks point back to this binary in hook handler mode
+	// Write Claude Code settings before starting the process. This
+	// configures hooks, permissions, sandbox behavior, and plan
+	// storage. Hooks point back to this binary in hook handler mode
 	// (bureau-agent-claude hook <event-type>). This must happen
-	// before command.Start() so Claude Code reads the hooks at
+	// before command.Start() so Claude Code reads the settings at
 	// initialization.
 	hookBinaryPath, err := os.Executable()
 	if err != nil {
@@ -61,14 +63,20 @@ func (driver *claudeDriver) Start(ctx context.Context, config agentdriver.Driver
 		// (shouldn't happen on Linux, but defense-in-depth).
 		hookBinaryPath = os.Args[0]
 	}
-	if writeError := writeHookSettings(config.WorkingDirectory, hookBinaryPath); writeError != nil {
-		return nil, nil, fmt.Errorf("writing hook settings: %w", writeError)
+	if writeError := writeClaudeCodeSettings(config.WorkingDirectory, hookBinaryPath); writeError != nil {
+		return nil, nil, fmt.Errorf("writing Claude Code settings: %w", writeError)
 	}
 
 	arguments := []string{
 		"--output-format", "stream-json",
 		"--print",
 		"--verbose",
+		// Bypass Claude Code's permission system. Bureau's bwrap
+		// namespace provides filesystem isolation, PreToolUse hooks
+		// enforce write-path authorization, and the proxy provides
+		// credential authorization. The CLI flag has highest
+		// precedence and cannot be overridden by project settings.
+		"--dangerously-skip-permissions",
 	}
 	if config.SystemPromptFile != "" {
 		arguments = append(arguments, "--append-system-prompt-file", config.SystemPromptFile)

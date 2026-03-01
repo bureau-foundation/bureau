@@ -520,15 +520,15 @@ func TestRunHookDispatch(t *testing.T) {
 	})
 }
 
-// --- Hook settings generation tests ---
+// --- Claude Code settings generation tests ---
 
-func TestHookSettings(t *testing.T) {
+func TestClaudeCodeSettings(t *testing.T) {
 	t.Parallel()
 
 	t.Run("generates valid settings JSON", func(t *testing.T) {
 		t.Parallel()
 
-		settings := hookSettings("/usr/bin/bureau-agent-claude")
+		settings := claudeCodeSettings("/usr/bin/bureau-agent-claude")
 		data, err := json.Marshal(settings)
 		if err != nil {
 			t.Fatalf("marshal settings: %v", err)
@@ -556,7 +556,7 @@ func TestHookSettings(t *testing.T) {
 	t.Run("uses correct binary path", func(t *testing.T) {
 		t.Parallel()
 
-		settings := hookSettings("/nix/store/abc123/bureau-agent-claude")
+		settings := claudeCodeSettings("/nix/store/abc123/bureau-agent-claude")
 		data, err := json.Marshal(settings)
 		if err != nil {
 			t.Fatalf("marshal settings: %v", err)
@@ -574,7 +574,7 @@ func TestHookSettings(t *testing.T) {
 	t.Run("PreToolUse matcher covers write tools", func(t *testing.T) {
 		t.Parallel()
 
-		settings := hookSettings("/bin/test")
+		settings := claudeCodeSettings("/bin/test")
 		data, err := json.Marshal(settings)
 		if err != nil {
 			t.Fatalf("marshal settings: %v", err)
@@ -585,18 +585,65 @@ func TestHookSettings(t *testing.T) {
 			t.Errorf("PreToolUse matcher should cover write tools, got: %s", settingsJSON)
 		}
 	})
+
+	t.Run("bypasses permissions for autonomous operation", func(t *testing.T) {
+		t.Parallel()
+
+		settings := claudeCodeSettings("/bin/test")
+		data, err := json.Marshal(settings)
+		if err != nil {
+			t.Fatalf("marshal settings: %v", err)
+		}
+
+		settingsJSON := string(data)
+		if !strings.Contains(settingsJSON, "bypassPermissions") {
+			t.Errorf("settings should set bypassPermissions, got: %s", settingsJSON)
+		}
+	})
+
+	t.Run("disables Claude Code sandbox", func(t *testing.T) {
+		t.Parallel()
+
+		settings := claudeCodeSettings("/bin/test")
+
+		sandboxSection, ok := settings["sandbox"].(map[string]any)
+		if !ok {
+			t.Fatal("settings should have 'sandbox' section")
+		}
+		enabled, ok := sandboxSection["enabled"].(bool)
+		if !ok {
+			t.Fatal("sandbox.enabled should be a bool")
+		}
+		if enabled {
+			t.Error("sandbox.enabled should be false (Bureau provides isolation)")
+		}
+	})
+
+	t.Run("sets plans directory to scratch", func(t *testing.T) {
+		t.Parallel()
+
+		settings := claudeCodeSettings("/bin/test")
+
+		plansDirectory, ok := settings["plansDirectory"].(string)
+		if !ok {
+			t.Fatal("settings should have 'plansDirectory' string")
+		}
+		if plansDirectory != "/scratch/plans" {
+			t.Errorf("plansDirectory = %q, want /scratch/plans", plansDirectory)
+		}
+	})
 }
 
-func TestWriteHookSettings(t *testing.T) {
+func TestWriteClaudeCodeSettings(t *testing.T) {
 	t.Parallel()
 
-	t.Run("creates settings file", func(t *testing.T) {
+	t.Run("creates settings file with all sections", func(t *testing.T) {
 		t.Parallel()
 
 		directory := t.TempDir()
-		err := writeHookSettings(directory, "/bin/test-agent")
+		err := writeClaudeCodeSettings(directory, "/bin/test-agent")
 		if err != nil {
-			t.Fatalf("writeHookSettings: %v", err)
+			t.Fatalf("writeClaudeCodeSettings: %v", err)
 		}
 
 		settingsPath := filepath.Join(directory, ".claude", "settings.local.json")
@@ -627,6 +674,17 @@ func TestWriteHookSettings(t *testing.T) {
 			t.Error("should have PostToolUse hook")
 		}
 
+		// Verify permissions, sandbox, and plans directory.
+		if _, ok := parsed["permissions"]; !ok {
+			t.Error("should have 'permissions' section")
+		}
+		if _, ok := parsed["sandbox"]; !ok {
+			t.Error("should have 'sandbox' section")
+		}
+		if _, ok := parsed["plansDirectory"]; !ok {
+			t.Error("should have 'plansDirectory'")
+		}
+
 		// Verify binary path is in the commands.
 		content := string(data)
 		if !strings.Contains(content, "/bin/test-agent hook pre-tool-use") {
@@ -638,9 +696,9 @@ func TestWriteHookSettings(t *testing.T) {
 		t.Parallel()
 
 		directory := t.TempDir()
-		err := writeHookSettings(directory, "/bin/test")
+		err := writeClaudeCodeSettings(directory, "/bin/test")
 		if err != nil {
-			t.Fatalf("writeHookSettings: %v", err)
+			t.Fatalf("writeClaudeCodeSettings: %v", err)
 		}
 
 		claudeDir := filepath.Join(directory, ".claude")
@@ -663,9 +721,9 @@ func TestWriteHookSettings(t *testing.T) {
 			t.Fatalf("creating .claude: %v", err)
 		}
 
-		err := writeHookSettings(directory, "/bin/test")
+		err := writeClaudeCodeSettings(directory, "/bin/test")
 		if err != nil {
-			t.Fatalf("writeHookSettings should be idempotent: %v", err)
+			t.Fatalf("writeClaudeCodeSettings should be idempotent: %v", err)
 		}
 	})
 }

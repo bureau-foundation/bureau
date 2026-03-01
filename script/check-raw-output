@@ -19,6 +19,7 @@
 #   - lib/process/     — Fatal() helper writes to stderr (this IS the
 #                        centralized raw I/O for entrypoint error exit)
 #   - cmd/bureau/      — CLI user-facing output (tables, lists, help)
+#   - cmd/bureau-viewer/         — TUI binary (help, room selection, error exit)
 #   - cmd/bureau-credentials/    — credential provisioning CLI
 #   - cmd/bureau-proxy-call/     — diagnostic CLI tool
 #   - cmd/bureau-state-check/    — diagnostic CLI tool
@@ -56,6 +57,7 @@ violations=$(
         ':!lib/version/' \
         ':!lib/process/' \
         ':!cmd/bureau/' \
+        ':!cmd/bureau-viewer/' \
         ':!cmd/bureau-credentials/' \
         ':!cmd/bureau-proxy-call/' \
         ':!cmd/bureau-state-check/' \

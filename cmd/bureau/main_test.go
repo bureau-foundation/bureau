@@ -8,6 +8,7 @@ import (
 	"testing"
 
 	"github.com/bureau-foundation/bureau/cmd/bureau/cli"
+	"github.com/bureau-foundation/bureau/cmd/bureau/commands"
 )
 
 // TestCommandTreeAnnotations walks the full production command tree
@@ -20,7 +21,7 @@ import (
 // Use cli.ReadOnly(), cli.Idempotent(), cli.Create(), or
 // cli.Destructive() to set appropriate annotations on each command.
 func TestCommandTreeAnnotations(t *testing.T) {
-	root := rootCommand()
+	root := commands.Root()
 	walkCommands(root, nil, func(command *cli.Command, path []string) {
 		if command.Params == nil || command.Run == nil {
 			return

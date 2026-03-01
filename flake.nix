@@ -247,20 +247,21 @@
 
         binaries = [
           "bureau"
-          "bureau-daemon"
-          "bureau-launcher"
-          "bureau-proxy"
-          "bureau-log-relay"
-          "bureau-bridge"
-          "bureau-sandbox"
-          "bureau-credentials"
-          "bureau-proxy-call"
-          "bureau-observe-relay"
-          "bureau-pipeline-executor"
           "bureau-agent-service"
           "bureau-artifact-service"
-          "bureau-ticket-service"
+          "bureau-bridge"
+          "bureau-credentials"
+          "bureau-daemon"
+          "bureau-launcher"
+          "bureau-log-relay"
+          "bureau-observe-relay"
+          "bureau-pipeline-executor"
+          "bureau-proxy"
+          "bureau-proxy-call"
+          "bureau-sandbox"
           "bureau-test-agent"
+          "bureau-ticket-service"
+          "bureau-viewer"
         ];
 
         # Bureau binaries that run on the host outside sandboxes: the
@@ -270,17 +271,18 @@
         # launcher needs for namespace creation and terminal observation.
         hostBinaries = [
           "bureau"
-          "bureau-daemon"
-          "bureau-launcher"
-          "bureau-proxy"
-          "bureau-log-relay"
-          "bureau-bridge"
-          "bureau-sandbox"
-          "bureau-observe-relay"
-          "bureau-credentials"
           "bureau-agent-service"
           "bureau-artifact-service"
+          "bureau-bridge"
+          "bureau-credentials"
+          "bureau-daemon"
+          "bureau-launcher"
+          "bureau-log-relay"
+          "bureau-observe-relay"
+          "bureau-proxy"
+          "bureau-sandbox"
           "bureau-ticket-service"
+          "bureau-viewer"
         ];
 
         # Bureau binaries for use inside sandboxes by agents and
@@ -290,8 +292,8 @@
         sandboxBinaries = [
           "bureau"
           "bureau-bridge"
-          "bureau-proxy-call"
           "bureau-pipeline-executor"
+          "bureau-proxy-call"
         ];
       in
       {

@@ -192,6 +192,13 @@ func (c *Command) Execute(args []string) error {
 		// subcommand name (e.g., "bureau cbor '.field'" where
 		// ".field" is a jq filter, not a subcommand).
 		if c.Run == nil {
+			// At the root level, check for a plugin binary on PATH
+			// before giving up. bureau-<name> is exec'd with Bureau
+			// context injected via environment variables.
+			if err := c.tryPluginDispatch(name, args[1:]); err != nil {
+				return err
+			}
+
 			suggestion := suggestCommand(name, c.Subcommands)
 			if suggestion != "" {
 				return Validation("unknown command %q (did you mean %q?)\n\nRun '%s --help' for usage.",

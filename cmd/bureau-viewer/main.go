@@ -1,16 +1,22 @@
 // Copyright 2026 The Bureau Authors
 // SPDX-License-Identifier: Apache-2.0
 
-// Package viewer provides the interactive ticket viewer TUI command.
-// This is a separate package from cmd/bureau/ticket so that the
-// charmbracelet/bubbletea dependency (and its transitive closure:
-// lipgloss, termenv, fzf, goldmark, chroma, cellbuf) is only linked
-// into binaries that actually import this package.
+// bureau-viewer is a standalone TUI for browsing and managing Bureau
+// tickets. Designed as a Bureau CLI plugin: `bureau viewer` dispatches
+// to this binary via PATH lookup when the plugin architecture is active.
 //
-// The bureau CLI imports this package; bureau-agent does not. This
-// saves ~9 MB and ~1,500 transitive dependencies from the agent
-// binary, which can never use a TUI.
-package viewer
+// Two modes of operation:
+//
+// File mode (default): loads tickets from a JSONL file (typically
+// .beads/issues.jsonl) and watches it for changes via inotify. No
+// Bureau infrastructure required — works offline with local beads.
+//
+// Service mode (--service): connects to the ticket service via the
+// Bureau daemon's observe socket. Authenticates using the operator's
+// saved session from "bureau login", mints a service token, and
+// subscribes to a live stream of ticket updates with full read-write
+// capability.
+package main
 
 import (
 	"context"
@@ -25,21 +31,83 @@ import (
 	ticketcmd "github.com/bureau-foundation/bureau/cmd/bureau/ticket"
 	"github.com/bureau-foundation/bureau/lib/service"
 	"github.com/bureau-foundation/bureau/lib/ticketui"
+	"github.com/bureau-foundation/bureau/lib/version"
 	tea "github.com/charmbracelet/bubbletea"
 )
 
-// Command returns the "viewer" subcommand that launches the
-// interactive ticket viewer TUI.
-func Command() *cli.Command {
+func main() {
+	if err := run(); err != nil {
+		if coder, ok := err.(interface{ ExitCode() int }); ok {
+			os.Exit(coder.ExitCode())
+		}
+		fmt.Fprintf(os.Stderr, "error: %v\n", err)
+		os.Exit(1)
+	}
+}
+
+func run() error {
 	var connection ticketcmd.TicketConnection
 	var filePath string
 	var roomFlag string
 	var logOutput string
 
-	return &cli.Command{
-		Name:    "viewer",
-		Summary: "Interactive ticket viewer",
-		Description: `Launch an interactive terminal UI for browsing tickets.
+	flagSet := pflag.NewFlagSet("bureau-viewer", pflag.ContinueOnError)
+	flagSet.StringVar(&filePath, "file", "", "path to beads JSONL file (default: .beads/issues.jsonl)")
+	connection.AddFlags(flagSet)
+	flagSet.StringVar(&roomFlag, "room", "", "room alias or ID (skip room selector when using --service)")
+	flagSet.StringVar(&logOutput, "log-output", "", "write JSON log records to this file (in addition to TUI display)")
+	flagSet.BoolP("help", "h", false, "show help")
+
+	// Handle --version before flag parsing to match other Bureau binaries.
+	if len(os.Args) > 1 && os.Args[1] == "--version" {
+		version.Print("bureau-viewer")
+		return nil
+	}
+
+	if err := flagSet.Parse(os.Args[1:]); err != nil {
+		if err == pflag.ErrHelp {
+			printHelp(flagSet)
+			return nil
+		}
+		return err
+	}
+
+	if help, _ := flagSet.GetBool("help"); help {
+		printHelp(flagSet)
+		return nil
+	}
+
+	args := flagSet.Args()
+	if len(args) > 0 {
+		return cli.Validation("unexpected argument: %s", args[0])
+	}
+
+	if connection.ServiceMode {
+		ctx, cancel := context.WithCancel(context.Background())
+		defer cancel()
+		logger := slog.New(slog.NewTextHandler(os.Stderr, &slog.HandlerOptions{Level: slog.LevelWarn}))
+		return runServiceViewer(ctx, logger, &connection, roomFlag, logOutput)
+	}
+
+	if filePath == "" {
+		filePath = ".beads/issues.jsonl"
+	}
+
+	source, cleanup, err := ticketui.WatchBeadsFile(filePath)
+	if err != nil {
+		return cli.Validation("cannot load tickets from %s: %w", filePath, err).
+			WithHint("Check that the file exists and contains valid JSONL. Use --service to connect to the ticket service instead.")
+	}
+	defer cleanup()
+
+	model := ticketui.NewModel(source)
+	program := tea.NewProgram(model, tea.WithAltScreen(), tea.WithMouseAllMotion())
+	_, err = program.Run()
+	return err
+}
+
+func printHelp(flagSet *pflag.FlagSet) {
+	fmt.Fprintf(os.Stderr, `Bureau ticket viewer — interactive terminal UI for browsing tickets.
 
 By default, loads tickets from .beads/issues.jsonl in the current
 directory. Use --file to specify an alternate JSONL path.
@@ -47,62 +115,28 @@ directory. Use --file to specify an alternate JSONL path.
 With --service, connects to the ticket service via the daemon's
 observe socket. The viewer authenticates using your operator session
 (from "bureau login"), mints a service token for the ticket service,
-and subscribes to a live stream of ticket updates. Use --room to
-specify the room directly, or omit it to choose from a list of
-available rooms.`,
-		Usage: "bureau ticket viewer [flags]",
-		Examples: []cli.Example{
-			{
-				Description: "Open the ticket viewer with default beads file",
-				Command:     "bureau ticket viewer",
-			},
-			{
-				Description: "Open with a specific file",
-				Command:     "bureau ticket viewer --file path/to/issues.jsonl",
-			},
-			{
-				Description: "Connect to the ticket service",
-				Command:     "bureau ticket viewer --service",
-			},
-			{
-				Description: "Connect to a specific room via non-default daemon socket",
-				Command:     "bureau ticket viewer --service --daemon-socket /tmp/bureau-dev/run/observe.sock --room iree/general",
-			},
-		},
-		Flags: func() *pflag.FlagSet {
-			flagSet := pflag.NewFlagSet("viewer", pflag.ContinueOnError)
-			flagSet.StringVar(&filePath, "file", "", "path to beads JSONL file (default: .beads/issues.jsonl)")
-			connection.AddFlags(flagSet)
-			flagSet.StringVar(&roomFlag, "room", "", "room alias or ID (skip room selector when using --service)")
-			flagSet.StringVar(&logOutput, "log-output", "", "write JSON log records to this file (in addition to TUI display)")
-			return flagSet
-		},
-		Run: func(ctx context.Context, args []string, logger *slog.Logger) error {
-			if len(args) > 0 {
-				return cli.Validation("unexpected argument: %s", args[0])
-			}
+and subscribes to a live stream of ticket updates.
 
-			if connection.ServiceMode {
-				return runServiceViewer(ctx, logger, &connection, roomFlag, logOutput)
-			}
+Usage:
+  bureau-viewer [flags]
 
-			if filePath == "" {
-				filePath = ".beads/issues.jsonl"
-			}
+Examples:
+  # Open the viewer with default beads file
+  bureau viewer
 
-			source, cleanup, err := ticketui.WatchBeadsFile(filePath)
-			if err != nil {
-				return cli.Validation("cannot load tickets from %s: %w", filePath, err).
-					WithHint("Check that the file exists and contains valid JSONL. Use --service to connect to the ticket service instead.")
-			}
-			defer cleanup()
+  # Open with a specific file
+  bureau viewer --file path/to/issues.jsonl
 
-			model := ticketui.NewModel(source)
-			program := tea.NewProgram(model, tea.WithAltScreen(), tea.WithMouseAllMotion())
-			_, err = program.Run()
-			return err
-		},
-	}
+  # Connect to the ticket service
+  bureau viewer --service
+
+  # Connect to a specific room via non-default daemon socket
+  bureau viewer --service --daemon-socket /tmp/bureau-dev/run/observe.sock --room iree/general
+
+Flags:
+`)
+	flagSet.SetOutput(os.Stderr)
+	flagSet.PrintDefaults()
 }
 
 // runServiceViewer implements the --service viewer mode. It mints a
@@ -116,36 +150,25 @@ available rooms.`,
 // the alt-screen display). An optional file logger captures all
 // records to a JSONL file for post-mortem debugging.
 func runServiceViewer(ctx context.Context, logger *slog.Logger, connection *ticketcmd.TicketConnection, roomFlag string, logOutput string) error {
-	// Mint initial service token via the daemon.
 	mintResult, err := connection.MintServiceToken()
 	if err != nil {
 		return err
 	}
 
-	// Load operator session for the viewer's display identity.
 	operatorSession, err := cli.LoadSession()
 	if err != nil {
 		return err
 	}
 
-	// Resolve which room to subscribe to. If --room was specified, use
-	// it directly. Otherwise, query the service for available rooms and
-	// let the user pick. This happens before the TUI starts, so the
-	// original stderr logger is appropriate here.
 	roomID, err := resolveViewerRoom(ctx, logger, mintResult.SocketPath, mintResult.TokenBytes, roomFlag)
 	if err != nil {
 		return err
 	}
 
-	// Build the TUI-routed logger for background operations. The TUI
-	// handler shows WARN and above in the status bar; INFO-level
-	// records (like "token refreshed") are suppressed to avoid
-	// cluttering the display.
 	tuiHandler := ticketui.NewTUILogHandler(slog.LevelWarn)
 
 	var backgroundLogger *slog.Logger
 	if logOutput != "" {
-		// Also write all records to the file at DEBUG level.
 		fileHandler, fileCloser, fileErr := openFileLogHandler(logOutput)
 		if fileErr != nil {
 			return cli.Validation("cannot open log file %s: %w", logOutput, fileErr)
@@ -156,13 +179,9 @@ func runServiceViewer(ctx context.Context, logger *slog.Logger, connection *tick
 		backgroundLogger = slog.New(tuiHandler)
 	}
 
-	// Create the service source — starts connecting immediately.
 	source := ticketui.NewServiceSource(mintResult.SocketPath, mintResult.TokenBytes, roomID, backgroundLogger)
 	defer source.Close()
 
-	// Start background token refresh at 80% of TTL. The refresh
-	// goroutine calls connection.MintServiceToken() before the current
-	// token expires and updates the source atomically.
 	refreshContext, refreshCancel := context.WithCancel(context.Background())
 	defer refreshCancel()
 	go refreshServiceToken(refreshContext, source, connection, mintResult.TTLSeconds, backgroundLogger)
@@ -171,12 +190,6 @@ func runServiceViewer(ctx context.Context, logger *slog.Logger, connection *tick
 	model.SetOperatorID(operatorSession.UserID)
 	program := tea.NewProgram(model, tea.WithAltScreen(), tea.WithMouseAllMotion())
 
-	// Wire the TUI handler to the program so log records flow into
-	// bubbletea's message loop. This must happen after NewProgram
-	// (which creates the program) but before Run returns (which
-	// processes messages). Records arriving between NewServiceSource
-	// and this call are silently dropped — acceptable because the TUI
-	// isn't rendering yet.
 	tuiHandler.SetProgram(program)
 
 	_, err = program.Run()
@@ -201,7 +214,6 @@ func resolveViewerRoom(ctx context.Context, logger *slog.Logger, socketPath stri
 		return roomFlag, nil
 	}
 
-	// Query the ticket service for available rooms.
 	client := service.NewServiceClientFromToken(socketPath, tokenBytes)
 	ctx, cancel := context.WithTimeout(ctx, 10*time.Second)
 	defer cancel()
@@ -226,7 +238,6 @@ func resolveViewerRoom(ctx context.Context, logger *slog.Logger, socketPath stri
 		return room.RoomID, nil
 	}
 
-	// Multiple rooms — prompt the user to choose.
 	fmt.Fprintf(os.Stderr, "Available rooms:\n")
 	for index, room := range rooms {
 		label := room.RoomID
@@ -251,8 +262,6 @@ func resolveViewerRoom(ctx context.Context, logger *slog.Logger, socketPath stri
 // refreshServiceToken periodically mints a new service token before the
 // current one expires. Runs until the context is cancelled (viewer exit).
 // Mints at 80% of TTL to provide comfortable margin before expiry.
-// Each mint re-reads the operator session from disk, so token rotation
-// is handled transparently.
 func refreshServiceToken(
 	ctx context.Context,
 	source *ticketui.ServiceSource,
@@ -264,7 +273,6 @@ func refreshServiceToken(
 		return
 	}
 
-	// Refresh at 80% of TTL.
 	refreshInterval := time.Duration(float64(ttlSeconds)*0.8) * time.Second
 
 	for {

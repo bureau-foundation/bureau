@@ -1,0 +1,26 @@
+# Copyright 2026 The Bureau Authors
+# SPDX-License-Identifier: Apache-2.0
+
+load("@rules_go//go:def.bzl", "go_binary", "go_library")
+
+go_library(
+    name = "bureau-viewer_lib",
+    srcs = ["main.go"],
+    importpath = "github.com/bureau-foundation/bureau/cmd/bureau-viewer",
+    visibility = ["//visibility:private"],
+    deps = [
+        "//cmd/bureau/cli",
+        "//cmd/bureau/ticket",
+        "//lib/service",
+        "//lib/ticketui",
+        "//lib/version",
+        "@com_github_charmbracelet_bubbletea//:bubbletea",
+        "@com_github_spf13_pflag//:pflag",
+    ],
+)
+
+go_binary(
+    name = "bureau-viewer",
+    embed = [":bureau-viewer_lib"],
+    visibility = ["//visibility:public"],
+)

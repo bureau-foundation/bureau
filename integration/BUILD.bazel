@@ -55,6 +55,15 @@ go_test(
         "workspace_test.go",
         "worktree_test.go",
     ],
+    args = [
+        # Cap concurrent test goroutines. With 51 t.Parallel() tests and
+        # GOMAXPROCS=192, the default launches all tests simultaneously,
+        # creating a burst of 50+ Matrix account registrations that
+        # overwhelms Continuwuity's UIAA endpoint (HTTP 500). Sixteen
+        # concurrent tests keeps enough parallelism to surface real
+        # concurrency bugs while staying within the homeserver's capacity.
+        "-test.parallel=16",
+    ],
     data = [
         "//:MODULE.bazel",
         "//cmd/bureau",

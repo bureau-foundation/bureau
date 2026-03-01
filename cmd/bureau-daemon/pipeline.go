@@ -4,10 +4,19 @@
 package main
 
 // Pipeline execution: ticket-driven integration for spawning ephemeral
-// bureau-pipeline-executor sandboxes. Command handlers create pip- tickets
-// and return "accepted"; the ticket watcher (processPipelineTickets) picks
-// them up from /sync and creates sandboxes through the standard daemon
-// lifecycle (d.running, exit watchers, clean shutdown).
+// bureau-pipeline-executor sandboxes. Two paths create executor sandboxes:
+//
+//   - Command-driven: handlePipelineExecute creates a pip- ticket and
+//     starts the executor immediately in the same handler. The ticket
+//     exists before the executor starts, so the executor can claim it.
+//
+//   - Reconcile-driven: applyPipelineExecutorOverlay (in reconcile.go)
+//     creates tickets and sandboxes together during config reconciliation
+//     for template-based pipeline principals (workspace setup/teardown).
+//
+// The ticket watcher (processPipelineTickets) serves as a recovery path:
+// if the daemon restarts after creating a ticket but before spawning the
+// executor, the watcher picks up untracked open tickets from /sync.
 //
 // The pipeline executor runs in a bwrap sandbox with its own proxy process
 // (holding the daemon's Matrix token via DirectCredentials). The executor
@@ -39,10 +48,11 @@ import (
 const maxUnixSocketPathLength = 107
 
 // handlePipelineExecute validates the pipeline.execute command, creates
-// a pip- ticket, and returns "accepted" with the ticket ID. The ticket
-// watcher (processPipelineTickets) picks up the ticket from the next
-// /sync and creates the executor sandbox through the standard daemon
-// lifecycle.
+// a pip- ticket, starts the executor sandbox immediately, and returns
+// "accepted" with the ticket ID. Starting the executor inline (rather
+// than waiting for /sync to deliver the ticket event back to
+// processPipelineTickets) eliminates a round-trip through the homeserver's
+// sync endpoint — a trip that can silently fail under concurrent load.
 func handlePipelineExecute(ctx context.Context, d *Daemon, roomID ref.RoomID, eventID ref.EventID, command schema.CommandMessage) (any, error) {
 	if d.pipelineExecutorBinary == "" {
 		return nil, fmt.Errorf("daemon not configured for pipeline execution (--pipeline-executor-binary not set)")
@@ -99,8 +109,9 @@ func handlePipelineExecute(ctx context.Context, d *Daemon, roomID ref.RoomID, ev
 
 	// Extract variables from command parameters (string values only,
 	// excluding the pipeline ref and room). Inject MACHINE for
-	// affinity so the ticket watcher knows which daemon should
-	// execute this ticket.
+	// affinity so the recovery watcher (processPipelineTickets) can
+	// identify which daemon should execute this ticket if it needs
+	// to be recovered after a crash.
 	pipelineVariables := make(map[string]string)
 	for key, value := range command.Parameters {
 		if key == "pipeline" || key == "room" {
@@ -112,12 +123,30 @@ func handlePipelineExecute(ctx context.Context, d *Daemon, roomID ref.RoomID, ev
 	}
 	pipelineVariables["MACHINE"] = d.machine.Localpart()
 
-	ticketID, _, err := d.createPipelineTicket(
+	ticketID, triggerBytes, err := d.createPipelineTicket(
 		ctx, ticketSocketPath, pipelineEntity, ticketRoomID,
 		pipelineRef, pipelineVariables)
 	if err != nil {
 		return nil, fmt.Errorf("creating pipeline ticket: %w", err)
 	}
+
+	// Reconstruct the TicketContent from the trigger bytes so we can
+	// pass it to startPipelineExecutor. The trigger bytes are the
+	// JSON-serialized TicketContent that createPipelineTicket built.
+	var ticketContent ticket.TicketContent
+	if err := json.Unmarshal(triggerBytes, &ticketContent); err != nil {
+		return nil, fmt.Errorf("unmarshaling ticket content for executor: %w", err)
+	}
+
+	// Start the executor immediately under reconcileMu. This bypasses
+	// the /sync round-trip that processPipelineTickets would require,
+	// eliminating a dependency on the homeserver delivering the ticket
+	// state event back via /sync. The ticket is registered in
+	// d.pipelineTickets, so processPipelineTickets skips it if /sync
+	// eventually delivers the event.
+	d.reconcileMu.Lock()
+	d.startPipelineExecutor(ctx, ticketRoomID, ticketID, &ticketContent)
+	d.reconcileMu.Unlock()
 
 	d.logger.Info("pipeline.execute accepted",
 		"room_id", roomID,
@@ -149,11 +178,12 @@ func (d *Daemon) removePipelineTicketByPrincipal(principal ref.Entity) {
 
 // processPipelineTickets scans a /sync response for open pipeline
 // tickets and creates executor sandboxes for tickets that belong to
-// this machine. This is the ticket-driven pipeline execution path:
-// command handlers and worktree handlers create pip- tickets and
-// return "accepted" immediately; this function picks them up from the
-// next /sync and spawns the executor through the standard daemon
-// lifecycle (d.running, exit watchers, clean shutdown).
+// this machine. This serves as a recovery path: if a daemon crashes
+// after creating a pipeline ticket but before spawning its executor,
+// the watcher picks up the orphaned ticket on restart. In the normal
+// case, executors are started inline by their creators
+// (handlePipelineExecute, applyPipelineExecutorOverlay) and registered
+// in d.pipelineTickets, so the watcher skips them.
 //
 // Machine affinity is determined by the MACHINE variable in the
 // ticket's PipelineExecutionContent.Variables: the ticket watcher only

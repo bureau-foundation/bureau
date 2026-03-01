@@ -7,6 +7,7 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"log/slog"
 
 	"github.com/bureau-foundation/bureau/lib/ref"
 	"github.com/bureau-foundation/bureau/lib/schema"
@@ -163,11 +164,19 @@ func QueryFirst(ctx context.Context, session messaging.Session, fleet ref.Fleet,
 // m.bureau.service_ready event. This is a stronger guarantee than
 // membership alone — the service is accepting requests for this room.
 //
-// The sync listener starts before the invitation is sent so the ready
+// The room watcher starts before the invitation is sent so the ready
 // event cannot be missed regardless of timing. If the service is
 // already a member, the function assumes it is tracking the room and
 // returns immediately — the ready event was sent on a previous join.
+//
+// The /sync calls use a room-scoped filter (only this room, only
+// service_ready timeline events) and retry up to 5 times on transient
+// errors (connection reset, timeout). This avoids the failure mode
+// where an unfiltered sync across hundreds of rooms triggers a
+// connection reset from the homeserver under load.
 func EnsureServiceInRoom(ctx context.Context, session messaging.Session, roomID ref.RoomID, serviceUserID ref.UserID) error {
+	logger := slog.With("room_id", roomID, "service_user", serviceUserID)
+
 	// Fast path: if the service is already a member, it has already
 	// processed room state and sent its ready event on a prior join.
 	// The only case where membership exists without tracking is the
@@ -175,67 +184,57 @@ func EnsureServiceInRoom(ctx context.Context, session messaging.Session, roomID 
 	// covered by a prior EnsureServiceInRoom call that waited for
 	// the ready event.
 	if isJoined, err := checkMembership(ctx, session, roomID, serviceUserID); err == nil && isJoined {
+		logger.Info("service already joined, skipping wait")
 		return nil
 	}
 
-	// Capture the current sync position before starting the listener.
-	initialSync, err := session.Sync(ctx, messaging.SyncOptions{
-		SetTimeout: true,
-		Timeout:    0,
+	// Start watching BEFORE inviting so the ready event cannot be
+	// missed. The filter scopes /sync to only this room and only
+	// service_ready timeline events, which keeps responses small
+	// even when the session is in hundreds of rooms.
+	logger.Info("starting room watch for service ready")
+	watcher, err := messaging.WatchRoom(ctx, session, roomID, &messaging.SyncFilter{
+		TimelineTypes: []string{string(schema.EventTypeServiceReady)},
+		ExcludeState:  true,
 	})
 	if err != nil {
-		return fmt.Errorf("initial sync: %w", err)
+		return fmt.Errorf("watching room %s for service ready: %w", roomID, err)
+	}
+	logger.Info("room watch started", "sync_position", watcher.SyncPosition())
+
+	// Double-check membership after capturing the sync position.
+	// ConfigureRoom may have already invited the service before
+	// this function was called — if the service joined between the
+	// initial membership check and WatchRoom creation, it has
+	// already sent service_ready (which is past our sync token).
+	// The second check catches this race without modifying
+	// WatchRoom's contract.
+	if isJoined, err := checkMembership(ctx, session, roomID, serviceUserID); err == nil && isJoined {
+		logger.Info("service joined during watch setup, skipping wait")
+		return nil
 	}
 
-	// Start the sync listener BEFORE inviting so we cannot miss the
-	// ready event. The goroutine long-polls /sync and signals when it
-	// sees m.bureau.service_ready from the expected service user.
-	syncCtx, cancelSync := context.WithCancel(ctx)
-	defer cancelSync()
-
-	ready := make(chan error, 1)
-	go func() {
-		since := initialSync.NextBatch
-		for {
-			syncResponse, syncErr := session.Sync(syncCtx, messaging.SyncOptions{
-				Since:      since,
-				SetTimeout: true,
-				Timeout:    30000,
-			})
-			if syncErr != nil {
-				if syncCtx.Err() != nil {
-					return
-				}
-				ready <- fmt.Errorf("sync waiting for service ready: %w", syncErr)
-				return
-			}
-			since = syncResponse.NextBatch
-
-			if room, exists := syncResponse.Rooms.Join[roomID]; exists {
-				for _, event := range room.Timeline.Events {
-					if event.Type == schema.EventTypeServiceReady && event.Sender == serviceUserID {
-						ready <- nil
-						return
-					}
-				}
-			}
-		}
-	}()
-
-	// Send the invitation. The sync goroutine is already listening.
+	// Send the invitation. The watcher is already capturing events.
 	if inviteErr := session.InviteUser(ctx, roomID, serviceUserID); inviteErr != nil {
 		if !messaging.IsMatrixError(inviteErr, "M_FORBIDDEN") {
 			return fmt.Errorf("inviting %s to room %s: %w", serviceUserID, roomID, inviteErr)
 		}
+		logger.Info("service already invited or joined (M_FORBIDDEN on invite)")
 	}
 
-	// Wait for the sync goroutine to observe the ready event.
-	select {
-	case err := <-ready:
-		return err
-	case <-ctx.Done():
-		return fmt.Errorf("waiting for %s to become ready in room %s: %w", serviceUserID, roomID, ctx.Err())
+	// Wait for the service to send m.bureau.service_ready. The
+	// RoomWatcher retries up to 5 times on transient /sync errors
+	// (connection reset, timeout) with idle connection cleanup,
+	// matching the daemon's resilience to homeserver hiccups.
+	logger.Info("waiting for service ready event")
+	_, err = watcher.WaitForEvent(ctx, func(event messaging.Event) bool {
+		return event.Type == schema.EventTypeServiceReady && event.Sender == serviceUserID
+	})
+	if err != nil {
+		return fmt.Errorf("waiting for %s to become ready in room %s: %w", serviceUserID, roomID, err)
 	}
+	logger.Info("service ready confirmed")
+	return nil
 }
 
 // checkMembership reads the m.room.member state event for a user in a

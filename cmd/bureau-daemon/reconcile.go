@@ -1930,6 +1930,18 @@ func (d *Daemon) watchSandboxExit(ctx context.Context, principal ref.Entity) {
 		return
 	}
 
+	// Switch to the daemon's lifecycle context for all post-exit work.
+	// The watcher context (ctx) exists solely to cancel the blocking
+	// launcherWaitSandbox IPC. Once the sandbox has exited, subsequent
+	// operations (posting notifications, completing logs, reconciling)
+	// must use the daemon's lifecycle context. This is necessary because
+	// the proxy exit watcher may race with us and cancel our watcher
+	// context via cancelExitWatcher before we can post the notification.
+	postExitCtx := ctx
+	if d.shutdownCtx != nil {
+		postExitCtx = d.shutdownCtx
+	}
+
 	if exitCode != 0 && exitOutput != "" {
 		d.logger.Warn("sandbox exited with captured output",
 			"principal", principal,
@@ -1946,26 +1958,45 @@ func (d *Daemon) watchSandboxExit(ctx context.Context, principal ref.Entity) {
 	}
 
 	d.reconcileMu.Lock()
-	if d.running[principal] {
-		d.cancelProxyExitWatcher(principal)
-		d.stopHealthMonitor(principal)
-		d.stopLayoutWatcher(principal)
-		d.revokeAndCleanupTokens(ctx, principal)
-		delete(d.running, principal)
-		d.notifyStatusChange()
-		delete(d.dynamicPrincipals, principal)
-		d.removePipelineTicketByPrincipal(principal)
-		delete(d.exitWatchers, principal)
-		delete(d.proxyExitWatchers, principal)
-		delete(d.lastSpecs, principal)
-		delete(d.previousSpecs, principal)
-		delete(d.lastTemplates, principal)
-		delete(d.lastCredentials, principal)
-		delete(d.lastGrants, principal)
-		delete(d.lastTokenMint, principal)
-		delete(d.lastObserveAllowances, principal)
-		d.lastActivityAt = d.clock.Now()
+
+	// If the principal is no longer tracked (proxy exit watcher or
+	// reconcile already cleaned it up), we still need to post the
+	// sandbox_exited notification — consumers may be waiting for it.
+	// Skip everything else: state cleanup, crash recording, and
+	// reconciliation were already handled by the other path.
+	if !d.running[principal] {
+		d.reconcileMu.Unlock()
+
+		var capturedOutput string
+		if exitCode != 0 && exitOutput != "" {
+			capturedOutput = tailLines(exitOutput, maxMatrixOutputLines)
+		}
+		if _, err := d.sendEventRetry(postExitCtx, d.configRoomID, schema.MatrixEventTypeMessage,
+			schema.NewSandboxExitedMessage(principal.AccountLocalpart(), exitCode, exitDescription, capturedOutput)); err != nil {
+			d.logger.Error("failed to post sandbox exit notification (late arrival)",
+				"principal", principal, "error", err)
+		}
+		return
 	}
+
+	d.cancelProxyExitWatcher(principal)
+	d.stopHealthMonitor(principal)
+	d.stopLayoutWatcher(principal)
+	d.revokeAndCleanupTokens(postExitCtx, principal)
+	delete(d.running, principal)
+	d.notifyStatusChange()
+	delete(d.dynamicPrincipals, principal)
+	d.removePipelineTicketByPrincipal(principal)
+	delete(d.exitWatchers, principal)
+	delete(d.proxyExitWatchers, principal)
+	delete(d.lastSpecs, principal)
+	delete(d.previousSpecs, principal)
+	delete(d.lastTemplates, principal)
+	delete(d.lastCredentials, principal)
+	delete(d.lastGrants, principal)
+	delete(d.lastTokenMint, principal)
+	delete(d.lastObserveAllowances, principal)
+	d.lastActivityAt = d.clock.Now()
 
 	// Cancel the drain grace period timer if this principal was being
 	// drained. The graceful exit means we don't need the force-kill.
@@ -2046,7 +2077,7 @@ func (d *Daemon) watchSandboxExit(ctx context.Context, principal ref.Entity) {
 	// only cleans up the proxy. Must happen after releasing reconcileMu
 	// because the launcher IPC call blocks.
 	if wasDraining {
-		response, err := d.launcherRequest(ctx, launcherIPCRequest{
+		response, err := d.launcherRequest(postExitCtx, launcherIPCRequest{
 			Action:    ipc.ActionDestroySandbox,
 			Principal: principal.AccountLocalpart(),
 			Force:     true, // Sandbox already exited, just cleaning up proxy.
@@ -2062,7 +2093,7 @@ func (d *Daemon) watchSandboxExit(ctx context.Context, principal ref.Entity) {
 
 	// Tell the telemetry service to flush and complete all log sessions
 	// for this principal. Best-effort — errors are logged, not fatal.
-	d.completeLogForPrincipal(ctx, principal)
+	d.completeLogForPrincipal(postExitCtx, principal)
 
 	// Post exit notification to config room. On failure, include the
 	// captured terminal output so operators can diagnose the problem
@@ -2074,7 +2105,7 @@ func (d *Daemon) watchSandboxExit(ctx context.Context, principal ref.Entity) {
 	if exitCode != 0 && exitOutput != "" {
 		capturedOutput = tailLines(exitOutput, maxMatrixOutputLines)
 	}
-	if _, err := d.sendEventRetry(ctx, d.configRoomID, schema.MatrixEventTypeMessage,
+	if _, err := d.sendEventRetry(postExitCtx, d.configRoomID, schema.MatrixEventTypeMessage,
 		schema.NewSandboxExitedMessage(principal.AccountLocalpart(), exitCode, exitDescription, capturedOutput)); err != nil {
 		d.logger.Error("failed to post sandbox exit notification",
 			"principal", principal, "error", err)
@@ -2086,7 +2117,7 @@ func (d *Daemon) watchSandboxExit(ctx context.Context, principal ref.Entity) {
 	// backoff expires so the principal retries without waiting for an
 	// external sync event.
 	// This acquires reconcileMu again — safe because we released it above.
-	if err := d.reconcile(ctx); err != nil {
+	if err := d.reconcile(postExitCtx); err != nil {
 		d.logger.Error("reconciliation after sandbox exit failed",
 			"principal", principal,
 			"error", err,
@@ -2584,6 +2615,13 @@ func (d *Daemon) watchProxyExit(ctx context.Context, principal ref.Entity) {
 		return
 	}
 
+	// Switch to the daemon's lifecycle context for post-exit work,
+	// same rationale as watchSandboxExit.
+	postExitCtx := ctx
+	if d.shutdownCtx != nil {
+		postExitCtx = d.shutdownCtx
+	}
+
 	d.logger.Warn("proxy exited unexpectedly",
 		"principal", principal,
 		"exit_code", exitCode,
@@ -2603,7 +2641,7 @@ func (d *Daemon) watchProxyExit(ctx context.Context, principal ref.Entity) {
 	// the entry first makes cancelProxyExitWatcher a no-op for us.
 	delete(d.proxyExitWatchers, principal)
 
-	if err := d.destroyPrincipal(ctx, principal, true); err != nil {
+	if err := d.destroyPrincipal(postExitCtx, principal, true); err != nil {
 		d.logger.Error("proxy exit handler: failed to destroy sandbox",
 			"principal", principal, "error", err)
 	}
@@ -2621,7 +2659,7 @@ func (d *Daemon) watchProxyExit(ctx context.Context, principal ref.Entity) {
 	)
 	d.reconcileMu.Unlock()
 
-	if _, err := d.sendEventRetry(ctx, d.configRoomID, schema.MatrixEventTypeMessage,
+	if _, err := d.sendEventRetry(postExitCtx, d.configRoomID, schema.MatrixEventTypeMessage,
 		schema.NewProxyCrashMessage(principal.AccountLocalpart(), schema.ProxyCrashDetected, exitCode, "")); err != nil {
 		d.logger.Error("failed to post proxy crash notification",
 			"principal", principal, "error", err)
@@ -2629,12 +2667,12 @@ func (d *Daemon) watchProxyExit(ctx context.Context, principal ref.Entity) {
 
 	// Trigger re-reconciliation. Reconcile will see the crash backoff
 	// and skip the principal until the backoff expires.
-	if err := d.reconcile(ctx); err != nil {
+	if err := d.reconcile(postExitCtx); err != nil {
 		d.logger.Error("reconciliation after proxy exit failed",
 			"principal", principal,
 			"error", err,
 		)
-		if _, sendErr := d.sendEventRetry(ctx, d.configRoomID, schema.MatrixEventTypeMessage,
+		if _, sendErr := d.sendEventRetry(postExitCtx, d.configRoomID, schema.MatrixEventTypeMessage,
 			schema.NewProxyCrashMessage(principal.AccountLocalpart(), schema.ProxyCrashFailed, exitCode, err.Error())); sendErr != nil {
 			d.logger.Error("failed to post proxy recovery failure notification",
 				"principal", principal, "error", sendErr)
@@ -2650,7 +2688,7 @@ func (d *Daemon) watchProxyExit(ctx context.Context, principal ref.Entity) {
 			status = schema.ProxyCrashBackingOff
 			errorMessage = "proxy crashed, retry scheduled with exponential backoff"
 		}
-		if _, err := d.sendEventRetry(ctx, d.configRoomID, schema.MatrixEventTypeMessage,
+		if _, err := d.sendEventRetry(postExitCtx, d.configRoomID, schema.MatrixEventTypeMessage,
 			schema.NewProxyCrashMessage(principal.AccountLocalpart(), status, exitCode, errorMessage)); err != nil {
 			d.logger.Error("failed to post proxy recovery status",
 				"principal", principal, "error", err)

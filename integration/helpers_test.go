@@ -908,6 +908,36 @@ func (batcher *powerLevelBatcher) grant(
 	}
 }
 
+// lockRoom acquires the per-room flush mutex for a specific room. Use
+// this to serialize external GrantPowerLevels calls (e.g., from
+// machine.Provision) with the batcher's own writes. The caller MUST call
+// unlockRoom when done to avoid deadlocking other tests.
+//
+// This prevents PL write contention between the batcher (adding admin
+// PLs) and production provisioning code (adding machine PLs) on the
+// same global room. Without serialization, concurrent read-modify-write
+// cycles can produce stale writes that omit users added by concurrent
+// writers, exhausting GrantPowerLevels' retry budget.
+func (batcher *powerLevelBatcher) lockRoom(roomID ref.RoomID) {
+	batcher.mu.Lock()
+	if batcher.flushMus[roomID] == nil {
+		batcher.flushMus[roomID] = &sync.Mutex{}
+	}
+	flushMu := batcher.flushMus[roomID]
+	batcher.mu.Unlock()
+
+	flushMu.Lock()
+}
+
+// unlockRoom releases the per-room flush mutex acquired by lockRoom.
+func (batcher *powerLevelBatcher) unlockRoom(roomID ref.RoomID) {
+	batcher.mu.Lock()
+	flushMu := batcher.flushMus[roomID]
+	batcher.mu.Unlock()
+
+	flushMu.Unlock()
+}
+
 // flushRoom acquires the per-room flush mutex, takes all pending grants,
 // and writes them in a single GrantPowerLevels call. If another goroutine
 // already flushed our grant, the pending map is empty and we return
@@ -987,9 +1017,23 @@ func homeserverAdmin(t *testing.T) messaging.HomeserverAdmin {
 // provisionMachine provisions a machine via the production API (not the
 // CLI subprocess). Returns the bootstrap config path. The caller typically
 // passes this path to the launcher's --bootstrap-file flag.
+//
+// Provisioning includes GrantPowerLevels calls to the system room and
+// fleet service room. These are serialized with the globalPLBatcher to
+// prevent PL write contention: without serialization, the batcher
+// (adding admin PLs) and Provision (adding machine PLs) race on
+// read-modify-write to the same room, producing stale writes that exhaust
+// GrantPowerLevels' retry budget.
 func provisionMachine(t *testing.T, client *messaging.Client, admin *messaging.DirectSession, hsAdmin messaging.HomeserverAdmin, machineRef ref.Machine, bootstrapPath string) {
 	t.Helper()
 	ctx := t.Context()
+
+	// Serialize with the PL batcher on global rooms that Provision
+	// writes to. Provision calls GrantPowerLevels on the system room
+	// and service room; holding the batcher's per-room mutexes prevents
+	// interleaved read-modify-write cycles.
+	globalPLBatcher.lockRoom(globalSystemRoomID)
+	defer globalPLBatcher.unlockRoom(globalSystemRoomID)
 
 	registrationToken, err := secret.NewFromString(testRegistrationToken)
 	if err != nil {
@@ -1000,6 +1044,7 @@ func provisionMachine(t *testing.T, client *messaging.Client, admin *messaging.D
 	logger := slog.New(slog.NewJSONHandler(os.Stderr, nil)).With(
 		"test", t.Name(),
 		"machine", machineRef.Localpart(),
+		"machine_user_id", machineRef.UserID(),
 	)
 
 	result, err := machine.Provision(ctx, client, admin, hsAdmin, machine.ProvisionParams{

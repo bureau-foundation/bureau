@@ -41,6 +41,7 @@ func buildSyncFilter() string {
 		schema.EventTypeStewardship,
 		schema.MatrixEventTypeTombstone,
 		schema.MatrixEventTypeRoomMember,
+		schema.MatrixEventTypeCanonicalAlias,
 	}
 
 	// Timeline includes the same state event types (state events can
@@ -107,9 +108,10 @@ type roomState struct {
 	pendingEchoes map[string]ref.EventID
 
 	// alias is the room's canonical alias (e.g.,
-	// "#iree/general:bureau.local"), resolved once when the room is
-	// first tracked. Empty if the room has no alias or the fetch
-	// failed. Used for operator-friendly logging only.
+	// "#iree/general:bureau.local"). Extracted from room state
+	// events when the room is first tracked, updated when
+	// canonical alias changes arrive via /sync. Used for
+	// subscription matching (resolveRoomString) and logging.
 	alias string
 }
 
@@ -286,17 +288,21 @@ func (ts *TicketService) initialSync(ctx context.Context) (string, error) {
 // Called during initial sync for each joined room and can be called
 // when the service joins a new room during incremental sync.
 func (ts *TicketService) processRoomState(ctx context.Context, roomID ref.RoomID, stateEvents, timelineEvents []messaging.Event) int {
-	// Pass 1: detect tombstone and ticket_config. Check both state
-	// and timeline events (timeline events with a state_key are
-	// state changes).
+	// Pass 1: detect tombstone, ticket_config, and canonical alias.
+	// Check both state and timeline events (timeline events with a
+	// state_key are state changes).
 	var config *ticket.TicketConfigContent
 	var tombstoned bool
+	var canonicalAlias string
 	for _, event := range stateEvents {
 		if event.Type == schema.MatrixEventTypeTombstone {
 			tombstoned = true
 		}
 		if event.Type == schema.EventTypeTicketConfig && event.StateKey != nil {
 			config = ts.parseTicketConfig(event)
+		}
+		if event.Type == schema.MatrixEventTypeCanonicalAlias {
+			canonicalAlias = extractCanonicalAlias(event)
 		}
 	}
 	for _, event := range timelineEvents {
@@ -305,6 +311,9 @@ func (ts *TicketService) processRoomState(ctx context.Context, roomID ref.RoomID
 		}
 		if event.Type == schema.EventTypeTicketConfig && event.StateKey != nil {
 			config = ts.parseTicketConfig(event)
+		}
+		if event.Type == schema.MatrixEventTypeCanonicalAlias {
+			canonicalAlias = extractCanonicalAlias(event)
 		}
 	}
 
@@ -343,15 +352,27 @@ func (ts *TicketService) processRoomState(ctx context.Context, roomID ref.RoomID
 	// This room has ticket management. Create or update room state.
 	state, exists := ts.rooms[roomID]
 	if !exists {
+		// Prefer the canonical alias extracted from state events
+		// (reliable — no network call). Fall back to a direct
+		// GetStateEvent only when events don't include the alias
+		// (e.g., initial /sync with a filtered event list).
+		alias := canonicalAlias
+		if alias == "" {
+			alias = ts.resolveRoomAlias(ctx, roomID)
+		}
 		state = &roomState{
 			config:        config,
 			index:         ticketindex.NewIndex(),
 			pendingEchoes: make(map[string]ref.EventID),
-			alias:         ts.resolveRoomAlias(ctx, roomID),
+			alias:         alias,
 		}
 		ts.rooms[roomID] = state
 	} else {
 		state.config = config
+		// Update alias if a newer canonical_alias event arrived.
+		if canonicalAlias != "" {
+			state.alias = canonicalAlias
+		}
 	}
 
 	// Pass 3: index all ticket events.
@@ -479,10 +500,10 @@ func (ts *TicketService) processRoomSync(ctx context.Context, roomID ref.RoomID,
 		}
 	}
 
-	// Index member and stewardship events, and check for
-	// ticket_config changes. Member and stewardship events are
-	// indexed for all rooms; ticket_config determines whether
-	// the room has ticket management.
+	// Index member and stewardship events, check for ticket_config
+	// changes, and update canonical aliases. Member and stewardship
+	// events are indexed for all rooms; ticket_config determines
+	// whether the room has ticket management.
 	for _, event := range stateEvents {
 		if event.Type == schema.MatrixEventTypeRoomMember && event.StateKey != nil {
 			ts.indexMemberEvent(roomID, event)
@@ -492,6 +513,13 @@ func (ts *TicketService) processRoomSync(ctx context.Context, roomID ref.RoomID,
 		}
 		if event.Type == schema.EventTypeTicketConfig {
 			ts.handleTicketConfigChange(ctx, roomID, event)
+		}
+		if event.Type == schema.MatrixEventTypeCanonicalAlias {
+			if state, exists := ts.rooms[roomID]; exists {
+				if alias := extractCanonicalAlias(event); alias != "" {
+					state.alias = alias
+				}
+			}
 		}
 	}
 
@@ -599,13 +627,14 @@ func (ts *TicketService) handleTicketConfigChange(ctx context.Context, roomID re
 			config:        config,
 			index:         ticketindex.NewIndex(),
 			pendingEchoes: make(map[string]ref.EventID),
-			alias:         ts.resolveRoomAlias(ctx, roomID),
 		}
 		ts.rooms[roomID] = state
 
 		// Backfill: the room may already contain ticket events from
 		// before this service started tracking it. Fetch the full
-		// room state and index any existing tickets.
+		// room state and index any existing tickets. The backfill
+		// also extracts the canonical alias from the full room state
+		// (reliable — GetRoomState returns all events, not filtered).
 		backfilled := ts.backfillRoomTickets(ctx, roomID, state)
 
 		// Push timer gates from backfilled tickets to the heap.
@@ -629,10 +658,11 @@ func (ts *TicketService) handleTicketConfigChange(ctx context.Context, roomID re
 }
 
 // backfillRoomTickets fetches the full state of a room and indexes
-// any existing ticket events. Called when a room gains ticket_config
-// mid-operation — the initial sync path processes state events from
-// the sync response directly and doesn't need this. Returns the
-// number of tickets indexed.
+// any existing ticket events. Also extracts the canonical alias from
+// the full state and sets it on the roomState. Called when a room
+// gains ticket_config mid-operation — the initial sync path processes
+// state events from the sync response directly and doesn't need
+// this. Returns the number of tickets indexed.
 func (ts *TicketService) backfillRoomTickets(ctx context.Context, roomID ref.RoomID, state *roomState) int {
 	events, err := ts.session.GetRoomState(ctx, roomID)
 	if err != nil {
@@ -650,28 +680,52 @@ func (ts *TicketService) backfillRoomTickets(ctx context.Context, roomID ref.Roo
 				count++
 			}
 		}
+		if event.Type == schema.MatrixEventTypeCanonicalAlias {
+			if alias := extractCanonicalAlias(event); alias != "" {
+				state.alias = alias
+			}
+		}
 	}
 	return count
 }
 
-// resolveRoomAlias fetches the canonical alias for a room. Returns
-// empty string if the room has no alias or the fetch fails. Called
-// once per room when it is first tracked. Used for logging only.
+// resolveRoomAlias fetches the canonical alias for a room via a
+// direct GetStateEvent call. This is the fallback path used when the
+// alias is not available from state events (e.g., initial /sync with
+// a filtered event list). Prefer extractCanonicalAlias when state
+// events are already available. Returns empty string if the room has
+// no alias or the fetch fails. The alias is used for subscription
+// matching (resolveRoomString) and logging.
 func (ts *TicketService) resolveRoomAlias(ctx context.Context, roomID ref.RoomID) string {
 	if ts.session == nil {
 		return ""
 	}
 	raw, err := ts.session.GetStateEvent(ctx, roomID, schema.MatrixEventTypeCanonicalAlias, "")
 	if err != nil {
+		ts.logger.Warn("failed to fetch canonical alias for room",
+			"room_id", roomID,
+			"error", err,
+		)
 		return ""
 	}
 	var content struct {
 		Alias string `json:"alias"`
 	}
 	if err := json.Unmarshal(raw, &content); err != nil {
+		ts.logger.Warn("failed to parse canonical alias for room",
+			"room_id", roomID,
+			"error", err,
+		)
 		return ""
 	}
 	return content.Alias
+}
+
+// extractCanonicalAlias extracts the alias from a m.room.canonical_alias
+// state event. Returns empty string if the event content has no alias.
+func extractCanonicalAlias(event messaging.Event) string {
+	alias, _ := event.Content["alias"].(string)
+	return alias
 }
 
 // parseTicketConfig parses a ticket_config event's content. Returns

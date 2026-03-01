@@ -507,11 +507,11 @@ func (d *Daemon) processSyncResponse(ctx context.Context, response *messaging.Sy
 		d.processCommandMessages(ctx, roomID, room.Timeline.Events)
 	}
 
-	// Scan for open pipeline tickets and create executor sandboxes.
-	// Runs after reconcile (which registers its own tickets in
-	// d.pipelineTickets) and after command processing (which creates
-	// new tickets). The ticket state events from command-created
-	// tickets arrive in a subsequent /sync batch.
+	// Recovery scan for orphaned pipeline tickets. Normal pipeline
+	// execution starts executors inline (handlePipelineExecute,
+	// applyPipelineExecutorOverlay), but if the daemon crashed after
+	// creating a ticket and before spawning its executor, this picks
+	// up untracked open tickets from /sync.
 	d.reconcileMu.Lock()
 	d.processPipelineTickets(ctx, response)
 	d.reconcileMu.Unlock()

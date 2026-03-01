@@ -6,6 +6,7 @@ package integration_test
 import (
 	"bufio"
 	"encoding/json"
+	"fmt"
 	"io"
 	"os"
 	"path/filepath"
@@ -108,7 +109,7 @@ func TestMCPResourceTicketSubscribe(t *testing.T) {
 			"clientInfo":      map[string]any{"name": "test", "version": "1.0"},
 		},
 	})
-	initResponse := pipe.readMessage()
+	initResponse := pipe.readResponse(t)
 	if initResponse["error"] != nil {
 		t.Fatalf("initialize failed: %v", initResponse["error"])
 	}
@@ -145,7 +146,7 @@ func TestMCPResourceTicketSubscribe(t *testing.T) {
 		"method":  "resources/subscribe",
 		"params":  map[string]any{"uri": resourceURI},
 	})
-	subscribeResponse := pipe.readMessage()
+	subscribeResponse := pipe.readResponse(t)
 	if subscribeResponse["error"] != nil {
 		t.Fatalf("resources/subscribe failed: %v", subscribeResponse["error"])
 	}
@@ -202,7 +203,7 @@ func TestMCPResourceTicketSubscribe(t *testing.T) {
 		"method":  "resources/read",
 		"params":  map[string]any{"uri": resourceURI},
 	})
-	readResponse := pipe.readMessage()
+	readResponse := pipe.readResponse(t)
 	if readResponse["error"] != nil {
 		t.Fatalf("resources/read failed: %v", readResponse["error"])
 	}
@@ -301,6 +302,16 @@ func newMCPPipe(t *testing.T, server *mcp.Server) *mcpPipe {
 		outputWriter.Close()
 	}()
 
+	// Unblock any pending reads on the output pipe when the test
+	// context is cancelled (timeout or completion). Without this,
+	// readMessage/readUntilNotification hang forever if the MCP
+	// server stops producing output (e.g., a resource subscription
+	// is stuck reconnecting to a dead service).
+	go func() {
+		<-t.Context().Done()
+		outputWriter.CloseWithError(fmt.Errorf("test context cancelled: %w", t.Context().Err()))
+	}()
+
 	scanner := bufio.NewScanner(outputReader)
 	// MCP messages can be large.
 	scanner.Buffer(make([]byte, 0, 64*1024), 1024*1024)
@@ -352,6 +363,25 @@ func (p *mcpPipe) readMessage() map[string]any {
 		p.t.Fatalf("unmarshal MCP output: %v\nraw: %s", err, p.scanner.Bytes())
 	}
 	return message
+}
+
+// readResponse reads messages until a JSON-RPC response (message with
+// an "id" field) is received. Notifications are skipped — they arrive
+// asynchronously from resource subscriptions and can interleave with
+// responses to explicit requests.
+func (p *mcpPipe) readResponse(t *testing.T) map[string]any {
+	t.Helper()
+
+	for {
+		message := p.readMessage()
+
+		// Responses have an "id" field.
+		if _, hasID := message["id"]; hasID {
+			return message
+		}
+
+		t.Logf("skipping notification while waiting for response: method=%v", message["method"])
+	}
 }
 
 // readUntilNotification reads messages until a notification with the

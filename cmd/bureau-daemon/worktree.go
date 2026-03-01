@@ -6,25 +6,27 @@ package main
 // Daemon handlers for workspace.worktree.add and workspace.worktree.remove.
 // Both are async, ticket-driven operations: the handler validates parameters,
 // publishes a transitional worktree state event, creates a pip- ticket via
-// the ticket service, and returns "accepted" with the ticket ID. The ticket
-// watcher (processPipelineTickets) picks up the ticket from the next /sync
-// and creates an ephemeral pipeline executor sandbox through the standard
-// daemon lifecycle.
+// the ticket service, starts the executor immediately, and returns "accepted"
+// with the ticket ID. Starting the executor inline avoids a dependency on
+// the homeserver delivering the ticket state event back via /sync — the
+// recovery watcher (processPipelineTickets) handles restart scenarios only.
 
 import (
 	"context"
+	"encoding/json"
 	"fmt"
 	"os"
 
 	"github.com/bureau-foundation/bureau/lib/principal"
 	"github.com/bureau-foundation/bureau/lib/ref"
 	"github.com/bureau-foundation/bureau/lib/schema"
+	"github.com/bureau-foundation/bureau/lib/schema/ticket"
 	"github.com/bureau-foundation/bureau/lib/schema/workspace"
 )
 
 // handleWorkspaceWorktreeAdd validates parameters, publishes transitional
-// "creating" state, and creates a pip- ticket for the dev-worktree-init
-// pipeline. The ticket watcher spawns the executor sandbox.
+// "creating" state, creates a pip- ticket for the dev-worktree-init
+// pipeline, and starts the executor immediately.
 func handleWorkspaceWorktreeAdd(ctx context.Context, d *Daemon, roomID ref.RoomID, eventID ref.EventID, command schema.CommandMessage) (any, error) {
 	if d.pipelineExecutorBinary == "" {
 		return nil, fmt.Errorf("daemon not configured for pipeline execution (--pipeline-executor-binary not set)")
@@ -86,14 +88,21 @@ func handleWorkspaceWorktreeAdd(ctx context.Context, d *Daemon, roomID ref.RoomI
 		return nil, fmt.Errorf("failed to publish worktree creating state: %w", err)
 	}
 
-	// Create the pip- ticket. The ticket watcher picks it up from
-	// the next /sync and spawns the executor sandbox.
-	ticketID, _, err := d.createPipelineTicket(
+	ticketID, triggerBytes, err := d.createPipelineTicket(
 		ctx, ticketSocketPath, pipelineEntity, roomID,
 		pipelineRef, pipelineVariables)
 	if err != nil {
 		return nil, fmt.Errorf("creating pipeline ticket: %w", err)
 	}
+
+	// Start the executor immediately, bypassing the /sync round-trip.
+	var ticketContent ticket.TicketContent
+	if err := json.Unmarshal(triggerBytes, &ticketContent); err != nil {
+		return nil, fmt.Errorf("unmarshaling ticket content for executor: %w", err)
+	}
+	d.reconcileMu.Lock()
+	d.startPipelineExecutor(ctx, roomID, ticketID, &ticketContent)
+	d.reconcileMu.Unlock()
 
 	d.logger.Info("workspace.worktree.add accepted",
 		"room_id", roomID,
@@ -111,9 +120,8 @@ func handleWorkspaceWorktreeAdd(ctx context.Context, d *Daemon, roomID ref.RoomI
 }
 
 // handleWorkspaceWorktreeRemove validates parameters, publishes
-// transitional "removing" state, and creates a pip- ticket for the
-// dev-worktree-deinit pipeline. The ticket watcher spawns the executor
-// sandbox.
+// transitional "removing" state, creates a pip- ticket for the
+// dev-worktree-deinit pipeline, and starts the executor immediately.
 func handleWorkspaceWorktreeRemove(ctx context.Context, d *Daemon, roomID ref.RoomID, eventID ref.EventID, command schema.CommandMessage) (any, error) {
 	if d.pipelineExecutorBinary == "" {
 		return nil, fmt.Errorf("daemon not configured for pipeline execution (--pipeline-executor-binary not set)")
@@ -174,14 +182,21 @@ func handleWorkspaceWorktreeRemove(ctx context.Context, d *Daemon, roomID ref.Ro
 		return nil, fmt.Errorf("failed to publish worktree removing state: %w", err)
 	}
 
-	// Create the pip- ticket. The ticket watcher picks it up from
-	// the next /sync and spawns the executor sandbox.
-	ticketID, _, err := d.createPipelineTicket(
+	ticketID, triggerBytes, err := d.createPipelineTicket(
 		ctx, ticketSocketPath, pipelineEntity, roomID,
 		pipelineRef, pipelineVariables)
 	if err != nil {
 		return nil, fmt.Errorf("creating pipeline ticket: %w", err)
 	}
+
+	// Start the executor immediately, bypassing the /sync round-trip.
+	var ticketContent ticket.TicketContent
+	if err := json.Unmarshal(triggerBytes, &ticketContent); err != nil {
+		return nil, fmt.Errorf("unmarshaling ticket content for executor: %w", err)
+	}
+	d.reconcileMu.Lock()
+	d.startPipelineExecutor(ctx, roomID, ticketID, &ticketContent)
+	d.reconcileMu.Unlock()
 
 	d.logger.Info("workspace.worktree.remove accepted",
 		"room_id", roomID,

@@ -565,7 +565,7 @@ func TestListenSocket(t *testing.T) {
 	socketDir := testutil.SocketDir(t)
 	socketPath := filepath.Join(socketDir, "test.sock")
 
-	listener, err := listenSocket(socketPath)
+	listener, err := listenSocket(socketPath, -1)
 	if err != nil {
 		t.Fatalf("listenSocket() error: %v", err)
 	}
@@ -584,7 +584,7 @@ func TestListenSocket(t *testing.T) {
 
 	// Calling listenSocket again should work (removes stale socket).
 	listener.Close()
-	listener2, err := listenSocket(socketPath)
+	listener2, err := listenSocket(socketPath, -1)
 	if err != nil {
 		t.Fatalf("second listenSocket() error: %v", err)
 	}
@@ -595,7 +595,7 @@ func TestListenSocket_CreatesParentDirectory(t *testing.T) {
 	tempDir := testutil.SocketDir(t)
 	socketPath := filepath.Join(tempDir, "nested", "dir", "test.sock")
 
-	listener, err := listenSocket(socketPath)
+	listener, err := listenSocket(socketPath, -1)
 	if err != nil {
 		t.Fatalf("listenSocket() error: %v", err)
 	}

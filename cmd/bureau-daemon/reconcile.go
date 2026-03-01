@@ -549,6 +549,15 @@ func (d *Daemon) reconcile(ctx context.Context) error {
 				continue
 			}
 
+			// If the daemon has a host environment path from
+			// BureauVersion, inject it as the sandbox's Nix
+			// environment for commands found in host-env/bin/.
+			// This must happen before ensureCommandBinaryMounted
+			// because setting EnvironmentPath causes that function
+			// to skip explicit bind-mount (the launcher handles
+			// /nix/store mounting for Nix environments).
+			d.applyHostEnvironment(sandboxSpec)
+
 			// Resolve bare command names to absolute paths and add a
 			// filesystem mount when the binary is not covered by a Nix
 			// environment or existing template mounts. Without this,
@@ -921,6 +930,7 @@ func (d *Daemon) reconcileRunningPrincipal(ctx context.Context, principal ref.En
 	// freshly resolved spec, which would cause an infinite
 	// destroy-recreate loop.
 	d.applyPipelineExecutorOverlay(newSpec)
+	d.applyHostEnvironment(newSpec)
 	ensureCommandBinaryMounted(newSpec)
 
 	// Compare with the previously deployed spec.
@@ -1278,6 +1288,39 @@ func (d *Daemon) applyPipelineExecutorOverlay(spec *schema.SandboxSpec) bool {
 	}
 
 	return true
+}
+
+// applyHostEnvironment injects the host-env Nix store path as the
+// sandbox's EnvironmentPath for templates whose command is a bare Bureau
+// binary name found in the host-env. This enables automatic service
+// binary updates: when BureauVersion publishes a new host-env path, the
+// daemon re-resolves specs with the new EnvironmentPath, detects the
+// structural change, and restarts the sandbox with the new binary.
+//
+// Skipped when:
+//   - No host environment path is configured (pre-BureauVersion state)
+//   - The template or assignment already specifies an EnvironmentPath
+//   - The command is an absolute path or a shell interpreter
+//   - The command is not found in host-env/bin/
+func (d *Daemon) applyHostEnvironment(spec *schema.SandboxSpec) {
+	if d.hostEnvironmentPath == "" {
+		return
+	}
+	if spec.EnvironmentPath != "" {
+		return
+	}
+	if len(spec.Command) == 0 {
+		return
+	}
+	command := spec.Command[0]
+	if filepath.IsAbs(command) || shellInterpreters[command] {
+		return
+	}
+	candidate := filepath.Join(d.hostEnvironmentPath, "bin", command)
+	if _, err := os.Stat(candidate); err != nil {
+		return
+	}
+	spec.EnvironmentPath = d.hostEnvironmentPath
 }
 
 // readCredentials reads the Credentials state event for a principal.
@@ -2341,6 +2384,20 @@ func (d *Daemon) reconcileBureauVersion(ctx context.Context, desired *schema.Bur
 			d.logger.Error("failed to post bureau version prefetch failure notification", "error", err)
 		}
 		return
+	}
+
+	// Update the host environment path. Service sandbox specs that use
+	// bare command names found in host-env/bin/ will have their
+	// EnvironmentPath set to this path, causing the launcher to mount
+	// /nix/store and resolve the binary from the Nix closure. When
+	// this path changes, reconcileRunningPrincipal detects the
+	// structural change and restarts affected sandboxes.
+	if desired.HostEnvironmentPath != "" && desired.HostEnvironmentPath != d.hostEnvironmentPath {
+		d.logger.Info("host environment path updated",
+			"previous", d.hostEnvironmentPath,
+			"new", desired.HostEnvironmentPath,
+		)
+		d.hostEnvironmentPath = desired.HostEnvironmentPath
 	}
 
 	// Query the launcher for its current binary hash and binary paths.

@@ -154,6 +154,8 @@ func runUpgrade(ctx context.Context, args []string, params *upgradeParams, logge
 		"daemon", version.DaemonStorePath,
 		"launcher", version.LauncherStorePath,
 		"proxy", version.ProxyStorePath,
+		"log_relay", version.LogRelayStorePath,
+		"host_env", version.HostEnvironmentPath,
 	)
 
 	// Resolve the machine's config room.
@@ -219,8 +221,10 @@ func resolveMachineArg(arg string, defaultServer ref.ServerName) (ref.Machine, e
 
 // resolveHostEnvBinaries resolves the bin/ symlinks in a bureau-host-env
 // Nix derivation to produce a BureauVersion with full Nix store paths.
-// Each binary (bureau-daemon, bureau-launcher, bureau-proxy) is resolved
-// via filepath.EvalSymlinks and validated to be under /nix/store/.
+// Each core binary is resolved via filepath.EvalSymlinks and validated to
+// be under /nix/store/. The host-env path itself is included so the
+// daemon can resolve service binaries from the Nix closure without
+// relying on /usr/local/bin symlinks.
 func resolveHostEnvBinaries(hostEnvPath string) (*schema.BureauVersion, error) {
 	binaries := []struct {
 		name  string
@@ -229,6 +233,7 @@ func resolveHostEnvBinaries(hostEnvPath string) (*schema.BureauVersion, error) {
 		{"bureau-daemon", "daemon"},
 		{"bureau-launcher", "launcher"},
 		{"bureau-proxy", "proxy"},
+		{"bureau-log-relay", "log-relay"},
 	}
 
 	paths := make([]string, len(binaries))
@@ -249,9 +254,20 @@ func resolveHostEnvBinaries(hostEnvPath string) (*schema.BureauVersion, error) {
 		paths[index] = resolved
 	}
 
+	// Validate that the host-env path itself is under /nix/store/.
+	resolvedHostEnv, err := filepath.EvalSymlinks(hostEnvPath)
+	if err != nil {
+		return nil, fmt.Errorf("resolving host-env path %s: %w", hostEnvPath, err)
+	}
+	if !strings.HasPrefix(resolvedHostEnv, "/nix/store/") {
+		return nil, fmt.Errorf("host-env path %s resolves to %s which is not under /nix/store/", hostEnvPath, resolvedHostEnv)
+	}
+
 	return &schema.BureauVersion{
-		DaemonStorePath:   paths[0],
-		LauncherStorePath: paths[1],
-		ProxyStorePath:    paths[2],
+		DaemonStorePath:     paths[0],
+		LauncherStorePath:   paths[1],
+		ProxyStorePath:      paths[2],
+		LogRelayStorePath:   paths[3],
+		HostEnvironmentPath: resolvedHostEnv,
 	}, nil
 }

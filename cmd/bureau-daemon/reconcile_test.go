@@ -2425,6 +2425,110 @@ func TestApplyPipelineExecutorOverlay(t *testing.T) {
 	}
 }
 
+func TestApplyHostEnvironment(t *testing.T) {
+	t.Parallel()
+
+	// Create a fake host-env directory with a bin/ subdirectory containing
+	// a fake service binary. os.Stat must succeed on the candidate path
+	// for applyHostEnvironment to set EnvironmentPath.
+	hostEnvDir := t.TempDir()
+	binDir := filepath.Join(hostEnvDir, "bin")
+	if err := os.MkdirAll(binDir, 0755); err != nil {
+		t.Fatalf("creating bin directory: %v", err)
+	}
+	fakeBinary := filepath.Join(binDir, "bureau-ticket-service")
+	if err := os.WriteFile(fakeBinary, []byte("#!/bin/sh\n"), 0755); err != nil {
+		t.Fatalf("writing fake binary: %v", err)
+	}
+
+	tests := []struct {
+		name                string
+		hostEnvironmentPath string
+		spec                *schema.SandboxSpec
+		wantEnvironmentPath string
+	}{
+		{
+			name:                "bare command found in host-env",
+			hostEnvironmentPath: hostEnvDir,
+			spec: &schema.SandboxSpec{
+				Command: []string{"bureau-ticket-service", "--mode", "service"},
+			},
+			wantEnvironmentPath: hostEnvDir,
+		},
+		{
+			name:                "no host-env configured",
+			hostEnvironmentPath: "",
+			spec: &schema.SandboxSpec{
+				Command: []string{"bureau-ticket-service"},
+			},
+			wantEnvironmentPath: "",
+		},
+		{
+			name:                "spec already has EnvironmentPath",
+			hostEnvironmentPath: hostEnvDir,
+			spec: &schema.SandboxSpec{
+				Command:         []string{"bureau-ticket-service"},
+				EnvironmentPath: "/nix/store/existing-env",
+			},
+			wantEnvironmentPath: "/nix/store/existing-env",
+		},
+		{
+			name:                "empty command",
+			hostEnvironmentPath: hostEnvDir,
+			spec:                &schema.SandboxSpec{},
+			wantEnvironmentPath: "",
+		},
+		{
+			name:                "absolute command path",
+			hostEnvironmentPath: hostEnvDir,
+			spec: &schema.SandboxSpec{
+				Command: []string{"/usr/local/bin/bureau-ticket-service"},
+			},
+			wantEnvironmentPath: "",
+		},
+		{
+			name:                "shell interpreter",
+			hostEnvironmentPath: hostEnvDir,
+			spec: &schema.SandboxSpec{
+				Command: []string{"/bin/sh", "-c", "echo hello"},
+			},
+			wantEnvironmentPath: "",
+		},
+		{
+			name:                "bare shell interpreter",
+			hostEnvironmentPath: hostEnvDir,
+			spec: &schema.SandboxSpec{
+				Command: []string{"bash", "-c", "echo hello"},
+			},
+			wantEnvironmentPath: "",
+		},
+		{
+			name:                "command not in host-env bin",
+			hostEnvironmentPath: hostEnvDir,
+			spec: &schema.SandboxSpec{
+				Command: []string{"some-unknown-binary"},
+			},
+			wantEnvironmentPath: "",
+		},
+	}
+
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			t.Parallel()
+
+			daemon, _ := newTestDaemon(t)
+			daemon.hostEnvironmentPath = test.hostEnvironmentPath
+
+			daemon.applyHostEnvironment(test.spec)
+
+			if test.spec.EnvironmentPath != test.wantEnvironmentPath {
+				t.Errorf("EnvironmentPath = %q, want %q",
+					test.spec.EnvironmentPath, test.wantEnvironmentPath)
+			}
+		})
+	}
+}
+
 // TestReconcileNoConfig verifies that reconcile handles the M_NOT_FOUND
 // case gracefully — when no MachineConfig state event exists in the config
 // room, the daemon should succeed (treating it as "nothing to do") rather

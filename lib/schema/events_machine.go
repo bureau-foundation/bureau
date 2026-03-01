@@ -390,6 +390,15 @@ type BureauVersion struct {
 	// sandboxes continue running their current log-relay binary until
 	// recycled.
 	LogRelayStorePath string `json:"log_relay_store_path,omitempty"`
+
+	// HostEnvironmentPath is the Nix store path of the bureau-host-env
+	// buildEnv derivation (e.g., "/nix/store/...-bureau-host-env").
+	// Its bin/ directory contains symlinks to every Bureau binary. The
+	// daemon uses this to resolve service binary commands (bare names
+	// like "bureau-ticket-service") from the Nix closure instead of
+	// relying on /usr/local/bin symlinks, enabling fully automated
+	// service binary updates without root privileges.
+	HostEnvironmentPath string `json:"host_environment_path,omitempty"`
 }
 
 // CredentialsVersion is the current schema version for

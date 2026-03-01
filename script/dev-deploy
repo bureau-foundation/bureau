@@ -94,8 +94,18 @@ fi
 
 # Publish the BureauVersion state event. The running daemon picks this
 # up via /sync, prefetches the store paths, compares content hashes,
-# and performs the atomic exec() transition.
+# and performs the atomic exec() transition. Service binaries are
+# resolved from the host-env path in the event, so no /usr/local/bin
+# symlink updates are needed.
 echo "Publishing BureauVersion..."
 "$BUREAU_CLI" machine upgrade --local \
     --host-env "$HOST_ENV" \
     --credential-file "$CREDENTIAL_FILE"
+
+# Write the host-env path so scripts and agents can find Bureau
+# binaries without relying on /usr/local/bin symlinks.
+HOST_ENV_MARKER="/var/bureau/cache/current-host-env"
+if [ -d "$(dirname "$HOST_ENV_MARKER")" ] && [ -w "$(dirname "$HOST_ENV_MARKER")" ]; then
+    echo "$HOST_ENV" > "$HOST_ENV_MARKER"
+    echo "Host-env path written to $HOST_ENV_MARKER"
+fi

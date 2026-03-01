@@ -112,6 +112,12 @@ func (d *Daemon) startTransport(ctx context.Context, relaySocketPath string) err
 		return fmt.Errorf("setting relay socket permissions: %w", err)
 	}
 
+	if err := principal.SetOperatorGroupOwnership(relaySocketPath, d.operatorsGID); err != nil {
+		relayListener.Close()
+		webrtcTransport.Close()
+		return fmt.Errorf("setting relay socket group ownership: %w", err)
+	}
+
 	relayMux := http.NewServeMux()
 	relayMux.HandleFunc("/http/", d.handleRelay)
 	d.relayServer = &http.Server{
@@ -700,6 +706,12 @@ func (d *Daemon) startTunnel(name, serviceLocalpart, peerAddress, tunnelSocketPa
 		listener.Close()
 		os.Remove(tunnelSocketPath)
 		return fmt.Errorf("setting tunnel socket permissions: %w", err)
+	}
+
+	if err := principal.SetOperatorGroupOwnership(tunnelSocketPath, d.operatorsGID); err != nil {
+		listener.Close()
+		os.Remove(tunnelSocketPath)
+		return fmt.Errorf("setting tunnel socket group ownership: %w", err)
 	}
 
 	tunnelContext, tunnelCancel := context.WithCancel(context.Background())

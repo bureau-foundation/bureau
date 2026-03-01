@@ -299,7 +299,7 @@ func run() error {
 		launcher.failedExecPaths[failedPath] = true
 	}
 
-	listener, err := listenSocket(socketPath)
+	listener, err := listenSocket(socketPath, launcher.operatorsGID)
 	if err != nil {
 		return fmt.Errorf("listening on %s: %w", socketPath, err)
 	}
@@ -395,7 +395,11 @@ func loadOrGenerateKeypair(stateDir string, logger *slog.Logger) (*sealed.Keypai
 }
 
 // listenSocket creates a unix socket listener, removing any stale socket file.
-func listenSocket(socketPath string) (net.Listener, error) {
+// The operatorsGID parameter controls group ownership: when >= 0, the socket's
+// group is set to the bureau-operators group so operators can connect. When
+// negative (group not found or test environments), group ownership is left at
+// the process default.
+func listenSocket(socketPath string, operatorsGID int) (net.Listener, error) {
 	// Ensure the parent directory exists.
 	socketDir := filepath.Dir(socketPath)
 	if err := os.MkdirAll(socketDir, 0755); err != nil {
@@ -412,11 +416,19 @@ func listenSocket(socketPath string) (net.Listener, error) {
 		return nil, err
 	}
 
-	// Set socket permissions so the daemon (running as a different user
-	// in production) can connect.
+	// Set socket permissions so the daemon and operators can connect.
 	if err := os.Chmod(socketPath, 0660); err != nil {
 		listener.Close()
 		return nil, fmt.Errorf("setting socket permissions: %w", err)
+	}
+
+	// Set group ownership to bureau-operators so operators in that group
+	// can reach the launcher IPC socket. Without this, the socket
+	// inherits the process's primary group (bureau), and operators
+	// get EACCES on connect().
+	if err := principal.SetOperatorGroupOwnership(socketPath, operatorsGID); err != nil {
+		listener.Close()
+		return nil, fmt.Errorf("setting socket group ownership: %w", err)
 	}
 
 	return listener, nil

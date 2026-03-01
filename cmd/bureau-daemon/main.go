@@ -1032,6 +1032,19 @@ type Daemon struct {
 	// default), which limits the shell commands pipeline steps can run.
 	pipelineEnvironment string
 
+	// hostEnvironmentPath is the Nix store path of the bureau-host-env
+	// derivation (e.g., "/nix/store/...-bureau-host-env"). Its bin/
+	// directory contains all Bureau binaries. When set, the daemon
+	// injects this as EnvironmentPath into service sandbox specs whose
+	// templates use bare command names (like "bureau-ticket-service")
+	// found in the host-env. This eliminates the need for /usr/local/bin
+	// symlinks and enables fully automated service binary updates:
+	// when BureauVersion publishes a new host-env path, the daemon
+	// detects the structural change and restarts affected sandboxes.
+	//
+	// Populated from BureauVersion.HostEnvironmentPath via /sync.
+	hostEnvironmentPath string
+
 	// shutdownCtx is the daemon's top-level context, cancelled on
 	// SIGINT/SIGTERM or when the daemon detects an unrecoverable
 	// condition (e.g., Matrix account deactivated). Used by async

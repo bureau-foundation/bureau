@@ -17,8 +17,8 @@ concurrency:
   cancel-in-progress: true
 
 jobs:
-  lint:
-    name: Lint
+  ci:
+    name: Lint, build, and test
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
@@ -37,6 +37,7 @@ jobs:
       - name: Warm Nix dev shell
         run: nix develop --command true
 
+      # Go module cache for ci-lint (go vet, golangci-lint download modules).
       - name: Cache Go modules and build cache
         uses: actions/cache@v4
         with:
@@ -48,54 +49,17 @@ jobs:
             go-${{ runner.os }}-${{ hashFiles('go.sum') }}-
             go-${{ runner.os }}-
 
-      - name: Lint and format checks
-        run: nix develop --command script/ci-lint
-
-      - name: Push to Nix binary cache
-        if: github.ref == 'refs/heads/main' && github.event_name == 'push'
-        continue-on-error: true
-        env:
-          AWS_ACCESS_KEY_ID: ${{ secrets.R2_ACCESS_KEY_ID }}
-          AWS_SECRET_ACCESS_KEY: ${{ secrets.R2_SECRET_ACCESS_KEY }}
-        run: |
-          echo "${{ secrets.NIX_CACHE_SIGNING_KEY }}" > /tmp/nix-signing-key
-          trap 'rm -f /tmp/nix-signing-key' EXIT
-
-          CACHE="s3://bureau-cache?endpoint=${{ secrets.R2_ENDPOINT }}&region=auto"
-
-          nix build --no-link .#devShells.x86_64-linux.default
-          nix store sign --key-file /tmp/nix-signing-key -r .#devShells.x86_64-linux.default
-          nix copy --to "$CACHE" .#devShells.x86_64-linux.default
-
-  build:
-    name: Build and test
-    needs: lint
-    runs-on: ubuntu-latest
-    steps:
-      - uses: actions/checkout@v4
-
-      - uses: DeterminateSystems/determinate-nix-action@v3
-
-      - name: Configure Nix binary cache
-        run: |
-          cat <<'EOF' | sudo tee /etc/nix/nix.custom.conf
-          accept-flake-config = true
-          extra-substituters = https://cache.infra.bureau.foundation
-          extra-trusted-public-keys = cache.infra.bureau.foundation-1:3hpghLePqloLp0qMpkgPy/i0gKiL/Sxl2dY8EHZgOeY=
-          EOF
-          sudo systemctl restart nix-daemon
-
-      - name: Warm Nix dev shell
-        run: nix develop --command true
-
       - name: Mount Bazel cache
         uses: actions/cache@v4
         with:
           path: ~/.cache/bazel-disk-cache
-          key: bazel-build-${{ runner.os }}-${{ hashFiles('.bazelversion', 'MODULE.bazel', 'go.mod') }}-${{ github.sha }}
+          key: bazel-${{ runner.os }}-${{ hashFiles('.bazelversion', 'MODULE.bazel', 'go.mod') }}-${{ github.sha }}
           restore-keys: |
-            bazel-build-${{ runner.os }}-${{ hashFiles('.bazelversion', 'MODULE.bazel', 'go.mod') }}-
-            bazel-build-${{ runner.os }}-
+            bazel-${{ runner.os }}-${{ hashFiles('.bazelversion', 'MODULE.bazel', 'go.mod') }}-
+            bazel-${{ runner.os }}-
+
+      - name: Lint and format checks
+        run: nix develop --command script/ci-lint
 
       - name: Gazelle freshness check
         run: nix develop --command script/check-gazelle

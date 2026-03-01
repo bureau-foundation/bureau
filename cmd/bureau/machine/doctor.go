@@ -85,7 +85,7 @@ func buildExpectedDirectories(systemUser, operatorsGroup string) []directorySpec
 		{"/run/bureau", systemUser + ":" + operatorsGroup, 0750},
 		{"/var/lib/bureau", systemUser + ":" + systemUser, 0700},
 		{"/var/bureau/workspace", systemUser + ":" + systemUser, 0755},
-		{"/var/bureau/cache", systemUser + ":" + systemUser, 0755},
+		{"/var/bureau/cache", systemUser + ":" + operatorsGroup, 0775},
 	}
 }
 

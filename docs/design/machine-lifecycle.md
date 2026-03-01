@@ -104,7 +104,7 @@ user.
 | `/run/bureau/` | `bureau:bureau-operators` | 0750 | Sockets, tmux |
 | `/var/lib/bureau/` | `bureau:bureau` | 0700 | Keypair, session, state |
 | `/var/bureau/workspace/` | `bureau:bureau` | 0755 | Git worktrees |
-| `/var/bureau/cache/` | `bureau:bureau` | 0755 | Nix store cache |
+| `/var/bureau/cache/` | `bureau:bureau-operators` | 0775 | Nix store cache, host-env marker |
 
 ### Proxy Config Directories
 

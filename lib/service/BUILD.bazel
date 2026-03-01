@@ -10,6 +10,7 @@ go_library(
         "client.go",
         "discovery.go",
         "doc.go",
+        "http.go",
         "ready.go",
         "registration.go",
         "session.go",
@@ -39,6 +40,7 @@ go_test(
     srcs = [
         "client_test.go",
         "discovery_test.go",
+        "http_test.go",
         "session_test.go",
         "signing_key_test.go",
         "socket_test.go",

@@ -1,0 +1,39 @@
+# Copyright 2026 The Bureau Authors
+# SPDX-License-Identifier: Apache-2.0
+
+load("@rules_go//go:def.bzl", "go_binary", "go_library", "go_test")
+
+go_library(
+    name = "bureau-github-service_lib",
+    srcs = [
+        "doc.go",
+        "github_types.go",
+        "main.go",
+        "service.go",
+        "webhook.go",
+    ],
+    importpath = "github.com/bureau-foundation/bureau/cmd/bureau-github-service",
+    visibility = ["//visibility:private"],
+    deps = [
+        "//lib/process",
+        "//lib/ref",
+        "//lib/schema",
+        "//lib/schema/forge",
+        "//lib/service",
+        "//lib/version",
+        "//messaging",
+    ],
+)
+
+go_binary(
+    name = "bureau-github-service",
+    embed = [":bureau-github-service_lib"],
+    visibility = ["//visibility:public"],
+)
+
+go_test(
+    name = "bureau-github-service_test",
+    srcs = ["webhook_test.go"],
+    embed = [":bureau-github-service_lib"],
+    deps = ["//lib/schema/forge"],
+)

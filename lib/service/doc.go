@@ -23,6 +23,11 @@
 //   - Socket client: CBOR client for making authenticated requests to
 //     service sockets. Handles token inclusion, connection lifecycle,
 //     and response decoding.
+//   - HTTP server: TCP listener for services that need inbound HTTP
+//     (webhook ingestion from external forges). Includes HMAC-SHA256
+//     signature verification for webhook payloads. Same lifecycle
+//     pattern as [SocketServer]: [HTTPServer.Serve] blocks until
+//     graceful shutdown completes.
 //   - Session persistence: [LoadSession] and [SaveSession] for the
 //     launcher and daemon's machine-level Matrix sessions (not used
 //     by service bootstrap).

@@ -46,6 +46,8 @@ The command:
   - Registers a Matrix account for the ticket service
   - Provisions encrypted credentials to the target machine
   - Publishes a PrincipalAssignment to the machine's config room
+  - Publishes m.bureau.service_binding (role=ticket) to the machine's
+    config room so the daemon can mint service tokens for operators
   - For each existing room in the space: publishes m.bureau.ticket_config,
     sets the m.bureau.service_binding (role=ticket), invites the
     service, and configures power levels
@@ -275,6 +277,20 @@ func runEnable(ctx context.Context, logger *slog.Logger, params *enableParams) e
 			"config_room", createResult.ConfigRoomID,
 			"config_event", createResult.ConfigEventID,
 		)
+	}
+
+	// Publish the service binding to the machine config room. The daemon's
+	// token minting searches the config room for m.bureau.service_binding
+	// with the role as state key. Without this, operators running
+	// "bureau ticket --service" cannot discover the ticket socket.
+	//
+	// The per-project-room bindings (published by ConfigureRoom below)
+	// serve a different purpose: they tell the ticket service which
+	// rooms to watch for ticket events. Both bindings are needed.
+	configBinding := schema.ServiceBindingContent{Principal: serviceEntity}
+	_, err = adminSession.SendStateEvent(ctx, createResult.ConfigRoomID, schema.EventTypeServiceBinding, "ticket", configBinding)
+	if err != nil {
+		return cli.Internal("publishing service binding to machine config room %s: %w", createResult.ConfigRoomID, err)
 	}
 
 	// Resolve the space and discover child rooms.

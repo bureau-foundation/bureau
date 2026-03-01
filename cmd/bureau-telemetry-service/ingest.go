@@ -156,6 +156,21 @@ func (s *TelemetryService) handleIngest(ctx context.Context, token *servicetoken
 			return
 		}
 
+		// Persist spans, metrics, and logs to SQLite before
+		// fan-out so tail subscribers observe data that is
+		// already durable. Storage failures are logged but do
+		// not disconnect the relay — the live tail stream and
+		// ingestion counters continue working even when the
+		// database is degraded.
+		if s.store != nil {
+			if err := s.store.WriteBatch(ctx, &batch); err != nil {
+				s.logger.Error("store: write batch failed",
+					"machine", batch.Machine,
+					"error", err,
+				)
+			}
+		}
+
 		// Fan out to tail subscribers. Only build the tailEvent
 		// when there are active subscribers to avoid unnecessary
 		// source localpart extraction.
@@ -165,19 +180,6 @@ func (s *TelemetryService) handleIngest(ctx context.Context, token *servicetoken
 				sourceLocalparts: extractSourceLocalparts(&batch),
 				rawBatch:         rawBatch,
 			})
-		}
-
-		// Persist spans, metrics, and logs to SQLite. Storage
-		// failures are logged but do not disconnect the relay —
-		// the live tail stream and ingestion counters continue
-		// working even when the database is degraded.
-		if s.store != nil {
-			if err := s.store.WriteBatch(ctx, &batch); err != nil {
-				s.logger.Error("store: write batch failed",
-					"machine", batch.Machine,
-					"error", err,
-				)
-			}
 		}
 	}
 }

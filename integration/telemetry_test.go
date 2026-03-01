@@ -311,8 +311,8 @@ func TestTelemetryServiceTail(t *testing.T) {
 	}
 
 	// Verify storage stats reflect the persisted data. The ingest
-	// handler writes spans and logs to SQLite synchronously before
-	// sending the batch ack, so by the time we reach this point the
+	// handler writes to SQLite before fanning out to tail subscribers,
+	// so by the time we received the batch on the tail stream the
 	// data is committed. Output deltas go to the log manager, not
 	// the store, so they don't appear in storage stats.
 	if status.Storage.PartitionCount != 1 {

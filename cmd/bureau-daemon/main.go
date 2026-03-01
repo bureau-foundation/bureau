@@ -369,6 +369,7 @@ func run() error {
 		lastGrants:            make(map[ref.Entity][]schema.Grant),
 		lastTokenMint:         make(map[ref.Entity]time.Time),
 		activeTokens:          make(map[ref.Entity][]activeToken),
+		logSessionIDs:         make(map[ref.Entity]string),
 		lastServiceMounts:     make(map[ref.Entity][]launcherServiceMount),
 		lastObserveAllowances: make(map[ref.Entity][]schema.Allowance),
 		lastSpecs:             make(map[ref.Entity]*schema.SandboxSpec),
@@ -758,6 +759,12 @@ type Daemon struct {
 	// auto-cleanup on the service side). Expired entries are pruned
 	// on each mint. Protected by reconcileMu.
 	activeTokens map[ref.Entity][]activeToken
+
+	// logSessionIDs maps running principal entities to their assigned
+	// log session ID. Set on sandbox creation, read on sandbox exit
+	// for targeted complete-log calls, cleared on sandbox exit.
+	// Protected by reconcileMu.
+	logSessionIDs map[ref.Entity]string
 
 	// lastServiceMounts stores the resolved service socket paths for
 	// each running principal. Populated at sandbox creation from

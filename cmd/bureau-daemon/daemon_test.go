@@ -85,6 +85,7 @@ func newTestDaemon(t *testing.T) (*Daemon, *clock.FakeClock) {
 		lastGrants:            make(map[ref.Entity][]schema.Grant),
 		lastTokenMint:         make(map[ref.Entity]time.Time),
 		activeTokens:          make(map[ref.Entity][]activeToken),
+		logSessionIDs:         make(map[ref.Entity]string),
 		lastServiceMounts:     make(map[ref.Entity][]launcherServiceMount),
 		lastObserveAllowances: make(map[ref.Entity][]schema.Allowance),
 		lastSpecs:             make(map[ref.Entity]*schema.SandboxSpec),

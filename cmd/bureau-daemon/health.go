@@ -406,6 +406,8 @@ func (d *Daemon) rollbackPrincipal(ctx context.Context, principal ref.Entity) {
 	// Resolve authorization grants so the proxy starts with enforcement.
 	grants := d.resolveGrantsForProxy(principal.UserID())
 
+	logSessionID := d.generateLogSessionID(principal.AccountLocalpart())
+
 	// Recreate with the previous working spec and credentials.
 	response, err := d.launcherRequest(ctx, launcherIPCRequest{
 		Action:               ipc.ActionCreateSandbox,
@@ -413,6 +415,7 @@ func (d *Daemon) rollbackPrincipal(ctx context.Context, principal ref.Entity) {
 		EncryptedCredentials: ciphertext,
 		Grants:               grants,
 		SandboxSpec:          previousSpec,
+		LogSessionID:         logSessionID,
 	})
 	if err != nil {
 		d.logger.Error("health rollback: create-sandbox IPC failed",
@@ -437,6 +440,7 @@ func (d *Daemon) rollbackPrincipal(ctx context.Context, principal ref.Entity) {
 
 	d.running[principal] = true
 	d.notifyStatusChange()
+	d.logSessionIDs[principal] = logSessionID
 	d.lastSpecs[principal] = previousSpec
 	d.lastCredentials[principal] = ciphertext
 	d.lastGrants[principal] = grants

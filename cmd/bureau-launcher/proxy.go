@@ -304,7 +304,7 @@ func waitForSocket(socketPath string, processDone <-chan struct{}, timeout time.
 // The returned command is a single-element slice containing the script path.
 // The script handles all bwrap argument quoting internally, avoiding shell
 // escaping issues when tmux invokes the command.
-func (l *Launcher) buildSandboxCommand(principalLocalpart string, spec *schema.SandboxSpec, triggerContent []byte, serviceMounts []ServiceMount, tokenDirectory string, telemetrySocketPath string, telemetryTokenPath string) ([]string, error) {
+func (l *Launcher) buildSandboxCommand(principalLocalpart string, spec *schema.SandboxSpec, triggerContent []byte, serviceMounts []ServiceMount, tokenDirectory string, telemetrySocketPath string, telemetryTokenPath string, logSessionID string) ([]string, error) {
 	// Find the sandbox's config directory (created by spawnProxy).
 	sb, exists := l.sandboxes[principalLocalpart]
 	if !exists {
@@ -566,7 +566,7 @@ func (l *Launcher) buildSandboxCommand(principalLocalpart string, spec *schema.S
 				fleet:           string(fleetText),
 				machine:         string(machineText),
 				source:          string(sourceText),
-				sessionID:       fmt.Sprintf("%s-%d", principalLocalpart, time.Now().UnixNano()),
+				sessionID:       logSessionID,
 			}
 			l.logger.Info("output capture enabled",
 				"principal", principalLocalpart,

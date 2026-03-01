@@ -169,6 +169,14 @@ type Request struct {
 	// deployed.
 	TelemetryTokenPath string `cbor:"telemetry_token_path,omitempty"`
 
+	// LogSessionID is the session identifier for output capture log
+	// correlation. Assigned by the daemon so it can track which
+	// session belongs to each principal — enabling targeted
+	// complete-log calls and log tag references (e.g., passing
+	// BUREAU_LOG_REF to pipeline executors). The launcher passes
+	// this to bureau-log-relay via the --session-id flag.
+	LogSessionID string `cbor:"log_session_id,omitempty"`
+
 	// BinaryPath is a filesystem path used by the "update-proxy-binary"
 	// action. The launcher validates the path exists and is executable,
 	// then switches to it for future sandbox creation. Existing proxy

@@ -430,6 +430,22 @@ func (d *Daemon) startPipelineExecutor(
 		"MATRIX_USER_ID": d.machine.UserID().String(),
 	}
 
+	// Assign a log session ID for output capture correlation. Use the
+	// ticket state key as a basis (instead of the ephemeral localpart)
+	// so the resulting log tag is human-readable and preserves the
+	// ticket association.
+	logSessionID := d.generateLogSessionID(ticketStateKey)
+
+	// Inject BUREAU_LOG_REF so the pipeline executor can attach the
+	// output capture log to the ticket as an artifact tag reference.
+	// The tag name matches the telemetry service's logTagName format:
+	// log/<source-localpart>/<sessionID>.
+	logTagName := "log/" + localpart + "/" + logSessionID
+	if spec.EnvironmentVariables == nil {
+		spec.EnvironmentVariables = make(map[string]string)
+	}
+	spec.EnvironmentVariables["BUREAU_LOG_REF"] = logTagName
+
 	response, err := d.launcherRequest(ctx, launcherIPCRequest{
 		Action:              ipc.ActionCreateSandbox,
 		Principal:           localpart,
@@ -439,6 +455,7 @@ func (d *Daemon) startPipelineExecutor(
 		TokenDirectory:      tokenDirectory,
 		TelemetrySocketPath: telemetrySocketPath,
 		TelemetryTokenPath:  telemetryTokenPath,
+		LogSessionID:        logSessionID,
 	})
 	if err != nil {
 		d.logger.Error("create-sandbox IPC failed for pipeline executor",
@@ -458,6 +475,7 @@ func (d *Daemon) startPipelineExecutor(
 	d.notifyStatusChange()
 	d.dynamicPrincipals[pipelineEntity] = true
 	d.pipelineTickets[ticketStateKey] = pipelineEntity
+	d.logSessionIDs[pipelineEntity] = logSessionID
 	d.lastSpecs[pipelineEntity] = spec
 	d.lastActivityAt = d.clock.Now()
 
@@ -510,6 +528,7 @@ func (d *Daemon) watchPipelineSandboxExit(ctx context.Context, principal ref.Ent
 	}
 
 	d.reconcileMu.Lock()
+	var sessionID string
 	if d.running[principal] {
 		delete(d.running, principal)
 		d.notifyStatusChange()
@@ -517,14 +536,18 @@ func (d *Daemon) watchPipelineSandboxExit(ctx context.Context, principal ref.Ent
 		d.removePipelineTicketByPrincipal(principal)
 		delete(d.exitWatchers, principal)
 		delete(d.lastSpecs, principal)
+		sessionID = d.logSessionIDs[principal]
+		delete(d.logSessionIDs, principal)
 		d.lastActivityAt = d.clock.Now()
 	}
 	d.reconcileMu.Unlock()
 
-	// Tell the telemetry service to flush and complete all log sessions
-	// for this principal. Best-effort — errors are logged, not fatal.
-	// Must be called after releasing reconcileMu (blocks on service I/O).
-	d.completeLogForPrincipal(ctx, principal)
+	// Tell the telemetry service to flush and complete log sessions for
+	// this principal. When the daemon assigned a session ID, only that
+	// session is completed (targeted). Best-effort — errors are logged,
+	// not fatal. Must be called after releasing reconcileMu (blocks on
+	// service I/O).
+	d.completeLogForPrincipal(ctx, principal, sessionID)
 
 	// Destroy the sandbox.
 	d.destroyPipelineSandbox(ctx, principal)

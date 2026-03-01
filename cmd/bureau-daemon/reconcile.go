@@ -696,6 +696,11 @@ func (d *Daemon) reconcile(ctx context.Context) error {
 		// launcher pipes these to the proxy's stdin alongside credentials.
 		grants := d.resolveGrantsForProxy(principal.UserID())
 
+		// Assign a log session ID so the daemon can issue targeted
+		// complete-log calls on sandbox exit and pass BUREAU_LOG_REF
+		// to pipeline executors.
+		logSessionID := d.generateLogSessionID(principal.AccountLocalpart())
+
 		// Send create-sandbox to the launcher.
 		response, err := d.launcherRequest(ctx, launcherIPCRequest{
 			Action:               ipc.ActionCreateSandbox,
@@ -708,6 +713,7 @@ func (d *Daemon) reconcile(ctx context.Context) error {
 			TokenDirectory:       tokenDirectory,
 			TelemetrySocketPath:  telemetrySocketPath,
 			TelemetryTokenPath:   telemetryTokenPath,
+			LogSessionID:         logSessionID,
 		})
 		if err != nil {
 			d.logger.Error("create-sandbox IPC failed", "principal", principal, "error", err)
@@ -723,6 +729,7 @@ func (d *Daemon) reconcile(ctx context.Context) error {
 		d.clearStartFailure(principal)
 		d.running[principal] = true
 		d.notifyStatusChange()
+		d.logSessionIDs[principal] = logSessionID
 		d.lastCredentials[principal] = credentials.Ciphertext
 		d.lastObserveAllowances[principal] = d.authorizationIndex.Allowances(principal.UserID())
 		d.lastSpecs[principal] = sandboxSpec
@@ -2006,6 +2013,8 @@ func (d *Daemon) watchSandboxExit(ctx context.Context, principal ref.Entity) {
 	delete(d.lastGrants, principal)
 	delete(d.lastTokenMint, principal)
 	delete(d.lastObserveAllowances, principal)
+	sessionID := d.logSessionIDs[principal]
+	delete(d.logSessionIDs, principal)
 	d.lastActivityAt = d.clock.Now()
 
 	// Cancel the drain grace period timer if this principal was being
@@ -2101,9 +2110,11 @@ func (d *Daemon) watchSandboxExit(ctx context.Context, principal ref.Entity) {
 		}
 	}
 
-	// Tell the telemetry service to flush and complete all log sessions
-	// for this principal. Best-effort — errors are logged, not fatal.
-	d.completeLogForPrincipal(postExitCtx, principal)
+	// Tell the telemetry service to flush and complete log sessions for
+	// this principal. When the daemon assigned a session ID, only that
+	// session is completed (targeted). Best-effort — errors are logged,
+	// not fatal.
+	d.completeLogForPrincipal(postExitCtx, principal, sessionID)
 
 	// Post exit notification to config room. On failure, include the
 	// captured terminal output so operators can diagnose the problem

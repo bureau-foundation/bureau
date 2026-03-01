@@ -95,8 +95,10 @@ external service connectors.
 - **[agent-layering.md](agent-layering.md)** — Agent runtime
   integration: wrapper binaries, session management, conversation
   logging, MCP, quota.
-- **[forgejo.md](forgejo.md)** — External service connector pattern:
-  identity mapping, permission sync, event translation, webhook ingress.
+- **[forges.md](forges.md)** — Unified forge connector model: event
+  schema, subscription model, entity mapping, identity and attribution,
+  webhook ingestion, credential management, CLI plugin architecture.
+  Covers GitHub, Forgejo, and GitLab.
 
 ---
 

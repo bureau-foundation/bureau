@@ -932,10 +932,11 @@ Matrix availability.
   layer. Room-level authorization policy is stored as state events,
   consistent with the Matrix data model.
 
-- **[forgejo.md](forgejo.md)** — reference implementation for
-  external service connectors. Demonstrates both authorization
-  surfaces: agent-to-socket (token grants) and connector-to-daemon
-  (credential provisioning grants).
+- **[forges.md](forges.md)** — unified forge connector model.
+  Demonstrates both authorization surfaces: agent-to-socket (token
+  grants with `<provider>/*` namespace) and connector-to-daemon
+  (credential provisioning grants). Three access tiers with different
+  grant scopes.
 
 - **[workspace.md](workspace.md)** — workspace operations map to
   `workspace/*` actions. Power level grants bridge room power levels

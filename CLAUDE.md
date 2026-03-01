@@ -382,7 +382,7 @@ documentation.
 **Applications** (patterns built from everything above):
 - `dev-team.md` — Self-hosted development team, role taxonomy, review pipeline
 - `agent-layering.md` — Agent runtime integration, session management, MCP, quota
-- `forgejo.md` — External service connector pattern
+- `forges.md` — Unified forge connector model (GitHub, Forgejo, GitLab)
 
 ## Design document rules
 

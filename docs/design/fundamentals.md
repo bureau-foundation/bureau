@@ -587,7 +587,7 @@ expiry, and uses the embedded grants for authorization.
 
 External services (Forgejo, etc.) use their own authentication models.
 Bureau manages the mapping between Bureau principal identity and
-service-specific credentials. See [credentials.md](credentials.md) and [forgejo.md](forgejo.md).
+service-specific credentials. See [credentials.md](credentials.md) and [forges.md](forges.md).
 
 ---
 

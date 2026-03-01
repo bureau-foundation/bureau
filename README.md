@@ -181,8 +181,8 @@ authorization.md, stewardship.md, telemetry.md, logging.md,
 agent-context.md.
 
 **Applications**: dev-team.md (self-hosted team structure),
-agent-layering.md (agent runtime integration), forgejo.md (external
-service connectors).
+agent-layering.md (agent runtime integration), forges.md (forge
+connectors: GitHub, Forgejo, GitLab).
 
 ## Building
 

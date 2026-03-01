@@ -57,13 +57,11 @@ The push step uses `continue-on-error: true` so cache failures never block
 CI. Only pushes on main trigger the upload (fork PRs don't receive secrets;
 same-repo PRs do, but the `event_name == 'push'` guard prevents execution).
 
-**Current status**: Cache writes are commented out pending Determinate Nix
-shipping Nix >= 2.33.2 (see [#15](https://github.com/bureau-foundation/bureau/issues/15)).
-Nix 2.33.0–2.33.1 has a bug where curl's `--aws-sigv4` signs the
-`accept-encoding` header; Cloudflare's edge modifies it before R2 sees the
-request, causing 403 on every S3 operation
-([NixOS/nix#15019](https://github.com/NixOS/nix/issues/15019), fixed in
-2.33.2). The dev shell closure was manually uploaded and reads work.
+Cache writes are enabled on main branch merges. Nix 2.33.0–2.33.1 had a bug
+where curl's `--aws-sigv4` signed the `accept-encoding` header; Cloudflare's
+edge modified it before R2 saw the request, causing 403 on every S3 operation
+([NixOS/nix#15019](https://github.com/NixOS/nix/issues/15019)). Fixed in
+upstream Nix 2.33.2, shipped in Determinate Nix 3.16.0+.
 
 ## Signing
 

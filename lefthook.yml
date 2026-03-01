@@ -162,7 +162,7 @@ pre-commit:
 
     gomod2nix:
       run: script/check-gomod2nix
-      glob: "*.{go,mod,sum}"
+      glob: "{go.mod,go.sum,gomod2nix.toml}"
       priority: 3
 
     bazel-build:

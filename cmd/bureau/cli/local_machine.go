@@ -20,16 +20,29 @@ const DefaultLauncherStateDir = "/var/lib/bureau"
 // this file on first boot after registering with the homeserver.
 const DefaultLauncherSessionPath = DefaultLauncherStateDir + "/session.json"
 
-// ResolveLocalMachine reads the local launcher's session file to discover
-// the machine localpart. The launcher registers a Matrix account for the
-// machine on first boot and writes the session (including user_id) to disk.
+// ResolveLocalMachine discovers the local machine's localpart. Resolution
+// priority:
 //
-// The session file path can be overridden with the BUREAU_LAUNCHER_SESSION
-// environment variable.
+//  1. /etc/bureau/machine.conf — BUREAU_MACHINE_NAME. This is the canonical
+//     source: world-readable, contains no secrets, written by "bureau machine
+//     doctor --fix". Operators and agents can always read it.
+//  2. Launcher session file — fallback for minimal setups where machine.conf
+//     doesn't exist (e.g., early bootstrap before doctor runs). The session
+//     file is only readable by the bureau user, so this path fails for
+//     operators — but if machine.conf exists, they never hit it.
 //
-// Returns the machine localpart (e.g., "machine/workstation") extracted from
-// the Matrix user ID (e.g., "@machine/workstation:bureau.local").
+// The session file path can be overridden with BUREAU_LAUNCHER_SESSION.
+// The machine.conf path can be overridden with BUREAU_MACHINE_CONF.
+//
+// Returns the machine localpart (e.g., "bureau/fleet/prod/machine/workstation").
 func ResolveLocalMachine() (string, error) {
+	// Try machine.conf first — public configuration, no secrets.
+	if conf := LoadMachineConf(); conf.MachineName != "" {
+		return conf.MachineName, nil
+	}
+
+	// Fall back to the launcher session file. This requires read access
+	// to /var/lib/bureau/session.json (bureau user only).
 	sessionPath := os.Getenv("BUREAU_LAUNCHER_SESSION")
 	if sessionPath == "" {
 		sessionPath = DefaultLauncherSessionPath
@@ -39,9 +52,10 @@ func ResolveLocalMachine() (string, error) {
 	if err != nil {
 		if os.IsNotExist(err) {
 			return "", NotFound(
-				"no launcher session found at %s — is the Bureau launcher running on this machine? "+
-					"(set BUREAU_LAUNCHER_SESSION to override the path)",
-				sessionPath,
+				"no machine identity found: %s has no BUREAU_MACHINE_NAME and "+
+					"no launcher session at %s — is Bureau deployed on this machine? "+
+					"Run 'bureau machine doctor --fix' to set up machine.conf",
+				MachineConfPath(), sessionPath,
 			)
 		}
 		return "", Internal("reading launcher session %s: %w", sessionPath, err)

@@ -486,6 +486,27 @@ func (idx *Index) ChildProgress(parentID string) (total, closed int) {
 	return total, closed
 }
 
+// DepsProgress returns a summary of a ticket's transitive dependency
+// closure: total count and how many have status "closed". Useful for
+// progress displays like "12 of 20 dependencies closed". Unlike
+// ChildProgress (which counts direct children), this walks the full
+// blocked_by graph recursively. The ticket itself is not counted.
+// Returns (0, 0) if the ticket has no dependencies.
+func (idx *Index) DepsProgress(ticketID string) (total, closed int) {
+	deps := idx.Deps(ticketID)
+	for _, depID := range deps {
+		content, exists := idx.tickets[depID]
+		if !exists {
+			continue
+		}
+		total++
+		if content.Status == ticket.StatusClosed {
+			closed++
+		}
+	}
+	return total, closed
+}
+
 // PendingGates returns all tickets that have at least one gate with
 // status "pending". Used by timer gate evaluation and cross-room gate
 // evaluation, which need to scan all pending gates regardless of event

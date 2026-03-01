@@ -119,6 +119,13 @@ const (
 
 	// TypeCredentialRotation is a credential rotation task.
 	TypeCredentialRotation TicketType = "credential_rotation"
+
+	// TypeSprint is a bounded work period with a clear goal. A sprint
+	// ticket's blocked_by dependencies define the work scope: the
+	// transitive closure of all dependencies is the set of tickets
+	// that must close for the sprint to complete. Sprint progress is
+	// measured by the fraction of that closure that is closed.
+	TypeSprint TicketType = "sprint"
 )
 
 // GateType identifies how a gate condition is evaluated.
@@ -215,7 +222,7 @@ func (t TicketType) IsKnown() bool {
 	case TypeTask, TypeBug, TypeFeature, TypeEpic, TypeChore,
 		TypeDocs, TypeQuestion, TypePipeline, TypeReviewFinding,
 		TypeReview, TypeResourceRequest, TypeAccessRequest,
-		TypeDeployment, TypeCredentialRotation:
+		TypeDeployment, TypeCredentialRotation, TypeSprint:
 		return true
 	}
 	return false

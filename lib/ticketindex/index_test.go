@@ -1005,6 +1005,63 @@ func TestChildProgressNoChildren(t *testing.T) {
 	}
 }
 
+// --- DepsProgress ---
+
+func TestDepsProgress(t *testing.T) {
+	idx := NewIndex()
+
+	// Sprint blocked by A and B. A blocked by A1 and A2.
+	// Transitive closure: {A, B, A1, A2} = 4 tickets.
+	sprint := makeTicket("Sprint")
+	sprint.Type = ticket.TypeSprint
+	sprint.BlockedBy = []string{"tkt-a", "tkt-b"}
+	idx.Put("tkt-sprint", sprint)
+
+	taskA := makeTicket("A")
+	taskA.BlockedBy = []string{"tkt-a1", "tkt-a2"}
+	idx.Put("tkt-a", taskA)
+
+	taskB := makeTicket("B")
+	taskB.Status = ticket.StatusClosed
+	taskB.ClosedAt = "2026-02-13T10:00:00Z"
+	idx.Put("tkt-b", taskB)
+
+	taskA1 := makeTicket("A1")
+	taskA1.Status = ticket.StatusClosed
+	taskA1.ClosedAt = "2026-02-13T10:00:00Z"
+	idx.Put("tkt-a1", taskA1)
+
+	taskA2 := makeTicket("A2")
+	idx.Put("tkt-a2", taskA2)
+
+	total, closed := idx.DepsProgress("tkt-sprint")
+	if total != 4 {
+		t.Errorf("DepsProgress total = %d, want 4", total)
+	}
+	if closed != 2 {
+		t.Errorf("DepsProgress closed = %d, want 2", closed)
+	}
+}
+
+func TestDepsProgressNoDeps(t *testing.T) {
+	idx := NewIndex()
+	idx.Put("tkt-a", makeTicket("No deps"))
+
+	total, closed := idx.DepsProgress("tkt-a")
+	if total != 0 || closed != 0 {
+		t.Errorf("DepsProgress of ticket without deps = (%d, %d), want (0, 0)", total, closed)
+	}
+}
+
+func TestDepsProgressNonexistent(t *testing.T) {
+	idx := NewIndex()
+
+	total, closed := idx.DepsProgress("tkt-nonexistent")
+	if total != 0 || closed != 0 {
+		t.Errorf("DepsProgress of nonexistent ticket = (%d, %d), want (0, 0)", total, closed)
+	}
+}
+
 // --- PendingGates ---
 
 func TestPendingGates(t *testing.T) {

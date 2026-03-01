@@ -1759,7 +1759,7 @@ func TestTicketTypeIsKnown(t *testing.T) {
 		TypeTask, TypeBug, TypeFeature, TypeEpic, TypeChore,
 		TypeDocs, TypeQuestion, TypePipeline, TypeReviewFinding,
 		TypeReview, TypeResourceRequest, TypeAccessRequest,
-		TypeDeployment, TypeCredentialRotation,
+		TypeDeployment, TypeCredentialRotation, TypeSprint,
 	}
 	for _, typeName := range knownTypes {
 		if !typeName.IsKnown() {

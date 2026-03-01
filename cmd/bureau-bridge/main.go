@@ -18,7 +18,11 @@ import (
 
 func main() {
 	if err := run(); err != nil {
-		fmt.Fprintf(os.Stderr, "error: %v\n", err)
+		// Propagate the child's exit code in exec mode.
+		if exitErr, ok := err.(*exec.ExitError); ok {
+			os.Exit(exitErr.ExitCode())
+		}
+		fmt.Fprintf(os.Stderr, "error: %v\n", err) //nolint:rawoutput
 		os.Exit(1)
 	}
 }
@@ -147,17 +151,9 @@ func runExecMode(b *bridge.Bridge, command []string) error {
 	err = cmd.Run()
 	signal.Stop(sigChan)
 
-	// Propagate exit code. Stop the bridge explicitly before os.Exit
-	// because os.Exit does not run deferred functions.
-	if err != nil {
-		if exitErr, ok := err.(*exec.ExitError); ok {
-			b.Stop()
-			os.Exit(exitErr.ExitCode())
-		}
-		return err
-	}
-
-	return nil
+	// Return the error (including *exec.ExitError for exit code
+	// propagation). The defer above handles bridge cleanup.
+	return err
 }
 
 // runStandalone runs the bridge until interrupted by SIGINT or SIGTERM.

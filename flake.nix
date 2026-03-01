@@ -401,8 +401,10 @@
             pkgs.curl
             pkgs.openssl
 
-            # Nix formatting.
+            # Nix tooling.
             pkgs.nixfmt
+            pkgs.statix
+            pkgs.deadnix
 
             # Attic CLI for pushing to the binary cache.
             pkgs.attic-client

@@ -1,0 +1,79 @@
+#!/usr/bin/env bash
+# Copyright 2026 The Bureau Authors
+# SPDX-License-Identifier: Apache-2.0
+#
+# Verify that every lefthook pre-commit command has a CI coverage entry
+# and vice versa. Catches drift between local hooks and CI.
+#
+# Reads lefthook.yml for command names and script/ci-lint-coverage for
+# the mapping. Fails if:
+#   - A lefthook command has no coverage entry
+#   - A coverage entry references a command not in lefthook.yml
+#
+# Usage: script/check-ci-coverage
+
+set -euo pipefail
+
+SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+REPO_ROOT="$(cd "$SCRIPT_DIR/.." && pwd)"
+LEFTHOOK_FILE="$REPO_ROOT/lefthook.yml"
+COVERAGE_FILE="$SCRIPT_DIR/ci-lint-coverage"
+
+if [ ! -f "$LEFTHOOK_FILE" ]; then
+    echo "check-ci-coverage: lefthook.yml not found" >&2
+    exit 1
+fi
+
+if [ ! -f "$COVERAGE_FILE" ]; then
+    echo "check-ci-coverage: script/ci-lint-coverage not found" >&2
+    exit 1
+fi
+
+# Extract command names from lefthook.yml.
+# Commands are keys at exactly 4-space indentation under
+# pre-commit.commands. Sub-properties (run, glob, priority, exclude)
+# are at 6+ spaces, so the 4-space prefix is unambiguous.
+lefthook_commands=$(grep -E '^    [a-z][a-z0-9_-]+:' "$LEFTHOOK_FILE" \
+    | sed 's/^ *//; s/:.*//' | sort)
+
+# Extract command names from the coverage file.
+# Non-comment, non-blank lines. First field is the command name.
+coverage_commands=$(grep -v '^#' "$COVERAGE_FILE" | grep -v '^[[:space:]]*$' \
+    | awk '{print $1}' | sort)
+
+# Bidirectional diff.
+missing_from_coverage=$(comm -23 \
+    <(echo "$lefthook_commands") \
+    <(echo "$coverage_commands"))
+extra_in_coverage=$(comm -13 \
+    <(echo "$lefthook_commands") \
+    <(echo "$coverage_commands"))
+
+errors=false
+
+if [ -n "$missing_from_coverage" ]; then
+    errors=true
+    echo ""
+    echo "ERROR: Lefthook commands missing from script/ci-lint-coverage:"
+    while IFS= read -r command; do
+        echo "  $command"
+    done <<< "$missing_from_coverage"
+    echo ""
+    echo "Add an entry for each command with its CI location:"
+    echo "  ci-lint, ci-build, local-only, or not-in-ci"
+fi
+
+if [ -n "$extra_in_coverage" ]; then
+    errors=true
+    echo ""
+    echo "ERROR: Coverage entries for commands not in lefthook.yml:"
+    while IFS= read -r command; do
+        echo "  $command"
+    done <<< "$extra_in_coverage"
+    echo ""
+    echo "Remove the stale entries or add the commands to lefthook.yml."
+fi
+
+if $errors; then
+    exit 1
+fi

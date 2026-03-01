@@ -156,7 +156,7 @@ func TestEnumerateSkipsNonAMDGPU(t *testing.T) {
 	createSyntheticAMDGPU(t, root, 0, "0000:c3:00.0")
 
 	// Create a non-amdgpu card (AST BMC graphics).
-	cardPath := filepath.Join("sys/class/drm/card1")
+	cardPath := "sys/class/drm/card1"
 	astDriverDir := filepath.Join(root, "sys/bus/pci/drivers/ast")
 	if err := os.MkdirAll(astDriverDir, 0755); err != nil {
 		t.Fatalf("mkdir: %v", err)

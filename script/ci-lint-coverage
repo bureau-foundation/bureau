@@ -1,0 +1,62 @@
+# Copyright 2026 The Bureau Authors
+# SPDX-License-Identifier: Apache-2.0
+#
+# CI Coverage Mapping
+#
+# Maps every lefthook pre-commit command to where it runs in CI.
+# script/check-ci-coverage verifies this file stays in sync with
+# lefthook.yml — any mismatch fails the pre-commit hook.
+#
+# Locations:
+#   ci-lint    — script/ci-lint (CI lint job)
+#   ci-build   — CI build-and-test job (bazel build, test, gazelle)
+#   local-only — enforced at commit time only (diff-based ratchets)
+#   not-in-ci  — intentionally excluded from CI
+#
+# Format: <command-name> <location>
+# Lines starting with # are comments. Blank lines are ignored.
+
+# Tier 1: Formatting
+gofmt               ci-lint
+buildifier          ci-lint
+license-go          ci-lint
+license-bazel       ci-lint
+license-shell       ci-lint
+license-nix         ci-lint
+trailing-whitespace ci-lint
+end-of-file-fixer   ci-lint
+
+# Tier 2: Static analysis
+go-vet              ci-lint
+golangci-lint       ci-lint
+buildifier-lint     ci-lint
+shellcheck          ci-lint
+lychee              ci-lint
+check-merge-conflict ci-lint
+check-large-files   ci-lint
+detect-private-key  ci-lint
+check-case-conflict ci-lint
+check-bead-references ci-lint
+check-real-clock    local-only
+check-raw-output    local-only
+check-bare-tmux     local-only
+check-banned-imports local-only
+check-ci-coverage   local-only
+
+# Tier 3: Build and test
+gazelle             ci-build
+bazel-build         ci-build
+bazel-test          ci-build
+binary-sizes        ci-build
+
+# Tier 4: Integration
+integration-test    not-in-ci
+
+# Tier 5: Nix
+nixfmt              ci-lint
+statix              ci-lint
+deadnix             ci-lint
+nix-flake-check     ci-lint
+
+# Tier 6: Side effects
+beads-flush         not-in-ci

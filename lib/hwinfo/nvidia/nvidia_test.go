@@ -197,7 +197,7 @@ func TestEnumerateSkipsAMDGPU(t *testing.T) {
 	if err := os.MkdirAll(amdDriverDir, 0755); err != nil {
 		t.Fatalf("mkdir: %v", err)
 	}
-	cardPath := filepath.Join("sys/class/drm/card1")
+	cardPath := "sys/class/drm/card1"
 	deviceDir := filepath.Join(root, cardPath, "device")
 	if err := os.MkdirAll(deviceDir, 0755); err != nil {
 		t.Fatalf("mkdir: %v", err)

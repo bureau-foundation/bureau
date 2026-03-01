@@ -1,0 +1,358 @@
+#!/usr/bin/env bash
+# Copyright 2026 The Bureau Authors
+# SPDX-License-Identifier: Apache-2.0
+#
+# CI lint and format verification. Runs the same checks as the lefthook
+# pre-commit hooks but adapted for CI: check-only (no auto-fix), whole
+# repository (no staged-file scoping), and reports ALL failures rather
+# than bailing on the first.
+#
+# Covers Tier 1 (formatting verification), Tier 2 (static analysis),
+# and Tier 5 (nix) checks. Tier 3 (build/test) and Tier 4 (integration)
+# are handled by the CI build job. Diff-based ratchet hooks
+# (check-real-clock, check-raw-output, check-bare-tmux,
+# check-banned-imports) are enforced at commit time only.
+#
+# See script/ci-lint-coverage for the full mapping between lefthook
+# commands and CI coverage locations.
+#
+# Usage: script/ci-lint
+#
+# Requires the Nix dev shell (all tools come from there).
+
+set -euo pipefail
+
+REPO_ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
+cd "$REPO_ROOT"
+
+failures=()
+
+# Run a named check. Streams output for CI log visibility. Appends to
+# failures[] on non-zero exit.
+run_check() {
+    local name="$1"
+    shift
+
+    echo "--- $name ---"
+
+    local status=0
+    "$@" || status=$?
+
+    if [ "$status" -ne 0 ]; then
+        failures+=("$name")
+        echo "^^^ FAIL: $name (exit $status)"
+    else
+        echo "  ok"
+    fi
+    echo ""
+}
+
+# =====================================================================
+# Tier 1: Formatting verification (check-only)
+#
+# Local hooks auto-fix via format-staged. CI verifies the result:
+# if formatting is wrong, the developer forgot to run hooks or
+# bypassed them.
+# =====================================================================
+
+check_gofmt() {
+    local unformatted
+    unformatted=$(git ls-files '*.go' | xargs -r gofmt -l 2>&1)
+    if [ -n "$unformatted" ]; then
+        echo "Unformatted Go files (run gofmt -w on each):"
+        echo "$unformatted"
+        return 1
+    fi
+}
+
+check_buildifier_format() {
+    local files
+    files=$(git ls-files '*.bazel' '*.bzl')
+    if [ -z "$files" ]; then
+        return 0
+    fi
+    # Word splitting is intentional: each file is a separate argument.
+    # shellcheck disable=SC2086
+    buildifier --mode=check $files
+}
+
+check_license() {
+    local missing=()
+
+    # Go files: "// Copyright ..." on line 1 or 2.
+    while IFS= read -r file; do
+        if ! head -2 "$file" | grep -q "^// Copyright 2026 The Bureau Authors"; then
+            missing+=("$file")
+        fi
+    done < <(git ls-files '*.go')
+
+    # Bazel files: "# Copyright ..." on line 1 or 2.
+    while IFS= read -r file; do
+        if ! head -2 "$file" | grep -q "^# Copyright 2026 The Bureau Authors"; then
+            missing+=("$file")
+        fi
+    done < <(git ls-files '*.bazel' '*.bzl')
+
+    # Nix files: "# Copyright ..." on line 1 or 2.
+    while IFS= read -r file; do
+        if ! head -2 "$file" | grep -q "^# Copyright 2026 The Bureau Authors"; then
+            missing+=("$file")
+        fi
+    done < <(git ls-files '*.nix')
+
+    # Shell scripts: copyright within first 4 lines (shebang may push
+    # the header down by one line).
+    while IFS= read -r file; do
+        case "$(basename "$file")" in
+            *.md|*.txt|*.json|*.gitkeep) continue ;;
+            nix-expected-version|nix-installer-version) continue ;;
+        esac
+        if ! head -4 "$file" | grep -q "^# Copyright 2026 The Bureau Authors"; then
+            missing+=("$file")
+        fi
+    done < <(git ls-files 'script/*')
+
+    if [ ${#missing[@]} -gt 0 ]; then
+        echo "Files missing license header:"
+        printf '  %s\n' "${missing[@]}"
+        return 1
+    fi
+}
+
+check_trailing_whitespace() {
+    # git grep only searches tracked files and skips binary content.
+    local found
+    found=$(git grep -n '[[:space:]]$' \
+        -- '*.go' '*.bazel' '*.bzl' '*.nix' '*.md' '*.yaml' '*.yml' 'script/*' \
+        || true)
+    if [ -n "$found" ]; then
+        local count
+        count=$(echo "$found" | wc -l)
+        echo "Trailing whitespace in $count location(s):"
+        echo "$found" | head -20
+        if [ "$count" -gt 20 ]; then
+            echo "  ... ($((count - 20)) more)"
+        fi
+        return 1
+    fi
+}
+
+check_end_of_file() {
+    local bad=()
+    while IFS= read -r -d '' file; do
+        [ -s "$file" ] || continue
+        # tail -c 1 outputs the last byte; wc -l counts 0 if it is not
+        # a newline. No command-substitution stripping because we pipe
+        # rather than capture the raw byte.
+        local newline_count
+        newline_count=$(tail -c 1 "$file" | wc -l)
+        if [ "$newline_count" -eq 0 ]; then
+            bad+=("$file")
+        fi
+    done < <(git ls-files -z -- '*.go' '*.bazel' '*.bzl' '*.nix' '*.md' '*.yaml' '*.yml')
+
+    if [ ${#bad[@]} -gt 0 ]; then
+        echo "Files missing final newline:"
+        printf '  %s\n' "${bad[@]}"
+        return 1
+    fi
+}
+
+# =====================================================================
+# Tier 2: Static analysis
+#
+# Local hooks scope to staged files/packages for speed. CI checks the
+# entire repository.
+# =====================================================================
+
+check_go_vet() {
+    go vet ./...
+}
+
+check_golangci_lint() {
+    golangci-lint run --timeout=5m ./...
+}
+
+check_buildifier_lint() {
+    local files
+    files=$(git ls-files '*.bazel' '*.bzl')
+    if [ -z "$files" ]; then
+        return 0
+    fi
+    # --mode=check prevents file modification. Lint warnings go to
+    # stderr. We grep for the warning pattern to separate lint findings
+    # from format complaints (already caught by the format check).
+    local output
+    # shellcheck disable=SC2086
+    output=$(buildifier --lint=warn --mode=check $files 2>&1 || true)
+    local warnings
+    warnings=$(echo "$output" | grep ": warning: " || true)
+    if [ -n "$warnings" ]; then
+        echo "$warnings"
+        return 1
+    fi
+}
+
+check_shellcheck() {
+    local files=()
+    while IFS= read -r file; do
+        case "$(basename "$file")" in
+            *.md|*.txt|*.json|*.gitkeep) continue ;;
+            nix-expected-version|nix-installer-version) continue ;;
+            ci-lint-coverage) continue ;;
+        esac
+        files+=("$file")
+    done < <(git ls-files 'script/*')
+
+    if [ ${#files[@]} -gt 0 ]; then
+        shellcheck --severity=warning "${files[@]}"
+    fi
+}
+
+check_lychee() {
+    local files
+    files=$(git ls-files '*.md')
+    if [ -z "$files" ]; then
+        return 0
+    fi
+    # shellcheck disable=SC2086
+    lychee --offline --no-progress $files
+}
+
+check_merge_conflict() {
+    local found
+    found=$(git grep -lE '^<<<<<<< |^=======$|^>>>>>>> ' || true)
+    if [ -n "$found" ]; then
+        echo "Merge conflict markers found:"
+        echo "$found"
+        return 1
+    fi
+}
+
+check_large_files() {
+    local maximum_bytes=1000000
+    local bad=()
+    while IFS= read -r -d '' file; do
+        [ -f "$file" ] || continue
+        local size
+        size=$(stat -c %s "$file" 2>/dev/null || echo 0)
+        if [ "$size" -gt "$maximum_bytes" ]; then
+            bad+=("$file ($size bytes)")
+        fi
+    done < <(git ls-files -z)
+
+    if [ ${#bad[@]} -gt 0 ]; then
+        echo "Files exceeding $maximum_bytes bytes:"
+        printf '  %s\n' "${bad[@]}"
+        return 1
+    fi
+}
+
+check_private_key() {
+    local found
+    # [B] prevents this script from matching its own pattern.
+    found=$(git grep -l -- '-----[B]EGIN.*PRIVATE KEY' || true)
+    if [ -n "$found" ]; then
+        echo "Private key material found:"
+        echo "$found"
+        return 1
+    fi
+}
+
+check_case_conflict() {
+    local duplicates
+    duplicates=$(git ls-files | tr '[:upper:]' '[:lower:]' | sort | uniq -d)
+    if [ -n "$duplicates" ]; then
+        echo "Case-insensitive filename conflicts:"
+        echo "$duplicates"
+        return 1
+    fi
+}
+
+check_bead_references() {
+    script/check-bead-references
+}
+
+# =====================================================================
+# Tier 5: Nix
+#
+# Local hooks use script/nix-hook which locates nix and runs tools via
+# `nix run nixpkgs#<tool>`. In CI, all tools are already in the dev
+# shell, so we invoke them directly — faster and avoids downloading a
+# fresh nixpkgs tarball.
+# =====================================================================
+
+check_nixfmt() {
+    local files
+    files=$(git ls-files '*.nix')
+    if [ -z "$files" ]; then
+        return 0
+    fi
+    # shellcheck disable=SC2086
+    nixfmt --check $files
+}
+
+check_statix() {
+    statix check .
+}
+
+check_deadnix() {
+    deadnix --fail .
+}
+
+check_nix_flake() {
+    nix flake check --no-build
+}
+
+# =====================================================================
+# Run all checks
+# =====================================================================
+
+echo "========================================="
+echo "CI Lint Checks"
+echo "========================================="
+echo ""
+
+echo "=== Formatting ==="
+echo ""
+run_check "gofmt" check_gofmt
+run_check "buildifier" check_buildifier_format
+run_check "license-headers" check_license
+run_check "trailing-whitespace" check_trailing_whitespace
+run_check "end-of-file" check_end_of_file
+
+echo "=== Static Analysis ==="
+echo ""
+run_check "go-vet" check_go_vet
+run_check "golangci-lint" check_golangci_lint
+run_check "buildifier-lint" check_buildifier_lint
+run_check "shellcheck" check_shellcheck
+run_check "lychee" check_lychee
+run_check "merge-conflict" check_merge_conflict
+run_check "large-files" check_large_files
+run_check "private-key" check_private_key
+run_check "case-conflict" check_case_conflict
+run_check "bead-references" check_bead_references
+
+echo "=== Nix ==="
+echo ""
+run_check "nixfmt" check_nixfmt
+run_check "statix" check_statix
+run_check "deadnix" check_deadnix
+run_check "nix-flake-check" check_nix_flake
+
+# =====================================================================
+# Summary
+# =====================================================================
+
+echo "========================================="
+if [ ${#failures[@]} -eq 0 ]; then
+    echo "All checks passed."
+    exit 0
+else
+    echo "FAILED (${#failures[@]}):"
+    for name in "${failures[@]}"; do
+        echo "  - $name"
+    done
+    exit 1
+fi

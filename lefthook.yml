@@ -99,6 +99,7 @@ pre-commit:
         - "*.gitkeep"
         - "**/nix-expected-version"
         - "**/nix-installer-version"
+        - "**/ci-lint-coverage"
       priority: 2
 
     lychee:
@@ -144,6 +145,10 @@ pre-commit:
     check-banned-imports:
       run: script/check-banned-imports
       glob: "*.go"
+      priority: 2
+
+    check-ci-coverage:
+      run: script/check-ci-coverage
       priority: 2
 
     # ===================================================================

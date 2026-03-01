@@ -1,0 +1,40 @@
+#!/bin/bash
+# Copyright 2026 The Bureau Authors
+# SPDX-License-Identifier: Apache-2.0
+
+# Regenerate gomod2nix.toml and fail if it differs from the committed version.
+# Any change to go.mod, go.sum, or Go source files can cause the toml to drift.
+# This catches the drift before the Nix build fails with a cryptic hash mismatch.
+#
+# Same pattern as script/check-gazelle: compare checksums before and after
+# regeneration, not git diff (which would false-positive on unstaged changes
+# from earlier hooks).
+
+set -euo pipefail
+
+if ! command -v gomod2nix > /dev/null 2>&1; then
+    echo "ERROR: gomod2nix not found on PATH."
+    echo ""
+    echo "Enter the dev shell with 'nix develop' or 'direnv allow'."
+    exit 1
+fi
+
+if [ ! -f gomod2nix.toml ]; then
+    echo "ERROR: gomod2nix.toml not found. Run 'gomod2nix generate' first."
+    exit 1
+fi
+
+before=$(sha256sum gomod2nix.toml)
+
+gomod2nix generate 2>&1
+
+after=$(sha256sum gomod2nix.toml)
+
+if [ "$before" != "$after" ]; then
+    echo ""
+    echo "ERROR: gomod2nix.toml is stale. Go dependencies changed without"
+    echo "regenerating the Nix module lockfile."
+    echo ""
+    echo "Stage the updated gomod2nix.toml and retry your commit."
+    exit 1
+fi

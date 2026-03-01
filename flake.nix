@@ -14,6 +14,8 @@
   inputs = {
     nixpkgs.url = "github:NixOS/nixpkgs/nixos-unstable";
     flake-utils.url = "github:numtide/flake-utils";
+    gomod2nix.url = "github:nix-community/gomod2nix";
+    gomod2nix.inputs.nixpkgs.follows = "nixpkgs";
   };
 
   outputs =
@@ -21,6 +23,7 @@
       self,
       nixpkgs,
       flake-utils,
+      gomod2nix,
     }:
     # Environment modules and presets. These are functions, not
     # derivations, so they live outside the per-system wrapper.
@@ -199,31 +202,38 @@
 
         # All Bureau binaries share the same Go module. Each gets its own
         # derivation so the daemon can track per-binary store paths, but they
-        # share the same vendor hash (same go.sum).
+        # share the same Go dependency set (gomod2nix.toml).
         #
-        # Uses buildGoModule rather than invoking Bazel: Bazel needs network
-        # access for toolchain downloads which is forbidden in Nix's build
-        # sandbox. The resulting binaries are identical (same Go compiler,
-        # CGO_ENABLED=0, static linking). The daemon compares binary content
-        # hashes to decide what needs restarting, not store paths or build
-        # provenance.
-        vendorHash = "sha256-+TqNFI8OkgXTXCK8Wb0Bfy37YdJzM7fXfJNJGQ1FIp4=";
+        # Uses gomod2nix's buildGoApplication rather than buildGoModule:
+        # gomod2nix tracks per-module hashes in gomod2nix.toml instead of
+        # a single vendorHash for all dependencies. This makes staleness
+        # detectable without building (the lefthook check compares SHA
+        # before/after regeneration) and errors per-module rather than
+        # "all of vendor is wrong."
+        #
+        # Uses buildGoApplication rather than invoking Bazel: Bazel needs
+        # network access for toolchain downloads which is forbidden in
+        # Nix's build sandbox. The resulting binaries are identical (same
+        # Go compiler, CGO_ENABLED=0, static linking). The daemon compares
+        # binary content hashes to decide what needs restarting, not store
+        # paths or build provenance.
 
-        # Override the Go version used by buildGoModule. The `go` parameter
-        # is a callPackage injection — passing it as a build attribute does
-        # nothing. `.override` replaces the callPackage argument so both the
-        # vendor-fetch derivation and the main build use our pinned Go.
-        buildGoModule = pkgs.buildGoModule.override { inherit go; };
+        # gomod2nix exposes buildGoApplication as a plain function (not
+        # a callPackage result), so there is no .override. The Go version
+        # is passed directly as an attribute — buildGoApplication extracts
+        # it from the attrs spread and uses it for both module fetching
+        # and compilation.
+        inherit (gomod2nix.legacyPackages.${system}) buildGoApplication;
 
         mkBureauBinary =
           name:
-          buildGoModule {
+          buildGoApplication {
             pname = name;
-            inherit version;
+            inherit version go;
             src = ./.;
-            inherit vendorHash;
+            modules = ./gomod2nix.toml;
             subPackages = [ "cmd/${name}" ];
-            env.CGO_ENABLED = 0;
+            CGO_ENABLED = 0;
             ldflags = [
               "-s"
               "-w"
@@ -405,6 +415,7 @@
             pkgs.nixfmt
             pkgs.statix
             pkgs.deadnix
+            gomod2nix.legacyPackages.${system}.gomod2nix
 
             # Attic CLI for pushing to the binary cache.
             pkgs.attic-client

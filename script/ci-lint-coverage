@@ -45,6 +45,7 @@ check-ci-coverage   local-only
 
 # Tier 3: Build and test
 gazelle             ci-build
+gomod2nix           ci-build
 bazel-build         ci-build
 bazel-test          ci-build
 binary-sizes        ci-build

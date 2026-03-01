@@ -38,6 +38,7 @@ use_repo(
     "com_github_tidwall_jsonc",
     "com_github_yuin_goldmark",
     "com_github_zeebo_blake3",
+    "com_zombiezen_go_sqlite",
     "in_gopkg_yaml_v3",
     "io_filippo_age",
     "org_golang_x_crypto",

@@ -10,6 +10,7 @@ import (
 	"log/slog"
 	"os"
 	"os/signal"
+	"path/filepath"
 	"sync"
 	"sync/atomic"
 	"syscall"
@@ -40,6 +41,18 @@ func run() error {
 		"buffer size in bytes that triggers an immediate flush to artifact storage")
 	maxBytesPerSession := flag.Int64("max-bytes-per-session", defaultMaxBytesPerSession,
 		"maximum stored output bytes per session before old chunks are evicted")
+
+	// Storage flags.
+	storagePath := flag.String("storage-path", "/var/bureau/telemetry/telemetry.db",
+		"filesystem path for the SQLite telemetry database")
+	storagePoolSize := flag.Int("storage-pool-size", 4,
+		"number of SQLite connections in the pool")
+	retentionSpanDays := flag.Int("retention-span-days", 7,
+		"days to retain span data before partition drop")
+	retentionMetricDays := flag.Int("retention-metric-days", 14,
+		"days to retain metric data before partition drop")
+	retentionLogDays := flag.Int("retention-log-days", 7,
+		"days to retain log data before partition drop")
 
 	flag.Parse()
 
@@ -76,6 +89,33 @@ func run() error {
 	logMgr.chunkSizeThreshold = *chunkSizeThreshold
 	logMgr.maxBytesPerSession = *maxBytesPerSession
 
+	// Ensure the storage directory exists. In production sandboxes,
+	// the template's CreateDirs or a persistent volume mount provides
+	// the parent directory. Auto-creating it here prevents confusing
+	// "no such file or directory" errors if the template omits it.
+	if err := os.MkdirAll(filepath.Dir(*storagePath), 0o755); err != nil {
+		return fmt.Errorf("creating storage directory: %w", err)
+	}
+
+	// Open the SQLite store for span, metric, and log persistence.
+	store, err := OpenStore(StoreConfig{
+		Path:       *storagePath,
+		PoolSize:   *storagePoolSize,
+		ServerName: boot.ServerName,
+		Clock:      boot.Clock,
+		Logger:     boot.Logger,
+	})
+	if err != nil {
+		return fmt.Errorf("opening telemetry store: %w", err)
+	}
+	defer store.Close()
+
+	retention := RetentionConfig{
+		Spans:   time.Duration(*retentionSpanDays) * 24 * time.Hour,
+		Metrics: time.Duration(*retentionMetricDays) * 24 * time.Hour,
+		Logs:    time.Duration(*retentionLogDays) * 24 * time.Hour,
+	}
+
 	telemetryService := &TelemetryService{
 		authConfig:          boot.AuthConfig,
 		clock:               boot.Clock,
@@ -83,6 +123,7 @@ func run() error {
 		startedAt:           boot.Clock.Now(),
 		artifactPersistence: artifactClient != nil,
 		logManager:          logMgr,
+		store:               store,
 	}
 
 	// Start the CBOR socket server with ingestion and query actions.
@@ -97,6 +138,32 @@ func run() error {
 		close(logManagerDone)
 	}()
 
+	// Start the retention ticker. Runs hourly, dropping partition
+	// tables older than the configured retention period.
+	retentionDone := make(chan struct{})
+	go func() {
+		defer close(retentionDone)
+		retentionTicker := boot.Clock.NewTicker(1 * time.Hour)
+		defer retentionTicker.Stop()
+
+		// Run retention once at startup to clean up any partitions
+		// that expired while the service was stopped.
+		if err := store.RunRetention(ctx, retention); err != nil {
+			boot.Logger.Error("initial retention failed", "error", err)
+		}
+
+		for {
+			select {
+			case <-retentionTicker.C:
+				if err := store.RunRetention(ctx, retention); err != nil {
+					boot.Logger.Error("retention failed", "error", err)
+				}
+			case <-ctx.Done():
+				return
+			}
+		}
+	}()
+
 	socketDone := make(chan error, 1)
 	go func() {
 		socketDone <- socketServer.Serve(ctx)
@@ -106,6 +173,10 @@ func run() error {
 		"principal", boot.PrincipalName,
 		"socket", boot.SocketPath,
 		"artifact_persistence", artifactClient != nil,
+		"storage_path", *storagePath,
+		"retention_spans", retention.Spans,
+		"retention_metrics", retention.Metrics,
+		"retention_logs", retention.Logs,
 		"chunk_size_threshold", *chunkSizeThreshold,
 		"max_bytes_per_session", *maxBytesPerSession,
 	)
@@ -120,8 +191,9 @@ func run() error {
 		boot.Logger.Error("socket server error", "error", err)
 	}
 
-	// Wait for the log manager's background goroutines to stop.
+	// Wait for background goroutines to stop.
 	<-logManagerDone
+	<-retentionDone
 
 	// Drain remaining output buffers.
 	logMgr.Close(context.Background())
@@ -183,6 +255,12 @@ type TelemetryService struct {
 	// HandleDeltas returns early without storing anything.
 	logManager *logManager
 
+	// store persists spans, metrics, and logs to SQLite with
+	// time-partitioned tables. Write path: called from handleIngest
+	// after fan-out to tail subscribers. Query path: used by query
+	// actions (traces, metrics, logs, top).
+	store *Store
+
 	// Ingestion counters, updated atomically by ingest stream handlers.
 	batchesReceived      atomic.Uint64
 	spansReceived        atomic.Uint64
@@ -230,10 +308,17 @@ func (s *TelemetryService) registerActions(server *service.SocketServer) {
 // handleStatus returns aggregate ingestion stats. This is the only
 // unauthenticated action — it exposes operational metrics but no
 // telemetry content or topology information.
-func (s *TelemetryService) handleStatus(_ context.Context, _ []byte) (any, error) {
+func (s *TelemetryService) handleStatus(ctx context.Context, _ []byte) (any, error) {
 	s.relayMu.Lock()
 	relays := s.connectedRelays
 	s.relayMu.Unlock()
+
+	storageStats, err := s.store.Stats(ctx)
+	if err != nil {
+		s.logger.Error("status: failed to read storage stats", "error", err)
+		// Return the response with zero-valued storage stats rather
+		// than failing the entire status request.
+	}
 
 	return telemetry.ServiceStatus{
 		BatchesReceived:      s.batchesReceived.Load(),
@@ -245,6 +330,7 @@ func (s *TelemetryService) handleStatus(_ context.Context, _ []byte) (any, error
 		UptimeSeconds:        s.clock.Now().Sub(s.startedAt).Seconds(),
 		ArtifactPersistence:  s.artifactPersistence,
 		LogManager:           s.logManager.Stats(),
+		Storage:              storageStats,
 	}, nil
 }
 

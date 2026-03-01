@@ -10,6 +10,7 @@ go_library(
         "ingest.go",
         "log_manager.go",
         "main.go",
+        "store.go",
         "tail.go",
     ],
     importpath = "github.com/bureau-foundation/bureau/cmd/bureau-telemetry-service",
@@ -26,7 +27,10 @@ go_library(
         "//lib/schema/telemetry",
         "//lib/service",
         "//lib/servicetoken",
+        "//lib/sqlitepool",
         "//lib/version",
+        "@com_zombiezen_go_sqlite//:sqlite",
+        "@com_zombiezen_go_sqlite//sqlitex",
     ],
 )
 
@@ -38,7 +42,10 @@ go_binary(
 
 go_test(
     name = "bureau-telemetry-service_test",
-    srcs = ["log_manager_test.go"],
+    srcs = [
+        "log_manager_test.go",
+        "store_test.go",
+    ],
     embed = [":bureau-telemetry-service_lib"],
     deps = [
         "//lib/artifactstore",

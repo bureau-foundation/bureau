@@ -1,13 +1,13 @@
 {
   "bureau": 15814840,
   "bureau-agent": 10461368,
-  "bureau-agent-claude": 7008440,
+  "bureau-agent-claude": 7016632,
   "bureau-agent-mock": 6918328,
   "bureau-agent-service": 7332024,
   "bureau-artifact-service": 8143032,
   "bureau-bridge": 2916536,
   "bureau-credentials": 6566072,
-  "bureau-daemon": 12796088,
+  "bureau-daemon": 12800184,
   "bureau-fleet-controller": 6848696,
   "bureau-launcher": 7340216,
   "bureau-log-relay": 4092088,
@@ -19,8 +19,8 @@
   "bureau-state-check": 5914808,
   "bureau-telemetry-mock": 6688952,
   "bureau-telemetry-relay": 6697144,
-  "bureau-telemetry-service": 7037112,
+  "bureau-telemetry-service": 10756280,
   "bureau-test-agent": 6025400,
   "bureau-test-service": 6602936,
-  "bureau-ticket-service": 7528632
+  "bureau-ticket-service": 7532728
 }

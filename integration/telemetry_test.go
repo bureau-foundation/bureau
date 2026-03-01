@@ -157,10 +157,12 @@ func TestTelemetryServiceTail(t *testing.T) {
 	})
 
 	// Deploy the real telemetry service.
+	telemetryBinary := resolvedBinary(t, "TELEMETRY_SERVICE_BINARY")
 	telemetrySvc := deployService(t, admin, fleet, machine, serviceDeployOptions{
-		Binary:    resolvedBinary(t, "TELEMETRY_SERVICE_BINARY"),
+		Binary:    telemetryBinary,
 		Name:      "telemetry-tail",
 		Localpart: "service/telemetry/tail",
+		Command:   []string{telemetryBinary, "--storage-path", "/tmp/telemetry.db"},
 	})
 
 	// Build a caller entity for minting service tokens.
@@ -306,6 +308,30 @@ func TestTelemetryServiceTail(t *testing.T) {
 	}
 	if status.OutputDeltasReceived != 1 {
 		t.Fatalf("expected 1 output delta received, got %d", status.OutputDeltasReceived)
+	}
+
+	// Verify storage stats reflect the persisted data. The ingest
+	// handler writes spans and logs to SQLite synchronously before
+	// sending the batch ack, so by the time we reach this point the
+	// data is committed. Output deltas go to the log manager, not
+	// the store, so they don't appear in storage stats.
+	if status.Storage.PartitionCount != 1 {
+		t.Fatalf("expected 1 storage partition, got %d", status.Storage.PartitionCount)
+	}
+	if status.Storage.SpanCount != 1 {
+		t.Fatalf("expected 1 stored span, got %d", status.Storage.SpanCount)
+	}
+	if status.Storage.LogCount != 1 {
+		t.Fatalf("expected 1 stored log, got %d", status.Storage.LogCount)
+	}
+	if status.Storage.MetricCount != 0 {
+		t.Fatalf("expected 0 stored metrics, got %d", status.Storage.MetricCount)
+	}
+	if status.Storage.DatabaseSizeBytes <= 0 {
+		t.Fatalf("expected positive database size, got %d", status.Storage.DatabaseSizeBytes)
+	}
+	if status.Storage.NewestPartition == "" {
+		t.Fatal("expected non-empty newest partition suffix")
 	}
 }
 
@@ -770,10 +796,12 @@ func TestTelemetryOutputDeltaPersistence(t *testing.T) {
 
 	// --- Deploy the telemetry service with artifact dependency ---
 
+	telemetryBinary := resolvedBinary(t, "TELEMETRY_SERVICE_BINARY")
 	telemetrySvc := deployService(t, admin, fleet, machine, serviceDeployOptions{
-		Binary:           resolvedBinary(t, "TELEMETRY_SERVICE_BINARY"),
+		Binary:           telemetryBinary,
 		Name:             "telemetry-logtest",
 		Localpart:        "service/telemetry/logtest",
+		Command:          []string{telemetryBinary, "--storage-path", "/tmp/telemetry.db"},
 		RequiredServices: []string{"artifact"},
 		Authorization: &schema.AuthorizationPolicy{
 			Grants: []schema.Grant{
@@ -1043,6 +1071,7 @@ func TestTelemetryOutputRotation(t *testing.T) {
 		Localpart: "service/telemetry/rotate",
 		Command: []string{
 			telemetryBinary,
+			"--storage-path", "/tmp/telemetry.db",
 			"--chunk-size-threshold", "5000",
 			"--max-bytes-per-session", "12000",
 		},
@@ -1290,10 +1319,12 @@ func deployTelemetryLogInfra(
 
 	// --- Deploy the telemetry service ---
 
+	telemetryBinary := resolvedBinary(t, "TELEMETRY_SERVICE_BINARY")
 	telemetrySvc := deployService(t, admin, fleet, machine, serviceDeployOptions{
-		Binary:           resolvedBinary(t, "TELEMETRY_SERVICE_BINARY"),
+		Binary:           telemetryBinary,
 		Name:             "telemetry-" + suffix,
 		Localpart:        "service/telemetry/" + suffix,
+		Command:          []string{telemetryBinary, "--storage-path", "/tmp/telemetry.db"},
 		RequiredServices: []string{"artifact"},
 		Authorization: &schema.AuthorizationPolicy{
 			Grants: []schema.Grant{

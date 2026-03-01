@@ -1,0 +1,28 @@
+# Copyright 2026 The Bureau Authors
+# SPDX-License-Identifier: Apache-2.0
+
+load("@rules_go//go:def.bzl", "go_library", "go_test")
+
+go_library(
+    name = "sqlitepool",
+    srcs = [
+        "doc.go",
+        "pool.go",
+    ],
+    importpath = "github.com/bureau-foundation/bureau/lib/sqlitepool",
+    visibility = ["//visibility:public"],
+    deps = [
+        "@com_zombiezen_go_sqlite//:sqlite",
+        "@com_zombiezen_go_sqlite//sqlitex",
+    ],
+)
+
+go_test(
+    name = "sqlitepool_test",
+    srcs = ["pool_test.go"],
+    deps = [
+        ":sqlitepool",
+        "@com_zombiezen_go_sqlite//:sqlite",
+        "@com_zombiezen_go_sqlite//sqlitex",
+    ],
+)

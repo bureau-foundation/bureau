@@ -166,5 +166,18 @@ func (s *TelemetryService) handleIngest(ctx context.Context, token *servicetoken
 				rawBatch:         rawBatch,
 			})
 		}
+
+		// Persist spans, metrics, and logs to SQLite. Storage
+		// failures are logged but do not disconnect the relay —
+		// the live tail stream and ingestion counters continue
+		// working even when the database is degraded.
+		if s.store != nil {
+			if err := s.store.WriteBatch(ctx, &batch); err != nil {
+				s.logger.Error("store: write batch failed",
+					"machine", batch.Machine,
+					"error", err,
+				)
+			}
+		}
 	}
 }

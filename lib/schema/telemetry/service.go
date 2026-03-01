@@ -19,6 +19,39 @@ type ServiceStatus struct {
 	UptimeSeconds        float64         `cbor:"uptime_seconds"`
 	ArtifactPersistence  bool            `cbor:"artifact_persistence"`
 	LogManager           LogManagerStats `cbor:"log_manager"`
+	Storage              StorageStats    `cbor:"storage"`
+}
+
+// StorageStats contains SQLite storage health metrics. Exposed via
+// ServiceStatus so operators and agents can monitor database size,
+// partition lifecycle, and record counts without direct database access.
+type StorageStats struct {
+	// PartitionCount is the number of active day partitions.
+	PartitionCount int `cbor:"partition_count"`
+
+	// OldestPartition is the YYYYMMDD suffix of the oldest partition,
+	// or empty if no partitions exist.
+	OldestPartition string `cbor:"oldest_partition,omitempty"`
+
+	// NewestPartition is the YYYYMMDD suffix of the newest partition,
+	// or empty if no partitions exist.
+	NewestPartition string `cbor:"newest_partition,omitempty"`
+
+	// DatabaseSizeBytes is the total size of the database file on
+	// disk (page_count * page_size). Includes free pages.
+	DatabaseSizeBytes int64 `cbor:"database_size_bytes"`
+
+	// SpanCount is the total number of span records across all
+	// active partitions.
+	SpanCount int64 `cbor:"span_count"`
+
+	// MetricCount is the total number of metric point records
+	// across all active partitions.
+	MetricCount int64 `cbor:"metric_count"`
+
+	// LogCount is the total number of log records across all
+	// active partitions.
+	LogCount int64 `cbor:"log_count"`
 }
 
 // LogManagerStats contains operational counters for the log manager's

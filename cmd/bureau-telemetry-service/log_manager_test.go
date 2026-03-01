@@ -1242,6 +1242,166 @@ func TestCompleteLogAfterRotating(t *testing.T) {
 	}
 }
 
+func TestPerSourceLimitOverridesGlobal(t *testing.T) {
+	refs := newTestRefs(t)
+	mgr, _, fakeClock := newTestLogManager(t)
+
+	mgr.chunkSizeThreshold = 200
+	// Global limit: 10000 bytes (generous).
+	mgr.maxBytesPerSession = 10000
+
+	ctx := context.Background()
+
+	// Set a per-source limit of 500 bytes — much smaller than global.
+	mgr.SetSourceLimit(refs.source.UserID(), 500)
+
+	// Flush 4 chunks of 250 bytes (1000 bytes total, exceeds 500 per-source).
+	flushChunks(t, ctx, mgr, refs, "session-1", 4, 250, 1)
+
+	session := getSession(t, mgr, refs, "session-1")
+	session.mu.Lock()
+	preChunkCount := len(session.chunks)
+	preTotalBytes := session.totalBytes
+	session.mu.Unlock()
+
+	if preChunkCount != 4 {
+		t.Fatalf("expected 4 chunks before eviction, got %d", preChunkCount)
+	}
+	if preTotalBytes != 1000 {
+		t.Fatalf("expected 1000 bytes before eviction, got %d", preTotalBytes)
+	}
+
+	// Run the reaper — should evict using the 500-byte per-source limit,
+	// not the 10000-byte global limit.
+	fakeClock.Advance(30 * time.Second)
+	mgr.tickReaper(ctx)
+
+	session.mu.Lock()
+	postChunkCount := len(session.chunks)
+	postTotalBytes := session.totalBytes
+	postStatus := session.status
+	session.mu.Unlock()
+
+	if postChunkCount != 2 {
+		t.Errorf("expected 2 chunks after per-source eviction, got %d", postChunkCount)
+	}
+	if postTotalBytes != 500 {
+		t.Errorf("expected 500 bytes after per-source eviction, got %d", postTotalBytes)
+	}
+	if postStatus != log.LogStatusRotating {
+		t.Errorf("expected rotating status after eviction, got %q", postStatus)
+	}
+}
+
+func TestPerSourceLimitDoesNotAffectOtherSources(t *testing.T) {
+	refs := newTestRefs(t)
+	mgr, _, fakeClock := newTestLogManager(t)
+
+	mgr.chunkSizeThreshold = 200
+	mgr.maxBytesPerSession = 10000
+
+	ctx := context.Background()
+
+	// Set a per-source limit only for refs.source.
+	mgr.SetSourceLimit(refs.source.UserID(), 500)
+
+	// Create a second source with no per-source limit.
+	source2, err := ref.ParseEntityUserID("@test_bureau/fleet/prod/agent/other-agent:bureau.local")
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	// Flush 4 chunks of 250 bytes for source 1 (should evict at 500).
+	flushChunks(t, ctx, mgr, refs, "session-1", 4, 250, 1)
+
+	// Flush 4 chunks of 250 bytes for source 2 (should NOT evict — global is 10000).
+	for i := range 4 {
+		deltas := []telemetry.OutputDelta{{
+			Fleet:     refs.fleet,
+			Machine:   refs.machine,
+			Source:    source2,
+			SessionID: "session-2",
+			Sequence:  uint64(i + 1),
+			Timestamp: time.Date(2026, 1, 1, 0, 0, i, 0, time.UTC).UnixNano(),
+			Data:      make([]byte, 250),
+		}}
+		mgr.HandleDeltas(ctx, deltas)
+	}
+
+	fakeClock.Advance(30 * time.Second)
+	mgr.tickReaper(ctx)
+
+	// Source 1: should be evicted (per-source limit 500).
+	session1 := getSession(t, mgr, refs, "session-1")
+	session1.mu.Lock()
+	s1Chunks := len(session1.chunks)
+	s1Status := session1.status
+	session1.mu.Unlock()
+
+	if s1Chunks != 2 {
+		t.Errorf("source 1: expected 2 chunks after eviction, got %d", s1Chunks)
+	}
+	if s1Status != log.LogStatusRotating {
+		t.Errorf("source 1: expected rotating, got %q", s1Status)
+	}
+
+	// Source 2: should NOT be evicted (global limit 10000).
+	key2 := sessionKey{source: source2.UserID(), sessionID: "session-2"}
+	mgr.sessionsMu.RLock()
+	session2 := mgr.sessions[key2]
+	mgr.sessionsMu.RUnlock()
+	if session2 == nil {
+		t.Fatal("source 2: expected session to exist")
+	}
+
+	session2.mu.Lock()
+	s2Chunks := len(session2.chunks)
+	s2Status := session2.status
+	session2.mu.Unlock()
+
+	if s2Chunks != 4 {
+		t.Errorf("source 2: expected 4 chunks (no eviction), got %d", s2Chunks)
+	}
+	if s2Status != log.LogStatusActive {
+		t.Errorf("source 2: expected active (no eviction), got %q", s2Status)
+	}
+}
+
+func TestSetSourceLimitIdempotent(t *testing.T) {
+	refs := newTestRefs(t)
+	mgr, _, fakeClock := newTestLogManager(t)
+
+	mgr.chunkSizeThreshold = 200
+	mgr.maxBytesPerSession = 10000
+
+	ctx := context.Background()
+
+	// Set per-source limit to 500, then update to 750.
+	mgr.SetSourceLimit(refs.source.UserID(), 500)
+	mgr.SetSourceLimit(refs.source.UserID(), 750)
+
+	// Flush 4 chunks of 250 bytes (1000 bytes total).
+	flushChunks(t, ctx, mgr, refs, "session-1", 4, 250, 1)
+
+	fakeClock.Advance(30 * time.Second)
+	mgr.tickReaper(ctx)
+
+	// With limit 750: 1000 bytes, need to evict 1 chunk (250 bytes)
+	// to get to 750. Should have 3 chunks remaining.
+	session := getSession(t, mgr, refs, "session-1")
+	session.mu.Lock()
+	chunkCount := len(session.chunks)
+	totalBytes := session.totalBytes
+	session.mu.Unlock()
+
+	if chunkCount != 3 {
+		t.Errorf("expected 3 chunks after eviction with 750-byte limit, got %d", chunkCount)
+	}
+	if totalBytes != 750 {
+		t.Errorf("expected 750 total bytes, got %d", totalBytes)
+	}
+}
+
 func TestStaleReaperCompletesRotatingSessions(t *testing.T) {
 	refs := newTestRefs(t)
 	mgr, mockArtifact, fakeClock := newTestLogManager(t)

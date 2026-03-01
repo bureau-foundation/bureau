@@ -95,3 +95,28 @@ type CompleteLogRequest struct {
 type CompleteLogResponse struct {
 	Completed bool `cbor:"completed"`
 }
+
+// ConfigureLogRequest is the CBOR request for the telemetry service's
+// "configure-log" action. Called by the daemon after sandbox creation
+// to set a per-source eviction limit based on the template's
+// OutputCapture.MaxSize. The telemetry service stores this limit and
+// uses it instead of the global default when evicting chunks for
+// sessions from this source.
+//
+// Source is required: the Matrix user ID of the principal. The full
+// user ID (not a bare localpart) is required for federation safety.
+//
+// MaxBytesPerSession is the maximum stored output in bytes before
+// the eviction loop starts removing old chunks from the front.
+// Must be positive.
+type ConfigureLogRequest struct {
+	Source             ref.UserID `cbor:"source"`
+	MaxBytesPerSession int64      `cbor:"max_bytes_per_session"`
+}
+
+// ConfigureLogResponse is the CBOR response for the "configure-log"
+// action. Configured is true if the per-source limit was stored
+// successfully.
+type ConfigureLogResponse struct {
+	Configured bool `cbor:"configured"`
+}

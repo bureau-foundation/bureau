@@ -3,7 +3,11 @@
 
 package schema
 
-import "github.com/bureau-foundation/bureau/lib/ref"
+import (
+	"time"
+
+	"github.com/bureau-foundation/bureau/lib/ref"
+)
 
 // RestartPolicy controls what happens when a sandbox exits.
 type RestartPolicy string
@@ -457,17 +461,17 @@ type OutputCapture struct {
 	// passthrough mode with no PTY interposition.
 	Enabled bool `json:"enabled"`
 
-	// Retention is a hint to the telemetry service's eviction policy
-	// for how long to keep captured output (e.g., "7d", "24h").
-	// The telemetry service may enforce fleet-wide limits that
-	// override this. Empty means use the fleet default.
-	Retention string `json:"retention,omitempty"`
+	// Retention is the minimum duration to keep captured output
+	// before the telemetry service may evict it. The telemetry
+	// service may enforce fleet-wide limits that override this.
+	// Zero means use the fleet default.
+	Retention time.Duration `json:"retention,omitempty"`
 
-	// MaxSize is a hint to the telemetry service for the maximum
-	// stored output size (e.g., "1GB", "500MB"). The telemetry
-	// service may enforce fleet-wide limits. Empty means use the
-	// fleet default.
-	MaxSize string `json:"max_size,omitempty"`
+	// MaxSize is the maximum stored output in bytes per session
+	// before the telemetry service starts evicting old chunks.
+	// The telemetry service may enforce fleet-wide limits. Zero
+	// means use the fleet default.
+	MaxSize int64 `json:"max_size,omitempty"`
 }
 
 // HealthCheckType selects the transport for health check probes.

@@ -106,6 +106,12 @@ type logManager struct {
 	staleTimeout       time.Duration
 	maxBytesPerSession int64
 
+	// sourceLimits holds per-source eviction limits set via the
+	// configure-log action. When present, overrides maxBytesPerSession
+	// for sessions from that source. Protected by sessionsMu because
+	// the read path (tickReaper, evictSession) already holds it.
+	sourceLimits map[ref.UserID]int64
+
 	// Operational counters for the status endpoint.
 	flushCount     atomic.Uint64
 	flushErrors    atomic.Uint64
@@ -136,6 +142,7 @@ func newLogManager(artifact artifactStorer, clk clock.Clock, logger *slog.Logger
 		flushInterval:      defaultFlushInterval,
 		staleTimeout:       defaultStaleTimeout,
 		maxBytesPerSession: defaultMaxBytesPerSession,
+		sourceLimits:       make(map[ref.UserID]int64),
 	}
 }
 
@@ -166,6 +173,32 @@ func (m *logManager) Stats() telemetry.LogManagerStats {
 		ActiveSessions: sessionCount,
 		LastError:      lastErr,
 	}
+}
+
+// SetSourceLimit stores a per-source eviction limit. When set,
+// evictSession uses this limit instead of the global maxBytesPerSession
+// for all sessions from the given source. Idempotent — calling with
+// the same source overwrites the previous value.
+func (m *logManager) SetSourceLimit(source ref.UserID, maxBytes int64) {
+	m.sessionsMu.Lock()
+	m.sourceLimits[source] = maxBytes
+	m.sessionsMu.Unlock()
+
+	m.logger.Info("per-source eviction limit configured",
+		"source", source,
+		"max_bytes", maxBytes,
+	)
+}
+
+// maxBytesForSource returns the eviction limit for a given source.
+// Returns the per-source limit if one has been configured via
+// SetSourceLimit, otherwise returns the global maxBytesPerSession.
+// Caller must hold sessionsMu (at least RLock).
+func (m *logManager) maxBytesForSource(source ref.UserID) int64 {
+	if limit, ok := m.sourceLimits[source]; ok {
+		return limit
+	}
+	return m.maxBytesPerSession
 }
 
 // sessionBuffer holds the in-flight data for one (source, sessionID)
@@ -552,12 +585,14 @@ func (m *logManager) tickReaper(ctx context.Context) {
 	var stale []*sessionBuffer
 	var staleKeys []sessionKey
 	var oversized []*sessionBuffer
+	var oversizedLimits []int64
 	for key, session := range m.sessions {
 		session.mu.Lock()
 		isStale := (session.status == log.LogStatusActive || session.status == log.LogStatusRotating) &&
 			session.lastActivity.Before(staleThreshold)
+		sourceLimit := m.maxBytesForSource(session.source.UserID())
 		needsEviction := (session.status == log.LogStatusActive || session.status == log.LogStatusRotating) &&
-			session.totalBytes > m.maxBytesPerSession
+			session.totalBytes > sourceLimit
 		session.mu.Unlock()
 		if isStale {
 			stale = append(stale, session)
@@ -566,6 +601,7 @@ func (m *logManager) tickReaper(ctx context.Context) {
 			// Only evict non-stale sessions. Stale sessions are
 			// being completed, which removes them entirely.
 			oversized = append(oversized, session)
+			oversizedLimits = append(oversizedLimits, sourceLimit)
 		}
 	}
 	m.sessionsMu.RUnlock()
@@ -578,21 +614,25 @@ func (m *logManager) tickReaper(ctx context.Context) {
 		)
 	}
 
-	for _, session := range oversized {
-		m.evictSession(ctx, session)
+	for i, session := range oversized {
+		m.evictSession(ctx, session, oversizedLimits[i])
 	}
 }
 
 // evictSession removes the oldest chunks from a session until its
-// totalBytes is at or below maxBytesPerSession. The last chunk is
-// never removed (so the session always has some recent output). After
-// trimming the in-memory state, writes the updated m.bureau.log state
-// event.
-func (m *logManager) evictSession(ctx context.Context, session *sessionBuffer) {
+// totalBytes is at or below the given limit. The last chunk is never
+// removed (so the session always has some recent output). After
+// trimming the in-memory state, writes the updated log metadata
+// artifact.
+//
+// The limit parameter is the effective maxBytesPerSession for this
+// session's source, resolved by the caller under sessionsMu. Passing
+// it as a parameter avoids re-reading sourceLimits without the lock.
+func (m *logManager) evictSession(ctx context.Context, session *sessionBuffer, limit int64) {
 	session.mu.Lock()
 
 	// Re-check under lock — a concurrent flush may have changed totalBytes.
-	if session.totalBytes <= m.maxBytesPerSession {
+	if session.totalBytes <= limit {
 		session.mu.Unlock()
 		return
 	}
@@ -601,7 +641,7 @@ func (m *logManager) evictSession(ctx context.Context, session *sessionBuffer) {
 	// limit. Keep at least one chunk (never evict everything).
 	evicted := 0
 	evictedBytes := int64(0)
-	for evicted < len(session.chunks)-1 && session.totalBytes-evictedBytes > m.maxBytesPerSession {
+	for evicted < len(session.chunks)-1 && session.totalBytes-evictedBytes > limit {
 		evictedBytes += session.chunks[evicted].Size
 		evicted++
 	}

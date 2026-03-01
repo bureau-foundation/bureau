@@ -298,6 +298,11 @@ func (s *TelemetryService) registerActions(server *service.SocketServer) {
 	// entity as complete.
 	server.HandleAuth("complete-log", s.handleCompleteLog)
 
+	// Authenticated per-source configuration. Called by the daemon
+	// after sandbox creation to set eviction limits from the
+	// template's OutputCapture.MaxSize.
+	server.HandleAuth("configure-log", s.handleConfigureLog)
+
 	// Authenticated operational actions for deterministic testing.
 	// These trigger the same logic as the background tickers but
 	// on demand, so callers don't need to wait for timer intervals.
@@ -362,6 +367,37 @@ func (s *TelemetryService) handleCompleteLog(ctx context.Context, token *service
 	)
 
 	return telemetry.CompleteLogResponse{Completed: true}, nil
+}
+
+// handleConfigureLog sets a per-source eviction limit on the log
+// manager. Called by the daemon after sandbox creation when the
+// template specifies OutputCapture.MaxSize. Idempotent — calling
+// again for the same source overwrites the previous limit.
+func (s *TelemetryService) handleConfigureLog(_ context.Context, token *servicetoken.Token, raw []byte) (any, error) {
+	if !servicetoken.GrantsAllow(token.Grants, "telemetry/ingest", "") {
+		return nil, fmt.Errorf("access denied: missing grant for telemetry/ingest")
+	}
+
+	var request telemetry.ConfigureLogRequest
+	if err := codec.Unmarshal(raw, &request); err != nil {
+		return nil, fmt.Errorf("decoding configure-log request: %w", err)
+	}
+	if request.Source.IsZero() {
+		return nil, fmt.Errorf("source is required")
+	}
+	if request.MaxBytesPerSession <= 0 {
+		return nil, fmt.Errorf("max_bytes_per_session must be positive, got %d", request.MaxBytesPerSession)
+	}
+
+	s.logManager.SetSourceLimit(request.Source, request.MaxBytesPerSession)
+
+	s.logger.Info("log source limit configured",
+		"source", request.Source,
+		"max_bytes_per_session", request.MaxBytesPerSession,
+		"subject", token.Subject,
+	)
+
+	return telemetry.ConfigureLogResponse{Configured: true}, nil
 }
 
 // handleFlush triggers an immediate flush of all session buffers that

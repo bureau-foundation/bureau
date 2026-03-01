@@ -770,6 +770,16 @@ func (d *Daemon) reconcile(ctx context.Context) error {
 			)
 		}
 
+		// Tell the telemetry service about the per-source eviction
+		// limit if the template specifies one. The telemetry service
+		// stores this and uses it instead of the global default when
+		// evicting chunks for this principal's sessions.
+		if resolvedTemplate != nil &&
+			resolvedTemplate.OutputCapture != nil &&
+			resolvedTemplate.OutputCapture.MaxSize > 0 {
+			d.configureLogForPrincipal(ctx, principal, resolvedTemplate.OutputCapture.MaxSize)
+		}
+
 		// Watch for sandbox process exit and proxy process exit. Each
 		// goroutine blocks on a launcher IPC call (wait-sandbox or
 		// wait-proxy) until the respective process exits, then clears

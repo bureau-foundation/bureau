@@ -227,6 +227,41 @@ universe aligns to show you the problem.
 - **Stress test the fix.** Run `--runs_per_test=50`. If it's not 50/50, the
   fix is incomplete.
 
+**Chasing intermittent failures.** The technique that cracks these bugs is
+refusing to accept any explanation that doesn't name a specific mechanism.
+Every plausible-sounding narrative has a chain of causation — trace the
+whole chain or you don't have an explanation yet.
+
+- **"The event didn't arrive."** Why not? Is there a sync filter excluding
+  it? Did the homeserver drop it? Did the subscriber start watching after
+  the event was published? Did the publishing call succeed? Each answer
+  is testable. Read the logs for the publishing side, not just the
+  receiving side.
+- **"Context canceled."** This is never a root cause. Someone canceled the
+  context. Who created it? Who holds the cancel function? What triggered
+  the cancellation? Was the cancellation before or after the work that
+  needed the context? Chase the cancel chain until you find the goroutine
+  that called cancel and the reason it did so too early.
+- **"Race condition between X and Y."** Not specific enough. Which
+  goroutine acquires what lock? What does it do while holding it? What
+  side effect of that action (a context cancellation, a map deletion, a
+  state transition) is visible to the other goroutine? At what exact
+  point does the other goroutine observe the side effect? That level of
+  specificity is what makes the fix obvious — and usually reveals that
+  the fix is a production improvement, not a test workaround.
+- **"Works in isolation, fails under load."** This means there's a shared
+  resource with inadequate synchronization. List every resource the test
+  touches that is shared with other tests: Matrix rooms, unix sockets,
+  homeserver endpoints, filesystem paths, global variables. One of them
+  is the collision point. Narrow it down by running the failing test
+  paired with one other test at a time.
+
+Stress tests are diagnostic tools. A 10x run that fails 2/10 is not
+"mostly passing" — it is a 20% reproduction rate, which is excellent.
+Run it, read the two failure logs, find the specific bug in each. Then
+run 10x again. Repeat until 10/10. Every flake traced this way has been
+a real production bug with a clean fix.
+
 **When you encounter a flake you can't fix right now:** file a bead with the
 exact failure message, which test, and your best hypothesis about the race.
 A well-described bead is infinitely more useful than `--no-verify`.

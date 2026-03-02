@@ -11,6 +11,7 @@ go_library(
         "query.go",
         "service.go",
         "submit.go",
+        "tail.go",
         "telemetry.go",
     ],
     importpath = "github.com/bureau-foundation/bureau/lib/schema/telemetry",

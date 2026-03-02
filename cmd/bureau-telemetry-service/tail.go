@@ -61,36 +61,6 @@ type tailSubscriber struct {
 	done   chan struct{}
 }
 
-// tailFrame is the CBOR frame sent to a tail client. The Type field
-// distinguishes batch data from heartbeat keepalives.
-//
-// Wire protocol after handshake:
-//
-//	Server → Client: tailFrame{Type: "batch", Batch: <raw CBOR>}
-//	Server → Client: tailFrame{Type: "heartbeat"}              (periodic)
-//	Client → Server: tailControl{Subscribe: [...]}             (dynamic)
-//	Client → Server: tailControl{Unsubscribe: [...]}           (dynamic)
-type tailFrame struct {
-	Type  string           `cbor:"type"`
-	Batch codec.RawMessage `cbor:"batch,omitempty"`
-}
-
-// tailControl is the CBOR message received from a tail client to
-// dynamically adjust the source filter. Subscribe adds glob patterns;
-// Unsubscribe removes them. Patterns use the same syntax as
-// principal.MatchPattern: *, **, and ? on hierarchical localpart paths.
-//
-// Examples of patterns:
-//
-//   - "my_bureau/fleet/prod/**"             — everything in a fleet
-//   - "**/machine/gpu-*"                    — all machines named gpu-*
-//   - "my_bureau/fleet/prod/service/relay"  — exact service match
-//   - "**"                                  — all sources
-type tailControl struct {
-	Subscribe   []string `cbor:"subscribe,omitempty"`
-	Unsubscribe []string `cbor:"unsubscribe,omitempty"`
-}
-
 // tailFilter manages the set of active glob patterns for a single tail
 // subscriber. All access is serialized by the handleTail goroutine's
 // select loop, so no mutex is needed.
@@ -198,12 +168,12 @@ func (s *TelemetryService) hasSubscribers() bool {
 // authentication and grant verification, the client receives a
 // readiness ack and then a bidirectional CBOR stream:
 //
-//   - Server → Client: tailFrame (type "batch" with raw CBOR, or
+//   - Server → Client: TailFrame (type "batch" with raw CBOR, or
 //     type "heartbeat" for keepalive)
-//   - Client → Server: tailControl (subscribe/unsubscribe patterns)
+//   - Client → Server: TailControl (subscribe/unsubscribe patterns)
 //
 // The client starts with an empty filter (no patterns match). It
-// sends tailControl messages to subscribe to sources by glob pattern,
+// sends TailControl messages to subscribe to sources by glob pattern,
 // matching against entity localparts. The filter supports Bureau's
 // standard pathing and globbing via principal.MatchPattern.
 //
@@ -263,9 +233,9 @@ func (s *TelemetryService) handleTail(ctx context.Context, token *servicetoken.T
 		}
 	}()
 
-	// Start the reader goroutine that decodes tailControl messages
+	// Start the reader goroutine that decodes TailControl messages
 	// from the client connection.
-	controlChannel := make(chan tailControl, tailControlBufferSize)
+	controlChannel := make(chan telemetry.TailControl, tailControlBufferSize)
 	readerDone := make(chan error, 1)
 	go func() {
 		readerDone <- readTailControls(conn, controlChannel)
@@ -281,7 +251,7 @@ func (s *TelemetryService) handleTail(ctx context.Context, token *servicetoken.T
 			if !filter.matches(event) {
 				continue
 			}
-			if err := encoder.Encode(tailFrame{Type: "batch", Batch: event.rawBatch}); err != nil {
+			if err := encoder.Encode(telemetry.TailFrame{Type: "batch", Batch: event.rawBatch}); err != nil {
 				s.logger.Debug("tail: failed to write batch",
 					"subject", subject,
 					"error", err,
@@ -298,7 +268,7 @@ func (s *TelemetryService) handleTail(ctx context.Context, token *servicetoken.T
 			)
 
 		case <-heartbeatTicker.C:
-			if err := encoder.Encode(tailFrame{Type: "heartbeat"}); err != nil {
+			if err := encoder.Encode(telemetry.TailFrame{Type: "heartbeat"}); err != nil {
 				s.logger.Debug("tail: failed to write heartbeat",
 					"subject", subject,
 					"error", err,
@@ -321,14 +291,14 @@ func (s *TelemetryService) handleTail(ctx context.Context, token *servicetoken.T
 	}
 }
 
-// readTailControls reads tailControl messages from the client
+// readTailControls reads TailControl messages from the client
 // connection and sends them on the control channel. Returns nil when
 // the connection is closed cleanly (EOF or closed socket); returns the
 // error for any other decode failure.
-func readTailControls(conn net.Conn, controls chan<- tailControl) error {
+func readTailControls(conn net.Conn, controls chan<- telemetry.TailControl) error {
 	decoder := codec.NewDecoder(conn)
 	for {
-		var control tailControl
+		var control telemetry.TailControl
 		if err := decoder.Decode(&control); err != nil {
 			if netutil.IsExpectedCloseError(err) {
 				return nil

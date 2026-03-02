@@ -18,6 +18,7 @@ go_library(
         "//cmd/bureau/doctor",
         "//cmd/bureau/environment",
         "//cmd/bureau/fleet",
+        "//cmd/bureau/log",
         "//cmd/bureau/machine",
         "//cmd/bureau/matrix",
         "//cmd/bureau/mcp",

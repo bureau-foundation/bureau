@@ -5,15 +5,29 @@ load("@rules_go//go:def.bzl", "go_library", "go_test")
 
 go_library(
     name = "modelregistry",
-    srcs = ["registry.go"],
+    srcs = [
+        "account.go",
+        "quota.go",
+        "registry.go",
+    ],
     importpath = "github.com/bureau-foundation/bureau/lib/modelregistry",
     visibility = ["//visibility:public"],
-    deps = ["//lib/schema/model"],
+    deps = [
+        "//lib/clock",
+        "//lib/schema/model",
+    ],
 )
 
 go_test(
     name = "modelregistry_test",
-    srcs = ["registry_test.go"],
+    srcs = [
+        "account_test.go",
+        "quota_test.go",
+        "registry_test.go",
+    ],
     embed = [":modelregistry"],
-    deps = ["//lib/schema/model"],
+    deps = [
+        "//lib/clock",
+        "//lib/schema/model",
+    ],
 )

@@ -40,6 +40,12 @@ var (
 	// ErrNoMatchingModel means auto-selection found no model whose
 	// capabilities are a superset of the requested capabilities.
 	ErrNoMatchingModel = errors.New("modelregistry: no model matches requested capabilities")
+
+	// ErrNoMatchingAccount means no account matches the (project,
+	// provider) pair. Either no account covers the provider, or no
+	// account's project list includes the requesting project (or
+	// the wildcard "*").
+	ErrNoMatchingAccount = errors.New("modelregistry: no account matches (project, provider) pair")
 )
 
 // Resolution is the result of resolving a model alias to a concrete
@@ -71,14 +77,16 @@ type Resolution struct {
 	Capabilities []string
 }
 
-// Registry is a thread-safe in-memory index of model providers and
-// aliases. The sync loop calls SetProvider/SetAlias to populate it
-// from Matrix state events; request handlers call Resolve to route
-// model requests.
+// Registry is a thread-safe in-memory index of model providers,
+// aliases, and accounts. The sync loop calls Set/Remove methods to
+// populate it from Matrix state events (m.bureau.model_provider,
+// m.bureau.model_alias, m.bureau.model_account); request handlers
+// call Resolve and SelectAccount to route model requests.
 type Registry struct {
 	mu        sync.RWMutex
 	providers map[string]model.ModelProviderContent // state key (provider name) → content
 	aliases   map[string]model.ModelAliasContent    // state key (alias name) → content
+	accounts  map[string]model.ModelAccountContent  // state key (account name) → content
 }
 
 // New creates an empty registry.
@@ -86,6 +94,7 @@ func New() *Registry {
 	return &Registry{
 		providers: make(map[string]model.ModelProviderContent),
 		aliases:   make(map[string]model.ModelAliasContent),
+		accounts:  make(map[string]model.ModelAccountContent),
 	}
 }
 

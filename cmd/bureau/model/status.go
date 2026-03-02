@@ -21,21 +21,9 @@ type statusParams struct {
 	cli.JSONOutput
 }
 
-// accountStatusEntry mirrors the server-side accountStatus type.
-type accountStatusEntry struct {
-	Name                     string             `json:"name"                       desc:"account name"`
-	Provider                 string             `json:"provider"                   desc:"provider name"`
-	Projects                 []string           `json:"projects"                   desc:"covered project names"`
-	Priority                 int                `json:"priority"                   desc:"account selection priority"`
-	Quota                    *modelschema.Quota `json:"quota,omitempty"            desc:"spending limits"`
-	DailySpendMicrodollars   int64              `json:"daily_spend_microdollars"   desc:"current daily spend"`
-	MonthlySpendMicrodollars int64              `json:"monthly_spend_microdollars" desc:"current monthly spend"`
-}
-
-// statusResult is the full response from the model/status action.
-type statusResult struct {
-	Accounts []accountStatusEntry `json:"accounts" desc:"account quota status entries"`
-}
+// statusResult is an alias for the shared response type, used as the
+// Output() type for MCP schema generation.
+type statusResult = modelschema.AccountStatusResponse
 
 func statusCommand() *cli.Command {
 	var params statusParams

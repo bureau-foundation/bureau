@@ -8,6 +8,7 @@ go_library(
     srcs = [
         "action.go",
         "model.go",
+        "query.go",
         "wire.go",
     ],
     importpath = "github.com/bureau-foundation/bureau/lib/schema/model",

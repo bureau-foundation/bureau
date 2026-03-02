@@ -20,25 +20,9 @@ type listParams struct {
 	cli.JSONOutput
 }
 
-// listEntry is a single alias in the list output. Mirrors the
-// server-side modelEntry but uses json tags for CBOR decoding
-// (the CBOR codec falls back to json tags).
-type listEntry struct {
-	Alias         string                 `json:"alias"          desc:"model alias name"`
-	Provider      string                 `json:"provider"       desc:"provider name"`
-	ProviderModel string                 `json:"provider_model" desc:"provider-specific model ID"`
-	Capabilities  []string               `json:"capabilities"   desc:"model capabilities"`
-	Pricing       modelschema.Pricing    `json:"pricing"        desc:"cost per million tokens in microdollars"`
-	Endpoint      string                 `json:"endpoint"       desc:"provider endpoint URL"`
-	AuthMethod    modelschema.AuthMethod `json:"auth_method"    desc:"authentication method"`
-}
-
-// listResult is the full response from the model/list action.
-type listResult struct {
-	Aliases   []listEntry `json:"aliases"   desc:"registered model aliases"`
-	Providers int         `json:"providers" desc:"number of registered providers"`
-	Accounts  int         `json:"accounts"  desc:"number of registered accounts"`
-}
+// listResult is an alias for the shared response type, used as the
+// Output() type for MCP schema generation.
+type listResult = modelschema.ModelListResponse
 
 func listCommand() *cli.Command {
 	var params listParams

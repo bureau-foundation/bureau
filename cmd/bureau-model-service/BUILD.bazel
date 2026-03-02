@@ -12,6 +12,7 @@ go_library(
         "doc.go",
         "embed.go",
         "main.go",
+        "query.go",
         "service.go",
         "sync.go",
     ],

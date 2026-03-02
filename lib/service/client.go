@@ -164,6 +164,77 @@ func (c *ServiceClient) buildRequest(action string, fields any) (map[string]any,
 	return request, nil
 }
 
+// OpenStream opens a bidirectional CBOR stream to a service socket.
+//
+// The initial handshake mirrors Call: the client sends a CBOR request
+// (action + token + fields) and reads a Response envelope. If the
+// server accepts (ok=true), OpenStream returns a ServiceStream for
+// unbounded bidirectional messaging. If the server rejects (ok=false),
+// OpenStream returns a *ServiceError.
+//
+// On the server side, the stream handler (registered via
+// HandleAuthStream) wraps the connection with NewServiceStream and
+// calls SendAck() to accept or SendError(message) to reject. After
+// the handshake, both sides communicate via Send/Recv on their
+// respective ServiceStream instances.
+//
+// The caller owns the returned stream and must call Close() when done.
+// Unlike Call, the connection is not closed automatically.
+func (c *ServiceClient) OpenStream(ctx context.Context, action string, fields any) (*ServiceStream, error) {
+	request, err := c.buildRequest(action, fields)
+	if err != nil {
+		return nil, fmt.Errorf("building stream request for %q: %w", action, err)
+	}
+
+	dialer := net.Dialer{Timeout: dialTimeout}
+	conn, err := dialer.DialContext(ctx, "unix", c.socketPath)
+	if err != nil {
+		return nil, fmt.Errorf("opening stream %q on %s: %w", action, c.socketPath, err)
+	}
+
+	// Create the stream before the handshake so that the same CBOR
+	// decoder is used for both the handshake response and all
+	// subsequent messages. The CBOR decoder buffers internally;
+	// creating a temporary decoder for the handshake could consume
+	// bytes belonging to subsequent stream messages.
+	stream := NewServiceStream(conn)
+
+	// Write the handshake request. Unlike Call, we do NOT half-close
+	// the write side — the stream needs bidirectional communication
+	// after the handshake completes.
+	if err := stream.Send(request); err != nil {
+		conn.Close()
+		return nil, fmt.Errorf("opening stream %q on %s: %w", action, c.socketPath, err)
+	}
+
+	// Read the handshake response. Stream handlers send Response{OK:
+	// true} via SendAck() to accept, or Response{OK: false, Error:
+	// "..."} via SendError() to reject. The server's standard auth
+	// failure path also writes a Response, so auth errors appear here
+	// as rejected handshakes.
+	conn.SetReadDeadline(time.Now().Add(responseReadTimeout))
+
+	var response Response
+	if err := stream.Recv(&response); err != nil {
+		conn.Close()
+		return nil, fmt.Errorf("opening stream %q on %s: %w", action, c.socketPath, err)
+	}
+
+	if !response.OK {
+		conn.Close()
+		return nil, &ServiceError{
+			Action:  action,
+			Message: response.Error,
+		}
+	}
+
+	// Clear the read deadline — the stream is now open for unbounded
+	// bidirectional communication.
+	conn.SetReadDeadline(time.Time{})
+
+	return stream, nil
+}
+
 // send connects to the socket, writes the request, and reads the
 // response. Each call creates a new connection.
 func (c *ServiceClient) send(ctx context.Context, request any) (*Response, error) {

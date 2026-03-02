@@ -10,6 +10,7 @@ import (
 	"io"
 	"os"
 	"os/exec"
+	"runtime"
 	"strconv"
 	"strings"
 	"sync"
@@ -77,26 +78,53 @@ func Relay(connection io.ReadWriteCloser, server *tmux.Server, sessionName strin
 	// Close slave in parent — the child has its own copy via fd 0/1/2.
 	slave.Close()
 
+	// done is closed when any goroutine finishes, triggering cleanup.
+	done := make(chan struct{})
+	var doneOnce sync.Once
+	triggerDone := func() { doneOnce.Do(func() { close(done) }) }
+
+	// Wait for tmux process exit in background. Started before the
+	// client readiness check so we can detect if tmux crashes during
+	// startup, and reused as the tmux exit shutdown trigger.
+	var tmuxExitError error
+	tmuxExitDone := make(chan struct{})
+	go func() {
+		tmuxExitError = cmd.Wait()
+		close(tmuxExitDone)
+		triggerDone()
+	}()
+
+	// Wait for the tmux attach client to connect to the session
+	// before sending the handshake or accepting input. Without this,
+	// input sent immediately after the handshake can arrive at the
+	// PTY before tmux has started reading from it.
+	if err := waitForTmuxClient(server, sessionName, tmuxExitDone); err != nil {
+		_ = cmd.Process.Kill()
+		<-tmuxExitDone
+		master.Close()
+		return err
+	}
+
 	ring := NewRingBuffer(DefaultRingBufferSize)
 
 	// Query tmux for session metadata and send it to the observer.
 	metadata, err := queryMetadata(server, sessionName)
 	if err != nil {
 		_ = cmd.Process.Kill()
-		_ = cmd.Wait()
+		<-tmuxExitDone
 		master.Close()
 		return fmt.Errorf("query tmux metadata: %w", err)
 	}
 	metadataJSON, err := json.Marshal(metadata)
 	if err != nil {
 		_ = cmd.Process.Kill()
-		_ = cmd.Wait()
+		<-tmuxExitDone
 		master.Close()
 		return fmt.Errorf("marshal metadata: %w", err)
 	}
 	if err := WriteMessage(connection, NewMetadataMessage(metadataJSON)); err != nil {
 		_ = cmd.Process.Kill()
-		_ = cmd.Wait()
+		<-tmuxExitDone
 		master.Close()
 		return fmt.Errorf("send metadata: %w", err)
 	}
@@ -109,15 +137,10 @@ func Relay(connection io.ReadWriteCloser, server *tmux.Server, sessionName strin
 	}
 	if err := WriteMessage(connection, NewHistoryMessage(historyData)); err != nil {
 		_ = cmd.Process.Kill()
-		_ = cmd.Wait()
+		<-tmuxExitDone
 		master.Close()
 		return fmt.Errorf("send history: %w", err)
 	}
-
-	// done is closed when any activity finishes, triggering cleanup.
-	done := make(chan struct{})
-	var doneOnce sync.Once
-	triggerDone := func() { doneOnce.Do(func() { close(done) }) }
 
 	var goroutineWait sync.WaitGroup
 
@@ -181,13 +204,6 @@ func Relay(connection io.ReadWriteCloser, server *tmux.Server, sessionName strin
 		}
 	}()
 
-	// Goroutine: wait for tmux process to exit.
-	tmuxExited := make(chan error, 1)
-	go func() {
-		tmuxExited <- cmd.Wait()
-		triggerDone()
-	}()
-
 	// Block until something triggers shutdown.
 	<-done
 
@@ -200,7 +216,7 @@ func Relay(connection io.ReadWriteCloser, server *tmux.Server, sessionName strin
 
 	goroutineWait.Wait()
 
-	tmuxErr := <-tmuxExited
+	<-tmuxExitDone
 
 	// After the handshake completes, the relay's job is to forward bytes
 	// until the session ends. Any of tmux exit, connection close, or
@@ -212,11 +228,33 @@ func Relay(connection io.ReadWriteCloser, server *tmux.Server, sessionName strin
 	// triggered shutdown, we treat tmux exit code 0 and SIGTERM-killed
 	// as normal. tmux also exits with code 1 when its controlling PTY
 	// closes (which we do during cleanup), so we accept that too.
-	if tmuxErr != nil && !isNormalTmuxExit(tmuxErr) {
-		return fmt.Errorf("tmux exited: %w", tmuxErr)
+	if tmuxExitError != nil && !isNormalTmuxExit(tmuxExitError) {
+		return fmt.Errorf("tmux exited: %w", tmuxExitError)
 	}
 
 	return nil
+}
+
+// waitForTmuxClient polls the tmux server until a client is connected
+// to the given session. This ensures the tmux attach process has fully
+// started reading from its PTY before the relay proceeds with the
+// handshake.
+//
+// tmuxExited is closed when the tmux process exits, providing a bail-out
+// if the process crashes during startup.
+func waitForTmuxClient(server *tmux.Server, sessionName string, tmuxExited <-chan struct{}) error {
+	for {
+		select {
+		case <-tmuxExited:
+			return fmt.Errorf("tmux attach exited before connecting to session %q", sessionName)
+		default:
+		}
+		output, err := server.Run("list-clients", "-t", sessionName, "-F", "#{client_name}")
+		if err == nil && strings.TrimSpace(output) != "" {
+			return nil
+		}
+		runtime.Gosched()
+	}
 }
 
 // openPTY allocates a PTY master/slave pair using the Linux devpts interface.

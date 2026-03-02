@@ -183,10 +183,17 @@ func (session *Session) Run(input io.Reader, output io.Writer) error {
 	}()
 
 	// Goroutine: input (stdin) → data messages to remote.
-	goroutineWait.Add(1)
+	//
+	// Input EOF does not trigger session shutdown. The session continues
+	// receiving remote output until the remote side disconnects or an
+	// external signal closes the connection. In production, the CLI
+	// handles disconnection via SIGINT/SIGTERM → session.Close().
+	//
+	// Not tracked in goroutineWait because a blocking input reader
+	// (os.Stdin) cannot be interrupted when the connection closes.
+	// The goroutine exits when its next writeMessage call fails
+	// (connection closed) or when the process exits.
 	go func() {
-		defer goroutineWait.Done()
-		defer triggerDone()
 		readBuffer := make([]byte, 4096)
 		for {
 			bytesRead, readErr := input.Read(readBuffer)

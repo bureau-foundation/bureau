@@ -388,15 +388,18 @@ func TestSessionRunWithPipe(t *testing.T) {
 	defer listener.Close()
 
 	// Bridge: accept the Connect call and pipe it to daemonConn.
+	// Each copy direction closes its write-end when the source is
+	// exhausted so that the other side sees EOF and shuts down.
 	go func() {
 		accepted, err := listener.Accept()
 		if err != nil {
 			return
 		}
-		// Copy bidirectionally between accepted and clientConn.
-		go io.Copy(accepted, clientConn)
+		go func() {
+			io.Copy(accepted, clientConn)
+			accepted.Close()
+		}()
 		io.Copy(clientConn, accepted)
-		accepted.Close()
 	}()
 
 	session, err := Connect(socketPath, ObserveRequest{

@@ -277,10 +277,11 @@ func TestIntegrationRoundTrip(t *testing.T) {
 	TmuxSendKeys(t, fixture.server, fixture.sessionName, "Enter")
 	pollForContent(t, fixture.output, "tmux-direct-output")
 
-	// Clean shutdown: close the input pipe so Session.Run's input
-	// goroutine reads EOF, which triggers the shutdown cascade through
-	// the bridge to the relay.
+	// Clean shutdown: close the session to trigger the shutdown
+	// cascade through the bridge to the relay. Input pipe close
+	// prevents a goroutine leak but is not a shutdown trigger.
 	fixture.inputWriter.Close()
+	fixture.session.Close()
 	fixture.awaitShutdown(t)
 }
 
@@ -315,6 +316,7 @@ func TestIntegrationReadOnly(t *testing.T) {
 	pollForContent(t, fixture.output, "readonly-output-test")
 
 	fixture.inputWriter.Close()
+	fixture.session.Close()
 	fixture.awaitShutdown(t)
 }
 
@@ -334,6 +336,7 @@ func TestIntegrationResize(t *testing.T) {
 	pollTmuxClientDimensions(t, fixture.server, fixture.sessionName, "120 40")
 
 	fixture.inputWriter.Close()
+	fixture.session.Close()
 	fixture.awaitShutdown(t)
 }
 
@@ -370,9 +373,10 @@ func TestIntegrationSessionEnd(t *testing.T) {
 		t.Fatalf("kill-session: %v", err)
 	}
 
-	// Close the input pipe to unblock Session.Run's input goroutine.
-	// Without this, the input goroutine blocks on Read indefinitely
-	// even after the connection is closed, preventing Run from returning.
+	// Close the input pipe so the input goroutine exits promptly.
+	// Run no longer waits for the input goroutine (it is not a
+	// shutdown trigger), but closing the pipe prevents a goroutine
+	// leak during test cleanup.
 	fixture.inputWriter.Close()
 
 	fixture.awaitShutdown(t)

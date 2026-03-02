@@ -1,0 +1,25 @@
+# Copyright 2026 The Bureau Authors
+# SPDX-License-Identifier: Apache-2.0
+
+load("@rules_go//go:def.bzl", "go_library", "go_test")
+
+go_library(
+    name = "modelprovider",
+    srcs = [
+        "openai.go",
+        "provider.go",
+    ],
+    importpath = "github.com/bureau-foundation/bureau/lib/modelprovider",
+    visibility = ["//visibility:public"],
+    deps = [
+        "//lib/llm",
+        "//lib/schema/model",
+    ],
+)
+
+go_test(
+    name = "modelprovider_test",
+    srcs = ["openai_test.go"],
+    embed = [":modelprovider"],
+    deps = ["//lib/schema/model"],
+)

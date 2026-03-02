@@ -1,0 +1,33 @@
+# Copyright 2026 The Bureau Authors
+# SPDX-License-Identifier: Apache-2.0
+
+load("@rules_go//go:def.bzl", "go_library", "go_test")
+
+go_library(
+    name = "forgesub",
+    srcs = [
+        "doc.go",
+        "filter.go",
+        "manager.go",
+        "subscriber.go",
+    ],
+    importpath = "github.com/bureau-foundation/bureau/lib/forgesub",
+    visibility = ["//visibility:public"],
+    deps = [
+        "//lib/ref",
+        "//lib/schema/forge",
+    ],
+)
+
+go_test(
+    name = "forgesub_test",
+    srcs = [
+        "filter_test.go",
+        "manager_test.go",
+    ],
+    embed = [":forgesub"],
+    deps = [
+        "//lib/ref",
+        "//lib/schema/forge",
+    ],
+)

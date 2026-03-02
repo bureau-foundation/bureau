@@ -24,6 +24,7 @@ go_test(
         "action_test.go",
         "config_test.go",
         "identity_test.go",
+        "stream_test.go",
     ],
     embed = [":forge"],
 )

@@ -12,6 +12,7 @@ import (
 	"strings"
 	"syscall"
 
+	"github.com/bureau-foundation/bureau/lib/forgesub"
 	"github.com/bureau-foundation/bureau/lib/process"
 	"github.com/bureau-foundation/bureau/lib/service"
 	"github.com/bureau-foundation/bureau/lib/version"
@@ -65,6 +66,7 @@ func run() error {
 		session:       boot.Session,
 		service:       boot.Service,
 		serviceRoomID: boot.ServiceRoomID,
+		manager:       forgesub.NewManager(boot.Logger),
 		logger:        boot.Logger,
 	}
 

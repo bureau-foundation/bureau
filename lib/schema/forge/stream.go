@@ -217,6 +217,145 @@ type EntityRef struct {
 	RunID      string     `cbor:"run_id,omitempty"` // CI run ID (for workflow_run)
 }
 
+// IsZero reports whether the EntityRef is the zero value.
+func (r EntityRef) IsZero() bool {
+	return r == EntityRef{}
+}
+
+// --- Event accessor methods ---
+//
+// These extract common metadata from the discriminated Event union
+// without requiring callers to switch on every event type. Each method
+// returns the zero value if the event is invalid (no variant populated
+// or Type does not match the populated variant).
+
+// Repo returns the "owner/repo" string from the event.
+func (e *Event) Repo() string {
+	_, repo := e.providerAndRepo()
+	return repo
+}
+
+// Provider returns the forge provider string from the event.
+func (e *Event) Provider() string {
+	provider, _ := e.providerAndRepo()
+	return provider
+}
+
+// providerAndRepo extracts the provider and repo from whichever event
+// variant is populated. Returns zero values if the event is invalid.
+func (e *Event) providerAndRepo() (string, string) {
+	switch e.Type {
+	case EventCategoryPush:
+		if e.Push != nil {
+			return e.Push.Provider, e.Push.Repo
+		}
+	case EventCategoryPullRequest:
+		if e.PullRequest != nil {
+			return e.PullRequest.Provider, e.PullRequest.Repo
+		}
+	case EventCategoryIssues:
+		if e.Issue != nil {
+			return e.Issue.Provider, e.Issue.Repo
+		}
+	case EventCategoryReview:
+		if e.Review != nil {
+			return e.Review.Provider, e.Review.Repo
+		}
+	case EventCategoryComment:
+		if e.Comment != nil {
+			return e.Comment.Provider, e.Comment.Repo
+		}
+	case EventCategoryCIStatus:
+		if e.CIStatus != nil {
+			return e.CIStatus.Provider, e.CIStatus.Repo
+		}
+	}
+	return "", ""
+}
+
+// EntityRefFromEvent extracts the entity reference from the event, if
+// one exists. Push events have no entity and return a zero EntityRef
+// with false.
+//
+// Review and Comment events produce entity refs pointing at their
+// parent entity: a review on PR #42 returns an EntityRef with
+// EntityTypePullRequest and Number 42. This means an agent subscribed
+// to PR #42 receives reviews and comments on that PR.
+func (e *Event) EntityRefFromEvent() (EntityRef, bool) {
+	switch e.Type {
+	case EventCategoryPush:
+		return EntityRef{}, false
+	case EventCategoryPullRequest:
+		if e.PullRequest != nil {
+			return EntityRef{
+				Provider:   e.PullRequest.Provider,
+				Repo:       e.PullRequest.Repo,
+				EntityType: EntityTypePullRequest,
+				Number:     e.PullRequest.Number,
+			}, true
+		}
+	case EventCategoryIssues:
+		if e.Issue != nil {
+			return EntityRef{
+				Provider:   e.Issue.Provider,
+				Repo:       e.Issue.Repo,
+				EntityType: EntityTypeIssue,
+				Number:     e.Issue.Number,
+			}, true
+		}
+	case EventCategoryReview:
+		if e.Review != nil {
+			return EntityRef{
+				Provider:   e.Review.Provider,
+				Repo:       e.Review.Repo,
+				EntityType: EntityTypePullRequest,
+				Number:     e.Review.PRNumber,
+			}, true
+		}
+	case EventCategoryComment:
+		if e.Comment != nil {
+			entityType := EntityTypeIssue
+			if e.Comment.EntityType == string(EntityTypePullRequest) {
+				entityType = EntityTypePullRequest
+			}
+			return EntityRef{
+				Provider:   e.Comment.Provider,
+				Repo:       e.Comment.Repo,
+				EntityType: entityType,
+				Number:     e.Comment.EntityNumber,
+			}, true
+		}
+	case EventCategoryCIStatus:
+		if e.CIStatus != nil {
+			return EntityRef{
+				Provider:   e.CIStatus.Provider,
+				Repo:       e.CIStatus.Repo,
+				EntityType: EntityTypeWorkflowRun,
+				RunID:      e.CIStatus.RunID,
+			}, true
+		}
+	}
+	return EntityRef{}, false
+}
+
+// IsEntityClose reports whether this event represents an entity
+// reaching a terminal state: issue closed, PR closed or merged, CI
+// run completed. Used by the subscription manager to send
+// entity_closed frames and clean up ephemeral subscriptions.
+func (e *Event) IsEntityClose() bool {
+	switch e.Type {
+	case EventCategoryIssues:
+		return e.Issue != nil && e.Issue.Action == string(IssueClosed)
+	case EventCategoryPullRequest:
+		return e.PullRequest != nil &&
+			(e.PullRequest.Action == string(PullRequestClosed) ||
+				e.PullRequest.Action == string(PullRequestMerged))
+	case EventCategoryCIStatus:
+		return e.CIStatus != nil && e.CIStatus.Status == string(CIStatusCompleted)
+	}
+	return false
+}
+
 // --- Subscribe stream protocol ---
 
 // SubscribeFrameType enumerates the frame types in the forge subscribe

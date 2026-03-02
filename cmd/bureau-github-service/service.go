@@ -8,6 +8,7 @@ import (
 	"encoding/json"
 	"log/slog"
 
+	"github.com/bureau-foundation/bureau/lib/forgesub"
 	"github.com/bureau-foundation/bureau/lib/ref"
 	"github.com/bureau-foundation/bureau/lib/schema"
 	"github.com/bureau-foundation/bureau/lib/schema/forge"
@@ -75,17 +76,19 @@ type GitHubService struct {
 	session       messaging.Session
 	service       ref.Service
 	serviceRoomID ref.RoomID
+	manager       *forgesub.Manager
 	logger        *slog.Logger
 }
 
 // handleEvent processes a translated forge event from the webhook
-// handler. Routes to the subscription manager and entity mapping
-// handlers.
+// handler. Routes to the subscription manager for delivery to
+// connected agents.
 func (gs *GitHubService) handleEvent(event *forge.Event) {
 	gs.logger.Info("forge event received",
 		"type", event.Type,
 		"summary", eventSummary(event),
 	)
+	gs.manager.Dispatch(event)
 }
 
 // eventSummary extracts a human-readable summary from a forge event.
@@ -135,20 +138,16 @@ func (gs *GitHubService) handleSync(ctx context.Context, response *messaging.Syn
 	}
 }
 
-// processRoomEvents handles state events from a single room.
+// processRoomEvents handles state events from a single room. Parses
+// repository bindings and forge config into the subscription manager,
+// and logs identity and auto-subscribe events for future handling.
 func (gs *GitHubService) processRoomEvents(roomID ref.RoomID, events []messaging.Event) {
 	for _, event := range events {
 		switch event.Type {
 		case forge.EventTypeRepository:
-			gs.logger.Debug("repository binding updated",
-				"room_id", roomID,
-				"state_key", event.StateKey,
-			)
+			gs.processRepositoryBinding(roomID, event)
 		case forge.EventTypeForgeConfig:
-			gs.logger.Debug("forge config updated",
-				"room_id", roomID,
-				"state_key", event.StateKey,
-			)
+			gs.processForgeConfig(roomID, event)
 		case forge.EventTypeForgeIdentity:
 			gs.logger.Debug("forge identity updated",
 				"room_id", roomID,
@@ -168,12 +167,115 @@ func (gs *GitHubService) processRoomEvents(roomID ref.RoomID, events []messaging
 	}
 }
 
-// registerActions registers CBOR socket API actions. The service
-// skeleton starts with a status health check; subscription and
-// entity management actions are added as the implementation
-// progresses.
+// processRepositoryBinding parses an m.bureau.repository state event
+// and updates the subscription manager's binding index.
+func (gs *GitHubService) processRepositoryBinding(roomID ref.RoomID, event messaging.Event) {
+	// Empty content means the binding was redacted/tombstoned.
+	if len(event.Content) == 0 {
+		stateKey := ""
+		if event.StateKey != nil {
+			stateKey = *event.StateKey
+		}
+		// State key format is "provider/owner/repo". Extract
+		// provider and combined "owner/repo" string.
+		provider, repo := parseBindingStateKey(stateKey)
+		if provider != "" && repo != "" {
+			gs.manager.RemoveRoomBinding(roomID, provider, repo)
+		}
+		return
+	}
+
+	contentJSON, err := json.Marshal(event.Content)
+	if err != nil {
+		gs.logger.Warn("failed to marshal repository binding content",
+			"room_id", roomID,
+			"error", err,
+		)
+		return
+	}
+
+	var binding forge.RepositoryBinding
+	if err := json.Unmarshal(contentJSON, &binding); err != nil {
+		gs.logger.Warn("failed to parse repository binding",
+			"room_id", roomID,
+			"error", err,
+		)
+		return
+	}
+
+	if err := binding.Validate(); err != nil {
+		gs.logger.Warn("invalid repository binding",
+			"room_id", roomID,
+			"error", err,
+		)
+		return
+	}
+
+	gs.manager.UpdateRoomBinding(roomID, binding)
+}
+
+// processForgeConfig parses an m.bureau.forge_config state event and
+// updates the subscription manager's filter config.
+func (gs *GitHubService) processForgeConfig(roomID ref.RoomID, event messaging.Event) {
+	if len(event.Content) == 0 {
+		return
+	}
+
+	contentJSON, err := json.Marshal(event.Content)
+	if err != nil {
+		gs.logger.Warn("failed to marshal forge config content",
+			"room_id", roomID,
+			"error", err,
+		)
+		return
+	}
+
+	var config forge.ForgeConfig
+	if err := json.Unmarshal(contentJSON, &config); err != nil {
+		gs.logger.Warn("failed to parse forge config",
+			"room_id", roomID,
+			"error", err,
+		)
+		return
+	}
+
+	if err := config.Validate(); err != nil {
+		gs.logger.Warn("invalid forge config",
+			"room_id", roomID,
+			"error", err,
+		)
+		return
+	}
+
+	gs.manager.UpdateForgeConfig(roomID, config)
+}
+
+// parseBindingStateKey splits a binding state key
+// ("provider/owner/repo") into provider and "owner/repo". Returns
+// empty strings if the key is malformed.
+func parseBindingStateKey(stateKey string) (string, string) {
+	// Format: "provider/owner/repo" — split on first "/" only.
+	slashIndex := 0
+	for i, char := range stateKey {
+		if char == '/' {
+			slashIndex = i
+			break
+		}
+	}
+	if slashIndex == 0 || slashIndex >= len(stateKey)-1 {
+		return "", ""
+	}
+	return stateKey[:slashIndex], stateKey[slashIndex+1:]
+}
+
+// registerActions registers CBOR socket API actions on the service's
+// Unix socket server.
 func (gs *GitHubService) registerActions(server *service.SocketServer) {
 	server.Handle("status", gs.handleStatus)
+	server.HandleAuthStream(
+		forge.ProviderAction(forge.ProviderGitHub, forge.ActionSubscribe),
+		gs.handleSubscribe,
+	)
 }
 
 // handleStatus returns basic service health information.

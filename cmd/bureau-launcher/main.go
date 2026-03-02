@@ -172,6 +172,24 @@ func run() error {
 	}
 	logger.Info("matrix session loaded", "user_id", session.UserID())
 
+	// When starting from an exec() transition, the previous launcher
+	// saved its binary paths to the state file. The daemon may have
+	// updated the proxy/log-relay paths via IPC before triggering the
+	// exec, so these paths supersede sibling-binary discovery (which
+	// would fail when the new launcher is in a per-binary Nix store
+	// path without companion binaries alongside it).
+	if proxyBinaryPath == "" || logRelayBinaryPath == "" {
+		execProxy, execLogRelay := readExecStateBinaryPaths(runDir)
+		if proxyBinaryPath == "" && execProxy != "" {
+			proxyBinaryPath = execProxy
+			logger.Info("proxy binary path restored from exec state", "path", proxyBinaryPath)
+		}
+		if logRelayBinaryPath == "" && execLogRelay != "" {
+			logRelayBinaryPath = execLogRelay
+			logger.Info("log-relay binary path restored from exec state", "path", logRelayBinaryPath)
+		}
+	}
+
 	// Find and validate the proxy binary for sandbox spawning. Every
 	// sandbox needs bureau-proxy, so if it's missing the launcher cannot
 	// do useful work. Fail immediately with a precise error rather than

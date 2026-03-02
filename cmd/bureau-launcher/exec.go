@@ -237,6 +237,27 @@ func (l *Launcher) performExec(newBinaryPath string) {
 	l.failedExecPaths[newBinaryPath] = true
 }
 
+// readExecStateBinaryPaths reads binary paths from the exec state file
+// without removing it. Called early in startup so that binary validation
+// uses the daemon-updated paths from the previous launcher incarnation
+// rather than discovering from scratch (which fails when the new launcher
+// is in a Nix store path without sibling binaries).
+//
+// Returns empty strings when no state file exists (normal startup, not
+// an exec transition).
+func readExecStateBinaryPaths(runDir string) (proxyBinaryPath, logRelayBinaryPath string) {
+	statePath := filepath.Join(runDir, "launcher-state.cbor")
+	data, err := os.ReadFile(statePath)
+	if err != nil {
+		return "", ""
+	}
+	var state launcherState
+	if err := codec.Unmarshal(data, &state); err != nil {
+		return "", ""
+	}
+	return state.ProxyBinaryPath, state.LogRelayBinaryPath
+}
+
 // reconnectSandboxes reads the state file written by a previous launcher
 // process before exec() and reconnects to the surviving proxy processes.
 // For each entry, it verifies the process is alive and the admin socket

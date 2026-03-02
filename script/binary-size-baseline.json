@@ -1,6 +1,6 @@
 {
-  "bureau": 10399928,
-  "bureau-agent": 10645688,
+  "bureau": 10449080,
+  "bureau-agent": 10694840,
   "bureau-agent-claude": 7024824,
   "bureau-agent-mock": 6918328,
   "bureau-agent-service": 7332024,
@@ -12,7 +12,7 @@
   "bureau-github-service": 7180472,
   "bureau-launcher": 7340216,
   "bureau-log-relay": 4096184,
-  "bureau-model-service": 6799544,
+  "bureau-model-service": 6811832,
   "bureau-observe-relay": 2363576,
   "bureau-pipeline-executor": 7286968,
   "bureau-proxy": 7844024,

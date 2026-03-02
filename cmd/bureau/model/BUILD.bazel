@@ -1,0 +1,25 @@
+# Copyright 2026 The Bureau Authors
+# SPDX-License-Identifier: Apache-2.0
+
+load("@rules_go//go:def.bzl", "go_library")
+
+go_library(
+    name = "model",
+    srcs = [
+        "command.go",
+        "complete.go",
+        "connection.go",
+        "doc.go",
+        "embed.go",
+        "list.go",
+        "status.go",
+    ],
+    importpath = "github.com/bureau-foundation/bureau/cmd/bureau/model",
+    visibility = ["//visibility:public"],
+    deps = [
+        "//cmd/bureau/cli",
+        "//lib/schema/model",
+        "//lib/service",
+        "@com_github_spf13_pflag//:pflag",
+    ],
+)

@@ -36,6 +36,7 @@ import (
 	machinecmd "github.com/bureau-foundation/bureau/cmd/bureau/machine"
 	"github.com/bureau-foundation/bureau/cmd/bureau/matrix"
 	mcpcmd "github.com/bureau-foundation/bureau/cmd/bureau/mcp"
+	modelcmd "github.com/bureau-foundation/bureau/cmd/bureau/model"
 	observecmd "github.com/bureau-foundation/bureau/cmd/bureau/observe"
 	pipelinecmd "github.com/bureau-foundation/bureau/cmd/bureau/pipeline"
 	servicecmd "github.com/bureau-foundation/bureau/cmd/bureau/service"
@@ -79,6 +80,7 @@ observation, and structured messaging via Matrix.`,
 			artifactcmd.Command(),
 			fleetcmd.Command(),
 			logcmd.Command(),
+			modelcmd.Command(),
 			telemetrycmd.Command(),
 			cborcmd.Command(),
 			{

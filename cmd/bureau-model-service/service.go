@@ -75,6 +75,8 @@ func newModelService(boot *service.BootstrapResult, credentials *credentialStore
 func (ms *ModelService) registerActions(server *service.SocketServer) {
 	server.HandleAuthStream(model.ActionComplete, ms.handleComplete)
 	server.HandleAuth(model.ActionEmbed, ms.handleEmbed)
+	server.HandleAuth(model.ActionList, ms.handleList)
+	server.HandleAuth(model.ActionStatus, ms.handleStatus)
 }
 
 // getOrCreateProvider returns a provider for the given name and

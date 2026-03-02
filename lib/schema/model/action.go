@@ -12,6 +12,10 @@ const (
 	ActionComplete = "model/complete"
 	ActionEmbed    = "model/embed"
 
+	// Read-only query actions.
+	ActionList   = "model/list"
+	ActionStatus = "model/status"
+
 	// Wildcard — matches all model service actions.
 	ActionAll = "model/**"
 )

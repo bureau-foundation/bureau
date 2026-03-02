@@ -39,6 +39,7 @@ import (
 	pipelinecmd "github.com/bureau-foundation/bureau/cmd/bureau/pipeline"
 	servicecmd "github.com/bureau-foundation/bureau/cmd/bureau/service"
 	suggestcmd "github.com/bureau-foundation/bureau/cmd/bureau/suggest"
+	telemetrycmd "github.com/bureau-foundation/bureau/cmd/bureau/telemetry"
 	templatecmd "github.com/bureau-foundation/bureau/cmd/bureau/template"
 	ticketcmd "github.com/bureau-foundation/bureau/cmd/bureau/ticket"
 	workspacecmd "github.com/bureau-foundation/bureau/cmd/bureau/workspace"
@@ -76,6 +77,7 @@ observation, and structured messaging via Matrix.`,
 			ticketcmd.Command(),
 			artifactcmd.Command(),
 			fleetcmd.Command(),
+			telemetrycmd.Command(),
 			cborcmd.Command(),
 			{
 				Name:    "version",

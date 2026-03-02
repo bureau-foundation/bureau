@@ -614,9 +614,10 @@ telemetry service.
 | `bureau telemetry status` | Telemetry service health: ingestion rate, storage usage, relay count |
 
 All commands route to the telemetry service's CBOR socket via service
-discovery. The `--fleet` flag selects the fleet (defaults to the
-configured fleet). The `--machine` flag restricts output to a single
-machine.
+discovery (`--service` mode mints a token through the daemon; direct
+mode uses `--socket` and `--token-file`). The `--machine` flag
+restricts output to a single machine. Fleet is implicit from which
+telemetry service the operator connects to.
 
 ---
 

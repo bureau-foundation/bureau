@@ -10,7 +10,6 @@ import (
 	"time"
 
 	"github.com/bureau-foundation/bureau/lib/codec"
-	"github.com/bureau-foundation/bureau/lib/modelprovider"
 	"github.com/bureau-foundation/bureau/lib/modelregistry"
 	"github.com/bureau-foundation/bureau/lib/schema/model"
 	"github.com/bureau-foundation/bureau/lib/schema/telemetry"
@@ -65,16 +64,30 @@ func (ms *ModelService) handleEmbed(ctx context.Context, token *servicetoken.Tok
 		return nil, fmt.Errorf("quota check failed: %w", err)
 	}
 
+	// Determine latency policy. Defaults to immediate when unset.
+	policy := request.LatencyPolicy
+	if policy == "" {
+		policy = model.LatencyImmediate
+	}
+	if !policy.IsKnown() {
+		return nil, fmt.Errorf("unknown latency policy: %q", request.LatencyPolicy)
+	}
+
 	// Look up credential and get provider.
 	credential := ms.lookupCredential(resolution, account)
 	provider := ms.getOrCreateProvider(resolution.ProviderName, resolution.Provider)
 
-	// Send the embedding request to the provider.
-	result, err := provider.Embed(ctx, &modelprovider.EmbedRequest{
-		Model:      resolution.ProviderModel,
-		Input:      request.Input,
-		Credential: credential,
-	})
+	// Route through the latency router. For immediate requests, this
+	// calls the provider directly. For batch, it merges with other
+	// requests into a single provider call. For background, it waits
+	// for the provider to become idle first.
+	result, err := ms.latencyRouter.SubmitEmbed(
+		ctx, policy, provider,
+		resolution.ProviderName, resolution.ProviderModel, credential,
+		request.Input,
+		resolution.Provider.MaxBatchSize,
+		resolution.Provider.BatchSupport,
+	)
 	if err != nil {
 		return nil, fmt.Errorf("provider error: %w", err)
 	}
@@ -85,7 +98,7 @@ func (ms *ModelService) handleEmbed(ctx context.Context, token *servicetoken.Tok
 
 	// Emit telemetry.
 	latency := ms.clock.Now().Sub(startTime)
-	ms.emitEmbedTelemetry(token, request.Model, resolution, account, &result.Usage, result.Model, cost, latency)
+	ms.emitEmbedTelemetry(token, request.Model, resolution, account, &result.Usage, result.Model, cost, latency, result.BatchSize)
 
 	// Return the response for the socket server to encode and send.
 	return &model.EmbedResponse{
@@ -107,6 +120,7 @@ func (ms *ModelService) emitEmbedTelemetry(
 	providerModel string,
 	costMicrodollars int64,
 	latency time.Duration,
+	batchSize int,
 ) {
 	if ms.telemetry == nil {
 		return
@@ -133,6 +147,7 @@ func (ms *ModelService) emitEmbedTelemetry(
 			"account":           account.AccountName,
 			"input_tokens":      inputTokens,
 			"cost_microdollars": costMicrodollars,
+			"batch_size":        batchSize,
 		},
 	})
 }

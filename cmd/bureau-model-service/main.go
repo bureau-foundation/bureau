@@ -56,6 +56,10 @@ func run() error {
 	defer cleanup()
 
 	modelService := newModelService(boot, credentials)
+	modelService.latencyRouter = NewLatencyRouter(
+		ctx, boot.Clock, boot.Logger,
+		DefaultLatencyConfig(),
+	)
 
 	// Perform initial /sync to populate the model registry with
 	// provider, alias, and account configuration.
@@ -95,6 +99,12 @@ func run() error {
 	// Wait for shutdown signal.
 	<-ctx.Done()
 	boot.Logger.Info("shutting down")
+
+	// Close the latency router first: flushes pending embed batches
+	// (last-chance service), releases completion gate waiters, and
+	// wakes background waiters. Must happen before closing providers
+	// since pending flushes may make provider API calls.
+	modelService.latencyRouter.Close()
 
 	// Close all provider HTTP clients.
 	modelService.closeProviders()

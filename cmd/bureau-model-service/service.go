@@ -47,6 +47,12 @@ type ModelService struct {
 	// restart.
 	credentials *credentialStore
 
+	// latencyRouter coordinates batching, gating, and background
+	// scheduling for all provider requests. Handlers call SubmitEmbed
+	// or GateComplete instead of calling providers directly. Nil
+	// until initialization in main.go.
+	latencyRouter *LatencyRouter
+
 	// providersMu protects the providers map. Providers are
 	// long-lived HTTP clients keyed by provider name. Created lazily
 	// on first request to that provider.

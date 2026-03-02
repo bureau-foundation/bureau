@@ -6,11 +6,15 @@ load("@rules_go//go:def.bzl", "go_binary", "go_library", "go_test")
 go_library(
     name = "bureau-model-service_lib",
     srcs = [
+        "background.go",
         "complete.go",
+        "completion_gate.go",
         "cost.go",
         "credentials.go",
         "doc.go",
         "embed.go",
+        "embed_batcher.go",
+        "latency.go",
         "main.go",
         "query.go",
         "service.go",
@@ -44,10 +48,18 @@ go_binary(
 go_test(
     name = "bureau-model-service_test",
     srcs = [
+        "background_test.go",
+        "completion_gate_test.go",
         "cost_test.go",
         "credentials_test.go",
+        "embed_batcher_test.go",
+        "latency_test.go",
         "sync_test.go",
     ],
     embed = [":bureau-model-service_lib"],
-    deps = ["//lib/schema/model"],
+    deps = [
+        "//lib/clock",
+        "//lib/modelprovider",
+        "//lib/schema/model",
+    ],
 )

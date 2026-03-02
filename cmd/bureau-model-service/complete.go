@@ -26,13 +26,14 @@ import (
 // Protocol:
 //  1. Decode the Request from the initial handshake raw bytes
 //  2. Resolve the alias, select an account, check quota, get credential
-//  3. Send ack (Response{OK: true}) to complete the OpenStream handshake
-//  4. Call the provider and stream response chunks to the client
-//  5. Record cost and emit telemetry
+//  3. Apply latency policy: gate for batch, wait for idle for background
+//  4. Send ack (Response{OK: true}) to complete the OpenStream handshake
+//  5. Call the provider and stream response chunks to the client
+//  6. Record cost and emit telemetry
 //
-// On pre-ack errors (bad request, unknown alias, quota exceeded), the
-// handler sends a stream rejection via SendError. The client's
-// OpenStream sees a *ServiceError.
+// On pre-ack errors (bad request, unknown alias, quota exceeded,
+// cancelled while gating), the handler sends a stream rejection via
+// SendError. The client's OpenStream sees a *ServiceError.
 //
 // On post-ack errors (provider failure, stream interruption), the
 // handler sends a model.Response{Type: "error"} on the stream. The
@@ -92,11 +93,49 @@ func (ms *ModelService) handleComplete(ctx context.Context, token *servicetoken.
 		return
 	}
 
+	// Determine latency policy. Defaults to immediate when unset.
+	policy := request.LatencyPolicy
+	if policy == "" {
+		policy = model.LatencyImmediate
+	}
+	if !policy.IsKnown() {
+		stream.SendError(fmt.Sprintf("unknown latency policy: %q", request.LatencyPolicy))
+		return
+	}
+
 	// Look up the API credential for this account.
 	credential := ms.lookupCredential(resolution, account)
 
 	// Get or create the provider HTTP client.
 	provider := ms.getOrCreateProvider(resolution.ProviderName, resolution.Provider)
+
+	// Track active requests for background scheduling. Immediate and
+	// batch requests count as "active" so background requests wait
+	// for them to complete. Background requests are NOT tracked — they
+	// should not block other background requests.
+	if policy != model.LatencyBackground {
+		ms.latencyRouter.RecordActiveStart(resolution.ProviderName)
+		defer ms.latencyRouter.RecordActiveEnd(resolution.ProviderName)
+	}
+
+	// Apply latency gating. For batch policy, blocks until enough
+	// concurrent requests accumulate (or a timer fires) so the
+	// inference engine sees concurrent requests it can batch
+	// internally. For background, blocks until the provider is idle.
+	// For immediate, returns nil without blocking.
+	//
+	// Gating BEFORE the ack is correct: the client's OpenStream
+	// blocks until we ack, and batch/background clients expect
+	// latency. Context cancellation (client disconnect) triggers
+	// the pre-ack error path.
+	if err := ms.latencyRouter.GateComplete(
+		ctx, policy,
+		resolution.ProviderName, resolution.ProviderModel,
+		resolution.Provider.MaxBatchSize,
+	); err != nil {
+		stream.SendError(fmt.Sprintf("cancelled while waiting: %v", err))
+		return
+	}
 
 	// Send the stream ack to complete the OpenStream handshake.
 	// After this point, the client's OpenStream returns and the

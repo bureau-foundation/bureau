@@ -415,6 +415,7 @@ func setupTestEnv(t *testing.T, pipelineRef string, variables map[string]string)
 	t.Setenv("BUREAU_TICKET_SOCKET", ticketSocket)
 	t.Setenv("BUREAU_TICKET_TOKEN", ticketToken)
 	t.Setenv("BUREAU_TRIGGER_PATH", triggerPath)
+	t.Setenv("BUREAU_LOG_REF", "log/pip-test/test-session-1")
 
 	os.Args = []string{"bureau-pipeline-executor"}
 
@@ -749,6 +750,7 @@ func TestThreadLoggingFailureIsFatal(t *testing.T) {
 	t.Setenv("BUREAU_TICKET_SOCKET", ticketSocket)
 	t.Setenv("BUREAU_TICKET_TOKEN", ticketToken)
 	t.Setenv("BUREAU_TRIGGER_PATH", triggerPath)
+	t.Setenv("BUREAU_LOG_REF", "log/pip-test/test-session-1")
 
 	os.Args = []string{"bureau-pipeline-executor"}
 	err = run()
@@ -926,6 +928,21 @@ func TestMissingTicketRoomRejectsRun(t *testing.T) {
 	}
 	if !strings.Contains(err.Error(), "BUREAU_TICKET_ROOM") {
 		t.Errorf("expected ticket room error, got: %v", err)
+	}
+}
+
+func TestMissingLogRefRejectsRun(t *testing.T) {
+	t.Setenv("BUREAU_SANDBOX", "1")
+	t.Setenv("BUREAU_TICKET_ID", "pip-test")
+	t.Setenv("BUREAU_TICKET_ROOM", "!room:test")
+	t.Setenv("BUREAU_LOG_REF", "")
+	os.Args = []string{"bureau-pipeline-executor"}
+	err := run()
+	if err == nil {
+		t.Fatal("expected error when BUREAU_LOG_REF is not set")
+	}
+	if !strings.Contains(err.Error(), "BUREAU_LOG_REF") {
+		t.Errorf("expected log ref error, got: %v", err)
 	}
 }
 
@@ -1352,6 +1369,21 @@ func TestTicketProgressAndCloseOnSuccess(t *testing.T) {
 		t.Errorf("close reason should mention success, got: %q", closeReason)
 	}
 
+	// Verify log attachment.
+	if len(ticketMock.attachCalls) != 1 {
+		t.Fatalf("expected 1 attachment (output log), got %d", len(ticketMock.attachCalls))
+	}
+	attachFields := ticketMock.attachCalls[0].Fields
+	if attachFields["ref"] != "log/pip-test/test-session-1" {
+		t.Errorf("attachment ref = %v, want log/pip-test/test-session-1", attachFields["ref"])
+	}
+	if attachFields["label"] != "output log" {
+		t.Errorf("attachment label = %v, want 'output log'", attachFields["label"])
+	}
+	if attachFields["content_type"] != "application/x-bureau-log" {
+		t.Errorf("attachment content_type = %v, want application/x-bureau-log", attachFields["content_type"])
+	}
+
 	// Verify step notes.
 	if len(ticketMock.noteCalls) != 2 {
 		t.Fatalf("expected 2 notes (one per step), got %d", len(ticketMock.noteCalls))
@@ -1470,6 +1502,7 @@ func TestNonPipelineTicketTypeRejected(t *testing.T) {
 	t.Setenv("BUREAU_TICKET_SOCKET", ticketSocket)
 	t.Setenv("BUREAU_TICKET_TOKEN", ticketToken)
 	t.Setenv("BUREAU_TRIGGER_PATH", triggerPath)
+	t.Setenv("BUREAU_LOG_REF", "log/pip-test/test-session-1")
 
 	os.Args = []string{"bureau-pipeline-executor"}
 	err := run()

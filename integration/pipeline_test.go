@@ -475,36 +475,55 @@ func TestPipelineArtifactAttachment(t *testing.T) {
 		t.Errorf("pipeline conclusion = %q, want %s", final.Pipeline.Conclusion, pipeline.ConclusionSuccess)
 	}
 
-	// --- Verify ticket attachment ---
+	// --- Verify ticket attachments ---
 	//
-	// The executor auto-attaches artifact outputs after each step.
-	// Read the ticket state event and verify the attachment fields.
-	// The ticket service wrote the attachment via add-attachment,
-	// which the executor called with:
-	//   ref:    the art-* hash from the artifact service
-	//   label:  "gen-data/report" (step-name/output-name)
-	//   content_type: "text/plain" (from the output declaration)
+	// The executor attaches two things:
+	//   - The output capture log (BUREAU_LOG_REF), attached immediately
+	//     after claiming the ticket
+	//   - Artifact outputs from pipeline steps, attached after each step
+	//     with artifact: true output declarations
 
 	ticketContent := readTicketState(t, admin, projectRoomID, result.TicketID.String())
 
-	if len(ticketContent.Attachments) == 0 {
-		// Read the full ticket content for diagnostics.
+	if len(ticketContent.Attachments) < 2 {
 		raw, _ := admin.GetStateEvent(ctx, projectRoomID, schema.EventTypeTicket, result.TicketID.String())
-		t.Fatalf("ticket has no attachments; full content: %s", string(raw))
+		t.Fatalf("expected at least 2 attachments (log + artifact), got %d; full content: %s",
+			len(ticketContent.Attachments), string(raw))
 	}
 
-	attachment := ticketContent.Attachments[0]
+	// Find each attachment by type. The log attachment has content type
+	// "application/x-bureau-log"; the artifact attachment has "text/plain"
+	// (from the output declaration).
+	var logAttachment, artifactAttachment *ticket.TicketAttachment
+	for i := range ticketContent.Attachments {
+		switch ticketContent.Attachments[i].ContentType {
+		case "application/x-bureau-log":
+			logAttachment = &ticketContent.Attachments[i]
+		case "text/plain":
+			artifactAttachment = &ticketContent.Attachments[i]
+		}
+	}
 
-	if !strings.HasPrefix(attachment.Ref, "art-") {
-		t.Errorf("attachment ref = %q, want art-* prefix", attachment.Ref)
+	if logAttachment == nil {
+		t.Fatal("missing log attachment (application/x-bureau-log)")
 	}
-	if attachment.Label != "gen-data/report" {
-		t.Errorf("attachment label = %q, want %q", attachment.Label, "gen-data/report")
+	if !strings.HasPrefix(logAttachment.Ref, "log/") {
+		t.Errorf("log attachment ref = %q, want log/ prefix", logAttachment.Ref)
 	}
-	if attachment.ContentType != "text/plain" {
-		t.Errorf("attachment content_type = %q, want %q", attachment.ContentType, "text/plain")
+	if logAttachment.Label != "output log" {
+		t.Errorf("log attachment label = %q, want %q", logAttachment.Label, "output log")
 	}
+	t.Logf("log attachment verified: ref=%s label=%s", logAttachment.Ref, logAttachment.Label)
 
+	if artifactAttachment == nil {
+		t.Fatal("missing artifact attachment (text/plain)")
+	}
+	if !strings.HasPrefix(artifactAttachment.Ref, "art-") {
+		t.Errorf("artifact attachment ref = %q, want art-* prefix", artifactAttachment.Ref)
+	}
+	if artifactAttachment.Label != "gen-data/report" {
+		t.Errorf("artifact attachment label = %q, want %q", artifactAttachment.Label, "gen-data/report")
+	}
 	t.Logf("artifact attachment verified: ref=%s label=%s content_type=%s",
-		attachment.Ref, attachment.Label, attachment.ContentType)
+		artifactAttachment.Ref, artifactAttachment.Label, artifactAttachment.ContentType)
 }

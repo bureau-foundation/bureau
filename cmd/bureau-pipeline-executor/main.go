@@ -66,6 +66,10 @@ func run() error {
 	if ticketRoom == "" {
 		return fmt.Errorf("BUREAU_TICKET_ROOM not set: executor requires ticket context")
 	}
+	logRef := os.Getenv("BUREAU_LOG_REF")
+	if logRef == "" {
+		return fmt.Errorf("BUREAU_LOG_REF not set: executor requires log reference for ticket attachment")
+	}
 
 	ctx := context.Background()
 
@@ -157,6 +161,14 @@ func run() error {
 		return fmt.Errorf("claiming ticket %s: %w", ticketID, err)
 	}
 	logger.Info("claimed ticket")
+
+	// Attach the output capture log to the ticket so operators can
+	// resolve ticket -> log -> output. logRef was validated at the top
+	// of run() alongside the other required env vars.
+	if err := addTicketAttachment(ctx, ticketClient, ticketID, ticketRoom,
+		logRef, "output log", "application/x-bureau-log"); err != nil {
+		return fmt.Errorf("attaching output log %s to ticket %s: %w", logRef, ticketID, err)
+	}
 
 	// Resolve pipeline definition from the ticket's pipeline ref.
 	name, content, err := resolvePipelineRef(ctx, pipelineRef, proxy)

@@ -457,7 +457,7 @@ func (d *Daemon) reconcile(ctx context.Context) error {
 					Subject:   principal.UserID(),
 					Machine:   d.machine,
 					Audience:  "ticket",
-					Grants:    []servicetoken.Grant{{Actions: []string{"ticket/update", "ticket/close", "ticket/show"}}},
+					Grants:    []servicetoken.Grant{{Actions: []string{"ticket/update", "ticket/close", "ticket/show", "ticket/attach"}}},
 					IssuedAt:  d.clock.Now().Unix(),
 					ExpiresAt: d.clock.Now().Add(1 * time.Hour).Unix(),
 				}
@@ -709,6 +709,14 @@ func (d *Daemon) reconcile(ctx context.Context) error {
 		// complete-log calls on sandbox exit and pass BUREAU_LOG_REF
 		// to pipeline executors.
 		logSessionID := d.generateLogSessionID(principal.AccountLocalpart())
+
+		// Pipeline executors need BUREAU_LOG_REF so they can attach the
+		// output capture log to the ticket. The tag name format matches
+		// the telemetry service's convention: log/<localpart>/<sessionID>.
+		if d.dynamicPrincipals[principal] && sandboxSpec != nil && sandboxSpec.EnvironmentVariables != nil {
+			logTagName := "log/" + principal.AccountLocalpart() + "/" + logSessionID
+			sandboxSpec.EnvironmentVariables["BUREAU_LOG_REF"] = logTagName
+		}
 
 		// Send create-sandbox to the launcher.
 		response, err := d.launcherRequest(ctx, launcherIPCRequest{

@@ -219,6 +219,15 @@ func (r *Registry) ResolveAuto(capabilities []string) (Resolution, error) {
 	return bestResolution, nil
 }
 
+// GetProvider returns the configuration for a single provider by name.
+// Returns false if the provider is not registered.
+func (r *Registry) GetProvider(name string) (model.ModelProviderContent, bool) {
+	r.mu.RLock()
+	defer r.mu.RUnlock()
+	provider, ok := r.providers[name]
+	return provider, ok
+}
+
 // Aliases returns a snapshot of all registered aliases. The returned
 // map is a copy — callers can read it without holding the lock.
 func (r *Registry) Aliases() map[string]model.ModelAliasContent {

@@ -134,6 +134,18 @@ type ModelProviderContent struct {
 	// accepts in a single batch. Zero means no limit (provider default).
 	// Only meaningful when BatchSupport is true.
 	MaxBatchSize int `json:"max_batch_size,omitempty"`
+
+	// HTTPAuthHeader is the HTTP header name for credential injection
+	// in the HTTP compatibility proxy. When empty, defaults to
+	// "Authorization" with "Bearer " scheme prefix. Set to a custom
+	// header name (e.g., "x-api-key") for providers that use non-
+	// standard auth headers — custom headers receive the raw credential
+	// value without a scheme prefix.
+	//
+	// This field only affects the HTTP compatibility layer. The CBOR
+	// service socket uses Bureau service tokens directly and does not
+	// use HTTP headers.
+	HTTPAuthHeader string `json:"http_auth_header,omitempty"`
 }
 
 // Validate checks that the provider content is well-formed. Returns

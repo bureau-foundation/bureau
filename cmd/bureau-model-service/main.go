@@ -7,6 +7,7 @@ import (
 	"context"
 	"flag"
 	"fmt"
+	"os"
 	"os/signal"
 	"syscall"
 	"time"
@@ -78,6 +79,19 @@ func run() error {
 		socketDone <- socketServer.Serve(ctx)
 	}()
 
+	// Start the HTTP compatibility proxy if configured. The env var
+	// is set by the launcher when the template requests the model
+	// service's HTTP interface (for standard SDK compatibility).
+	httpSocketPath := os.Getenv("BUREAU_MODEL_HTTP_SOCKET")
+	var httpDone chan error
+	if httpSocketPath != "" {
+		proxy := newHTTPProxy(modelService, boot.AuthConfig)
+		httpDone = make(chan error, 1)
+		go func() {
+			httpDone <- serveHTTPSocket(ctx, httpSocketPath, proxy, boot.Logger)
+		}()
+	}
+
 	// Start the incremental sync loop in a goroutine.
 	go service.RunSyncLoop(ctx, boot.Session, service.SyncConfig{
 		Filter: syncFilter,
@@ -91,6 +105,7 @@ func run() error {
 	boot.Logger.Info("model service running",
 		"principal", boot.PrincipalName,
 		"socket", boot.SocketPath,
+		"http_socket", httpSocketPath,
 		"providers", modelService.registry.ProviderCount(),
 		"aliases", modelService.registry.AliasCount(),
 		"accounts", modelService.registry.AccountCount(),
@@ -112,6 +127,13 @@ func run() error {
 	// Wait for the socket server to drain active connections.
 	if err := <-socketDone; err != nil {
 		boot.Logger.Error("socket server error", "error", err)
+	}
+
+	// Wait for the HTTP proxy to drain.
+	if httpDone != nil {
+		if err := <-httpDone; err != nil {
+			boot.Logger.Error("http proxy error", "error", err)
+		}
 	}
 
 	return nil

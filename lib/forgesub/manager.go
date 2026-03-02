@@ -746,6 +746,8 @@ func roleMatchesRules(role InvolvementRole, rules forge.ForgeAutoSubscribeRules)
 		return rules.OnAssign
 	case RoleReviewRequested:
 		return rules.OnReviewRequest
+	case RoleMentioned:
+		return rules.OnMention
 	default:
 		return false
 	}

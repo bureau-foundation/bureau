@@ -10,6 +10,7 @@ go_library(
         "filter.go",
         "involved.go",
         "manager.go",
+        "mention.go",
         "subscriber.go",
     ],
     importpath = "github.com/bureau-foundation/bureau/lib/forgesub",
@@ -25,6 +26,7 @@ go_test(
     srcs = [
         "filter_test.go",
         "manager_test.go",
+        "mention_test.go",
     ],
     embed = [":forgesub"],
     deps = [

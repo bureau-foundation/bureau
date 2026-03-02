@@ -18,6 +18,10 @@ const (
 	// RoleReviewRequested means the user was requested as a reviewer
 	// on a pull request.
 	RoleReviewRequested InvolvementRole = "review_requested"
+
+	// RoleMentioned means the user was @mentioned in the text of an
+	// issue body, PR description, or comment.
+	RoleMentioned InvolvementRole = "mentioned"
 )
 
 // InvolvedUser pairs a forge username with their role in an event.

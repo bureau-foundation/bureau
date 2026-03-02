@@ -7,6 +7,7 @@ import (
 	"context"
 	"encoding/json"
 	"log/slog"
+	"strings"
 
 	"github.com/bureau-foundation/bureau/lib/clock"
 	"github.com/bureau-foundation/bureau/lib/forgesub"
@@ -368,64 +369,91 @@ func (gs *GitHubService) processAutoSubscribeRules(event messaging.Event) {
 
 // extractInvolvedUsers extracts forge usernames and their roles from
 // a translated forge event. Provider-specific: reads fields populated
-// by the GitHub webhook translator.
+// by the GitHub webhook translator. Also scans markdown body fields
+// for @mentions.
 func extractInvolvedUsers(event *forge.Event) []forgesub.InvolvedUser {
 	var users []forgesub.InvolvedUser
+
+	// Track usernames already seen in structured roles so we don't
+	// duplicate them as mentions.
+	seen := make(map[string]struct{})
+	add := func(username string, role forgesub.InvolvementRole) {
+		lower := strings.ToLower(username)
+		seen[lower] = struct{}{}
+		users = append(users, forgesub.InvolvedUser{
+			ForgeUsername: username,
+			Role:          role,
+		})
+	}
+
+	// Collect body text for mention scanning.
+	var bodyTexts []string
 
 	switch event.Type {
 	case forge.EventCategoryPush:
 		if event.Push != nil && event.Push.Sender != "" {
-			users = append(users, forgesub.InvolvedUser{
-				ForgeUsername: event.Push.Sender,
-				Role:          forgesub.RoleAuthor,
-			})
+			add(event.Push.Sender, forgesub.RoleAuthor)
 		}
 
 	case forge.EventCategoryPullRequest:
 		if event.PullRequest != nil {
 			if event.PullRequest.Author != "" {
-				users = append(users, forgesub.InvolvedUser{
-					ForgeUsername: event.PullRequest.Author,
-					Role:          forgesub.RoleAuthor,
-				})
+				add(event.PullRequest.Author, forgesub.RoleAuthor)
 			}
 			if event.PullRequest.RequestedReviewer != "" {
-				users = append(users, forgesub.InvolvedUser{
-					ForgeUsername: event.PullRequest.RequestedReviewer,
-					Role:          forgesub.RoleReviewRequested,
-				})
+				add(event.PullRequest.RequestedReviewer, forgesub.RoleReviewRequested)
+			}
+			if event.PullRequest.Title != "" {
+				bodyTexts = append(bodyTexts, event.PullRequest.Title)
 			}
 		}
 
 	case forge.EventCategoryIssues:
 		if event.Issue != nil {
 			if event.Issue.Author != "" {
-				users = append(users, forgesub.InvolvedUser{
-					ForgeUsername: event.Issue.Author,
-					Role:          forgesub.RoleAuthor,
-				})
+				add(event.Issue.Author, forgesub.RoleAuthor)
 			}
 			if event.Issue.Assignee != "" {
-				users = append(users, forgesub.InvolvedUser{
-					ForgeUsername: event.Issue.Assignee,
-					Role:          forgesub.RoleAssignee,
-				})
+				add(event.Issue.Assignee, forgesub.RoleAssignee)
+			}
+			if event.Issue.Body != "" {
+				bodyTexts = append(bodyTexts, event.Issue.Body)
 			}
 		}
 
 	case forge.EventCategoryReview:
-		if event.Review != nil && event.Review.Reviewer != "" {
-			users = append(users, forgesub.InvolvedUser{
-				ForgeUsername: event.Review.Reviewer,
-				Role:          forgesub.RoleAuthor,
-			})
+		if event.Review != nil {
+			if event.Review.Reviewer != "" {
+				add(event.Review.Reviewer, forgesub.RoleAuthor)
+			}
+			if event.Review.Body != "" {
+				bodyTexts = append(bodyTexts, event.Review.Body)
+			}
 		}
 
 	case forge.EventCategoryComment:
-		if event.Comment != nil && event.Comment.Author != "" {
+		if event.Comment != nil {
+			if event.Comment.Author != "" {
+				add(event.Comment.Author, forgesub.RoleAuthor)
+			}
+			if event.Comment.Body != "" {
+				bodyTexts = append(bodyTexts, event.Comment.Body)
+			}
+		}
+	}
+
+	// Scan body text for @mentions and add any that weren't already
+	// captured in structured roles.
+	for _, body := range bodyTexts {
+		mentioned := forgesub.ExtractMentions(body)
+		for _, username := range mentioned {
+			if _, already := seen[username]; already {
+				continue
+			}
+			seen[username] = struct{}{}
 			users = append(users, forgesub.InvolvedUser{
-				ForgeUsername: event.Comment.Author,
-				Role:          forgesub.RoleAuthor,
+				ForgeUsername: username,
+				Role:          forgesub.RoleMentioned,
 			})
 		}
 	}

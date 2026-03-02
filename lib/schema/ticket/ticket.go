@@ -54,6 +54,12 @@ const (
 	// as ticket dependencies.
 	StatusBlocked TicketStatus = "blocked"
 
+	// StatusDeferred means the ticket is intentionally postponed. It
+	// is not available for work and does not appear in Ready or Blocked
+	// views, but retains all its content, dependencies, and metadata.
+	// Transitioning back to "open" makes it actionable again.
+	StatusDeferred TicketStatus = "deferred"
+
 	// StatusClosed means the ticket is resolved.
 	StatusClosed TicketStatus = "closed"
 )
@@ -64,7 +70,7 @@ const (
 // state machine transitions.
 func (s TicketStatus) IsKnown() bool {
 	switch s {
-	case StatusOpen, StatusInProgress, StatusReview, StatusBlocked, StatusClosed:
+	case StatusOpen, StatusInProgress, StatusReview, StatusBlocked, StatusDeferred, StatusClosed:
 		return true
 	}
 	return false

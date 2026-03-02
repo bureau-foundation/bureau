@@ -32,6 +32,8 @@ const (
 	TabReady Tab = iota
 	// TabBlocked shows tickets with unsatisfied dependencies.
 	TabBlocked
+	// TabDeferred shows tickets that have been intentionally postponed.
+	TabDeferred
 	// TabAll shows every ticket regardless of status.
 	TabAll
 	// TabPipelines shows pipeline tickets grouped by execution state.
@@ -425,6 +427,9 @@ func (model Model) Update(message tea.Msg) (tea.Model, tea.Cmd) {
 
 		case key.Matches(message, model.keys.TabBlocked):
 			model.switchTab(TabBlocked)
+
+		case key.Matches(message, model.keys.TabDeferred):
+			model.switchTab(TabDeferred)
 
 		case key.Matches(message, model.keys.TabAll):
 			model.switchTab(TabAll)
@@ -1175,6 +1180,8 @@ func (model *Model) refreshFromSource() {
 		snapshot = model.source.Ready()
 	case TabBlocked:
 		snapshot = model.source.Blocked()
+	case TabDeferred:
+		snapshot = model.source.Deferred()
 	case TabAll:
 		snapshot = model.source.All()
 	case TabPipelines:
@@ -1225,6 +1232,8 @@ func (model *Model) applyFilter() {
 		snapshot = model.source.Ready()
 	case TabBlocked:
 		snapshot = model.source.Blocked()
+	case TabDeferred:
+		snapshot = model.source.Deferred()
 	case TabAll:
 		snapshot = model.source.All()
 	case TabPipelines:
@@ -2696,11 +2705,12 @@ type tabDef struct {
 var coreTabDefs = []tabDef{
 	{"1:Ready", TabReady},
 	{"2:Blocked", TabBlocked},
-	{"3:All", TabAll},
+	{"3:Deferred", TabDeferred},
+	{"4:All", TabAll},
 }
 
 // pipelinesTabDef is appended when the index contains pipeline tickets.
-var pipelinesTabDef = tabDef{"4:Pipelines", TabPipelines}
+var pipelinesTabDef = tabDef{"5:Pipelines", TabPipelines}
 
 // visibleTabs returns the tab definitions that should be shown. The
 // Pipelines tab is only shown when the index contains at least one
@@ -2900,10 +2910,8 @@ func (model Model) renderHelp() string {
 		focusIndicator = "NOTE"
 	}
 
-	tabHint := "1/2/3 tabs"
-	if model.hasPipelinesTab() {
-		tabHint = "1-4 tabs"
-	}
+	tabCount := len(model.visibleTabs())
+	tabHint := fmt.Sprintf("1-%d tabs", tabCount)
 	help := fmt.Sprintf(" [%s] q quit  ↑↓ navigate  ←→ collapse/expand  BS back  Tab focus  ]/[ resize  %s  / filter",
 		focusIndicator, tabHint)
 

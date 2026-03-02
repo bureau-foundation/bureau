@@ -482,8 +482,8 @@ func TestStatusTransitionsReview(t *testing.T) {
 	t.Parallel()
 
 	options := StatusTransitions(string(ticket.StatusReview))
-	if len(options) != 3 {
-		t.Fatalf("expected 3 transitions from review, got %d", len(options))
+	if len(options) != 4 {
+		t.Fatalf("expected 4 transitions from review, got %d", len(options))
 	}
 
 	values := make(map[string]bool)
@@ -491,7 +491,7 @@ func TestStatusTransitionsReview(t *testing.T) {
 		values[option.Value] = true
 	}
 
-	for _, expected := range []string{string(ticket.StatusOpen), string(ticket.StatusInProgress), string(ticket.StatusClosed)} {
+	for _, expected := range []string{string(ticket.StatusOpen), string(ticket.StatusInProgress), string(ticket.StatusDeferred), string(ticket.StatusClosed)} {
 		if !values[expected] {
 			t.Errorf("missing transition: %s", expected)
 		}

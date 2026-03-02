@@ -28,6 +28,7 @@ type KeyMap struct {
 	// Tab switching.
 	TabReady     key.Binding
 	TabBlocked   key.Binding
+	TabDeferred  key.Binding
 	TabAll       key.Binding
 	TabPipelines key.Binding
 
@@ -104,13 +105,17 @@ var DefaultKeyMap = KeyMap{
 		key.WithKeys("2"),
 		key.WithHelp("2", "blocked"),
 	),
-	TabAll: key.NewBinding(
+	TabDeferred: key.NewBinding(
 		key.WithKeys("3"),
-		key.WithHelp("3", "all"),
+		key.WithHelp("3", "deferred"),
+	),
+	TabAll: key.NewBinding(
+		key.WithKeys("4"),
+		key.WithHelp("4", "all"),
 	),
 	TabPipelines: key.NewBinding(
-		key.WithKeys("4"),
-		key.WithHelp("4", "pipelines"),
+		key.WithKeys("5"),
+		key.WithHelp("5", "pipelines"),
 	),
 	NavigateBack: key.NewBinding(
 		key.WithKeys("backspace"),

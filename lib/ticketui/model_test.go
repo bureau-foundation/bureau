@@ -352,11 +352,11 @@ func TestModelTabSwitching(t *testing.T) {
 		t.Errorf("expected TabReady, got %d", model.activeTab)
 	}
 
-	// Switch to All tab (key "3").
-	updated, _ = model.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{'3'}})
+	// Switch to All tab (key "4").
+	updated, _ = model.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{'4'}})
 	model = updated.(Model)
 	if model.activeTab != TabAll {
-		t.Errorf("expected TabAll after pressing 3, got %d", model.activeTab)
+		t.Errorf("expected TabAll after pressing 4, got %d", model.activeTab)
 	}
 	// All tab should show all 4 tickets (flat, no grouping).
 	ticketCount := 0
@@ -458,7 +458,7 @@ func TestModelFilter(t *testing.T) {
 	model = updated.(Model)
 
 	// Switch to All tab first so we have all 4 tickets visible.
-	updated, _ = model.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{'3'}})
+	updated, _ = model.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{'4'}})
 	model = updated.(Model)
 
 	// Activate filter (/).
@@ -508,7 +508,7 @@ func TestModelFilterByLabel(t *testing.T) {
 	model = updated.(Model)
 
 	// Switch to All tab.
-	updated, _ = model.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{'3'}})
+	updated, _ = model.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{'4'}})
 	model = updated.(Model)
 
 	// Activate filter and type "transport".

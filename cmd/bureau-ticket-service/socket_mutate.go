@@ -169,20 +169,26 @@ func (ts *TicketService) synthesizeDeferGate(until, forDuration string) (ticket.
 //   - open -> in_progress (caller must also provide assignee)
 //   - open -> review (direct review request, e.g. PM use case)
 //   - open -> closed (wontfix, duplicate)
+//   - open -> deferred (postpone)
 //   - in_progress -> open (unclaim)
 //   - in_progress -> review (author requests review)
 //   - in_progress -> closed (done)
 //   - in_progress -> blocked (agent hit blocker)
+//   - in_progress -> deferred (postpone active work)
 //   - in_progress -> in_progress: REJECTED (contention)
 //   - review -> in_progress (author iterates after feedback)
 //   - review -> open (drop review, release to pool)
 //   - review -> closed (approved and done)
 //   - review -> blocked (external blocker during review)
+//   - review -> deferred (postpone during review)
 //   - review -> review: REJECTED (contention)
 //   - blocked -> open (release back)
 //   - blocked -> in_progress (resume, caller must provide assignee)
 //   - blocked -> review (resume directly into review)
 //   - blocked -> closed (cancelled while blocked)
+//   - blocked -> deferred (postpone blocked work)
+//   - deferred -> open (resume deferred work)
+//   - deferred -> closed (cancel deferred work)
 //   - closed -> open (reopen)
 func validateStatusTransition(currentStatus, proposedStatus ticket.TicketStatus, currentAssignee ref.UserID) error {
 	if currentStatus == proposedStatus {
@@ -198,28 +204,35 @@ func validateStatusTransition(currentStatus, proposedStatus ticket.TicketStatus,
 	switch currentStatus {
 	case ticket.StatusOpen:
 		switch proposedStatus {
-		case ticket.StatusInProgress, ticket.StatusReview, ticket.StatusClosed:
+		case ticket.StatusInProgress, ticket.StatusReview, ticket.StatusClosed, ticket.StatusDeferred:
 			return nil
 		default:
 			return fmt.Errorf("invalid status transition: %s → %s", currentStatus, proposedStatus)
 		}
 	case ticket.StatusInProgress:
 		switch proposedStatus {
-		case ticket.StatusOpen, ticket.StatusReview, ticket.StatusClosed, ticket.StatusBlocked:
+		case ticket.StatusOpen, ticket.StatusReview, ticket.StatusClosed, ticket.StatusBlocked, ticket.StatusDeferred:
 			return nil
 		default:
 			return fmt.Errorf("invalid status transition: %s → %s", currentStatus, proposedStatus)
 		}
 	case ticket.StatusReview:
 		switch proposedStatus {
-		case ticket.StatusInProgress, ticket.StatusOpen, ticket.StatusClosed, ticket.StatusBlocked:
+		case ticket.StatusInProgress, ticket.StatusOpen, ticket.StatusClosed, ticket.StatusBlocked, ticket.StatusDeferred:
 			return nil
 		default:
 			return fmt.Errorf("invalid status transition: %s → %s", currentStatus, proposedStatus)
 		}
 	case ticket.StatusBlocked:
 		switch proposedStatus {
-		case ticket.StatusOpen, ticket.StatusInProgress, ticket.StatusReview, ticket.StatusClosed:
+		case ticket.StatusOpen, ticket.StatusInProgress, ticket.StatusReview, ticket.StatusClosed, ticket.StatusDeferred:
+			return nil
+		default:
+			return fmt.Errorf("invalid status transition: %s → %s", currentStatus, proposedStatus)
+		}
+	case ticket.StatusDeferred:
+		switch proposedStatus {
+		case ticket.StatusOpen, ticket.StatusClosed:
 			return nil
 		default:
 			return fmt.Errorf("invalid status transition: %s → %s", currentStatus, proposedStatus)

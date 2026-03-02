@@ -175,7 +175,7 @@ type updateParams struct {
 	Ticket    string   `json:"ticket"   desc:"ticket ID" required:"true"`
 	Title     string   `json:"title"    flag:"title"      desc:"new title"`
 	Body      string   `json:"body"     flag:"body"       desc:"new body"`
-	Status    string   `json:"status"   flag:"status,s"   desc:"new status (open, in_progress, review, blocked, closed)"`
+	Status    string   `json:"status"   flag:"status,s"   desc:"new status (open, in_progress, review, blocked, deferred, closed)"`
 	Priority  int      `json:"priority" flag:"priority,p"  desc:"new priority (0-4, -1 to skip)" default:"-1"`
 	Type      string   `json:"type"     flag:"type,t"     desc:"new type"`
 	Labels    []string `json:"labels"   flag:"label,l"    desc:"replace labels (repeatable)"`

@@ -33,24 +33,33 @@ func StatusTransitions(currentStatus string) []DropdownOption {
 	case string(ticket.StatusOpen):
 		return []DropdownOption{
 			{Label: "IN_PROGRESS", Value: string(ticket.StatusInProgress)},
+			{Label: "DEFERRED", Value: string(ticket.StatusDeferred)},
 			{Label: "CLOSED", Value: string(ticket.StatusClosed)},
 		}
 	case string(ticket.StatusInProgress):
 		return []DropdownOption{
 			{Label: "OPEN", Value: string(ticket.StatusOpen)},
 			{Label: "BLOCKED", Value: string(ticket.StatusBlocked)},
+			{Label: "DEFERRED", Value: string(ticket.StatusDeferred)},
 			{Label: "CLOSED", Value: string(ticket.StatusClosed)},
 		}
 	case string(ticket.StatusBlocked):
 		return []DropdownOption{
 			{Label: "OPEN", Value: string(ticket.StatusOpen)},
 			{Label: "IN_PROGRESS", Value: string(ticket.StatusInProgress)},
+			{Label: "DEFERRED", Value: string(ticket.StatusDeferred)},
 			{Label: "CLOSED", Value: string(ticket.StatusClosed)},
 		}
 	case string(ticket.StatusReview):
 		return []DropdownOption{
 			{Label: "OPEN", Value: string(ticket.StatusOpen)},
 			{Label: "IN_PROGRESS", Value: string(ticket.StatusInProgress)},
+			{Label: "DEFERRED", Value: string(ticket.StatusDeferred)},
+			{Label: "CLOSED", Value: string(ticket.StatusClosed)},
+		}
+	case string(ticket.StatusDeferred):
+		return []DropdownOption{
+			{Label: "OPEN", Value: string(ticket.StatusOpen)},
 			{Label: "CLOSED", Value: string(ticket.StatusClosed)},
 		}
 	case string(ticket.StatusClosed):

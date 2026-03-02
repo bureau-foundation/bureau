@@ -22,7 +22,7 @@ type listParams struct {
 	TicketConnection
 	cli.JSONOutput
 	Room     string `json:"room"     flag:"room,r"    desc:"room ID (e.g. !abc123:bureau.local)" required:"true"`
-	Status   string `json:"status"   flag:"status,s"   desc:"filter by status (open, in_progress, blocked, closed)"`
+	Status   string `json:"status"   flag:"status,s"   desc:"filter by status (open, in_progress, blocked, deferred, closed)"`
 	Priority int    `json:"priority" flag:"priority,p"  desc:"filter by priority (0-4, -1 for all)" default:"-1"`
 	Label    string `json:"label"    flag:"label,l"    desc:"filter by label"`
 	Assignee string `json:"assignee" flag:"assignee"   desc:"filter by assignee (Matrix user ID)"`
@@ -326,7 +326,7 @@ type grepParams struct {
 	cli.JSONOutput
 	Pattern  string `json:"pattern"  desc:"regex search pattern" required:"true"`
 	Room     string `json:"room"     flag:"room,r"     desc:"room ID (optional, searches all rooms if omitted)"`
-	Status   string `json:"status"   flag:"status,s"    desc:"filter by status (open, in_progress, closed, active, ready)"`
+	Status   string `json:"status"   flag:"status,s"    desc:"filter by status (open, in_progress, deferred, closed, active, ready)"`
 	Priority int    `json:"priority" flag:"priority,p"   desc:"filter by priority (0-4, -1 for all)" default:"-1"`
 	Label    string `json:"label"    flag:"label,l"     desc:"filter by label"`
 	Assignee string `json:"assignee" flag:"assignee"    desc:"filter by assignee (Matrix user ID)"`
@@ -344,9 +344,9 @@ If --room is specified, searches only that room. Otherwise searches
 all rooms and includes the room ID in results.
 
 Results can be narrowed with filter flags (--status, --priority, etc.).
-The --status flag accepts concrete values (open, in_progress, closed) and
-two synthetic values: "active" (open or in_progress) and "ready" (open
-with all blockers closed and all gates satisfied).`,
+The --status flag accepts concrete values (open, in_progress, deferred,
+closed) and two synthetic values: "active" (open or in_progress) and
+"ready" (open with all blockers closed and all gates satisfied).`,
 		Usage: "bureau ticket grep <pattern> [flags]",
 		Examples: []cli.Example{
 			{
@@ -434,7 +434,7 @@ type searchParams struct {
 	cli.JSONOutput
 	Query    string `json:"query"    desc:"search query (natural language, ticket IDs, or both)" required:"true"`
 	Room     string `json:"room"     flag:"room,r"     desc:"room ID (optional, searches all rooms if omitted)"`
-	Status   string `json:"status"   flag:"status,s"    desc:"filter by status (open, in_progress, closed, active, ready)"`
+	Status   string `json:"status"   flag:"status,s"    desc:"filter by status (open, in_progress, deferred, closed, active, ready)"`
 	Priority int    `json:"priority" flag:"priority,p"   desc:"filter by priority (0-4, -1 for all)" default:"-1"`
 	Label    string `json:"label"    flag:"label,l"     desc:"filter by label"`
 	Assignee string `json:"assignee" flag:"assignee"    desc:"filter by assignee (Matrix user ID)"`

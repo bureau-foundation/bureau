@@ -34,6 +34,7 @@ type Theme struct {
 	StatusInProgress lipgloss.Color
 	StatusReview     lipgloss.Color
 	StatusBlocked    lipgloss.Color
+	StatusDeferred   lipgloss.Color
 	StatusClosed     lipgloss.Color
 
 	// UI chrome.
@@ -69,8 +70,8 @@ func (theme Theme) PriorityColor(priority int) lipgloss.Color {
 }
 
 // StatusColor returns the color for a status string. Recognizes the
-// five standard statuses (open, in_progress, review, blocked, closed)
-// and returns FaintText for unknown values.
+// six standard statuses (open, in_progress, review, blocked, deferred,
+// closed) and returns FaintText for unknown values.
 func (theme Theme) StatusColor(status string) lipgloss.Color {
 	switch status {
 	case string(ticket.StatusOpen):
@@ -81,6 +82,8 @@ func (theme Theme) StatusColor(status string) lipgloss.Color {
 		return theme.StatusReview
 	case string(ticket.StatusBlocked):
 		return theme.StatusBlocked
+	case string(ticket.StatusDeferred):
+		return theme.StatusDeferred
 	case string(ticket.StatusClosed):
 		return theme.StatusClosed
 	default:
@@ -110,6 +113,7 @@ var DefaultTheme = Theme{
 	StatusInProgress: lipgloss.Color("220"), // yellow/amber
 	StatusReview:     lipgloss.Color("141"), // light purple
 	StatusBlocked:    lipgloss.Color("196"), // red
+	StatusDeferred:   lipgloss.Color("67"),  // muted blue
 	StatusClosed:     lipgloss.Color("245"), // gray
 
 	HeaderForeground: lipgloss.Color("255"),

@@ -39,6 +39,9 @@ type Source interface {
 	// blockers or gates.
 	Blocked() Snapshot
 
+	// Deferred returns tickets with status "deferred".
+	Deferred() Snapshot
+
 	// All returns every ticket regardless of status.
 	All() Snapshot
 
@@ -224,6 +227,16 @@ func (source *IndexSource) Blocked() Snapshot {
 	defer source.mutex.RUnlock()
 	return Snapshot{
 		Entries: source.index.Blocked(),
+		Stats:   source.index.Stats(),
+	}
+}
+
+// Deferred returns tickets with status "deferred".
+func (source *IndexSource) Deferred() Snapshot {
+	source.mutex.RLock()
+	defer source.mutex.RUnlock()
+	return Snapshot{
+		Entries: source.index.Deferred(),
 		Stats:   source.index.Stats(),
 	}
 }

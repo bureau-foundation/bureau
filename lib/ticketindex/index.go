@@ -403,6 +403,20 @@ func (idx *Index) Blocked() []Entry {
 	return result
 }
 
+// Deferred returns all tickets with status "deferred". Results are
+// sorted by priority (ascending, 0=critical first) then by creation
+// time (oldest first).
+func (idx *Index) Deferred() []Entry {
+	var result []Entry
+	for id, content := range idx.tickets {
+		if content.Status == ticket.StatusDeferred {
+			result = append(result, Entry{ID: id, Content: content})
+		}
+	}
+	sortEntries(result)
+	return result
+}
+
 // List returns tickets matching the given filter. All non-zero filter
 // fields must match (AND semantics). An empty filter returns all
 // tickets. Results are sorted by priority then creation time.

@@ -21,7 +21,7 @@ type exportParams struct {
 	TicketConnection
 	Room   string `json:"room"   flag:"room,r" desc:"room ID to export" required:"true"`
 	File   string `json:"-"      flag:"file,f" desc:"output file (default: stdout)"`
-	Status string `json:"status" flag:"status,s" desc:"filter by status (open, in_progress, blocked, closed)"`
+	Status string `json:"status" flag:"status,s" desc:"filter by status (open, in_progress, blocked, deferred, closed)"`
 }
 
 func exportCommand() *cli.Command {

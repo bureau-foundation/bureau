@@ -16,6 +16,7 @@ import (
 	"sync"
 	"testing"
 
+	"github.com/bureau-foundation/bureau/lib/clock"
 	"github.com/bureau-foundation/bureau/lib/schema/forge"
 )
 
@@ -41,6 +42,7 @@ func newTestHandler() *testHandler {
 	handler := &testHandler{}
 	handler.handler = NewWebhookHandler(
 		[]byte(testWebhookSecret),
+		clock.Real(),
 		logger,
 		func(event *forge.Event) {
 			handler.mu.Lock()
@@ -289,8 +291,8 @@ func TestWebhookTranslateIssues(t *testing.T) {
 	if event.Issue.Number != 42 {
 		t.Errorf("number = %d, want 42", event.Issue.Number)
 	}
-	if event.Issue.Action != "opened" {
-		t.Errorf("action = %q, want %q", event.Issue.Action, "opened")
+	if event.Issue.Action != forge.IssueOpened {
+		t.Errorf("action = %q, want %q", event.Issue.Action, forge.IssueOpened)
 	}
 	if event.Issue.Author != "octocat" {
 		t.Errorf("author = %q, want %q", event.Issue.Author, "octocat")
@@ -352,8 +354,8 @@ func TestWebhookTranslatePullRequest(t *testing.T) {
 	if event.PullRequest.Number != 99 {
 		t.Errorf("number = %d, want 99", event.PullRequest.Number)
 	}
-	if event.PullRequest.Action != "opened" {
-		t.Errorf("action = %q, want %q", event.PullRequest.Action, "opened")
+	if event.PullRequest.Action != forge.PullRequestOpened {
+		t.Errorf("action = %q, want %q", event.PullRequest.Action, forge.PullRequestOpened)
 	}
 	if event.PullRequest.HeadRef != "feature-x" {
 		t.Errorf("head ref = %q, want %q", event.PullRequest.HeadRef, "feature-x")
@@ -406,7 +408,7 @@ func TestWebhookTranslatePullRequestMerge(t *testing.T) {
 	}
 	// GitHub sends action "closed" for merges. The translator should
 	// detect the merged flag and use the forge schema's "merged" action.
-	if event.PullRequest.Action != string(forge.PullRequestMerged) {
+	if event.PullRequest.Action != forge.PullRequestMerged {
 		t.Errorf("action = %q, want %q", event.PullRequest.Action, forge.PullRequestMerged)
 	}
 }
@@ -458,8 +460,8 @@ func TestWebhookTranslateReview(t *testing.T) {
 	if event.Review.Reviewer != "reviewer" {
 		t.Errorf("reviewer = %q, want %q", event.Review.Reviewer, "reviewer")
 	}
-	if event.Review.State != "approved" {
-		t.Errorf("state = %q, want %q", event.Review.State, "approved")
+	if event.Review.State != forge.ReviewApproved {
+		t.Errorf("state = %q, want %q", event.Review.State, forge.ReviewApproved)
 	}
 	if event.Review.PRNumber != 99 {
 		t.Errorf("PR number = %d, want 99", event.Review.PRNumber)
@@ -547,8 +549,8 @@ func TestWebhookTranslateIssueComment(t *testing.T) {
 	if event.Comment.Author != "helper" {
 		t.Errorf("author = %q, want %q", event.Comment.Author, "helper")
 	}
-	if event.Comment.EntityType != "issue" {
-		t.Errorf("entity type = %q, want %q", event.Comment.EntityType, "issue")
+	if event.Comment.EntityType != forge.EntityTypeIssue {
+		t.Errorf("entity type = %q, want %q", event.Comment.EntityType, forge.EntityTypeIssue)
 	}
 	if event.Comment.EntityNumber != 42 {
 		t.Errorf("entity number = %d, want 42", event.Comment.EntityNumber)
@@ -598,8 +600,8 @@ func TestWebhookTranslatePRComment(t *testing.T) {
 	if event.Comment == nil {
 		t.Fatal("event.Comment is nil")
 	}
-	if event.Comment.EntityType != "pull_request" {
-		t.Errorf("entity type = %q, want %q", event.Comment.EntityType, "pull_request")
+	if event.Comment.EntityType != forge.EntityTypePullRequest {
+		t.Errorf("entity type = %q, want %q", event.Comment.EntityType, forge.EntityTypePullRequest)
 	}
 }
 
@@ -689,8 +691,8 @@ func TestWebhookTranslateWorkflowRun(t *testing.T) {
 	if event.CIStatus.Workflow != "CI" {
 		t.Errorf("workflow = %q, want %q", event.CIStatus.Workflow, "CI")
 	}
-	if event.CIStatus.Conclusion != "success" {
-		t.Errorf("conclusion = %q, want %q", event.CIStatus.Conclusion, "success")
+	if event.CIStatus.Conclusion != forge.CIConclusionSuccess {
+		t.Errorf("conclusion = %q, want %q", event.CIStatus.Conclusion, forge.CIConclusionSuccess)
 	}
 	if event.CIStatus.PRNumber != 99 {
 		t.Errorf("PR number = %d, want 99", event.CIStatus.PRNumber)
@@ -786,35 +788,48 @@ func TestFormatPushSummary(t *testing.T) {
 
 func TestNewWebhookHandlerPanics(t *testing.T) {
 	logger := slog.New(slog.NewTextHandler(io.Discard, nil))
+	clk := clock.Real()
 	callback := func(*forge.Event) {}
 
 	tests := []struct {
 		name    string
 		secret  []byte
+		clock   clock.Clock
 		logger  *slog.Logger
 		onEvent func(*forge.Event)
 	}{
 		{
 			name:    "nil_secret",
 			secret:  nil,
+			clock:   clk,
 			logger:  logger,
 			onEvent: callback,
 		},
 		{
 			name:    "empty_secret",
 			secret:  []byte{},
+			clock:   clk,
+			logger:  logger,
+			onEvent: callback,
+		},
+		{
+			name:    "nil_clock",
+			secret:  []byte("secret"),
+			clock:   nil,
 			logger:  logger,
 			onEvent: callback,
 		},
 		{
 			name:    "nil_logger",
 			secret:  []byte("secret"),
+			clock:   clk,
 			logger:  nil,
 			onEvent: callback,
 		},
 		{
 			name:    "nil_callback",
 			secret:  []byte("secret"),
+			clock:   clk,
 			logger:  logger,
 			onEvent: nil,
 		},
@@ -827,7 +842,7 @@ func TestNewWebhookHandlerPanics(t *testing.T) {
 					t.Error("NewWebhookHandler did not panic")
 				}
 			}()
-			NewWebhookHandler(tt.secret, tt.logger, tt.onEvent)
+			NewWebhookHandler(tt.secret, tt.clock, tt.logger, tt.onEvent)
 		})
 	}
 }

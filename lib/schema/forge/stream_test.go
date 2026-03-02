@@ -70,7 +70,7 @@ func TestEvent_Repo(t *testing.T) {
 		},
 		{
 			name:  "unknown type",
-			event: Event{Type: "unknown"},
+			event: Event{Type: EventCategory("unknown")},
 			want:  "",
 		},
 	}
@@ -192,7 +192,7 @@ func TestEvent_EntityRefFromEvent(t *testing.T) {
 				Type: EventCategoryComment,
 				Comment: &CommentEvent{
 					Provider: "github", Repo: "o/r",
-					EntityType: "issue", EntityNumber: 3,
+					EntityType: EntityTypeIssue, EntityNumber: 3,
 				},
 			},
 			wantRef: EntityRef{
@@ -207,7 +207,7 @@ func TestEvent_EntityRefFromEvent(t *testing.T) {
 				Type: EventCategoryComment,
 				Comment: &CommentEvent{
 					Provider: "github", Repo: "o/r",
-					EntityType: "pull_request", EntityNumber: 9,
+					EntityType: EntityTypePullRequest, EntityNumber: 9,
 				},
 			},
 			wantRef: EntityRef{
@@ -263,7 +263,7 @@ func TestEvent_IsEntityClose(t *testing.T) {
 			name: "issue closed",
 			event: Event{
 				Type:  EventCategoryIssues,
-				Issue: &IssueEvent{Action: string(IssueClosed)},
+				Issue: &IssueEvent{Action: IssueClosed},
 			},
 			want: true,
 		},
@@ -271,7 +271,7 @@ func TestEvent_IsEntityClose(t *testing.T) {
 			name: "issue opened is not close",
 			event: Event{
 				Type:  EventCategoryIssues,
-				Issue: &IssueEvent{Action: string(IssueOpened)},
+				Issue: &IssueEvent{Action: IssueOpened},
 			},
 			want: false,
 		},
@@ -279,7 +279,7 @@ func TestEvent_IsEntityClose(t *testing.T) {
 			name: "issue reopened is not close",
 			event: Event{
 				Type:  EventCategoryIssues,
-				Issue: &IssueEvent{Action: string(IssueReopened)},
+				Issue: &IssueEvent{Action: IssueReopened},
 			},
 			want: false,
 		},
@@ -287,7 +287,7 @@ func TestEvent_IsEntityClose(t *testing.T) {
 			name: "PR closed",
 			event: Event{
 				Type:        EventCategoryPullRequest,
-				PullRequest: &PullRequestEvent{Action: string(PullRequestClosed)},
+				PullRequest: &PullRequestEvent{Action: PullRequestClosed},
 			},
 			want: true,
 		},
@@ -295,7 +295,7 @@ func TestEvent_IsEntityClose(t *testing.T) {
 			name: "PR merged",
 			event: Event{
 				Type:        EventCategoryPullRequest,
-				PullRequest: &PullRequestEvent{Action: string(PullRequestMerged)},
+				PullRequest: &PullRequestEvent{Action: PullRequestMerged},
 			},
 			want: true,
 		},
@@ -303,7 +303,7 @@ func TestEvent_IsEntityClose(t *testing.T) {
 			name: "PR opened is not close",
 			event: Event{
 				Type:        EventCategoryPullRequest,
-				PullRequest: &PullRequestEvent{Action: string(PullRequestOpened)},
+				PullRequest: &PullRequestEvent{Action: PullRequestOpened},
 			},
 			want: false,
 		},
@@ -311,7 +311,7 @@ func TestEvent_IsEntityClose(t *testing.T) {
 			name: "CI completed",
 			event: Event{
 				Type:     EventCategoryCIStatus,
-				CIStatus: &CIStatusEvent{Status: string(CIStatusCompleted)},
+				CIStatus: &CIStatusEvent{Status: CIStatusCompleted},
 			},
 			want: true,
 		},
@@ -319,7 +319,7 @@ func TestEvent_IsEntityClose(t *testing.T) {
 			name: "CI in_progress is not close",
 			event: Event{
 				Type:     EventCategoryCIStatus,
-				CIStatus: &CIStatusEvent{Status: string(CIStatusInProgress)},
+				CIStatus: &CIStatusEvent{Status: CIStatusInProgress},
 			},
 			want: false,
 		},
@@ -335,7 +335,7 @@ func TestEvent_IsEntityClose(t *testing.T) {
 			name: "review is never close",
 			event: Event{
 				Type:   EventCategoryReview,
-				Review: &ReviewEvent{State: string(ReviewApproved)},
+				Review: &ReviewEvent{State: ReviewApproved},
 			},
 			want: false,
 		},
@@ -379,5 +379,198 @@ func TestEntityRef_IsZero(t *testing.T) {
 	partial := EntityRef{Provider: "github"}
 	if partial.IsZero() {
 		t.Error("partially-populated EntityRef should not be zero")
+	}
+}
+
+// --- EntityRef.Validate() ---
+
+func TestEntityRef_Validate(t *testing.T) {
+	tests := []struct {
+		name    string
+		ref     EntityRef
+		wantErr bool
+	}{
+		{
+			name: "valid issue ref",
+			ref: EntityRef{
+				Provider: "github", Repo: "o/r",
+				EntityType: EntityTypeIssue, Number: 42,
+			},
+		},
+		{
+			name: "valid PR ref",
+			ref: EntityRef{
+				Provider: "github", Repo: "o/r",
+				EntityType: EntityTypePullRequest, Number: 7,
+			},
+		},
+		{
+			name: "valid workflow run ref",
+			ref: EntityRef{
+				Provider: "github", Repo: "o/r",
+				EntityType: EntityTypeWorkflowRun, RunID: "12345",
+			},
+		},
+		{
+			name: "empty provider",
+			ref: EntityRef{
+				Repo: "o/r", EntityType: EntityTypeIssue, Number: 1,
+			},
+			wantErr: true,
+		},
+		{
+			name: "empty repo",
+			ref: EntityRef{
+				Provider: "github", EntityType: EntityTypeIssue, Number: 1,
+			},
+			wantErr: true,
+		},
+		{
+			name: "issue with zero number",
+			ref: EntityRef{
+				Provider: "github", Repo: "o/r",
+				EntityType: EntityTypeIssue,
+			},
+			wantErr: true,
+		},
+		{
+			name: "PR with zero number",
+			ref: EntityRef{
+				Provider: "github", Repo: "o/r",
+				EntityType: EntityTypePullRequest,
+			},
+			wantErr: true,
+		},
+		{
+			name: "workflow run with empty run_id",
+			ref: EntityRef{
+				Provider: "github", Repo: "o/r",
+				EntityType: EntityTypeWorkflowRun,
+			},
+			wantErr: true,
+		},
+		{
+			name: "unknown entity type",
+			ref: EntityRef{
+				Provider: "github", Repo: "o/r",
+				EntityType: EntityType("bogus"), Number: 1,
+			},
+			wantErr: true,
+		},
+	}
+
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			err := test.ref.Validate()
+			if test.wantErr && err == nil {
+				t.Error("Validate() returned nil, want error")
+			}
+			if !test.wantErr && err != nil {
+				t.Errorf("Validate() returned error: %v", err)
+			}
+		})
+	}
+}
+
+// --- Event.Validate() ---
+
+func TestEvent_Validate(t *testing.T) {
+	tests := []struct {
+		name    string
+		event   Event
+		wantErr bool
+	}{
+		{
+			name: "valid push event",
+			event: Event{
+				Type: EventCategoryPush,
+				Push: &PushEvent{Provider: "github", Repo: "o/r"},
+			},
+		},
+		{
+			name: "valid issue event",
+			event: Event{
+				Type:  EventCategoryIssues,
+				Issue: &IssueEvent{Provider: "github", Repo: "o/r"},
+			},
+		},
+		{
+			name: "valid PR event",
+			event: Event{
+				Type:        EventCategoryPullRequest,
+				PullRequest: &PullRequestEvent{Provider: "github", Repo: "o/r"},
+			},
+		},
+		{
+			name: "valid review event",
+			event: Event{
+				Type:   EventCategoryReview,
+				Review: &ReviewEvent{Provider: "github", Repo: "o/r"},
+			},
+		},
+		{
+			name: "valid comment event",
+			event: Event{
+				Type:    EventCategoryComment,
+				Comment: &CommentEvent{Provider: "github", Repo: "o/r"},
+			},
+		},
+		{
+			name: "valid CI status event",
+			event: Event{
+				Type:     EventCategoryCIStatus,
+				CIStatus: &CIStatusEvent{Provider: "github", Repo: "o/r"},
+			},
+		},
+		{
+			name:    "no variant populated",
+			event:   Event{Type: EventCategoryPush},
+			wantErr: true,
+		},
+		{
+			name: "type mismatch",
+			event: Event{
+				Type:  EventCategoryPush,
+				Issue: &IssueEvent{Provider: "github", Repo: "o/r"},
+			},
+			wantErr: true,
+		},
+		{
+			name: "multiple variants populated",
+			event: Event{
+				Type:  EventCategoryIssues,
+				Issue: &IssueEvent{Provider: "github", Repo: "o/r"},
+				Push:  &PushEvent{Provider: "github", Repo: "o/r"},
+			},
+			wantErr: true,
+		},
+		{
+			name: "empty provider",
+			event: Event{
+				Type: EventCategoryPush,
+				Push: &PushEvent{Repo: "o/r"},
+			},
+			wantErr: true,
+		},
+		{
+			name: "empty repo",
+			event: Event{
+				Type: EventCategoryPush,
+				Push: &PushEvent{Provider: "github"},
+			},
+			wantErr: true,
+		},
+	}
+
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			err := test.event.Validate()
+			if test.wantErr && err == nil {
+				t.Error("Validate() returned nil, want error")
+			}
+			if !test.wantErr && err != nil {
+				t.Errorf("Validate() returned error: %v", err)
+			}
+		})
 	}
 }

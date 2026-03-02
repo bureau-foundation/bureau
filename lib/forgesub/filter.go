@@ -86,21 +86,21 @@ func eventTypeString(event *forge.Event) string {
 		return "push"
 	case forge.EventCategoryIssues:
 		if event.Issue != nil {
-			return "issue_" + event.Issue.Action
+			return "issue_" + string(event.Issue.Action)
 		}
 	case forge.EventCategoryPullRequest:
 		if event.PullRequest != nil {
-			return "pr_" + event.PullRequest.Action
+			return "pr_" + string(event.PullRequest.Action)
 		}
 	case forge.EventCategoryReview:
 		if event.Review != nil {
-			return "review_" + event.Review.State
+			return "review_" + string(event.Review.State)
 		}
 	case forge.EventCategoryComment:
 		return "comment_created"
 	case forge.EventCategoryCIStatus:
 		if event.CIStatus != nil {
-			return "ci_" + event.CIStatus.Status
+			return "ci_" + string(event.CIStatus.Status)
 		}
 	}
 	return ""

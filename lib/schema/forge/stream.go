@@ -3,17 +3,21 @@
 
 package forge
 
-// Event category names used in ForgeConfig.Events and stream
-// filtering. These are the common category names shared across all
-// forge providers. Provider-specific webhook event names are
-// translated to these categories at ingestion time.
+import "fmt"
+
+// EventCategory identifies the kind of forge event in the
+// discriminated Event union and in ForgeConfig.Events filtering.
+// Provider-specific webhook event names are translated to these
+// categories at ingestion time.
+type EventCategory string
+
 const (
-	EventCategoryPush        = "push"
-	EventCategoryPullRequest = "pull_request"
-	EventCategoryIssues      = "issues"
-	EventCategoryReview      = "review"
-	EventCategoryComment     = "comment"
-	EventCategoryCIStatus    = "ci_status"
+	EventCategoryPush        EventCategory = "push"
+	EventCategoryPullRequest EventCategory = "pull_request"
+	EventCategoryIssues      EventCategory = "issues"
+	EventCategoryReview      EventCategory = "review"
+	EventCategoryComment     EventCategory = "comment"
+	EventCategoryCIStatus    EventCategory = "ci_status"
 )
 
 // --- Provider-agnostic event types ---
@@ -71,19 +75,19 @@ const (
 // PullRequestEvent represents a change to a pull request (or merge
 // request on GitLab).
 type PullRequestEvent struct {
-	Provider     string `cbor:"provider"`
-	Repo         string `cbor:"repo"`
-	Number       int    `cbor:"number"`
-	Action       string `cbor:"action"` // see PullRequestAction constants
-	Title        string `cbor:"title"`
-	Author       string `cbor:"author"` // forge username
-	BureauEntity string `cbor:"bureau_entity,omitempty"`
-	HeadRef      string `cbor:"head_ref"`
-	BaseRef      string `cbor:"base_ref"`
-	HeadSHA      string `cbor:"head_sha"`
-	Draft        bool   `cbor:"draft"`
-	Summary      string `cbor:"summary"`
-	URL          string `cbor:"url"`
+	Provider     string            `cbor:"provider"`
+	Repo         string            `cbor:"repo"`
+	Number       int               `cbor:"number"`
+	Action       PullRequestAction `cbor:"action"`
+	Title        string            `cbor:"title"`
+	Author       string            `cbor:"author"` // forge username
+	BureauEntity string            `cbor:"bureau_entity,omitempty"`
+	HeadRef      string            `cbor:"head_ref"`
+	BaseRef      string            `cbor:"base_ref"`
+	HeadSHA      string            `cbor:"head_sha"`
+	Draft        bool              `cbor:"draft"`
+	Summary      string            `cbor:"summary"`
+	URL          string            `cbor:"url"`
 }
 
 // IssueAction enumerates the common actions on an issue.
@@ -100,17 +104,17 @@ const (
 
 // IssueEvent represents a change to an issue.
 type IssueEvent struct {
-	Provider     string   `cbor:"provider"`
-	Repo         string   `cbor:"repo"`
-	Number       int      `cbor:"number"`
-	Action       string   `cbor:"action"` // see IssueAction constants
-	Title        string   `cbor:"title"`
-	Body         string   `cbor:"body,omitempty"` // issue description (markdown)
-	Author       string   `cbor:"author"`
-	BureauEntity string   `cbor:"bureau_entity,omitempty"`
-	Labels       []string `cbor:"labels,omitempty"`
-	Summary      string   `cbor:"summary"`
-	URL          string   `cbor:"url"`
+	Provider     string      `cbor:"provider"`
+	Repo         string      `cbor:"repo"`
+	Number       int         `cbor:"number"`
+	Action       IssueAction `cbor:"action"`
+	Title        string      `cbor:"title"`
+	Body         string      `cbor:"body,omitempty"` // issue description (markdown)
+	Author       string      `cbor:"author"`
+	BureauEntity string      `cbor:"bureau_entity,omitempty"`
+	Labels       []string    `cbor:"labels,omitempty"`
+	Summary      string      `cbor:"summary"`
+	URL          string      `cbor:"url"`
 }
 
 // ReviewState enumerates the common review dispositions.
@@ -124,28 +128,28 @@ const (
 
 // ReviewEvent represents a code review submission.
 type ReviewEvent struct {
-	Provider     string `cbor:"provider"`
-	Repo         string `cbor:"repo"`
-	PRNumber     int    `cbor:"pr_number"`
-	Reviewer     string `cbor:"reviewer"` // forge username
-	BureauEntity string `cbor:"bureau_entity,omitempty"`
-	State        string `cbor:"state"` // see ReviewState constants
-	Body         string `cbor:"body"`
-	Summary      string `cbor:"summary"`
-	URL          string `cbor:"url"`
+	Provider     string      `cbor:"provider"`
+	Repo         string      `cbor:"repo"`
+	PRNumber     int         `cbor:"pr_number"`
+	Reviewer     string      `cbor:"reviewer"` // forge username
+	BureauEntity string      `cbor:"bureau_entity,omitempty"`
+	State        ReviewState `cbor:"state"`
+	Body         string      `cbor:"body"`
+	Summary      string      `cbor:"summary"`
+	URL          string      `cbor:"url"`
 }
 
 // CommentEvent represents a comment on an issue or PR.
 type CommentEvent struct {
-	Provider     string `cbor:"provider"`
-	Repo         string `cbor:"repo"`
-	EntityType   string `cbor:"entity_type"` // "issue" or "pull_request"
-	EntityNumber int    `cbor:"entity_number"`
-	Author       string `cbor:"author"`
-	BureauEntity string `cbor:"bureau_entity,omitempty"`
-	Body         string `cbor:"body"`
-	Summary      string `cbor:"summary"`
-	URL          string `cbor:"url"`
+	Provider     string     `cbor:"provider"`
+	Repo         string     `cbor:"repo"`
+	EntityType   EntityType `cbor:"entity_type"`
+	EntityNumber int        `cbor:"entity_number"`
+	Author       string     `cbor:"author"`
+	BureauEntity string     `cbor:"bureau_entity,omitempty"`
+	Body         string     `cbor:"body"`
+	Summary      string     `cbor:"summary"`
+	URL          string     `cbor:"url"`
 }
 
 // CIStatus enumerates the common CI/CD run statuses.
@@ -169,17 +173,17 @@ const (
 // CIStatusEvent represents a CI/CD pipeline or workflow run status
 // change. Covers GitHub Actions, Forgejo Actions, GitLab CI.
 type CIStatusEvent struct {
-	Provider   string `cbor:"provider"`
-	Repo       string `cbor:"repo"`
-	RunID      string `cbor:"run_id"`     // provider-specific run identifier
-	Workflow   string `cbor:"workflow"`   // workflow/pipeline name
-	Status     string `cbor:"status"`     // see CIStatus constants
-	Conclusion string `cbor:"conclusion"` // see CIConclusion constants; empty when not completed
-	HeadSHA    string `cbor:"head_sha"`
-	Branch     string `cbor:"branch"`
-	PRNumber   int    `cbor:"pr_number,omitempty"`
-	URL        string `cbor:"url"`
-	Summary    string `cbor:"summary"`
+	Provider   string       `cbor:"provider"`
+	Repo       string       `cbor:"repo"`
+	RunID      string       `cbor:"run_id"`   // provider-specific run identifier
+	Workflow   string       `cbor:"workflow"` // workflow/pipeline name
+	Status     CIStatus     `cbor:"status"`
+	Conclusion CIConclusion `cbor:"conclusion"` // empty when not completed
+	HeadSHA    string       `cbor:"head_sha"`
+	Branch     string       `cbor:"branch"`
+	PRNumber   int          `cbor:"pr_number,omitempty"`
+	URL        string       `cbor:"url"`
+	Summary    string       `cbor:"summary"`
 }
 
 // --- Discriminated event union ---
@@ -188,7 +192,7 @@ type CIStatusEvent struct {
 // identifies which event pointer is populated. Exactly one event
 // pointer is non-nil for a valid Event.
 type Event struct {
-	Type        string            `cbor:"type"` // matches EventCategory* constants
+	Type        EventCategory     `cbor:"type"`
 	Push        *PushEvent        `cbor:"push,omitempty"`
 	PullRequest *PullRequestEvent `cbor:"pull_request,omitempty"`
 	Issue       *IssueEvent       `cbor:"issue,omitempty"`
@@ -221,6 +225,102 @@ type EntityRef struct {
 // IsZero reports whether the EntityRef is the zero value.
 func (r EntityRef) IsZero() bool {
 	return r == EntityRef{}
+}
+
+// Validate checks that the EntityRef is well-formed: non-empty
+// provider and repo, valid entity type, and the correct identifier
+// field set for the entity type (Number for issues/PRs, RunID for
+// workflow runs).
+func (r EntityRef) Validate() error {
+	if r.Provider == "" {
+		return fmt.Errorf("entity ref: provider is required")
+	}
+	if r.Repo == "" {
+		return fmt.Errorf("entity ref: repo is required")
+	}
+	switch r.EntityType {
+	case EntityTypeIssue, EntityTypePullRequest:
+		if r.Number <= 0 {
+			return fmt.Errorf("entity ref: number is required for %s entity type", r.EntityType)
+		}
+	case EntityTypeWorkflowRun:
+		if r.RunID == "" {
+			return fmt.Errorf("entity ref: run_id is required for workflow_run entity type")
+		}
+	default:
+		return fmt.Errorf("entity ref: unknown entity type %q", r.EntityType)
+	}
+	return nil
+}
+
+// Validate checks that the Event is a well-formed discriminated union:
+// the Type field must identify a known category, exactly one event
+// variant must be populated, and the populated variant must match Type.
+// Each populated variant must also have non-empty Provider and Repo
+// fields.
+func (e *Event) Validate() error {
+	type variantInfo struct {
+		category EventCategory
+		present  bool
+		provider string
+		repo     string
+	}
+
+	variants := []variantInfo{
+		{EventCategoryPush, e.Push != nil, "", ""},
+		{EventCategoryPullRequest, e.PullRequest != nil, "", ""},
+		{EventCategoryIssues, e.Issue != nil, "", ""},
+		{EventCategoryReview, e.Review != nil, "", ""},
+		{EventCategoryComment, e.Comment != nil, "", ""},
+		{EventCategoryCIStatus, e.CIStatus != nil, "", ""},
+	}
+
+	// Fill in provider/repo for populated variants.
+	if e.Push != nil {
+		variants[0].provider, variants[0].repo = e.Push.Provider, e.Push.Repo
+	}
+	if e.PullRequest != nil {
+		variants[1].provider, variants[1].repo = e.PullRequest.Provider, e.PullRequest.Repo
+	}
+	if e.Issue != nil {
+		variants[2].provider, variants[2].repo = e.Issue.Provider, e.Issue.Repo
+	}
+	if e.Review != nil {
+		variants[3].provider, variants[3].repo = e.Review.Provider, e.Review.Repo
+	}
+	if e.Comment != nil {
+		variants[4].provider, variants[4].repo = e.Comment.Provider, e.Comment.Repo
+	}
+	if e.CIStatus != nil {
+		variants[5].provider, variants[5].repo = e.CIStatus.Provider, e.CIStatus.Repo
+	}
+
+	populatedCount := 0
+	var matchedType EventCategory
+	for _, variant := range variants {
+		if variant.present {
+			populatedCount++
+			matchedType = variant.category
+			if variant.provider == "" {
+				return fmt.Errorf("event: %s variant has empty provider", variant.category)
+			}
+			if variant.repo == "" {
+				return fmt.Errorf("event: %s variant has empty repo", variant.category)
+			}
+		}
+	}
+
+	if populatedCount == 0 {
+		return fmt.Errorf("event: no variant populated (type is %q)", e.Type)
+	}
+	if populatedCount > 1 {
+		return fmt.Errorf("event: multiple variants populated (%d), expected exactly one", populatedCount)
+	}
+	if e.Type != matchedType {
+		return fmt.Errorf("event: type %q does not match populated variant %q", e.Type, matchedType)
+	}
+
+	return nil
 }
 
 // --- Event accessor methods ---
@@ -316,7 +416,7 @@ func (e *Event) EntityRefFromEvent() (EntityRef, bool) {
 	case EventCategoryComment:
 		if e.Comment != nil {
 			entityType := EntityTypeIssue
-			if e.Comment.EntityType == string(EntityTypePullRequest) {
+			if e.Comment.EntityType == EntityTypePullRequest {
 				entityType = EntityTypePullRequest
 			}
 			return EntityRef{
@@ -346,13 +446,13 @@ func (e *Event) EntityRefFromEvent() (EntityRef, bool) {
 func (e *Event) IsEntityClose() bool {
 	switch e.Type {
 	case EventCategoryIssues:
-		return e.Issue != nil && e.Issue.Action == string(IssueClosed)
+		return e.Issue != nil && e.Issue.Action == IssueClosed
 	case EventCategoryPullRequest:
 		return e.PullRequest != nil &&
-			(e.PullRequest.Action == string(PullRequestClosed) ||
-				e.PullRequest.Action == string(PullRequestMerged))
+			(e.PullRequest.Action == PullRequestClosed ||
+				e.PullRequest.Action == PullRequestMerged)
 	case EventCategoryCIStatus:
-		return e.CIStatus != nil && e.CIStatus.Status == string(CIStatusCompleted)
+		return e.CIStatus != nil && e.CIStatus.Status == CIStatusCompleted
 	}
 	return false
 }

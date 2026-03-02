@@ -70,7 +70,7 @@ func run() error {
 	ticketTokenPath := os.Getenv("BUREAU_TICKET_SERVICE_TOKEN")
 	if ticketSocketPath != "" && ticketTokenPath != "" {
 		var err error
-		ticketSyncer, err = NewTicketSyncer(ticketSocketPath, ticketTokenPath, boot.Logger)
+		ticketSyncer, err = NewTicketSyncer(ticketSocketPath, ticketTokenPath, boot.Clock, boot.Logger)
 		if err != nil {
 			return fmt.Errorf("creating ticket syncer: %w", err)
 		}
@@ -87,13 +87,14 @@ func run() error {
 		serviceRoomID: boot.ServiceRoomID,
 		manager:       forgesub.NewManager(boot.Logger),
 		ticketSyncer:  ticketSyncer,
+		clock:         boot.Clock,
 		logger:        boot.Logger,
 	}
 
 	// Create the webhook handler. Events are dispatched to the
 	// service's handleEvent method, which will route to the
 	// subscription manager and entity mapping handlers.
-	webhookHandler := NewWebhookHandler(webhookSecret, boot.Logger, githubService.handleEvent)
+	webhookHandler := NewWebhookHandler(webhookSecret, boot.Clock, boot.Logger, githubService.handleEvent)
 
 	// Start the HTTP server for webhook ingestion.
 	httpServer := service.NewHTTPServer(service.HTTPServerConfig{

@@ -6,6 +6,8 @@ package github
 import (
 	"context"
 	"fmt"
+	"net/url"
+	"strconv"
 )
 
 // CreateIssueRequest contains the fields for creating a new issue.
@@ -34,20 +36,17 @@ type ListIssuesOptions struct {
 }
 
 func (options ListIssuesOptions) queryParams() string {
-	query := ""
+	values := url.Values{}
 	if options.State != "" {
-		query += "state=" + options.State + "&"
+		values.Set("state", options.State)
 	}
 	if options.Sort != "" {
-		query += "sort=" + options.Sort + "&"
+		values.Set("sort", options.Sort)
 	}
 	if options.PerPage > 0 {
-		query += fmt.Sprintf("per_page=%d&", options.PerPage)
+		values.Set("per_page", strconv.Itoa(options.PerPage))
 	}
-	if query != "" {
-		return query[:len(query)-1] // trim trailing &
-	}
-	return ""
+	return values.Encode()
 }
 
 // CreateIssue creates a new issue in a repository.

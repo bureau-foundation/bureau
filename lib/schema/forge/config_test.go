@@ -147,7 +147,7 @@ func validForgeConfig() ForgeConfig {
 		Version:  ForgeConfigVersion,
 		Provider: "github",
 		Repo:     "bureau-foundation/bureau",
-		Events:   []string{EventCategoryPush, EventCategoryPullRequest},
+		Events:   []EventCategory{EventCategoryPush, EventCategoryPullRequest},
 	}
 }
 

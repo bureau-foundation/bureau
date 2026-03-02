@@ -6,6 +6,8 @@ package github
 import (
 	"context"
 	"fmt"
+	"net/url"
+	"strconv"
 )
 
 // ListPullRequestsOptions controls filtering and pagination for
@@ -17,20 +19,17 @@ type ListPullRequestsOptions struct {
 }
 
 func (options ListPullRequestsOptions) queryParams() string {
-	query := ""
+	values := url.Values{}
 	if options.State != "" {
-		query += "state=" + options.State + "&"
+		values.Set("state", options.State)
 	}
 	if options.Sort != "" {
-		query += "sort=" + options.Sort + "&"
+		values.Set("sort", options.Sort)
 	}
 	if options.PerPage > 0 {
-		query += fmt.Sprintf("per_page=%d&", options.PerPage)
+		values.Set("per_page", strconv.Itoa(options.PerPage))
 	}
-	if query != "" {
-		return query[:len(query)-1]
-	}
-	return ""
+	return values.Encode()
 }
 
 // GetPullRequest retrieves a single pull request by number.

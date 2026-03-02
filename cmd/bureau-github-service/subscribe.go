@@ -74,6 +74,17 @@ func (gs *GitHubService) handleSubscribe(ctx context.Context, token *servicetoke
 		return
 	}
 
+	// Validate the entity ref if one was provided.
+	if hasEntity {
+		if err := request.Entity.Validate(); err != nil {
+			encoder.Encode(forge.SubscribeFrame{
+				Type:    forge.FrameError,
+				Message: err.Error(),
+			})
+			return
+		}
+	}
+
 	done := make(chan struct{})
 	subscriber := &forgesub.Subscriber{
 		Channel: make(chan forgesub.SubscribeEvent, forgesub.SubscriberChannelSize),
@@ -188,7 +199,7 @@ func (gs *GitHubService) handleEntitySubscription(
 // re-collect: forge events are ephemeral, so the resync simply
 // signals that some events were missed.
 func (gs *GitHubService) subscribeEventLoop(ctx context.Context, encoder *codec.Encoder, subscriber *forgesub.Subscriber) {
-	heartbeat := time.NewTicker(heartbeatInterval)
+	heartbeat := gs.clock.NewTicker(heartbeatInterval)
 	defer heartbeat.Stop()
 
 	for {

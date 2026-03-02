@@ -5,12 +5,23 @@ package main
 
 import (
 	"testing"
+	"time"
 
+	"github.com/bureau-foundation/bureau/lib/clock"
 	"github.com/bureau-foundation/bureau/lib/forgesub"
 	"github.com/bureau-foundation/bureau/lib/ref"
 	"github.com/bureau-foundation/bureau/lib/schema/forge"
 	"github.com/bureau-foundation/bureau/lib/schema/ticket"
 )
+
+// testSyncer creates a TicketSyncer with a fake clock for translation
+// tests. No socket client is needed — these tests only exercise the
+// issueToTicketContent translation, not actual ticket service calls.
+func testSyncer(t *testing.T) (*TicketSyncer, *clock.FakeClock) {
+	t.Helper()
+	fakeClock := clock.Fake(time.Date(2026, 3, 1, 12, 0, 0, 0, time.UTC))
+	return &TicketSyncer{clock: fakeClock}, fakeClock
+}
 
 // --- Deterministic ticket ID ---
 
@@ -24,6 +35,9 @@ func TestIssueTicketID(t *testing.T) {
 		{"github", "octocat/hello", 42, "gh-octocat-hello-42"},
 		{"github", "bureau-foundation/bureau", 1, "gh-bureau-foundation-bureau-1"},
 		{"github", "org/repo.name", 99, "gh-org-repo-name-99"},
+		{"forgejo", "alice/widgets", 5, "fj-alice-widgets-5"},
+		{"gitlab", "group/project", 10, "gl-group-project-10"},
+		{"bitbucket", "team/repo", 3, "bitbucket-team-repo-3"},
 	}
 
 	for _, tt := range tests {
@@ -38,11 +52,13 @@ func TestIssueTicketID(t *testing.T) {
 // --- Issue → TicketContent translation ---
 
 func TestIssueToTicketContent_Opened(t *testing.T) {
+	syncer, _ := testSyncer(t)
+
 	issue := &forge.IssueEvent{
 		Provider: "github",
 		Repo:     "octocat/hello",
 		Number:   42,
-		Action:   "opened",
+		Action:   forge.IssueOpened,
 		Title:    "Fix the thing",
 		Body:     "The thing is broken.\n\nSteps to reproduce:\n1. Do X\n2. See Y",
 		Author:   "octocat",
@@ -51,7 +67,7 @@ func TestIssueToTicketContent_Opened(t *testing.T) {
 		URL:      "https://github.com/octocat/hello/issues/42",
 	}
 
-	content := issueToTicketContent(issue)
+	content := syncer.issueToTicketContent(issue)
 
 	if content.Title != "Fix the thing" {
 		t.Errorf("Title = %q, want %q", content.Title, "Fix the thing")
@@ -91,18 +107,20 @@ func TestIssueToTicketContent_Opened(t *testing.T) {
 }
 
 func TestIssueToTicketContent_EmptyBodyFallsBackToSummary(t *testing.T) {
+	syncer, _ := testSyncer(t)
+
 	issue := &forge.IssueEvent{
 		Provider: "github",
 		Repo:     "octocat/hello",
 		Number:   7,
-		Action:   "opened",
+		Action:   forge.IssueOpened,
 		Title:    "Quick fix",
 		Author:   "octocat",
 		Summary:  "[octocat/hello] opened #7: Quick fix",
 		URL:      "https://github.com/octocat/hello/issues/7",
 	}
 
-	content := issueToTicketContent(issue)
+	content := syncer.issueToTicketContent(issue)
 
 	wantBody := "https://github.com/octocat/hello/issues/7\n\n[octocat/hello] opened #7: Quick fix"
 	if content.Body != wantBody {
@@ -111,23 +129,26 @@ func TestIssueToTicketContent_EmptyBodyFallsBackToSummary(t *testing.T) {
 }
 
 func TestIssueToTicketContent_Closed(t *testing.T) {
+	syncer, fakeClock := testSyncer(t)
+
 	issue := &forge.IssueEvent{
 		Provider: "github",
 		Repo:     "octocat/hello",
 		Number:   42,
-		Action:   "closed",
+		Action:   forge.IssueClosed,
 		Title:    "Fix the thing",
 		Author:   "octocat",
 		URL:      "https://github.com/octocat/hello/issues/42",
 	}
 
-	content := issueToTicketContent(issue)
+	content := syncer.issueToTicketContent(issue)
 
 	if content.Status != ticket.StatusClosed {
 		t.Errorf("Status = %q, want %q", content.Status, ticket.StatusClosed)
 	}
-	if content.ClosedAt == "" {
-		t.Error("ClosedAt should be set for closed issues")
+	wantClosedAt := fakeClock.Now().UTC().Format(time.RFC3339)
+	if content.ClosedAt != wantClosedAt {
+		t.Errorf("ClosedAt = %q, want %q", content.ClosedAt, wantClosedAt)
 	}
 	if content.CloseReason != "Closed on GitHub" {
 		t.Errorf("CloseReason = %q, want %q", content.CloseReason, "Closed on GitHub")

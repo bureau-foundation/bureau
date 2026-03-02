@@ -93,10 +93,8 @@ type ForgeConfig struct {
 
 	// Events lists which forge event categories to process for this
 	// room. Events not listed are received by the connector but not
-	// dispatched to subscribers in this room. Uses common category
-	// names: "push", "pull_request", "issues", "review", "comment",
-	// "ci_status".
-	Events []string `json:"events"`
+	// dispatched to subscribers in this room.
+	Events []EventCategory `json:"events"`
 
 	// IssueSync controls issue-to-ticket synchronization.
 	IssueSync IssueSyncMode `json:"issue_sync"`

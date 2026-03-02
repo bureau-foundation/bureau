@@ -8,6 +8,7 @@ import (
 	"encoding/json"
 	"log/slog"
 
+	"github.com/bureau-foundation/bureau/lib/clock"
 	"github.com/bureau-foundation/bureau/lib/forgesub"
 	"github.com/bureau-foundation/bureau/lib/ref"
 	"github.com/bureau-foundation/bureau/lib/schema"
@@ -78,6 +79,7 @@ type GitHubService struct {
 	serviceRoomID ref.RoomID
 	manager       *forgesub.Manager
 	ticketSyncer  *TicketSyncer // nil if ticket service not configured
+	clock         clock.Clock
 	logger        *slog.Logger
 }
 

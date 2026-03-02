@@ -138,7 +138,7 @@ func TestUpdateForgeConfig_AttachesToBinding(t *testing.T) {
 	manager.UpdateForgeConfig(roomID, forge.ForgeConfig{
 		Provider: "github",
 		Repo:     "octocat/hello",
-		Events:   []string{"push", "issues"},
+		Events:   []forge.EventCategory{forge.EventCategoryPush, forge.EventCategoryIssues},
 	})
 
 	key := repoKey{Provider: "github", Repo: "octocat/hello"}
@@ -162,7 +162,7 @@ func TestUpdateForgeConfig_StoredBeforeBinding(t *testing.T) {
 	manager.UpdateForgeConfig(roomID, forge.ForgeConfig{
 		Provider: "github",
 		Repo:     "octocat/hello",
-		Events:   []string{"push"},
+		Events:   []forge.EventCategory{forge.EventCategoryPush},
 	})
 
 	// Now add the binding.
@@ -286,7 +286,7 @@ func TestDispatch_RoomSubscriber_ReceivesMatchingEvent(t *testing.T) {
 	manager.UpdateForgeConfig(roomID, forge.ForgeConfig{
 		Provider: "github",
 		Repo:     "octocat/hello",
-		Events:   []string{forge.EventCategoryPush},
+		Events:   []forge.EventCategory{forge.EventCategoryPush},
 	})
 
 	subscriber, _ := newTestSubscriber()
@@ -320,7 +320,7 @@ func TestDispatch_RoomSubscriber_FilteredByCategory(t *testing.T) {
 	manager.UpdateForgeConfig(roomID, forge.ForgeConfig{
 		Provider: "github",
 		Repo:     "o/r",
-		Events:   []string{forge.EventCategoryPush}, // only push
+		Events:   []forge.EventCategory{forge.EventCategoryPush}, // only push
 	})
 
 	subscriber, _ := newTestSubscriber()
@@ -497,7 +497,7 @@ func TestDispatch_EntityClose_SendsClosedFrame(t *testing.T) {
 		Type: forge.EventCategoryIssues,
 		Issue: &forge.IssueEvent{
 			Provider: "github", Repo: "o/r", Number: 7,
-			Action: string(forge.IssueClosed),
+			Action: forge.IssueClosed,
 		},
 	})
 
@@ -547,7 +547,7 @@ func TestDispatch_EphemeralSubscription_CleanedOnClose(t *testing.T) {
 		Type: forge.EventCategoryIssues,
 		Issue: &forge.IssueEvent{
 			Provider: "github", Repo: "o/r", Number: 5,
-			Action: string(forge.IssueClosed),
+			Action: forge.IssueClosed,
 		},
 	})
 
@@ -581,7 +581,7 @@ func TestDispatch_PersistentSubscription_SurvivesClose(t *testing.T) {
 		Type: forge.EventCategoryIssues,
 		Issue: &forge.IssueEvent{
 			Provider: "github", Repo: "o/r", Number: 5,
-			Action: string(forge.IssueClosed),
+			Action: forge.IssueClosed,
 		},
 	})
 
@@ -599,7 +599,7 @@ func TestDispatch_PersistentSubscription_SurvivesClose(t *testing.T) {
 		Type: forge.EventCategoryIssues,
 		Issue: &forge.IssueEvent{
 			Provider: "github", Repo: "o/r", Number: 5,
-			Action: string(forge.IssueReopened),
+			Action: forge.IssueReopened,
 		},
 	})
 
@@ -620,7 +620,7 @@ func TestDispatch_CleansDisconnectedSubscribers(t *testing.T) {
 	})
 	manager.UpdateForgeConfig(roomID, forge.ForgeConfig{
 		Provider: "github", Repo: "o/r",
-		Events: []string{forge.EventCategoryPush},
+		Events: []forge.EventCategory{forge.EventCategoryPush},
 	})
 
 	// Add two subscribers. Close the first one's done channel.
@@ -673,7 +673,7 @@ func TestDispatch_MultipleRoomsForSameRepo(t *testing.T) {
 		})
 		manager.UpdateForgeConfig(roomID, forge.ForgeConfig{
 			Provider: "github", Repo: "o/r",
-			Events: []string{forge.EventCategoryPush},
+			Events: []forge.EventCategory{forge.EventCategoryPush},
 		})
 	}
 
@@ -838,7 +838,7 @@ func TestRoomsForEvent_IncludesConfig(t *testing.T) {
 		Version:   1,
 		Provider:  "github",
 		Repo:      "octocat/hello",
-		Events:    []string{"issues"},
+		Events:    []forge.EventCategory{forge.EventCategoryIssues},
 		IssueSync: forge.IssueSyncImport,
 	})
 

@@ -17,7 +17,7 @@ func TestMatchesForgeConfig_NilConfig(t *testing.T) {
 }
 
 func TestMatchesForgeConfig_EmptyEvents(t *testing.T) {
-	config := &forge.ForgeConfig{Events: []string{}}
+	config := &forge.ForgeConfig{Events: []forge.EventCategory{}}
 	event := &forge.Event{Type: forge.EventCategoryPush, Push: &forge.PushEvent{}}
 	if matchesForgeConfig(config, event) {
 		t.Error("empty Events list should reject all events (default-deny)")
@@ -26,7 +26,7 @@ func TestMatchesForgeConfig_EmptyEvents(t *testing.T) {
 
 func TestMatchesForgeConfig_CategoryMatch(t *testing.T) {
 	config := &forge.ForgeConfig{
-		Events: []string{forge.EventCategoryPush, forge.EventCategoryIssues},
+		Events: []forge.EventCategory{forge.EventCategoryPush, forge.EventCategoryIssues},
 	}
 
 	// Matching category.
@@ -37,7 +37,7 @@ func TestMatchesForgeConfig_CategoryMatch(t *testing.T) {
 
 	issue := &forge.Event{
 		Type:  forge.EventCategoryIssues,
-		Issue: &forge.IssueEvent{Action: "opened"},
+		Issue: &forge.IssueEvent{Action: forge.IssueOpened},
 	}
 	if !matchesForgeConfig(config, issue) {
 		t.Error("issue should match config with issues in Events")
@@ -46,7 +46,7 @@ func TestMatchesForgeConfig_CategoryMatch(t *testing.T) {
 	// Non-matching category.
 	review := &forge.Event{
 		Type:   forge.EventCategoryReview,
-		Review: &forge.ReviewEvent{State: "approved"},
+		Review: &forge.ReviewEvent{State: forge.ReviewApproved},
 	}
 	if matchesForgeConfig(config, review) {
 		t.Error("review should not match config without review in Events")
@@ -69,7 +69,7 @@ func TestMatchesTriageFilter_Labels(t *testing.T) {
 	matching := &forge.Event{
 		Type: forge.EventCategoryIssues,
 		Issue: &forge.IssueEvent{
-			Action: "opened",
+			Action: forge.IssueOpened,
 			Labels: []string{"feature", "bug"},
 		},
 	}
@@ -81,7 +81,7 @@ func TestMatchesTriageFilter_Labels(t *testing.T) {
 	noMatch := &forge.Event{
 		Type: forge.EventCategoryIssues,
 		Issue: &forge.IssueEvent{
-			Action: "opened",
+			Action: forge.IssueOpened,
 			Labels: []string{"feature", "docs"},
 		},
 	}
@@ -92,7 +92,7 @@ func TestMatchesTriageFilter_Labels(t *testing.T) {
 	// Issue with no labels at all.
 	noLabels := &forge.Event{
 		Type:  forge.EventCategoryIssues,
-		Issue: &forge.IssueEvent{Action: "opened"},
+		Issue: &forge.IssueEvent{Action: forge.IssueOpened},
 	}
 	if matchesTriageFilter(filter, noLabels) {
 		t.Error("issue with no labels should not match when labels filter is set")
@@ -107,7 +107,7 @@ func TestMatchesTriageFilter_Labels(t *testing.T) {
 	// Review event — passes vacuously.
 	review := &forge.Event{
 		Type:   forge.EventCategoryReview,
-		Review: &forge.ReviewEvent{State: "approved"},
+		Review: &forge.ReviewEvent{State: forge.ReviewApproved},
 	}
 	if !matchesTriageFilter(filter, review) {
 		t.Error("review event should pass label filter vacuously")
@@ -122,7 +122,7 @@ func TestMatchesTriageFilter_EventTypes(t *testing.T) {
 	// Matching event type.
 	issueOpened := &forge.Event{
 		Type:  forge.EventCategoryIssues,
-		Issue: &forge.IssueEvent{Action: "opened"},
+		Issue: &forge.IssueEvent{Action: forge.IssueOpened},
 	}
 	if !matchesTriageFilter(filter, issueOpened) {
 		t.Error("issue_opened should match")
@@ -131,7 +131,7 @@ func TestMatchesTriageFilter_EventTypes(t *testing.T) {
 	// Non-matching event type.
 	issueClosed := &forge.Event{
 		Type:  forge.EventCategoryIssues,
-		Issue: &forge.IssueEvent{Action: "closed"},
+		Issue: &forge.IssueEvent{Action: forge.IssueClosed},
 	}
 	if matchesTriageFilter(filter, issueClosed) {
 		t.Error("issue_closed should not match filter for issue_opened")
@@ -140,7 +140,7 @@ func TestMatchesTriageFilter_EventTypes(t *testing.T) {
 	// PR opened matches.
 	prOpened := &forge.Event{
 		Type:        forge.EventCategoryPullRequest,
-		PullRequest: &forge.PullRequestEvent{Action: "opened"},
+		PullRequest: &forge.PullRequestEvent{Action: forge.PullRequestOpened},
 	}
 	if !matchesTriageFilter(filter, prOpened) {
 		t.Error("pr_opened should match")
@@ -164,7 +164,7 @@ func TestMatchesTriageFilter_Conjunctive(t *testing.T) {
 	both := &forge.Event{
 		Type: forge.EventCategoryIssues,
 		Issue: &forge.IssueEvent{
-			Action: "opened",
+			Action: forge.IssueOpened,
 			Labels: []string{"bug"},
 		},
 	}
@@ -176,7 +176,7 @@ func TestMatchesTriageFilter_Conjunctive(t *testing.T) {
 	labelOnly := &forge.Event{
 		Type: forge.EventCategoryIssues,
 		Issue: &forge.IssueEvent{
-			Action: "closed",
+			Action: forge.IssueClosed,
 			Labels: []string{"bug"},
 		},
 	}
@@ -188,7 +188,7 @@ func TestMatchesTriageFilter_Conjunctive(t *testing.T) {
 	typeOnly := &forge.Event{
 		Type: forge.EventCategoryIssues,
 		Issue: &forge.IssueEvent{
-			Action: "opened",
+			Action: forge.IssueOpened,
 			Labels: []string{"feature"},
 		},
 	}
@@ -212,7 +212,7 @@ func TestEventTypeString(t *testing.T) {
 			name: "issue_opened",
 			event: &forge.Event{
 				Type:  forge.EventCategoryIssues,
-				Issue: &forge.IssueEvent{Action: "opened"},
+				Issue: &forge.IssueEvent{Action: forge.IssueOpened},
 			},
 			want: "issue_opened",
 		},
@@ -220,7 +220,7 @@ func TestEventTypeString(t *testing.T) {
 			name: "pr_merged",
 			event: &forge.Event{
 				Type:        forge.EventCategoryPullRequest,
-				PullRequest: &forge.PullRequestEvent{Action: "merged"},
+				PullRequest: &forge.PullRequestEvent{Action: forge.PullRequestMerged},
 			},
 			want: "pr_merged",
 		},
@@ -228,7 +228,7 @@ func TestEventTypeString(t *testing.T) {
 			name: "review_approved",
 			event: &forge.Event{
 				Type:   forge.EventCategoryReview,
-				Review: &forge.ReviewEvent{State: "approved"},
+				Review: &forge.ReviewEvent{State: forge.ReviewApproved},
 			},
 			want: "review_approved",
 		},
@@ -244,7 +244,7 @@ func TestEventTypeString(t *testing.T) {
 			name: "ci_completed",
 			event: &forge.Event{
 				Type:     forge.EventCategoryCIStatus,
-				CIStatus: &forge.CIStatusEvent{Status: "completed"},
+				CIStatus: &forge.CIStatusEvent{Status: forge.CIStatusCompleted},
 			},
 			want: "ci_completed",
 		},

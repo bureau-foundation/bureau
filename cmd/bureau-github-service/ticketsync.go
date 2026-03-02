@@ -10,6 +10,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/bureau-foundation/bureau/lib/clock"
 	"github.com/bureau-foundation/bureau/lib/forgesub"
 	"github.com/bureau-foundation/bureau/lib/schema/forge"
 	"github.com/bureau-foundation/bureau/lib/schema/ticket"
@@ -25,19 +26,21 @@ import (
 // service socket configured, ticket sync is silently disabled.
 type TicketSyncer struct {
 	client *service.ServiceClient
+	clock  clock.Clock
 	logger *slog.Logger
 }
 
 // NewTicketSyncer creates a syncer that calls the ticket service at
 // the given socket path, authenticated with the given token. Returns
 // an error if the token cannot be read.
-func NewTicketSyncer(socketPath, tokenPath string, logger *slog.Logger) (*TicketSyncer, error) {
+func NewTicketSyncer(socketPath, tokenPath string, clk clock.Clock, logger *slog.Logger) (*TicketSyncer, error) {
 	client, err := service.NewServiceClient(socketPath, tokenPath)
 	if err != nil {
 		return nil, fmt.Errorf("creating ticket service client: %w", err)
 	}
 	return &TicketSyncer{
 		client: client,
+		clock:  clk,
 		logger: logger,
 	}, nil
 }
@@ -61,7 +64,7 @@ func (ts *TicketSyncer) SyncEvent(ctx context.Context, event *forge.Event, rooms
 			return
 		}
 		// Only sync comments on issues, not PRs.
-		if event.Comment.EntityType != "issue" {
+		if event.Comment.EntityType != forge.EntityTypeIssue {
 			return
 		}
 		ts.syncCommentEvent(ctx, event.Comment, rooms)
@@ -79,7 +82,7 @@ func (ts *TicketSyncer) syncIssueEvent(ctx context.Context, issue *forge.IssueEv
 		}
 
 		ticketID := issueTicketID(issue.Provider, issue.Repo, issue.Number)
-		content := issueToTicketContent(issue)
+		content := ts.issueToTicketContent(issue)
 
 		err := ts.client.Call(ctx, "import", importRequest{
 			Room: room.RoomID.String(),
@@ -184,28 +187,42 @@ func issueSyncEnabled(config *forge.ForgeConfig) bool {
 		config.IssueSync == forge.IssueSyncBidirectional
 }
 
+// providerPrefix maps forge provider names to short ticket ID
+// prefixes. Each provider gets a distinct prefix so ticket IDs
+// are unambiguous across forges.
+var providerPrefix = map[string]string{
+	string(forge.ProviderGitHub):  "gh",
+	string(forge.ProviderForgejo): "fj",
+	string(forge.ProviderGitLab):  "gl",
+}
+
 // issueTicketID generates a deterministic ticket ID from a forge
 // issue reference. The ID is stable across updates so that repeated
 // imports for the same issue upsert the same ticket.
 //
-// Format: "gh-<owner>-<repo>-<number>" with slashes and dots replaced
-// by hyphens. Example: "gh-bureau-foundation-bureau-42".
+// Format: "<prefix>-<owner>-<repo>-<number>" with slashes and dots
+// replaced by hyphens. Example: "gh-bureau-foundation-bureau-42".
 func issueTicketID(provider, repo string, number int) string {
-	// Normalize the repo path into a valid ticket ID component.
+	prefix, ok := providerPrefix[provider]
+	if !ok {
+		// Use the provider name directly as prefix for unknown
+		// providers rather than silently misidentifying them.
+		prefix = strings.NewReplacer("/", "-", ".", "-").Replace(provider)
+	}
 	normalized := strings.NewReplacer("/", "-", ".", "-").Replace(repo)
-	return fmt.Sprintf("gh-%s-%d", normalized, number)
+	return fmt.Sprintf("%s-%s-%d", prefix, normalized, number)
 }
 
 // issueToTicketContent translates a forge IssueEvent into a
 // TicketContent for the ticket service's import action.
-func issueToTicketContent(issue *forge.IssueEvent) ticket.TicketContent {
+func (ts *TicketSyncer) issueToTicketContent(issue *forge.IssueEvent) ticket.TicketContent {
 	status := ticket.StatusOpen
 	var closedAt string
 	var closeReason string
 
-	if issue.Action == string(forge.IssueClosed) {
+	if issue.Action == forge.IssueClosed {
 		status = ticket.StatusClosed
-		closedAt = time.Now().UTC().Format(time.RFC3339)
+		closedAt = ts.clock.Now().UTC().Format(time.RFC3339)
 		closeReason = "Closed on GitHub"
 	}
 

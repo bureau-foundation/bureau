@@ -14,6 +14,7 @@ import (
 	"sync"
 	"time"
 
+	"github.com/bureau-foundation/bureau/lib/clock"
 	"github.com/bureau-foundation/bureau/lib/schema/forge"
 	"github.com/bureau-foundation/bureau/lib/service"
 )
@@ -36,6 +37,7 @@ const deduplicationWindow = 1 * time.Hour
 // or any standard Go HTTP server/mux.
 type WebhookHandler struct {
 	secret []byte
+	clock  clock.Clock
 	logger *slog.Logger
 
 	// onEvent is called for each successfully verified and translated
@@ -53,9 +55,12 @@ type WebhookHandler struct {
 // NewWebhookHandler creates a handler that verifies webhooks using
 // the given HMAC secret. Panics if secret is empty, logger is nil,
 // or onEvent is nil — a nil callback would silently discard events.
-func NewWebhookHandler(secret []byte, logger *slog.Logger, onEvent func(*forge.Event)) *WebhookHandler {
+func NewWebhookHandler(secret []byte, clk clock.Clock, logger *slog.Logger, onEvent func(*forge.Event)) *WebhookHandler {
 	if len(secret) == 0 {
 		panic("WebhookHandler: secret is required")
+	}
+	if clk == nil {
+		panic("WebhookHandler: clock is required")
 	}
 	if logger == nil {
 		panic("WebhookHandler: logger is required")
@@ -65,6 +70,7 @@ func NewWebhookHandler(secret []byte, logger *slog.Logger, onEvent func(*forge.E
 	}
 	return &WebhookHandler{
 		secret:     secret,
+		clock:      clk,
 		logger:     logger,
 		onEvent:    onEvent,
 		deliveries: make(map[string]time.Time),
@@ -165,7 +171,7 @@ func (h *WebhookHandler) isDuplicate(deliveryID string) bool {
 	h.mu.Lock()
 	defer h.mu.Unlock()
 
-	now := time.Now()
+	now := h.clock.Now()
 
 	// Prune expired entries every time we check. The map is small
 	// (one entry per webhook over the last hour) so this is cheap.
@@ -278,7 +284,7 @@ func (h *WebhookHandler) translateIssues(body []byte) (*forge.Event, error) {
 			Provider: string(forge.ProviderGitHub),
 			Repo:     payload.Repository.FullName,
 			Number:   payload.Issue.Number,
-			Action:   payload.Action,
+			Action:   forge.IssueAction(payload.Action),
 			Title:    payload.Issue.Title,
 			Body:     payload.Issue.Body,
 			Author:   payload.Issue.User.Login,
@@ -298,14 +304,14 @@ func (h *WebhookHandler) translatePullRequest(body []byte) (*forge.Event, error)
 	// GitHub uses "closed" for both close and merge. Translate
 	// to the forge schema's separate "merged" action when the PR
 	// was merged.
-	action := payload.Action
-	if action == "closed" && payload.PullRequest.Merged {
-		action = string(forge.PullRequestMerged)
+	action := forge.PullRequestAction(payload.Action)
+	if action == forge.PullRequestClosed && payload.PullRequest.Merged {
+		action = forge.PullRequestMerged
 	}
 
 	summary := fmt.Sprintf("[%s] %s PR #%d: %s",
 		payload.Repository.FullName,
-		action,
+		string(action),
 		payload.PullRequest.Number,
 		payload.PullRequest.Title,
 	)
@@ -355,7 +361,7 @@ func (h *WebhookHandler) translatePullRequestReview(body []byte) (*forge.Event, 
 			Repo:     payload.Repository.FullName,
 			PRNumber: payload.PullRequest.Number,
 			Reviewer: payload.Review.User.Login,
-			State:    payload.Review.State,
+			State:    forge.ReviewState(payload.Review.State),
 			Body:     payload.Review.Body,
 			Summary:  summary,
 			URL:      payload.Review.HTMLURL,
@@ -381,9 +387,9 @@ func (h *WebhookHandler) translateIssueComment(body []byte) (*forge.Event, error
 	// the comment is on a PR, but the minimal ghIssue struct
 	// doesn't include it. Use a heuristic: if the issue URL
 	// contains "/pull/", it's a PR comment.
-	entityType := "issue"
+	entityType := forge.EntityTypeIssue
 	if strings.Contains(payload.Issue.HTMLURL, "/pull/") {
-		entityType = "pull_request"
+		entityType = forge.EntityTypePullRequest
 	}
 
 	summary := fmt.Sprintf("[%s] %s commented on #%d",
@@ -435,8 +441,8 @@ func (h *WebhookHandler) translateWorkflowRun(body []byte) (*forge.Event, error)
 			Repo:       payload.Repository.FullName,
 			RunID:      strconv.FormatInt(payload.WorkflowRun.ID, 10),
 			Workflow:   payload.WorkflowRun.Name,
-			Status:     payload.WorkflowRun.Status,
-			Conclusion: payload.WorkflowRun.Conclusion,
+			Status:     forge.CIStatus(payload.WorkflowRun.Status),
+			Conclusion: forge.CIConclusion(payload.WorkflowRun.Conclusion),
 			HeadSHA:    payload.WorkflowRun.HeadSHA,
 			Branch:     payload.WorkflowRun.HeadBranch,
 			PRNumber:   prNumber,

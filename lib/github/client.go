@@ -182,8 +182,12 @@ func (client *Client) doWithRetry(ctx context.Context, method, path string, requ
 		if cached != nil {
 			return cached, response.Header, nil
 		}
-		// Cache miss on 304 — should not happen, but fall through to
-		// read the (empty) response body rather than failing silently.
+		// Cache miss on a 304 means the server recognized our ETag
+		// but our local cache was evicted. This is a transient error
+		// (cache too small, concurrent eviction, etc.) — return an
+		// explicit error rather than silently returning an empty body,
+		// which would cause callers to see empty/zero results.
+		return nil, nil, fmt.Errorf("github: received 304 Not Modified for %s but cached body is missing (ETag cache evicted)", path)
 	}
 
 	// Read response body.
@@ -356,8 +360,17 @@ func buildListPath(basePath string, options listOptions) string {
 }
 
 // parseAPIError reads a GitHub API error from an HTTP response.
+// If the response body cannot be read, the error message will
+// reflect the read failure rather than silently returning an
+// empty-message APIError.
 func parseAPIError(response *http.Response) *APIError {
-	body, _ := netutil.ReadResponse(response.Body)
+	body, err := netutil.ReadResponse(response.Body)
+	if err != nil {
+		return &APIError{
+			StatusCode: response.StatusCode,
+			Message:    fmt.Sprintf("(failed to read error response body: %v)", err),
+		}
+	}
 	return parseAPIErrorFromBody(response.StatusCode, body)
 }
 

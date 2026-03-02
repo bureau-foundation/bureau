@@ -88,6 +88,14 @@ type PullRequestEvent struct {
 	Draft        bool              `cbor:"draft"`
 	Summary      string            `cbor:"summary"`
 	URL          string            `cbor:"url"`
+
+	// RequestedReviewers lists all users currently requested as
+	// reviewers on this PR. Always populated when available.
+	RequestedReviewers []string `cbor:"requested_reviewers,omitempty"`
+
+	// RequestedReviewer is the specific user added in a
+	// review_requested action. Empty for other actions.
+	RequestedReviewer string `cbor:"requested_reviewer,omitempty"`
 }
 
 // IssueAction enumerates the common actions on an issue.
@@ -115,6 +123,14 @@ type IssueEvent struct {
 	Labels       []string    `cbor:"labels,omitempty"`
 	Summary      string      `cbor:"summary"`
 	URL          string      `cbor:"url"`
+
+	// Assignees lists all users currently assigned to this issue.
+	// Always populated when available.
+	Assignees []string `cbor:"assignees,omitempty"`
+
+	// Assignee is the specific user added in an assigned action.
+	// Empty for other actions.
+	Assignee string `cbor:"assignee,omitempty"`
 }
 
 // ReviewState enumerates the common review dispositions.

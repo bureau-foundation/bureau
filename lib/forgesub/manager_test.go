@@ -929,3 +929,460 @@ func TestRoomsForEvent_InvalidEvent(t *testing.T) {
 		t.Fatalf("expected nil for invalid event, got %v", matches)
 	}
 }
+
+// --- Identity and auto-subscribe tests ---
+
+func TestUpdateIdentity(t *testing.T) {
+	manager := newTestManager()
+
+	manager.UpdateIdentity(forge.ForgeIdentity{
+		Version:    1,
+		Provider:   "forgejo",
+		MatrixUser: "@bureau/fleet/prod/agent/reviewer:bureau.local",
+		ForgeUser:  "reviewer-bot",
+	})
+
+	// Verify the reverse lookup works via ProcessAutoSubscribe.
+	// Set up a room with auto-subscribe enabled.
+	roomID := testRoomID("project")
+	manager.UpdateRoomBinding(roomID, forge.RepositoryBinding{
+		Version:    1,
+		Provider:   "forgejo",
+		Owner:      "org",
+		Repo:       "project",
+		URL:        "https://forgejo.local/org/project",
+		CloneHTTPS: "https://forgejo.local/org/project.git",
+	})
+	manager.UpdateForgeConfig(roomID, forge.ForgeConfig{
+		Version:       1,
+		Provider:      "forgejo",
+		Repo:          "org/project",
+		Events:        []forge.EventCategory{forge.EventCategoryPullRequest},
+		AutoSubscribe: true,
+	})
+
+	event := &forge.Event{
+		Type: forge.EventCategoryPullRequest,
+		PullRequest: &forge.PullRequestEvent{
+			Provider:          "forgejo",
+			Repo:              "org/project",
+			Number:            7,
+			Action:            forge.PullRequestReviewRequested,
+			Title:             "Add feature",
+			Author:            "dev-bot",
+			RequestedReviewer: "reviewer-bot",
+		},
+	}
+
+	manager.ProcessAutoSubscribe(event, []InvolvedUser{
+		{ForgeUsername: "reviewer-bot", Role: RoleReviewRequested},
+	})
+
+	if manager.PendingAutoSubscriptionCount("bureau/fleet/prod/agent/reviewer") != 1 {
+		t.Fatal("expected 1 pending auto-subscription")
+	}
+}
+
+func TestUpdateIdentity_SharedAccountSkipped(t *testing.T) {
+	manager := newTestManager()
+
+	// GitHub shared-account identities have empty ForgeUser —
+	// no reverse lookup entry should be created.
+	manager.UpdateIdentity(forge.ForgeIdentity{
+		Version:    1,
+		Provider:   "github",
+		MatrixUser: "@bureau/fleet/prod/agent/coder:bureau.local",
+		ForgeUser:  "", // shared account
+	})
+
+	// Verify no identity entry exists.
+	manager.mu.RLock()
+	count := len(manager.identities)
+	manager.mu.RUnlock()
+
+	if count != 0 {
+		t.Fatalf("expected 0 identity entries for shared-account, got %d", count)
+	}
+}
+
+func TestProcessAutoSubscribe_AssignRole(t *testing.T) {
+	manager := newTestManager()
+
+	manager.UpdateIdentity(forge.ForgeIdentity{
+		Version:    1,
+		Provider:   "forgejo",
+		MatrixUser: "@bureau/fleet/prod/agent/handler:bureau.local",
+		ForgeUser:  "handler-bot",
+	})
+
+	roomID := testRoomID("bugs")
+	manager.UpdateRoomBinding(roomID, forge.RepositoryBinding{
+		Version:    1,
+		Provider:   "forgejo",
+		Owner:      "org",
+		Repo:       "bugs",
+		URL:        "https://forgejo.local/org/bugs",
+		CloneHTTPS: "https://forgejo.local/org/bugs.git",
+	})
+	manager.UpdateForgeConfig(roomID, forge.ForgeConfig{
+		Version:       1,
+		Provider:      "forgejo",
+		Repo:          "org/bugs",
+		Events:        []forge.EventCategory{forge.EventCategoryIssues},
+		AutoSubscribe: true,
+	})
+
+	event := &forge.Event{
+		Type: forge.EventCategoryIssues,
+		Issue: &forge.IssueEvent{
+			Provider: "forgejo",
+			Repo:     "org/bugs",
+			Number:   42,
+			Action:   forge.IssueAssigned,
+			Title:    "Fix the thing",
+			Author:   "reporter",
+			Assignee: "handler-bot",
+		},
+	}
+
+	manager.ProcessAutoSubscribe(event, []InvolvedUser{
+		{ForgeUsername: "handler-bot", Role: RoleAssignee},
+	})
+
+	if manager.PendingAutoSubscriptionCount("bureau/fleet/prod/agent/handler") != 1 {
+		t.Fatal("expected 1 pending auto-subscription for assignee")
+	}
+}
+
+func TestProcessAutoSubscribe_RuleDisabled(t *testing.T) {
+	manager := newTestManager()
+
+	manager.UpdateIdentity(forge.ForgeIdentity{
+		Version:    1,
+		Provider:   "forgejo",
+		MatrixUser: "@bureau/fleet/prod/agent/manual:bureau.local",
+		ForgeUser:  "manual-bot",
+	})
+
+	// Agent has on_assign disabled.
+	manager.UpdateAutoSubscribeRules("bureau/fleet/prod/agent/manual", forge.ForgeAutoSubscribeRules{
+		Version:         1,
+		OnAuthor:        true,
+		OnAssign:        false,
+		OnMention:       true,
+		OnReviewRequest: true,
+	})
+
+	roomID := testRoomID("repo")
+	manager.UpdateRoomBinding(roomID, forge.RepositoryBinding{
+		Version:    1,
+		Provider:   "forgejo",
+		Owner:      "org",
+		Repo:       "repo",
+		URL:        "https://forgejo.local/org/repo",
+		CloneHTTPS: "https://forgejo.local/org/repo.git",
+	})
+	manager.UpdateForgeConfig(roomID, forge.ForgeConfig{
+		Version:       1,
+		Provider:      "forgejo",
+		Repo:          "org/repo",
+		Events:        []forge.EventCategory{forge.EventCategoryIssues},
+		AutoSubscribe: true,
+	})
+
+	event := &forge.Event{
+		Type: forge.EventCategoryIssues,
+		Issue: &forge.IssueEvent{
+			Provider: "forgejo",
+			Repo:     "org/repo",
+			Number:   10,
+			Action:   forge.IssueAssigned,
+			Title:    "Task",
+			Author:   "someone",
+			Assignee: "manual-bot",
+		},
+	}
+
+	manager.ProcessAutoSubscribe(event, []InvolvedUser{
+		{ForgeUsername: "manual-bot", Role: RoleAssignee},
+	})
+
+	if manager.PendingAutoSubscriptionCount("bureau/fleet/prod/agent/manual") != 0 {
+		t.Fatal("expected no pending auto-subscription when on_assign is disabled")
+	}
+}
+
+func TestProcessAutoSubscribe_AutoSubscribeDisabledInConfig(t *testing.T) {
+	manager := newTestManager()
+
+	manager.UpdateIdentity(forge.ForgeIdentity{
+		Version:    1,
+		Provider:   "forgejo",
+		MatrixUser: "@bureau/fleet/prod/agent/worker:bureau.local",
+		ForgeUser:  "worker-bot",
+	})
+
+	roomID := testRoomID("norepo")
+	manager.UpdateRoomBinding(roomID, forge.RepositoryBinding{
+		Version:    1,
+		Provider:   "forgejo",
+		Owner:      "org",
+		Repo:       "norepo",
+		URL:        "https://forgejo.local/org/norepo",
+		CloneHTTPS: "https://forgejo.local/org/norepo.git",
+	})
+	manager.UpdateForgeConfig(roomID, forge.ForgeConfig{
+		Version:       1,
+		Provider:      "forgejo",
+		Repo:          "org/norepo",
+		Events:        []forge.EventCategory{forge.EventCategoryIssues},
+		AutoSubscribe: false, // disabled
+	})
+
+	event := &forge.Event{
+		Type: forge.EventCategoryIssues,
+		Issue: &forge.IssueEvent{
+			Provider: "forgejo",
+			Repo:     "org/norepo",
+			Number:   1,
+			Action:   forge.IssueAssigned,
+			Title:    "Task",
+			Author:   "someone",
+			Assignee: "worker-bot",
+		},
+	}
+
+	manager.ProcessAutoSubscribe(event, []InvolvedUser{
+		{ForgeUsername: "worker-bot", Role: RoleAssignee},
+	})
+
+	if manager.PendingAutoSubscriptionCount("bureau/fleet/prod/agent/worker") != 0 {
+		t.Fatal("expected no pending auto-subscription when config.AutoSubscribe is false")
+	}
+}
+
+func TestClaimAutoSubscriptions(t *testing.T) {
+	manager := newTestManager()
+
+	manager.UpdateIdentity(forge.ForgeIdentity{
+		Version:    1,
+		Provider:   "forgejo",
+		MatrixUser: "@bureau/fleet/prod/agent/dev:bureau.local",
+		ForgeUser:  "dev-bot",
+	})
+
+	roomID := testRoomID("app")
+	manager.UpdateRoomBinding(roomID, forge.RepositoryBinding{
+		Version:    1,
+		Provider:   "forgejo",
+		Owner:      "org",
+		Repo:       "app",
+		URL:        "https://forgejo.local/org/app",
+		CloneHTTPS: "https://forgejo.local/org/app.git",
+	})
+	manager.UpdateForgeConfig(roomID, forge.ForgeConfig{
+		Version:       1,
+		Provider:      "forgejo",
+		Repo:          "org/app",
+		Events:        []forge.EventCategory{forge.EventCategoryPullRequest, forge.EventCategoryIssues},
+		AutoSubscribe: true,
+	})
+
+	// Create two pending auto-subscriptions.
+	prEvent := &forge.Event{
+		Type: forge.EventCategoryPullRequest,
+		PullRequest: &forge.PullRequestEvent{
+			Provider:          "forgejo",
+			Repo:              "org/app",
+			Number:            5,
+			Action:            forge.PullRequestReviewRequested,
+			Title:             "PR five",
+			Author:            "other",
+			RequestedReviewer: "dev-bot",
+		},
+	}
+	issueEvent := &forge.Event{
+		Type: forge.EventCategoryIssues,
+		Issue: &forge.IssueEvent{
+			Provider: "forgejo",
+			Repo:     "org/app",
+			Number:   20,
+			Action:   forge.IssueAssigned,
+			Title:    "Issue twenty",
+			Author:   "other",
+			Assignee: "dev-bot",
+		},
+	}
+
+	manager.ProcessAutoSubscribe(prEvent, []InvolvedUser{
+		{ForgeUsername: "dev-bot", Role: RoleReviewRequested},
+	})
+	manager.ProcessAutoSubscribe(issueEvent, []InvolvedUser{
+		{ForgeUsername: "dev-bot", Role: RoleAssignee},
+	})
+
+	if manager.PendingAutoSubscriptionCount("bureau/fleet/prod/agent/dev") != 2 {
+		t.Fatalf("expected 2 pending, got %d",
+			manager.PendingAutoSubscriptionCount("bureau/fleet/prod/agent/dev"))
+	}
+
+	// Claim them.
+	claimed := manager.ClaimAutoSubscriptions("bureau/fleet/prod/agent/dev")
+	if len(claimed) != 2 {
+		t.Fatalf("expected 2 claimed, got %d", len(claimed))
+	}
+
+	// After claiming, pending should be empty.
+	if manager.PendingAutoSubscriptionCount("bureau/fleet/prod/agent/dev") != 0 {
+		t.Fatal("expected 0 pending after claim")
+	}
+
+	// Claiming again returns nil.
+	again := manager.ClaimAutoSubscriptions("bureau/fleet/prod/agent/dev")
+	if again != nil {
+		t.Fatalf("expected nil on second claim, got %d refs", len(again))
+	}
+}
+
+func TestProcessAutoSubscribe_NoDuplicates(t *testing.T) {
+	manager := newTestManager()
+
+	manager.UpdateIdentity(forge.ForgeIdentity{
+		Version:    1,
+		Provider:   "forgejo",
+		MatrixUser: "@bureau/fleet/prod/agent/dup:bureau.local",
+		ForgeUser:  "dup-bot",
+	})
+
+	roomID := testRoomID("dedupe")
+	manager.UpdateRoomBinding(roomID, forge.RepositoryBinding{
+		Version:    1,
+		Provider:   "forgejo",
+		Owner:      "org",
+		Repo:       "dedupe",
+		URL:        "https://forgejo.local/org/dedupe",
+		CloneHTTPS: "https://forgejo.local/org/dedupe.git",
+	})
+	manager.UpdateForgeConfig(roomID, forge.ForgeConfig{
+		Version:       1,
+		Provider:      "forgejo",
+		Repo:          "org/dedupe",
+		Events:        []forge.EventCategory{forge.EventCategoryIssues},
+		AutoSubscribe: true,
+	})
+
+	event := &forge.Event{
+		Type: forge.EventCategoryIssues,
+		Issue: &forge.IssueEvent{
+			Provider: "forgejo",
+			Repo:     "org/dedupe",
+			Number:   1,
+			Action:   forge.IssueAssigned,
+			Title:    "Dup test",
+			Author:   "someone",
+			Assignee: "dup-bot",
+		},
+	}
+
+	// Process the same event twice.
+	manager.ProcessAutoSubscribe(event, []InvolvedUser{
+		{ForgeUsername: "dup-bot", Role: RoleAssignee},
+	})
+	manager.ProcessAutoSubscribe(event, []InvolvedUser{
+		{ForgeUsername: "dup-bot", Role: RoleAssignee},
+	})
+
+	if manager.PendingAutoSubscriptionCount("bureau/fleet/prod/agent/dup") != 1 {
+		t.Fatalf("expected 1 pending (no duplicates), got %d",
+			manager.PendingAutoSubscriptionCount("bureau/fleet/prod/agent/dup"))
+	}
+}
+
+func TestEntityClose_CleansPendingAutoSubscriptions(t *testing.T) {
+	manager := newTestManager()
+
+	manager.UpdateIdentity(forge.ForgeIdentity{
+		Version:    1,
+		Provider:   "forgejo",
+		MatrixUser: "@bureau/fleet/prod/agent/cleaner:bureau.local",
+		ForgeUser:  "cleaner-bot",
+	})
+
+	roomID := testRoomID("lifecycle")
+	manager.UpdateRoomBinding(roomID, forge.RepositoryBinding{
+		Version:    1,
+		Provider:   "forgejo",
+		Owner:      "org",
+		Repo:       "lifecycle",
+		URL:        "https://forgejo.local/org/lifecycle",
+		CloneHTTPS: "https://forgejo.local/org/lifecycle.git",
+	})
+	manager.UpdateForgeConfig(roomID, forge.ForgeConfig{
+		Version:       1,
+		Provider:      "forgejo",
+		Repo:          "org/lifecycle",
+		Events:        []forge.EventCategory{forge.EventCategoryIssues},
+		AutoSubscribe: true,
+	})
+
+	// Create a pending auto-subscription.
+	assignEvent := &forge.Event{
+		Type: forge.EventCategoryIssues,
+		Issue: &forge.IssueEvent{
+			Provider: "forgejo",
+			Repo:     "org/lifecycle",
+			Number:   99,
+			Action:   forge.IssueAssigned,
+			Title:    "Will be closed",
+			Author:   "someone",
+			Assignee: "cleaner-bot",
+		},
+	}
+	manager.ProcessAutoSubscribe(assignEvent, []InvolvedUser{
+		{ForgeUsername: "cleaner-bot", Role: RoleAssignee},
+	})
+
+	if manager.PendingAutoSubscriptionCount("bureau/fleet/prod/agent/cleaner") != 1 {
+		t.Fatal("expected 1 pending before close")
+	}
+
+	// Dispatch a close event for the same entity.
+	closeEvent := &forge.Event{
+		Type: forge.EventCategoryIssues,
+		Issue: &forge.IssueEvent{
+			Provider: "forgejo",
+			Repo:     "org/lifecycle",
+			Number:   99,
+			Action:   forge.IssueClosed,
+			Title:    "Will be closed",
+			Author:   "someone",
+		},
+	}
+	manager.Dispatch(closeEvent)
+
+	// Pending auto-subscription should be cleaned up.
+	if manager.PendingAutoSubscriptionCount("bureau/fleet/prod/agent/cleaner") != 0 {
+		t.Fatal("expected 0 pending after entity close")
+	}
+}
+
+func TestExtractLocalpart(t *testing.T) {
+	tests := []struct {
+		input    string
+		expected string
+	}{
+		{"@bureau/fleet/prod/agent/coder:bureau.local", "bureau/fleet/prod/agent/coder"},
+		{"@simple:server.com", "simple"},
+		{"invalid", ""},
+		{"@:server.com", ""},
+		{"@noserver", ""},
+		{"", ""},
+	}
+
+	for _, test := range tests {
+		result := extractLocalpart(test.input)
+		if result != test.expected {
+			t.Errorf("extractLocalpart(%q) = %q, want %q", test.input, result, test.expected)
+		}
+	}
+}

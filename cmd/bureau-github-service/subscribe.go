@@ -25,6 +25,13 @@ type subscribeRequest struct {
 	Room       string          `cbor:"room,omitempty"`
 	Entity     forge.EntityRef `cbor:"entity,omitempty"`
 	Persistent bool            `cbor:"persistent,omitempty"` // entity subscriptions only
+
+	// Auto activates pending auto-subscriptions for the connecting
+	// agent. Only applies to room subscriptions. Pending
+	// auto-subscriptions (created by ProcessAutoSubscribe when
+	// webhooks arrive) are claimed and live entity subscriptions
+	// are created sharing the same event stream.
+	Auto bool `cbor:"auto,omitempty"`
 }
 
 // heartbeatInterval is the time between heartbeat frames on a
@@ -92,7 +99,7 @@ func (gs *GitHubService) handleSubscribe(ctx context.Context, token *servicetoke
 	}
 
 	if hasRoom {
-		gs.handleRoomSubscription(ctx, encoder, subscriber, done, request.Room)
+		gs.handleRoomSubscription(ctx, encoder, subscriber, done, request.Room, request.Auto, token.Subject)
 	} else {
 		gs.handleEntitySubscription(ctx, encoder, subscriber, done, request.Entity, request.Persistent)
 	}
@@ -100,13 +107,17 @@ func (gs *GitHubService) handleSubscribe(ctx context.Context, token *servicetoke
 
 // handleRoomSubscription registers a room subscriber and runs the
 // event loop. The room string is resolved to a ref.RoomID before
-// registration.
+// registration. When auto is true, pending auto-subscriptions for
+// the agent are claimed and activated as live entity subscriptions
+// sharing the same event stream.
 func (gs *GitHubService) handleRoomSubscription(
 	ctx context.Context,
 	encoder *codec.Encoder,
 	subscriber *forgesub.Subscriber,
 	done chan struct{},
 	room string,
+	auto bool,
+	subject ref.UserID,
 ) {
 	roomID, err := ref.ParseRoomID(room)
 	if err != nil {
@@ -130,14 +141,47 @@ func (gs *GitHubService) handleRoomSubscription(
 		return
 	}
 
+	// Activate pending auto-subscriptions if requested. Entity
+	// subscriptions share the same subscriber channel so events
+	// multiplex onto this stream.
+	var autoEntitySubscriptions []*forgesub.EntitySubscription
+	if auto {
+		agentLocalpart := subject.Localpart()
+		claimed := gs.manager.ClaimAutoSubscriptions(agentLocalpart)
+		for _, entityRef := range claimed {
+			entitySubscription := &forgesub.EntitySubscription{
+				Subscriber:       subscriber,
+				Entity:           entityRef,
+				Persistent:       true,
+				SuppressCaughtUp: true,
+			}
+			if addErr := gs.manager.AddEntitySubscriber(entitySubscription); addErr != nil {
+				gs.logger.Warn("failed to activate auto-subscription",
+					"entity", entityRef,
+					"error", addErr,
+				)
+				continue
+			}
+			autoEntitySubscriptions = append(autoEntitySubscriptions, entitySubscription)
+			gs.logger.Info("auto-subscription activated",
+				"agent", agentLocalpart,
+				"entity", entityRef,
+			)
+		}
+	}
+
 	gs.logger.Info("forge subscribe stream started",
 		"type", "room",
 		"room_id", roomID,
+		"auto_subscriptions", len(autoEntitySubscriptions),
 	)
 
 	defer func() {
 		close(done)
 		gs.manager.RemoveRoomSubscriber(subscription)
+		for _, entitySubscription := range autoEntitySubscriptions {
+			gs.manager.RemoveEntitySubscriber(entitySubscription)
+		}
 		gs.logger.Info("forge subscribe stream ended",
 			"type", "room",
 			"room_id", roomID,

@@ -56,6 +56,12 @@ type EntitySubscription struct {
 	*Subscriber
 	Entity     forge.EntityRef
 	Persistent bool // if false, auto-removed on entity close
+
+	// SuppressCaughtUp skips the FrameCaughtUp sent at registration.
+	// Used when auto-subscribe activates entity subscriptions on an
+	// existing subscribe stream that has already received its
+	// caught_up frame.
+	SuppressCaughtUp bool
 }
 
 // trySend attempts a non-blocking send on the subscriber's channel.

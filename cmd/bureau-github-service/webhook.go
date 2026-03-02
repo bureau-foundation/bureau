@@ -278,19 +278,31 @@ func (h *WebhookHandler) translateIssues(body []byte) (*forge.Event, error) {
 		payload.Issue.Title,
 	)
 
+	assignees := make([]string, len(payload.Issue.Assignees))
+	for i, user := range payload.Issue.Assignees {
+		assignees[i] = user.Login
+	}
+
+	var assignee string
+	if payload.Assignee != nil {
+		assignee = payload.Assignee.Login
+	}
+
 	return &forge.Event{
 		Type: forge.EventCategoryIssues,
 		Issue: &forge.IssueEvent{
-			Provider: string(forge.ProviderGitHub),
-			Repo:     payload.Repository.FullName,
-			Number:   payload.Issue.Number,
-			Action:   forge.IssueAction(payload.Action),
-			Title:    payload.Issue.Title,
-			Body:     payload.Issue.Body,
-			Author:   payload.Issue.User.Login,
-			Labels:   labels,
-			Summary:  summary,
-			URL:      payload.Issue.HTMLURL,
+			Provider:  string(forge.ProviderGitHub),
+			Repo:      payload.Repository.FullName,
+			Number:    payload.Issue.Number,
+			Action:    forge.IssueAction(payload.Action),
+			Title:     payload.Issue.Title,
+			Body:      payload.Issue.Body,
+			Author:    payload.Issue.User.Login,
+			Labels:    labels,
+			Assignees: assignees,
+			Assignee:  assignee,
+			Summary:   summary,
+			URL:       payload.Issue.HTMLURL,
 		},
 	}, nil
 }
@@ -316,21 +328,33 @@ func (h *WebhookHandler) translatePullRequest(body []byte) (*forge.Event, error)
 		payload.PullRequest.Title,
 	)
 
+	requestedReviewers := make([]string, len(payload.PullRequest.RequestedReviewers))
+	for i, user := range payload.PullRequest.RequestedReviewers {
+		requestedReviewers[i] = user.Login
+	}
+
+	var requestedReviewer string
+	if payload.RequestedReviewer != nil {
+		requestedReviewer = payload.RequestedReviewer.Login
+	}
+
 	return &forge.Event{
 		Type: forge.EventCategoryPullRequest,
 		PullRequest: &forge.PullRequestEvent{
-			Provider: string(forge.ProviderGitHub),
-			Repo:     payload.Repository.FullName,
-			Number:   payload.PullRequest.Number,
-			Action:   action,
-			Title:    payload.PullRequest.Title,
-			Author:   payload.PullRequest.User.Login,
-			HeadRef:  payload.PullRequest.Head.Ref,
-			BaseRef:  payload.PullRequest.Base.Ref,
-			HeadSHA:  payload.PullRequest.Head.SHA,
-			Draft:    payload.PullRequest.Draft,
-			Summary:  summary,
-			URL:      payload.PullRequest.HTMLURL,
+			Provider:           string(forge.ProviderGitHub),
+			Repo:               payload.Repository.FullName,
+			Number:             payload.PullRequest.Number,
+			Action:             action,
+			Title:              payload.PullRequest.Title,
+			Author:             payload.PullRequest.User.Login,
+			HeadRef:            payload.PullRequest.Head.Ref,
+			BaseRef:            payload.PullRequest.Base.Ref,
+			HeadSHA:            payload.PullRequest.Head.SHA,
+			Draft:              payload.PullRequest.Draft,
+			Summary:            summary,
+			URL:                payload.PullRequest.HTMLURL,
+			RequestedReviewers: requestedReviewers,
+			RequestedReviewer:  requestedReviewer,
 		},
 	}, nil
 }

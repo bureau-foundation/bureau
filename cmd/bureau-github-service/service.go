@@ -84,13 +84,23 @@ type GitHubService struct {
 }
 
 // handleEvent processes a translated forge event from the webhook
-// handler. Routes to the subscription manager for delivery to
-// connected agents, then syncs to the ticket service if configured.
+// handler. Evaluates auto-subscribe rules, routes to the subscription
+// manager for delivery to connected agents, then syncs to the ticket
+// service if configured.
 func (gs *GitHubService) handleEvent(event *forge.Event) {
 	gs.logger.Info("forge event received",
 		"type", event.Type,
 		"summary", eventSummary(event),
 	)
+
+	// Evaluate auto-subscribe before dispatch so that any newly
+	// created pending subscriptions are recorded before the event
+	// reaches existing subscribers.
+	involved := extractInvolvedUsers(event)
+	if len(involved) > 0 {
+		gs.manager.ProcessAutoSubscribe(event, involved)
+	}
+
 	gs.manager.Dispatch(event)
 
 	// Sync issue events to the ticket service if configured.
@@ -160,15 +170,9 @@ func (gs *GitHubService) processRoomEvents(roomID ref.RoomID, events []messaging
 		case forge.EventTypeForgeConfig:
 			gs.processForgeConfig(roomID, event)
 		case forge.EventTypeForgeIdentity:
-			gs.logger.Debug("forge identity updated",
-				"room_id", roomID,
-				"state_key", event.StateKey,
-			)
+			gs.processForgeIdentity(event)
 		case forge.EventTypeForgeAutoSubscribe:
-			gs.logger.Debug("auto-subscribe rules updated",
-				"room_id", roomID,
-				"state_key", event.StateKey,
-			)
+			gs.processAutoSubscribeRules(event)
 		case forge.EventTypeForgeWorkIdentity:
 			gs.logger.Debug("work identity updated",
 				"room_id", roomID,
@@ -279,6 +283,156 @@ func parseBindingStateKey(stateKey string) (string, string) {
 	return stateKey[:slashIndex], stateKey[slashIndex+1:]
 }
 
+// processForgeIdentity parses an m.bureau.forge_identity state event
+// and updates the Manager's identity reverse lookup index.
+func (gs *GitHubService) processForgeIdentity(event messaging.Event) {
+	if len(event.Content) == 0 {
+		// Identity redacted — remove from index.
+		stateKey := ""
+		if event.StateKey != nil {
+			stateKey = *event.StateKey
+		}
+		provider, forgeUser := parseBindingStateKey(stateKey)
+		if provider != "" && forgeUser != "" {
+			gs.manager.RemoveIdentity(provider, forgeUser)
+		}
+		return
+	}
+
+	contentJSON, err := json.Marshal(event.Content)
+	if err != nil {
+		gs.logger.Warn("failed to marshal forge identity content",
+			"error", err,
+		)
+		return
+	}
+
+	var identity forge.ForgeIdentity
+	if err := json.Unmarshal(contentJSON, &identity); err != nil {
+		gs.logger.Warn("failed to parse forge identity",
+			"error", err,
+		)
+		return
+	}
+
+	if err := identity.Validate(); err != nil {
+		gs.logger.Warn("invalid forge identity",
+			"error", err,
+		)
+		return
+	}
+
+	gs.manager.UpdateIdentity(identity)
+}
+
+// processAutoSubscribeRules parses an m.bureau.forge_auto_subscribe
+// state event and updates the Manager's per-agent rules index.
+func (gs *GitHubService) processAutoSubscribeRules(event messaging.Event) {
+	stateKey := ""
+	if event.StateKey != nil {
+		stateKey = *event.StateKey
+	}
+
+	if len(event.Content) == 0 || stateKey == "" {
+		return
+	}
+
+	contentJSON, err := json.Marshal(event.Content)
+	if err != nil {
+		gs.logger.Warn("failed to marshal auto-subscribe rules content",
+			"state_key", stateKey,
+			"error", err,
+		)
+		return
+	}
+
+	var rules forge.ForgeAutoSubscribeRules
+	if err := json.Unmarshal(contentJSON, &rules); err != nil {
+		gs.logger.Warn("failed to parse auto-subscribe rules",
+			"state_key", stateKey,
+			"error", err,
+		)
+		return
+	}
+
+	if err := rules.Validate(); err != nil {
+		gs.logger.Warn("invalid auto-subscribe rules",
+			"state_key", stateKey,
+			"error", err,
+		)
+		return
+	}
+
+	gs.manager.UpdateAutoSubscribeRules(stateKey, rules)
+}
+
+// extractInvolvedUsers extracts forge usernames and their roles from
+// a translated forge event. Provider-specific: reads fields populated
+// by the GitHub webhook translator.
+func extractInvolvedUsers(event *forge.Event) []forgesub.InvolvedUser {
+	var users []forgesub.InvolvedUser
+
+	switch event.Type {
+	case forge.EventCategoryPush:
+		if event.Push != nil && event.Push.Sender != "" {
+			users = append(users, forgesub.InvolvedUser{
+				ForgeUsername: event.Push.Sender,
+				Role:          forgesub.RoleAuthor,
+			})
+		}
+
+	case forge.EventCategoryPullRequest:
+		if event.PullRequest != nil {
+			if event.PullRequest.Author != "" {
+				users = append(users, forgesub.InvolvedUser{
+					ForgeUsername: event.PullRequest.Author,
+					Role:          forgesub.RoleAuthor,
+				})
+			}
+			if event.PullRequest.RequestedReviewer != "" {
+				users = append(users, forgesub.InvolvedUser{
+					ForgeUsername: event.PullRequest.RequestedReviewer,
+					Role:          forgesub.RoleReviewRequested,
+				})
+			}
+		}
+
+	case forge.EventCategoryIssues:
+		if event.Issue != nil {
+			if event.Issue.Author != "" {
+				users = append(users, forgesub.InvolvedUser{
+					ForgeUsername: event.Issue.Author,
+					Role:          forgesub.RoleAuthor,
+				})
+			}
+			if event.Issue.Assignee != "" {
+				users = append(users, forgesub.InvolvedUser{
+					ForgeUsername: event.Issue.Assignee,
+					Role:          forgesub.RoleAssignee,
+				})
+			}
+		}
+
+	case forge.EventCategoryReview:
+		if event.Review != nil && event.Review.Reviewer != "" {
+			users = append(users, forgesub.InvolvedUser{
+				ForgeUsername: event.Review.Reviewer,
+				Role:          forgesub.RoleAuthor,
+			})
+		}
+
+	case forge.EventCategoryComment:
+		if event.Comment != nil && event.Comment.Author != "" {
+			users = append(users, forgesub.InvolvedUser{
+				ForgeUsername: event.Comment.Author,
+				Role:          forgesub.RoleAuthor,
+			})
+		}
+	}
+
+	return users
+}
+
 // registerActions registers CBOR socket API actions on the service's
 // Unix socket server.
 func (gs *GitHubService) registerActions(server *service.SocketServer) {
@@ -286,6 +440,10 @@ func (gs *GitHubService) registerActions(server *service.SocketServer) {
 	server.HandleAuthStream(
 		forge.ProviderAction(forge.ProviderGitHub, forge.ActionSubscribe),
 		gs.handleSubscribe,
+	)
+	server.HandleAuth(
+		forge.ProviderAction(forge.ProviderGitHub, forge.ActionAutoSubscribeConfig),
+		gs.handleAutoSubscribeConfig,
 	)
 }
 

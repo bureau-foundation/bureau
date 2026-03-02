@@ -63,19 +63,21 @@ type ghLabel struct {
 
 // ghIssue is a GitHub issue within an issues event payload.
 type ghIssue struct {
-	Number  int       `json:"number"`
-	Title   string    `json:"title"`
-	Body    string    `json:"body"`
-	HTMLURL string    `json:"html_url"`
-	User    ghUser    `json:"user"`
-	Labels  []ghLabel `json:"labels"`
-	State   string    `json:"state"` // "open" or "closed"
+	Number    int       `json:"number"`
+	Title     string    `json:"title"`
+	Body      string    `json:"body"`
+	HTMLURL   string    `json:"html_url"`
+	User      ghUser    `json:"user"`
+	Labels    []ghLabel `json:"labels"`
+	Assignees []ghUser  `json:"assignees"`
+	State     string    `json:"state"` // "open" or "closed"
 }
 
 // ghIssuesPayload is the webhook payload for an "issues" event.
 type ghIssuesPayload struct {
 	Action     string       `json:"action"` // opened, closed, reopened, labeled, assigned, edited, ...
 	Issue      ghIssue      `json:"issue"`
+	Assignee   *ghUser      `json:"assignee"` // populated on "assigned"/"unassigned" actions
 	Repository ghRepository `json:"repository"`
 	Sender     ghUser       `json:"sender"`
 }
@@ -88,25 +90,27 @@ type ghBranch struct {
 
 // ghPullRequest is a GitHub pull request within a pull_request event.
 type ghPullRequest struct {
-	Number  int      `json:"number"`
-	Title   string   `json:"title"`
-	Body    string   `json:"body"`
-	HTMLURL string   `json:"html_url"`
-	User    ghUser   `json:"user"`
-	Head    ghBranch `json:"head"`
-	Base    ghBranch `json:"base"`
-	Draft   bool     `json:"draft"`
-	State   string   `json:"state"`  // "open" or "closed"
-	Merged  bool     `json:"merged"` // true if the PR was merged (only on close)
+	Number             int      `json:"number"`
+	Title              string   `json:"title"`
+	Body               string   `json:"body"`
+	HTMLURL            string   `json:"html_url"`
+	User               ghUser   `json:"user"`
+	Head               ghBranch `json:"head"`
+	Base               ghBranch `json:"base"`
+	Draft              bool     `json:"draft"`
+	State              string   `json:"state"`               // "open" or "closed"
+	Merged             bool     `json:"merged"`              // true if the PR was merged (only on close)
+	RequestedReviewers []ghUser `json:"requested_reviewers"` // users requested as reviewers
 }
 
 // ghPullRequestPayload is the webhook payload for a "pull_request"
 // event.
 type ghPullRequestPayload struct {
-	Action      string        `json:"action"` // opened, closed, synchronize, review_requested, ...
-	PullRequest ghPullRequest `json:"pull_request"`
-	Repository  ghRepository  `json:"repository"`
-	Sender      ghUser        `json:"sender"`
+	Action            string        `json:"action"` // opened, closed, synchronize, review_requested, ...
+	PullRequest       ghPullRequest `json:"pull_request"`
+	RequestedReviewer *ghUser       `json:"requested_reviewer"` // populated on "review_requested" action
+	Repository        ghRepository  `json:"repository"`
+	Sender            ghUser        `json:"sender"`
 }
 
 // ghReview is a GitHub pull request review.

@@ -102,6 +102,10 @@ func run() error {
 	// unbounded growth of the spend map.
 	go modelService.runQuotaCleanup(ctx)
 
+	// Start the continuation expiry goroutine. Evicts conversation
+	// history entries that haven't been used within the TTL.
+	go modelService.continuations.runExpiry(ctx)
+
 	boot.Logger.Info("model service running",
 		"principal", boot.PrincipalName,
 		"socket", boot.SocketPath,

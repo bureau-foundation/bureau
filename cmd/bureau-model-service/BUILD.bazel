@@ -9,6 +9,7 @@ go_library(
         "background.go",
         "complete.go",
         "completion_gate.go",
+        "continuation.go",
         "cost.go",
         "credentials.go",
         "doc.go",
@@ -52,6 +53,7 @@ go_test(
     srcs = [
         "background_test.go",
         "completion_gate_test.go",
+        "continuation_test.go",
         "cost_test.go",
         "credentials_test.go",
         "embed_batcher_test.go",

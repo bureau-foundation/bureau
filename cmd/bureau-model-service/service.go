@@ -17,13 +17,15 @@ import (
 )
 
 // ModelService is the core service state. The model registry, quota
-// tracker, and provider map are the three mutable data structures:
+// tracker, provider map, and continuation store are the four mutable
+// data structures:
 //
 //   - The registry is self-synchronized (internal RWMutex).
 //   - The quota tracker is self-synchronized (internal Mutex).
 //   - The provider map is protected by providersMu. Providers are
 //     created lazily on first use and reused for all subsequent
 //     requests to the same endpoint.
+//   - The continuation store is self-synchronized (internal Mutex).
 type ModelService struct {
 	session   messaging.Session
 	clock     clock.Clock
@@ -47,6 +49,12 @@ type ModelService struct {
 	// restart.
 	credentials *credentialStore
 
+	// continuations stores conversation history for multi-turn
+	// completion requests. Keyed by (agent, continuation_id). Entries
+	// expire after defaultContinuationTTL. Thread-safe (internal
+	// Mutex).
+	continuations *continuationStore
+
 	// latencyRouter coordinates batching, gating, and background
 	// scheduling for all provider requests. Handlers call SubmitEmbed
 	// or GateComplete instead of calling providers directly. Nil
@@ -64,16 +72,17 @@ type ModelService struct {
 // credential store.
 func newModelService(boot *service.BootstrapResult, credentials *credentialStore) *ModelService {
 	return &ModelService{
-		session:      boot.Session,
-		clock:        boot.Clock,
-		service:      boot.Service,
-		machine:      boot.Machine,
-		telemetry:    boot.Telemetry,
-		logger:       boot.Logger,
-		registry:     modelregistry.New(),
-		quotaTracker: modelregistry.NewQuotaTracker(boot.Clock),
-		credentials:  credentials,
-		providers:    make(map[string]modelprovider.Provider),
+		session:       boot.Session,
+		clock:         boot.Clock,
+		service:       boot.Service,
+		machine:       boot.Machine,
+		telemetry:     boot.Telemetry,
+		logger:        boot.Logger,
+		registry:      modelregistry.New(),
+		quotaTracker:  modelregistry.NewQuotaTracker(boot.Clock),
+		credentials:   credentials,
+		continuations: newContinuationStore(defaultContinuationTTL, boot.Clock),
+		providers:     make(map[string]modelprovider.Provider),
 	}
 }
 

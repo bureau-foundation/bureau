@@ -8,6 +8,7 @@ import (
 	"errors"
 	"fmt"
 	"net"
+	"strings"
 	"time"
 
 	"github.com/bureau-foundation/bureau/lib/codec"
@@ -56,6 +57,26 @@ func (ms *ModelService) handleComplete(ctx context.Context, token *servicetoken.
 	if len(request.Messages) == 0 {
 		stream.SendError("missing required field: messages")
 		return
+	}
+
+	// Load continuation history if this is a multi-turn request.
+	// When continuation_id is present, stored conversation history
+	// is prepended to the request messages so the model sees the
+	// full context. Continuations are opt-in: requests without a
+	// continuation_id create no server-side state.
+	var contKey continuationKey
+	providerMessages := request.Messages
+	if request.ContinuationID != "" {
+		contKey = continuationKey{
+			agent:          token.Subject.String(),
+			continuationID: request.ContinuationID,
+		}
+		if history := ms.continuations.Load(contKey); history != nil {
+			combined := make([]model.Message, 0, len(history)+len(request.Messages))
+			combined = append(combined, history...)
+			combined = append(combined, request.Messages...)
+			providerMessages = combined
+		}
 	}
 
 	// Resolve the model alias to a concrete provider and model.
@@ -149,10 +170,11 @@ func (ms *ModelService) handleComplete(ctx context.Context, token *servicetoken.
 		return
 	}
 
-	// Forward the request to the provider.
+	// Forward the request to the provider. When a continuation is
+	// active, providerMessages includes the prepended history.
 	completionStream, err := provider.Complete(ctx, &modelprovider.CompleteRequest{
 		Model:      resolution.ProviderModel,
-		Messages:   request.Messages,
+		Messages:   providerMessages,
 		Stream:     request.Stream,
 		Credential: credential,
 	})
@@ -165,20 +187,34 @@ func (ms *ModelService) handleComplete(ctx context.Context, token *servicetoken.
 	}
 	defer completionStream.Close()
 
-	// Stream response chunks to the client.
+	// Stream response chunks to the client. When a continuation is
+	// active, accumulate the assistant's response content so we can
+	// store the full conversation after successful completion.
 	var finalUsage *model.Usage
 	var finalModel string
+	var responseContent strings.Builder
 	for completionStream.Next() {
 		chunk := completionStream.Response()
+
+		// Accumulate content for continuation storage. Delta
+		// messages carry incremental fragments; done messages
+		// carry the full text for non-streaming requests.
+		if request.ContinuationID != "" {
+			responseContent.WriteString(chunk.Content)
+		}
 
 		if chunk.Type == model.ResponseDone {
 			finalUsage = chunk.Usage
 			finalModel = chunk.Model
 
-			// Enrich the done message with cost information before
-			// forwarding to the client.
+			// Enrich the done message with cost information
+			// before forwarding to the client.
 			cost := calculateCost(chunk.Usage, resolution.Pricing)
 			chunk.CostMicrodollars = cost
+
+			// Echo the continuation_id so the agent can use it
+			// in subsequent requests.
+			chunk.ContinuationID = request.ContinuationID
 		}
 
 		if err := stream.Send(chunk); err != nil {
@@ -197,6 +233,21 @@ func (ms *ModelService) handleComplete(ctx context.Context, token *servicetoken.
 			Error: fmt.Sprintf("stream error: %v", err),
 		})
 		return
+	}
+
+	// Store the continuation if this was a multi-turn request. The
+	// full conversation (history + new messages + assistant response)
+	// is saved so the next request in this continuation has the
+	// complete context.
+	if request.ContinuationID != "" {
+		assistantMessage := model.Message{
+			Role:    "assistant",
+			Content: responseContent.String(),
+		}
+		fullConversation := make([]model.Message, len(providerMessages)+1)
+		copy(fullConversation, providerMessages)
+		fullConversation[len(providerMessages)] = assistantMessage
+		ms.continuations.Store(contKey, fullConversation)
 	}
 
 	// Record cost and emit telemetry for the completed request.

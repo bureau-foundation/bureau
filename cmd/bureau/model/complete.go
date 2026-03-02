@@ -20,18 +20,21 @@ import (
 type completeParams struct {
 	ModelConnection
 	cli.JSONOutput
-	Model  string `json:"model"  flag:"model,m"  desc:"model alias or 'auto'" default:"auto"`
-	System string `json:"system" flag:"system,s"  desc:"system prompt"`
-	Prompt string `json:"prompt"                   desc:"user message (or read from stdin)" required:"true"`
+	Model          string `json:"model"           flag:"model,m"     desc:"model alias or 'auto'" default:"auto"`
+	System         string `json:"system"          flag:"system,s"    desc:"system prompt"`
+	ContinuationID string `json:"continuation_id" flag:"continue,c"  desc:"continuation ID for multi-turn conversation"`
+	Prompt         string `json:"prompt"                              desc:"user message (or read from stdin)" required:"true"`
 }
 
 // completeResult is the structured output for --json mode. Contains
-// the full response text, model used, token usage, and cost.
+// the full response text, model used, token usage, cost, and
+// continuation ID for multi-turn scripting.
 type completeResult struct {
-	Content          string             `json:"content"           desc:"complete response text"`
-	Model            string             `json:"model"             desc:"provider model used"`
-	Usage            *modelschema.Usage `json:"usage,omitempty"   desc:"token usage"`
-	CostMicrodollars int64              `json:"cost_microdollars" desc:"cost in microdollars"`
+	Content          string             `json:"content"                      desc:"complete response text"`
+	Model            string             `json:"model"                        desc:"provider model used"`
+	Usage            *modelschema.Usage `json:"usage,omitempty"              desc:"token usage"`
+	CostMicrodollars int64              `json:"cost_microdollars"            desc:"cost in microdollars"`
+	ContinuationID   string             `json:"continuation_id,omitempty"    desc:"continuation ID for follow-up requests"`
 }
 
 func completeCommand() *cli.Command {
@@ -67,6 +70,10 @@ the response text, model used, token usage, and cost.`,
 				Description: "JSON output for scripting",
 				Command:     "bureau model complete --model codex --json 'Summarize this'",
 			},
+			{
+				Description: "Multi-turn conversation (continuation)",
+				Command:     "bureau model complete --continue my-review --system 'Code reviewer' 'Review this function'\nbureau model complete --continue my-review 'Now check for memory leaks'",
+			},
 		},
 		Params:         func() any { return &params },
 		Output:         func() any { return &completeResult{} },
@@ -99,9 +106,10 @@ the response text, model used, token usage, and cost.`,
 
 			// Open a streaming completion.
 			stream, err := client.OpenStream(ctx, modelschema.ActionComplete, &modelschema.Request{
-				Model:    params.Model,
-				Messages: messages,
-				Stream:   true,
+				Model:          params.Model,
+				Messages:       messages,
+				Stream:         true,
+				ContinuationID: params.ContinuationID,
 			})
 			if err != nil {
 				return classifyServiceError(err, "complete")
@@ -164,6 +172,7 @@ func readCompletionStream(stream *service.ServiceStream, jsonOutput *cli.JSONOut
 				Model:            finalModel,
 				Usage:            finalUsage,
 				CostMicrodollars: finalCost,
+				ContinuationID:   response.ContinuationID,
 			}
 
 			if done, err := jsonOutput.EmitJSON(result); done {
@@ -173,11 +182,20 @@ func readCompletionStream(stream *service.ServiceStream, jsonOutput *cli.JSONOut
 			// Print usage summary to stderr in text mode so it
 			// doesn't interfere with pipe-friendly stdout output.
 			if finalUsage != nil {
-				fmt.Fprintf(os.Stderr, "[model=%s input=%d output=%d cost=$%.4f]\n",
-					finalModel,
-					finalUsage.InputTokens,
-					finalUsage.OutputTokens,
-					float64(finalCost)/1_000_000)
+				if response.ContinuationID != "" {
+					fmt.Fprintf(os.Stderr, "[model=%s input=%d output=%d cost=$%.4f continue=%s]\n",
+						finalModel,
+						finalUsage.InputTokens,
+						finalUsage.OutputTokens,
+						float64(finalCost)/1_000_000,
+						response.ContinuationID)
+				} else {
+					fmt.Fprintf(os.Stderr, "[model=%s input=%d output=%d cost=$%.4f]\n",
+						finalModel,
+						finalUsage.InputTokens,
+						finalUsage.OutputTokens,
+						float64(finalCost)/1_000_000)
+				}
 			}
 			return nil
 

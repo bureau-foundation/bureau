@@ -194,6 +194,13 @@ type Response struct {
 	// Error is a human-readable error description. Present only in
 	// error messages.
 	Error string `cbor:"6,keyasint,omitempty"`
+
+	// ContinuationID echoes the continuation identifier from the
+	// request. Present only in done messages when the request
+	// included a ContinuationID. The agent includes this in
+	// subsequent requests to continue the conversation with
+	// server-side history prepending.
+	ContinuationID string `cbor:"7,keyasint,omitempty"`
 }
 
 // EmbedResponse is the response for an embedding request. Unlike

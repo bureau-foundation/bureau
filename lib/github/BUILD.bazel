@@ -1,0 +1,45 @@
+# Copyright 2026 The Bureau Authors
+# SPDX-License-Identifier: Apache-2.0
+
+load("@rules_go//go:def.bzl", "go_library", "go_test")
+
+go_library(
+    name = "github",
+    srcs = [
+        "actions.go",
+        "app.go",
+        "auth.go",
+        "client.go",
+        "doc.go",
+        "errors.go",
+        "etag.go",
+        "git.go",
+        "hooks.go",
+        "issues.go",
+        "pagination.go",
+        "pulls.go",
+        "ratelimit.go",
+        "reviews.go",
+        "status.go",
+        "types.go",
+    ],
+    importpath = "github.com/bureau-foundation/bureau/lib/github",
+    visibility = ["//visibility:public"],
+    deps = [
+        "//lib/clock",
+        "//lib/netutil",
+    ],
+)
+
+go_test(
+    name = "github_test",
+    srcs = [
+        "api_test.go",
+        "auth_test.go",
+        "client_test.go",
+        "errors_test.go",
+        "pagination_test.go",
+    ],
+    embed = [":github"],
+    deps = ["//lib/clock"],
+)

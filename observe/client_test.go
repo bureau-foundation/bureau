@@ -223,7 +223,9 @@ func TestSessionRunReceivesHistory(t *testing.T) {
 
 	// Wait for the connection to be accepted, then run the handshake
 	// and close the connection to trigger Session.Run to return.
+	daemonDone := make(chan struct{})
 	go func() {
+		defer close(daemonDone)
 		<-accepted
 		daemon.handshake(t)
 		daemon.conn.Close()
@@ -244,6 +246,8 @@ func TestSessionRunReceivesHistory(t *testing.T) {
 		t.Fatalf("Run: %v", err)
 	}
 
+	<-daemonDone
+
 	result := output.String()
 	if !strings.Contains(result, "previous output") {
 		t.Errorf("output should contain history, got: %q", result)
@@ -257,7 +261,9 @@ func TestSessionRunRelaysData(t *testing.T) {
 	t.Parallel()
 	daemon, socketPath, accepted := newTestDaemon(t, testMetadata, nil)
 
+	daemonDone := make(chan struct{})
 	go func() {
+		defer close(daemonDone)
 		<-accepted
 		daemon.handshake(t)
 		// Send some terminal output, then close to trigger EOF.
@@ -279,6 +285,11 @@ func TestSessionRunRelaysData(t *testing.T) {
 	if err != nil {
 		t.Fatalf("Run: %v", err)
 	}
+
+	// Wait for the daemon goroutine to finish before the test returns.
+	// Without this, t.Cleanup (registered by newTestDaemon) races to
+	// close daemon.conn while the daemon goroutine is still writing.
+	<-daemonDone
 
 	result := output.String()
 	if !strings.Contains(result, "remote terminal output") {
@@ -355,7 +366,9 @@ func TestSessionRunWithPipe(t *testing.T) {
 
 	// Simulate daemon side: complete the protocol exchange, send live
 	// data, then close to trigger EOF on the client.
+	daemonDone := make(chan struct{})
 	go func() {
+		defer close(daemonDone)
 		// Read request.
 		var request ObserveRequest
 		json.NewDecoder(daemonConn).Decode(&request)
@@ -423,6 +436,11 @@ func TestSessionRunWithPipe(t *testing.T) {
 	if err != nil {
 		t.Fatalf("Run: %v", err)
 	}
+
+	// Wait for the daemon goroutine to finish before the test returns.
+	// Without this, deferred closes race to tear down daemonConn while
+	// the daemon goroutine is still writing.
+	<-daemonDone
 
 	result := output.String()
 	if !strings.Contains(result, "scrollback history") {

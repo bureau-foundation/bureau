@@ -107,69 +107,15 @@ func Relay(connection io.ReadWriteCloser, server *tmux.Server, sessionName strin
 
 	ring := NewRingBuffer(DefaultRingBufferSize)
 
-	// Query tmux for session metadata and send it to the observer.
-	metadata, err := queryMetadata(server, sessionName)
-	if err != nil {
-		_ = cmd.Process.Kill()
-		<-tmuxExitDone
-		master.Close()
-		return fmt.Errorf("query tmux metadata: %w", err)
-	}
-	metadataJSON, err := json.Marshal(metadata)
-	if err != nil {
-		_ = cmd.Process.Kill()
-		<-tmuxExitDone
-		master.Close()
-		return fmt.Errorf("marshal metadata: %w", err)
-	}
-	if err := WriteMessage(connection, NewMetadataMessage(metadataJSON)); err != nil {
-		_ = cmd.Process.Kill()
-		<-tmuxExitDone
-		master.Close()
-		return fmt.Errorf("send metadata: %w", err)
-	}
-
-	// Send current ring buffer contents as history. Empty on initial connect
-	// since the relay just started, but the protocol requires the message.
-	historyData := ring.ReadFrom(0)
-	if historyData == nil {
-		historyData = []byte{}
-	}
-	if err := WriteMessage(connection, NewHistoryMessage(historyData)); err != nil {
-		_ = cmd.Process.Kill()
-		<-tmuxExitDone
-		master.Close()
-		return fmt.Errorf("send history: %w", err)
-	}
-
 	var goroutineWait sync.WaitGroup
 
-	// Goroutine: PTY master output → connection as data messages.
-	// Also feeds output through the ring buffer for history.
-	goroutineWait.Add(1)
-	go func() {
-		defer goroutineWait.Done()
-		defer triggerDone()
-		readBuffer := make([]byte, 4096)
-		for {
-			bytesRead, readErr := master.Read(readBuffer)
-			if bytesRead > 0 {
-				ring.Write(readBuffer[:bytesRead])
-				if writeErr := WriteMessage(connection, NewDataMessage(readBuffer[:bytesRead])); writeErr != nil {
-					// Connection write failure means the observer disconnected.
-					// This is a normal shutdown trigger, not an error.
-					return
-				}
-			}
-			if readErr != nil {
-				// EIO is the normal signal that the PTY slave closed
-				// (tmux exited). Any other read error also ends the relay.
-				return
-			}
-		}
-	}()
-
-	// Goroutine: connection messages → PTY master input or ioctl.
+	// Start the input reader goroutine BEFORE sending the handshake.
+	// The handshake signals to the client that the relay is ready for I/O.
+	// The input goroutine must already be blocked in ReadMessage by the
+	// time the client receives the handshake and sends data. Without this
+	// ordering, the goroutine might not be scheduled when the client
+	// writes, which deadlocks on synchronous transports (net.Pipe) and
+	// creates a theoretical input-loss window on buffered transports.
 	goroutineWait.Add(1)
 	go func() {
 		defer goroutineWait.Done()
@@ -200,6 +146,71 @@ func Relay(connection io.ReadWriteCloser, server *tmux.Server, sessionName strin
 				if resizeErr := setWindowSize(int(master.Fd()), columns, rows); resizeErr != nil {
 					return
 				}
+			}
+		}
+	}()
+
+	// abortHandshake stops the input goroutine (which is already running)
+	// by closing the connection to unblock its ReadMessage, waits for it
+	// to exit, then tears down the tmux process and PTY.
+	abortHandshake := func() {
+		connection.Close()
+		goroutineWait.Wait()
+		_ = cmd.Process.Kill()
+		<-tmuxExitDone
+		master.Close()
+	}
+
+	// Query tmux for session metadata and send it to the observer.
+	metadata, err := queryMetadata(server, sessionName)
+	if err != nil {
+		abortHandshake()
+		return fmt.Errorf("query tmux metadata: %w", err)
+	}
+	metadataJSON, err := json.Marshal(metadata)
+	if err != nil {
+		abortHandshake()
+		return fmt.Errorf("marshal metadata: %w", err)
+	}
+	if err := WriteMessage(connection, NewMetadataMessage(metadataJSON)); err != nil {
+		abortHandshake()
+		return fmt.Errorf("send metadata: %w", err)
+	}
+
+	// Send current ring buffer contents as history. Empty on initial connect
+	// since the relay just started, but the protocol requires the message.
+	historyData := ring.ReadFrom(0)
+	if historyData == nil {
+		historyData = []byte{}
+	}
+	if err := WriteMessage(connection, NewHistoryMessage(historyData)); err != nil {
+		abortHandshake()
+		return fmt.Errorf("send history: %w", err)
+	}
+
+	// Goroutine: PTY master output → connection as data messages.
+	// Also feeds output through the ring buffer for history.
+	// Started AFTER the handshake because data messages must follow
+	// metadata and history per the observation protocol.
+	goroutineWait.Add(1)
+	go func() {
+		defer goroutineWait.Done()
+		defer triggerDone()
+		readBuffer := make([]byte, 4096)
+		for {
+			bytesRead, readErr := master.Read(readBuffer)
+			if bytesRead > 0 {
+				ring.Write(readBuffer[:bytesRead])
+				if writeErr := WriteMessage(connection, NewDataMessage(readBuffer[:bytesRead])); writeErr != nil {
+					// Connection write failure means the observer disconnected.
+					// This is a normal shutdown trigger, not an error.
+					return
+				}
+			}
+			if readErr != nil {
+				// EIO is the normal signal that the PTY slave closed
+				// (tmux exited). Any other read error also ends the relay.
+				return
 			}
 		}
 	}()

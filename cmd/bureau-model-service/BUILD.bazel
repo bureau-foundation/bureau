@@ -1,0 +1,52 @@
+# Copyright 2026 The Bureau Authors
+# SPDX-License-Identifier: Apache-2.0
+
+load("@rules_go//go:def.bzl", "go_binary", "go_library", "go_test")
+
+go_library(
+    name = "bureau-model-service_lib",
+    srcs = [
+        "complete.go",
+        "cost.go",
+        "credentials.go",
+        "doc.go",
+        "embed.go",
+        "main.go",
+        "service.go",
+        "sync.go",
+    ],
+    importpath = "github.com/bureau-foundation/bureau/cmd/bureau-model-service",
+    visibility = ["//visibility:private"],
+    deps = [
+        "//lib/clock",
+        "//lib/codec",
+        "//lib/modelprovider",
+        "//lib/modelregistry",
+        "//lib/process",
+        "//lib/ref",
+        "//lib/schema/model",
+        "//lib/schema/telemetry",
+        "//lib/secret",
+        "//lib/service",
+        "//lib/servicetoken",
+        "//lib/version",
+        "//messaging",
+    ],
+)
+
+go_binary(
+    name = "bureau-model-service",
+    embed = [":bureau-model-service_lib"],
+    visibility = ["//visibility:public"],
+)
+
+go_test(
+    name = "bureau-model-service_test",
+    srcs = [
+        "cost_test.go",
+        "credentials_test.go",
+        "sync_test.go",
+    ],
+    embed = [":bureau-model-service_lib"],
+    deps = ["//lib/schema/model"],
+)

@@ -86,6 +86,15 @@ func (ms *ModelService) handleComplete(ctx context.Context, token *servicetoken.
 		return
 	}
 
+	// Authorize: check that the token grants model/complete on
+	// the resolved alias. The check uses the resolved alias (not
+	// the raw request model) so that "auto" resolution is subject
+	// to the same access control as explicit alias requests.
+	if err := requireModelGrant(token, model.ActionComplete, resolution.Alias); err != nil {
+		stream.SendError(err.Error())
+		return
+	}
+
 	// Extract the project identity from the service token for
 	// per-project accounting and credential selection.
 	project := token.Project

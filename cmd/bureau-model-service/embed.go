@@ -42,6 +42,12 @@ func (ms *ModelService) handleEmbed(ctx context.Context, token *servicetoken.Tok
 		return nil, err
 	}
 
+	// Authorize: check that the token grants model/embed on the
+	// resolved alias.
+	if err := requireModelGrant(token, model.ActionEmbed, resolution.Alias); err != nil {
+		return nil, err
+	}
+
 	// Extract project identity.
 	project := token.Project
 	if project == "" {

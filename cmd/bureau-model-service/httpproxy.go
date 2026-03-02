@@ -127,7 +127,8 @@ func (proxy *httpProxy) ServeHTTP(writer http.ResponseWriter, request *http.Requ
 	// named by the path prefix.
 	resolvedProvider := providerName
 	var resolution *modelregistry.Resolution
-	if modelName := extractModelField(requestBody); modelName != "" {
+	modelName := extractModelField(requestBody)
+	if modelName != "" {
 		resolved, resolveError := proxy.modelService.resolveModel(modelName)
 		if resolveError != nil {
 			http.Error(writer, fmt.Sprintf("model resolution failed: %v", resolveError), http.StatusBadRequest)
@@ -147,6 +148,23 @@ func (proxy *httpProxy) ServeHTTP(writer http.ResponseWriter, request *http.Requ
 			return
 		}
 		providerConfig = resolvedProviderConfig
+	}
+
+	// Authorize the request. Requests with a model field get a
+	// target-scoped grant check (action + model alias). Requests
+	// without a model field (e.g., GET /v1/models) get an action-
+	// only check. The HTTP proxy uses model/complete as the action
+	// for all forwarded requests since it proxies inference calls.
+	if resolution != nil {
+		if err := requireModelGrant(token, model.ActionComplete, resolution.Alias); err != nil {
+			http.Error(writer, err.Error(), http.StatusForbidden)
+			return
+		}
+	} else {
+		if err := requireActionGrant(token, model.ActionList); err != nil {
+			http.Error(writer, err.Error(), http.StatusForbidden)
+			return
+		}
 	}
 
 	// Select the account for this (project, provider) pair.

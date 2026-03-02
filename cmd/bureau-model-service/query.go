@@ -13,7 +13,11 @@ import (
 // handleList returns the list of registered model aliases with their
 // resolved provider information. This is an AuthActionFunc: the
 // socket server handles the response envelope.
-func (ms *ModelService) handleList(_ context.Context, _ *servicetoken.Token, _ []byte) (any, error) {
+func (ms *ModelService) handleList(_ context.Context, token *servicetoken.Token, _ []byte) (any, error) {
+	if err := requireActionGrant(token, model.ActionList); err != nil {
+		return nil, err
+	}
+
 	aliases := ms.registry.Aliases()
 	providers := ms.registry.Providers()
 
@@ -45,7 +49,11 @@ func (ms *ModelService) handleList(_ context.Context, _ *servicetoken.Token, _ [
 
 // handleStatus returns quota usage for all accounts. This is an
 // AuthActionFunc: the socket server handles the response envelope.
-func (ms *ModelService) handleStatus(_ context.Context, _ *servicetoken.Token, _ []byte) (any, error) {
+func (ms *ModelService) handleStatus(_ context.Context, token *servicetoken.Token, _ []byte) (any, error) {
+	if err := requireActionGrant(token, model.ActionStatus); err != nil {
+		return nil, err
+	}
+
 	accounts := ms.registry.Accounts()
 
 	entries := make([]model.AccountStatusEntry, 0, len(accounts))

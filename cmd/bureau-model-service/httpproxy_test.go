@@ -471,6 +471,12 @@ func (fixture *testFixture) setCredential(t *testing.T, name, value string) {
 
 func (fixture *testFixture) mintToken(t *testing.T, project string) string {
 	t.Helper()
+	return fixture.mintTokenWithGrants(t, project,
+		[]servicetoken.Grant{{Actions: []string{"model/*"}}})
+}
+
+func (fixture *testFixture) mintTokenWithGrants(t *testing.T, project string, grants []servicetoken.Grant) string {
+	t.Helper()
 
 	serverName, _ := ref.ParseServerName("bureau.local")
 	subject, _ := ref.ParseUserID(fmt.Sprintf("@test/fleet/prod/agent/test-agent:%s", serverName))
@@ -481,7 +487,7 @@ func (fixture *testFixture) mintToken(t *testing.T, project string) string {
 		Subject:   subject,
 		Machine:   machine,
 		Audience:  "model",
-		Grants:    []servicetoken.Grant{{Actions: []string{"model/*"}}},
+		Grants:    grants,
 		ID:        "test-token-1",
 		IssuedAt:  fixture.fakeClock.Now().Unix(),
 		ExpiresAt: fixture.fakeClock.Now().Add(1 * time.Hour).Unix(),
@@ -911,5 +917,145 @@ func TestHTTPProxy_QueryStringForwarded(t *testing.T) {
 
 	if recorder.Code != http.StatusOK {
 		t.Fatalf("status = %d, want %d", recorder.Code, http.StatusOK)
+	}
+}
+
+// --- Grant enforcement tests for HTTP proxy ---
+
+func TestHTTPProxy_GrantDenied_WrongAction(t *testing.T) {
+	fixture := newTestFixture(t)
+
+	upstream := httptest.NewServer(http.HandlerFunc(func(writer http.ResponseWriter, request *http.Request) {
+		t.Fatal("request should not reach upstream when grant is denied")
+	}))
+	defer upstream.Close()
+
+	fixture.modelService.registry.SetProvider("openai", model.ModelProviderContent{
+		Endpoint:     upstream.URL,
+		AuthMethod:   model.AuthMethodBearer,
+		Capabilities: []string{"completion"},
+	})
+	fixture.modelService.registry.SetAlias("codex", model.ModelAliasContent{
+		Provider:      "openai",
+		ProviderModel: "gpt-4",
+	})
+	fixture.modelService.registry.SetAccount("openai-shared", model.ModelAccountContent{
+		Provider:      "openai",
+		CredentialRef: "openai-key",
+		Projects:      []string{"*"},
+	})
+	fixture.setCredential(t, "openai-key", "real-key")
+
+	// Token only grants model/embed, not model/complete.
+	tokenString := fixture.mintTokenWithGrants(t, "my-project",
+		[]servicetoken.Grant{{Actions: []string{"model/embed"}}})
+
+	requestBody := `{"model":"codex","messages":[{"role":"user","content":"Hi"}]}`
+	request := httptest.NewRequest("POST", "/openai/v1/chat/completions",
+		strings.NewReader(requestBody))
+	request.Header.Set("Authorization", "Bearer "+tokenString)
+	recorder := httptest.NewRecorder()
+
+	fixture.proxy.ServeHTTP(recorder, request)
+
+	if recorder.Code != http.StatusForbidden {
+		t.Errorf("status = %d, want %d; body: %s", recorder.Code, http.StatusForbidden, recorder.Body.String())
+	}
+}
+
+func TestHTTPProxy_GrantDenied_WrongModel(t *testing.T) {
+	fixture := newTestFixture(t)
+
+	upstream := httptest.NewServer(http.HandlerFunc(func(writer http.ResponseWriter, request *http.Request) {
+		t.Fatal("request should not reach upstream when model is denied")
+	}))
+	defer upstream.Close()
+
+	fixture.modelService.registry.SetProvider("openai", model.ModelProviderContent{
+		Endpoint:     upstream.URL,
+		AuthMethod:   model.AuthMethodBearer,
+		Capabilities: []string{"completion"},
+	})
+	fixture.modelService.registry.SetAlias("codex", model.ModelAliasContent{
+		Provider:      "openai",
+		ProviderModel: "gpt-4",
+	})
+	fixture.modelService.registry.SetAlias("sonnet", model.ModelAliasContent{
+		Provider:      "openai",
+		ProviderModel: "claude-sonnet",
+	})
+	fixture.modelService.registry.SetAccount("openai-shared", model.ModelAccountContent{
+		Provider:      "openai",
+		CredentialRef: "openai-key",
+		Projects:      []string{"*"},
+	})
+	fixture.setCredential(t, "openai-key", "real-key")
+
+	// Token grants model/complete but only for "codex" target.
+	tokenString := fixture.mintTokenWithGrants(t, "my-project",
+		[]servicetoken.Grant{{
+			Actions: []string{"model/complete"},
+			Targets: []string{"codex"},
+		}})
+
+	// Request "sonnet" which is not in the target list.
+	requestBody := `{"model":"sonnet","messages":[{"role":"user","content":"Hi"}]}`
+	request := httptest.NewRequest("POST", "/openai/v1/chat/completions",
+		strings.NewReader(requestBody))
+	request.Header.Set("Authorization", "Bearer "+tokenString)
+	recorder := httptest.NewRecorder()
+
+	fixture.proxy.ServeHTTP(recorder, request)
+
+	if recorder.Code != http.StatusForbidden {
+		t.Errorf("status = %d, want %d; body: %s", recorder.Code, http.StatusForbidden, recorder.Body.String())
+	}
+	if !strings.Contains(recorder.Body.String(), "not permitted") {
+		t.Errorf("body should mention 'not permitted', got: %s", recorder.Body.String())
+	}
+}
+
+func TestHTTPProxy_GrantAllowed_TargetedGrant(t *testing.T) {
+	fixture := newTestFixture(t)
+
+	upstream := httptest.NewServer(http.HandlerFunc(func(writer http.ResponseWriter, request *http.Request) {
+		writer.Header().Set("Content-Type", "application/json")
+		writer.Write([]byte(`{"model":"gpt-4","choices":[],"usage":{"prompt_tokens":1,"completion_tokens":1}}`))
+	}))
+	defer upstream.Close()
+
+	fixture.modelService.registry.SetProvider("openai", model.ModelProviderContent{
+		Endpoint:     upstream.URL,
+		AuthMethod:   model.AuthMethodBearer,
+		Capabilities: []string{"completion"},
+	})
+	fixture.modelService.registry.SetAlias("codex", model.ModelAliasContent{
+		Provider:      "openai",
+		ProviderModel: "gpt-4",
+	})
+	fixture.modelService.registry.SetAccount("openai-shared", model.ModelAccountContent{
+		Provider:      "openai",
+		CredentialRef: "openai-key",
+		Projects:      []string{"*"},
+	})
+	fixture.setCredential(t, "openai-key", "real-key")
+
+	// Token grants model/complete only for "codex".
+	tokenString := fixture.mintTokenWithGrants(t, "my-project",
+		[]servicetoken.Grant{{
+			Actions: []string{"model/complete"},
+			Targets: []string{"codex"},
+		}})
+
+	requestBody := `{"model":"codex","messages":[{"role":"user","content":"Hi"}]}`
+	request := httptest.NewRequest("POST", "/openai/v1/chat/completions",
+		strings.NewReader(requestBody))
+	request.Header.Set("Authorization", "Bearer "+tokenString)
+	recorder := httptest.NewRecorder()
+
+	fixture.proxy.ServeHTTP(recorder, request)
+
+	if recorder.Code != http.StatusOK {
+		t.Fatalf("status = %d, want %d; body: %s", recorder.Code, http.StatusOK, recorder.Body.String())
 	}
 }

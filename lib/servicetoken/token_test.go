@@ -368,6 +368,80 @@ func TestMintVerify_NoGrants(t *testing.T) {
 	}
 }
 
+func TestMintVerify_WithProject(t *testing.T) {
+	public, private := testKeypair(t)
+
+	subject := mustParseUserID(t, "@iree/fleet/prod/agent/code-reviewer:bureau.local")
+	machine := mustParseMachine(t, "@iree/fleet/prod/machine/gpu-box:bureau.local")
+
+	const issuedAt int64 = 1735689600  // 2025-01-01 00:00:00 UTC
+	const expiresAt int64 = 1735693200 // 2025-01-01 01:00:00 UTC
+	token := &Token{
+		Subject:  subject,
+		Machine:  machine,
+		Audience: "model",
+		Grants: []Grant{
+			{Actions: []string{"model/**"}},
+		},
+		ID:        "model-token-1",
+		IssuedAt:  issuedAt,
+		ExpiresAt: expiresAt,
+		Project:   "iree-amdgpu",
+	}
+
+	tokenBytes, err := Mint(private, token)
+	if err != nil {
+		t.Fatalf("Mint: %v", err)
+	}
+
+	verifyTime := time.Unix(issuedAt+1800, 0)
+	verified, err := VerifyForServiceAt(public, tokenBytes, "model", verifyTime)
+	if err != nil {
+		t.Fatalf("VerifyForServiceAt: %v", err)
+	}
+
+	if verified.Project != "iree-amdgpu" {
+		t.Errorf("Project = %q, want %q", verified.Project, "iree-amdgpu")
+	}
+	if verified.Subject != subject {
+		t.Errorf("Subject = %v, want %v", verified.Subject, subject)
+	}
+	if verified.Audience != "model" {
+		t.Errorf("Audience = %q, want %q", verified.Audience, "model")
+	}
+}
+
+func TestMintVerify_EmptyProject(t *testing.T) {
+	public, private := testKeypair(t)
+
+	const issuedAt int64 = 1735689600  // 2025-01-01 00:00:00 UTC
+	const expiresAt int64 = 1735693200 // 2025-01-01 01:00:00 UTC
+	token := &Token{
+		Subject:   mustParseUserID(t, "@bureau/fleet/prod/agent/tester:bureau.local"),
+		Machine:   mustParseMachine(t, "@bureau/fleet/prod/machine/box:bureau.local"),
+		Audience:  "ticket",
+		ID:        "id1",
+		IssuedAt:  issuedAt,
+		ExpiresAt: expiresAt,
+		// Project intentionally omitted — ticket service tokens don't need it.
+	}
+
+	tokenBytes, err := Mint(private, token)
+	if err != nil {
+		t.Fatalf("Mint: %v", err)
+	}
+
+	verifyTime := time.Unix(issuedAt+1800, 0)
+	verified, err := VerifyAt(public, tokenBytes, verifyTime)
+	if err != nil {
+		t.Fatalf("VerifyAt: %v", err)
+	}
+
+	if verified.Project != "" {
+		t.Errorf("Project = %q, want empty", verified.Project)
+	}
+}
+
 func TestTokenWireSize(t *testing.T) {
 	_, private := testKeypair(t)
 

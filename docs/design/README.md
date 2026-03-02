@@ -61,6 +61,9 @@ a Matrix account and a unix socket API.
   placement, machine lifecycle, HA, batch scheduling.
 - **[authorization.md](authorization.md)** — Access control: grants,
   denials, allowances, temporal scoping, credential provisioning.
+- **[model-service.md](model-service.md)** — Unified inference gateway:
+  native CBOR and HTTP compatibility APIs, provider routing, model
+  registry, per-project accounting, batching, streaming.
 - **[stewardship.md](stewardship.md)** — Governance layer: resource
   ownership, tiered review escalation, workspace path stewardship
   (CODEOWNERS equivalent), notification batching, access escalation.

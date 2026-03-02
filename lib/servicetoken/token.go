@@ -70,6 +70,14 @@ type Token struct {
 	// ExpiresAt is a Unix timestamp (seconds) after which this
 	// token is no longer valid.
 	ExpiresAt int64 `cbor:"7,keyasint"`
+
+	// Project is the project name for per-project accounting and
+	// quota enforcement. Derived from the agent's workspace
+	// assignment when the daemon mints the token. The model service
+	// uses this to select the correct API key account and attribute
+	// costs. Empty for tokens scoped to services that don't need
+	// project identity (e.g., ticket service).
+	Project string `cbor:"8,keyasint,omitempty"`
 }
 
 // Errors returned by Verify and related functions.

@@ -1280,7 +1280,8 @@ func (pane *DetailPane) SetSize(width, height int) {
 // search is cleared because the search was against the previous
 // ticket's body content.
 func (pane *DetailPane) SetContent(source Source, entry ticketindex.Entry, now time.Time) {
-	if entry.ID != pane.entry.ID {
+	newTicket := entry.ID != pane.entry.ID
+	if newTicket {
 		pane.search.Clear()
 		// Viewport height may change when the search bar disappears.
 		pane.viewport.Height = pane.bodyHeight()
@@ -1318,7 +1319,13 @@ func (pane *DetailPane) SetContent(source Source, entry ticketindex.Entry, now t
 	pane.clickTargets = clickTargets
 	pane.rawBody = body
 	pane.applySearchHighlighting()
-	pane.viewport.GotoTop()
+
+	// Only reset scroll position when navigating to a different
+	// ticket. Re-rendering the same ticket (e.g. due to an unrelated
+	// source event) should preserve the reader's scroll position.
+	if newTicket {
+		pane.viewport.GotoTop()
+	}
 }
 
 // Clear removes the detail pane content.

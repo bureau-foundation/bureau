@@ -394,6 +394,75 @@ func testTime() time.Time {
 	return time.Date(2026, 2, 24, 12, 0, 0, 0, time.UTC)
 }
 
+func TestSetContentPreservesScrollForSameTicket(t *testing.T) {
+	t.Parallel()
+
+	index := newTestIndex()
+	// Create a ticket with enough body content to be scrollable.
+	longBody := strings.Repeat("Line of body text for scrolling.\n", 50)
+	index.Put("tkt-scroll", ticket.TicketContent{
+		Version:   1,
+		Title:     "Scrollable ticket",
+		Body:      longBody,
+		Status:    ticket.StatusOpen,
+		Priority:  1,
+		Type:      ticket.TypeTask,
+		CreatedAt: "2026-02-01T00:00:00Z",
+		UpdatedAt: "2026-02-01T00:00:00Z",
+	})
+	index.Put("tkt-other", ticket.TicketContent{
+		Version:   1,
+		Title:     "Different ticket",
+		Body:      longBody,
+		Status:    ticket.StatusOpen,
+		Priority:  2,
+		Type:      ticket.TypeTask,
+		CreatedAt: "2026-02-01T00:00:00Z",
+		UpdatedAt: "2026-02-01T00:00:00Z",
+	})
+	source := NewIndexSource(index)
+
+	pane := NewDetailPane(DefaultTheme)
+	pane.SetSize(60, 20)
+	now := testTime()
+
+	scrollContent, _ := index.Get("tkt-scroll")
+	scrollEntry := ticketindex.Entry{
+		ID:      "tkt-scroll",
+		Content: scrollContent,
+	}
+	otherContent, _ := index.Get("tkt-other")
+	otherEntry := ticketindex.Entry{
+		ID:      "tkt-other",
+		Content: otherContent,
+	}
+
+	// Initial render: should start at top.
+	pane.SetContent(source, scrollEntry, now)
+	if pane.viewport.YOffset != 0 {
+		t.Fatalf("expected initial YOffset=0, got %d", pane.viewport.YOffset)
+	}
+
+	// Scroll down.
+	pane.viewport.SetYOffset(10)
+	if pane.viewport.YOffset != 10 {
+		t.Fatalf("expected YOffset=10 after scroll, got %d", pane.viewport.YOffset)
+	}
+
+	// Re-render the same ticket (simulates a source event refresh).
+	// Scroll position should be preserved.
+	pane.SetContent(source, scrollEntry, now)
+	if pane.viewport.YOffset != 10 {
+		t.Errorf("expected YOffset=10 after same-ticket re-render, got %d", pane.viewport.YOffset)
+	}
+
+	// Switch to a different ticket. Scroll should reset to top.
+	pane.SetContent(source, otherEntry, now)
+	if pane.viewport.YOffset != 0 {
+		t.Errorf("expected YOffset=0 after switching tickets, got %d", pane.viewport.YOffset)
+	}
+}
+
 func TestCanReviewFileMode(t *testing.T) {
 	t.Parallel()
 

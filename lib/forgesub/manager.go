@@ -304,6 +304,51 @@ func (m *Manager) EntitySubscriberCount(entity forge.EntityRef) int {
 	return len(m.entitySubscribers[entity])
 }
 
+// --- Room config queries ---
+
+// RoomMatch pairs a room ID with its forge configuration. Returned by
+// RoomsForEvent to let callers (e.g., ticket sync) inspect per-room
+// config without reaching into the Manager's internal structures.
+type RoomMatch struct {
+	RoomID ref.RoomID
+	Config *forge.ForgeConfig // nil if no ForgeConfig event received yet
+}
+
+// RoomsForEvent returns all rooms that have a repository binding
+// matching the event's provider and repo, along with each room's
+// ForgeConfig. This is the same lookup that Dispatch uses internally
+// for subscriber fanout, exposed as a public query for consumers
+// that need to act on events based on per-room config (e.g., issue
+// → ticket sync checking IssueSync mode).
+//
+// Returns nil if the event has no provider/repo or no rooms match.
+func (m *Manager) RoomsForEvent(event *forge.Event) []RoomMatch {
+	repo := event.Repo()
+	provider := event.Provider()
+	if repo == "" || provider == "" {
+		return nil
+	}
+
+	key := repoKey{Provider: provider, Repo: repo}
+
+	m.mu.RLock()
+	defer m.mu.RUnlock()
+
+	rooms := m.repoToRooms[key]
+	if len(rooms) == 0 {
+		return nil
+	}
+
+	matches := make([]RoomMatch, 0, len(rooms))
+	for roomID, config := range rooms {
+		matches = append(matches, RoomMatch{
+			RoomID: roomID,
+			Config: config.Config,
+		})
+	}
+	return matches
+}
+
 // --- Event dispatch ---
 
 // Dispatch routes a forge event to all matching subscribers. Called

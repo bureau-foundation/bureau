@@ -77,18 +77,27 @@ type GitHubService struct {
 	service       ref.Service
 	serviceRoomID ref.RoomID
 	manager       *forgesub.Manager
+	ticketSyncer  *TicketSyncer // nil if ticket service not configured
 	logger        *slog.Logger
 }
 
 // handleEvent processes a translated forge event from the webhook
 // handler. Routes to the subscription manager for delivery to
-// connected agents.
+// connected agents, then syncs to the ticket service if configured.
 func (gs *GitHubService) handleEvent(event *forge.Event) {
 	gs.logger.Info("forge event received",
 		"type", event.Type,
 		"summary", eventSummary(event),
 	)
 	gs.manager.Dispatch(event)
+
+	// Sync issue events to the ticket service if configured.
+	if gs.ticketSyncer != nil {
+		rooms := gs.manager.RoomsForEvent(event)
+		if len(rooms) > 0 {
+			gs.ticketSyncer.SyncEvent(context.Background(), event, rooms)
+		}
+	}
 }
 
 // eventSummary extracts a human-readable summary from a forge event.

@@ -280,6 +280,7 @@ func (h *WebhookHandler) translateIssues(body []byte) (*forge.Event, error) {
 			Number:   payload.Issue.Number,
 			Action:   payload.Action,
 			Title:    payload.Issue.Title,
+			Body:     payload.Issue.Body,
 			Author:   payload.Issue.User.Login,
 			Labels:   labels,
 			Summary:  summary,

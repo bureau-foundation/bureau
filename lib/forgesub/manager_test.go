@@ -779,3 +779,153 @@ func TestDispatch_ResyncOnOverflow(t *testing.T) {
 		t.Error("expected resync flag to be set after channel overflow")
 	}
 }
+
+// --- RoomsForEvent tests ---
+
+func TestRoomsForEvent_NoBindings(t *testing.T) {
+	manager := newTestManager()
+
+	matches := manager.RoomsForEvent(&forge.Event{
+		Type: forge.EventCategoryIssues,
+		Issue: &forge.IssueEvent{
+			Provider: "github", Repo: "o/r", Number: 1, Action: "opened",
+		},
+	})
+
+	if len(matches) != 0 {
+		t.Fatalf("expected no matches, got %d", len(matches))
+	}
+}
+
+func TestRoomsForEvent_MatchesBinding(t *testing.T) {
+	manager := newTestManager()
+	roomID := testRoomID("room1")
+
+	manager.UpdateRoomBinding(roomID, forge.RepositoryBinding{
+		Provider: "github",
+		Owner:    "octocat",
+		Repo:     "hello",
+	})
+
+	matches := manager.RoomsForEvent(&forge.Event{
+		Type: forge.EventCategoryIssues,
+		Issue: &forge.IssueEvent{
+			Provider: "github", Repo: "octocat/hello", Number: 1, Action: "opened",
+		},
+	})
+
+	if len(matches) != 1 {
+		t.Fatalf("expected 1 match, got %d", len(matches))
+	}
+	if matches[0].RoomID != roomID {
+		t.Errorf("expected room %s, got %s", roomID, matches[0].RoomID)
+	}
+	if matches[0].Config != nil {
+		t.Error("expected nil config (no ForgeConfig event yet)")
+	}
+}
+
+func TestRoomsForEvent_IncludesConfig(t *testing.T) {
+	manager := newTestManager()
+	roomID := testRoomID("room1")
+
+	manager.UpdateRoomBinding(roomID, forge.RepositoryBinding{
+		Provider: "github",
+		Owner:    "octocat",
+		Repo:     "hello",
+	})
+	manager.UpdateForgeConfig(roomID, forge.ForgeConfig{
+		Version:   1,
+		Provider:  "github",
+		Repo:      "octocat/hello",
+		Events:    []string{"issues"},
+		IssueSync: forge.IssueSyncImport,
+	})
+
+	matches := manager.RoomsForEvent(&forge.Event{
+		Type: forge.EventCategoryIssues,
+		Issue: &forge.IssueEvent{
+			Provider: "github", Repo: "octocat/hello", Number: 1, Action: "opened",
+		},
+	})
+
+	if len(matches) != 1 {
+		t.Fatalf("expected 1 match, got %d", len(matches))
+	}
+	if matches[0].Config == nil {
+		t.Fatal("expected non-nil config")
+	}
+	if matches[0].Config.IssueSync != forge.IssueSyncImport {
+		t.Errorf("expected IssueSync=%s, got %s", forge.IssueSyncImport, matches[0].Config.IssueSync)
+	}
+}
+
+func TestRoomsForEvent_MultipleRooms(t *testing.T) {
+	manager := newTestManager()
+	room1 := testRoomID("room1")
+	room2 := testRoomID("room2")
+
+	manager.UpdateRoomBinding(room1, forge.RepositoryBinding{
+		Provider: "github",
+		Owner:    "octocat",
+		Repo:     "hello",
+	})
+	manager.UpdateRoomBinding(room2, forge.RepositoryBinding{
+		Provider: "github",
+		Owner:    "octocat",
+		Repo:     "hello",
+	})
+
+	matches := manager.RoomsForEvent(&forge.Event{
+		Type: forge.EventCategoryIssues,
+		Issue: &forge.IssueEvent{
+			Provider: "github", Repo: "octocat/hello", Number: 1, Action: "opened",
+		},
+	})
+
+	if len(matches) != 2 {
+		t.Fatalf("expected 2 matches, got %d", len(matches))
+	}
+
+	// Both rooms should be present (order not guaranteed).
+	found := map[ref.RoomID]bool{}
+	for _, match := range matches {
+		found[match.RoomID] = true
+	}
+	if !found[room1] || !found[room2] {
+		t.Errorf("expected both rooms, got %v", found)
+	}
+}
+
+func TestRoomsForEvent_DifferentRepo(t *testing.T) {
+	manager := newTestManager()
+	roomID := testRoomID("room1")
+
+	manager.UpdateRoomBinding(roomID, forge.RepositoryBinding{
+		Provider: "github",
+		Owner:    "octocat",
+		Repo:     "hello",
+	})
+
+	// Event for a different repo should not match.
+	matches := manager.RoomsForEvent(&forge.Event{
+		Type: forge.EventCategoryIssues,
+		Issue: &forge.IssueEvent{
+			Provider: "github", Repo: "octocat/other", Number: 1, Action: "opened",
+		},
+	})
+
+	if len(matches) != 0 {
+		t.Fatalf("expected no matches for different repo, got %d", len(matches))
+	}
+}
+
+func TestRoomsForEvent_InvalidEvent(t *testing.T) {
+	manager := newTestManager()
+
+	// Event with no provider/repo should return nil.
+	matches := manager.RoomsForEvent(&forge.Event{Type: "unknown"})
+	if matches != nil {
+		t.Fatalf("expected nil for invalid event, got %v", matches)
+	}
+}

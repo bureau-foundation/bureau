@@ -11,6 +11,7 @@ go_library(
         "main.go",
         "service.go",
         "subscribe.go",
+        "ticketsync.go",
         "webhook.go",
     ],
     importpath = "github.com/bureau-foundation/bureau/cmd/bureau-github-service",
@@ -22,6 +23,7 @@ go_library(
         "//lib/ref",
         "//lib/schema",
         "//lib/schema/forge",
+        "//lib/schema/ticket",
         "//lib/service",
         "//lib/servicetoken",
         "//lib/version",
@@ -37,7 +39,15 @@ go_binary(
 
 go_test(
     name = "bureau-github-service_test",
-    srcs = ["webhook_test.go"],
+    srcs = [
+        "ticketsync_test.go",
+        "webhook_test.go",
+    ],
     embed = [":bureau-github-service_lib"],
-    deps = ["//lib/schema/forge"],
+    deps = [
+        "//lib/forgesub",
+        "//lib/ref",
+        "//lib/schema/forge",
+        "//lib/schema/ticket",
+    ],
 )

@@ -298,6 +298,9 @@ func TestWebhookTranslateIssues(t *testing.T) {
 	if len(event.Issue.Labels) != 2 {
 		t.Errorf("label count = %d, want 2", len(event.Issue.Labels))
 	}
+	if event.Issue.Body != "Login fails with OAuth" {
+		t.Errorf("body = %q, want %q", event.Issue.Body, "Login fails with OAuth")
+	}
 }
 
 // --- Pull request event translation ---

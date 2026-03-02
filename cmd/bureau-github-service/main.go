@@ -62,11 +62,31 @@ func run() error {
 	}
 	defer cleanup()
 
+	// Create the ticket syncer if a ticket service socket is configured.
+	// Ticket sync is optional — the service can run without it for
+	// environments that only need forge event streaming.
+	var ticketSyncer *TicketSyncer
+	ticketSocketPath := os.Getenv("BUREAU_TICKET_SERVICE_SOCKET")
+	ticketTokenPath := os.Getenv("BUREAU_TICKET_SERVICE_TOKEN")
+	if ticketSocketPath != "" && ticketTokenPath != "" {
+		var err error
+		ticketSyncer, err = NewTicketSyncer(ticketSocketPath, ticketTokenPath, boot.Logger)
+		if err != nil {
+			return fmt.Errorf("creating ticket syncer: %w", err)
+		}
+		boot.Logger.Info("ticket sync enabled",
+			"ticket_socket", ticketSocketPath,
+		)
+	} else {
+		boot.Logger.Info("ticket sync disabled (BUREAU_TICKET_SERVICE_SOCKET or BUREAU_TICKET_SERVICE_TOKEN not set)")
+	}
+
 	githubService := &GitHubService{
 		session:       boot.Session,
 		service:       boot.Service,
 		serviceRoomID: boot.ServiceRoomID,
 		manager:       forgesub.NewManager(boot.Logger),
+		ticketSyncer:  ticketSyncer,
 		logger:        boot.Logger,
 	}
 

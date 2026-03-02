@@ -105,6 +105,7 @@ type IssueEvent struct {
 	Number       int      `cbor:"number"`
 	Action       string   `cbor:"action"` // see IssueAction constants
 	Title        string   `cbor:"title"`
+	Body         string   `cbor:"body,omitempty"` // issue description (markdown)
 	Author       string   `cbor:"author"`
 	BureauEntity string   `cbor:"bureau_entity,omitempty"`
 	Labels       []string `cbor:"labels,omitempty"`

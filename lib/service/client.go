@@ -131,27 +131,36 @@ func (c *ServiceClient) Call(ctx context.Context, action string, fields any, res
 // buildRequest constructs the CBOR request map. Starts with the
 // caller's fields (if any), then injects "action" and optionally
 // "token". The fields parameter may be nil, a map[string]any, or a
-// struct. Struct fields are flattened by CBOR-encoding the struct and
-// decoding into a map[string]any.
-func (c *ServiceClient) buildRequest(action string, fields any) (map[string]any, error) {
-	var request map[string]any
+// struct.
+//
+// Struct fields are flattened by CBOR-encoding the struct and decoding
+// into a map[any]any. The any-keyed map preserves CBOR key types: structs
+// with keyasint tags produce integer keys, while structs with string tags
+// produce string keys. The server-side decoder handles mixed-key maps
+// correctly — it matches string keys (action, token) for routing and
+// integer keys for keyasint-tagged handler request types.
+func (c *ServiceClient) buildRequest(action string, fields any) (map[any]any, error) {
+	var request map[any]any
 
 	switch typedFields := fields.(type) {
 	case nil:
-		request = make(map[string]any, 2)
+		request = make(map[any]any, 2)
 	case map[string]any:
-		request = make(map[string]any, len(typedFields)+2)
+		request = make(map[any]any, len(typedFields)+2)
 		for key, value := range typedFields {
 			request[key] = value
 		}
 	default:
-		// Struct or other type: CBOR-encode then decode into a map
-		// to flatten struct fields into top-level map entries.
+		// Struct or other type: CBOR-encode then decode into a
+		// map[any]any to preserve the original CBOR key types.
+		// This is necessary because keyasint-tagged structs (like
+		// model.Request) produce integer keys, not string keys.
+		// Decoding into map[string]any would fail on integer keys.
 		encoded, err := codec.Marshal(typedFields)
 		if err != nil {
 			return nil, fmt.Errorf("encoding fields: %w", err)
 		}
-		if err := codec.Unmarshal(encoded, &request); err != nil {
+		if err := codec.UnmarshalMixedKeys(encoded, &request); err != nil {
 			return nil, fmt.Errorf("decoding fields to map: %w", err)
 		}
 	}

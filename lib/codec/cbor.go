@@ -18,7 +18,17 @@ var encMode cbor.EncMode
 
 // decMode is the CBOR decoder configured to accept standard CBOR.
 // Unknown fields are silently ignored for forward compatibility.
+// Map keys in any-typed targets are decoded as strings (DefaultMapType
+// is map[string]any). This is the right default for Bureau protocol
+// types, which use string keys.
 var decMode cbor.DecMode
+
+// decModeMixedKeys is a CBOR decoder that preserves the CBOR key types
+// when decoding into any-typed targets. Integer keys decode as uint64,
+// string keys decode as string. This is necessary for round-tripping
+// keyasint-tagged structs through map[any]any without losing the
+// integer key types.
+var decModeMixedKeys cbor.DecMode
 
 func init() {
 	var err error
@@ -53,6 +63,17 @@ func init() {
 	if err != nil {
 		panic("codec: CBOR decoder initialization failed: " + err.Error())
 	}
+
+	// Mixed-key decoder: no DefaultMapType override, so CBOR maps with
+	// integer keys decode into map[any]any (the fxamacker/cbor default).
+	// Integer keys become uint64, string keys become string, negative
+	// integer keys become int64.
+	decModeMixedKeys, err = cbor.DecOptions{
+		TextUnmarshaler: cbor.TextUnmarshalerTextString,
+	}.DecMode()
+	if err != nil {
+		panic("codec: CBOR mixed-key decoder initialization failed: " + err.Error())
+	}
 }
 
 // Marshal encodes v to CBOR using Core Deterministic Encoding.
@@ -60,9 +81,19 @@ func Marshal(v any) ([]byte, error) {
 	return encMode.Marshal(v)
 }
 
-// Unmarshal decodes CBOR data into v.
+// Unmarshal decodes CBOR data into v. When the target contains
+// any-typed map values, map keys are decoded as strings.
 func Unmarshal(data []byte, v any) error {
 	return decMode.Unmarshal(data, v)
+}
+
+// UnmarshalMixedKeys decodes CBOR data into v, preserving the original
+// CBOR key types. Integer keys decode as uint64, string keys as string.
+// Use this when round-tripping keyasint-tagged structs through
+// map[any]any — the standard Unmarshal would fail because it forces
+// all map keys to be strings.
+func UnmarshalMixedKeys(data []byte, v any) error {
+	return decModeMixedKeys.Unmarshal(data, v)
 }
 
 // Encoder is a CBOR stream encoder. Type alias so consumers import

@@ -245,6 +245,106 @@ func TestDiagnoseFirst(t *testing.T) {
 	}
 }
 
+// sampleKeyasintMessage uses integer map keys, matching the CBOR wire
+// format used by model.Request and similar high-frequency service types.
+type sampleKeyasintMessage struct {
+	Model    string   `cbor:"1,keyasint"`
+	Messages []string `cbor:"2,keyasint,omitempty"`
+	Stream   bool     `cbor:"3,keyasint,omitempty"`
+}
+
+func TestUnmarshalMixedKeysPreservesIntegerKeys(t *testing.T) {
+	original := sampleKeyasintMessage{
+		Model:    "test-model",
+		Messages: []string{"hello"},
+		Stream:   true,
+	}
+
+	data, err := Marshal(original)
+	if err != nil {
+		t.Fatalf("Marshal: %v", err)
+	}
+
+	// UnmarshalMixedKeys should decode into map[any]any with uint64 keys.
+	var result map[any]any
+	if err := UnmarshalMixedKeys(data, &result); err != nil {
+		t.Fatalf("UnmarshalMixedKeys: %v", err)
+	}
+
+	// Verify integer keys survived as uint64.
+	model, ok := result[uint64(1)]
+	if !ok {
+		t.Fatalf("missing key 1; keys = %v", mapKeys(result))
+	}
+	if model != "test-model" {
+		t.Errorf("key 1: got %q, want %q", model, "test-model")
+	}
+
+	stream, ok := result[uint64(3)]
+	if !ok {
+		t.Fatalf("missing key 3; keys = %v", mapKeys(result))
+	}
+	if stream != true {
+		t.Errorf("key 3: got %v, want true", stream)
+	}
+}
+
+func TestUnmarshalRejectsIntegerKeysIntoStringMap(t *testing.T) {
+	// This test documents why UnmarshalMixedKeys exists: the standard
+	// Unmarshal forces map[string]any which cannot hold integer keys.
+	original := sampleKeyasintMessage{
+		Model:  "test-model",
+		Stream: true,
+	}
+
+	data, err := Marshal(original)
+	if err != nil {
+		t.Fatalf("Marshal: %v", err)
+	}
+
+	var result map[string]any
+	err = Unmarshal(data, &result)
+	if err == nil {
+		t.Fatal("expected Unmarshal to fail on integer keys with map[string]any target")
+	}
+}
+
+func TestUnmarshalMixedKeysStringKeysStillWork(t *testing.T) {
+	// String-keyed structs should also work with UnmarshalMixedKeys.
+	original := sampleMessage{
+		Action:    "status",
+		Principal: "test/agent",
+		Count:     7,
+	}
+
+	data, err := Marshal(original)
+	if err != nil {
+		t.Fatalf("Marshal: %v", err)
+	}
+
+	var result map[any]any
+	if err := UnmarshalMixedKeys(data, &result); err != nil {
+		t.Fatalf("UnmarshalMixedKeys: %v", err)
+	}
+
+	action, ok := result["action"]
+	if !ok {
+		t.Fatalf("missing key 'action'; keys = %v", mapKeys(result))
+	}
+	if action != "status" {
+		t.Errorf("action: got %q, want %q", action, "status")
+	}
+}
+
+// mapKeys returns the keys of a map[any]any for diagnostic messages.
+func mapKeys(m map[any]any) []any {
+	keys := make([]any, 0, len(m))
+	for k := range m {
+		keys = append(keys, k)
+	}
+	return keys
+}
+
 func BenchmarkUnmarshal(b *testing.B) {
 	message := sampleMessage{
 		Action:    "create-sandbox",

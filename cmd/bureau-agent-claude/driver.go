@@ -52,18 +52,28 @@ func (driver *claudeDriver) Start(ctx context.Context, config agentdriver.Driver
 	}
 
 	// Write Claude Code settings before starting the process. This
-	// configures hooks, permissions, sandbox behavior, and plan
-	// storage. Hooks point back to this binary in hook handler mode
-	// (bureau-agent-claude hook <event-type>). This must happen
-	// before command.Start() so Claude Code reads the settings at
-	// initialization.
+	// configures hooks, permissions, sandbox behavior, plan storage,
+	// and the MCP server for Bureau tool access. Hooks point back to
+	// this binary in hook handler mode (bureau-agent-claude hook
+	// <event-type>). This must happen before command.Start() so
+	// Claude Code reads the settings at initialization.
 	hookBinaryPath, err := os.Executable()
 	if err != nil {
 		// Fall back to os.Args[0] if /proc/self/exe is unavailable
 		// (shouldn't happen on Linux, but defense-in-depth).
 		hookBinaryPath = os.Args[0]
 	}
-	if writeError := writeClaudeCodeSettings(config.WorkingDirectory, hookBinaryPath); writeError != nil {
+
+	// Resolve the bureau CLI binary for the MCP server subprocess.
+	// In Nix environments, "bureau" is on PATH via bureau-sandbox-env.
+	// Integration tests set BUREAU_MCP_BINARY to the absolute path
+	// of the Bazel-built binary (which is bind-mounted into the sandbox).
+	bureauBinaryPath := os.Getenv("BUREAU_MCP_BINARY")
+	if bureauBinaryPath == "" {
+		bureauBinaryPath = "bureau"
+	}
+
+	if writeError := writeClaudeCodeSettings(config.WorkingDirectory, hookBinaryPath, bureauBinaryPath); writeError != nil {
 		return nil, nil, fmt.Errorf("writing Claude Code settings: %w", writeError)
 	}
 

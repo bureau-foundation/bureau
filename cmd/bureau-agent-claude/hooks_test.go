@@ -806,7 +806,7 @@ func TestClaudeCodeSettings(t *testing.T) {
 	t.Run("generates valid settings JSON", func(t *testing.T) {
 		t.Parallel()
 
-		settings := claudeCodeSettings("/usr/bin/bureau-agent-claude")
+		settings := claudeCodeSettings("/usr/bin/bureau-agent-claude", "bureau")
 		data, err := json.Marshal(settings)
 		if err != nil {
 			t.Fatalf("marshal settings: %v", err)
@@ -834,7 +834,7 @@ func TestClaudeCodeSettings(t *testing.T) {
 	t.Run("uses correct binary path", func(t *testing.T) {
 		t.Parallel()
 
-		settings := claudeCodeSettings("/nix/store/abc123/bureau-agent-claude")
+		settings := claudeCodeSettings("/nix/store/abc123/bureau-agent-claude", "bureau")
 		data, err := json.Marshal(settings)
 		if err != nil {
 			t.Fatalf("marshal settings: %v", err)
@@ -852,7 +852,7 @@ func TestClaudeCodeSettings(t *testing.T) {
 	t.Run("PreToolUse matcher covers write tools", func(t *testing.T) {
 		t.Parallel()
 
-		settings := claudeCodeSettings("/bin/test")
+		settings := claudeCodeSettings("/bin/test", "bureau")
 		data, err := json.Marshal(settings)
 		if err != nil {
 			t.Fatalf("marshal settings: %v", err)
@@ -867,7 +867,7 @@ func TestClaudeCodeSettings(t *testing.T) {
 	t.Run("bypasses permissions for autonomous operation", func(t *testing.T) {
 		t.Parallel()
 
-		settings := claudeCodeSettings("/bin/test")
+		settings := claudeCodeSettings("/bin/test", "bureau")
 		data, err := json.Marshal(settings)
 		if err != nil {
 			t.Fatalf("marshal settings: %v", err)
@@ -882,7 +882,7 @@ func TestClaudeCodeSettings(t *testing.T) {
 	t.Run("disables Claude Code sandbox", func(t *testing.T) {
 		t.Parallel()
 
-		settings := claudeCodeSettings("/bin/test")
+		settings := claudeCodeSettings("/bin/test", "bureau")
 
 		sandboxSection, ok := settings["sandbox"].(map[string]any)
 		if !ok {
@@ -900,7 +900,7 @@ func TestClaudeCodeSettings(t *testing.T) {
 	t.Run("sets plans directory to scratch", func(t *testing.T) {
 		t.Parallel()
 
-		settings := claudeCodeSettings("/bin/test")
+		settings := claudeCodeSettings("/bin/test", "bureau")
 
 		plansDirectory, ok := settings["plansDirectory"].(string)
 		if !ok {
@@ -908,6 +908,44 @@ func TestClaudeCodeSettings(t *testing.T) {
 		}
 		if plansDirectory != "/scratch/plans" {
 			t.Errorf("plansDirectory = %q, want /scratch/plans", plansDirectory)
+		}
+	})
+
+	t.Run("configures MCP server with bureau binary", func(t *testing.T) {
+		t.Parallel()
+
+		settings := claudeCodeSettings("/bin/test", "/nix/store/xyz/bureau")
+
+		mcpServers, ok := settings["mcpServers"].(map[string]any)
+		if !ok {
+			t.Fatal("settings should have 'mcpServers' section")
+		}
+
+		bureau, ok := mcpServers["bureau"].(map[string]any)
+		if !ok {
+			t.Fatal("mcpServers should have 'bureau' entry")
+		}
+
+		command, ok := bureau["command"].(string)
+		if !ok {
+			t.Fatal("bureau MCP server should have 'command' string")
+		}
+		if command != "/nix/store/xyz/bureau" {
+			t.Errorf("command = %q, want /nix/store/xyz/bureau", command)
+		}
+
+		args, ok := bureau["args"].([]string)
+		if !ok {
+			t.Fatal("bureau MCP server should have 'args' string slice")
+		}
+		expectedArgs := []string{"mcp", "serve", "--progressive"}
+		if len(args) != len(expectedArgs) {
+			t.Fatalf("args length = %d, want %d", len(args), len(expectedArgs))
+		}
+		for i, arg := range args {
+			if arg != expectedArgs[i] {
+				t.Errorf("args[%d] = %q, want %q", i, arg, expectedArgs[i])
+			}
 		}
 	})
 }
@@ -919,7 +957,7 @@ func TestWriteClaudeCodeSettings(t *testing.T) {
 		t.Parallel()
 
 		directory := t.TempDir()
-		err := writeClaudeCodeSettings(directory, "/bin/test-agent")
+		err := writeClaudeCodeSettings(directory, "/bin/test-agent", "bureau")
 		if err != nil {
 			t.Fatalf("writeClaudeCodeSettings: %v", err)
 		}
@@ -952,7 +990,7 @@ func TestWriteClaudeCodeSettings(t *testing.T) {
 			t.Error("should have PostToolUse hook")
 		}
 
-		// Verify permissions, sandbox, and plans directory.
+		// Verify permissions, sandbox, plans directory, and MCP servers.
 		if _, ok := parsed["permissions"]; !ok {
 			t.Error("should have 'permissions' section")
 		}
@@ -961,6 +999,9 @@ func TestWriteClaudeCodeSettings(t *testing.T) {
 		}
 		if _, ok := parsed["plansDirectory"]; !ok {
 			t.Error("should have 'plansDirectory'")
+		}
+		if _, ok := parsed["mcpServers"]; !ok {
+			t.Error("should have 'mcpServers' section")
 		}
 
 		// Verify binary path is in the commands.
@@ -974,7 +1015,7 @@ func TestWriteClaudeCodeSettings(t *testing.T) {
 		t.Parallel()
 
 		directory := t.TempDir()
-		err := writeClaudeCodeSettings(directory, "/bin/test")
+		err := writeClaudeCodeSettings(directory, "/bin/test", "bureau")
 		if err != nil {
 			t.Fatalf("writeClaudeCodeSettings: %v", err)
 		}
@@ -999,7 +1040,7 @@ func TestWriteClaudeCodeSettings(t *testing.T) {
 			t.Fatalf("creating .claude: %v", err)
 		}
 
-		err := writeClaudeCodeSettings(directory, "/bin/test")
+		err := writeClaudeCodeSettings(directory, "/bin/test", "bureau")
 		if err != nil {
 			t.Fatalf("writeClaudeCodeSettings should be idempotent: %v", err)
 		}

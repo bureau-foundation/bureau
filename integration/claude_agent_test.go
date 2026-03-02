@@ -117,6 +117,14 @@ func TestClaudeAgentLifecycle(t *testing.T) {
 	claudeAgentBinary := testutil.DataBinary(t, "CLAUDE_AGENT_BINARY")
 	claudeMockBinary := testutil.DataBinary(t, "CLAUDE_MOCK_BINARY")
 
+	// The bureau CLI binary is mounted into the sandbox for the MCP
+	// server subprocess. Claude Code launches "bureau mcp serve" via
+	// the mcpServers settings to access Bureau tools.
+	bureauBinary, err := findBureauBinary()
+	if err != nil {
+		t.Fatalf("find bureau binary: %v", err)
+	}
+
 	debugDir := t.TempDir()
 	agent := deployAgent(t, admin, machine, agentOptions{
 		Binary:           claudeAgentBinary,
@@ -124,12 +132,15 @@ func TestClaudeAgentLifecycle(t *testing.T) {
 		RequiredServices: []string{"agent"},
 		RestartPolicy:    schema.RestartPolicyOnFailure,
 		ExtraEnv: map[string]string{
-			"CLAUDE_BINARY": claudeMockBinary,
+			"CLAUDE_BINARY":     claudeMockBinary,
+			"BUREAU_MCP_BINARY": bureauBinary,
 		},
 		ExtraMounts: []schema.TemplateMount{
 			// Bind-mount the mock binary into the sandbox so the
 			// Claude driver can exec it.
 			{Source: claudeMockBinary, Dest: claudeMockBinary, Mode: schema.MountModeRO},
+			// Bind-mount the bureau CLI for the MCP server subprocess.
+			{Source: bureauBinary, Dest: bureauBinary, Mode: schema.MountModeRO},
 			// Bind-mount a debug directory for the mock's diagnostic log.
 			{Source: debugDir, Dest: "/run/bureau/debug", Mode: schema.MountModeRW},
 		},
@@ -145,13 +156,18 @@ func TestClaudeAgentLifecycle(t *testing.T) {
 	metricsWatch.WaitForStateEvent(t, agentschema.EventTypeAgentMetrics, metricsStateKey)
 	t.Log("Claude agent service wrote metrics state event")
 
-	// --- Dump debug log ---
+	// --- Verify debug log and MCP settings ---
 
 	debugLogPath := filepath.Join(debugDir, "claude-mock.log")
-	if debugLog, err := os.ReadFile(debugLogPath); err != nil {
-		t.Logf("no mock debug log at %s: %v", debugLogPath, err)
-	} else {
-		t.Logf("mock Claude debug log (%d bytes):\n%s", len(debugLog), debugLog)
+	debugLog, readError := os.ReadFile(debugLogPath)
+	if readError != nil {
+		t.Fatalf("no mock debug log at %s: %v", debugLogPath, readError)
+	}
+	t.Logf("mock Claude debug log (%d bytes):\n%s", len(debugLog), debugLog)
+
+	debugLogContent := string(debugLog)
+	if !strings.Contains(debugLogContent, "MCP_SERVERS_VALID") {
+		t.Error("debug log should contain MCP_SERVERS_VALID confirming bureau MCP server configuration")
 	}
 
 	// --- Verify session state ---

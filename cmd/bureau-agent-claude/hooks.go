@@ -372,9 +372,15 @@ func isWritePathAllowed(path string) bool {
 
 // claudeCodeSettings generates the Claude Code settings.local.json
 // content for sandboxed agent operation. This configures hooks, sandbox
-// behavior, plan storage, and permission defaults. The binary path
-// parameter controls hook commands that point back to this binary.
-func claudeCodeSettings(binaryPath string) map[string]any {
+// behavior, plan storage, permission defaults, and MCP server access
+// to Bureau CLI commands.
+//
+// binaryPath controls hook commands that point back to this binary.
+// bureauBinaryPath is the path to the bureau CLI binary for the MCP
+// server subprocess. Claude Code launches it via the mcpServers
+// configuration to give agents access to Bureau tools (tickets,
+// pipelines, artifacts, etc.) with grant-filtered authorization.
+func claudeCodeSettings(binaryPath, bureauBinaryPath string) map[string]any {
 	return map[string]any{
 		// Autonomous operation: Bureau's bwrap namespace provides
 		// filesystem isolation, PreToolUse hooks enforce write-path
@@ -403,6 +409,21 @@ func claudeCodeSettings(binaryPath string) map[string]any {
 		// the full plan text), so this directory serves as a fallback
 		// — plans survive even if archival fails.
 		"plansDirectory": "/scratch/plans",
+
+		// MCP server: launches bureau mcp serve as a subprocess so
+		// Claude Code can discover and invoke Bureau CLI commands as
+		// tools. Progressive disclosure exposes three meta-tools
+		// (bureau_tools_list, bureau_tools_describe, bureau_tools_call)
+		// instead of the full tool catalog, keeping Claude Code's
+		// initial tool payload small. The MCP server reads grants from
+		// the proxy socket (inherited from the sandbox environment)
+		// and filters tools by the principal's authorization policy.
+		"mcpServers": map[string]any{
+			"bureau": map[string]any{
+				"command": bureauBinaryPath,
+				"args":    []string{"mcp", "serve", "--progressive"},
+			},
+		},
 
 		"hooks": map[string]any{
 			"PreToolUse": []map[string]any{
@@ -433,15 +454,15 @@ func claudeCodeSettings(binaryPath string) map[string]any {
 
 // writeClaudeCodeSettings writes the Claude Code configuration to
 // .claude/settings.local.json in the given working directory. This
-// includes hooks, permissions, sandbox behavior, and plan storage
-// configuration for sandboxed agent operation.
-func writeClaudeCodeSettings(workingDirectory, binaryPath string) error {
+// includes hooks, permissions, sandbox behavior, plan storage, and
+// MCP server configuration for sandboxed agent operation.
+func writeClaudeCodeSettings(workingDirectory, binaryPath, bureauBinaryPath string) error {
 	settingsDirectory := filepath.Join(workingDirectory, ".claude")
 	if err := os.MkdirAll(settingsDirectory, 0755); err != nil {
 		return fmt.Errorf("creating .claude directory: %w", err)
 	}
 
-	settings := claudeCodeSettings(binaryPath)
+	settings := claudeCodeSettings(binaryPath, bureauBinaryPath)
 	data, err := json.MarshalIndent(settings, "", "    ")
 	if err != nil {
 		return fmt.Errorf("marshaling Claude Code settings: %w", err)

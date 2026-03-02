@@ -140,8 +140,8 @@ func run() int {
 
 // verifySettingsFile checks that .claude/settings.local.json exists in
 // the current working directory and contains valid JSON with the
-// expected top-level keys. Results are written to the debug log for
-// post-test inspection.
+// expected top-level keys including MCP server configuration. Results
+// are written to the debug log for post-test inspection.
 func verifySettingsFile(debugLog io.Writer) {
 	cwd, err := os.Getwd()
 	if err != nil {
@@ -170,4 +170,25 @@ func verifySettingsFile(debugLog io.Writer) {
 	}
 	sort.Strings(keys)
 	fmt.Fprintf(debugLog, "SETTINGS_VALID: keys=%v\n", keys)
+
+	// Verify MCP server configuration for Bureau tool access.
+	mcpServers, ok := settings["mcpServers"].(map[string]any)
+	if !ok {
+		fmt.Fprintf(debugLog, "MCP_SERVERS_MISSING: no mcpServers key in settings\n")
+		return
+	}
+
+	bureau, ok := mcpServers["bureau"].(map[string]any)
+	if !ok {
+		fmt.Fprintf(debugLog, "MCP_SERVERS_INVALID: mcpServers has no 'bureau' entry\n")
+		return
+	}
+
+	command, _ := bureau["command"].(string)
+	if command == "" {
+		fmt.Fprintf(debugLog, "MCP_SERVERS_INVALID: bureau entry has no 'command'\n")
+		return
+	}
+
+	fmt.Fprintf(debugLog, "MCP_SERVERS_VALID: bureau command=%s\n", command)
 }

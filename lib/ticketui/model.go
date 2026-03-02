@@ -186,7 +186,7 @@ type ListItem struct {
 	EpicTotal int
 	Collapsed bool
 	// For headers: health metrics (nil on non-ready tabs or ungrouped).
-	EpicHealth *ticketindex.EpicHealthStats
+	EpicHealth *ticket.EpicHealthStats
 
 	// For ticket rows: the ticket entry.
 	Entry ticketindex.Entry
@@ -2272,7 +2272,7 @@ func (model *Model) updateTitleEditHeader() {
 	editedEntry.Content.Title = titleWithCursor
 
 	renderer := NewDetailRenderer(model.theme, model.detailPane.contentWidth())
-	var score *ticketindex.TicketScore
+	var score *ticket.TicketScore
 	if model.activeTab == TabReady {
 		ticketScore := model.source.Score(editedEntry.ID, model.detailPane.renderTime)
 		score = &ticketScore
@@ -2564,7 +2564,7 @@ func (model Model) renderListPane() string {
 		} else {
 			// On the Ready tab, compute and pass scoring info for
 			// leverage/urgency indicators. Other tabs pass nil.
-			var score *ticketindex.TicketScore
+			var score *ticket.TicketScore
 			if model.activeTab == TabReady {
 				ticketScore := model.source.Score(item.Entry.ID, now)
 				score = &ticketScore

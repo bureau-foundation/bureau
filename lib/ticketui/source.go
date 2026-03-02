@@ -69,11 +69,11 @@ type Source interface {
 	// Score computes ranking dimensions for a ticket. The now
 	// parameter drives staleness computation; callers pass the
 	// current time rather than embedding a clock in the source.
-	Score(ticketID string, now time.Time) ticketindex.TicketScore
+	Score(ticketID string, now time.Time) ticket.TicketScore
 
 	// EpicHealth returns health metrics for an epic's children:
 	// parallelism width, active fraction, and critical path depth.
-	EpicHealth(epicID string) ticketindex.EpicHealthStats
+	EpicHealth(epicID string) ticket.EpicHealthStats
 
 	// Subscribe returns a channel that receives Events when the
 	// underlying data changes. Returns nil if live updates are not
@@ -297,14 +297,14 @@ func (source *IndexSource) Blocks(ticketID string) []string {
 }
 
 // Score computes ranking dimensions for a ticket using default weights.
-func (source *IndexSource) Score(ticketID string, now time.Time) ticketindex.TicketScore {
+func (source *IndexSource) Score(ticketID string, now time.Time) ticket.TicketScore {
 	source.mutex.RLock()
 	defer source.mutex.RUnlock()
 	return source.index.Score(ticketID, now, ticketindex.DefaultRankWeights())
 }
 
 // EpicHealth returns health metrics for an epic's children.
-func (source *IndexSource) EpicHealth(epicID string) ticketindex.EpicHealthStats {
+func (source *IndexSource) EpicHealth(epicID string) ticket.EpicHealthStats {
 	source.mutex.RLock()
 	defer source.mutex.RUnlock()
 	return source.index.EpicHealth(epicID)

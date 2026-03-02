@@ -87,39 +87,18 @@ type childrenRequest struct {
 	Ticket string `cbor:"ticket"`
 }
 
-// --- Response types ---
+// --- Response helpers ---
 //
-// Query responses use schema types directly (ticket.TicketContent,
-// ticketindex.Entry, ticketindex.Stats) rather than defining parallel wire
-// types. The CBOR library falls back to json struct tags when cbor
-// tags are absent, so schema types serialize correctly over CBOR.
-// This avoids a shadow schema that silently drifts when fields are
-// added to the canonical types.
-//
-// Response-only types below add context that doesn't exist in the
-// schema (room ID, computed dependency graph fields).
-
-// entryWithRoom pairs a ticketindex.Entry with its room ID for cross-room
-// query results. Room-scoped queries leave Room empty since the
-// caller already knows which room they asked about.
-type entryWithRoom struct {
-	ID      string               `json:"id"`
-	Room    string               `json:"room,omitempty"`
-	Content ticket.TicketContent `json:"content"`
-
-	// Stewardship gate summary — populated when the ticket has
-	// stewardship review gates (gates with "stewardship:" prefix).
-	// Omitted when no stewardship gates exist.
-	StewardshipGates     int `json:"stewardship_gates,omitempty"`
-	StewardshipSatisfied int `json:"stewardship_satisfied,omitempty"`
-}
+// Query responses use shared types from lib/schema/ticket directly.
+// The CBOR library falls back to json struct tags when cbor tags are
+// absent, so schema types serialize correctly over CBOR.
 
 // entriesFromIndex converts index entries to the wire format.
-func entriesFromIndex(entries []ticketindex.Entry, room string) []entryWithRoom {
-	result := make([]entryWithRoom, len(entries))
+func entriesFromIndex(entries []ticketindex.Entry, room string) []ticket.TicketEntry {
+	result := make([]ticket.TicketEntry, len(entries))
 	for i, entry := range entries {
 		gateCount, gateSatisfied := computeStewardshipSummary(entry.Content)
-		result[i] = entryWithRoom{
+		result[i] = ticket.TicketEntry{
 			ID:                   entry.ID,
 			Room:                 room,
 			Content:              entry.Content,
@@ -130,132 +109,11 @@ func entriesFromIndex(entries []ticketindex.Entry, room string) []entryWithRoom 
 	return result
 }
 
-// searchEntryResponse pairs a ticket entry with its search relevance
-// score for the "search" action response.
-type searchEntryResponse struct {
-	ID      string               `json:"id"`
-	Room    string               `json:"room,omitempty"`
-	Content ticket.TicketContent `json:"content"`
-	Score   float64              `json:"score"`
-}
-
-// showResponse is the full detail response for a single ticket.
-// It embeds the schema content directly and adds computed fields
-// from the dependency graph, child progress, scoring, and
-// stewardship governance context.
-type showResponse struct {
-	ID      string               `json:"id"`
-	Room    string               `json:"room"`
-	Content ticket.TicketContent `json:"content"`
-
-	// Computed fields from the dependency graph.
-	Blocks      []string `json:"blocks,omitempty"`
-	ChildTotal  int      `json:"child_total,omitempty"`
-	ChildClosed int      `json:"child_closed,omitempty"`
-
-	// Score holds the ranking dimensions for an open ticket. Nil
-	// for closed tickets where scoring is not meaningful.
-	Score *ticketindex.TicketScore `json:"score,omitempty"`
-
-	// Stewardship holds the governance context for this ticket:
-	// which declarations matched, and per-gate tier approval
-	// progress. Nil when the ticket has no Affects or no matching
-	// declarations.
-	Stewardship *stewardshipContext `json:"stewardship,omitempty"`
-}
-
-// childrenResponse includes the children list and progress summary.
-type childrenResponse struct {
-	Parent      string          `json:"parent"`
-	Children    []entryWithRoom `json:"children"`
-	ChildTotal  int             `json:"child_total"`
-	ChildClosed int             `json:"child_closed"`
-}
-
-// depsResponse is the transitive dependency closure.
-type depsResponse struct {
-	Ticket string   `json:"ticket"`
-	Deps   []string `json:"deps"`
-}
-
-// rankedEntryResponse pairs a ticket entry with its computed score
-// for the "ranked" action. Entries are sorted by composite score
-// descending (highest-leverage first).
-type rankedEntryResponse struct {
-	ID      string                  `json:"id"`
-	Room    string                  `json:"room,omitempty"`
-	Content ticket.TicketContent    `json:"content"`
-	Score   ticketindex.TicketScore `json:"score"`
-}
-
-// epicHealthResponse holds health metrics for an epic's children.
-type epicHealthResponse struct {
-	Ticket string                      `json:"ticket"`
-	Health ticketindex.EpicHealthStats `json:"health"`
-}
-
-// upcomingGateEntry is a single upcoming timer gate with its ticket
-// and room context. Entries are sorted by Target time ascending.
-type upcomingGateEntry struct {
-	// Gate metadata.
-	GateID      string `json:"gate_id"`
-	Target      string `json:"target"`
-	Schedule    string `json:"schedule,omitempty"`
-	Interval    string `json:"interval,omitempty"`
-	FireCount   int    `json:"fire_count,omitempty"`
-	LastFiredAt string `json:"last_fired_at,omitempty"`
-
-	// Ticket context.
-	TicketID string `json:"ticket_id"`
-	Title    string `json:"title"`
-	Status   string `json:"status"`
-	Assignee string `json:"assignee,omitempty"`
-	Room     string `json:"room"`
-
-	// Computed fields.
-	UntilFire string `json:"until_fire"`
-}
-
-// --- Stewardship context types ---
-
-// stewardshipContext describes the governance context for a ticket:
-// which stewardship declarations matched its Affects field, and the
-// per-gate tier approval progress for each stewardship review gate.
-type stewardshipContext struct {
-	// Declarations lists the stewardship declarations that matched
-	// the ticket's Affects field. Reuses stewardshipMatchEntry from
-	// the stewardship-resolve action for consistent wire format.
-	Declarations []stewardshipMatchEntry `json:"declarations,omitempty"`
-
-	// Gates summarizes the approval progress for each stewardship
-	// review gate on the ticket. Each gate has per-tier counts of
-	// total reviewers, approvals, and whether the tier is satisfied.
-	Gates []stewardshipGateProgress `json:"gates,omitempty"`
-}
-
-// stewardshipGateProgress describes the approval progress for a
-// single stewardship review gate.
-type stewardshipGateProgress struct {
-	GateID string                `json:"gate_id"`
-	Status ticket.GateStatus     `json:"status"`
-	Tiers  []tierApprovalSummary `json:"tiers,omitempty"`
-}
-
-// tierApprovalSummary describes the approval state of a single tier
-// within a stewardship review gate.
-type tierApprovalSummary struct {
-	Tier      int  `json:"tier"`
-	Total     int  `json:"total"`
-	Approved  int  `json:"approved"`
-	Threshold *int `json:"threshold,omitempty"`
-	Satisfied bool `json:"satisfied"`
-}
-
 // computeStewardshipContext builds the full stewardship governance
 // context for a ticket. Re-resolves Affects against the stewardship
 // index (to show which declarations currently match) and computes
 // per-gate tier approval status from the ticket's Review data.
-func (ts *TicketService) computeStewardshipContext(roomID ref.RoomID, content ticket.TicketContent) *stewardshipContext {
+func (ts *TicketService) computeStewardshipContext(roomID ref.RoomID, content ticket.TicketContent) *ticket.StewardshipContext {
 	if len(content.Affects) == 0 {
 		return nil
 	}
@@ -267,12 +125,12 @@ func (ts *TicketService) computeStewardshipContext(roomID ref.RoomID, content ti
 	matches := ts.stewardshipIndex.ResolveForRoom(roomID, content.Affects)
 
 	// Compute per-gate tier progress for stewardship review gates.
-	var gateProgress []stewardshipGateProgress
+	var gateProgress []ticket.StewardshipGateProgress
 	for _, gate := range content.Gates {
 		if gate.Type != ticket.GateReview || !strings.HasPrefix(gate.ID, "stewardship:") {
 			continue
 		}
-		progress := stewardshipGateProgress{
+		progress := ticket.StewardshipGateProgress{
 			GateID: gate.ID,
 			Status: gate.Status,
 		}
@@ -286,12 +144,12 @@ func (ts *TicketService) computeStewardshipContext(roomID ref.RoomID, content ti
 		return nil
 	}
 
-	result := &stewardshipContext{
+	result := &ticket.StewardshipContext{
 		Gates: gateProgress,
 	}
 
 	for _, match := range matches {
-		result.Declarations = append(result.Declarations, stewardshipMatchEntry{
+		result.Declarations = append(result.Declarations, ticket.StewardshipMatchEntry{
 			RoomID:          match.Declaration.RoomID,
 			StateKey:        match.Declaration.StateKey,
 			OverlapPolicy:   string(match.Declaration.Content.OverlapPolicy),
@@ -307,7 +165,7 @@ func (ts *TicketService) computeStewardshipContext(roomID ref.RoomID, content ti
 // computeTierProgress builds per-tier approval summaries from the
 // ticket's Review data. Groups reviewers by Tier, counts approvals,
 // and checks each tier's threshold.
-func computeTierProgress(review *ticket.TicketReview) []tierApprovalSummary {
+func computeTierProgress(review *ticket.TicketReview) []ticket.TierApprovalSummary {
 	// Collect distinct tiers from thresholds and reviewers.
 	tierSet := make(map[int]struct{})
 	thresholdByTier := make(map[int]*int)
@@ -327,7 +185,7 @@ func computeTierProgress(review *ticket.TicketReview) []tierApprovalSummary {
 	sort.Ints(tiers)
 
 	// Build per-tier counts.
-	var summaries []tierApprovalSummary
+	var summaries []ticket.TierApprovalSummary
 	for _, tier := range tiers {
 		total := 0
 		approved := 0
@@ -348,7 +206,7 @@ func computeTierProgress(review *ticket.TicketReview) []tierApprovalSummary {
 		} else {
 			satisfied = approved >= *threshold
 		}
-		summaries = append(summaries, tierApprovalSummary{
+		summaries = append(summaries, ticket.TierApprovalSummary{
 			Tier:      tier,
 			Total:     total,
 			Approved:  approved,
@@ -484,9 +342,9 @@ func (ts *TicketService) handleRanked(ctx context.Context, token *servicetoken.T
 	}
 
 	ranked := state.index.Ranked(ts.clock.Now(), ticketindex.DefaultRankWeights())
-	result := make([]rankedEntryResponse, len(ranked))
+	result := make([]ticket.RankedEntry, len(ranked))
 	for i, entry := range ranked {
-		result[i] = rankedEntryResponse{
+		result[i] = ticket.RankedEntry{
 			ID:      entry.ID,
 			Content: entry.Content,
 			Score:   entry.Score,
@@ -526,13 +384,13 @@ func (ts *TicketService) handleShow(ctx context.Context, token *servicetoken.Tok
 	// Compute score for non-closed tickets. Scoring a closed ticket
 	// is meaningless (it cannot be assigned) and would produce
 	// confusing results.
-	var score *ticketindex.TicketScore
+	var score *ticket.TicketScore
 	if content.Status != ticket.StatusClosed {
 		ticketScore := state.index.Score(ticketID, ts.clock.Now(), ticketindex.DefaultRankWeights())
 		score = &ticketScore
 	}
 
-	return showResponse{
+	return ticket.ShowResponse{
 		ID:          ticketID,
 		Room:        roomID.String(),
 		Content:     content,
@@ -568,7 +426,7 @@ func (ts *TicketService) handleChildren(ctx context.Context, token *servicetoken
 	children := state.index.Children(ticketID)
 	childTotal, childClosed := state.index.ChildProgress(ticketID)
 
-	return childrenResponse{
+	return ticket.ChildrenResponse{
 		Parent:      ticketID,
 		Children:    entriesFromIndex(children, ""),
 		ChildTotal:  childTotal,
@@ -622,7 +480,7 @@ func (ts *TicketService) handleGrep(ctx context.Context, token *servicetoken.Tok
 	}
 
 	// Cross-room grep — include room ID in each result.
-	var allEntries []entryWithRoom
+	var allEntries []ticket.TicketEntry
 	for roomID, state := range ts.rooms {
 		entries, err := state.index.Grep(request.Pattern, filter)
 		if err != nil {
@@ -630,7 +488,7 @@ func (ts *TicketService) handleGrep(ctx context.Context, token *servicetoken.Tok
 		}
 		for _, entry := range entries {
 			gateCount, gateSatisfied := computeStewardshipSummary(entry.Content)
-			allEntries = append(allEntries, entryWithRoom{
+			allEntries = append(allEntries, ticket.TicketEntry{
 				ID:                   entry.ID,
 				Room:                 roomID.String(),
 				Content:              entry.Content,
@@ -641,7 +499,7 @@ func (ts *TicketService) handleGrep(ctx context.Context, token *servicetoken.Tok
 	}
 
 	if allEntries == nil {
-		allEntries = []entryWithRoom{}
+		allEntries = []ticket.TicketEntry{}
 	}
 
 	return allEntries, nil
@@ -690,9 +548,9 @@ func (ts *TicketService) handleSearch(ctx context.Context, token *servicetoken.T
 			return nil, err
 		}
 		results := state.index.Search(request.Query, filter, limit)
-		entries := make([]searchEntryResponse, len(results))
+		entries := make([]ticket.SearchEntry, len(results))
 		for i, result := range results {
-			entries[i] = searchEntryResponse{
+			entries[i] = ticket.SearchEntry{
 				ID:      result.ID,
 				Content: result.Content,
 				Score:   result.Score,
@@ -703,11 +561,11 @@ func (ts *TicketService) handleSearch(ctx context.Context, token *servicetoken.T
 
 	// Cross-room search: search each room with no limit, merge
 	// all results, re-sort by score, then apply the global limit.
-	var allResults []searchEntryResponse
+	var allResults []ticket.SearchEntry
 	for roomID, state := range ts.rooms {
 		results := state.index.Search(request.Query, filter, 0)
 		for _, result := range results {
-			allResults = append(allResults, searchEntryResponse{
+			allResults = append(allResults, ticket.SearchEntry{
 				ID:      result.ID,
 				Room:    roomID.String(),
 				Content: result.Content,
@@ -731,7 +589,7 @@ func (ts *TicketService) handleSearch(ctx context.Context, token *servicetoken.T
 	}
 
 	if allResults == nil {
-		allResults = []searchEntryResponse{}
+		allResults = []ticket.SearchEntry{}
 	}
 
 	return allResults, nil
@@ -781,7 +639,7 @@ func (ts *TicketService) handleDeps(ctx context.Context, token *servicetoken.Tok
 		deps = []string{}
 	}
 
-	return depsResponse{
+	return ticket.DepsResponse{
 		Ticket: ticketID,
 		Deps:   deps,
 	}, nil
@@ -812,7 +670,7 @@ func (ts *TicketService) handleEpicHealth(ctx context.Context, token *servicetok
 
 	health := state.index.EpicHealth(ticketID)
 
-	return epicHealthResponse{
+	return ticket.EpicHealthResponse{
 		Ticket: ticketID,
 		Health: health,
 	}, nil
@@ -833,7 +691,7 @@ func (ts *TicketService) handleUpcomingGates(ctx context.Context, token *service
 	}
 
 	now := ts.clock.Now()
-	var entries []upcomingGateEntry
+	var entries []ticket.UpcomingGateEntry
 
 	for roomID, state := range ts.rooms {
 		if request.Room != "" && roomID.String() != request.Room {
@@ -860,7 +718,7 @@ func (ts *TicketService) handleUpcomingGates(ctx context.Context, token *service
 					untilFireStr = formatDuration(untilFire)
 				}
 
-				entries = append(entries, upcomingGateEntry{
+				entries = append(entries, ticket.UpcomingGateEntry{
 					GateID:      gate.ID,
 					Target:      gate.Target,
 					Schedule:    gate.Schedule,
@@ -922,17 +780,6 @@ func formatDuration(d time.Duration) string {
 
 // --- List rooms ---
 
-// roomInfo describes a single tracked room for the list-rooms
-// response. Includes the room's canonical alias and ticket ID prefix
-// so the viewer can display human-friendly room names and construct
-// ticket references.
-type roomInfo struct {
-	RoomID string            `cbor:"room_id"`
-	Alias  string            `cbor:"alias,omitempty"`
-	Prefix string            `cbor:"prefix,omitempty"`
-	Stats  ticketindex.Stats `cbor:"stats"`
-}
-
 // handleListRooms returns summary information for every tracked room.
 // The viewer uses this for room selection when no --room flag is
 // provided.
@@ -941,17 +788,21 @@ func (ts *TicketService) handleListRooms(ctx context.Context, token *servicetoke
 		return nil, err
 	}
 
-	rooms := make([]roomInfo, 0, len(ts.rooms))
+	rooms := make([]ticket.RoomInfo, 0, len(ts.rooms))
 	for roomID, state := range ts.rooms {
 		prefix := state.config.Prefix
 		if prefix == "" {
 			prefix = "tkt"
 		}
-		rooms = append(rooms, roomInfo{
-			RoomID: roomID.String(),
-			Alias:  state.alias,
-			Prefix: prefix,
-			Stats:  state.index.Stats(),
+		stats := state.index.Stats()
+		rooms = append(rooms, ticket.RoomInfo{
+			RoomID:     roomID.String(),
+			Alias:      state.alias,
+			Prefix:     prefix,
+			Total:      stats.Total,
+			ByStatus:   stats.ByStatus,
+			ByPriority: stats.ByPriority,
+			ByType:     stats.ByType,
 		})
 	}
 
@@ -959,18 +810,6 @@ func (ts *TicketService) handleListRooms(ctx context.Context, token *servicetoke
 }
 
 // --- List members ---
-
-// memberInfo describes a single joined member of a tracked room,
-// enriched with presence state from the ticket service's /sync loop.
-// The TUI uses this to populate the assignee dropdown with
-// availability indicators.
-type memberInfo struct {
-	UserID          ref.UserID `cbor:"user_id"`
-	DisplayName     string     `cbor:"display_name"`
-	Presence        string     `cbor:"presence"`
-	StatusMsg       string     `cbor:"status_msg"`
-	CurrentlyActive bool       `cbor:"currently_active"`
-}
 
 // presenceRank returns a sort key for presence states. Lower values
 // sort first: online users appear before unavailable, which appear
@@ -1016,9 +855,9 @@ func (ts *TicketService) handleListMembers(_ context.Context, token *servicetoke
 	// enriched with presence state. Only joined members are stored
 	// in membersByRoom (leave/ban events remove them).
 	members := ts.membersByRoom[roomID]
-	result := make([]memberInfo, 0, len(members))
+	result := make([]ticket.MemberInfo, 0, len(members))
 	for userID, member := range members {
-		info := memberInfo{
+		info := ticket.MemberInfo{
 			UserID:      userID,
 			DisplayName: member.DisplayName,
 		}

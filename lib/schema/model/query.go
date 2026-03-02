@@ -3,15 +3,6 @@
 
 package model
 
-// Query response types for the model service's introspection actions
-// (model/list and model/status). These flow over the service socket
-// encoded as CBOR through the standard SocketServer response envelope.
-// The CBOR codec uses json tags for field names.
-//
-// Both the model service binary (server side) and the bureau CLI
-// (client side) import these types. A single source of truth prevents
-// silent deserialization mismatches from duplicated struct definitions.
-
 // ModelListEntry is a single alias in the model/list response,
 // enriched with resolved provider details.
 type ModelListEntry struct {

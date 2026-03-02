@@ -14,6 +14,7 @@ import (
 
 	"github.com/bureau-foundation/bureau/cmd/bureau/cli"
 	"github.com/bureau-foundation/bureau/lib/artifactstore"
+	ticketschema "github.com/bureau-foundation/bureau/lib/schema/ticket"
 )
 
 // --- attach ---
@@ -63,7 +64,7 @@ and BUREAU_ARTIFACT_TOKEN environment variables).`,
 			},
 		},
 		Params:         func() any { return &params },
-		Output:         func() any { return &mutationResult{} },
+		Output:         func() any { return &ticketschema.MutationResponse{} },
 		Annotations:    cli.Create(),
 		RequiredGrants: []string{"command/ticket/attach"},
 		Run: func(ctx context.Context, args []string, logger *slog.Logger) error {
@@ -125,7 +126,7 @@ and BUREAU_ARTIFACT_TOKEN environment variables).`,
 				fields["content_type"] = contentType
 			}
 
-			var result mutationResult
+			var result ticketschema.MutationResponse
 			if err := ticketClient.Call(ctx, "add-attachment", fields, &result); err != nil {
 				return err
 			}
@@ -245,7 +246,7 @@ ticket's reference to it is removed.`,
 			},
 		},
 		Params:         func() any { return &params },
-		Output:         func() any { return &mutationResult{} },
+		Output:         func() any { return &ticketschema.MutationResponse{} },
 		Annotations:    cli.Idempotent(),
 		RequiredGrants: []string{"command/ticket/attach"},
 		Run: func(ctx context.Context, args []string, logger *slog.Logger) error {
@@ -278,7 +279,7 @@ ticket's reference to it is removed.`,
 				return err
 			}
 
-			var result mutationResult
+			var result ticketschema.MutationResponse
 			if err := client.Call(ctx, "remove-attachment", fields, &result); err != nil {
 				return err
 			}

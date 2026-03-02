@@ -105,7 +105,7 @@ func (p *TicketProvider) List(ctx context.Context, _ []schema.Grant) ([]resource
 		return nil, p.templates()
 	}
 
-	var rooms []roomInfo
+	var rooms []ticket.RoomInfo
 	if err := client.Call(ctx, "list-rooms", nil, &rooms); err != nil {
 		p.logger.Warn("ticket provider: list-rooms failed", "error", err)
 		return nil, p.templates()
@@ -127,8 +127,8 @@ func (p *TicketProvider) List(ctx context.Context, _ []schema.Grant) ([]resource
 			alias = alias[:colonIndex]
 		}
 
-		openCount := room.Stats.ByStatus["open"] + room.Stats.ByStatus["in_progress"]
-		closedCount := room.Stats.ByStatus["closed"]
+		openCount := room.ByStatus["open"] + room.ByStatus["in_progress"]
+		closedCount := room.ByStatus["closed"]
 		description := fmt.Sprintf("Tickets in %s (%d open, %d closed)",
 			room.Alias, openCount, closedCount)
 
@@ -420,16 +420,6 @@ type ticketResourceEntry struct {
 	Parent    string   `json:"parent,omitempty"`
 	BlockedBy []string `json:"blocked_by,omitempty"`
 	Deadline  string   `json:"deadline,omitempty"`
-}
-
-// roomInfo mirrors the ticket service's room info response for
-// list-rooms. Defined here to avoid importing from
-// cmd/bureau-ticket-service/.
-type roomInfo struct {
-	RoomID string            `cbor:"room_id"`
-	Alias  string            `cbor:"alias,omitempty"`
-	Prefix string            `cbor:"prefix,omitempty"`
-	Stats  ticketindex.Stats `cbor:"stats"`
 }
 
 // readTokenFile reads raw token bytes from a file path. Returns an

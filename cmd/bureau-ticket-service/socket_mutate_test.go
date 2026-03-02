@@ -20,7 +20,7 @@ func TestHandleCreate(t *testing.T) {
 	env := testMutationServer(t, mutationRooms())
 	defer env.cleanup()
 
-	var result createResponse
+	var result ticket.CreateResponse
 	err := env.client.Call(context.Background(), "create", map[string]any{
 		"room":     "!room:bureau.local",
 		"title":    "new feature",
@@ -76,7 +76,7 @@ func TestHandleCreateWithBlockedBy(t *testing.T) {
 	env := testMutationServer(t, mutationRooms())
 	defer env.cleanup()
 
-	var result createResponse
+	var result ticket.CreateResponse
 	err := env.client.Call(context.Background(), "create", map[string]any{
 		"room":       "!room:bureau.local",
 		"title":      "blocked task",
@@ -153,7 +153,7 @@ func TestHandleUpdateTitle(t *testing.T) {
 	env := testMutationServer(t, mutationRooms())
 	defer env.cleanup()
 
-	var result mutationResponse
+	var result ticket.MutationResponse
 	err := env.client.Call(context.Background(), "update", map[string]any{
 		"ticket": "tkt-open",
 		"room":   "!room:bureau.local",
@@ -178,7 +178,7 @@ func TestHandleUpdateClaimTicket(t *testing.T) {
 	env := testMutationServer(t, mutationRooms())
 	defer env.cleanup()
 
-	var result mutationResponse
+	var result ticket.MutationResponse
 	err := env.client.Call(context.Background(), "update", map[string]any{
 		"ticket":   "tkt-open",
 		"room":     "!room:bureau.local",
@@ -217,7 +217,7 @@ func TestHandleUpdateUnclaim(t *testing.T) {
 	env := testMutationServer(t, mutationRooms())
 	defer env.cleanup()
 
-	var result mutationResponse
+	var result ticket.MutationResponse
 	err := env.client.Call(context.Background(), "update", map[string]any{
 		"ticket": "tkt-inprog",
 		"room":   "!room:bureau.local",
@@ -277,7 +277,7 @@ func TestHandleUpdateCloseViaUpdate(t *testing.T) {
 	env := testMutationServer(t, mutationRooms())
 	defer env.cleanup()
 
-	var result mutationResponse
+	var result ticket.MutationResponse
 	err := env.client.Call(context.Background(), "update", map[string]any{
 		"ticket": "tkt-open",
 		"room":   "!room:bureau.local",
@@ -315,7 +315,7 @@ func TestHandleClose(t *testing.T) {
 	env := testMutationServer(t, mutationRooms())
 	defer env.cleanup()
 
-	var result mutationResponse
+	var result ticket.MutationResponse
 	err := env.client.Call(context.Background(), "close", map[string]any{
 		"ticket": "tkt-open",
 		"room":   "!room:bureau.local",
@@ -341,7 +341,7 @@ func TestHandleCloseInProgress(t *testing.T) {
 	defer env.cleanup()
 
 	// Closing an in_progress ticket should work and clear the assignee.
-	var result mutationResponse
+	var result ticket.MutationResponse
 	err := env.client.Call(context.Background(), "close", map[string]any{
 		"ticket": "tkt-inprog",
 		"room":   "!room:bureau.local",
@@ -467,7 +467,7 @@ func TestHandleCloseRecurringScheduleRearms(t *testing.T) {
 	env := testMutationServer(t, recurringRooms())
 	defer env.cleanup()
 
-	var result mutationResponse
+	var result ticket.MutationResponse
 	err := env.client.Call(context.Background(), "close", map[string]any{
 		"ticket": "tkt-recurring-schedule",
 		"room":   "!room:bureau.local",
@@ -519,7 +519,7 @@ func TestHandleCloseRecurringIntervalRearms(t *testing.T) {
 	env := testMutationServer(t, recurringRooms())
 	defer env.cleanup()
 
-	var result mutationResponse
+	var result ticket.MutationResponse
 	err := env.client.Call(context.Background(), "close", map[string]any{
 		"ticket": "tkt-recurring-interval",
 		"room":   "!room:bureau.local",
@@ -549,7 +549,7 @@ func TestHandleCloseRecurringExhaustedClosesNormally(t *testing.T) {
 	env := testMutationServer(t, recurringRooms())
 	defer env.cleanup()
 
-	var result mutationResponse
+	var result ticket.MutationResponse
 	err := env.client.Call(context.Background(), "close", map[string]any{
 		"ticket": "tkt-recurring-exhausted",
 		"room":   "!room:bureau.local",
@@ -581,7 +581,7 @@ func TestHandleCloseEndRecurrenceClosesNormally(t *testing.T) {
 	env := testMutationServer(t, recurringRooms())
 	defer env.cleanup()
 
-	var result mutationResponse
+	var result ticket.MutationResponse
 	err := env.client.Call(context.Background(), "close", map[string]any{
 		"ticket":         "tkt-recurring-schedule",
 		"room":           "!room:bureau.local",
@@ -608,7 +608,7 @@ func TestHandleCloseNonRecurringClosesNormally(t *testing.T) {
 	env := testMutationServer(t, recurringRooms())
 	defer env.cleanup()
 
-	var result mutationResponse
+	var result ticket.MutationResponse
 	err := env.client.Call(context.Background(), "close", map[string]any{
 		"ticket": "tkt-non-recurring",
 		"room":   "!room:bureau.local",
@@ -629,7 +629,7 @@ func TestHandleReopen(t *testing.T) {
 	env := testMutationServer(t, mutationRooms())
 	defer env.cleanup()
 
-	var result mutationResponse
+	var result ticket.MutationResponse
 	err := env.client.Call(context.Background(), "reopen", map[string]any{
 		"ticket": "tkt-closed",
 		"room":   "!room:bureau.local",
@@ -665,7 +665,7 @@ func TestHandleBatchCreate(t *testing.T) {
 	env := testMutationServer(t, mutationRooms())
 	defer env.cleanup()
 
-	var result batchCreateResponse
+	var result ticket.BatchCreateResponse
 	err := env.client.Call(context.Background(), "batch-create", map[string]any{
 		"room": "!room:bureau.local",
 		"tickets": []map[string]any{
@@ -747,7 +747,7 @@ func TestHandleBatchCreateWithExistingDep(t *testing.T) {
 	defer env.cleanup()
 
 	// blocked_by references an existing ticket (not a symbolic ref).
-	var result batchCreateResponse
+	var result ticket.BatchCreateResponse
 	err := env.client.Call(context.Background(), "batch-create", map[string]any{
 		"room": "!room:bureau.local",
 		"tickets": []map[string]any{
@@ -771,7 +771,7 @@ func TestHandleResolveGate(t *testing.T) {
 	env := testMutationServer(t, mutationRooms())
 	defer env.cleanup()
 
-	var result mutationResponse
+	var result ticket.MutationResponse
 	err := env.client.Call(context.Background(), "resolve-gate", map[string]any{
 		"ticket": "tkt-gated",
 		"room":   "!room:bureau.local",
@@ -855,7 +855,7 @@ func TestHandleUpdateGate(t *testing.T) {
 	env := testMutationServer(t, mutationRooms())
 	defer env.cleanup()
 
-	var result mutationResponse
+	var result ticket.MutationResponse
 	err := env.client.Call(context.Background(), "update-gate", map[string]any{
 		"ticket":       "tkt-gated",
 		"room":         "!room:bureau.local",
@@ -997,7 +997,7 @@ func TestCloseAllowedWithCloseGrant(t *testing.T) {
 	})
 	defer env.cleanup()
 
-	var result mutationResponse
+	var result ticket.MutationResponse
 	err := env.client.Call(context.Background(), "close", map[string]any{
 		"ticket": "tkt-open",
 		"room":   "!room:bureau.local",
@@ -1018,7 +1018,7 @@ func TestReopenAllowedWithReopenGrant(t *testing.T) {
 	})
 	defer env.cleanup()
 
-	var result mutationResponse
+	var result ticket.MutationResponse
 	err := env.client.Call(context.Background(), "reopen", map[string]any{
 		"ticket": "tkt-closed",
 		"room":   "!room:bureau.local",
@@ -1083,7 +1083,7 @@ func TestAssigneeFloorUpdateBody(t *testing.T) {
 	env := noGrantsAssigneeEnv(t)
 	defer env.cleanup()
 
-	var result mutationResponse
+	var result ticket.MutationResponse
 	err := env.client.Call(context.Background(), "update", map[string]any{
 		"ticket": "tkt-mywork",
 		"room":   "!room:bureau.local",
@@ -1101,7 +1101,7 @@ func TestAssigneeFloorUpdateLabels(t *testing.T) {
 	env := noGrantsAssigneeEnv(t)
 	defer env.cleanup()
 
-	var result mutationResponse
+	var result ticket.MutationResponse
 	err := env.client.Call(context.Background(), "update", map[string]any{
 		"ticket": "tkt-mywork",
 		"room":   "!room:bureau.local",
@@ -1119,7 +1119,7 @@ func TestAssigneeFloorUpdateContextID(t *testing.T) {
 	env := noGrantsAssigneeEnv(t)
 	defer env.cleanup()
 
-	var result mutationResponse
+	var result ticket.MutationResponse
 	err := env.client.Call(context.Background(), "update", map[string]any{
 		"ticket":     "tkt-mywork",
 		"room":       "!room:bureau.local",
@@ -1137,7 +1137,7 @@ func TestAssigneeFloorClose(t *testing.T) {
 	env := noGrantsAssigneeEnv(t)
 	defer env.cleanup()
 
-	var result mutationResponse
+	var result ticket.MutationResponse
 	err := env.client.Call(context.Background(), "close", map[string]any{
 		"ticket": "tkt-mywork",
 		"room":   "!room:bureau.local",
@@ -1158,7 +1158,7 @@ func TestAssigneeFloorCloseViaUpdate(t *testing.T) {
 	env := noGrantsAssigneeEnv(t)
 	defer env.cleanup()
 
-	var result mutationResponse
+	var result ticket.MutationResponse
 	err := env.client.Call(context.Background(), "update", map[string]any{
 		"ticket": "tkt-mywork",
 		"room":   "!room:bureau.local",
@@ -1176,7 +1176,7 @@ func TestAssigneeFloorAddNote(t *testing.T) {
 	env := noGrantsAssigneeEnv(t)
 	defer env.cleanup()
 
-	var result mutationResponse
+	var result ticket.MutationResponse
 	err := env.client.Call(context.Background(), "add-note", map[string]any{
 		"ticket": "tkt-mywork",
 		"room":   "!room:bureau.local",
@@ -1197,7 +1197,7 @@ func TestAssigneeFloorRelinquish(t *testing.T) {
 	env := noGrantsAssigneeEnv(t)
 	defer env.cleanup()
 
-	var result mutationResponse
+	var result ticket.MutationResponse
 	err := env.client.Call(context.Background(), "update", map[string]any{
 		"ticket":   "tkt-mywork",
 		"room":     "!room:bureau.local",
@@ -1437,7 +1437,7 @@ func TestBroadGrantStillAllowsAllFields(t *testing.T) {
 	env := testMutationServer(t, mutationRooms())
 	defer env.cleanup()
 
-	var result mutationResponse
+	var result ticket.MutationResponse
 	err := env.client.Call(context.Background(), "update", map[string]any{
 		"ticket":   "tkt-mywork",
 		"room":     "!room:bureau.local",
@@ -1465,7 +1465,7 @@ func TestHandleCreatePipelineTicket(t *testing.T) {
 	env := testMutationServer(t, mutationRooms())
 	defer env.cleanup()
 
-	var result createResponse
+	var result ticket.CreateResponse
 	err := env.client.Call(context.Background(), "create", map[string]any{
 		"room":     "!room:bureau.local",
 		"title":    "deploy staging",
@@ -1572,7 +1572,7 @@ func TestHandleUpdatePipelineProgress(t *testing.T) {
 	env := testMutationServer(t, rooms)
 	defer env.cleanup()
 
-	var result mutationResponse
+	var result ticket.MutationResponse
 	err := env.client.Call(context.Background(), "update", map[string]any{
 		"ticket": "pip-deploy",
 		"room":   "!room:bureau.local",
@@ -1627,7 +1627,7 @@ func TestHandleUpdateTypeFromPipelineAutoClearsPipelineContent(t *testing.T) {
 	env := testMutationServer(t, rooms)
 	defer env.cleanup()
 
-	var result mutationResponse
+	var result ticket.MutationResponse
 	err := env.client.Call(context.Background(), "update", map[string]any{
 		"ticket": "pip-deploy",
 		"room":   "!room:bureau.local",
@@ -1677,7 +1677,7 @@ func TestHandleCreateAllowedTypesEnforced(t *testing.T) {
 	defer env.cleanup()
 
 	// Creating a "task" should succeed.
-	var result createResponse
+	var result ticket.CreateResponse
 	err := env.client.Call(context.Background(), "create", map[string]any{
 		"room":     "!room:bureau.local",
 		"title":    "allowed task",
@@ -1729,7 +1729,7 @@ func TestHandleUpdateAllowedTypesEnforced(t *testing.T) {
 	defer env.cleanup()
 
 	// Changing type to "bug" (allowed) should succeed.
-	var result mutationResponse
+	var result ticket.MutationResponse
 	err := env.client.Call(context.Background(), "update", map[string]any{
 		"ticket": "tkt-task",
 		"room":   "!room:bureau.local",
@@ -1758,7 +1758,7 @@ func TestHandleBatchCreatePipelineTickets(t *testing.T) {
 	env := testMutationServer(t, mutationRooms())
 	defer env.cleanup()
 
-	var result batchCreateResponse
+	var result ticket.BatchCreateResponse
 	err := env.client.Call(context.Background(), "batch-create", map[string]any{
 		"room": "!room:bureau.local",
 		"tickets": []map[string]any{
@@ -1819,7 +1819,7 @@ func TestHandleAddNote(t *testing.T) {
 	env := testMutationServer(t, mutationRooms())
 	defer env.cleanup()
 
-	var result mutationResponse
+	var result ticket.MutationResponse
 	err := env.client.Call(context.Background(), "add-note", map[string]any{
 		"ticket": "tkt-open",
 		"room":   "!room:bureau.local",
@@ -1869,7 +1869,7 @@ func TestHandleAddNoteSequentialIDs(t *testing.T) {
 
 	ctx := context.Background()
 
-	var firstResult mutationResponse
+	var firstResult ticket.MutationResponse
 	err := env.client.Call(ctx, "add-note", map[string]any{
 		"ticket": "tkt-open",
 		"room":   "!room:bureau.local",
@@ -1879,7 +1879,7 @@ func TestHandleAddNoteSequentialIDs(t *testing.T) {
 		t.Fatalf("first add-note: %v", err)
 	}
 
-	var secondResult mutationResponse
+	var secondResult ticket.MutationResponse
 	err = env.client.Call(ctx, "add-note", map[string]any{
 		"ticket": "tkt-open",
 		"room":   "!room:bureau.local",
@@ -1943,7 +1943,7 @@ func TestHandleAddNoteWithExistingNotes(t *testing.T) {
 	env := testMutationServer(t, rooms)
 	defer env.cleanup()
 
-	var result mutationResponse
+	var result ticket.MutationResponse
 	err := env.client.Call(context.Background(), "add-note", map[string]any{
 		"ticket": "tkt-noted",
 		"room":   "!room:bureau.local",
@@ -2050,7 +2050,7 @@ func TestHandleUpdateInProgressToReview(t *testing.T) {
 	env := testMutationServer(t, mutationRooms())
 	defer env.cleanup()
 
-	var result mutationResponse
+	var result ticket.MutationResponse
 	err := env.client.Call(context.Background(), "update", map[string]any{
 		"ticket": "tkt-inprog",
 		"room":   "!room:bureau.local",
@@ -2083,7 +2083,7 @@ func TestHandleUpdateReviewToInProgress(t *testing.T) {
 	env := testMutationServer(t, mutationRooms())
 	defer env.cleanup()
 
-	var result mutationResponse
+	var result ticket.MutationResponse
 	err := env.client.Call(context.Background(), "update", map[string]any{
 		"ticket": "tkt-review",
 		"room":   "!room:bureau.local",
@@ -2108,7 +2108,7 @@ func TestHandleUpdateReviewToOpen(t *testing.T) {
 	env := testMutationServer(t, mutationRooms())
 	defer env.cleanup()
 
-	var result mutationResponse
+	var result ticket.MutationResponse
 	err := env.client.Call(context.Background(), "update", map[string]any{
 		"ticket": "tkt-review",
 		"room":   "!room:bureau.local",
@@ -2132,7 +2132,7 @@ func TestHandleUpdateReviewToClosed(t *testing.T) {
 	env := testMutationServer(t, mutationRooms())
 	defer env.cleanup()
 
-	var result mutationResponse
+	var result ticket.MutationResponse
 	err := env.client.Call(context.Background(), "update", map[string]any{
 		"ticket": "tkt-review",
 		"room":   "!room:bureau.local",
@@ -2159,7 +2159,7 @@ func TestHandleUpdateReviewToBlocked(t *testing.T) {
 	env := testMutationServer(t, mutationRooms())
 	defer env.cleanup()
 
-	var result mutationResponse
+	var result ticket.MutationResponse
 	err := env.client.Call(context.Background(), "update", map[string]any{
 		"ticket": "tkt-review",
 		"room":   "!room:bureau.local",
@@ -2197,7 +2197,7 @@ func TestHandleUpdateOpenToReview(t *testing.T) {
 	env := testMutationServer(t, mutationRooms())
 	defer env.cleanup()
 
-	var result mutationResponse
+	var result ticket.MutationResponse
 	err := env.client.Call(context.Background(), "update", map[string]any{
 		"ticket": "tkt-open",
 		"room":   "!room:bureau.local",
@@ -2227,7 +2227,7 @@ func TestHandleUpdateBlockedToReview(t *testing.T) {
 	env := testMutationServer(t, mutationRooms())
 	defer env.cleanup()
 
-	var result mutationResponse
+	var result ticket.MutationResponse
 	err := env.client.Call(context.Background(), "update", map[string]any{
 		"ticket": "tkt-blocked",
 		"room":   "!room:bureau.local",
@@ -2294,7 +2294,7 @@ func TestHandleUpdateReviewAssigneeOnReview(t *testing.T) {
 	defer env.cleanup()
 
 	// First transition open → review with an assignee.
-	var result mutationResponse
+	var result ticket.MutationResponse
 	err := env.client.Call(context.Background(), "update", map[string]any{
 		"ticket":   "tkt-open",
 		"room":     "!room:bureau.local",
@@ -2329,7 +2329,7 @@ func TestHandleSetDisposition(t *testing.T) {
 
 	// The test token's subject is @bureau/fleet/prod/agent/tester:bureau.local,
 	// which is in tkt-review's reviewer list.
-	var result mutationResponse
+	var result ticket.MutationResponse
 	err := env.client.Call(context.Background(), "set-disposition", map[string]any{
 		"ticket":      "tkt-review",
 		"room":        "!room:bureau.local",
@@ -2461,7 +2461,7 @@ func TestHandleAddAttachment(t *testing.T) {
 	env := testMutationServer(t, mutationRooms())
 	defer env.cleanup()
 
-	var result mutationResponse
+	var result ticket.MutationResponse
 	err := env.client.Call(context.Background(), "add-attachment", map[string]any{
 		"ticket":       "tkt-open",
 		"room":         "!room:bureau.local",
@@ -2521,7 +2521,7 @@ func TestHandleAddAttachmentUpsert(t *testing.T) {
 	}
 
 	// Upsert same ref with different label and content type.
-	var result mutationResponse
+	var result ticket.MutationResponse
 	err = env.client.Call(ctx, "add-attachment", map[string]any{
 		"ticket":       "tkt-open",
 		"room":         "!room:bureau.local",
@@ -2593,7 +2593,7 @@ func TestHandleRemoveAttachment(t *testing.T) {
 	env := testMutationServer(t, rooms)
 	defer env.cleanup()
 
-	var result mutationResponse
+	var result ticket.MutationResponse
 	err := env.client.Call(context.Background(), "remove-attachment", map[string]any{
 		"ticket": "tkt-attached",
 		"room":   "!room:bureau.local",
@@ -2677,7 +2677,7 @@ func TestHandleCreateWithContextID(t *testing.T) {
 	env := testMutationServer(t, mutationRooms())
 	defer env.cleanup()
 
-	var result createResponse
+	var result ticket.CreateResponse
 	err := env.client.Call(context.Background(), "create", map[string]any{
 		"room":       "!room:bureau.local",
 		"title":      "task with context",
@@ -2702,7 +2702,7 @@ func TestHandleUpdateWithContextID(t *testing.T) {
 	env := testMutationServer(t, mutationRooms())
 	defer env.cleanup()
 
-	var result mutationResponse
+	var result ticket.MutationResponse
 	err := env.client.Call(context.Background(), "update", map[string]any{
 		"ticket":     "tkt-open",
 		"room":       "!room:bureau.local",
@@ -2734,7 +2734,7 @@ func TestHandleCloseWithContextID(t *testing.T) {
 	env := testMutationServer(t, mutationRooms())
 	defer env.cleanup()
 
-	var result mutationResponse
+	var result ticket.MutationResponse
 	err := env.client.Call(context.Background(), "close", map[string]any{
 		"ticket":     "tkt-open",
 		"room":       "!room:bureau.local",
@@ -2757,7 +2757,7 @@ func TestHandleAddNoteWithContextID(t *testing.T) {
 	env := testMutationServer(t, mutationRooms())
 	defer env.cleanup()
 
-	var result mutationResponse
+	var result ticket.MutationResponse
 	err := env.client.Call(context.Background(), "add-note", map[string]any{
 		"ticket":     "tkt-open",
 		"room":       "!room:bureau.local",

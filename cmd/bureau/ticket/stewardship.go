@@ -11,9 +11,7 @@ import (
 	"os"
 
 	"github.com/bureau-foundation/bureau/cmd/bureau/cli"
-	"github.com/bureau-foundation/bureau/lib/ref"
-	"github.com/bureau-foundation/bureau/lib/schema/stewardship"
-	ticketschema "github.com/bureau-foundation/bureau/lib/schema/ticket"
+	stewardshipschema "github.com/bureau-foundation/bureau/lib/schema/stewardship"
 )
 
 // stewardshipCommand returns the "stewardship" subcommand group for
@@ -50,20 +48,6 @@ type stewardshipListParams struct {
 	Room string `json:"room" flag:"room,r" desc:"room ID (optional, scope to one room)"`
 }
 
-// stewardshipListEntry mirrors the service response for a single
-// declaration in the stewardship-list result.
-type stewardshipListEntry struct {
-	RoomID           ref.RoomID                    `json:"room_id"`
-	StateKey         string                        `json:"state_key"`
-	ResourcePatterns []string                      `json:"resource_patterns"`
-	GateTypes        []string                      `json:"gate_types,omitempty"`
-	NotifyTypes      []string                      `json:"notify_types,omitempty"`
-	OverlapPolicy    string                        `json:"overlap_policy,omitempty"`
-	Description      string                        `json:"description,omitempty"`
-	Tiers            []stewardship.StewardshipTier `json:"tiers"`
-	DigestInterval   string                        `json:"digest_interval,omitempty"`
-}
-
 func stewardshipListCommand() *cli.Command {
 	var params stewardshipListParams
 
@@ -84,7 +68,7 @@ Optionally scope to a single room with --room.`,
 			},
 		},
 		Params:         func() any { return &params },
-		Output:         func() any { return &[]stewardshipListEntry{} },
+		Output:         func() any { return &[]stewardshipschema.StewardshipListEntry{} },
 		Annotations:    cli.ReadOnly(),
 		RequiredGrants: []string{"command/ticket/stewardship/list"},
 		Run: func(ctx context.Context, _ []string, logger *slog.Logger) error {
@@ -105,7 +89,7 @@ Optionally scope to a single room with --room.`,
 				fields["room"] = roomID.String()
 			}
 
-			var entries []stewardshipListEntry
+			var entries []stewardshipschema.StewardshipListEntry
 			if err := client.Call(ctx, "stewardship-list", fields, &entries); err != nil {
 				return err
 			}
@@ -142,25 +126,6 @@ type stewardshipResolveParams struct {
 	Priority int    `json:"priority" flag:"priority,p"  desc:"ticket priority for P0 bypass evaluation" default:"2"`
 }
 
-// stewardshipResolveResponse mirrors the service response for
-// stewardship-resolve.
-type stewardshipResolveResponse struct {
-	Gates      []ticketschema.TicketGate      `json:"gates"`
-	Reviewers  []ticketschema.ReviewerEntry   `json:"reviewers"`
-	Thresholds []ticketschema.TierThreshold   `json:"thresholds"`
-	Matches    []stewardshipResolveMatchEntry `json:"matches"`
-}
-
-// stewardshipResolveMatchEntry describes a single declaration match.
-type stewardshipResolveMatchEntry struct {
-	RoomID          ref.RoomID `json:"room_id"`
-	StateKey        string     `json:"state_key"`
-	MatchedPattern  string     `json:"matched_pattern"`
-	MatchedResource string     `json:"matched_resource"`
-	OverlapPolicy   string     `json:"overlap_policy"`
-	Description     string     `json:"description,omitempty"`
-}
-
 func stewardshipResolveCommand() *cli.Command {
 	var params stewardshipResolveParams
 
@@ -185,7 +150,7 @@ ticket type for gate_types matching.`,
 			},
 		},
 		Params:         func() any { return &params },
-		Output:         func() any { return &stewardshipResolveResponse{} },
+		Output:         func() any { return &stewardshipschema.StewardshipResolveResponse{} },
 		Annotations:    cli.ReadOnly(),
 		RequiredGrants: []string{"command/ticket/stewardship/resolve"},
 		Run: func(ctx context.Context, args []string, logger *slog.Logger) error {
@@ -212,7 +177,7 @@ ticket type for gate_types matching.`,
 				fields["priority"] = params.Priority
 			}
 
-			var response stewardshipResolveResponse
+			var response stewardshipschema.StewardshipResolveResponse
 			if err := client.Call(ctx, "stewardship-resolve", fields, &response); err != nil {
 				return err
 			}
@@ -259,11 +224,6 @@ type stewardshipSetParams struct {
 	File     string `json:"-"         flag:"file,f"       desc:"path to JSON file containing StewardshipContent"`
 }
 
-// stewardshipSetResult is the response from stewardship-set.
-type stewardshipSetResult struct {
-	EventID ref.EventID `json:"event_id"`
-}
-
 func stewardshipSetCommand() *cli.Command {
 	var params stewardshipSetParams
 
@@ -286,7 +246,7 @@ overlap_policy, and digest_interval.`,
 			},
 		},
 		Params:         func() any { return &params },
-		Output:         func() any { return &stewardshipSetResult{} },
+		Output:         func() any { return &stewardshipschema.StewardshipSetResponse{} },
 		Annotations:    cli.Create(),
 		RequiredGrants: []string{"command/ticket/stewardship/set"},
 		Run: func(ctx context.Context, _ []string, logger *slog.Logger) error {
@@ -324,7 +284,7 @@ overlap_policy, and digest_interval.`,
 				"content":   content,
 			}
 
-			var result stewardshipSetResult
+			var result stewardshipschema.StewardshipSetResponse
 			if err := client.Call(ctx, "stewardship-set", fields, &result); err != nil {
 				return err
 			}
@@ -345,19 +305,19 @@ overlap_policy, and digest_interval.`,
 
 // loadStewardshipContent reads and validates a StewardshipContent from
 // a JSON file.
-func loadStewardshipContent(path string) (stewardship.StewardshipContent, error) {
+func loadStewardshipContent(path string) (stewardshipschema.StewardshipContent, error) {
 	data, err := os.ReadFile(path)
 	if err != nil {
-		return stewardship.StewardshipContent{}, cli.Validation("cannot read stewardship file %s: %w", path, err)
+		return stewardshipschema.StewardshipContent{}, cli.Validation("cannot read stewardship file %s: %w", path, err)
 	}
 
-	var content stewardship.StewardshipContent
+	var content stewardshipschema.StewardshipContent
 	if err := json.Unmarshal(data, &content); err != nil {
-		return stewardship.StewardshipContent{}, cli.Validation("invalid JSON in stewardship file %s: %w", path, err)
+		return stewardshipschema.StewardshipContent{}, cli.Validation("invalid JSON in stewardship file %s: %w", path, err)
 	}
 
 	if err := content.Validate(); err != nil {
-		return stewardship.StewardshipContent{}, cli.Validation("invalid stewardship content in %s: %w", path, err)
+		return stewardshipschema.StewardshipContent{}, cli.Validation("invalid stewardship content in %s: %w", path, err)
 	}
 
 	return content, nil

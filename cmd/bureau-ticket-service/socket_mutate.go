@@ -411,12 +411,6 @@ type importEntry struct {
 	Content ticket.TicketContent `cbor:"content"`
 }
 
-// importResponse is returned by the "import" action.
-type importResponse struct {
-	Room     string `json:"room"`
-	Imported int    `json:"imported"`
-}
-
 // resolveGateRequest is the input for the "resolve-gate" action.
 type resolveGateRequest struct {
 	Room   string `cbor:"room,omitempty"`
@@ -463,29 +457,6 @@ type setDispositionRequest struct {
 	Room        string `cbor:"room,omitempty"`
 	Ticket      string `cbor:"ticket"`
 	Disposition string `cbor:"disposition"`
-}
-
-// --- Mutation response types ---
-
-// createResponse is returned by the "create" action.
-type createResponse struct {
-	ID   string `json:"id"`
-	Room string `json:"room"`
-}
-
-// batchCreateResponse is returned by the "batch-create" action.
-type batchCreateResponse struct {
-	Room string            `json:"room"`
-	Refs map[string]string `json:"refs"`
-}
-
-// mutationResponse is the common response for update, close, reopen,
-// and gate operations. Returns the full updated content so the caller
-// does not need a separate show call.
-type mutationResponse struct {
-	ID      string               `json:"id"`
-	Room    string               `json:"room"`
-	Content ticket.TicketContent `json:"content"`
 }
 
 // --- Mutation handlers ---
@@ -636,7 +607,7 @@ func (ts *TicketService) handleCreate(ctx context.Context, token *servicetoken.T
 		}
 	}
 
-	return createResponse{
+	return ticket.CreateResponse{
 		ID:   ticketID,
 		Room: request.Room,
 	}, nil
@@ -897,7 +868,7 @@ func (ts *TicketService) handleUpdate(ctx context.Context, token *servicetoken.T
 
 			ts.pushTimerGates(roomID, ticketID, &content)
 
-			return mutationResponse{
+			return ticket.MutationResponse{
 				ID:      ticketID,
 				Room:    roomID.String(),
 				Content: content,
@@ -936,7 +907,7 @@ func (ts *TicketService) handleUpdate(ctx context.Context, token *servicetoken.T
 		}
 	}
 
-	return mutationResponse{
+	return ticket.MutationResponse{
 		ID:      ticketID,
 		Room:    roomID.String(),
 		Content: content,
@@ -1028,7 +999,7 @@ func (ts *TicketService) handleClose(ctx context.Context, token *servicetoken.To
 			// timer loop fires them at the new target time.
 			ts.pushTimerGates(roomID, ticketID, &content)
 
-			return mutationResponse{
+			return ticket.MutationResponse{
 				ID:      ticketID,
 				Room:    roomID.String(),
 				Content: content,
@@ -1063,7 +1034,7 @@ func (ts *TicketService) handleClose(ctx context.Context, token *servicetoken.To
 	// already have a Target).
 	ts.resolveUnblockedTimerTargets(ctx, roomID, state, []string{ticketID})
 
-	return mutationResponse{
+	return ticket.MutationResponse{
 		ID:      ticketID,
 		Room:    roomID.String(),
 		Content: content,
@@ -1115,7 +1086,7 @@ func (ts *TicketService) handleReopen(ctx context.Context, token *servicetoken.T
 		return nil, fmt.Errorf("writing ticket to Matrix: %w", err)
 	}
 
-	return mutationResponse{
+	return ticket.MutationResponse{
 		ID:      ticketID,
 		Room:    roomID.String(),
 		Content: content,
@@ -1273,7 +1244,7 @@ func (ts *TicketService) handleBatchCreate(ctx context.Context, token *serviceto
 		}
 	}
 
-	return batchCreateResponse{
+	return ticket.BatchCreateResponse{
 		Room: request.Room,
 		Refs: refToID,
 	}, nil
@@ -1363,7 +1334,7 @@ func (ts *TicketService) handleImport(ctx context.Context, token *servicetoken.T
 		}
 	}
 
-	return importResponse{
+	return ticket.ImportResponse{
 		Room:     request.Room,
 		Imported: len(request.Tickets),
 	}, nil
@@ -1425,7 +1396,7 @@ func (ts *TicketService) handleResolveGate(ctx context.Context, token *serviceto
 		return nil, fmt.Errorf("writing ticket to Matrix: %w", err)
 	}
 
-	return mutationResponse{
+	return ticket.MutationResponse{
 		ID:      ticketID,
 		Room:    roomID.String(),
 		Content: content,
@@ -1490,7 +1461,7 @@ func (ts *TicketService) handleUpdateGate(ctx context.Context, token *servicetok
 		return nil, fmt.Errorf("writing ticket to Matrix: %w", err)
 	}
 
-	return mutationResponse{
+	return ticket.MutationResponse{
 		ID:      ticketID,
 		Room:    roomID.String(),
 		Content: content,
@@ -1578,7 +1549,7 @@ func (ts *TicketService) handleSetDisposition(ctx context.Context, token *servic
 	// Check for escalation notifications after the successful write.
 	ts.sendEscalationNotifications(ctx, roomID, ticketID, oldReview, content)
 
-	return mutationResponse{
+	return ticket.MutationResponse{
 		ID:      ticketID,
 		Room:    roomID.String(),
 		Content: content,
@@ -1642,7 +1613,7 @@ func (ts *TicketService) handleAddNote(ctx context.Context, token *servicetoken.
 		return nil, fmt.Errorf("writing ticket to Matrix: %w", err)
 	}
 
-	return mutationResponse{
+	return ticket.MutationResponse{
 		ID:      ticketID,
 		Room:    roomID.String(),
 		Content: content,
@@ -1743,7 +1714,7 @@ func (ts *TicketService) handleDefer(ctx context.Context, token *servicetoken.To
 	// it at the right time.
 	ts.pushTimerGates(roomID, ticketID, &content)
 
-	return mutationResponse{
+	return ticket.MutationResponse{
 		ID:      ticketID,
 		Room:    roomID.String(),
 		Content: content,
@@ -1827,7 +1798,7 @@ func (ts *TicketService) handleAddAttachment(ctx context.Context, token *service
 		return nil, fmt.Errorf("writing ticket to Matrix: %w", err)
 	}
 
-	return mutationResponse{
+	return ticket.MutationResponse{
 		ID:      ticketID,
 		Room:    roomID.String(),
 		Content: content,
@@ -1886,7 +1857,7 @@ func (ts *TicketService) handleRemoveAttachment(ctx context.Context, token *serv
 		return nil, fmt.Errorf("writing ticket to Matrix: %w", err)
 	}
 
-	return mutationResponse{
+	return ticket.MutationResponse{
 		ID:      ticketID,
 		Room:    roomID.String(),
 		Content: content,

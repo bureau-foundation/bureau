@@ -86,7 +86,7 @@ const unblockIndicatorWidth = 4
 //
 //	🐛P0 ● tkt-3vk5  Fix connection pooling leak [infra]
 //	📋P2 tkt-2ccg    Implement retry backoff [transport] ↑3
-func (renderer ListRenderer) RenderRow(entry ticketindex.Entry, selected bool, score *ticketindex.TicketScore, matchPositions []int) string {
+func (renderer ListRenderer) RenderRow(entry ticketindex.Entry, selected bool, score *ticket.TicketScore, matchPositions []int) string {
 	// Title width uses worst-case left portion (with status icon)
 	// so truncation is consistent across rows.
 	titleWidth := renderer.width - maxLeftWidth - columnWidthID

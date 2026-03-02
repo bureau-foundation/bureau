@@ -85,7 +85,7 @@ func NewDetailRenderer(theme Theme, width int) DetailRenderer {
 // The presenceLookup function maps a user ID to their presence state
 // ("online", "unavailable", "offline"). Pass nil when presence
 // information is unavailable (e.g., file-backed mode).
-func (renderer DetailRenderer) RenderHeader(entry ticketindex.Entry, score *ticketindex.TicketScore, presenceLookup func(ref.UserID) string) HeaderRenderResult {
+func (renderer DetailRenderer) RenderHeader(entry ticketindex.Entry, score *ticket.TicketScore, presenceLookup func(ref.UserID) string) HeaderRenderResult {
 	content := entry.Content
 
 	// Line 1: STATUS  P1  type  id  [labels]  ...signals
@@ -311,7 +311,7 @@ func (renderer DetailRenderer) RenderBody(source Source, entry ticketindex.Entry
 //   - statusEnd: exclusive end column of the status text
 //   - priorityStart: inclusive start column of the priority text
 //   - priorityEnd: exclusive end column of the priority text
-func (renderer DetailRenderer) renderMetaLine(ticketID string, content ticket.TicketContent, score *ticketindex.TicketScore) (line string, statusEnd, priorityStart, priorityEnd int) {
+func (renderer DetailRenderer) renderMetaLine(ticketID string, content ticket.TicketContent, score *ticket.TicketScore) (line string, statusEnd, priorityStart, priorityEnd int) {
 	status := string(content.Status)
 	statusStyle := lipgloss.NewStyle().
 		Foreground(renderer.theme.StatusColor(status)).
@@ -371,7 +371,7 @@ func (renderer DetailRenderer) renderMetaLine(ticketID string, content ticket.Ti
 //   - →P0: borrowed priority, only when more urgent than own. Uses
 //     the borrowed priority's color.
 //   - Nd: days since ready, only when > 0. Faint text.
-func (renderer DetailRenderer) renderSignalIndicators(score *ticketindex.TicketScore, ownPriority int) string {
+func (renderer DetailRenderer) renderSignalIndicators(score *ticket.TicketScore, ownPriority int) string {
 	if score == nil {
 		return ""
 	}
@@ -1373,7 +1373,7 @@ func (pane *DetailPane) rerender() {
 
 // computeScore returns a TicketScore pointer for the given ticket, or
 // nil for closed tickets where scoring is not meaningful.
-func (pane *DetailPane) computeScore(source Source, entry ticketindex.Entry, now time.Time) *ticketindex.TicketScore {
+func (pane *DetailPane) computeScore(source Source, entry ticketindex.Entry, now time.Time) *ticket.TicketScore {
 	if entry.Content.Status == ticket.StatusClosed {
 		return nil
 	}

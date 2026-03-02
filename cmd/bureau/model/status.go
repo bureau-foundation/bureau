@@ -21,10 +21,6 @@ type statusParams struct {
 	cli.JSONOutput
 }
 
-// statusResult is an alias for the shared response type, used as the
-// Output() type for MCP schema generation.
-type statusResult = modelschema.AccountStatusResponse
-
 func statusCommand() *cli.Command {
 	var params statusParams
 
@@ -48,7 +44,7 @@ midnight UTC (daily) and the first of the month UTC (monthly).`,
 			},
 		},
 		Params:         func() any { return &params },
-		Output:         func() any { return &statusResult{} },
+		Output:         func() any { return &modelschema.AccountStatusResponse{} },
 		Annotations:    cli.ReadOnly(),
 		RequiredGrants: []string{"command/model/status"},
 		Run: func(ctx context.Context, args []string, logger *slog.Logger) error {
@@ -60,7 +56,7 @@ midnight UTC (daily) and the first of the month UTC (monthly).`,
 			ctx, cancel := callContext(ctx)
 			defer cancel()
 
-			var result statusResult
+			var result modelschema.AccountStatusResponse
 			if err := client.Call(ctx, modelschema.ActionStatus, nil, &result); err != nil {
 				return err
 			}

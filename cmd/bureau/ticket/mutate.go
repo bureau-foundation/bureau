@@ -82,7 +82,7 @@ Required fields: --room, --title, --type. Priority defaults to P2
 			},
 		},
 		Params:         func() any { return &params },
-		Output:         func() any { return &createResult{} },
+		Output:         func() any { return &ticketschema.CreateResponse{} },
 		Annotations:    cli.Create(),
 		RequiredGrants: []string{"command/ticket/create"},
 		Run: func(ctx context.Context, args []string, _ *slog.Logger) error {
@@ -151,7 +151,7 @@ Required fields: --room, --title, --type. Priority defaults to P2
 				fields["context_id"] = contextID
 			}
 
-			var result createResult
+			var result ticketschema.CreateResponse
 			if err := client.Call(ctx, "create", fields, &result); err != nil {
 				return err
 			}
@@ -223,7 +223,7 @@ in_progress returns a contention error with the current assignee.`,
 			},
 		},
 		Params:         func() any { return &params },
-		Output:         func() any { return &mutationResult{} },
+		Output:         func() any { return &ticketschema.MutationResponse{} },
 		Annotations:    cli.Idempotent(),
 		RequiredGrants: []string{"command/ticket/update"},
 		Run: func(ctx context.Context, args []string, logger *slog.Logger) error {
@@ -297,7 +297,7 @@ in_progress returns a contention error with the current assignee.`,
 				fields["context_id"] = contextID
 			}
 
-			var result mutationResult
+			var result ticketschema.MutationResponse
 			if err := client.Call(ctx, "update", fields, &result); err != nil {
 				return err
 			}
@@ -352,7 +352,7 @@ close a recurring ticket by stripping its recurring gates first.`,
 			},
 		},
 		Params:         func() any { return &params },
-		Output:         func() any { return &mutationResult{} },
+		Output:         func() any { return &ticketschema.MutationResponse{} },
 		Annotations:    cli.Idempotent(),
 		RequiredGrants: []string{"command/ticket/close"},
 		Run: func(ctx context.Context, args []string, logger *slog.Logger) error {
@@ -387,7 +387,7 @@ close a recurring ticket by stripping its recurring gates first.`,
 				fields["context_id"] = contextID
 			}
 
-			var result mutationResult
+			var result ticketschema.MutationResponse
 			if err := client.Call(ctx, "close", fields, &result); err != nil {
 				return err
 			}
@@ -421,7 +421,7 @@ func reopenCommand() *cli.Command {
 close timestamp and reason.`,
 		Usage:          "bureau ticket reopen <ticket-id> [flags]",
 		Params:         func() any { return &params },
-		Output:         func() any { return &mutationResult{} },
+		Output:         func() any { return &ticketschema.MutationResponse{} },
 		Annotations:    cli.Idempotent(),
 		RequiredGrants: []string{"command/ticket/reopen"},
 		Run: func(ctx context.Context, args []string, logger *slog.Logger) error {
@@ -449,7 +449,7 @@ close timestamp and reason.`,
 			if contextID := resolveContextID(); contextID != "" {
 				fields["context_id"] = contextID
 			}
-			var result mutationResult
+			var result ticketschema.MutationResponse
 			if err := client.Call(ctx, "reopen", fields, &result); err != nil {
 				return err
 			}
@@ -510,7 +510,7 @@ created.`,
 			},
 		},
 		Params:         func() any { return &params },
-		Output:         func() any { return &batchCreateResult{} },
+		Output:         func() any { return &ticketschema.BatchCreateResponse{} },
 		Annotations:    cli.Create(),
 		RequiredGrants: []string{"command/ticket/batch"},
 		Run: func(ctx context.Context, args []string, logger *slog.Logger) error {
@@ -551,7 +551,7 @@ created.`,
 				"tickets": tickets,
 			}
 
-			var result batchCreateResult
+			var result ticketschema.BatchCreateResponse
 			if err := client.Call(ctx, "batch-create", fields, &result); err != nil {
 				return err
 			}
@@ -604,7 +604,7 @@ remove a defer gate (un-defer), use: bureau ticket gate resolve ID defer`,
 			},
 		},
 		Params:         func() any { return &params },
-		Output:         func() any { return &mutationResult{} },
+		Output:         func() any { return &ticketschema.MutationResponse{} },
 		Annotations:    cli.Idempotent(),
 		RequiredGrants: []string{"command/ticket/defer"},
 		Run: func(ctx context.Context, args []string, logger *slog.Logger) error {
@@ -645,7 +645,7 @@ remove a defer gate (un-defer), use: bureau ticket gate resolve ID defer`,
 				fields["context_id"] = contextID
 			}
 
-			var result mutationResult
+			var result ticketschema.MutationResponse
 			if err := client.Call(ctx, "defer", fields, &result); err != nil {
 				return err
 			}

@@ -7,11 +7,15 @@ go_library(
     name = "stewardship",
     srcs = [
         "doc.go",
+        "response.go",
         "stewardship.go",
     ],
     importpath = "github.com/bureau-foundation/bureau/lib/schema/stewardship",
     visibility = ["//visibility:public"],
-    deps = ["//lib/schema/ticket"],
+    deps = [
+        "//lib/ref",
+        "//lib/schema/ticket",
+    ],
 )
 
 go_test(

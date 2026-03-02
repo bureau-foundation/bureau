@@ -16,7 +16,7 @@ func TestHandleCreateWithSchedule(t *testing.T) {
 	env := testMutationServer(t, mutationRooms())
 	defer env.cleanup()
 
-	var result createResponse
+	var result ticket.CreateResponse
 	err := env.client.Call(context.Background(), "create", map[string]any{
 		"room":     "!room:bureau.local",
 		"title":    "daily health check",
@@ -59,7 +59,7 @@ func TestHandleCreateWithInterval(t *testing.T) {
 	env := testMutationServer(t, mutationRooms())
 	defer env.cleanup()
 
-	var result createResponse
+	var result ticket.CreateResponse
 	err := env.client.Call(context.Background(), "create", map[string]any{
 		"room":     "!room:bureau.local",
 		"title":    "rotate API keys",
@@ -98,7 +98,7 @@ func TestHandleCreateWithScheduleAndExistingGates(t *testing.T) {
 
 	// Create with both an explicit gate and a convenience schedule.
 	// The schedule gate should be appended alongside the explicit gate.
-	var result createResponse
+	var result ticket.CreateResponse
 	err := env.client.Call(context.Background(), "create", map[string]any{
 		"room":     "!room:bureau.local",
 		"title":    "reviewed health check",
@@ -188,7 +188,7 @@ func TestHandleDeferWithFor(t *testing.T) {
 	env := testMutationServer(t, mutationRooms())
 	defer env.cleanup()
 
-	var result mutationResponse
+	var result ticket.MutationResponse
 	err := env.client.Call(context.Background(), "defer", map[string]any{
 		"ticket": "tkt-open",
 		"room":   "!room:bureau.local",
@@ -224,7 +224,7 @@ func TestHandleDeferWithUntil(t *testing.T) {
 	env := testMutationServer(t, mutationRooms())
 	defer env.cleanup()
 
-	var result mutationResponse
+	var result ticket.MutationResponse
 	err := env.client.Call(context.Background(), "defer", map[string]any{
 		"ticket": "tkt-open",
 		"room":   "!room:bureau.local",
@@ -261,7 +261,7 @@ func TestHandleDeferUpdatesExistingGate(t *testing.T) {
 	}
 
 	// Second defer should update the same gate, not create a second one.
-	var result mutationResponse
+	var result ticket.MutationResponse
 	err = env.client.Call(ctx, "defer", map[string]any{
 		"ticket": "tkt-open",
 		"room":   "!room:bureau.local",
@@ -342,7 +342,7 @@ func TestHandleDeferClosedTicketSucceeds(t *testing.T) {
 	env := testMutationServer(t, mutationRooms())
 	defer env.cleanup()
 
-	var result mutationResponse
+	var result ticket.MutationResponse
 	err := env.client.Call(context.Background(), "defer", map[string]any{
 		"ticket": "tkt-closed",
 		"room":   "!room:bureau.local",
@@ -362,7 +362,7 @@ func TestHandleCreateWithDeferFor(t *testing.T) {
 	env := testMutationServer(t, mutationRooms())
 	defer env.cleanup()
 
-	var result createResponse
+	var result ticket.CreateResponse
 	err := env.client.Call(context.Background(), "create", map[string]any{
 		"room":      "!room:bureau.local",
 		"title":     "deferred task",
@@ -475,7 +475,7 @@ func TestHandleUpcomingGates(t *testing.T) {
 	env := testMutationServer(t, rooms)
 	defer env.cleanup()
 
-	var results []upcomingGateEntry
+	var results []ticket.UpcomingGateEntry
 	err := env.client.Call(context.Background(), "upcoming-gates", map[string]any{}, &results)
 	if err != nil {
 		t.Fatalf("Call: %v", err)
@@ -550,7 +550,7 @@ func TestHandleUpcomingGatesRoomFilter(t *testing.T) {
 	env := testMutationServer(t, rooms)
 	defer env.cleanup()
 
-	var results []upcomingGateEntry
+	var results []ticket.UpcomingGateEntry
 	err := env.client.Call(context.Background(), "upcoming-gates", map[string]any{
 		"room": "!room1:bureau.local",
 	}, &results)
@@ -570,7 +570,7 @@ func TestHandleUpcomingGatesEmpty(t *testing.T) {
 	env := testMutationServer(t, mutationRooms())
 	defer env.cleanup()
 
-	var results []upcomingGateEntry
+	var results []ticket.UpcomingGateEntry
 	err := env.client.Call(context.Background(), "upcoming-gates", map[string]any{}, &results)
 	if err != nil {
 		t.Fatalf("Call: %v", err)
@@ -596,7 +596,7 @@ func waitForGateStatus(t *testing.T, env *testEnv, room, ticketID, gateID string
 	for {
 		<-env.writer.notify
 
-		var result mutationResponse
+		var result ticket.MutationResponse
 		err := env.client.Call(context.Background(), "show", map[string]any{
 			"ticket": ticketID,
 			"room":   room,
@@ -625,7 +625,7 @@ func TestTimerLifecycleScheduleFireAndRearm(t *testing.T) {
 	// Step 1: Create a ticket with a cron schedule (daily at 7am UTC).
 	// testClockEpoch is 2026-01-15T12:00:00Z, so first target is
 	// 2026-01-16T07:00:00Z (19 hours from now).
-	var createResult createResponse
+	var createResult ticket.CreateResponse
 	err := env.client.Call(ctx, "create", map[string]any{
 		"room":     room,
 		"title":    "daily check",
@@ -639,7 +639,7 @@ func TestTimerLifecycleScheduleFireAndRearm(t *testing.T) {
 	ticketID := createResult.ID
 
 	// Verify the initial gate state.
-	var showResult mutationResponse
+	var showResult ticket.MutationResponse
 	err = env.client.Call(ctx, "show", map[string]any{
 		"ticket": ticketID,
 		"room":   room,
@@ -666,7 +666,7 @@ func TestTimerLifecycleScheduleFireAndRearm(t *testing.T) {
 
 	// Step 3: Close the ticket. Since it has a recurring schedule gate,
 	// it should auto-rearm: reopen as "open" with a new target.
-	var closeResult mutationResponse
+	var closeResult ticket.MutationResponse
 	err = env.client.Call(ctx, "close", map[string]any{
 		"ticket": ticketID,
 		"room":   room,
@@ -700,7 +700,7 @@ func TestTimerLifecycleScheduleFireAndRearm(t *testing.T) {
 	// Use a fresh result variable to avoid stale slice values from
 	// the previous close response (CBOR omitempty skips empty slices,
 	// so decoding into a pre-used struct leaves old values).
-	var endResult mutationResponse
+	var endResult ticket.MutationResponse
 	err = env.client.Call(ctx, "close", map[string]any{
 		"ticket":         ticketID,
 		"room":           room,
@@ -730,7 +730,7 @@ func TestTimerLifecycleIntervalFireAndRearm(t *testing.T) {
 
 	// Create a ticket with a 4-hour interval.
 	// testClockEpoch is 2026-01-15T12:00:00Z, target: 16:00:00Z.
-	var createResult createResponse
+	var createResult ticket.CreateResponse
 	err := env.client.Call(ctx, "create", map[string]any{
 		"room":     room,
 		"title":    "periodic poll",
@@ -752,7 +752,7 @@ func TestTimerLifecycleIntervalFireAndRearm(t *testing.T) {
 	}
 
 	// Close the ticket. Interval rearm: next target is now + 4h.
-	var closeResult mutationResponse
+	var closeResult ticket.MutationResponse
 	err = env.client.Call(ctx, "close", map[string]any{
 		"ticket": ticketID,
 		"room":   room,
@@ -811,7 +811,7 @@ func TestTimerLifecycleMaxOccurrences(t *testing.T) {
 	waitForGateStatus(t, env, room, "tkt-max", "interval", ticket.GateSatisfied)
 
 	// Close — should rearm (fire_count becomes 1, max is 2).
-	var closeResult mutationResponse
+	var closeResult ticket.MutationResponse
 	err := env.client.Call(ctx, "close", map[string]any{
 		"ticket": "tkt-max",
 		"room":   room,
@@ -848,7 +848,7 @@ func TestTimerLifecycleDeferCreateAndFire(t *testing.T) {
 	room := "!room:bureau.local"
 
 	// Defer tkt-open for 2 hours.
-	var deferResult mutationResponse
+	var deferResult ticket.MutationResponse
 	err := env.client.Call(ctx, "defer", map[string]any{
 		"ticket": "tkt-open",
 		"room":   room,
@@ -886,7 +886,7 @@ func TestDeadlineCRUD(t *testing.T) {
 		env := testMutationServer(t, rooms)
 		defer env.cleanup()
 
-		var result createResponse
+		var result ticket.CreateResponse
 		err := env.client.Call(context.Background(), "create", map[string]any{
 			"room": room, "title": "Ship v2 API", "type": "task", "priority": 2,
 			"deadline": "2026-03-01T00:00:00Z",
@@ -908,7 +908,7 @@ func TestDeadlineCRUD(t *testing.T) {
 		env := testMutationServer(t, rooms)
 		defer env.cleanup()
 
-		var result createResponse
+		var result ticket.CreateResponse
 		err := env.client.Call(context.Background(), "create", map[string]any{
 			"room": room, "title": "Bad deadline", "type": "task", "priority": 2,
 			"deadline": "not-a-date",
@@ -925,7 +925,7 @@ func TestDeadlineCRUD(t *testing.T) {
 		env := testMutationServer(t, rooms)
 		defer env.cleanup()
 
-		var result mutationResponse
+		var result ticket.MutationResponse
 		err := env.client.Call(context.Background(), "update", map[string]any{
 			"ticket": "tkt-1", "room": room, "deadline": "2026-04-01T00:00:00Z",
 		}, &result)
@@ -946,7 +946,7 @@ func TestDeadlineCRUD(t *testing.T) {
 		env := testMutationServer(t, rooms)
 		defer env.cleanup()
 
-		var result mutationResponse
+		var result ticket.MutationResponse
 		err := env.client.Call(context.Background(), "update", map[string]any{
 			"ticket": "tkt-1", "room": room, "deadline": "",
 		}, &result)
@@ -973,7 +973,7 @@ func TestDeadlineFireAddsNote(t *testing.T) {
 	defer env.cleanup()
 
 	ctx := context.Background()
-	var result createResponse
+	var result ticket.CreateResponse
 	err := env.client.Call(ctx, "create", map[string]any{
 		"room":     room,
 		"title":    "Ticket with deadline",
@@ -993,7 +993,7 @@ func TestDeadlineFireAddsNote(t *testing.T) {
 	// so we loop until we see a note (skipping the create write).
 	for {
 		<-env.writer.notify
-		var showResult showResponse
+		var showResult ticket.ShowResponse
 		if err := env.client.Call(ctx, "show", map[string]any{
 			"ticket": result.ID,
 			"room":   room,
@@ -1030,7 +1030,7 @@ func TestDeadlineStaleEntryIgnored(t *testing.T) {
 	defer env.cleanup()
 
 	ctx := context.Background()
-	var result createResponse
+	var result ticket.CreateResponse
 	err := env.client.Call(ctx, "create", map[string]any{
 		"room":     room,
 		"title":    "Deadline will change",
@@ -1043,7 +1043,7 @@ func TestDeadlineStaleEntryIgnored(t *testing.T) {
 	}
 
 	// Update the deadline to later.
-	var updateResult mutationResponse
+	var updateResult ticket.MutationResponse
 	err = env.client.Call(ctx, "update", map[string]any{
 		"ticket":   result.ID,
 		"room":     room,
@@ -1061,7 +1061,7 @@ func TestDeadlineStaleEntryIgnored(t *testing.T) {
 	// Wait for the deadline note write.
 	for {
 		<-env.writer.notify
-		var showResult showResponse
+		var showResult ticket.ShowResponse
 		if err := env.client.Call(ctx, "show", map[string]any{
 			"ticket": result.ID,
 			"room":   room,

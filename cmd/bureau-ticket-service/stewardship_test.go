@@ -753,7 +753,7 @@ func TestHandleCreateWithStewardshipAffects(t *testing.T) {
 		},
 	})
 
-	var result createResponse
+	var result ticket.CreateResponse
 	err := env.client.Call(context.Background(), "create", map[string]any{
 		"room":     "!room:bureau.local",
 		"title":    "GPU allocation feature",
@@ -813,7 +813,7 @@ func TestHandleCreateWithAffectsNoMatchingDeclaration(t *testing.T) {
 	defer env.cleanup()
 
 	// No stewardship declarations configured.
-	var result createResponse
+	var result ticket.CreateResponse
 	err := env.client.Call(context.Background(), "create", map[string]any{
 		"room":     "!room:bureau.local",
 		"title":    "unstearded feature",
@@ -859,7 +859,7 @@ func TestHandleUpdateChangesAffects(t *testing.T) {
 	})
 
 	// Update the open ticket to add affects.
-	var result mutationResponse
+	var result ticket.MutationResponse
 	err := env.client.Call(context.Background(), "update", map[string]any{
 		"room":    "!room:bureau.local",
 		"ticket":  "tkt-open",
@@ -908,7 +908,7 @@ func TestHandleUpdateClearsAffects(t *testing.T) {
 	})
 
 	// First create a ticket with affects.
-	var createResult createResponse
+	var createResult ticket.CreateResponse
 	err := env.client.Call(context.Background(), "create", map[string]any{
 		"room":     "!room:bureau.local",
 		"title":    "stewardship test",
@@ -922,7 +922,7 @@ func TestHandleUpdateClearsAffects(t *testing.T) {
 
 	// Now update to clear affects.
 	emptyAffects := []string{}
-	var result mutationResponse
+	var result ticket.MutationResponse
 	err = env.client.Call(context.Background(), "update", map[string]any{
 		"room":    "!room:bureau.local",
 		"ticket":  createResult.ID,
@@ -965,7 +965,7 @@ func TestHandleStewardshipList(t *testing.T) {
 		},
 	})
 
-	var result []stewardshipListEntry
+	var result []stewardship.StewardshipListEntry
 	err := env.client.Call(context.Background(), "stewardship-list", map[string]any{}, &result)
 	if err != nil {
 		t.Fatalf("Call: %v", err)
@@ -1006,7 +1006,7 @@ func TestHandleStewardshipListByRoom(t *testing.T) {
 		Tiers:            []stewardship.StewardshipTier{{Principals: []string{"dev/*:bureau.local"}}},
 	})
 
-	var result []stewardshipListEntry
+	var result []stewardship.StewardshipListEntry
 	err := env.client.Call(context.Background(), "stewardship-list", map[string]any{
 		"room": roomA.String(),
 	}, &result)
@@ -1026,7 +1026,7 @@ func TestHandleStewardshipListEmpty(t *testing.T) {
 	env := testMutationServer(t, mutationRooms())
 	defer env.cleanup()
 
-	var result []stewardshipListEntry
+	var result []stewardship.StewardshipListEntry
 	err := env.client.Call(context.Background(), "stewardship-list", map[string]any{}, &result)
 	if err != nil {
 		t.Fatalf("Call: %v", err)
@@ -1056,7 +1056,7 @@ func TestHandleStewardshipResolve(t *testing.T) {
 		},
 	})
 
-	var result stewardshipResolveResponse
+	var result stewardship.StewardshipResolveResponse
 	err := env.client.Call(context.Background(), "stewardship-resolve", map[string]any{
 		"affects":     []string{"fleet/gpu/a100"},
 		"ticket_type": "task",
@@ -1092,7 +1092,7 @@ func TestHandleStewardshipResolveNoMatch(t *testing.T) {
 	env := testMutationServer(t, mutationRooms())
 	defer env.cleanup()
 
-	var result stewardshipResolveResponse
+	var result stewardship.StewardshipResolveResponse
 	err := env.client.Call(context.Background(), "stewardship-resolve", map[string]any{
 		"affects":     []string{"nonexistent/resource"},
 		"ticket_type": "task",
@@ -1113,7 +1113,7 @@ func TestHandleStewardshipResolveMissingAffects(t *testing.T) {
 	env := testMutationServer(t, mutationRooms())
 	defer env.cleanup()
 
-	var result stewardshipResolveResponse
+	var result stewardship.StewardshipResolveResponse
 	err := env.client.Call(context.Background(), "stewardship-resolve", map[string]any{
 		"ticket_type": "task",
 	}, &result)
@@ -1128,7 +1128,7 @@ func TestHandleStewardshipSet(t *testing.T) {
 	env := testMutationServer(t, mutationRooms())
 	defer env.cleanup()
 
-	var result stewardshipSetResponse
+	var result stewardship.StewardshipSetResponse
 	err := env.client.Call(context.Background(), "stewardship-set", map[string]any{
 		"room":      "!steward-room:bureau.local",
 		"state_key": "fleet/gpu",
@@ -1155,7 +1155,7 @@ func TestHandleStewardshipSetInvalidContent(t *testing.T) {
 	env := testMutationServer(t, mutationRooms())
 	defer env.cleanup()
 
-	var result stewardshipSetResponse
+	var result stewardship.StewardshipSetResponse
 	err := env.client.Call(context.Background(), "stewardship-set", map[string]any{
 		"room":      "!steward-room:bureau.local",
 		"state_key": "fleet/gpu",
@@ -1172,7 +1172,7 @@ func TestHandleStewardshipSetMissingRoom(t *testing.T) {
 	env := testMutationServer(t, mutationRooms())
 	defer env.cleanup()
 
-	var result stewardshipSetResponse
+	var result stewardship.StewardshipSetResponse
 	err := env.client.Call(context.Background(), "stewardship-set", map[string]any{
 		"state_key": "fleet/gpu",
 		"content": map[string]any{
@@ -1567,7 +1567,7 @@ func TestSetDispositionTriggersEscalation(t *testing.T) {
 	env.service.rooms[roomID].index.Put("tkt-1", content)
 
 	// Set disposition as the default test token subject (tier 0 approval).
-	var result mutationResponse
+	var result ticket.MutationResponse
 	err := env.client.Call(context.Background(), "set-disposition", map[string]any{
 		"room":        roomID.String(),
 		"ticket":      "tkt-1",
@@ -1628,7 +1628,7 @@ func TestSetDispositionNoEscalationWhenNotLastPending(t *testing.T) {
 	}
 	env.service.rooms[roomID].index.Put("tkt-2", content)
 
-	var result mutationResponse
+	var result ticket.MutationResponse
 	err := env.client.Call(context.Background(), "set-disposition", map[string]any{
 		"room":        roomID.String(),
 		"ticket":      "tkt-2",

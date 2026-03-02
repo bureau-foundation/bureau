@@ -354,6 +354,17 @@ Bureau runs untrusted code. Every design decision must account for this.
 - BUILD.bazel files are maintained by gazelle; manual edits go in `data`, `env`,
   and `deps` sections that gazelle preserves
 
+### Type discipline
+
+- **No duplicated types.** When a struct flows over a wire boundary (service
+  socket, IPC, HTTP), it is defined once in the appropriate `lib/schema/`
+  sub-package and imported by both sides. If a server-side handler and a
+  CLI command need the same response struct, that struct lives in schema.
+- **No type aliases.** `type Foo = pkg.Bar` is banned. It destroys
+  grepability — searching for `Foo` won't find the definition, searching
+  for `Bar` won't find the usage. Always use the qualified name directly
+  (`pkg.Bar`). If that's too verbose, the type is in the wrong package.
+
 ## Documentation map
 
 Design documents live in `docs/design/` (see `docs/design/README.md` for the

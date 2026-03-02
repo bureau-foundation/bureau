@@ -9,6 +9,7 @@ import (
 	"slices"
 
 	"github.com/bureau-foundation/bureau/cmd/bureau/cli"
+	ticketschema "github.com/bureau-foundation/bureau/lib/schema/ticket"
 )
 
 // depCommand returns the "dep" subcommand group for managing ticket
@@ -59,7 +60,7 @@ cycle.`,
 			},
 		},
 		Params:         func() any { return &params },
-		Output:         func() any { return &mutationResult{} },
+		Output:         func() any { return &ticketschema.MutationResponse{} },
 		Annotations:    cli.Idempotent(),
 		RequiredGrants: []string{"command/ticket/dep/add"},
 		Run: func(ctx context.Context, args []string, logger *slog.Logger) error {
@@ -93,7 +94,7 @@ cycle.`,
 			if err := addResolvedRoom(ctx, fields, params.Room); err != nil {
 				return err
 			}
-			var current showResult
+			var current ticketschema.ShowResponse
 			if err := client.Call(ctx, "show", fields, &current); err != nil {
 				return err
 			}
@@ -113,7 +114,7 @@ cycle.`,
 			if err := addResolvedRoom(ctx, updateFields, params.Room); err != nil {
 				return err
 			}
-			var result mutationResult
+			var result ticketschema.MutationResponse
 			if err := client.Call(ctx, "update", updateFields, &result); err != nil {
 				return err
 			}
@@ -153,7 +154,7 @@ func depRemoveCommand() *cli.Command {
 			},
 		},
 		Params:         func() any { return &params },
-		Output:         func() any { return &mutationResult{} },
+		Output:         func() any { return &ticketschema.MutationResponse{} },
 		Annotations:    cli.Idempotent(),
 		RequiredGrants: []string{"command/ticket/dep/remove"},
 		Run: func(ctx context.Context, args []string, logger *slog.Logger) error {
@@ -187,7 +188,7 @@ func depRemoveCommand() *cli.Command {
 			if err := addResolvedRoom(ctx, fields, params.Room); err != nil {
 				return err
 			}
-			var current showResult
+			var current ticketschema.ShowResponse
 			if err := client.Call(ctx, "show", fields, &current); err != nil {
 				return err
 			}
@@ -208,7 +209,7 @@ func depRemoveCommand() *cli.Command {
 			if err := addResolvedRoom(ctx, updateFields, params.Room); err != nil {
 				return err
 			}
-			var result mutationResult
+			var result ticketschema.MutationResponse
 			if err := client.Call(ctx, "update", updateFields, &result); err != nil {
 				return err
 			}

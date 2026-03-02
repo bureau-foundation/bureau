@@ -57,7 +57,7 @@ time (oldest first).`,
 			},
 		},
 		Params:         func() any { return &params },
-		Output:         func() any { return &[]ticketEntry{} },
+		Output:         func() any { return &[]ticketschema.TicketEntry{} },
 		Annotations:    cli.ReadOnly(),
 		RequiredGrants: []string{"command/ticket/list"},
 		Run: func(ctx context.Context, args []string, logger *slog.Logger) error {
@@ -94,7 +94,7 @@ time (oldest first).`,
 				fields["parent"] = params.Parent
 			}
 
-			var entries []ticketEntry
+			var entries []ticketschema.TicketEntry
 			if err := client.Call(ctx, "list", fields, &entries); err != nil {
 				return err
 			}
@@ -145,7 +145,7 @@ The ticket is resolved via --room or a room-qualified ticket reference (e.g., ir
 			},
 		},
 		Params:         func() any { return &params },
-		Output:         func() any { return &showResult{} },
+		Output:         func() any { return &ticketschema.ShowResponse{} },
 		Annotations:    cli.ReadOnly(),
 		RequiredGrants: []string{"command/ticket/show"},
 		Run: func(ctx context.Context, args []string, _ *slog.Logger) error {
@@ -174,7 +174,7 @@ The ticket is resolved via --room or a room-qualified ticket reference (e.g., ir
 				}
 				fields["room"] = roomID.String()
 			}
-			var result showResult
+			var result ticketschema.ShowResponse
 			if err := client.Call(ctx, "show", fields, &result); err != nil {
 				return err
 			}
@@ -214,7 +214,7 @@ Sorted by priority (most urgent first), then creation time.`,
 			},
 		},
 		Params:         func() any { return &params },
-		Output:         func() any { return &[]ticketEntry{} },
+		Output:         func() any { return &[]ticketschema.TicketEntry{} },
 		Annotations:    cli.ReadOnly(),
 		RequiredGrants: []string{"command/ticket/ready"},
 		Run: func(ctx context.Context, args []string, logger *slog.Logger) error {
@@ -241,7 +241,7 @@ func blockedCommand() *cli.Command {
 non-closed blocker or unsatisfied gate.`,
 		Usage:          "bureau ticket blocked --room ROOM [flags]",
 		Params:         func() any { return &params },
-		Output:         func() any { return &[]ticketEntry{} },
+		Output:         func() any { return &[]ticketschema.TicketEntry{} },
 		Annotations:    cli.ReadOnly(),
 		RequiredGrants: []string{"command/ticket/blocked"},
 		Run: func(ctx context.Context, args []string, logger *slog.Logger) error {
@@ -271,7 +271,7 @@ staleness (how long it's been actionable), and effort (note count).
 This is the primary query for PM agents deciding what to assign next.`,
 		Usage:          "bureau ticket ranked --room ROOM [flags]",
 		Params:         func() any { return &params },
-		Output:         func() any { return &[]rankedEntry{} },
+		Output:         func() any { return &[]ticketschema.RankedEntry{} },
 		Annotations:    cli.ReadOnly(),
 		RequiredGrants: []string{"command/ticket/ranked"},
 		Run: func(ctx context.Context, args []string, logger *slog.Logger) error {
@@ -288,7 +288,7 @@ This is the primary query for PM agents deciding what to assign next.`,
 			ctx, cancel := callContext(ctx)
 			defer cancel()
 
-			var entries []rankedEntry
+			var entries []ticketschema.RankedEntry
 			if err := client.Call(ctx, "ranked", map[string]any{"room": roomID.String()}, &entries); err != nil {
 				return err
 			}
@@ -367,7 +367,7 @@ closed) and two synthetic values: "active" (open or in_progress) and
 			},
 		},
 		Params:         func() any { return &params },
-		Output:         func() any { return &[]ticketEntry{} },
+		Output:         func() any { return &[]ticketschema.TicketEntry{} },
 		Annotations:    cli.ReadOnly(),
 		RequiredGrants: []string{"command/ticket/grep"},
 		Run: func(ctx context.Context, args []string, logger *slog.Logger) error {
@@ -408,7 +408,7 @@ closed) and two synthetic values: "active" (open or in_progress) and
 				fields["type"] = params.Type
 			}
 
-			var entries []ticketEntry
+			var entries []ticketschema.TicketEntry
 			if err := client.Call(ctx, "grep", fields, &entries); err != nil {
 				return err
 			}
@@ -479,7 +479,7 @@ rooms and includes the room ID in results.`,
 			},
 		},
 		Params:         func() any { return &params },
-		Output:         func() any { return &[]searchEntry{} },
+		Output:         func() any { return &[]ticketschema.SearchEntry{} },
 		Annotations:    cli.ReadOnly(),
 		RequiredGrants: []string{"command/ticket/search"},
 		Run: func(ctx context.Context, args []string, logger *slog.Logger) error {
@@ -523,7 +523,7 @@ rooms and includes the room ID in results.`,
 				fields["limit"] = params.Limit
 			}
 
-			var entries []searchEntry
+			var entries []ticketschema.SearchEntry
 			if err := client.Call(ctx, "search", fields, &entries); err != nil {
 				return err
 			}
@@ -657,7 +657,7 @@ func infoCommand() *cli.Command {
 total tickets, and per-room summaries. Requires authentication.`,
 		Usage:          "bureau ticket info [flags]",
 		Params:         func() any { return &params },
-		Output:         func() any { return &serviceInfo{} },
+		Output:         func() any { return &ticketschema.InfoResponse{} },
 		Annotations:    cli.ReadOnly(),
 		RequiredGrants: []string{"command/ticket/info"},
 		Run: func(ctx context.Context, args []string, _ *slog.Logger) error {
@@ -669,7 +669,7 @@ total tickets, and per-room summaries. Requires authentication.`,
 			ctx, cancel := callContext(ctx)
 			defer cancel()
 
-			var info serviceInfo
+			var info ticketschema.InfoResponse
 			if err := client.Call(ctx, "info", nil, &info); err != nil {
 				return err
 			}
@@ -724,7 +724,7 @@ func depsCommand() *cli.Command {
 becomes ready, including indirect (transitive) dependencies.`,
 		Usage:          "bureau ticket deps <ticket-id> [flags]",
 		Params:         func() any { return &params },
-		Output:         func() any { return &depsResult{} },
+		Output:         func() any { return &ticketschema.DepsResponse{} },
 		Annotations:    cli.ReadOnly(),
 		RequiredGrants: []string{"command/ticket/deps"},
 		Run: func(ctx context.Context, args []string, logger *slog.Logger) error {
@@ -749,7 +749,7 @@ becomes ready, including indirect (transitive) dependencies.`,
 			if err := addResolvedRoom(ctx, fields, params.Room); err != nil {
 				return err
 			}
-			var result depsResult
+			var result ticketschema.DepsResponse
 			if err := client.Call(ctx, "deps", fields, &result); err != nil {
 				return err
 			}
@@ -791,7 +791,7 @@ func childrenCommand() *cli.Command {
 showing how many are closed out of the total.`,
 		Usage:          "bureau ticket children <ticket-id> [flags]",
 		Params:         func() any { return &params },
-		Output:         func() any { return &childrenResult{} },
+		Output:         func() any { return &ticketschema.ChildrenResponse{} },
 		Annotations:    cli.ReadOnly(),
 		RequiredGrants: []string{"command/ticket/children"},
 		Run: func(ctx context.Context, args []string, _ *slog.Logger) error {
@@ -816,7 +816,7 @@ showing how many are closed out of the total.`,
 			if err := addResolvedRoom(ctx, fields, params.Room); err != nil {
 				return err
 			}
-			var result childrenResult
+			var result ticketschema.ChildrenResponse
 			if err := client.Call(ctx, "children", fields, &result); err != nil {
 				return err
 			}
@@ -857,7 +857,7 @@ portion of remaining work is actionable), and critical dependency
 depth (irreducible sequential steps).`,
 		Usage:          "bureau ticket epic-health <ticket-id> [flags]",
 		Params:         func() any { return &params },
-		Output:         func() any { return &epicHealthResult{} },
+		Output:         func() any { return &ticketschema.EpicHealthResponse{} },
 		Annotations:    cli.ReadOnly(),
 		RequiredGrants: []string{"command/ticket/epic-health"},
 		Run: func(ctx context.Context, args []string, _ *slog.Logger) error {
@@ -882,7 +882,7 @@ depth (irreducible sequential steps).`,
 			if err := addResolvedRoom(ctx, fields, params.Room); err != nil {
 				return err
 			}
-			var result epicHealthResult
+			var result ticketschema.EpicHealthResponse
 			if err := client.Call(ctx, "epic-health", fields, &result); err != nil {
 				return err
 			}
@@ -921,7 +921,7 @@ func roomScopedQuery(ctx context.Context, logger *slog.Logger, connection Ticket
 	ctx, cancel := callContext(ctx)
 	defer cancel()
 
-	var entries []ticketEntry
+	var entries []ticketschema.TicketEntry
 	if err := client.Call(ctx, action, map[string]any{"room": roomID.String()}, &entries); err != nil {
 		return err
 	}
@@ -939,7 +939,7 @@ func roomScopedQuery(ctx context.Context, logger *slog.Logger, connection Ticket
 }
 
 // writeTicketTable writes a compact table of ticket entries to stdout.
-func writeTicketTable(entries []ticketEntry) error {
+func writeTicketTable(entries []ticketschema.TicketEntry) error {
 	writer := tabwriter.NewWriter(os.Stdout, 2, 0, 3, ' ', 0)
 	fmt.Fprintf(writer, "ID\tSTATUS\tPRI\tTYPE\tTITLE\n")
 	for _, entry := range entries {
@@ -955,7 +955,7 @@ func writeTicketTable(entries []ticketEntry) error {
 }
 
 // writeShowDetail writes a human-readable detail view of a ticket.
-func writeShowDetail(result showResult) error {
+func writeShowDetail(result ticketschema.ShowResponse) error {
 	content := result.Content
 	writer := tabwriter.NewWriter(os.Stdout, 0, 4, 2, ' ', 0)
 
@@ -1095,7 +1095,7 @@ recurring tickets.`,
 			},
 		},
 		Params:         func() any { return &params },
-		Output:         func() any { return &[]upcomingGateResult{} },
+		Output:         func() any { return &[]ticketschema.UpcomingGateEntry{} },
 		Annotations:    cli.ReadOnly(),
 		RequiredGrants: []string{"command/ticket/upcoming"},
 		Run: func(ctx context.Context, args []string, logger *slog.Logger) error {
@@ -1112,7 +1112,7 @@ recurring tickets.`,
 				return err
 			}
 
-			var results []upcomingGateResult
+			var results []ticketschema.UpcomingGateEntry
 			if err := client.Call(ctx, "upcoming-gates", fields, &results); err != nil {
 				return err
 			}

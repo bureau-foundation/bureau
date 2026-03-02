@@ -16,7 +16,6 @@ go_library(
         "gate.go",
         "mutate.go",
         "query.go",
-        "response.go",
         "review.go",
         "stewardship.go",
         "transfer.go",

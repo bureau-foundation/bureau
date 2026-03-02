@@ -119,28 +119,13 @@ func (ts *TicketService) handleStatus(ctx context.Context, raw []byte) (any, err
 	}, nil
 }
 
-// infoResponse is the response to the authenticated "info" action.
-type infoResponse struct {
-	// UptimeSeconds is how long the service has been running.
-	UptimeSeconds float64 `cbor:"uptime_seconds"`
-
-	// Rooms is the number of rooms with ticket management enabled.
-	Rooms int `cbor:"rooms"`
-
-	// TotalTickets is the total number of tickets across all rooms.
-	TotalTickets int `cbor:"total_tickets"`
-
-	// RoomDetails lists per-room ticket summaries.
-	RoomDetails []roomSummary `cbor:"room_details"`
-}
-
 // handleInfo returns diagnostic information about the service. This
 // action requires authentication — room IDs, ticket counts, and
 // per-room summaries are sensitive information.
 func (ts *TicketService) handleInfo(ctx context.Context, token *servicetoken.Token, raw []byte) (any, error) {
 	uptime := ts.clock.Now().Sub(ts.startedAt)
 
-	return infoResponse{
+	return ticket.InfoResponse{
 		UptimeSeconds: uptime.Seconds(),
 		Rooms:         len(ts.rooms),
 		TotalTickets:  ts.totalTickets(),

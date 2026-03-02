@@ -19,7 +19,7 @@ func TestHandleListRoomsReturnsSummary(t *testing.T) {
 	client, cleanup := testServer(t, sampleRooms())
 	defer cleanup()
 
-	var result []roomInfo
+	var result []ticket.RoomInfo
 	err := client.Call(context.Background(), "list-rooms", map[string]any{}, &result)
 	if err != nil {
 		t.Fatalf("Call: %v", err)
@@ -30,7 +30,7 @@ func TestHandleListRoomsReturnsSummary(t *testing.T) {
 	}
 
 	// Build a map for order-independent assertion.
-	byRoom := make(map[string]roomInfo)
+	byRoom := make(map[string]ticket.RoomInfo)
 	for _, room := range result {
 		byRoom[room.RoomID] = room
 	}
@@ -39,8 +39,8 @@ func TestHandleListRoomsReturnsSummary(t *testing.T) {
 	if !exists {
 		t.Fatal("missing roomA in response")
 	}
-	if roomA.Stats.Total != 3 {
-		t.Errorf("roomA total: got %d, want 3", roomA.Stats.Total)
+	if roomA.Total != 3 {
+		t.Errorf("roomA total: got %d, want 3", roomA.Total)
 	}
 	// newTrackedRoom uses empty prefix → handler should default to "tkt".
 	if roomA.Prefix != "tkt" {
@@ -51,8 +51,8 @@ func TestHandleListRoomsReturnsSummary(t *testing.T) {
 	if !exists {
 		t.Fatal("missing roomB in response")
 	}
-	if roomB.Stats.Total != 1 {
-		t.Errorf("roomB total: got %d, want 1", roomB.Stats.Total)
+	if roomB.Total != 1 {
+		t.Errorf("roomB total: got %d, want 1", roomB.Total)
 	}
 }
 
@@ -63,13 +63,13 @@ func TestHandleListRoomsIncludesAlias(t *testing.T) {
 	client, cleanup := testServer(t, rooms)
 	defer cleanup()
 
-	var result []roomInfo
+	var result []ticket.RoomInfo
 	err := client.Call(context.Background(), "list-rooms", map[string]any{}, &result)
 	if err != nil {
 		t.Fatalf("Call: %v", err)
 	}
 
-	byRoom := make(map[string]roomInfo)
+	byRoom := make(map[string]ticket.RoomInfo)
 	for _, room := range result {
 		byRoom[room.RoomID] = room
 	}
@@ -87,13 +87,13 @@ func TestHandleListRoomsCustomPrefix(t *testing.T) {
 	client, cleanup := testServer(t, rooms)
 	defer cleanup()
 
-	var result []roomInfo
+	var result []ticket.RoomInfo
 	err := client.Call(context.Background(), "list-rooms", map[string]any{}, &result)
 	if err != nil {
 		t.Fatalf("Call: %v", err)
 	}
 
-	byRoom := make(map[string]roomInfo)
+	byRoom := make(map[string]ticket.RoomInfo)
 	for _, room := range result {
 		byRoom[room.RoomID] = room
 	}
@@ -107,7 +107,7 @@ func TestHandleListRoomsEmptyReturnsEmptySlice(t *testing.T) {
 	client, cleanup := testServer(t, map[ref.RoomID]*roomState{})
 	defer cleanup()
 
-	var result []roomInfo
+	var result []ticket.RoomInfo
 	err := client.Call(context.Background(), "list-rooms", map[string]any{}, &result)
 	if err != nil {
 		t.Fatalf("Call: %v", err)
@@ -127,7 +127,7 @@ func TestHandleListReturnsAllTickets(t *testing.T) {
 	client, cleanup := testServer(t, sampleRooms())
 	defer cleanup()
 
-	var result []entryWithRoom
+	var result []ticket.TicketEntry
 	err := client.Call(context.Background(), "list", map[string]any{
 		"room": "!roomA:local",
 	}, &result)
@@ -144,7 +144,7 @@ func TestHandleListFilterByStatus(t *testing.T) {
 	client, cleanup := testServer(t, sampleRooms())
 	defer cleanup()
 
-	var result []entryWithRoom
+	var result []ticket.TicketEntry
 	err := client.Call(context.Background(), "list", map[string]any{
 		"room":   "!roomA:local",
 		"status": "open",
@@ -168,7 +168,7 @@ func TestHandleListFilterByPriority(t *testing.T) {
 	defer cleanup()
 
 	priority := 0
-	var result []entryWithRoom
+	var result []ticket.TicketEntry
 	err := client.Call(context.Background(), "list", map[string]any{
 		"room":     "!roomA:local",
 		"priority": priority,
@@ -189,7 +189,7 @@ func TestHandleListFilterByLabel(t *testing.T) {
 	client, cleanup := testServer(t, sampleRooms())
 	defer cleanup()
 
-	var result []entryWithRoom
+	var result []ticket.TicketEntry
 	err := client.Call(context.Background(), "list", map[string]any{
 		"room":  "!roomA:local",
 		"label": "backend",
@@ -230,7 +230,7 @@ func TestHandleReady(t *testing.T) {
 	client, cleanup := testServer(t, sampleRooms())
 	defer cleanup()
 
-	var result []entryWithRoom
+	var result []ticket.TicketEntry
 	err := client.Call(context.Background(), "ready", map[string]any{
 		"room": "!roomA:local",
 	}, &result)
@@ -260,7 +260,7 @@ func TestHandleBlocked(t *testing.T) {
 	client, cleanup := testServer(t, rooms)
 	defer cleanup()
 
-	var result []entryWithRoom
+	var result []ticket.TicketEntry
 	err := client.Call(context.Background(), "blocked", map[string]any{
 		"room": "!room:local",
 	}, &result)
@@ -282,7 +282,7 @@ func TestHandleShow(t *testing.T) {
 	client, cleanup := testServer(t, sampleRooms())
 	defer cleanup()
 
-	var result showResponse
+	var result ticket.ShowResponse
 	err := client.Call(context.Background(), "show", map[string]any{
 		"ticket": "tkt-1",
 		"room":   "!roomA:local",
@@ -315,7 +315,7 @@ func TestHandleShowComputedFields(t *testing.T) {
 	client, cleanup := testServer(t, sampleRooms())
 	defer cleanup()
 
-	var result showResponse
+	var result ticket.ShowResponse
 	err := client.Call(context.Background(), "show", map[string]any{
 		"ticket": "tkt-1",
 		"room":   "!roomA:local",
@@ -333,7 +333,7 @@ func TestHandleShowComputedFields(t *testing.T) {
 	}
 
 	// Show tkt-2 — tkt-3 is blocked by it, so Blocks should include tkt-3.
-	var result2 showResponse
+	var result2 ticket.ShowResponse
 	err = client.Call(context.Background(), "show", map[string]any{
 		"ticket": "tkt-2",
 		"room":   "!roomA:local",
@@ -370,7 +370,7 @@ func TestHandleChildren(t *testing.T) {
 	client, cleanup := testServer(t, sampleRooms())
 	defer cleanup()
 
-	var result childrenResponse
+	var result ticket.ChildrenResponse
 	err := client.Call(context.Background(), "children", map[string]any{
 		"ticket": "tkt-1",
 		"room":   "!roomA:local",
@@ -400,7 +400,7 @@ func TestHandleChildrenNoChildren(t *testing.T) {
 	client, cleanup := testServer(t, sampleRooms())
 	defer cleanup()
 
-	var result childrenResponse
+	var result ticket.ChildrenResponse
 	err := client.Call(context.Background(), "children", map[string]any{
 		"ticket": "tkt-2",
 		"room":   "!roomA:local",
@@ -420,7 +420,7 @@ func TestHandleGrepRoomScoped(t *testing.T) {
 	client, cleanup := testServer(t, sampleRooms())
 	defer cleanup()
 
-	var result []entryWithRoom
+	var result []ticket.TicketEntry
 	err := client.Call(context.Background(), "grep", map[string]any{
 		"pattern": "login",
 		"room":    "!roomA:local",
@@ -442,7 +442,7 @@ func TestHandleGrepCrossRoom(t *testing.T) {
 	defer cleanup()
 
 	// "deploy" only appears in room B.
-	var result []entryWithRoom
+	var result []ticket.TicketEntry
 	err := client.Call(context.Background(), "grep", map[string]any{
 		"pattern": "deploy",
 	}, &result)
@@ -466,7 +466,7 @@ func TestHandleGrepBodySearch(t *testing.T) {
 	defer cleanup()
 
 	// "OAuth" is in tkt-1's body, not title.
-	var result []entryWithRoom
+	var result []ticket.TicketEntry
 	err := client.Call(context.Background(), "grep", map[string]any{
 		"pattern": "OAuth",
 	}, &result)
@@ -486,7 +486,7 @@ func TestHandleGrepNoResults(t *testing.T) {
 	client, cleanup := testServer(t, sampleRooms())
 	defer cleanup()
 
-	var result []entryWithRoom
+	var result []ticket.TicketEntry
 	err := client.Call(context.Background(), "grep", map[string]any{
 		"pattern": "xyzzy",
 	}, &result)
@@ -548,7 +548,7 @@ func TestHandleDeps(t *testing.T) {
 	client, cleanup := testServer(t, sampleRooms())
 	defer cleanup()
 
-	var result depsResponse
+	var result ticket.DepsResponse
 	err := client.Call(context.Background(), "deps", map[string]any{
 		"ticket": "tkt-3",
 		"room":   "!roomA:local",
@@ -569,7 +569,7 @@ func TestHandleDepsNoDependencies(t *testing.T) {
 	client, cleanup := testServer(t, sampleRooms())
 	defer cleanup()
 
-	var result depsResponse
+	var result ticket.DepsResponse
 	err := client.Call(context.Background(), "deps", map[string]any{
 		"ticket": "tkt-1",
 		"room":   "!roomA:local",
@@ -641,7 +641,7 @@ func TestHandleRanked(t *testing.T) {
 	client, cleanup := testServer(t, rooms)
 	defer cleanup()
 
-	var result []rankedEntryResponse
+	var result []ticket.RankedEntry
 	err := client.Call(context.Background(), "ranked", map[string]any{
 		"room": "!room:local",
 	}, &result)
@@ -685,7 +685,7 @@ func TestHandleRankedEmpty(t *testing.T) {
 	client, cleanup := testServer(t, rooms)
 	defer cleanup()
 
-	var result []rankedEntryResponse
+	var result []ticket.RankedEntry
 	err := client.Call(context.Background(), "ranked", map[string]any{
 		"room": "!room:local",
 	}, &result)
@@ -754,7 +754,7 @@ func TestHandleEpicHealth(t *testing.T) {
 	client, cleanup := testServer(t, rooms)
 	defer cleanup()
 
-	var result epicHealthResponse
+	var result ticket.EpicHealthResponse
 	err := client.Call(context.Background(), "epic-health", map[string]any{
 		"ticket": "tkt-epic",
 		"room":   "!room:local",
@@ -805,7 +805,7 @@ func TestHandleShowIncludesScore(t *testing.T) {
 	defer cleanup()
 
 	// tkt-1 is open — should include a score.
-	var result showResponse
+	var result ticket.ShowResponse
 	err := client.Call(context.Background(), "show", map[string]any{
 		"ticket": "tkt-1",
 		"room":   "!roomA:local",
@@ -824,7 +824,7 @@ func TestHandleShowClosedTicketOmitsScore(t *testing.T) {
 	defer cleanup()
 
 	// tkt-2 is closed — score should be nil.
-	var result showResponse
+	var result ticket.ShowResponse
 	err := client.Call(context.Background(), "show", map[string]any{
 		"ticket": "tkt-2",
 		"room":   "!roomA:local",
@@ -845,7 +845,7 @@ func TestHandleShowCrossRoom(t *testing.T) {
 	defer cleanup()
 
 	// tkt-10 is in room B.
-	var result showResponse
+	var result ticket.ShowResponse
 	err := client.Call(context.Background(), "show", map[string]any{
 		"ticket": "tkt-10",
 		"room":   "!roomB:local",
@@ -1010,7 +1010,7 @@ func TestHandleShowIncludesStewardshipContext(t *testing.T) {
 		},
 	)
 
-	var result showResponse
+	var result ticket.ShowResponse
 	err := env.client.Call(context.Background(), "show", map[string]any{
 		"ticket": "tkt-s1",
 		"room":   "!roomS:local",
@@ -1066,7 +1066,7 @@ func TestHandleShowNoStewardshipWithoutAffects(t *testing.T) {
 	client, cleanup := testServer(t, sampleRooms())
 	defer cleanup()
 
-	var result showResponse
+	var result ticket.ShowResponse
 	err := client.Call(context.Background(), "show", map[string]any{
 		"ticket": "tkt-1",
 		"room":   "!roomA:local",
@@ -1117,7 +1117,7 @@ func TestListIncludesStewardshipSummary(t *testing.T) {
 	client, cleanup := testServer(t, rooms)
 	defer cleanup()
 
-	var results []entryWithRoom
+	var results []ticket.TicketEntry
 	err := client.Call(context.Background(), "list", map[string]any{
 		"room": "!roomS:local",
 	}, &results)

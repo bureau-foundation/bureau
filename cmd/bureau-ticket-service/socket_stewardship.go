@@ -26,20 +26,6 @@ type stewardshipListRequest struct {
 	Room string `cbor:"room,omitempty"`
 }
 
-// stewardshipListEntry is a single declaration in a stewardship-list
-// response. Combines the declaration's room context with its content.
-type stewardshipListEntry struct {
-	RoomID           ref.RoomID                    `cbor:"room_id"`
-	StateKey         string                        `cbor:"state_key"`
-	ResourcePatterns []string                      `cbor:"resource_patterns"`
-	GateTypes        []ticket.TicketType           `cbor:"gate_types,omitempty"`
-	NotifyTypes      []ticket.TicketType           `cbor:"notify_types,omitempty"`
-	OverlapPolicy    string                        `cbor:"overlap_policy,omitempty"`
-	Description      string                        `cbor:"description,omitempty"`
-	Tiers            []stewardship.StewardshipTier `cbor:"tiers"`
-	DigestInterval   string                        `cbor:"digest_interval,omitempty"`
-}
-
 // handleStewardshipList returns all stewardship declarations in the
 // index, optionally scoped to a single room. Results are sorted by
 // room ID then state key for deterministic output.
@@ -72,9 +58,9 @@ func (ts *TicketService) handleStewardshipList(_ context.Context, token *service
 		return declarations[i].StateKey < declarations[j].StateKey
 	})
 
-	entries := make([]stewardshipListEntry, len(declarations))
+	entries := make([]stewardship.StewardshipListEntry, len(declarations))
 	for i, declaration := range declarations {
-		entries[i] = stewardshipListEntry{
+		entries[i] = stewardship.StewardshipListEntry{
 			RoomID:           declaration.RoomID,
 			StateKey:         declaration.StateKey,
 			ResourcePatterns: declaration.Content.ResourcePatterns,
@@ -98,26 +84,6 @@ type stewardshipResolveRequest struct {
 	Affects    []string `cbor:"affects"`
 	TicketType string   `cbor:"ticket_type"`
 	Priority   int      `cbor:"priority,omitempty"`
-}
-
-// stewardshipResolveResponse previews what gates and reviewers would
-// be created for the given affects and ticket type.
-type stewardshipResolveResponse struct {
-	Gates      []ticket.TicketGate     `cbor:"gates"`
-	Reviewers  []ticket.ReviewerEntry  `cbor:"reviewers"`
-	Thresholds []ticket.TierThreshold  `cbor:"thresholds"`
-	Matches    []stewardshipMatchEntry `cbor:"matches"`
-}
-
-// stewardshipMatchEntry describes a single declaration match for the
-// resolve preview.
-type stewardshipMatchEntry struct {
-	RoomID          ref.RoomID `cbor:"room_id"`
-	StateKey        string     `cbor:"state_key"`
-	MatchedPattern  string     `cbor:"matched_pattern"`
-	MatchedResource string     `cbor:"matched_resource"`
-	OverlapPolicy   string     `cbor:"overlap_policy"`
-	Description     string     `cbor:"description,omitempty"`
 }
 
 // handleStewardshipResolve performs a dry-run stewardship resolution.
@@ -144,13 +110,13 @@ func (ts *TicketService) handleStewardshipResolve(_ context.Context, token *serv
 
 	// Build the match list before resolution (for the preview).
 	rawMatches := ts.stewardshipIndex.Resolve(request.Affects)
-	var matchEntries []stewardshipMatchEntry
+	var matchEntries []ticket.StewardshipMatchEntry
 	for _, match := range rawMatches {
 		policy := match.Declaration.Content.OverlapPolicy
 		if policy == "" {
 			policy = stewardship.OverlapIndependent
 		}
-		matchEntries = append(matchEntries, stewardshipMatchEntry{
+		matchEntries = append(matchEntries, ticket.StewardshipMatchEntry{
 			RoomID:          match.Declaration.RoomID,
 			StateKey:        match.Declaration.StateKey,
 			MatchedPattern:  match.MatchedPattern,
@@ -163,7 +129,7 @@ func (ts *TicketService) handleStewardshipResolve(_ context.Context, token *serv
 	// Resolve gates and reviewers using the same logic as create/update.
 	result := ts.resolveStewardshipGates(request.Affects, ticket.TicketType(request.TicketType), request.Priority)
 
-	return stewardshipResolveResponse{
+	return stewardship.StewardshipResolveResponse{
 		Gates:      result.gates,
 		Reviewers:  result.reviewers,
 		Thresholds: result.thresholds,
@@ -179,11 +145,6 @@ type stewardshipSetRequest struct {
 	Room     string                         `cbor:"room"`
 	StateKey string                         `cbor:"state_key"`
 	Content  stewardship.StewardshipContent `cbor:"content"`
-}
-
-// stewardshipSetResponse confirms a successful stewardship write.
-type stewardshipSetResponse struct {
-	EventID ref.EventID `cbor:"event_id"`
 }
 
 // handleStewardshipSet writes a stewardship declaration to the
@@ -228,5 +189,5 @@ func (ts *TicketService) handleStewardshipSet(ctx context.Context, token *servic
 		return nil, fmt.Errorf("writing stewardship event: %w", err)
 	}
 
-	return stewardshipSetResponse{EventID: eventID}, nil
+	return stewardship.StewardshipSetResponse{EventID: eventID}, nil
 }

@@ -20,10 +20,6 @@ type listParams struct {
 	cli.JSONOutput
 }
 
-// listResult is an alias for the shared response type, used as the
-// Output() type for MCP schema generation.
-type listResult = modelschema.ModelListResponse
-
 func listCommand() *cli.Command {
 	var params listParams
 
@@ -46,7 +42,7 @@ requests.`,
 			},
 		},
 		Params:         func() any { return &params },
-		Output:         func() any { return &listResult{} },
+		Output:         func() any { return &modelschema.ModelListResponse{} },
 		Annotations:    cli.ReadOnly(),
 		RequiredGrants: []string{"command/model/list"},
 		Run: func(ctx context.Context, args []string, logger *slog.Logger) error {
@@ -58,7 +54,7 @@ requests.`,
 			ctx, cancel := callContext(ctx)
 			defer cancel()
 
-			var result listResult
+			var result modelschema.ModelListResponse
 			if err := client.Call(ctx, modelschema.ActionList, nil, &result); err != nil {
 				return err
 			}

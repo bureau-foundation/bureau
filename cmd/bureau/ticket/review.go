@@ -44,7 +44,7 @@ Dispositions:
 			},
 		},
 		Params:         func() any { return &params },
-		Output:         func() any { return &mutationResult{} },
+		Output:         func() any { return &ticketschema.MutationResponse{} },
 		Annotations:    cli.Idempotent(),
 		RequiredGrants: []string{"command/ticket/review"},
 		Run: func(ctx context.Context, args []string, logger *slog.Logger) error {
@@ -79,7 +79,7 @@ Dispositions:
 				return err
 			}
 
-			var result mutationResult
+			var result ticketschema.MutationResponse
 			if err := client.Call(ctx, "set-disposition", fields, &result); err != nil {
 				return err
 			}

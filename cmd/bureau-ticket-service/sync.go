@@ -856,11 +856,11 @@ func (ts *TicketService) roomIndex(roomID ref.RoomID) *ticketindex.Index {
 
 // roomStats returns a summary of all tracked rooms and their ticket
 // counts.
-func (ts *TicketService) roomStats() []roomSummary {
-	summaries := make([]roomSummary, 0, len(ts.rooms))
+func (ts *TicketService) roomStats() []ticket.RoomSummary {
+	summaries := make([]ticket.RoomSummary, 0, len(ts.rooms))
 	for roomID, state := range ts.rooms {
 		stats := state.index.Stats()
-		summaries = append(summaries, roomSummary{
+		summaries = append(summaries, ticket.RoomSummary{
 			RoomID:     roomID,
 			Tickets:    stats.Total,
 			ByStatus:   stats.ByStatus,
@@ -868,13 +868,6 @@ func (ts *TicketService) roomStats() []roomSummary {
 		})
 	}
 	return summaries
-}
-
-type roomSummary struct {
-	RoomID     ref.RoomID     `cbor:"room_id"`
-	Tickets    int            `cbor:"tickets"`
-	ByStatus   map[string]int `cbor:"by_status"`
-	ByPriority map[int]int    `cbor:"by_priority"`
 }
 
 // processPresence updates the in-memory presence cache from m.presence

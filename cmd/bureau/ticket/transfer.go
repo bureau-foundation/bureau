@@ -57,7 +57,7 @@ Use --status to export only tickets in a particular state (e.g.
 			},
 		},
 		Params:         func() any { return &params },
-		Output:         func() any { return &[]ticketEntry{} },
+		Output:         func() any { return &[]ticketschema.TicketEntry{} },
 		Annotations:    cli.ReadOnly(),
 		RequiredGrants: []string{"command/ticket/export"},
 		Run: func(ctx context.Context, args []string, logger *slog.Logger) error {
@@ -80,7 +80,7 @@ Use --status to export only tickets in a particular state (e.g.
 				fields["status"] = params.Status
 			}
 
-			var entries []ticketEntry
+			var entries []ticketschema.TicketEntry
 			if err := client.Call(ctx, "list", fields, &entries); err != nil {
 				return err
 			}
@@ -195,7 +195,7 @@ invalid, none are imported.`,
 			},
 		},
 		Params:         func() any { return &params },
-		Output:         func() any { return &importResult{} },
+		Output:         func() any { return &ticketschema.ImportResponse{} },
 		Annotations:    cli.Create(),
 		RequiredGrants: []string{"command/ticket/import"},
 		Run: func(ctx context.Context, args []string, logger *slog.Logger) error {
@@ -292,7 +292,7 @@ invalid, none are imported.`,
 			ctx, cancel := callContext(ctx)
 			defer cancel()
 
-			var result importResult
+			var result ticketschema.ImportResponse
 			if err := client.Call(ctx, "import", map[string]any{
 				"room":    roomID.String(),
 				"tickets": tickets,

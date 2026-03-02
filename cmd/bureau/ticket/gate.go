@@ -8,6 +8,7 @@ import (
 	"log/slog"
 
 	"github.com/bureau-foundation/bureau/cmd/bureau/cli"
+	ticketschema "github.com/bureau-foundation/bureau/lib/schema/ticket"
 )
 
 // gateCommand returns the "gate" subcommand group for managing ticket
@@ -59,7 +60,7 @@ The gate is identified by its ID within the ticket.`,
 			},
 		},
 		Params:         func() any { return &params },
-		Output:         func() any { return &mutationResult{} },
+		Output:         func() any { return &ticketschema.MutationResponse{} },
 		Annotations:    cli.Idempotent(),
 		RequiredGrants: []string{"command/ticket/gate/resolve"},
 		Run: func(ctx context.Context, args []string, logger *slog.Logger) error {
@@ -94,7 +95,7 @@ The gate is identified by its ID within the ticket.`,
 			if err := addResolvedRoom(ctx, fields, params.Room); err != nil {
 				return err
 			}
-			var result mutationResult
+			var result ticketschema.MutationResponse
 			if err := client.Call(ctx, "resolve-gate", fields, &result); err != nil {
 				return err
 			}
@@ -139,7 +140,7 @@ gate satisfaction.`,
 			},
 		},
 		Params:         func() any { return &params },
-		Output:         func() any { return &mutationResult{} },
+		Output:         func() any { return &ticketschema.MutationResponse{} },
 		Annotations:    cli.Idempotent(),
 		RequiredGrants: []string{"command/ticket/gate/update"},
 		Run: func(ctx context.Context, args []string, logger *slog.Logger) error {
@@ -182,7 +183,7 @@ gate satisfaction.`,
 				fields["satisfied_by"] = params.SatisfiedBy
 			}
 
-			var result mutationResult
+			var result ticketschema.MutationResponse
 			if err := client.Call(ctx, "update-gate", fields, &result); err != nil {
 				return err
 			}

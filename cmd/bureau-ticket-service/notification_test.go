@@ -312,7 +312,7 @@ func TestCreateWithNotifyTypeP0Immediate(t *testing.T) {
 	})
 
 	// P0 ticket should bypass digest and send immediately.
-	var result createResponse
+	var result ticket.CreateResponse
 	err := env.client.Call(context.Background(), "create", map[string]any{
 		"room":     "!room:bureau.local",
 		"title":    "P0 GPU outage",
@@ -367,7 +367,7 @@ func TestCreateWithNotifyTypeP1Immediate(t *testing.T) {
 		},
 	})
 
-	var result createResponse
+	var result ticket.CreateResponse
 	err := env.client.Call(context.Background(), "create", map[string]any{
 		"room":     "!room:bureau.local",
 		"title":    "P1 GPU issue",
@@ -407,7 +407,7 @@ func TestCreateWithNotifyTypeDigestQueued(t *testing.T) {
 	})
 
 	// P2 ticket should be queued in digest, not sent immediately.
-	var result createResponse
+	var result ticket.CreateResponse
 	err := env.client.Call(context.Background(), "create", map[string]any{
 		"room":     "!room:bureau.local",
 		"title":    "P2 GPU issue",
@@ -469,7 +469,7 @@ func TestDigestFlushAfterInterval(t *testing.T) {
 	go env.service.startDigestLoop(ctx)
 
 	// Create a P2 ticket — should be queued.
-	var result createResponse
+	var result ticket.CreateResponse
 	err := env.client.Call(context.Background(), "create", map[string]any{
 		"room":     "!room:bureau.local",
 		"title":    "P2 GPU issue",
@@ -547,7 +547,7 @@ func TestDigestAccumulatesMultipleTickets(t *testing.T) {
 	// Create three P2 tickets.
 	var ticketIDs []string
 	for _, title := range []string{"GPU issue 1", "GPU issue 2", "GPU issue 3"} {
-		var result createResponse
+		var result ticket.CreateResponse
 		err := env.client.Call(context.Background(), "create", map[string]any{
 			"room":     "!room:bureau.local",
 			"title":    title,
@@ -610,7 +610,7 @@ func TestCreateWithNotifyTypeNoDigestInterval(t *testing.T) {
 		},
 	})
 
-	var result createResponse
+	var result ticket.CreateResponse
 	err := env.client.Call(context.Background(), "create", map[string]any{
 		"room":     "!room:bureau.local",
 		"title":    "P3 GPU task",
@@ -651,7 +651,7 @@ func TestNotificationSentToDeclarationRoom(t *testing.T) {
 		},
 	})
 
-	var result createResponse
+	var result ticket.CreateResponse
 	err := env.client.Call(context.Background(), "create", map[string]any{
 		"room":     ticketRoomID.String(),
 		"title":    "GPU task",
@@ -702,7 +702,7 @@ func TestUpdateAffectsTriggersNotification(t *testing.T) {
 	})
 
 	// Create without affects.
-	var createResult createResponse
+	var createResult ticket.CreateResponse
 	err := env.client.Call(context.Background(), "create", map[string]any{
 		"room":  "!room:bureau.local",
 		"title": "GPU task",
@@ -794,7 +794,7 @@ func TestDigestFlushOnDeclarationRemoval(t *testing.T) {
 	})
 
 	// Create a P2 ticket to get something in the digest.
-	var result createResponse
+	var result ticket.CreateResponse
 	err := env.client.Call(context.Background(), "create", map[string]any{
 		"room":     "!room:bureau.local",
 		"title":    "GPU task",
@@ -859,7 +859,7 @@ func TestDigestFlushOnShutdown(t *testing.T) {
 	go env.service.startDigestLoop(ctx)
 
 	// Create a P2 ticket — queued in digest, not sent immediately.
-	var result createResponse
+	var result ticket.CreateResponse
 	err := env.client.Call(context.Background(), "create", map[string]any{
 		"room":     "!room:bureau.local",
 		"title":    "Pending GPU task",

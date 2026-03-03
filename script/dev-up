@@ -1,0 +1,222 @@
+#!/usr/bin/env bash
+# Copyright 2026 The Bureau Authors
+# SPDX-License-Identifier: Apache-2.0
+#
+# Start the Bureau dev instance (launcher + daemon).
+#
+# Default mode creates a tmux session with the launcher and daemon in
+# separate panes so you can see their logs. Use --background to run
+# them as detached processes with PID files instead.
+#
+# Usage:
+#   script/dev-up [options]
+#
+# Options:
+#   --background   Run as background processes with PID files
+#   --help         Show this help
+#
+# Prerequisites:
+#   - script/dev-setup has been run
+#   - Bureau binaries on PATH (eval "$(script/dev-env)")
+#   - Docker running (for the homeserver)
+
+set -euo pipefail
+
+SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+REPO_ROOT="$(cd "$SCRIPT_DIR/.." && pwd)"
+CONFIG_FILE="$REPO_ROOT/deploy/dev/config"
+
+if [ ! -f "$CONFIG_FILE" ]; then
+    echo "Error: dev config not found at $CONFIG_FILE" >&2
+    exit 1
+fi
+# shellcheck source=../deploy/dev/config
+source "$CONFIG_FILE"
+
+MACHINE_NAME="${BUREAU_DEV_FLEET}/machine/$(hostname)"
+HOMESERVER_URL="http://127.0.0.1:${BUREAU_DEV_HOMESERVER_PORT}"
+DATA_DIR="$BUREAU_DEV_DATA_DIR"
+RUN_DIR="$BUREAU_DEV_RUN_DIR"
+STATE_DIR="$DATA_DIR/state"
+WORKSPACE_DIR="$DATA_DIR/workspace"
+CACHE_DIR="$DATA_DIR/cache"
+LOG_DIR="$DATA_DIR/logs"
+TMUX_SOCK="$RUN_DIR/tmux.sock"
+TMUX_SESSION="bureau-dev"
+
+BACKGROUND=false
+
+usage() {
+    sed -n '/^# Usage:/,/^[^#]/p' "$0" | sed 's/^# \?//' | head -n -1
+    exit "${1:-0}"
+}
+
+while [[ $# -gt 0 ]]; do
+    case "$1" in
+        --background)
+            BACKGROUND=true
+            shift
+            ;;
+        --help|-h)
+            usage 0
+            ;;
+        *)
+            echo "Unknown option: $1" >&2
+            usage 1
+            ;;
+    esac
+done
+
+# Verify setup has been run.
+if [ ! -f "$STATE_DIR/machine-key.pub" ]; then
+    echo "Error: dev instance not set up. Run script/dev-setup first." >&2
+    exit 1
+fi
+
+# Verify binaries are available.
+for binary in bureau-launcher bureau-daemon; do
+    if ! command -v "$binary" &>/dev/null; then
+        echo "Error: '$binary' not found on PATH." >&2
+        echo "  Run: eval \"\$(script/dev-env)\"" >&2
+        exit 1
+    fi
+done
+
+# Ensure directories exist.
+mkdir -p "$RUN_DIR" "$LOG_DIR"
+
+# Ensure dev homeserver is running.
+if ! curl -sf "$HOMESERVER_URL/_matrix/client/versions" >/dev/null 2>&1; then
+    echo "Starting dev homeserver..."
+    docker compose -f "$REPO_ROOT/deploy/dev/docker-compose.yaml" \
+        -p bureau-dev up -d
+
+    echo -n "Waiting for homeserver"
+    for attempt in $(seq 1 30); do
+        if curl -sf "$HOMESERVER_URL/_matrix/client/versions" >/dev/null 2>&1; then
+            echo " ready."
+            break
+        fi
+        if [ "$attempt" -eq 30 ]; then
+            echo " timed out."
+            echo "Error: homeserver did not become ready." >&2
+            exit 1
+        fi
+        echo -n "."
+        sleep 1
+    done
+fi
+
+# Check if already running.
+if [ "$BACKGROUND" = false ]; then
+    if tmux -S "$TMUX_SOCK" has-session -t "$TMUX_SESSION" 2>/dev/null; then
+        echo "Dev instance already running in tmux."
+        echo "  Attach: tmux -S $TMUX_SOCK attach -t $TMUX_SESSION"
+        exit 0
+    fi
+else
+    if [ -f "$RUN_DIR/launcher.pid" ] && kill -0 "$(cat "$RUN_DIR/launcher.pid")" 2>/dev/null; then
+        echo "Dev instance already running (PID files in $RUN_DIR)."
+        exit 0
+    fi
+fi
+
+# Common flags for both launcher and daemon.
+LAUNCHER_CMD="bureau-launcher \
+    --homeserver $HOMESERVER_URL \
+    --machine-name $MACHINE_NAME \
+    --server-name $BUREAU_DEV_SERVER_NAME \
+    --fleet $BUREAU_DEV_FLEET \
+    --state-dir $STATE_DIR \
+    --run-dir $RUN_DIR \
+    --workspace-root $WORKSPACE_DIR \
+    --cache-root $CACHE_DIR \
+    --operators-group ''"
+
+DAEMON_CMD="bureau-daemon \
+    --homeserver $HOMESERVER_URL \
+    --machine-name $MACHINE_NAME \
+    --server-name $BUREAU_DEV_SERVER_NAME \
+    --fleet $BUREAU_DEV_FLEET \
+    --state-dir $STATE_DIR \
+    --run-dir $RUN_DIR \
+    --workspace-root $WORKSPACE_DIR \
+    --admin-user bureau-admin \
+    --operators-group ''"
+
+if [ "$BACKGROUND" = true ]; then
+    # Background mode: PID files + log files.
+    echo "Starting launcher..."
+    bureau-launcher \
+        --homeserver "$HOMESERVER_URL" \
+        --machine-name "$MACHINE_NAME" \
+        --server-name "$BUREAU_DEV_SERVER_NAME" \
+        --fleet "$BUREAU_DEV_FLEET" \
+        --state-dir "$STATE_DIR" \
+        --run-dir "$RUN_DIR" \
+        --workspace-root "$WORKSPACE_DIR" \
+        --cache-root "$CACHE_DIR" \
+        --operators-group "" \
+        >> "$LOG_DIR/launcher.log" 2>&1 &
+    echo $! > "$RUN_DIR/launcher.pid"
+
+    # Wait for launcher socket before starting daemon.
+    echo -n "Waiting for launcher socket"
+    for attempt in $(seq 1 30); do
+        if [ -S "$RUN_DIR/launcher.sock" ]; then
+            echo " ready."
+            break
+        fi
+        if [ "$attempt" -eq 30 ]; then
+            echo " timed out."
+            echo "Error: launcher socket not created. Check $LOG_DIR/launcher.log" >&2
+            exit 1
+        fi
+        echo -n "."
+        sleep 1
+    done
+
+    echo "Starting daemon..."
+    bureau-daemon \
+        --homeserver "$HOMESERVER_URL" \
+        --machine-name "$MACHINE_NAME" \
+        --server-name "$BUREAU_DEV_SERVER_NAME" \
+        --fleet "$BUREAU_DEV_FLEET" \
+        --state-dir "$STATE_DIR" \
+        --run-dir "$RUN_DIR" \
+        --workspace-root "$WORKSPACE_DIR" \
+        --admin-user bureau-admin \
+        --operators-group "" \
+        >> "$LOG_DIR/daemon.log" 2>&1 &
+    echo $! > "$RUN_DIR/daemon.pid"
+
+    echo ""
+    echo "Dev instance started (background mode)."
+    echo "  Launcher PID: $(cat "$RUN_DIR/launcher.pid")"
+    echo "  Daemon PID:   $(cat "$RUN_DIR/daemon.pid")"
+    echo "  Launcher log: $LOG_DIR/launcher.log"
+    echo "  Daemon log:   $LOG_DIR/daemon.log"
+    echo "  Stop with:    script/dev-down"
+else
+    # Tmux mode: session with two panes.
+    echo "Starting dev instance in tmux..."
+
+    # Create session with launcher in first window.
+    tmux -S "$TMUX_SOCK" new-session -d -s "$TMUX_SESSION" -n bureau \
+        "echo '=== Bureau Launcher ==='; $LAUNCHER_CMD; echo 'Launcher exited (\$?)'; read"
+
+    # Wait briefly for the launcher pane to start, then split for daemon.
+    # The daemon needs the launcher socket, so we add a wait loop.
+    tmux -S "$TMUX_SOCK" split-window -t "$TMUX_SESSION:bureau" -v \
+        "echo '=== Bureau Daemon ==='; echo 'Waiting for launcher socket...'; \
+         while [ ! -S '$RUN_DIR/launcher.sock' ]; do sleep 0.5; done; \
+         echo 'Launcher ready, starting daemon.'; $DAEMON_CMD; echo 'Daemon exited (\$?)'; read"
+
+    # Even split.
+    tmux -S "$TMUX_SOCK" select-layout -t "$TMUX_SESSION:bureau" even-vertical
+
+    echo ""
+    echo "Dev instance started in tmux."
+    echo "  Attach: tmux -S $TMUX_SOCK attach -t $TMUX_SESSION"
+    echo "  Stop:   script/dev-down"
+fi

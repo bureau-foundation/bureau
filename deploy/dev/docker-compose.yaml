@@ -1,0 +1,36 @@
+# Bureau dev homeserver.
+#
+# Provides a local Continuwuity instance for development. Unlike the
+# integration test stack (deploy/test/), this uses a fixed port and
+# persistent volume so state survives restarts.
+#
+# Usage:
+#   docker compose -f deploy/dev/docker-compose.yaml up -d
+#   docker compose -f deploy/dev/docker-compose.yaml down
+#
+# The dev-setup and dev-up scripts manage this automatically.
+
+services:
+  matrix:
+    image: ghcr.io/continuwuity/continuwuity:latest
+    restart: unless-stopped
+    ports:
+      - "127.0.0.1:6197:6167"
+    volumes:
+      - dev-matrix-data:/var/lib/continuwuity
+      - ../test/continuwuity.toml:/etc/conduwuit/conduwuit.toml:ro
+    environment:
+      CONDUWUIT_CONFIG: "/etc/conduwuit/conduwuit.toml"
+      CONTINUWUITY_SERVER_NAME: "dev.bureau.local"
+      CONTINUWUITY_REGISTRATION_TOKEN: "dev-registration-token"
+      CONTINUWUITY_ALLOW_REGISTRATION: "true"
+      CONTINUWUITY_ALLOW_FEDERATION: "false"
+    healthcheck:
+      test: ["CMD-SHELL", "wget --no-verbose --tries=1 --spider http://localhost:6167/_matrix/client/versions || exit 1"]
+      interval: 5s
+      timeout: 5s
+      retries: 10
+      start_period: 5s
+
+volumes:
+  dev-matrix-data:

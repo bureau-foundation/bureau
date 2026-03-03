@@ -2,18 +2,22 @@
 # Copyright 2026 The Bureau Authors
 # SPDX-License-Identifier: Apache-2.0
 #
-# Build and deploy the current worktree to the local machine.
+# Build and deploy the current worktree to the local Bureau instance.
 #
 # This script builds bureau-host-env from the current worktree, then
 # publishes a BureauVersion state event via "bureau machine upgrade --local".
 # The running daemon picks up the new version via /sync and performs an
 # atomic exec() transition.
 #
+# When a dev instance exists (from script/dev-setup), this targets the
+# dev instance by default. Use --prod to target the system installation.
+#
 # Usage:
 #   script/dev-deploy [options]
 #
 # Options:
-#   --credential-file FILE   Path to Bureau credentials (default: deploy/matrix/bureau-creds)
+#   --credential-file FILE   Path to Bureau credentials (auto-detected)
+#   --prod                   Target the system (prod) installation instead of dev
 #   --dry-run                Build but do not publish the upgrade event
 #   --help                   Show this help
 #
@@ -25,9 +29,11 @@ set -euo pipefail
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 REPO_ROOT="$(cd "$SCRIPT_DIR/.." && pwd)"
+DEV_CONFIG_FILE="$REPO_ROOT/deploy/dev/config"
 
 # Defaults.
-CREDENTIAL_FILE="${BUREAU_CREDENTIAL_FILE:-$REPO_ROOT/deploy/matrix/bureau-creds}"
+CREDENTIAL_FILE="${BUREAU_CREDENTIAL_FILE:-}"
+FORCE_PROD=false
 DRY_RUN=false
 
 usage() {
@@ -41,6 +47,10 @@ while [[ $# -gt 0 ]]; do
         --credential-file)
             CREDENTIAL_FILE="$2"
             shift 2
+            ;;
+        --prod)
+            FORCE_PROD=true
+            shift
             ;;
         --dry-run)
             DRY_RUN=true
@@ -60,11 +70,47 @@ while [[ $# -gt 0 ]]; do
     esac
 done
 
-# Verify credentials exist before spending time building.
+# Detect dev instance. If the dev config exists and the dev launcher
+# socket is present, default to targeting the dev instance. This
+# prevents accidentally upgrading a production installation.
+USE_DEV=false
+if [ "$FORCE_PROD" = false ] && [ -f "$DEV_CONFIG_FILE" ]; then
+    # shellcheck source=../deploy/dev/config
+    source "$DEV_CONFIG_FILE"
+    DEV_RUN_DIR="$BUREAU_DEV_RUN_DIR"
+    DEV_DATA_DIR="$BUREAU_DEV_DATA_DIR"
+
+    if [ -S "$DEV_RUN_DIR/launcher.sock" ]; then
+        USE_DEV=true
+    elif [ -f "$DEV_DATA_DIR/state/session.json" ]; then
+        # Dev instance exists but isn't running. Still target it to
+        # avoid hitting prod, but warn.
+        echo "Warning: dev instance exists but is not running." >&2
+        echo "  Start it with: script/dev-up" >&2
+        echo "  Or use --prod to target the system installation." >&2
+        exit 1
+    fi
+fi
+
+# Resolve credential file.
+if [ -z "$CREDENTIAL_FILE" ]; then
+    if [ "$USE_DEV" = true ]; then
+        CREDENTIAL_FILE="$DEV_DATA_DIR/bureau-creds"
+    else
+        CREDENTIAL_FILE="$REPO_ROOT/deploy/matrix/bureau-creds"
+    fi
+fi
+
 if [ ! -f "$CREDENTIAL_FILE" ]; then
     echo "Error: credential file not found: $CREDENTIAL_FILE" >&2
     echo "  Set BUREAU_CREDENTIAL_FILE or pass --credential-file" >&2
     exit 1
+fi
+
+if [ "$USE_DEV" = true ]; then
+    echo "Target: dev instance (fleet: $BUREAU_DEV_FLEET)"
+else
+    echo "Target: system installation"
 fi
 
 # Build bureau-host-env from the current worktree.
@@ -98,27 +144,32 @@ fi
 # resolved from the host-env path in the event, so sandbox binaries
 # update automatically without symlink changes.
 echo "Publishing BureauVersion..."
-"$BUREAU_CLI" machine upgrade --local \
-    --host-env "$HOST_ENV" \
-    --credential-file "$CREDENTIAL_FILE"
+if [ "$USE_DEV" = true ]; then
+    # For dev, set BUREAU_LAUNCHER_SESSION so --local reads the dev
+    # session instead of the system launcher session.
+    BUREAU_LAUNCHER_SESSION="$DEV_DATA_DIR/state/session.json" \
+        "$BUREAU_CLI" machine upgrade --local \
+        --host-env "$HOST_ENV" \
+        --credential-file "$CREDENTIAL_FILE"
+else
+    "$BUREAU_CLI" machine upgrade --local \
+        --host-env "$HOST_ENV" \
+        --credential-file "$CREDENTIAL_FILE"
 
-# Write the host-env path so scripts and agents can find Bureau
-# binaries without relying on symlinks in /var/bureau/bin.
-HOST_ENV_MARKER="/var/bureau/cache/current-host-env"
-if [ -d "$(dirname "$HOST_ENV_MARKER")" ] && [ -w "$(dirname "$HOST_ENV_MARKER")" ]; then
-    echo "$HOST_ENV" > "$HOST_ENV_MARKER"
-    echo "Host-env path written to $HOST_ENV_MARKER"
-fi
+    # For prod: write the host-env marker and update symlinks.
+    HOST_ENV_MARKER="/var/bureau/cache/current-host-env"
+    if [ -d "$(dirname "$HOST_ENV_MARKER")" ] && [ -w "$(dirname "$HOST_ENV_MARKER")" ]; then
+        echo "$HOST_ENV" > "$HOST_ENV_MARKER"
+        echo "Host-env path written to $HOST_ENV_MARKER"
+    fi
 
-# Update symlinks in /var/bureau/bin so that systemd ExecStart paths
-# and operator PATH resolve to the new binaries. This directory is
-# bureau:bureau-operators 0775, so no sudo is needed.
-if [ -d /var/bureau/bin ] && [ -w /var/bureau/bin ]; then
-    UPDATED=0
-    for binary in "$HOST_ENV"/bin/bureau*; do
-        name=$(basename "$binary")
-        ln -sf "$binary" "/var/bureau/bin/$name"
-        UPDATED=$((UPDATED + 1))
-    done
-    echo "Updated $UPDATED symlinks in /var/bureau/bin"
+    if [ -d /var/bureau/bin ] && [ -w /var/bureau/bin ]; then
+        UPDATED=0
+        for binary in "$HOST_ENV"/bin/bureau*; do
+            name=$(basename "$binary")
+            ln -sf "$binary" "/var/bureau/bin/$name"
+            UPDATED=$((UPDATED + 1))
+        done
+        echo "Updated $UPDATED symlinks in /var/bureau/bin"
+    fi
 fi

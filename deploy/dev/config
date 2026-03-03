@@ -1,0 +1,27 @@
+# Bureau dev instance configuration.
+#
+# Used by script/dev-setup, dev-up, dev-down, dev-status, and dev-deploy.
+# Edit this file to customize your local dev instance. All values have
+# sensible defaults for single-developer use.
+#
+# This file is sourced as a shell script. Values with spaces need quoting.
+
+# Fleet and machine identity. These are separate from any production
+# deployment on the same machine, preventing dev-deploy from accidentally
+# cycling prod services.
+BUREAU_DEV_FLEET=bureau/fleet/dev
+BUREAU_DEV_SERVER_NAME=dev.bureau.local
+
+# Homeserver port. Must not conflict with the production homeserver
+# (default 6167) or the integration test homeserver (dynamic).
+BUREAU_DEV_HOMESERVER_PORT=6197
+
+# Registration token for the dev homeserver. Hardcoded because this is
+# a local dev instance with no security boundary. Must match the value
+# in deploy/dev/docker-compose.yaml.
+BUREAU_DEV_REGISTRATION_TOKEN=dev-registration-token
+
+# State directories. Persistent state lives under XDG_DATA_HOME;
+# runtime state (sockets) lives under /tmp for short paths.
+BUREAU_DEV_DATA_DIR="${XDG_DATA_HOME:-$HOME/.local/share}/bureau-dev"
+BUREAU_DEV_RUN_DIR="/tmp/bureau-dev-$(id -un)"

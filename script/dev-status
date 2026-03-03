@@ -1,0 +1,146 @@
+#!/usr/bin/env bash
+# Copyright 2026 The Bureau Authors
+# SPDX-License-Identifier: Apache-2.0
+#
+# Check the health of the Bureau dev instance.
+#
+# Reports the status of the homeserver, launcher, daemon, and Matrix
+# connectivity.
+#
+# Usage:
+#   script/dev-status
+
+set -euo pipefail
+
+SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+REPO_ROOT="$(cd "$SCRIPT_DIR/.." && pwd)"
+CONFIG_FILE="$REPO_ROOT/deploy/dev/config"
+
+if [ ! -f "$CONFIG_FILE" ]; then
+    echo "Error: dev config not found at $CONFIG_FILE" >&2
+    exit 1
+fi
+# shellcheck source=../deploy/dev/config
+source "$CONFIG_FILE"
+
+MACHINE_NAME="${BUREAU_DEV_FLEET}/machine/$(hostname)"
+HOMESERVER_URL="http://127.0.0.1:${BUREAU_DEV_HOMESERVER_PORT}"
+DATA_DIR="$BUREAU_DEV_DATA_DIR"
+RUN_DIR="$BUREAU_DEV_RUN_DIR"
+STATE_DIR="$DATA_DIR/state"
+TMUX_SOCK="$RUN_DIR/tmux.sock"
+TMUX_SESSION="bureau-dev"
+
+# Track overall status.
+ALL_OK=true
+
+check() {
+    local label="$1"
+    local status="$2"
+    local detail="${3:-}"
+
+    if [ "$status" = "ok" ]; then
+        printf "  %-20s %s" "$label" "ok"
+    else
+        printf "  %-20s %s" "$label" "FAIL"
+        ALL_OK=false
+    fi
+    if [ -n "$detail" ]; then
+        printf "  (%s)" "$detail"
+    fi
+    echo ""
+}
+
+echo "Bureau Dev Instance Status"
+echo "=========================="
+echo ""
+echo "Config:"
+echo "  Fleet:      $BUREAU_DEV_FLEET"
+echo "  Machine:    $MACHINE_NAME"
+echo "  Server:     $BUREAU_DEV_SERVER_NAME"
+echo "  Homeserver: $HOMESERVER_URL"
+echo "  Data:       $DATA_DIR"
+echo "  Sockets:    $RUN_DIR"
+echo ""
+
+# Setup status.
+echo "Setup:"
+if [ -d "$DATA_DIR" ]; then
+    check "data directory" "ok"
+else
+    check "data directory" "fail" "run script/dev-setup"
+fi
+
+if [ -f "$STATE_DIR/machine-key.pub" ]; then
+    check "machine keypair" "ok"
+else
+    check "machine keypair" "fail" "run script/dev-setup"
+fi
+
+if [ -f "$STATE_DIR/session.json" ]; then
+    check "session" "ok"
+else
+    check "session" "fail" "run script/dev-setup"
+fi
+
+if [ -f "$DATA_DIR/bureau-creds" ]; then
+    check "credentials" "ok"
+else
+    check "credentials" "fail" "run script/dev-setup"
+fi
+echo ""
+
+# Services.
+echo "Services:"
+
+# Homeserver.
+if curl -sf "$HOMESERVER_URL/_matrix/client/versions" >/dev/null 2>&1; then
+    check "homeserver" "ok" "port $BUREAU_DEV_HOMESERVER_PORT"
+else
+    check "homeserver" "fail" "docker compose -f deploy/dev/docker-compose.yaml -p bureau-dev up -d"
+fi
+
+# Launcher.
+LAUNCHER_RUNNING=false
+if [ -S "$RUN_DIR/launcher.sock" ]; then
+    check "launcher" "ok" "socket at $RUN_DIR/launcher.sock"
+    LAUNCHER_RUNNING=true
+else
+    # Check tmux.
+    if tmux -S "$TMUX_SOCK" has-session -t "$TMUX_SESSION" 2>/dev/null; then
+        check "launcher" "fail" "tmux session exists but no socket"
+    elif [ -f "$RUN_DIR/launcher.pid" ] && kill -0 "$(cat "$RUN_DIR/launcher.pid")" 2>/dev/null; then
+        check "launcher" "fail" "process running but no socket"
+    else
+        check "launcher" "fail" "run script/dev-up"
+    fi
+fi
+
+# Daemon (check observe.sock as the daemon's operator-facing socket).
+if [ -S "$RUN_DIR/observe.sock" ]; then
+    check "daemon" "ok" "socket at $RUN_DIR/observe.sock"
+else
+    if [ "$LAUNCHER_RUNNING" = true ]; then
+        check "daemon" "fail" "launcher running but no daemon socket"
+    else
+        check "daemon" "fail" "run script/dev-up"
+    fi
+fi
+
+# Tmux session.
+if tmux -S "$TMUX_SOCK" has-session -t "$TMUX_SESSION" 2>/dev/null; then
+    check "tmux" "ok" "tmux -S $TMUX_SOCK attach -t $TMUX_SESSION"
+elif [ -f "$RUN_DIR/launcher.pid" ] && kill -0 "$(cat "$RUN_DIR/launcher.pid")" 2>/dev/null; then
+    check "tmux" "ok" "background mode (PID files)"
+else
+    check "tmux" "fail" "no session"
+fi
+echo ""
+
+# Summary.
+if [ "$ALL_OK" = true ]; then
+    echo "All checks passed."
+else
+    echo "Some checks failed. See details above."
+    exit 1
+fi

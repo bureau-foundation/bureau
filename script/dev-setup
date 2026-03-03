@@ -1,0 +1,225 @@
+#!/usr/bin/env bash
+# Copyright 2026 The Bureau Authors
+# SPDX-License-Identifier: Apache-2.0
+#
+# One-time setup for a Bureau dev instance.
+#
+# Creates a local Continuwuity homeserver, bootstraps it with Bureau
+# rooms, provisions a dev machine, and runs first boot. All state lives
+# in user-owned directories (no sudo required). The dev instance uses a
+# separate fleet name ("bureau/fleet/dev") so dev-deploy cannot
+# accidentally cycle a production deployment.
+#
+# Usage:
+#   script/dev-setup [options]
+#
+# Options:
+#   --reset   Tear down existing dev state and start fresh
+#   --help    Show this help
+#
+# Prerequisites:
+#   - Nix dev shell active (provides Bureau binaries via script/dev-env)
+#   - Docker running (for the Continuwuity homeserver)
+#
+# After setup, use script/dev-up to start the launcher and daemon.
+
+set -euo pipefail
+
+SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+REPO_ROOT="$(cd "$SCRIPT_DIR/.." && pwd)"
+CONFIG_FILE="$REPO_ROOT/deploy/dev/config"
+
+# Source dev config.
+if [ ! -f "$CONFIG_FILE" ]; then
+    echo "Error: dev config not found at $CONFIG_FILE" >&2
+    exit 1
+fi
+# shellcheck source=../deploy/dev/config
+source "$CONFIG_FILE"
+
+# Derived values.
+MACHINE_NAME="${BUREAU_DEV_FLEET}/machine/$(hostname)"
+HOMESERVER_URL="http://127.0.0.1:${BUREAU_DEV_HOMESERVER_PORT}"
+DATA_DIR="$BUREAU_DEV_DATA_DIR"
+RUN_DIR="$BUREAU_DEV_RUN_DIR"
+STATE_DIR="$DATA_DIR/state"
+WORKSPACE_DIR="$DATA_DIR/workspace"
+CACHE_DIR="$DATA_DIR/cache"
+CRED_FILE="$DATA_DIR/bureau-creds"
+BOOTSTRAP_FILE="$DATA_DIR/bootstrap.json"
+LOG_DIR="$DATA_DIR/logs"
+
+RESET=false
+
+usage() {
+    sed -n '/^# Usage:/,/^[^#]/p' "$0" | sed 's/^# \?//' | head -n -1
+    exit "${1:-0}"
+}
+
+while [[ $# -gt 0 ]]; do
+    case "$1" in
+        --reset)
+            RESET=true
+            shift
+            ;;
+        --help|-h)
+            usage 0
+            ;;
+        *)
+            echo "Unknown option: $1" >&2
+            usage 1
+            ;;
+    esac
+done
+
+# Handle --reset: tear down everything and start fresh.
+if [ "$RESET" = true ]; then
+    echo "Resetting dev instance..."
+    docker compose -f "$REPO_ROOT/deploy/dev/docker-compose.yaml" \
+        -p bureau-dev down -v 2>/dev/null || true
+    rm -rf "$DATA_DIR" "$RUN_DIR"
+    echo "Dev state removed. Re-run without --reset to set up."
+    exit 0
+fi
+
+# Verify prerequisites.
+if ! command -v bureau &>/dev/null; then
+    echo "Error: 'bureau' not found on PATH." >&2
+    echo "  Run: eval \"\$(script/dev-env)\"" >&2
+    exit 1
+fi
+
+if ! command -v bureau-launcher &>/dev/null; then
+    echo "Error: 'bureau-launcher' not found on PATH." >&2
+    echo "  Run: eval \"\$(script/dev-env)\"" >&2
+    exit 1
+fi
+
+if ! docker info &>/dev/null 2>&1; then
+    echo "Error: Docker is not running." >&2
+    exit 1
+fi
+
+# Create directories.
+mkdir -p "$STATE_DIR" "$WORKSPACE_DIR" "$CACHE_DIR" "$LOG_DIR" "$RUN_DIR"
+
+echo "=== Bureau Dev Setup ==="
+echo "  Fleet:      $BUREAU_DEV_FLEET"
+echo "  Machine:    $MACHINE_NAME"
+echo "  Server:     $BUREAU_DEV_SERVER_NAME"
+echo "  Homeserver: $HOMESERVER_URL"
+echo "  Data:       $DATA_DIR"
+echo "  Sockets:    $RUN_DIR"
+echo ""
+
+# Step 1: Start dev homeserver.
+echo "[1/6] Starting dev homeserver..."
+if curl -sf "$HOMESERVER_URL/_matrix/client/versions" >/dev/null 2>&1; then
+    echo "  Already running."
+else
+    docker compose -f "$REPO_ROOT/deploy/dev/docker-compose.yaml" \
+        -p bureau-dev up -d
+
+    echo -n "  Waiting for homeserver"
+    for attempt in $(seq 1 30); do
+        if curl -sf "$HOMESERVER_URL/_matrix/client/versions" >/dev/null 2>&1; then
+            echo " ready."
+            break
+        fi
+        if [ "$attempt" -eq 30 ]; then
+            echo " timed out."
+            echo "Error: homeserver did not become ready within 30 seconds." >&2
+            echo "  Check: docker compose -f deploy/dev/docker-compose.yaml -p bureau-dev logs" >&2
+            exit 1
+        fi
+        echo -n "."
+        sleep 1
+    done
+fi
+
+# Step 2: Bootstrap homeserver (idempotent).
+echo "[2/6] Bootstrapping homeserver..."
+if [ -f "$CRED_FILE" ]; then
+    echo "  Credential file exists, verifying..."
+    if bureau matrix doctor \
+        --credential-file "$CRED_FILE" \
+        --server-name "$BUREAU_DEV_SERVER_NAME" >/dev/null 2>&1; then
+        echo "  Homeserver already bootstrapped."
+    else
+        echo "  Credential file exists but doctor failed. Re-running setup..."
+        bureau matrix setup \
+            --homeserver "$HOMESERVER_URL" \
+            --server-name "$BUREAU_DEV_SERVER_NAME" \
+            --registration-token-file <(echo "$BUREAU_DEV_REGISTRATION_TOKEN") \
+            --credential-file "$CRED_FILE"
+    fi
+else
+    bureau matrix setup \
+        --homeserver "$HOMESERVER_URL" \
+        --server-name "$BUREAU_DEV_SERVER_NAME" \
+        --registration-token-file <(echo "$BUREAU_DEV_REGISTRATION_TOKEN") \
+        --credential-file "$CRED_FILE"
+fi
+
+# Step 3: Create fleet (idempotent).
+echo "[3/6] Creating dev fleet..."
+bureau fleet create "$BUREAU_DEV_FLEET" \
+    --credential-file "$CRED_FILE" 2>/dev/null || true
+
+# Step 4: Provision dev machine (idempotent — checks if already registered).
+echo "[4/6] Provisioning dev machine..."
+if [ -f "$STATE_DIR/machine-key.pub" ]; then
+    echo "  Machine already provisioned (keypair exists)."
+else
+    if [ ! -f "$BOOTSTRAP_FILE" ]; then
+        bureau machine provision "$MACHINE_NAME" \
+            --credential-file "$CRED_FILE" \
+            --output "$BOOTSTRAP_FILE"
+        echo "  Bootstrap config written to $BOOTSTRAP_FILE"
+    else
+        echo "  Bootstrap config already exists."
+    fi
+fi
+
+# Step 5: Launcher first boot (idempotent — checks keypair).
+echo "[5/6] Running first boot..."
+if [ -f "$STATE_DIR/machine-key.pub" ]; then
+    echo "  First boot already completed."
+else
+    bureau-launcher \
+        --bootstrap-file "$BOOTSTRAP_FILE" \
+        --first-boot-only \
+        --machine-name "$MACHINE_NAME" \
+        --server-name "$BUREAU_DEV_SERVER_NAME" \
+        --fleet "$BUREAU_DEV_FLEET" \
+        --homeserver "$HOMESERVER_URL" \
+        --state-dir "$STATE_DIR" \
+        --run-dir "$RUN_DIR" \
+        --workspace-root "$WORKSPACE_DIR" \
+        --cache-root "$CACHE_DIR" \
+        --operators-group ""
+
+    # Clean up bootstrap config (one-time password has been rotated).
+    rm -f "$BOOTSTRAP_FILE"
+    echo "  First boot complete. Password rotated, keypair generated."
+fi
+
+# Step 6: Create operator account for the developer.
+echo "[6/6] Creating operator account..."
+OPERATOR_USER="$(id -un)"
+bureau matrix user create "$OPERATOR_USER" \
+    --credential-file "$CRED_FILE" \
+    --operator 2>/dev/null || true
+echo "  Operator account: @${OPERATOR_USER}:${BUREAU_DEV_SERVER_NAME}"
+
+echo ""
+echo "=== Dev Setup Complete ==="
+echo ""
+echo "Next steps:"
+echo "  1. Start the dev instance:  script/dev-up"
+echo "  2. Check status:            script/dev-status"
+echo "  3. Deploy code changes:     script/dev-deploy"
+echo "  4. Stop the dev instance:   script/dev-down"
+echo ""
+echo "Attach to logs:  tmux -S $RUN_DIR/tmux.sock attach"
+echo "Reset everything: script/dev-setup --reset"

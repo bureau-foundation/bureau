@@ -1,0 +1,108 @@
+#!/usr/bin/env bash
+# Copyright 2026 The Bureau Authors
+# SPDX-License-Identifier: Apache-2.0
+#
+# Stop the Bureau dev instance.
+#
+# Stops the launcher and daemon processes started by dev-up, whether
+# they are running in a tmux session or as background processes.
+#
+# Usage:
+#   script/dev-down [options]
+#
+# Options:
+#   --all    Also stop the dev homeserver Docker container
+#   --help   Show this help
+
+set -euo pipefail
+
+SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+REPO_ROOT="$(cd "$SCRIPT_DIR/.." && pwd)"
+CONFIG_FILE="$REPO_ROOT/deploy/dev/config"
+
+if [ ! -f "$CONFIG_FILE" ]; then
+    echo "Error: dev config not found at $CONFIG_FILE" >&2
+    exit 1
+fi
+# shellcheck source=../deploy/dev/config
+source "$CONFIG_FILE"
+
+RUN_DIR="$BUREAU_DEV_RUN_DIR"
+TMUX_SOCK="$RUN_DIR/tmux.sock"
+TMUX_SESSION="bureau-dev"
+
+STOP_ALL=false
+
+usage() {
+    sed -n '/^# Usage:/,/^[^#]/p' "$0" | sed 's/^# \?//' | head -n -1
+    exit "${1:-0}"
+}
+
+while [[ $# -gt 0 ]]; do
+    case "$1" in
+        --all)
+            STOP_ALL=true
+            shift
+            ;;
+        --help|-h)
+            usage 0
+            ;;
+        *)
+            echo "Unknown option: $1" >&2
+            usage 1
+            ;;
+    esac
+done
+
+STOPPED=false
+
+# Stop tmux session if it exists.
+if tmux -S "$TMUX_SOCK" has-session -t "$TMUX_SESSION" 2>/dev/null; then
+    echo "Stopping tmux session..."
+    tmux -S "$TMUX_SOCK" kill-session -t "$TMUX_SESSION"
+    STOPPED=true
+fi
+
+# Stop background processes if PID files exist.
+for service in daemon launcher; do
+    PID_FILE="$RUN_DIR/${service}.pid"
+    if [ -f "$PID_FILE" ]; then
+        SERVICE_PID=$(cat "$PID_FILE")
+        if kill -0 "$SERVICE_PID" 2>/dev/null; then
+            echo "Stopping $service (PID $SERVICE_PID)..."
+            kill -TERM "$SERVICE_PID"
+
+            # Wait up to 5 seconds for graceful shutdown.
+            for _ in $(seq 1 10); do
+                if ! kill -0 "$SERVICE_PID" 2>/dev/null; then
+                    break
+                fi
+                sleep 0.5
+            done
+
+            # Force kill if still running.
+            if kill -0 "$SERVICE_PID" 2>/dev/null; then
+                echo "  Force killing $service..."
+                kill -KILL "$SERVICE_PID" 2>/dev/null || true
+            fi
+            STOPPED=true
+        fi
+        rm -f "$PID_FILE"
+    fi
+done
+
+# Clean up stale sockets.
+rm -f "$RUN_DIR/launcher.sock" "$RUN_DIR/observe.sock"
+
+if [ "$STOP_ALL" = true ]; then
+    echo "Stopping dev homeserver..."
+    docker compose -f "$REPO_ROOT/deploy/dev/docker-compose.yaml" \
+        -p bureau-dev down 2>/dev/null || true
+    STOPPED=true
+fi
+
+if [ "$STOPPED" = true ]; then
+    echo "Dev instance stopped."
+else
+    echo "Dev instance was not running."
+fi

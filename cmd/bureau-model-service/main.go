@@ -36,16 +36,6 @@ func run() error {
 	ctx, stop := signal.NotifyContext(context.Background(), syscall.SIGINT, syscall.SIGTERM)
 	defer stop()
 
-	// Load credentials for model provider API keys. The launcher
-	// delivers these as files in a directory, one file per credential
-	// ref. The env var BUREAU_MODEL_CREDENTIALS_DIR points to this
-	// directory.
-	credentials, err := loadCredentials()
-	if err != nil {
-		return err
-	}
-	defer credentials.Close()
-
 	boot, cleanup, err := service.BootstrapViaProxy(ctx, service.ProxyBootstrapConfig{
 		Audience:     "model",
 		Description:  "Model inference gateway — completion, embedding, streaming",
@@ -56,7 +46,12 @@ func run() error {
 	}
 	defer cleanup()
 
-	modelService := newModelService(boot, credentials)
+	// External providers route outbound HTTP through the proxy socket.
+	// The proxy handles credential injection via proxy_services
+	// declarations in the template — the model service never sees API keys.
+	proxySocketPath := os.Getenv("BUREAU_PROXY_SOCKET")
+
+	modelService := newModelService(boot, proxySocketPath)
 	modelService.latencyRouter = NewLatencyRouter(
 		ctx, boot.Clock, boot.Logger,
 		DefaultLatencyConfig(),

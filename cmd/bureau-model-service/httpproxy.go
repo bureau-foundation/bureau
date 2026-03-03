@@ -47,32 +47,58 @@ type httpProxy struct {
 	modelService *ModelService
 	auth         *service.AuthConfig
 	logger       *slog.Logger
-	client       *http.Client
+	client       *http.Client // direct HTTP for unauthenticated providers
+	proxyClient  *http.Client // routes through proxy socket for credential injection
 }
 
 // newHTTPProxy creates an HTTP proxy backed by the model service's
-// registry and credential store. The auth config is shared with the
-// CBOR socket server — both use the same token verification.
+// registry. Outbound requests route through the Bureau proxy socket
+// (when configured) for credential injection. The auth config is
+// shared with the CBOR socket server — both use the same token
+// verification.
 func newHTTPProxy(modelService *ModelService, auth *service.AuthConfig) *httpProxy {
-	transport := &http.Transport{
+	directTransport := &http.Transport{
 		MaxIdleConns:        100,
 		MaxIdleConnsPerHost: 10,
 		IdleConnTimeout:     90 * time.Second,
 		DisableCompression:  false,
 	}
 
+	directClient := &http.Client{
+		Timeout:   0,
+		Transport: directTransport,
+		CheckRedirect: func(request *http.Request, via []*http.Request) error {
+			return http.ErrUseLastResponse
+		},
+	}
+
+	proxyClient := directClient
+	if modelService.proxySocketPath != "" {
+		socketPath := modelService.proxySocketPath
+		proxyTransport := &http.Transport{
+			MaxIdleConns:        100,
+			MaxIdleConnsPerHost: 10,
+			IdleConnTimeout:     90 * time.Second,
+			DisableCompression:  false,
+			DialContext: func(ctx context.Context, _, _ string) (net.Conn, error) {
+				return (&net.Dialer{}).DialContext(ctx, "unix", socketPath)
+			},
+		}
+		proxyClient = &http.Client{
+			Timeout:   0,
+			Transport: proxyTransport,
+			CheckRedirect: func(request *http.Request, via []*http.Request) error {
+				return http.ErrUseLastResponse
+			},
+		}
+	}
+
 	return &httpProxy{
 		modelService: modelService,
 		auth:         auth,
 		logger:       modelService.logger,
-		client: &http.Client{
-			// No overall timeout — SSE streams are long-lived.
-			Timeout:   0,
-			Transport: transport,
-			CheckRedirect: func(request *http.Request, via []*http.Request) error {
-				return http.ErrUseLastResponse
-			},
-		},
+		client:       directClient,
+		proxyClient:  proxyClient,
 	}
 }
 
@@ -187,17 +213,23 @@ func (proxy *httpProxy) ServeHTTP(writer http.ResponseWriter, request *http.Requ
 		return
 	}
 
-	// Look up the API credential.
-	credential := proxy.modelService.lookupCredential(
-		modelregistry.Resolution{Provider: providerConfig},
-		account,
-	)
-
-	// Build the upstream URL.
-	upstreamURL, err := buildUpstreamURL(providerConfig.Endpoint, remainingPath, request.URL.RawQuery)
-	if err != nil {
-		http.Error(writer, fmt.Sprintf("invalid upstream URL: %v", err), http.StatusBadGateway)
-		return
+	// Build the upstream URL. When a proxy socket is configured,
+	// route through the proxy's /http/<provider>/ prefix — the proxy
+	// handles credential injection. Otherwise fall through to the
+	// provider's endpoint directly (dev/test without proxy).
+	var upstreamURL string
+	if proxy.modelService.proxySocketPath != "" && providerConfig.AuthMethod != model.AuthMethodNone {
+		upstreamURL = "http://localhost/http/" + resolvedProvider + remainingPath
+		if request.URL.RawQuery != "" {
+			upstreamURL += "?" + request.URL.RawQuery
+		}
+	} else {
+		var buildError error
+		upstreamURL, buildError = buildUpstreamURL(providerConfig.Endpoint, remainingPath, request.URL.RawQuery)
+		if buildError != nil {
+			http.Error(writer, fmt.Sprintf("invalid upstream URL: %v", buildError), http.StatusBadGateway)
+			return
+		}
 	}
 
 	// Create the upstream request.
@@ -208,23 +240,17 @@ func (proxy *httpProxy) ServeHTTP(writer http.ResponseWriter, request *http.Requ
 	}
 
 	// Copy headers from the original request, skipping hop-by-hop and
-	// the auth header (which we'll replace with the real credential).
-	authHeader := resolveAuthHeader(providerConfig)
+	// auth headers (the proxy injects the real credential).
 	for key, values := range request.Header {
 		if isHopByHopHeader(key) {
 			continue
 		}
-		if strings.EqualFold(key, authHeader) {
+		if strings.EqualFold(key, "Authorization") || strings.EqualFold(key, "x-api-key") {
 			continue
 		}
 		for _, value := range values {
 			upstreamRequest.Header.Add(key, value)
 		}
-	}
-
-	// Inject the real provider credential.
-	if credential != "" {
-		injectCredential(upstreamRequest, providerConfig, credential)
 	}
 
 	// Inject traceparent for distributed tracing.
@@ -239,8 +265,15 @@ func (proxy *httpProxy) ServeHTTP(writer http.ResponseWriter, request *http.Requ
 		"trace_id", traceID.String(),
 	)
 
+	// Select the HTTP client: proxy-routed for authenticated providers,
+	// direct for unauthenticated (local) providers.
+	httpClient := proxy.client
+	if providerConfig.AuthMethod != model.AuthMethodNone {
+		httpClient = proxy.proxyClient
+	}
+
 	// Forward the request.
-	response, err := proxy.client.Do(upstreamRequest)
+	response, err := httpClient.Do(upstreamRequest)
 	if err != nil {
 		proxy.logger.Error("upstream request failed",
 			"provider", resolvedProvider,
@@ -456,19 +489,15 @@ func (proxy *httpProxy) recordUsage(
 // writes the base64-encoded token to the agent's token file; the
 // agent sets it as the SDK API key; the SDK sends it in the auth
 // header; we decode and verify it here.
-func (proxy *httpProxy) extractAndVerifyToken(request *http.Request, providerConfig model.ModelProviderContent) (*servicetoken.Token, error) {
-	authHeader := resolveAuthHeader(providerConfig)
-	headerValue := request.Header.Get(authHeader)
+func (proxy *httpProxy) extractAndVerifyToken(request *http.Request, _ model.ModelProviderContent) (*servicetoken.Token, error) {
+	headerValue := request.Header.Get("Authorization")
 	if headerValue == "" {
-		return nil, fmt.Errorf("missing %s header", authHeader)
+		return nil, fmt.Errorf("missing Authorization header")
 	}
 
-	// Strip "Bearer " prefix if present (Authorization header convention).
-	tokenString := headerValue
-	if strings.EqualFold(authHeader, "Authorization") {
-		tokenString = strings.TrimPrefix(tokenString, "Bearer ")
-		tokenString = strings.TrimPrefix(tokenString, "bearer ")
-	}
+	// Strip "Bearer " prefix (Authorization header convention).
+	tokenString := strings.TrimPrefix(headerValue, "Bearer ")
+	tokenString = strings.TrimPrefix(tokenString, "bearer ")
 
 	// Base64-decode the token.
 	tokenBytes, err := base64.StdEncoding.DecodeString(tokenString)
@@ -543,30 +572,6 @@ func buildUpstreamURL(endpoint, remainingPath, rawQuery string) (string, error) 
 		result += "?" + rawQuery
 	}
 	return result, nil
-}
-
-// --- Credential injection ---
-
-// resolveAuthHeader returns the HTTP header name where the service
-// token is expected and where the real credential will be injected.
-// Defaults to "Authorization" when the provider has no custom config.
-func resolveAuthHeader(providerConfig model.ModelProviderContent) string {
-	if providerConfig.HTTPAuthHeader != "" {
-		return providerConfig.HTTPAuthHeader
-	}
-	return "Authorization"
-}
-
-// injectCredential sets the real API credential on the upstream
-// request. For "Authorization" headers, uses "Bearer <key>" format.
-// For custom headers (e.g., "x-api-key"), sends the raw key.
-func injectCredential(request *http.Request, providerConfig model.ModelProviderContent, credential string) {
-	header := resolveAuthHeader(providerConfig)
-	if strings.EqualFold(header, "Authorization") {
-		request.Header.Set(header, "Bearer "+credential)
-	} else {
-		request.Header.Set(header, credential)
-	}
 }
 
 // --- Model field extraction ---

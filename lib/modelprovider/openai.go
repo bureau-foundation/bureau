@@ -111,9 +111,6 @@ func (provider *OpenAIProvider) Complete(ctx context.Context, request *CompleteR
 	}
 
 	httpRequest.Header.Set("Content-Type", "application/json")
-	if request.Credential != "" {
-		httpRequest.Header.Set("Authorization", "Bearer "+request.Credential)
-	}
 	for key, value := range provider.extraHeaders {
 		httpRequest.Header.Set(key, value)
 	}
@@ -160,9 +157,6 @@ func (provider *OpenAIProvider) Embed(ctx context.Context, request *EmbedRequest
 	}
 
 	httpRequest.Header.Set("Content-Type", "application/json")
-	if request.Credential != "" {
-		httpRequest.Header.Set("Authorization", "Bearer "+request.Credential)
-	}
 	for key, value := range provider.extraHeaders {
 		httpRequest.Header.Set(key, value)
 	}

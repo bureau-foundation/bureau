@@ -61,7 +61,7 @@ func TestLatencyRouterImmediateEmbed(t *testing.T) {
 		context.Background(),
 		model.LatencyImmediate,
 		provider,
-		"test-provider", "test-model", "test-cred",
+		"test-provider", "test-model",
 		[][]byte{[]byte("hello"), []byte("world")},
 		0, true,
 	)
@@ -92,7 +92,7 @@ func TestLatencyRouterBatchEmbed(t *testing.T) {
 	router, fakeClock := newTestRouter(t)
 	provider := echoEmbedProvider()
 
-	batchKey := embedBatchKey{ProviderName: "p", ProviderModel: "m", Credential: "cred"}
+	batchKey := embedBatchKey{ProviderName: "p", ProviderModel: "m"}
 
 	// Submit two batch embed requests concurrently. They should be
 	// merged into a single provider call by the EmbedBatcher.
@@ -106,7 +106,7 @@ func TestLatencyRouterBatchEmbed(t *testing.T) {
 	go func() {
 		result, err := router.SubmitEmbed(
 			context.Background(), model.LatencyBatch,
-			provider, "p", "m", "cred",
+			provider, "p", "m",
 			[][]byte{[]byte("a1"), []byte("a2")},
 			0, true,
 		)
@@ -115,7 +115,7 @@ func TestLatencyRouterBatchEmbed(t *testing.T) {
 	go func() {
 		result, err := router.SubmitEmbed(
 			context.Background(), model.LatencyBatch,
-			provider, "p", "m", "cred",
+			provider, "p", "m",
 			[][]byte{[]byte("b1")},
 			0, true,
 		)
@@ -172,7 +172,7 @@ func TestLatencyRouterBatchDegradesToImmediateWithoutBatchSupport(t *testing.T) 
 		context.Background(),
 		model.LatencyBatch,
 		provider,
-		"p", "m", "cred",
+		"p", "m",
 		[][]byte{[]byte("hello")},
 		0, false, // no batch support
 	)
@@ -199,7 +199,7 @@ func TestLatencyRouterBackgroundDegradesToImmediateWithoutBatchSupport(t *testin
 		context.Background(),
 		model.LatencyBackground,
 		provider,
-		"p", "m", "cred",
+		"p", "m",
 		[][]byte{[]byte("hello")},
 		0, false,
 	)
@@ -231,7 +231,7 @@ func TestLatencyRouterBackgroundEmbedWaitsForIdle(t *testing.T) {
 	go func() {
 		result, err := router.SubmitEmbed(
 			context.Background(), model.LatencyBackground,
-			provider, "p", "m", "cred",
+			provider, "p", "m",
 			[][]byte{[]byte("bg")},
 			0, true,
 		)
@@ -405,7 +405,7 @@ func TestLatencyRouterUnknownPolicy(t *testing.T) {
 		context.Background(),
 		model.LatencyPolicy("turbo"),
 		provider,
-		"p", "m", "cred",
+		"p", "m",
 		[][]byte{[]byte("hello")},
 		0, true,
 	)
@@ -439,7 +439,7 @@ func TestLatencyRouterEmbedProviderError(t *testing.T) {
 		context.Background(),
 		model.LatencyImmediate,
 		provider,
-		"p", "m", "cred",
+		"p", "m",
 		[][]byte{[]byte("hello")},
 		0, true,
 	)

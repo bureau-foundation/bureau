@@ -90,8 +90,8 @@ func NewLatencyRouter(
 // Routing by policy:
 //   - immediate: calls provider.Embed directly, no batching.
 //   - batch: submits to the EmbedBatcher, which merges this request
-//     with other requests for the same (provider, model, credential)
-//     key and makes a single provider call.
+//     with other requests for the same (provider, model) key and makes
+//     a single provider call.
 //   - background: waits for the provider to become idle (no active
 //     immediate/batch requests), then submits through the batcher.
 //
@@ -105,7 +105,6 @@ func (r *LatencyRouter) SubmitEmbed(
 	provider modelprovider.Provider,
 	providerName string,
 	providerModel string,
-	credential string,
 	input [][]byte,
 	maxBatchSize int,
 	batchSupport bool,
@@ -124,16 +123,16 @@ func (r *LatencyRouter) SubmitEmbed(
 
 	switch effectivePolicy {
 	case model.LatencyImmediate:
-		return r.embedDirect(ctx, provider, providerModel, credential, input)
+		return r.embedDirect(ctx, provider, providerModel, input)
 
 	case model.LatencyBatch:
-		return r.embedBatched(ctx, providerName, providerModel, credential, provider, input, maxBatchSize)
+		return r.embedBatched(ctx, providerName, providerModel, provider, input, maxBatchSize)
 
 	case model.LatencyBackground:
 		if err := r.backgroundScheduler.WaitForIdle(ctx, providerName); err != nil {
 			return EmbedBatchResult{}, err
 		}
-		return r.embedBatched(ctx, providerName, providerModel, credential, provider, input, maxBatchSize)
+		return r.embedBatched(ctx, providerName, providerModel, provider, input, maxBatchSize)
 
 	default:
 		return EmbedBatchResult{}, fmt.Errorf("unknown latency policy: %q", policy)
@@ -146,13 +145,11 @@ func (r *LatencyRouter) embedDirect(
 	ctx context.Context,
 	provider modelprovider.Provider,
 	providerModel string,
-	credential string,
 	input [][]byte,
 ) (EmbedBatchResult, error) {
 	result, err := provider.Embed(ctx, &modelprovider.EmbedRequest{
-		Model:      providerModel,
-		Input:      input,
-		Credential: credential,
+		Model: providerModel,
+		Input: input,
 	})
 	if err != nil {
 		return EmbedBatchResult{}, err
@@ -171,7 +168,6 @@ func (r *LatencyRouter) embedBatched(
 	ctx context.Context,
 	providerName string,
 	providerModel string,
-	credential string,
 	provider modelprovider.Provider,
 	input [][]byte,
 	maxBatchSize int,
@@ -179,7 +175,6 @@ func (r *LatencyRouter) embedBatched(
 	key := embedBatchKey{
 		ProviderName:  providerName,
 		ProviderModel: providerModel,
-		Credential:    credential,
 	}
 
 	resultChan := r.embedBatcher.Submit(ctx, key, provider, input, maxBatchSize)

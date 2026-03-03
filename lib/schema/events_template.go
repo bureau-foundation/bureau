@@ -443,6 +443,13 @@ type TemplateProxyService struct {
 	// before forwarding. Use this to prevent agents from injecting
 	// their own authentication headers.
 	StripHeaders []string `json:"strip_headers,omitempty"`
+
+	// AuthScheme is prepended to credential values injected into the
+	// Authorization header. Set to "bearer" for APIs that expect
+	// "Bearer <token>" format. Only affects the Authorization header —
+	// other headers receive the raw credential value regardless of
+	// this setting. Empty means no scheme prefix (raw value).
+	AuthScheme string `json:"auth_scheme,omitempty"`
 }
 
 // OutputCapture configures raw output capture for a principal's

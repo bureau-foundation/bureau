@@ -26,6 +26,7 @@ type HTTPService struct {
 	upstream      *url.URL
 	injectHeaders map[string]string // header name -> credential name
 	stripHeaders  []string          // headers to remove from incoming requests
+	authScheme    string            // prepended to Authorization header values (e.g., "bearer")
 	filter        Filter            // optional path filtering
 	credential    CredentialSource
 	logger        *slog.Logger
@@ -67,6 +68,12 @@ type HTTPServiceConfig struct {
 
 	// StripHeaders lists headers to remove from incoming requests.
 	StripHeaders []string
+
+	// AuthScheme is prepended to credential values injected into the
+	// Authorization header. Set to "bearer" for APIs that expect
+	// "Bearer <token>" format. Only affects the Authorization header;
+	// other headers receive the raw credential value.
+	AuthScheme string
 
 	// Filter validates request paths before forwarding.
 	// If nil, all paths are allowed.
@@ -136,6 +143,7 @@ func NewHTTPService(config HTTPServiceConfig) (*HTTPService, error) {
 		upstream:      upstream,
 		injectHeaders: config.InjectHeaders,
 		stripHeaders:  config.StripHeaders,
+		authScheme:    config.AuthScheme,
 		filter:        config.Filter,
 		credential:    config.Credential,
 		logger:        logger,
@@ -233,11 +241,17 @@ func (s *HTTPService) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		}
 	}
 
-	// Inject credential headers
+	// Inject credential headers. When AuthScheme is set and the header
+	// is Authorization, prepend the scheme (e.g., "Bearer ") to the
+	// credential value. Other headers always get the raw value.
 	credentialCount := len(s.injectHeaders)
 	for headerName, credName := range s.injectHeaders {
 		value := s.credential.Get(credName)
-		upstreamReq.Header.Set(headerName, value.String())
+		headerValue := value.String()
+		if s.authScheme != "" && strings.EqualFold(headerName, "Authorization") {
+			headerValue = s.authScheme + " " + headerValue
+		}
+		upstreamReq.Header.Set(headerName, headerValue)
 	}
 
 	// Inject W3C traceparent header for distributed trace correlation.

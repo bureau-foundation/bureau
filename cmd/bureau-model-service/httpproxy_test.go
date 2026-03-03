@@ -12,8 +12,6 @@ import (
 	"io"
 	"net/http"
 	"net/http/httptest"
-	"os"
-	"path/filepath"
 	"strings"
 	"testing"
 	"time"
@@ -94,77 +92,6 @@ func TestBuildUpstreamURL(t *testing.T) {
 			t.Errorf("buildUpstreamURL(%q, %q, %q) = %q, want %q",
 				test.endpoint, test.remainingPath, test.rawQuery, got, test.want)
 		}
-	}
-}
-
-// --- resolveAuthHeader ---
-
-func TestResolveAuthHeader(t *testing.T) {
-	tests := []struct {
-		name           string
-		httpAuthHeader string
-		want           string
-	}{
-		{"default", "", "Authorization"},
-		{"custom", "x-api-key", "x-api-key"},
-		{"explicit authorization", "Authorization", "Authorization"},
-	}
-
-	for _, test := range tests {
-		t.Run(test.name, func(t *testing.T) {
-			config := model.ModelProviderContent{HTTPAuthHeader: test.httpAuthHeader}
-			got := resolveAuthHeader(config)
-			if got != test.want {
-				t.Errorf("resolveAuthHeader() = %q, want %q", got, test.want)
-			}
-		})
-	}
-}
-
-// --- injectCredential ---
-
-func TestInjectCredential(t *testing.T) {
-	tests := []struct {
-		name           string
-		httpAuthHeader string
-		credential     string
-		wantHeader     string
-		wantValue      string
-	}{
-		{
-			"default bearer",
-			"",
-			"sk-test-key",
-			"Authorization",
-			"Bearer sk-test-key",
-		},
-		{
-			"explicit authorization",
-			"Authorization",
-			"sk-test-key",
-			"Authorization",
-			"Bearer sk-test-key",
-		},
-		{
-			"anthropic x-api-key",
-			"x-api-key",
-			"sk-ant-test",
-			"X-Api-Key", // Go canonicalizes header names
-			"sk-ant-test",
-		},
-	}
-
-	for _, test := range tests {
-		t.Run(test.name, func(t *testing.T) {
-			request, _ := http.NewRequest("POST", "http://example.com", nil)
-			config := model.ModelProviderContent{HTTPAuthHeader: test.httpAuthHeader}
-			injectCredential(request, config, test.credential)
-
-			got := request.Header.Get(test.wantHeader)
-			if got != test.wantValue {
-				t.Errorf("header %q = %q, want %q", test.wantHeader, got, test.wantValue)
-			}
-		})
 	}
 }
 
@@ -378,13 +305,12 @@ func TestUsageScanner_NoUsage(t *testing.T) {
 // functions for HTTP proxy testing. No real Matrix or homeserver
 // needed — we populate the registry directly.
 type testFixture struct {
-	modelService  *ModelService
-	authConfig    *service.AuthConfig
-	proxy         *httpProxy
-	publicKey     ed25519.PublicKey
-	privateKey    ed25519.PrivateKey
-	fakeClock     *clock.FakeClock
-	credentialDir string
+	modelService *ModelService
+	authConfig   *service.AuthConfig
+	proxy        *httpProxy
+	publicKey    ed25519.PublicKey
+	privateKey   ed25519.PrivateKey
+	fakeClock    *clock.FakeClock
 }
 
 func newTestFixture(t *testing.T) *testFixture {
@@ -411,18 +337,6 @@ func newTestFixture(t *testing.T) *testFixture {
 
 	logger := service.NewLogger()
 
-	// Create a temp directory for test credentials. Tests write
-	// credential files here and call loadTestCredentials.
-	credentialDir := t.TempDir()
-
-	// Start with an empty credential store.
-	t.Setenv("BUREAU_MODEL_CREDENTIALS_DIR", credentialDir)
-	credentials, err := loadCredentials()
-	if err != nil {
-		t.Fatalf("loading empty credential store: %v", err)
-	}
-	t.Cleanup(func() { credentials.Close() })
-
 	ms := &ModelService{
 		clock:        fakeClock,
 		service:      serviceRef,
@@ -430,43 +344,19 @@ func newTestFixture(t *testing.T) *testFixture {
 		logger:       logger,
 		registry:     modelregistry.New(logger),
 		quotaTracker: modelregistry.NewQuotaTracker(fakeClock),
-		credentials:  credentials,
 		providers:    make(map[string]modelprovider.Provider),
 	}
 
 	proxy := newHTTPProxy(ms, authConfig)
 
 	return &testFixture{
-		modelService:  ms,
-		authConfig:    authConfig,
-		proxy:         proxy,
-		publicKey:     publicKey,
-		privateKey:    privateKey,
-		fakeClock:     fakeClock,
-		credentialDir: credentialDir,
+		modelService: ms,
+		authConfig:   authConfig,
+		proxy:        proxy,
+		publicKey:    publicKey,
+		privateKey:   privateKey,
+		fakeClock:    fakeClock,
 	}
-}
-
-// setCredential writes a credential file and reloads the credential
-// store. Must be called before the first request that needs this
-// credential.
-func (fixture *testFixture) setCredential(t *testing.T, name, value string) {
-	t.Helper()
-
-	if err := os.WriteFile(filepath.Join(fixture.credentialDir, name), []byte(value), 0600); err != nil {
-		t.Fatalf("writing test credential %q: %v", name, err)
-	}
-
-	// Reload the credential store to pick up the new file.
-	t.Setenv("BUREAU_MODEL_CREDENTIALS_DIR", fixture.credentialDir)
-	newCredentials, err := loadCredentials()
-	if err != nil {
-		t.Fatalf("reloading credentials: %v", err)
-	}
-	// Close the old store and replace.
-	fixture.modelService.credentials.Close()
-	fixture.modelService.credentials = newCredentials
-	t.Cleanup(func() { newCredentials.Close() })
 }
 
 func (fixture *testFixture) mintToken(t *testing.T, project string) string {
@@ -589,10 +479,10 @@ func TestHTTPProxy_ForwardsToUpstream(t *testing.T) {
 
 	// Start a fake upstream server.
 	upstream := httptest.NewServer(http.HandlerFunc(func(writer http.ResponseWriter, request *http.Request) {
-		// Verify the credential was injected.
-		authHeader := request.Header.Get("Authorization")
-		if authHeader != "Bearer real-api-key" {
-			t.Errorf("upstream Authorization = %q, want %q", authHeader, "Bearer real-api-key")
+		// Auth headers are stripped — the proxy handles credential
+		// injection, not the model service.
+		if auth := request.Header.Get("Authorization"); auth != "" {
+			t.Errorf("upstream Authorization should be empty (stripped by model service), got %q", auth)
 		}
 
 		// Verify the path was forwarded correctly.
@@ -646,8 +536,6 @@ func TestHTTPProxy_ForwardsToUpstream(t *testing.T) {
 	})
 
 	// Set up the credential.
-	fixture.setCredential(t, "openai-key", "real-api-key")
-
 	// Make the request.
 	requestBody := `{"model":"codex","messages":[{"role":"user","content":"Hi"}]}`
 	request := httptest.NewRequest("POST", "/openai/v1/chat/completions",
@@ -710,7 +598,6 @@ func TestHTTPProxy_SSEStreaming(t *testing.T) {
 		CredentialRef: "openai-key",
 		Projects:      []string{"*"},
 	})
-	fixture.setCredential(t, "openai-key", "real-key")
 
 	requestBody := `{"model":"fast","messages":[{"role":"user","content":"Hi"}],"stream":true}`
 	request := httptest.NewRequest("POST", "/openai/v1/chat/completions",
@@ -738,16 +625,14 @@ func TestHTTPProxy_SSEStreaming(t *testing.T) {
 func TestHTTPProxy_AnthropicAuthHeader(t *testing.T) {
 	fixture := newTestFixture(t)
 
-	// Start a fake upstream that checks for the x-api-key header.
+	// Start a fake upstream. Auth headers are stripped by the model
+	// service — the proxy handles credential injection.
 	upstream := httptest.NewServer(http.HandlerFunc(func(writer http.ResponseWriter, request *http.Request) {
-		apiKey := request.Header.Get("x-api-key")
-		if apiKey != "real-anthropic-key" {
-			t.Errorf("upstream x-api-key = %q, want %q", apiKey, "real-anthropic-key")
-		}
-
-		// Should not have an Authorization header (stripped from incoming).
 		if auth := request.Header.Get("Authorization"); auth != "" {
 			t.Errorf("upstream Authorization should be empty, got %q", auth)
+		}
+		if apiKey := request.Header.Get("x-api-key"); apiKey != "" {
+			t.Errorf("upstream x-api-key should be empty, got %q", apiKey)
 		}
 
 		writer.Header().Set("Content-Type", "application/json")
@@ -773,13 +658,11 @@ func TestHTTPProxy_AnthropicAuthHeader(t *testing.T) {
 		CredentialRef: "anthropic-key",
 		Projects:      []string{"*"},
 	})
-	fixture.setCredential(t, "anthropic-key", "real-anthropic-key")
 
 	requestBody := `{"model":"claude","messages":[{"role":"user","content":"Hi"}]}`
 	request := httptest.NewRequest("POST", "/anthropic/v1/messages",
 		strings.NewReader(requestBody))
-	// Anthropic SDK sends the token in x-api-key, not Authorization.
-	request.Header.Set("x-api-key", fixture.mintToken(t, "my-project"))
+	request.Header.Set("Authorization", "Bearer "+fixture.mintToken(t, "my-project"))
 	request.Header.Set("Content-Type", "application/json")
 	recorder := httptest.NewRecorder()
 
@@ -817,7 +700,6 @@ func TestHTTPProxy_QuotaExceeded(t *testing.T) {
 		Projects:      []string{"*"},
 		Quota:         &model.Quota{DailyMicrodollars: 100},
 	})
-	fixture.setCredential(t, "openai-key", "real-key")
 
 	// Exhaust the quota.
 	fixture.modelService.quotaTracker.Record("openai-limited", 200)
@@ -873,7 +755,6 @@ func TestHTTPProxy_NoModelField_DirectForward(t *testing.T) {
 		CredentialRef: "openai-key",
 		Projects:      []string{"*"},
 	})
-	fixture.setCredential(t, "openai-key", "real-key")
 
 	request := httptest.NewRequest("GET", "/openai/v1/models", nil)
 	request.Header.Set("Authorization", "Bearer "+fixture.mintToken(t, "my-project"))
@@ -907,7 +788,6 @@ func TestHTTPProxy_QueryStringForwarded(t *testing.T) {
 		CredentialRef: "openai-key",
 		Projects:      []string{"*"},
 	})
-	fixture.setCredential(t, "openai-key", "real-key")
 
 	request := httptest.NewRequest("GET", "/openai/v1/models?page=2&limit=10", nil)
 	request.Header.Set("Authorization", "Bearer "+fixture.mintToken(t, "my-project"))
@@ -944,7 +824,6 @@ func TestHTTPProxy_GrantDenied_WrongAction(t *testing.T) {
 		CredentialRef: "openai-key",
 		Projects:      []string{"*"},
 	})
-	fixture.setCredential(t, "openai-key", "real-key")
 
 	// Token only grants model/embed, not model/complete.
 	tokenString := fixture.mintTokenWithGrants(t, "my-project",
@@ -989,7 +868,6 @@ func TestHTTPProxy_GrantDenied_WrongModel(t *testing.T) {
 		CredentialRef: "openai-key",
 		Projects:      []string{"*"},
 	})
-	fixture.setCredential(t, "openai-key", "real-key")
 
 	// Token grants model/complete but only for "codex" target.
 	tokenString := fixture.mintTokenWithGrants(t, "my-project",
@@ -1038,7 +916,6 @@ func TestHTTPProxy_GrantAllowed_TargetedGrant(t *testing.T) {
 		CredentialRef: "openai-key",
 		Projects:      []string{"*"},
 	})
-	fixture.setCredential(t, "openai-key", "real-key")
 
 	// Token grants model/complete only for "codex".
 	tokenString := fixture.mintTokenWithGrants(t, "my-project",

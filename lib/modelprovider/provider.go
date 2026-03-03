@@ -48,9 +48,9 @@ type Provider interface {
 }
 
 // CompleteRequest carries the parameters for a chat completion.
-// The model service resolves the alias and selects the credential
-// before constructing this request — the provider only sees the
-// backend-specific model name and the credential to use.
+// The model service resolves the alias and routes the request to the
+// appropriate provider. Credential injection is handled by the proxy
+// (for external providers) or skipped (for local inference).
 type CompleteRequest struct {
 	// Model is the backend-specific model identifier (e.g.,
 	// "openai/gpt-4.1" for OpenRouter, "nomic-embed-text-v1.5"
@@ -65,11 +65,6 @@ type CompleteRequest struct {
 	// by a ResponseDone. When false, a single ResponseDone contains
 	// the complete response.
 	Stream bool
-
-	// Credential is the API key or bearer token for authentication.
-	// Empty for providers with AuthMethodNone (local inference).
-	// The model service selects this from the project's account.
-	Credential string
 }
 
 // EmbedRequest carries the parameters for an embedding request.
@@ -80,9 +75,6 @@ type EmbedRequest struct {
 	// Input is the list of texts to embed. Each element is raw bytes
 	// (typically UTF-8 text).
 	Input [][]byte
-
-	// Credential is the API key for authentication (empty for local).
-	Credential string
 }
 
 // EmbedResult is the successful result of an embedding request.

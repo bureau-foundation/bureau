@@ -81,8 +81,7 @@ func TestComplete_NonStreaming(t *testing.T) {
 			{Role: "system", Content: "You are a code reviewer."},
 			{Role: "user", Content: "Review this function."},
 		},
-		Stream:     false,
-		Credential: "sk-test-key",
+		Stream: false,
 	})
 	if err != nil {
 		t.Fatalf("Complete: %v", err)
@@ -323,74 +322,6 @@ func TestEmbed(t *testing.T) {
 	}
 	if result.Usage.InputTokens != 24 {
 		t.Errorf("InputTokens = %d, want 24", result.Usage.InputTokens)
-	}
-}
-
-// --- Credential injection ---
-
-func TestComplete_BearerTokenInjected(t *testing.T) {
-	var capturedAuth string
-
-	_, provider := openaiServer(t, func(writer http.ResponseWriter, request *http.Request) {
-		capturedAuth = request.Header.Get("Authorization")
-
-		response := openaiChatResponse{
-			Model: "gpt-4.1",
-			Choices: []openaiChoice{
-				{Message: &openaiChoiceMessage{Content: "ok"}, FinishReason: stringPointer("stop")},
-			},
-		}
-		writer.Header().Set("Content-Type", "application/json")
-		json.NewEncoder(writer).Encode(response)
-	})
-
-	stream, err := provider.Complete(context.Background(), &CompleteRequest{
-		Model:      "gpt-4.1",
-		Messages:   []model.Message{{Role: "user", Content: "test"}},
-		Credential: "sk-my-secret-key",
-	})
-	if err != nil {
-		t.Fatalf("Complete: %v", err)
-	}
-	defer stream.Close()
-
-	// Drain the stream.
-	for stream.Next() {
-	}
-
-	if capturedAuth != "Bearer sk-my-secret-key" {
-		t.Errorf("Authorization = %q, want %q", capturedAuth, "Bearer sk-my-secret-key")
-	}
-}
-
-func TestComplete_NoCredentialNoAuthHeader(t *testing.T) {
-	var hasAuth bool
-
-	_, provider := openaiServer(t, func(writer http.ResponseWriter, request *http.Request) {
-		hasAuth = request.Header.Get("Authorization") != ""
-
-		response := openaiChatResponse{
-			Model:   "local-model",
-			Choices: []openaiChoice{{Message: &openaiChoiceMessage{Content: "ok"}, FinishReason: stringPointer("stop")}},
-		}
-		writer.Header().Set("Content-Type", "application/json")
-		json.NewEncoder(writer).Encode(response)
-	})
-
-	stream, err := provider.Complete(context.Background(), &CompleteRequest{
-		Model:    "local-model",
-		Messages: []model.Message{{Role: "user", Content: "test"}},
-		// No credential — local provider.
-	})
-	if err != nil {
-		t.Fatalf("Complete: %v", err)
-	}
-	defer stream.Close()
-	for stream.Next() {
-	}
-
-	if hasAuth {
-		t.Error("Authorization header should not be present for local providers")
 	}
 }
 

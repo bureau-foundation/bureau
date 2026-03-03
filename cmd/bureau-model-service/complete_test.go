@@ -232,20 +232,11 @@ func newTestModelService(t *testing.T) *ModelService {
 	logger := slog.Default()
 	fakeClock := clock.Real()
 
-	credentialDir := t.TempDir()
-	t.Setenv("BUREAU_MODEL_CREDENTIALS_DIR", credentialDir)
-	credentials, err := loadCredentials()
-	if err != nil {
-		t.Fatalf("loading credentials: %v", err)
-	}
-	t.Cleanup(func() { credentials.Close() })
-
 	ms := &ModelService{
 		clock:        fakeClock,
 		logger:       logger,
 		registry:     modelregistry.New(logger),
 		quotaTracker: modelregistry.NewQuotaTracker(fakeClock),
-		credentials:  credentials,
 		providers:    make(map[string]modelprovider.Provider),
 		latencyRouter: NewLatencyRouter(context.Background(), fakeClock, logger, LatencyConfig{
 			FlushDelay:          50 * time.Millisecond,

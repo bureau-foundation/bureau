@@ -116,6 +116,11 @@ func run() error {
 		return fmt.Errorf("failed to create server: %w", err)
 	}
 
+	// Share the credential source with the handler so HTTP services
+	// registered dynamically via the admin API (proxy_services from
+	// templates) can inject credentials from the principal's bundle.
+	server.SetCredential(credentialSource)
+
 	// Register services from config.
 	for name, serviceConfig := range config.Services {
 		if name == "matrix" {

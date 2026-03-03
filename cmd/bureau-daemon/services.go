@@ -386,6 +386,7 @@ func (d *Daemon) registerExternalProxyService(ctx context.Context, consumer ref.
 		UpstreamURL:   service.Upstream,
 		InjectHeaders: service.InjectHeaders,
 		StripHeaders:  service.StripHeaders,
+		AuthScheme:    service.AuthScheme,
 	})
 	if err != nil {
 		return fmt.Errorf("marshaling registration request: %w", err)
@@ -454,6 +455,11 @@ type adminServiceRegistration struct {
 	// StripHeaders lists HTTP headers to remove from incoming requests
 	// before forwarding to the upstream.
 	StripHeaders []string `json:"strip_headers,omitempty"`
+
+	// AuthScheme is prepended to credential values injected into the
+	// Authorization header (e.g., "Bearer"). Only affects the Authorization
+	// header; other injected headers receive raw credential values.
+	AuthScheme string `json:"auth_scheme,omitempty"`
 }
 
 // registerProxyRoute registers a single service on a single consumer's proxy

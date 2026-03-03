@@ -122,6 +122,13 @@ func NewServer(config ServerConfig) (*Server, error) {
 	return server, nil
 }
 
+// SetCredential sets the credential source for the server. HTTP services
+// registered via the admin API inherit this source for credential injection.
+// Must be called before the admin socket starts accepting connections.
+func (s *Server) SetCredential(credential CredentialSource) {
+	s.handler.SetCredential(credential)
+}
+
 // RegisterService registers a CLI service that can be proxied.
 func (s *Server) RegisterService(name string, service Service) {
 	s.handler.RegisterService(name, service)

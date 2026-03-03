@@ -98,7 +98,6 @@ func TestEmbedBatcherFlushOnTimer(t *testing.T) {
 	key := embedBatchKey{
 		ProviderName:  "test-provider",
 		ProviderModel: "test-model",
-		Credential:    "test-cred",
 	}
 
 	// Submit one request with 2 inputs.
@@ -168,7 +167,6 @@ func TestEmbedBatcherFlushOnMaxSize(t *testing.T) {
 	key := embedBatchKey{
 		ProviderName:  "test-provider",
 		ProviderModel: "test-model",
-		Credential:    "test-cred",
 	}
 
 	// Submit 3 requests — should trigger immediate flush.
@@ -231,7 +229,6 @@ func TestEmbedBatcherMergesInputs(t *testing.T) {
 	key := embedBatchKey{
 		ProviderName:  "test-provider",
 		ProviderModel: "test-model",
-		Credential:    "test-cred",
 	}
 
 	// Request A: 2 inputs.
@@ -337,13 +334,13 @@ func TestEmbedBatcherDifferentKeys(t *testing.T) {
 	batcher := NewEmbedBatcher(ctx, fakeClock, logger, 50*time.Millisecond, 64)
 	defer batcher.Close()
 
-	keyA := embedBatchKey{ProviderName: "p", ProviderModel: "m", Credential: "credA"}
-	keyB := embedBatchKey{ProviderName: "p", ProviderModel: "m", Credential: "credB"}
+	keyA := embedBatchKey{ProviderName: "p", ProviderModel: "model-a"}
+	keyB := embedBatchKey{ProviderName: "p", ProviderModel: "model-b"}
 
 	chanA := batcher.Submit(ctx, keyA, provider, [][]byte{[]byte("a")}, 0)
 	chanB := batcher.Submit(ctx, keyB, provider, [][]byte{[]byte("b")}, 0)
 
-	// Two separate timers — one per key.
+	// Two separate timers — one per batch key.
 	fakeClock.WaitForTimers(2)
 	fakeClock.Advance(50 * time.Millisecond)
 
@@ -359,7 +356,7 @@ func TestEmbedBatcherDifferentKeys(t *testing.T) {
 		t.Fatalf("B error: %v", resultB.Error)
 	}
 
-	// Two separate provider calls (different credentials).
+	// Two separate provider calls (different models).
 	if provider.EmbedCallCount() != 2 {
 		t.Fatalf("expected 2 embed calls, got %d", provider.EmbedCallCount())
 	}
@@ -395,7 +392,7 @@ func TestEmbedBatcherContextCancellation(t *testing.T) {
 	batcher := NewEmbedBatcher(serverCtx, fakeClock, logger, 50*time.Millisecond, 64)
 	defer batcher.Close()
 
-	key := embedBatchKey{ProviderName: "p", ProviderModel: "m", Credential: "c"}
+	key := embedBatchKey{ProviderName: "p", ProviderModel: "m"}
 
 	// Request A: live context.
 	ctxA := context.Background()
@@ -459,7 +456,7 @@ func TestEmbedBatcherAllCancelled(t *testing.T) {
 	batcher := NewEmbedBatcher(serverCtx, fakeClock, logger, 50*time.Millisecond, 64)
 	defer batcher.Close()
 
-	key := embedBatchKey{ProviderName: "p", ProviderModel: "m", Credential: "c"}
+	key := embedBatchKey{ProviderName: "p", ProviderModel: "m"}
 
 	ctx, cancel := context.WithCancel(context.Background())
 	chanA := batcher.Submit(ctx, key, provider, [][]byte{[]byte("a")}, 0)
@@ -502,7 +499,7 @@ func TestEmbedBatcherProviderError(t *testing.T) {
 	batcher := NewEmbedBatcher(ctx, fakeClock, logger, 50*time.Millisecond, 64)
 	defer batcher.Close()
 
-	key := embedBatchKey{ProviderName: "p", ProviderModel: "m", Credential: "c"}
+	key := embedBatchKey{ProviderName: "p", ProviderModel: "m"}
 
 	chanA := batcher.Submit(ctx, key, provider, [][]byte{[]byte("a")}, 0)
 	chanB := batcher.Submit(ctx, key, provider, [][]byte{[]byte("b")}, 0)
@@ -542,7 +539,7 @@ func TestEmbedBatcherClose(t *testing.T) {
 
 	batcher := NewEmbedBatcher(ctx, fakeClock, logger, 50*time.Millisecond, 64)
 
-	key := embedBatchKey{ProviderName: "p", ProviderModel: "m", Credential: "c"}
+	key := embedBatchKey{ProviderName: "p", ProviderModel: "m"}
 	chanA := batcher.Submit(ctx, key, provider, [][]byte{[]byte("a")}, 0)
 
 	// Close flushes pending batches.

@@ -258,17 +258,6 @@ func (ms *ModelService) indexAccount(stateKey string, content map[string]any) {
 		return
 	}
 
-	// Validate that the credential exists if the provider requires
-	// authentication. Missing credentials are logged as warnings, not
-	// errors — the account is still indexed so that /sync configuration
-	// is visible, but requests will fail at runtime with a clear error.
-	if typed.CredentialRef != "" && ms.credentials.Get(typed.CredentialRef) == "" {
-		ms.logger.Warn("account references missing credential",
-			"account", stateKey,
-			"credential_ref", typed.CredentialRef,
-		)
-	}
-
 	ms.registry.SetAccount(stateKey, typed)
 	ms.logger.Info("account indexed",
 		"account", stateKey,

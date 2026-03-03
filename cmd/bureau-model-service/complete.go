@@ -169,14 +169,12 @@ func (ms *ModelService) handleComplete(ctx context.Context, token *servicetoken.
 			continue
 		}
 
-		credential := ms.lookupCredential(candidate, candidateAccount)
 		provider := ms.getOrCreateProvider(candidate.ProviderName, candidate.Provider)
 
 		attemptStream, attemptErr := provider.Complete(ctx, &modelprovider.CompleteRequest{
-			Model:      candidate.ProviderModel,
-			Messages:   providerMessages,
-			Stream:     request.Stream,
-			Credential: credential,
+			Model:    candidate.ProviderModel,
+			Messages: providerMessages,
+			Stream:   request.Stream,
 		})
 
 		if attemptErr == nil {
@@ -353,20 +351,6 @@ func isRetriableProviderError(err error) bool {
 	}
 
 	return false
-}
-
-// lookupCredential returns the API key for the given account. Returns
-// an empty string if no credential is needed (local providers) or if
-// the credential is missing (which will cause a provider-side auth
-// failure with a clear error).
-func (ms *ModelService) lookupCredential(resolution modelregistry.Resolution, account modelregistry.AccountSelection) string {
-	if resolution.Provider.AuthMethod == model.AuthMethodNone {
-		return ""
-	}
-	if account.CredentialRef == "" {
-		return ""
-	}
-	return ms.credentials.Get(account.CredentialRef)
 }
 
 // emitUsageTelemetry records a telemetry span for a completed model

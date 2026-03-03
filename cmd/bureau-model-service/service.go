@@ -5,6 +5,7 @@ package main
 
 import (
 	"log/slog"
+	"strings"
 	"sync"
 
 	"github.com/bureau-foundation/bureau/lib/clock"
@@ -43,11 +44,11 @@ type ModelService struct {
 	// window. Thread-safe (internal Mutex).
 	quotaTracker *modelregistry.QuotaTracker
 
-	// credentials maps credential_ref names (from ModelAccountContent)
-	// to API key values. Read-only after construction — the launcher
-	// delivers credentials at startup and they don't change until
-	// restart.
-	credentials *credentialStore
+	// proxySocketPath is the path to the proxy's Unix socket. External
+	// HTTP providers route outbound requests through the proxy, which
+	// handles credential injection via proxy_services declarations.
+	// Read from BUREAU_PROXY_SOCKET at startup.
+	proxySocketPath string
 
 	// continuations stores conversation history for multi-turn
 	// completion requests. Keyed by (agent, continuation_id). Entries
@@ -74,21 +75,20 @@ type ModelService struct {
 	providers   map[string]modelprovider.Provider
 }
 
-// newModelService creates a ModelService from the bootstrap result and
-// credential store.
-func newModelService(boot *service.BootstrapResult, credentials *credentialStore) *ModelService {
+// newModelService creates a ModelService from the bootstrap result.
+func newModelService(boot *service.BootstrapResult, proxySocketPath string) *ModelService {
 	return &ModelService{
-		session:       boot.Session,
-		clock:         boot.Clock,
-		service:       boot.Service,
-		machine:       boot.Machine,
-		telemetry:     boot.Telemetry,
-		logger:        boot.Logger,
-		registry:      modelregistry.New(boot.Logger),
-		quotaTracker:  modelregistry.NewQuotaTracker(boot.Clock),
-		credentials:   credentials,
-		continuations: newContinuationStore(defaultContinuationTTL, boot.Clock),
-		providers:     make(map[string]modelprovider.Provider),
+		session:         boot.Session,
+		clock:           boot.Clock,
+		service:         boot.Service,
+		machine:         boot.Machine,
+		telemetry:       boot.Telemetry,
+		logger:          boot.Logger,
+		registry:        modelregistry.New(boot.Logger),
+		quotaTracker:    modelregistry.NewQuotaTracker(boot.Clock),
+		proxySocketPath: proxySocketPath,
+		continuations:   newContinuationStore(defaultContinuationTTL, boot.Clock),
+		providers:       make(map[string]modelprovider.Provider),
 	}
 }
 
@@ -103,8 +103,12 @@ func (ms *ModelService) registerActions(server *service.SocketServer) {
 
 // getOrCreateProvider returns a provider for the given name and
 // configuration. Creates one on first access. The provider is reused
-// for all requests to the same endpoint — only the credential changes
-// per-request.
+// for all requests to the same endpoint.
+//
+// External HTTP providers (https:// endpoints) route through the proxy
+// socket. The proxy handles credential injection via proxy_services
+// declarations — the model service never sees API keys. Local providers
+// (unix:// endpoints) connect directly to their service socket.
 func (ms *ModelService) getOrCreateProvider(providerName string, config model.ModelProviderContent) modelprovider.Provider {
 	ms.providersMu.Lock()
 	defer ms.providersMu.Unlock()
@@ -113,15 +117,22 @@ func (ms *ModelService) getOrCreateProvider(providerName string, config model.Mo
 		return existing
 	}
 
-	// Determine if this is a Unix socket endpoint. Unix socket URIs
-	// use the "unix://" scheme prefix.
 	var options modelprovider.OpenAIOptions
 	endpoint := config.Endpoint
+
 	if len(endpoint) > 7 && endpoint[:7] == "unix://" {
+		// Local providers (llama.cpp, vLLM): direct Unix socket
+		// connection without credential injection.
 		options.UnixSocket = endpoint[7:]
-		// Local providers use http://localhost as the base URL — the
-		// actual routing is via the Unix socket dialer.
 		endpoint = "http://localhost/v1"
+	} else if ms.proxySocketPath != "" && config.AuthMethod != model.AuthMethodNone {
+		// Authenticated external providers: route through the proxy
+		// socket. The proxy's /http/<provider-name>/ prefix identifies
+		// which registered service to forward to. The proxy strips the
+		// prefix and forwards to the upstream URL (declared in the
+		// template's proxy_services) with credential injection.
+		options.UnixSocket = ms.proxySocketPath
+		endpoint = "http://localhost/http/" + providerName + "/v1"
 	}
 
 	provider := modelprovider.NewOpenAI(endpoint, options)
@@ -130,6 +141,7 @@ func (ms *ModelService) getOrCreateProvider(providerName string, config model.Mo
 	ms.logger.Info("provider initialized",
 		"provider", providerName,
 		"endpoint", config.Endpoint,
+		"proxy_routed", ms.proxySocketPath != "" && !strings.HasPrefix(config.Endpoint, "unix://"),
 	)
 
 	return provider

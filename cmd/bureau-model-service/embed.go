@@ -86,7 +86,6 @@ func (ms *ModelService) handleEmbed(ctx context.Context, token *servicetoken.Tok
 			continue
 		}
 
-		credential := ms.lookupCredential(candidate, candidateAccount)
 		provider := ms.getOrCreateProvider(candidate.ProviderName, candidate.Provider)
 
 		// Use the requested latency policy for the primary, immediate
@@ -98,7 +97,7 @@ func (ms *ModelService) handleEmbed(ctx context.Context, token *servicetoken.Tok
 
 		result, attemptErr := ms.latencyRouter.SubmitEmbed(
 			ctx, attemptPolicy, provider,
-			candidate.ProviderName, candidate.ProviderModel, credential,
+			candidate.ProviderName, candidate.ProviderModel,
 			request.Input,
 			candidate.Provider.MaxBatchSize,
 			candidate.Provider.BatchSupport,

@@ -48,6 +48,11 @@ type Handler struct {
 	identity     *IdentityInfo           // agent identity, nil if not set
 	grants       []schema.Grant          // pre-resolved grants from daemon, nil = default-deny
 
+	// credential is the proxy's credential source. Shared with HTTP
+	// services registered via the admin API so they can inject credentials
+	// from the principal's credential bundle into outbound requests.
+	credential CredentialSource
+
 	// serviceDirectory is the cached service directory pushed by the
 	// daemon. Agents query this via GET /v1/services to discover what
 	// services are available. The daemon pushes updates via the admin
@@ -110,6 +115,16 @@ func NewHandler(logger *slog.Logger) *Handler {
 		httpServices: make(map[string]*HTTPService),
 		logger:       logger,
 	}
+}
+
+// SetCredential configures the credential source for the handler. HTTP
+// services registered via the admin API inherit this source so they can
+// inject credentials from the principal's credential bundle into outbound
+// requests. Must be called before any admin service registrations.
+func (h *Handler) SetCredential(credential CredentialSource) {
+	h.mu.Lock()
+	defer h.mu.Unlock()
+	h.credential = credential
 }
 
 // SetTelemetry configures telemetry instrumentation for the handler and
@@ -627,6 +642,10 @@ type AdminServiceRequest struct {
 
 	// StripHeaders lists headers to remove from incoming requests.
 	StripHeaders []string `json:"strip_headers,omitempty"`
+
+	// AuthScheme is prepended to credential values injected into the
+	// Authorization header (e.g., "Bearer"). Other headers receive raw values.
+	AuthScheme string `json:"auth_scheme,omitempty"`
 }
 
 // AdminServiceInfo is returned by GET /v1/admin/services and
@@ -677,6 +696,8 @@ func (h *Handler) HandleAdminRegisterService(w http.ResponseWriter, r *http.Requ
 		UpstreamUnix:  req.UpstreamUnix,
 		InjectHeaders: req.InjectHeaders,
 		StripHeaders:  req.StripHeaders,
+		AuthScheme:    req.AuthScheme,
+		Credential:    h.credential,
 		Logger:        h.logger,
 	})
 	if err != nil {

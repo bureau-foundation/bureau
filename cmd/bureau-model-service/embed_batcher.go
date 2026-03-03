@@ -16,12 +16,10 @@ import (
 )
 
 // embedBatchKey groups embed requests that can be merged into a single
-// provider API call. The credential is part of the key because all
-// requests in a merged batch share one Authorization header.
+// provider API call.
 type embedBatchKey struct {
 	ProviderName  string
 	ProviderModel string
-	Credential    string
 }
 
 // EmbedBatchResult is the per-caller result delivered after a batch
@@ -49,7 +47,7 @@ type EmbedBatchResult struct {
 
 // EmbedBatcher accumulates embedding requests and flushes them as
 // merged provider API calls. Requests are grouped by
-// (providerName, providerModel, credential) — the batch key. A batch
+// (providerName, providerModel) — the batch key. A batch
 // flushes when it reaches the provider's MaxBatchSize or when the
 // flush timer fires (whichever comes first).
 //
@@ -88,10 +86,9 @@ type pendingEmbedBatch struct {
 	provider   modelprovider.Provider
 	maxSize    int
 
-	// providerModel and credential are carried from the batch key
-	// for constructing the EmbedRequest during flush.
+	// providerModel is carried from the batch key for constructing
+	// the EmbedRequest during flush.
 	providerModel string
-	credential    string
 }
 
 // embedBatchEntry is one caller's contribution to a batch.
@@ -158,7 +155,6 @@ func (b *EmbedBatcher) Submit(
 			provider:      provider,
 			maxSize:       effectiveMax,
 			providerModel: key.ProviderModel,
-			credential:    key.Credential,
 		}
 		batch.flushTimer = b.clock.AfterFunc(b.flushDelay, func() {
 			go b.flushBatch(key)
@@ -248,9 +244,8 @@ func (b *EmbedBatcher) doFlush(batch *pendingEmbedBatch) {
 
 	// Call the provider with merged inputs.
 	result, err := batch.provider.Embed(b.serverCtx, &modelprovider.EmbedRequest{
-		Model:      batch.providerModel,
-		Input:      mergedInput,
-		Credential: batch.credential,
+		Model: batch.providerModel,
+		Input: mergedInput,
 	})
 
 	if err != nil {

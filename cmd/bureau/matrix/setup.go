@@ -621,6 +621,25 @@ func baseTemplates() []namedTemplate {
 				EnvironmentVariables: map[string]string{
 					"BUREAU_MODEL_HTTP_SOCKET": "/run/bureau/listen/http.sock",
 				},
+				ProxyServices: map[string]schema.TemplateProxyService{
+					"anthropic": {
+						Upstream:      "https://api.anthropic.com",
+						InjectHeaders: map[string]string{"x-api-key": "ANTHROPIC_API_KEY"},
+						StripHeaders:  []string{"x-api-key", "authorization"},
+					},
+					"openrouter": {
+						Upstream:      "https://openrouter.ai/api",
+						InjectHeaders: map[string]string{"Authorization": "OPENROUTER_API_KEY"},
+						StripHeaders:  []string{"authorization"},
+						AuthScheme:    "Bearer",
+					},
+					"openai": {
+						Upstream:      "https://api.openai.com",
+						InjectHeaders: map[string]string{"Authorization": "OPENAI_API_KEY"},
+						StripHeaders:  []string{"authorization"},
+						AuthScheme:    "Bearer",
+					},
+				},
 			},
 		},
 	}

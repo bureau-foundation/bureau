@@ -202,12 +202,12 @@ func runDeployLocal(ctx context.Context, params deployLocalParams, logger *slog.
 }
 
 // firstBootNeeded returns true if the launcher has not yet completed
-// first boot. The launcher generates a keypair on first boot and
-// stores it in the state directory; its absence means first boot
-// hasn't run.
+// first boot. The launcher generates an age keypair on first boot and
+// stores the public key at machine-key.pub in the state directory;
+// its absence means first boot hasn't run.
 func firstBootNeeded(stateDir string) bool {
-	keypairPath := filepath.Join(stateDir, "keypair.json")
-	return !fileExists(keypairPath)
+	publicKeyPath := filepath.Join(stateDir, "machine-key.pub")
+	return !fileExists(publicKeyPath)
 }
 
 // runFirstBoot executes the launcher in first-boot-only mode as the

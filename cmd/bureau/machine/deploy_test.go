@@ -10,36 +10,36 @@ import (
 	"testing"
 )
 
-func TestFirstBootNeeded_NoKeypair(t *testing.T) {
+func TestFirstBootNeeded_NoPublicKey(t *testing.T) {
 	stateDir := t.TempDir()
 	if !firstBootNeeded(stateDir) {
-		t.Error("firstBootNeeded should return true when keypair.json does not exist")
+		t.Error("firstBootNeeded should return true when machine-key.pub does not exist")
 	}
 }
 
-func TestFirstBootNeeded_KeypairExists(t *testing.T) {
+func TestFirstBootNeeded_PublicKeyExists(t *testing.T) {
 	stateDir := t.TempDir()
-	keypairPath := filepath.Join(stateDir, "keypair.json")
-	if err := os.WriteFile(keypairPath, []byte(`{"public":"abc"}`), 0600); err != nil {
-		t.Fatalf("write keypair: %v", err)
+	publicKeyPath := filepath.Join(stateDir, "machine-key.pub")
+	if err := os.WriteFile(publicKeyPath, []byte("age1..."), 0600); err != nil {
+		t.Fatalf("write public key: %v", err)
 	}
 
 	if firstBootNeeded(stateDir) {
-		t.Error("firstBootNeeded should return false when keypair.json exists")
+		t.Error("firstBootNeeded should return false when machine-key.pub exists")
 	}
 }
 
-func TestFirstBootNeeded_KeypairIsDirectory(t *testing.T) {
-	// Edge case: something created a directory named keypair.json.
+func TestFirstBootNeeded_PublicKeyIsDirectory(t *testing.T) {
+	// Edge case: something created a directory named machine-key.pub.
 	// firstBootNeeded should treat this as not-a-file and return true.
 	stateDir := t.TempDir()
-	keypairPath := filepath.Join(stateDir, "keypair.json")
-	if err := os.Mkdir(keypairPath, 0700); err != nil {
+	publicKeyPath := filepath.Join(stateDir, "machine-key.pub")
+	if err := os.Mkdir(publicKeyPath, 0700); err != nil {
 		t.Fatalf("mkdir: %v", err)
 	}
 
 	if !firstBootNeeded(stateDir) {
-		t.Error("firstBootNeeded should return true when keypair.json is a directory, not a file")
+		t.Error("firstBootNeeded should return true when machine-key.pub is a directory, not a file")
 	}
 }
 

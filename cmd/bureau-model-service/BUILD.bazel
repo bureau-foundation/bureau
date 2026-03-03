@@ -55,6 +55,7 @@ go_test(
     srcs = [
         "auth_test.go",
         "background_test.go",
+        "complete_test.go",
         "completion_gate_test.go",
         "continuation_test.go",
         "cost_test.go",

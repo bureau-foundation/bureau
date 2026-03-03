@@ -250,6 +250,40 @@ func TestModelAliasContent_Validate(t *testing.T) {
 			},
 			wantErr: true,
 		},
+		{
+			name: "valid with fallbacks",
+			content: ModelAliasContent{
+				Provider:      "openrouter",
+				ProviderModel: "openai/gpt-4.1",
+				Pricing:       Pricing{InputPerMtokMicrodollars: 2000},
+				Fallbacks: []ModelAliasFallback{
+					{Provider: "anthropic", ProviderModel: "claude-sonnet-4-6"},
+					{Provider: "local", ProviderModel: "qwen3-32b"},
+				},
+			},
+		},
+		{
+			name: "fallback with empty provider",
+			content: ModelAliasContent{
+				Provider:      "openrouter",
+				ProviderModel: "openai/gpt-4.1",
+				Fallbacks: []ModelAliasFallback{
+					{ProviderModel: "claude-sonnet-4-6"},
+				},
+			},
+			wantErr: true,
+		},
+		{
+			name: "fallback with empty provider_model",
+			content: ModelAliasContent{
+				Provider:      "openrouter",
+				ProviderModel: "openai/gpt-4.1",
+				Fallbacks: []ModelAliasFallback{
+					{Provider: "anthropic"},
+				},
+			},
+			wantErr: true,
+		},
 	}
 
 	for _, tt := range tests {

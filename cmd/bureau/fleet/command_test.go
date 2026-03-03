@@ -19,6 +19,7 @@ func TestFleetCommandHasSubcommands(t *testing.T) {
 	}
 
 	expectedSubcommands := map[string]bool{
+		"setup":  false,
 		"create": false,
 		"enable": false,
 		"config": false,
@@ -339,6 +340,45 @@ func TestCreateRequiresFleetLocalpart(t *testing.T) {
 	for _, test := range tests {
 		t.Run(test.name, func(t *testing.T) {
 			command := createCommand()
+			err := command.Execute(test.args)
+			if err == nil {
+				t.Fatal("expected error, got nil")
+			}
+			if err.Error() != test.wantErr {
+				t.Errorf("error: got %q, want %q", err.Error(), test.wantErr)
+			}
+		})
+	}
+}
+
+// TestSetupRequiresArgs verifies the setup command validates required
+// arguments: fleet localpart (positional), --host, and --credential-file.
+func TestSetupRequiresArgs(t *testing.T) {
+	tests := []struct {
+		name    string
+		args    []string
+		wantErr string
+	}{
+		{
+			name:    "no arguments",
+			args:    nil,
+			wantErr: "fleet localpart is required (e.g., bureau/fleet/prod)",
+		},
+		{
+			name:    "too many arguments",
+			args:    []string{"bureau/fleet/prod", "bureau/fleet/staging"},
+			wantErr: "expected exactly one argument (fleet localpart), got 2",
+		},
+		{
+			name:    "missing host",
+			args:    []string{"bureau/fleet/prod"},
+			wantErr: "--host is required (machine name within the fleet, e.g., workstation)",
+		},
+	}
+
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			command := setupCommand()
 			err := command.Execute(test.args)
 			if err == nil {
 				t.Fatal("expected error, got nil")

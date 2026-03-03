@@ -20,6 +20,7 @@ import (
 	"github.com/bureau-foundation/bureau/lib/principal"
 	"github.com/bureau-foundation/bureau/lib/ref"
 	"github.com/bureau-foundation/bureau/lib/schema"
+	fleetschema "github.com/bureau-foundation/bureau/lib/schema/fleet"
 	"github.com/bureau-foundation/bureau/lib/secret"
 	"github.com/bureau-foundation/bureau/lib/servicetoken"
 	"github.com/bureau-foundation/bureau/lib/templatedef"
@@ -1142,6 +1143,13 @@ type serviceDeployOptions struct {
 	// template. When non-nil, the daemon starts a health monitor that
 	// probes the service at the configured interval and type.
 	HealthCheck *schema.HealthCheck
+
+	// FleetRegister publishes a FleetServiceContent state event to the
+	// fleet config room after deployment. This matches the production
+	// service create command's default behavior: the service becomes
+	// visible to the fleet controller for tracking, status reporting,
+	// and future re-placement.
+	FleetRegister bool
 }
 
 // serviceDeployResult holds the result of deployService: entity reference,
@@ -1333,6 +1341,22 @@ func deployService(
 	})
 	if err != nil {
 		t.Fatalf("create service %q: %v", options.Localpart, err)
+	}
+
+	// Register the service with the fleet controller by publishing a
+	// FleetServiceContent state event. This matches the production
+	// service create command's default behavior (opt-in in the test
+	// helper since most tests don't need fleet controller interaction).
+	if options.FleetRegister {
+		publishFleetService(t, admin, fleet.FleetRoomID, options.Localpart, fleetschema.FleetServiceContent{
+			Template: templateRef.String(),
+			Replicas: fleetschema.ReplicaSpec{Min: 1, Max: 1},
+			Failover: fleetschema.FailoverNone,
+			Priority: 50,
+			Placement: fleetschema.PlacementConstraints{
+				PreferredMachines: []string{machine.Name},
+			},
+		})
 	}
 
 	// Invite the service to any extra rooms the caller specified.

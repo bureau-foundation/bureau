@@ -14,6 +14,7 @@ import (
 	"time"
 
 	"github.com/bureau-foundation/bureau/cmd/bureau/cli"
+	fleetcmd "github.com/bureau-foundation/bureau/cmd/bureau/fleet"
 	"github.com/bureau-foundation/bureau/lib/bootstrap"
 	"github.com/bureau-foundation/bureau/lib/ref"
 	"github.com/bureau-foundation/bureau/lib/schema"
@@ -413,6 +414,19 @@ func Provision(ctx context.Context, client *messaging.Client, adminSession *mess
 	devTeamAlias := schema.DevTeamRoomAlias(fleet.Namespace())
 	if _, err := adminSession.SendStateEvent(ctx, configRoomID, schema.EventTypeDevTeam, "", schema.DevTeamContent{Room: devTeamAlias}); err != nil {
 		return nil, cli.Transient("publish dev team metadata on config room: %w", err)
+	}
+
+	// Publish the fleet controller service binding so the machine can
+	// discover the fleet controller immediately when its daemon starts.
+	// This is unconditional: even if the fleet controller doesn't exist
+	// yet, the binding is harmless (it points at a service identity that
+	// will exist when fleet enable/setup runs). The daemon resolves the
+	// binding via the service directory — if the fleet controller isn't
+	// running, resolution returns nothing and the daemon operates without
+	// fleet services. The binding pre-positions the machine so it is
+	// fleet-ready from first boot.
+	if err := fleetcmd.PublishFleetBindingToRoom(ctx, adminSession, configRoomID, fleet, logger); err != nil {
+		return nil, cli.Transient("publish fleet binding to config room: %w", err)
 	}
 
 	// Build the bootstrap config. The MachineName and FleetPrefix fields

@@ -13,6 +13,7 @@ go_library(
         "doc.go",
         "enable.go",
         "response.go",
+        "setup.go",
         "status.go",
     ],
     importpath = "github.com/bureau-foundation/bureau/cmd/bureau/fleet",

@@ -14,20 +14,21 @@ func Command() *cli.Command {
 
 A fleet is an infrastructure isolation boundary within a namespace.
 Each fleet has its own machines, services, and fleet controller.
-Use "bureau fleet create" to create the fleet rooms, then
-"bureau fleet enable" to bootstrap a fleet controller on a machine.
+Use "bureau fleet setup" to create the fleet rooms and deploy the
+fleet controller in one step, or use "bureau fleet create" and
+"bureau fleet enable" separately for staged provisioning.
 
 Service-related operations (list, show, plan, place, unplace) live
 under "bureau service". Machine-related operations (list, show) live
-under "bureau machine". Both command groups automatically enrich
-output with fleet controller data when a fleet controller is
-reachable.
+under "bureau machine". Both command groups require a fleet controller
+connection for enrichment data.
 
 The "status" command connects to the fleet controller's Unix socket
-for aggregate health. Operator commands (create, enable, config) use
-direct Matrix access via --credential-file.`,
+for aggregate health. Operator commands (setup, create, enable, config)
+use direct Matrix access via --credential-file.`,
 		Subcommands: []*cli.Command{
 			// Operator commands.
+			setupCommand(),
 			createCommand(),
 			enableCommand(),
 			configCommand(),
@@ -37,16 +38,16 @@ direct Matrix access via --credential-file.`,
 		},
 		Examples: []cli.Example{
 			{
-				Description: "Create a production fleet",
-				Command:     "bureau fleet create bureau/fleet/prod --credential-file ./creds",
+				Description: "Set up a fleet (create rooms + deploy controller)",
+				Command:     "bureau fleet setup bureau/fleet/prod --host workstation --credential-file ./creds",
 			},
 			{
 				Description: "Check fleet controller status",
 				Command:     "bureau fleet status",
 			},
 			{
-				Description: "Bootstrap the fleet controller on a machine",
-				Command:     "bureau fleet enable bureau/fleet/prod --host workstation --credential-file ./creds",
+				Description: "Create fleet rooms without deploying a controller",
+				Command:     "bureau fleet create bureau/fleet/prod --credential-file ./creds",
 			},
 		},
 	}

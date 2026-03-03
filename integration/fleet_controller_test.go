@@ -182,6 +182,19 @@ func publishFleetService(t *testing.T, admin *messaging.DirectSession, fleetRoom
 	}
 }
 
+// clearFleetService publishes empty content for a FleetServiceContent state
+// event, removing the service from the fleet controller's tracking map.
+// This matches the production clearFleetRegistration() behavior in
+// cmd/bureau/service/destroy.go.
+func clearFleetService(t *testing.T, admin *messaging.DirectSession, fleetRoomID ref.RoomID, serviceLocalpart string) {
+	t.Helper()
+
+	_, err := admin.SendStateEvent(t.Context(), fleetRoomID, schema.EventTypeFleetService, serviceLocalpart, struct{}{})
+	if err != nil {
+		t.Fatalf("clear fleet service %s: %v", serviceLocalpart, err)
+	}
+}
+
 // grantFleetControllerConfigAccess invites a fleet controller to a machine's
 // config room and grants it PL 50 so it can read/write MachineConfig for
 // placement.
@@ -1455,4 +1468,136 @@ func TestFleetPresenceDetection(t *testing.T) {
 	}
 
 	t.Log("fleet controller: presence offline, health escalated to suspect")
+}
+
+// TestServiceFleetRegistration verifies the full fleet registration lifecycle:
+// deploying a service with FleetRegister publishes a FleetServiceContent state
+// event that the fleet controller discovers, and clearing the registration
+// removes it from the fleet controller's tracking.
+//
+// This exercises the production code paths added by the fleet ergonomics work:
+//   - registerServiceWithFleet (cmd/bureau/service/create.go)
+//   - clearFleetRegistration (cmd/bureau/service/destroy.go)
+//
+// The test uses the integration test's deployService helper with
+// FleetRegister:true, which publishes the same FleetServiceContent that the
+// production CLI publishes.
+func TestServiceFleetRegistration(t *testing.T) {
+	t.Parallel()
+
+	admin := adminSession(t)
+	defer admin.Close()
+
+	fleet := createTestFleet(t, admin)
+
+	machine := newTestMachine(t, fleet, "fleet-reg")
+	startMachine(t, admin, machine, machineOptions{
+		LauncherBinary: resolvedBinary(t, "LAUNCHER_BINARY"),
+		DaemonBinary:   resolvedBinary(t, "DAEMON_BINARY"),
+		ProxyBinary:    resolvedBinary(t, "PROXY_BINARY"),
+		Fleet:          fleet,
+	})
+
+	// Start the fleet controller. Set up a fleet room watch BEFORE
+	// starting so we can synchronize on discovery notifications.
+	controllerName := "service/fleet/reg"
+	fleetWatch := watchRoom(t, admin, fleet.FleetRoomID)
+	fc := startFleetController(t, admin, machine, controllerName, fleet)
+	waitForFleetConfigRoom(t, &fleetWatch, fc, machine.Name)
+
+	operatorToken := mintFleetToken(t, fleet, machine, []string{fleetschema.ActionAll})
+	authClient := fleetClient(t, fc, operatorToken)
+
+	ctx := t.Context()
+
+	// Phase 1: Deploy a service with fleet registration.
+	// Set up the fleet watch BEFORE deploying so we capture the
+	// discovery notification.
+	serviceFleetWatch := watchRoom(t, admin, fleet.FleetRoomID)
+
+	svc := deployService(t, admin, fleet, machine, serviceDeployOptions{
+		Binary:        resolvedBinary(t, "TEST_SERVICE_BINARY"),
+		Name:          "fleet-reg-svc",
+		Localpart:     "service/test/fleet-reg",
+		FleetRegister: true,
+	})
+	_ = svc // service socket not needed for this test
+
+	// Wait for the fleet controller to discover the service definition.
+	waitForFleetService(t, &serviceFleetWatch, fc, "service/test/fleet-reg")
+
+	// Phase 2: Verify the fleet controller has the correct service fields.
+	var listResponse fleetListServicesResponse
+	if err := authClient.Call(ctx, "list-services", nil, &listResponse); err != nil {
+		t.Fatalf("list-services after registration: %v", err)
+	}
+
+	var found bool
+	for _, service := range listResponse.Services {
+		if service.Localpart == "service/test/fleet-reg" {
+			found = true
+			if service.Replicas != 1 {
+				t.Errorf("service replicas = %d, want 1", service.Replicas)
+			}
+			if service.Failover != string(fleetschema.FailoverNone) {
+				t.Errorf("service failover = %q, want %q", service.Failover, fleetschema.FailoverNone)
+			}
+			if service.Priority != 50 {
+				t.Errorf("service priority = %d, want 50", service.Priority)
+			}
+			break
+		}
+	}
+	if !found {
+		t.Fatalf("service %q not found in list-services after registration", "service/test/fleet-reg")
+	}
+
+	// Verify show-service returns the full definition with placement.
+	var showResponse fleetShowServiceResponse
+	if err := authClient.Call(ctx, "show-service",
+		map[string]any{"service": "service/test/fleet-reg"}, &showResponse); err != nil {
+		t.Fatalf("show-service: %v", err)
+	}
+	if showResponse.Definition == nil {
+		t.Fatal("show-service definition is nil")
+	}
+	if len(showResponse.Definition.Placement.PreferredMachines) == 0 {
+		t.Error("show-service placement preferred_machines is empty, want machine name")
+	} else if showResponse.Definition.Placement.PreferredMachines[0] != machine.Name {
+		t.Errorf("preferred_machines[0] = %q, want %q",
+			showResponse.Definition.Placement.PreferredMachines[0], machine.Name)
+	}
+
+	// Phase 3: Clear fleet registration (matches service destroy behavior).
+	// The fleet controller does not emit a removal notification, so use a
+	// sentinel service to synchronize: publish a second fleet service
+	// definition after the clear. Since the fleet controller's /sync
+	// processes events in order, when the sentinel's discovery
+	// notification arrives, the clear has already been processed.
+	sentinelWatch := watchRoom(t, admin, fleet.FleetRoomID)
+
+	clearFleetService(t, admin, fleet.FleetRoomID, "service/test/fleet-reg")
+	publishFleetService(t, admin, fleet.FleetRoomID, "service/test/fleet-reg-sentinel", fleetschema.FleetServiceContent{
+		Template: "bureau/template:sentinel",
+		Replicas: fleetschema.ReplicaSpec{Min: 0},
+	})
+
+	waitForFleetService(t, &sentinelWatch, fc, "service/test/fleet-reg-sentinel")
+
+	// Phase 4: Verify the original service is gone from the fleet model.
+	var afterListResponse fleetListServicesResponse
+	if err := authClient.Call(ctx, "list-services", nil, &afterListResponse); err != nil {
+		t.Fatalf("list-services after clear: %v", err)
+	}
+
+	for _, service := range afterListResponse.Services {
+		if service.Localpart == "service/test/fleet-reg" {
+			t.Fatalf("service %q still present in fleet controller after clearing registration", "service/test/fleet-reg")
+		}
+	}
+
+	// Clean up sentinel.
+	clearFleetService(t, admin, fleet.FleetRoomID, "service/test/fleet-reg-sentinel")
+
+	t.Log("fleet registration lifecycle: registered, verified, cleared, verified removal")
 }

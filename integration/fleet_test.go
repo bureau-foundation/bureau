@@ -111,6 +111,31 @@ func TestMachineJoinsFleet(t *testing.T) {
 		t.Errorf("machine power level = %d (present=%v), want 50", level, ok)
 	}
 
+	// Verify fleet service binding from provisioning. Provision()
+	// publishes an m.bureau.service_binding with state key "fleet" so the
+	// machine can discover the fleet controller immediately when its daemon
+	// starts, even before any fleet controller is deployed. No fleet
+	// controller is running in this test — the binding comes purely from
+	// machine.Provision() calling fleet.PublishFleetBindingToRoom().
+	bindingJSON, err := admin.GetStateEvent(ctx, machine.ConfigRoomID,
+		schema.EventTypeServiceBinding, "fleet")
+	if err != nil {
+		t.Fatalf("get fleet service binding from config room: %v", err)
+	}
+	var binding schema.ServiceBindingContent
+	if err := json.Unmarshal(bindingJSON, &binding); err != nil {
+		t.Fatalf("unmarshal fleet service binding: %v", err)
+	}
+	if binding.Principal.IsZero() {
+		t.Fatal("fleet service binding principal is zero")
+	}
+	// The binding should reference the fleet controller identity:
+	// service/fleet within the test fleet.
+	if accountLocalpart := binding.Principal.AccountLocalpart(); accountLocalpart != "service/fleet" {
+		t.Errorf("fleet binding principal account localpart = %q, want %q",
+			accountLocalpart, "service/fleet")
+	}
+
 	// Verify dev team metadata on fleet rooms and config room.
 	// EnsureFleetRooms publishes m.bureau.dev_team on all three fleet
 	// rooms, and machine.Provision publishes it on the config room.

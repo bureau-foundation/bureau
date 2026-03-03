@@ -158,10 +158,38 @@ func runEnable(ctx context.Context, logger *slog.Logger, fleetLocalpart string, 
 		return cli.Validation("%v", err)
 	}
 
-	// Resolve the machine within the fleet.
-	machine, err := resolveHostMachine(fleet, params.Host, logger)
+	result, err := EnableFleetController(ctx, logger, fleet, params.Host, adminSession, homeserverURL, client, registrationTokenBuffer)
 	if err != nil {
 		return err
+	}
+
+	if done, emitErr := params.EmitJSON(result); done {
+		return emitErr
+	}
+
+	logger.Info("fleet controller enabled",
+		"service", result.Service.Localpart(),
+		"service_user_id", result.Service.UserID(),
+		"machine_user_id", result.Machine.UserID(),
+		"bindings", result.BindingCount,
+	)
+
+	return nil
+}
+
+// EnableFleetController deploys the fleet controller on a machine within a
+// fleet. It registers the service account, provisions encrypted credentials,
+// publishes the MachineConfig assignment, and publishes service bindings to
+// all machine config rooms so agents with RequiredServices: ["fleet"] can
+// discover the fleet controller.
+//
+// The caller provides a pre-connected admin session and messaging client.
+// This function does not manage session lifecycle or credential file reading.
+func EnableFleetController(ctx context.Context, logger *slog.Logger, fleet ref.Fleet, host string, adminSession messaging.Session, homeserverURL string, client *messaging.Client, registrationToken *secret.Buffer) (*enableResult, error) {
+	// Resolve the machine within the fleet.
+	machine, err := resolveHostMachine(fleet, host, logger)
+	if err != nil {
+		return nil, err
 	}
 	logger = logger.With("machine", machine.Localpart())
 
@@ -169,7 +197,7 @@ func runEnable(ctx context.Context, logger *slog.Logger, fleetLocalpart string, 
 	// fleet.
 	serviceRef, err := ref.NewService(fleet, "fleet")
 	if err != nil {
-		return cli.Internal("constructing fleet controller service ref: %w", err)
+		return nil, cli.Internal("constructing fleet controller service ref: %w", err)
 	}
 
 	// Resolve the fleet machine room for credential provisioning.
@@ -177,10 +205,10 @@ func runEnable(ctx context.Context, logger *slog.Logger, fleetLocalpart string, 
 	machineRoomID, err := adminSession.ResolveAlias(ctx, machineRoomAlias)
 	if err != nil {
 		if messaging.IsMatrixError(err, messaging.ErrCodeNotFound) {
-			return cli.NotFound("fleet machine room %s not found", machineRoomAlias).
+			return nil, cli.NotFound("fleet machine room %s not found", machineRoomAlias).
 				WithHint("Has the fleet been created? Run 'bureau fleet create' first.")
 		}
-		return cli.Transient("resolving fleet machine room %s: %w", machineRoomAlias, err)
+		return nil, cli.Transient("resolving fleet machine room %s: %w", machineRoomAlias, err)
 	}
 
 	// The fleet-controller template is published by "bureau matrix
@@ -213,10 +241,10 @@ func runEnable(ctx context.Context, logger *slog.Logger, fleetLocalpart string, 
 		},
 	}
 
-	createResult, err := principal.Create(ctx, client, adminSession, registrationTokenBuffer, credential.AsProvisionFunc(), createParams)
+	createResult, err := principal.Create(ctx, client, adminSession, registrationToken, credential.AsProvisionFunc(), createParams)
 	if err != nil {
 		if !messaging.IsMatrixError(err, messaging.ErrCodeUserInUse) {
-			return cli.Internal("deploying fleet controller: %w", err)
+			return nil, cli.Internal("deploying fleet controller: %w", err)
 		}
 
 		// The fleet controller account already exists. This is
@@ -233,15 +261,15 @@ func runEnable(ctx context.Context, logger *slog.Logger, fleetLocalpart string, 
 		configRoomID, resolveErr := adminSession.ResolveAlias(ctx, machine.RoomAlias())
 		if resolveErr != nil {
 			if messaging.IsMatrixError(resolveErr, messaging.ErrCodeNotFound) {
-				return cli.NotFound("machine config room %s not found", machine.RoomAlias()).
+				return nil, cli.NotFound("machine config room %s not found", machine.RoomAlias()).
 					WithHint("The machine may not have been registered yet. Run 'bureau machine list' to see available machines.")
 			}
-			return cli.Transient("resolving machine config room %s: %w", machine.RoomAlias(), resolveErr)
+			return nil, cli.Transient("resolving machine config room %s: %w", machine.RoomAlias(), resolveErr)
 		}
 
 		configEventID, assignErr := principal.AssignPrincipals(ctx, adminSession, configRoomID, []principal.CreateParams{createParams})
 		if assignErr != nil {
-			return cli.Internal("ensuring fleet controller assignment: %w", assignErr)
+			return nil, cli.Internal("ensuring fleet controller assignment: %w", assignErr)
 		}
 
 		createResult = &principal.CreateResult{
@@ -264,30 +292,16 @@ func runEnable(ctx context.Context, logger *slog.Logger, fleetLocalpart string, 
 	// with required_services: ["fleet"] can discover it.
 	bindingCount, err := publishFleetBindings(ctx, adminSession, fleet, serviceRef, logger)
 	if err != nil {
-		return cli.Internal("publishing fleet bindings: %w", err)
+		return nil, cli.Internal("publishing fleet bindings: %w", err)
 	}
 
-	result := enableResult{
+	return &enableResult{
 		Service:       serviceRef,
 		Machine:       machine,
 		BindingCount:  bindingCount,
 		ConfigRoomID:  createResult.ConfigRoomID,
 		ConfigEventID: createResult.ConfigEventID,
-	}
-
-	if done, emitErr := params.EmitJSON(result); done {
-		return emitErr
-	}
-
-	logger.Info("fleet controller enabled",
-		"service", serviceRef.Localpart(),
-		"service_user_id", serviceRef.UserID(),
-		"machine_user_id", machine.UserID(),
-		"template", templateRef,
-		"bindings", bindingCount,
-	)
-
-	return nil
+	}, nil
 }
 
 // resolveHostMachine constructs a Machine ref from the fleet and host flag.
@@ -340,6 +354,26 @@ func extractMachineName(localpart string) (string, error) {
 		return "", fmt.Errorf("expected machine entity, got %q in localpart %q", entityType, localpart)
 	}
 	return entityName, nil
+}
+
+// PublishFleetBindingToRoom publishes the fleet controller's service binding
+// to a single machine's config room. This is the single-room equivalent of
+// publishFleetBindings, used when provisioning a new machine into a fleet
+// that may already have a fleet controller. The binding is unconditional:
+// even if the fleet controller does not exist yet, the binding pre-positions
+// the machine for fleet readiness.
+func PublishFleetBindingToRoom(ctx context.Context, session messaging.Session, configRoomID ref.RoomID, fleet ref.Fleet, logger *slog.Logger) error {
+	serviceRef, err := ref.NewService(fleet, "fleet")
+	if err != nil {
+		return fmt.Errorf("constructing fleet service ref: %w", err)
+	}
+	binding := schema.ServiceBindingContent{Principal: serviceRef.Entity()}
+	_, err = session.SendStateEvent(ctx, configRoomID, schema.EventTypeServiceBinding, "fleet", binding)
+	if err != nil {
+		return fmt.Errorf("publishing fleet binding: %w", err)
+	}
+	logger.Info("published fleet binding to config room", "config_room", configRoomID.String())
+	return nil
 }
 
 // publishFleetBindings publishes an m.bureau.service_binding state event with

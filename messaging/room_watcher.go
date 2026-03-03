@@ -8,6 +8,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"log/slog"
+	"time"
 
 	"github.com/bureau-foundation/bureau/lib/ref"
 )
@@ -162,6 +163,9 @@ func (w *RoomWatcher) WaitForEvent(ctx context.Context, predicate func(Event) bo
 		}
 	}
 
+	var totalSyncs, emptySyncs, wrongRoomSyncs int
+	startTime := time.Now()
+
 	for {
 		// On retry after a sync error, use a short server-side
 		// timeout (1s) so the HTTP round-trip itself provides
@@ -171,6 +175,7 @@ func (w *RoomWatcher) WaitForEvent(ctx context.Context, predicate func(Event) bo
 		if syncRetries > 0 {
 			syncTimeout = retryTimeout
 		}
+		totalSyncs++
 		response, err := w.session.Sync(ctx, SyncOptions{
 			Since:      w.nextBatch,
 			SetTimeout: true,
@@ -179,7 +184,8 @@ func (w *RoomWatcher) WaitForEvent(ctx context.Context, predicate func(Event) bo
 		})
 		if err != nil {
 			if ctx.Err() != nil {
-				return Event{}, fmt.Errorf("context cancelled waiting for event in room %s: %w", w.roomID, ctx.Err())
+				return Event{}, fmt.Errorf("context cancelled waiting for event in room %s (syncs: %d total, %d wrong_room, %d empty, elapsed %s): %w",
+					w.roomID, totalSyncs, wrongRoomSyncs, emptySyncs, time.Since(startTime).Round(time.Millisecond), ctx.Err())
 			}
 			syncRetries++
 			// TCP-level errors (connection reset, EOF) often indicate
@@ -205,17 +211,14 @@ func (w *RoomWatcher) WaitForEvent(ctx context.Context, predicate func(Event) bo
 
 		joined, ok := response.Rooms.Join[w.roomID]
 		if !ok {
-			// The server returned events for other rooms but not the
-			// watched room. This happens frequently when the user is
-			// in many active rooms: /sync returns as soon as ANY room
-			// has activity, but the filter only includes this room's
-			// data. No new events to scan — continue polling.
+			wrongRoomSyncs++
 			continue
 		}
 
 		stateCount := len(joined.State.Events)
 		timelineCount := len(joined.Timeline.Events)
 		if stateCount == 0 && timelineCount == 0 {
+			emptySyncs++
 			continue
 		}
 
@@ -235,6 +238,14 @@ func (w *RoomWatcher) WaitForEvent(ctx context.Context, predicate func(Event) bo
 		for i, event := range w.pending {
 			if predicate(event) {
 				w.pending = append(w.pending[:i], w.pending[i+1:]...)
+				slog.Debug("room watcher found event",
+					"room_id", w.roomID,
+					"event_type", event.Type,
+					"syncs_total", totalSyncs,
+					"syncs_wrong_room", wrongRoomSyncs,
+					"syncs_empty", emptySyncs,
+					"elapsed", time.Since(startTime).Round(time.Millisecond),
+				)
 				return event, nil
 			}
 		}

@@ -12,6 +12,7 @@ import (
 	"github.com/bureau-foundation/bureau/lib/principal"
 	"github.com/bureau-foundation/bureau/lib/ref"
 	"github.com/bureau-foundation/bureau/lib/schema"
+	"github.com/bureau-foundation/bureau/messaging"
 )
 
 type serviceDestroyParams struct {
@@ -29,6 +30,7 @@ type serviceDestroyResult struct {
 	ConfigRoomID  ref.RoomID  `json:"config_room_id"`
 	ConfigEventID ref.EventID `json:"config_event_id"`
 	Purged        bool        `json:"purged"`
+	FleetCleared  bool        `json:"fleet_cleared"`
 }
 
 func destroyCommand() *cli.Command {
@@ -129,12 +131,19 @@ func runDestroy(ctx context.Context, localpart string, logger *slog.Logger, para
 		}
 	}
 
+	// Clear the FleetServiceContent definition so the fleet controller
+	// stops tracking this service. Publishing empty content causes the
+	// fleet controller to remove the service from its map. Best-effort:
+	// the primary operation (assignment removal) already succeeded.
+	fleetCleared := clearFleetRegistration(ctx, session, location.Machine.Fleet(), localpart, logger)
+
 	if done, err := params.EmitJSON(serviceDestroyResult{
 		Localpart:     localpart,
 		MachineName:   location.Machine.Localpart(),
 		ConfigRoomID:  location.ConfigRoomID,
 		ConfigEventID: destroyResult.ConfigEventID,
 		Purged:        purged,
+		FleetCleared:  fleetCleared,
 	}); done {
 		return err
 	}
@@ -144,7 +153,34 @@ func runDestroy(ctx context.Context, localpart string, logger *slog.Logger, para
 		"machine", location.Machine.Localpart(),
 		"config_event", destroyResult.ConfigEventID,
 		"purged", purged,
+		"fleet_cleared", fleetCleared,
 	)
 
 	return nil
+}
+
+// clearFleetRegistration removes the FleetServiceContent state event for a
+// service from the fleet config room. This is best-effort: if the fleet room
+// cannot be resolved or the publish fails, a warning is logged but the
+// destroy operation is not failed (the assignment is already removed).
+func clearFleetRegistration(ctx context.Context, session messaging.Session, fleet ref.Fleet, accountLocalpart string, logger *slog.Logger) bool {
+	fleetRoomID, err := session.ResolveAlias(ctx, fleet.RoomAlias())
+	if err != nil {
+		logger.Warn("cannot resolve fleet room to clear service definition",
+			"fleet", fleet.Localpart(), "error", err)
+		return false
+	}
+
+	// Publishing empty content (struct{}{}) causes the fleet controller
+	// to delete the service from its tracking map.
+	_, err = session.SendStateEvent(ctx, fleetRoomID, schema.EventTypeFleetService, accountLocalpart, struct{}{})
+	if err != nil {
+		logger.Warn("failed to clear fleet service definition",
+			"fleet_room", fleetRoomID, "state_key", accountLocalpart, "error", err)
+		return false
+	}
+
+	logger.Info("cleared fleet service definition",
+		"fleet_room", fleetRoomID, "state_key", accountLocalpart)
+	return true
 }

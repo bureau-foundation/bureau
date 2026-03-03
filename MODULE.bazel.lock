@@ -210,6 +210,22 @@
   },
   "selectedYankedVersions": {},
   "moduleExtensions": {
+    "//build:nix_env.bzl%nix_env": {
+      "general": {
+        "bzlTransitiveDigest": "cpC8dcgqRrGGWbcfg5nRnq8ImbbH+KIOgSAw44PsmBw=",
+        "usagesDigest": "zGUZaJKCKJkMGVuzRfPiL7yAEZfoXHXlpuXIQHtOa6c=",
+        "recordedInputs": [],
+        "generatedRepoSpecs": {
+          "integration_test_env": {
+            "repoRuleId": "@@//build:nix_env.bzl%_nix_env_repo",
+            "attributes": {
+              "attr": "integration-test-env",
+              "nix_binary": "/nix/var/nix/profiles/default/bin/nix"
+            }
+          }
+        }
+      }
+    },
     "@@pybind11_bazel+//:internal_configure.bzl%internal_configure_extension": {
       "general": {
         "bzlTransitiveDigest": "06cynZ1bCvvy8zHPrrDlXq+Z68xmjctHpfFxi+zEpJY=",

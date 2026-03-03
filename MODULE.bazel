@@ -45,3 +45,12 @@ use_repo(
     "org_golang_x_sys",
     "org_golang_x_term",
 )
+
+# Nix environments: resolved during loading phase and cached by Bazel.
+# Re-evaluated only when flake.nix or flake.lock change.
+nix_env = use_extension("//build:nix_env.bzl", "nix_env")
+nix_env.build(
+    name = "integration_test_env",
+    attr = "integration-test-env",
+)
+use_repo(nix_env, "integration_test_env")

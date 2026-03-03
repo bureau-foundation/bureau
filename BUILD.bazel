@@ -6,9 +6,15 @@ load("@gazelle//:def.bzl", "gazelle")
 # gazelle:prefix github.com/bureau-foundation/bureau
 gazelle(name = "gazelle")
 
-# Exported for integration tests that need to resolve the workspace root
-# through Bazel's runfiles symlink tree.
-exports_files(["MODULE.bazel"])
+# MODULE.bazel: integration tests resolve the workspace root through
+# Bazel's runfiles symlink tree.
+# flake.nix, flake.lock: the nix_env module extension (build/nix_env.bzl)
+# watches these to invalidate cached Nix store paths.
+exports_files([
+    "MODULE.bazel",
+    "flake.nix",
+    "flake.lock",
+])
 
 # Remote execution platform. The platform properties must match exactly what
 # bb-worker registers with the scheduler (see deploy/buildbarn/bb-worker.jsonnet).

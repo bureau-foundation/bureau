@@ -117,8 +117,7 @@ func TestTemplatePublishFlake(t *testing.T) {
 	t.Parallel()
 
 	// Nix lives at a well-known path outside the default bazel test PATH.
-	// Check the known install location (same as buildRunnerEnv in TestMain)
-	// and inject its directory into PATH for the bureau subprocess, which
+	// Inject its directory into PATH for the bureau subprocess, which
 	// uses exec.LookPath("nix") internally.
 	nixBinary := "/nix/var/nix/profiles/default/bin/nix"
 	if _, err := os.Stat(nixBinary); err != nil {

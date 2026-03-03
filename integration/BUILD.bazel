@@ -94,9 +94,11 @@ go_test(
         "//cmd/bureau-test-agent-claude",
         "//cmd/bureau-test-service",
         "//cmd/bureau-ticket-service",
+        "@integration_test_env//:store_path",
     ],
     env = {
         "AGENT_SERVICE_BINARY": "$(rlocationpath //cmd/bureau-agent-service:bureau-agent-service)",
+        "INTEGRATION_TEST_ENV": "$(rlocationpath @integration_test_env//:store_path)",
         "ARTIFACT_SERVICE_BINARY": "$(rlocationpath //cmd/bureau-artifact-service:bureau-artifact-service)",
         "BRIDGE_BINARY": "$(rlocationpath //cmd/bureau-bridge:bureau-bridge)",
         "BUREAU_AGENT_BINARY": "$(rlocationpath //cmd/bureau-agent:bureau-agent)",

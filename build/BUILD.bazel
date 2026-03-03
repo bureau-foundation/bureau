@@ -1,0 +1,5 @@
+# Copyright 2026 The Bureau Authors
+# SPDX-License-Identifier: Apache-2.0
+
+# Bazel extension files. No targets — the .bzl files are loaded directly
+# by MODULE.bazel via use_extension().

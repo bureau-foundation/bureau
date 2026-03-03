@@ -6,6 +6,7 @@ load("@rules_go//go:def.bzl", "go_library", "go_test")
 go_library(
     name = "proxy",
     srcs = [
+        "attribution.go",
         "cli_service.go",
         "config.go",
         "credentials.go",
@@ -28,6 +29,7 @@ go_library(
         "//lib/netutil",
         "//lib/ref",
         "//lib/schema",
+        "//lib/schema/forge",
         "//lib/schema/telemetry",
         "//lib/secret",
         "//lib/service",
@@ -39,6 +41,7 @@ go_library(
 go_test(
     name = "proxy_test",
     srcs = [
+        "attribution_test.go",
         "cli_service_test.go",
         "credentials_test.go",
         "filter_test.go",

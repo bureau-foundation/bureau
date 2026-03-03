@@ -31,6 +31,14 @@ type HTTPService struct {
 	logger        *slog.Logger
 	client        *http.Client
 	telemetry     *ProxyTelemetry // nil when telemetry is not configured
+
+	// onResponse is an optional callback invoked after a successful
+	// non-SSE response with the method, path, status, and response
+	// body. Used by the attribution interceptor to detect entity
+	// creation and publish Matrix events. The body has already been
+	// buffered; the callback must not modify it. Nil when no
+	// interception is configured.
+	onResponse func(method, path string, statusCode int, body []byte)
 }
 
 // HTTPServiceConfig holds configuration for creating an HTTPService.
@@ -283,9 +291,30 @@ func (s *HTTPService) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		// For SSE, we need to flush after each chunk
 		s.streamSSE(w, resp, startTime, traceID, spanID, credentialCount)
 	} else {
-		// For regular responses, just copy
-		w.WriteHeader(resp.StatusCode)
-		bytesCopied, copyError := io.Copy(w, resp.Body)
+		// For regular responses, buffer or stream depending on whether
+		// the onResponse callback needs the body.
+		var bodyBytes []byte
+		var bytesCopied int64
+		var copyError error
+
+		if s.onResponse != nil && resp.StatusCode >= 200 && resp.StatusCode < 300 {
+			// Buffer the response body for the callback. Entity
+			// creation responses are small (a few KB), so this is
+			// bounded. The callback runs before the response is
+			// written to the agent.
+			bodyBytes, copyError = io.ReadAll(resp.Body)
+			bytesCopied = int64(len(bodyBytes))
+
+			s.onResponse(r.Method, r.URL.Path, resp.StatusCode, bodyBytes)
+
+			w.WriteHeader(resp.StatusCode)
+			if copyError == nil {
+				w.Write(bodyBytes)
+			}
+		} else {
+			w.WriteHeader(resp.StatusCode)
+			bytesCopied, copyError = io.Copy(w, resp.Body)
+		}
 
 		duration := time.Since(startTime)
 		if copyError != nil && !netutil.IsExpectedCloseError(copyError) {

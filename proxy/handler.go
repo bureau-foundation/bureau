@@ -60,6 +60,12 @@ type Handler struct {
 	// and it propagates to subsequently registered services).
 	telemetry *ProxyTelemetry
 
+	// repoRooms maps "owner/repo" to Matrix room IDs for attribution
+	// event publishing. Pushed by the daemon via PUT /v1/admin/repo-rooms.
+	// Used by the GitHub HTTP service's response interceptor to know
+	// which room to publish attribution events to.
+	repoRooms map[string]string
+
 	mu     sync.RWMutex
 	logger *slog.Logger
 }
@@ -811,4 +817,95 @@ func (h *Handler) HandleAdminSetAuthorization(w http.ResponseWriter, r *http.Req
 		"status": "ok",
 		"grants": len(grants),
 	})
+}
+
+// HandleAdminSetRepoRooms replaces the repo-to-room mapping used for
+// attribution event publishing. The daemon pushes this when repository
+// bindings change.
+func (h *Handler) HandleAdminSetRepoRooms(w http.ResponseWriter, r *http.Request) {
+	var mapping map[string]string
+	if err := json.NewDecoder(r.Body).Decode(&mapping); err != nil {
+		h.sendError(w, http.StatusBadRequest, "invalid repo-rooms payload: %v", err)
+		return
+	}
+
+	h.SetRepoRooms(mapping)
+
+	h.writeJSON(w, map[string]any{
+		"status": "ok",
+		"repos":  len(mapping),
+	})
+}
+
+// SetRepoRooms replaces the repo-to-room mapping.
+func (h *Handler) SetRepoRooms(mapping map[string]string) {
+	h.mu.Lock()
+	defer h.mu.Unlock()
+	h.repoRooms = mapping
+	h.logger.Info("repo-room mappings updated", "count", len(mapping))
+}
+
+// RepoRooms returns a snapshot of the current repo-to-room mapping.
+func (h *Handler) RepoRooms() map[string]string {
+	h.mu.RLock()
+	defer h.mu.RUnlock()
+	// Return a copy to avoid races.
+	result := make(map[string]string, len(h.repoRooms))
+	for repo, room := range h.repoRooms {
+		result[repo] = room
+	}
+	return result
+}
+
+// EnableAttribution configures response interception for a named HTTP
+// service. After successful responses, the interceptor checks for
+// entity-creating API patterns and publishes m.bureau.forge_attribution
+// events to the appropriate Matrix room.
+//
+// Requires the "matrix" HTTP service to be registered (for publishing
+// events to the homeserver) and the agent identity to be set.
+func (h *Handler) EnableAttribution(serviceName string) {
+	h.mu.Lock()
+	defer h.mu.Unlock()
+
+	service, exists := h.httpServices[serviceName]
+	if !exists {
+		h.logger.Warn("cannot enable attribution: service not found",
+			"service", serviceName,
+		)
+		return
+	}
+
+	matrixService, hasMatrix := h.httpServices["matrix"]
+	if !hasMatrix {
+		h.logger.Warn("cannot enable attribution: matrix service not registered",
+			"service", serviceName,
+		)
+		return
+	}
+
+	agentUserID := ""
+	if h.identity != nil {
+		agentUserID = h.identity.UserID
+	}
+	if agentUserID == "" {
+		h.logger.Warn("cannot enable attribution: agent identity not set",
+			"service", serviceName,
+		)
+		return
+	}
+
+	service.onResponse = func(method, path string, statusCode int, body []byte) {
+		match, matched := matchEntityCreation(method, path, statusCode, body)
+		if !matched {
+			return
+		}
+		repoRooms := h.RepoRooms()
+		publishAttribution(matrixService, agentUserID, match, repoRooms, h.logger)
+	}
+
+	h.logger.Info("attribution enabled for service",
+		"service", serviceName,
+		"agent", agentUserID,
+	)
 }

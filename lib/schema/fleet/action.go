@@ -17,6 +17,7 @@ const (
 	ActionUnplace       = "fleet/unplace"
 	ActionPlan          = "fleet/plan"
 	ActionMachineHealth = "fleet/machine-health"
+	ActionDrain         = "fleet/drain"
 	ActionAssign        = "fleet/assign"
 	ActionProvision     = "fleet/provision"
 )

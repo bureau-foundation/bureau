@@ -30,6 +30,7 @@ func (fc *FleetController) registerActions(server *service.SocketServer) {
 	server.HandleAuth("unplace", fc.handleUnplace)
 	server.HandleAuth("plan", fc.handlePlan)
 	server.HandleAuth("machine-health", fc.handleMachineHealth)
+	server.HandleAuth("drain", fc.handleDrain)
 }
 
 // --- Authorization helper ---
@@ -606,4 +607,164 @@ func buildHealthEntry(localpart string, machine *machineState, now time.Time) ma
 		entry.StalenessSeconds = int(now.Sub(machine.lastHeartbeat).Seconds())
 	}
 	return entry
+}
+
+// --- Drain machine ---
+
+// drainRequest identifies the machine to drain.
+type drainRequest struct {
+	Machine string `cbor:"machine"`
+}
+
+// drainResponse summarizes the result of a drain operation.
+type drainResponse struct {
+	Machine  string            `cbor:"machine"`
+	Moved    []drainMovedEntry `cbor:"moved"`
+	Stuck    []drainStuckEntry `cbor:"stuck"`
+	Cordoned bool              `cbor:"cordoned"`
+}
+
+// drainMovedEntry describes a service that was successfully relocated.
+type drainMovedEntry struct {
+	Service   string `cbor:"service"`
+	ToMachine string `cbor:"to_machine"`
+	Score     int    `cbor:"score"`
+}
+
+// drainStuckEntry describes a service that could not be relocated.
+type drainStuckEntry struct {
+	Service string `cbor:"service"`
+	Reason  string `cbor:"reason"`
+}
+
+// handleDrain evacuates all fleet-managed services from a machine,
+// redistributing them across the fleet via the placement scoring
+// engine. The machine is automatically cordoned first to prevent
+// the reconcile loop from placing services back on it.
+//
+// Each service is handled independently: if one service cannot be
+// moved (no eligible candidate), the drain continues with the rest.
+// The response reports both moved and stuck services so the operator
+// can take action on anything left behind.
+//
+// Requires "fleet/drain".
+func (fc *FleetController) handleDrain(ctx context.Context, token *servicetoken.Token, raw []byte) (any, error) {
+	if err := requireGrant(token, fleet.ActionDrain); err != nil {
+		return nil, err
+	}
+
+	var request drainRequest
+	if err := codec.Unmarshal(raw, &request); err != nil {
+		return nil, fmt.Errorf("decoding request: %w", err)
+	}
+	if request.Machine == "" {
+		return nil, fmt.Errorf("missing required field: machine")
+	}
+
+	fc.mu.Lock()
+	defer fc.mu.Unlock()
+
+	machine, exists := fc.machines[request.Machine]
+	if !exists {
+		return nil, fmt.Errorf("machine %s not found", request.Machine)
+	}
+
+	// Auto-cordon to prevent the reconcile loop from placing services
+	// back on this machine after drain releases the lock.
+	alreadyCordoned, err := fc.cordonMachine(ctx, request.Machine)
+	if err != nil {
+		return nil, fmt.Errorf("cordoning machine %s: %w", request.Machine, err)
+	}
+
+	response := drainResponse{
+		Machine:  request.Machine,
+		Cordoned: !alreadyCordoned,
+	}
+
+	// Nothing to move if the machine has no assignments.
+	if len(machine.assignments) == 0 {
+		return response, nil
+	}
+
+	// Collect and sort assignments for deterministic processing order.
+	serviceLocalparts := make([]string, 0, len(machine.assignments))
+	for serviceLocalpart := range machine.assignments {
+		serviceLocalparts = append(serviceLocalparts, serviceLocalpart)
+	}
+	sort.Strings(serviceLocalparts)
+
+	for _, serviceLocalpart := range serviceLocalparts {
+
+		serviceState, exists := fc.services[serviceLocalpart]
+		if !exists {
+			response.Stuck = append(response.Stuck, drainStuckEntry{
+				Service: serviceLocalpart,
+				Reason:  "service not found in fleet model",
+			})
+			continue
+		}
+		if serviceState.definition == nil {
+			response.Stuck = append(response.Stuck, drainStuckEntry{
+				Service: serviceLocalpart,
+				Reason:  "service has no definition",
+			})
+			continue
+		}
+
+		// Score all machines for this service, then filter out the
+		// drain target and machines that already host the service.
+		candidates := fc.scorePlacement(serviceState.definition)
+		var eligible []placementCandidate
+		for _, candidate := range candidates {
+			if candidate.machineLocalpart == request.Machine {
+				continue
+			}
+			if _, hasInstance := serviceState.instances[candidate.machineLocalpart]; hasInstance {
+				continue
+			}
+			eligible = append(eligible, candidate)
+		}
+
+		if len(eligible) == 0 {
+			response.Stuck = append(response.Stuck, drainStuckEntry{
+				Service: serviceLocalpart,
+				Reason:  "no eligible machine available",
+			})
+			continue
+		}
+
+		target := eligible[0]
+
+		if err := fc.place(ctx, serviceLocalpart, target.machineLocalpart); err != nil {
+			response.Stuck = append(response.Stuck, drainStuckEntry{
+				Service: serviceLocalpart,
+				Reason:  fmt.Sprintf("placement on %s failed: %v", target.machineLocalpart, err),
+			})
+			continue
+		}
+
+		if err := fc.unplace(ctx, serviceLocalpart, request.Machine); err != nil {
+			// The service is now on two machines. Record as stuck with
+			// enough detail for the operator to fix manually.
+			response.Stuck = append(response.Stuck, drainStuckEntry{
+				Service: serviceLocalpart,
+				Reason: fmt.Sprintf("placed on %s but unplace from %s failed: %v (service is on both machines — fix with 'bureau service unplace')",
+					target.machineLocalpart, request.Machine, err),
+			})
+			continue
+		}
+
+		response.Moved = append(response.Moved, drainMovedEntry{
+			Service:   serviceLocalpart,
+			ToMachine: target.machineLocalpart,
+			Score:     target.score,
+		})
+	}
+
+	fc.logger.Info("machine drained",
+		"machine", request.Machine,
+		"moved", len(response.Moved),
+		"stuck", len(response.Stuck),
+	)
+	return response, nil
 }

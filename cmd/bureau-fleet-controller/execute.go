@@ -231,6 +231,60 @@ func (fc *FleetController) unplace(ctx context.Context, serviceLocalpart, machin
 	return nil
 }
 
+// cordonMachine sets the "cordoned" label on a machine's MachineInfo
+// state event in the fleet's machine room, making the machine ineligible
+// for new placements. Also updates the in-memory model so the scoring
+// engine sees the cordon immediately. Returns true if the machine was
+// already cordoned (no write performed).
+//
+// Caller must hold fc.mu.
+func (fc *FleetController) cordonMachine(ctx context.Context, machineLocalpart string) (bool, error) {
+	machine, exists := fc.machines[machineLocalpart]
+	if !exists {
+		return false, fmt.Errorf("machine %s not found", machineLocalpart)
+	}
+
+	// Check in-memory model first — avoids a Matrix round-trip if
+	// already cordoned.
+	if machine.info != nil && machine.info.Labels["cordoned"] != "" {
+		return true, nil
+	}
+
+	// Read the canonical MachineInfo from the machine room.
+	raw, err := fc.configStore.GetStateEvent(ctx, fc.machineRoomID, schema.EventTypeMachineInfo, machineLocalpart)
+	if err != nil {
+		if messaging.IsMatrixError(err, messaging.ErrCodeNotFound) {
+			return false, fmt.Errorf("no MachineInfo for machine %s in machine room", machineLocalpart)
+		}
+		return false, fmt.Errorf("reading MachineInfo for %s: %w", machineLocalpart, err)
+	}
+
+	var info schema.MachineInfo
+	if err := json.Unmarshal(raw, &info); err != nil {
+		return false, fmt.Errorf("parsing MachineInfo for %s: %w", machineLocalpart, err)
+	}
+
+	if info.Labels == nil {
+		info.Labels = make(map[string]string)
+	}
+	info.Labels["cordoned"] = "true"
+
+	if _, err := fc.configStore.SendStateEvent(ctx, fc.machineRoomID, schema.EventTypeMachineInfo, machineLocalpart, &info); err != nil {
+		return false, fmt.Errorf("writing cordoned label for %s: %w", machineLocalpart, err)
+	}
+
+	// Update in-memory model to match.
+	if machine.info != nil {
+		if machine.info.Labels == nil {
+			machine.info.Labels = make(map[string]string)
+		}
+		machine.info.Labels["cordoned"] = "true"
+	}
+
+	fc.logger.Info("machine cordoned by drain", "machine", machineLocalpart)
+	return false, nil
+}
+
 // reconcile compares desired state (FleetServiceContent definitions)
 // with current state (tracked instances) and triggers placements or
 // removals to bring the fleet into alignment.

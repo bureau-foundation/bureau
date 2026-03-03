@@ -976,3 +976,218 @@ func TestPlanDeniedWithoutGrant(t *testing.T) {
 	err := client.Call(context.Background(), "plan", fields, &response)
 	requireServiceError(t, err)
 }
+
+// --- Drain tests ---
+
+// sampleFleetControllerForDrain creates a FleetController set up for
+// drain tests: two machines, two services on the workstation,
+// MachineInfo seeded in the machine room so cordon reads/writes work.
+func sampleFleetControllerForDrain(t *testing.T) *FleetController {
+	t.Helper()
+	fc := sampleFleetControllerForMutation(t)
+	store := fc.configStore.(*fakeConfigStore)
+
+	// Add a second service to the workstation so drain has multiple
+	// services to move.
+	fc.machines["bureau/fleet/prod/machine/workstation"].assignments["service/batch/worker"] = &schema.PrincipalAssignment{
+		Principal: testEntity(t, "service/batch/worker"),
+		Template:  "bureau/template:worker",
+		Labels:    map[string]string{"fleet_managed": "service/fleet/prod"},
+	}
+	fc.services["service/batch/worker"].instances["bureau/fleet/prod/machine/workstation"] = fc.machines["bureau/fleet/prod/machine/workstation"].assignments["service/batch/worker"]
+
+	// Update the seeded config to include both principals.
+	store.seedConfig("!config-ws:local", "bureau/fleet/prod/machine/workstation", &schema.MachineConfig{
+		Principals: []schema.PrincipalAssignment{
+			{
+				Principal: testEntity(t, "service/stt/whisper"),
+				Template:  "bureau/template:whisper-stt",
+				AutoStart: true,
+				Labels:    map[string]string{"fleet_managed": "service/fleet/prod"},
+			},
+			{
+				Principal: testEntity(t, "service/batch/worker"),
+				Template:  "bureau/template:worker",
+				AutoStart: true,
+				Labels:    map[string]string{"fleet_managed": "service/fleet/prod"},
+			},
+		},
+	})
+
+	// Seed MachineInfo in the machine room so the cordon read/write
+	// in drain works. The fake config store is keyed by roomID+stateKey,
+	// not event type, so this uses the machine room ID.
+	store.seedState("!machine:local", "bureau/fleet/prod/machine/workstation",
+		fc.machines["bureau/fleet/prod/machine/workstation"].info)
+	store.seedState("!machine:local", "bureau/fleet/prod/machine/server",
+		fc.machines["bureau/fleet/prod/machine/server"].info)
+
+	return fc
+}
+
+func TestDrainMovesAllServices(t *testing.T) {
+	fc := sampleFleetControllerForDrain(t)
+	client, cleanup := testServer(t, fc)
+	defer cleanup()
+
+	var response drainResponse
+	fields := map[string]any{"machine": "bureau/fleet/prod/machine/workstation"}
+	if err := client.Call(context.Background(), "drain", fields, &response); err != nil {
+		t.Fatalf("drain call failed: %v", err)
+	}
+
+	if response.Machine != "bureau/fleet/prod/machine/workstation" {
+		t.Errorf("machine = %q, want bureau/fleet/prod/machine/workstation", response.Machine)
+	}
+	if !response.Cordoned {
+		t.Error("expected cordoned=true, got false")
+	}
+	if len(response.Stuck) != 0 {
+		t.Errorf("expected 0 stuck services, got %d: %+v", len(response.Stuck), response.Stuck)
+	}
+	if len(response.Moved) != 2 {
+		t.Fatalf("expected 2 moved services, got %d", len(response.Moved))
+	}
+
+	// Both services should have been moved to the server (only other machine).
+	for _, moved := range response.Moved {
+		if moved.ToMachine != "bureau/fleet/prod/machine/server" {
+			t.Errorf("service %s moved to %q, expected bureau/fleet/prod/machine/server",
+				moved.Service, moved.ToMachine)
+		}
+		if moved.Score < 0 {
+			t.Errorf("service %s has negative score %d", moved.Service, moved.Score)
+		}
+	}
+
+	// Verify in-memory model: workstation should have no assignments.
+	if len(fc.machines["bureau/fleet/prod/machine/workstation"].assignments) != 0 {
+		t.Errorf("workstation should have 0 assignments after drain, got %d",
+			len(fc.machines["bureau/fleet/prod/machine/workstation"].assignments))
+	}
+
+	// Verify in-memory model: server should now have both services.
+	if len(fc.machines["bureau/fleet/prod/machine/server"].assignments) != 2 {
+		t.Errorf("server should have 2 assignments after drain, got %d",
+			len(fc.machines["bureau/fleet/prod/machine/server"].assignments))
+	}
+
+	// Verify the machine was cordoned in-memory.
+	if fc.machines["bureau/fleet/prod/machine/workstation"].info.Labels["cordoned"] != "true" {
+		t.Error("expected workstation to be cordoned in-memory after drain")
+	}
+}
+
+func TestDrainPartialStuck(t *testing.T) {
+	fc := sampleFleetControllerForDrain(t)
+
+	// Make whisper require a GPU label. The server has no GPU labels,
+	// so whisper can't be moved there. Only the workstation (drain
+	// target) has GPU — but it's excluded during drain.
+	fc.services["service/stt/whisper"].definition.Placement.Requires = []string{"gpu=rtx4090"}
+
+	client, cleanup := testServer(t, fc)
+	defer cleanup()
+
+	var response drainResponse
+	fields := map[string]any{"machine": "bureau/fleet/prod/machine/workstation"}
+	if err := client.Call(context.Background(), "drain", fields, &response); err != nil {
+		t.Fatalf("drain call failed: %v", err)
+	}
+
+	// Worker should move (no GPU requirement), whisper should be stuck.
+	if len(response.Moved) != 1 {
+		t.Fatalf("expected 1 moved service, got %d: %+v", len(response.Moved), response.Moved)
+	}
+	if response.Moved[0].Service != "service/batch/worker" {
+		t.Errorf("moved service = %q, want service/batch/worker", response.Moved[0].Service)
+	}
+
+	if len(response.Stuck) != 1 {
+		t.Fatalf("expected 1 stuck service, got %d: %+v", len(response.Stuck), response.Stuck)
+	}
+	if response.Stuck[0].Service != "service/stt/whisper" {
+		t.Errorf("stuck service = %q, want service/stt/whisper", response.Stuck[0].Service)
+	}
+}
+
+func TestDrainEmptyMachine(t *testing.T) {
+	fc := sampleFleetControllerForDrain(t)
+	client, cleanup := testServer(t, fc)
+	defer cleanup()
+
+	// Server has no assignments.
+	var response drainResponse
+	fields := map[string]any{"machine": "bureau/fleet/prod/machine/server"}
+	if err := client.Call(context.Background(), "drain", fields, &response); err != nil {
+		t.Fatalf("drain call failed: %v", err)
+	}
+
+	if len(response.Moved) != 0 {
+		t.Errorf("expected 0 moved, got %d", len(response.Moved))
+	}
+	if len(response.Stuck) != 0 {
+		t.Errorf("expected 0 stuck, got %d", len(response.Stuck))
+	}
+	if !response.Cordoned {
+		t.Error("expected cordoned=true even for empty machine")
+	}
+}
+
+func TestDrainMachineNotFound(t *testing.T) {
+	fc := sampleFleetControllerForDrain(t)
+	client, cleanup := testServer(t, fc)
+	defer cleanup()
+
+	var response drainResponse
+	fields := map[string]any{"machine": "bureau/fleet/prod/machine/nonexistent"}
+	err := client.Call(context.Background(), "drain", fields, &response)
+	requireServiceError(t, err)
+}
+
+func TestDrainAlreadyCordoned(t *testing.T) {
+	fc := sampleFleetControllerForDrain(t)
+
+	// Pre-cordon the workstation.
+	fc.machines["bureau/fleet/prod/machine/workstation"].info.Labels["cordoned"] = "true"
+
+	client, cleanup := testServer(t, fc)
+	defer cleanup()
+
+	var response drainResponse
+	fields := map[string]any{"machine": "bureau/fleet/prod/machine/workstation"}
+	if err := client.Call(context.Background(), "drain", fields, &response); err != nil {
+		t.Fatalf("drain call failed: %v", err)
+	}
+
+	// Cordoned should be false (drain didn't cordon — it was already cordoned).
+	if response.Cordoned {
+		t.Error("expected cordoned=false when machine was already cordoned")
+	}
+
+	// Services should still be moved successfully.
+	if len(response.Moved) != 2 {
+		t.Errorf("expected 2 moved services, got %d", len(response.Moved))
+	}
+}
+
+func TestDrainDeniedWithoutGrant(t *testing.T) {
+	fc := sampleFleetControllerForDrain(t)
+	client, cleanup := testServerNoGrants(t, fc)
+	defer cleanup()
+
+	var response drainResponse
+	fields := map[string]any{"machine": "bureau/fleet/prod/machine/workstation"}
+	err := client.Call(context.Background(), "drain", fields, &response)
+	requireServiceError(t, err)
+}
+
+func TestDrainMissingField(t *testing.T) {
+	fc := sampleFleetControllerForDrain(t)
+	client, cleanup := testServer(t, fc)
+	defer cleanup()
+
+	var response drainResponse
+	err := client.Call(context.Background(), "drain", nil, &response)
+	requireServiceError(t, err)
+}

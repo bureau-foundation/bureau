@@ -73,6 +73,29 @@ type PlanResponse struct {
 	CurrentMachines []string        `cbor:"current_machines"`
 }
 
+// DrainMovedEntry describes a service that was successfully relocated
+// during a drain operation.
+type DrainMovedEntry struct {
+	Service   string `cbor:"service"`
+	ToMachine string `cbor:"to_machine"`
+	Score     int    `cbor:"score"`
+}
+
+// DrainStuckEntry describes a service that could not be relocated
+// during a drain operation, with the reason it was stuck.
+type DrainStuckEntry struct {
+	Service string `cbor:"service"`
+	Reason  string `cbor:"reason"`
+}
+
+// DrainResponse is the fleet controller's response to the "drain" action.
+type DrainResponse struct {
+	Machine  string            `cbor:"machine"`
+	Moved    []DrainMovedEntry `cbor:"moved"`
+	Stuck    []DrainStuckEntry `cbor:"stuck"`
+	Cordoned bool              `cbor:"cordoned"`
+}
+
 // MachineEntry is a machine summary from the fleet controller's
 // list-machines response.
 type MachineEntry struct {

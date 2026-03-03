@@ -90,3 +90,12 @@ func (c *FleetConnection) mintFleetToken() (*cli.MintResult, error) {
 func CallContext(parent context.Context) (context.Context, context.CancelFunc) {
 	return context.WithTimeout(parent, 30*time.Second)
 }
+
+// DrainCallContext returns a context with a 120-second timeout for
+// fleet controller drain operations. Drain involves multiple Matrix
+// round-trips per service (read + write config for both source and
+// target machines), so it needs substantially more time than standard
+// single-action calls.
+func DrainCallContext(parent context.Context) (context.Context, context.CancelFunc) {
+	return context.WithTimeout(parent, 120*time.Second)
+}

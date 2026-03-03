@@ -90,6 +90,31 @@ func (f *fakeConfigStore) seedConfig(roomID, stateKey string, config *schema.Mac
 	f.configs[storeKey(roomID, stateKey)] = data
 }
 
+// seedState stores an arbitrary state event in the fake so that
+// subsequent reads will return it. Use this for event types other
+// than MachineConfig (e.g., MachineInfo for cordon tests).
+func (f *fakeConfigStore) seedState(roomID, stateKey string, content any) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	data, err := json.Marshal(content)
+	if err != nil {
+		panic("seedState: " + err.Error())
+	}
+	f.configs[storeKey(roomID, stateKey)] = data
+}
+
+// latestState reads the most recently stored state event for a given
+// room and state key as raw JSON. Panics if no state exists.
+func (f *fakeConfigStore) latestState(roomID, stateKey string) json.RawMessage {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	raw, exists := f.configs[storeKey(roomID, stateKey)]
+	if !exists {
+		panic("latestState: no state for " + storeKey(roomID, stateKey))
+	}
+	return raw
+}
+
 // latestConfig reads the most recently stored MachineConfig for a given
 // room and state key. Panics if no config exists — call only when a
 // write is expected to have occurred.

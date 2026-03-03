@@ -27,6 +27,7 @@ func TestMachineCommandHasSubcommands(t *testing.T) {
 		"show":         false,
 		"upgrade":      false,
 		"cordon":       false,
+		"drain":        false,
 		"uncordon":     false,
 		"label":        false,
 		"decommission": false,

@@ -50,6 +50,12 @@ revocation event for fleet-wide notification.
 The "cordon" subcommand adds the "cordoned" label to a machine, making
 it ineligible for new fleet placements. Existing workloads continue.
 
+The "drain" subcommand evacuates all fleet-managed services from a machine,
+redistributing them across the fleet via the placement scoring engine. The
+machine is automatically cordoned first to prevent new placements during
+and after the drain. Use "uncordon" to re-enable the machine after
+maintenance.
+
 The "uncordon" subcommand removes the "cordoned" label, re-enabling
 the machine for new placements.
 
@@ -66,6 +72,7 @@ services, removes unit files, binaries, directories, and configuration.`,
 			showCommand(),
 			upgradeCommand(),
 			cordonCommand(),
+			drainCommand(),
 			uncordonCommand(),
 			labelCommand(),
 			decommissionCommand(),
@@ -96,6 +103,10 @@ services, removes unit files, binaries, directories, and configuration.`,
 			{
 				Description: "Cordon a machine for maintenance",
 				Command:     "bureau machine cordon bureau/fleet/prod/machine/worker-01 --credential-file ./bureau-creds",
+			},
+			{
+				Description: "Drain all services before maintenance",
+				Command:     "bureau machine drain bureau/fleet/prod/machine/worker-01 --service",
 			},
 			{
 				Description: "Set labels for placement constraints",

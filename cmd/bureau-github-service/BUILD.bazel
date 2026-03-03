@@ -10,6 +10,7 @@ go_library(
         "doc.go",
         "github_types.go",
         "main.go",
+        "mention.go",
         "service.go",
         "subscribe.go",
         "ticketsync.go",
@@ -42,6 +43,7 @@ go_binary(
 go_test(
     name = "bureau-github-service_test",
     srcs = [
+        "mention_test.go",
         "ticketsync_test.go",
         "webhook_test.go",
     ],
@@ -52,5 +54,6 @@ go_test(
         "//lib/ref",
         "//lib/schema/forge",
         "//lib/schema/ticket",
+        "//messaging",
     ],
 )

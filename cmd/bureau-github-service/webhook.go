@@ -425,14 +425,16 @@ func (h *WebhookHandler) translateIssueComment(body []byte) (*forge.Event, error
 	return &forge.Event{
 		Type: forge.EventCategoryComment,
 		Comment: &forge.CommentEvent{
-			Provider:     string(forge.ProviderGitHub),
-			Repo:         payload.Repository.FullName,
-			EntityType:   entityType,
-			EntityNumber: payload.Issue.Number,
-			Author:       payload.Comment.User.Login,
-			Body:         payload.Comment.Body,
-			Summary:      summary,
-			URL:          payload.Comment.HTMLURL,
+			Provider:          string(forge.ProviderGitHub),
+			Repo:              payload.Repository.FullName,
+			EntityType:        entityType,
+			EntityNumber:      payload.Issue.Number,
+			EntityTitle:       payload.Issue.Title,
+			Author:            payload.Comment.User.Login,
+			Body:              payload.Comment.Body,
+			Summary:           summary,
+			URL:               payload.Comment.HTMLURL,
+			AuthorAssociation: payload.Comment.AuthorAssociation,
 		},
 	}, nil
 }

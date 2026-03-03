@@ -229,6 +229,166 @@ func TestForgeConfigValidate(t *testing.T) {
 	}
 }
 
+// --- AuthorAssociation ---
+
+func TestAuthorAssociationLevel(t *testing.T) {
+	// Verify the ordering is correct: higher levels represent
+	// stronger relationships.
+	ordered := []AuthorAssociation{
+		AssociationNone,
+		AssociationFirstTimer,
+		AssociationFirstTimeContributor,
+		AssociationContributor,
+		AssociationCollaborator,
+		AssociationMember,
+		AssociationOwner,
+	}
+
+	for i := 1; i < len(ordered); i++ {
+		if ordered[i].Level() <= ordered[i-1].Level() {
+			t.Errorf("Level(%q) = %d should be > Level(%q) = %d",
+				ordered[i], ordered[i].Level(),
+				ordered[i-1], ordered[i-1].Level())
+		}
+	}
+}
+
+func TestAuthorAssociationMeetsMinimum(t *testing.T) {
+	tests := []struct {
+		author  AuthorAssociation
+		minimum AuthorAssociation
+		want    bool
+	}{
+		{AssociationOwner, AssociationCollaborator, true},
+		{AssociationMember, AssociationCollaborator, true},
+		{AssociationCollaborator, AssociationCollaborator, true},
+		{AssociationContributor, AssociationCollaborator, false},
+		{AssociationNone, AssociationCollaborator, false},
+		{AssociationOwner, AssociationOwner, true},
+		{AssociationNone, AssociationNone, true},
+	}
+
+	for _, tt := range tests {
+		got := tt.author.MeetsMinimum(tt.minimum)
+		if got != tt.want {
+			t.Errorf("%q.MeetsMinimum(%q) = %v, want %v",
+				tt.author, tt.minimum, got, tt.want)
+		}
+	}
+}
+
+func TestAuthorAssociationIsKnown(t *testing.T) {
+	known := []AuthorAssociation{
+		AssociationOwner, AssociationMember,
+		AssociationCollaborator, AssociationContributor,
+		AssociationFirstTimeContributor, AssociationFirstTimer,
+		AssociationNone,
+	}
+	for _, association := range known {
+		if !association.IsKnown() {
+			t.Errorf("AuthorAssociation(%q).IsKnown() = false, want true", association)
+		}
+	}
+
+	unknown := []AuthorAssociation{"UNKNOWN", "", "collaborator"}
+	for _, association := range unknown {
+		if association.IsKnown() {
+			t.Errorf("AuthorAssociation(%q).IsKnown() = true, want false", association)
+		}
+	}
+}
+
+// --- MentionDispatchConfig ---
+
+func TestMentionDispatchConfigValidate(t *testing.T) {
+	t.Run("valid_minimal", func(t *testing.T) {
+		config := &MentionDispatchConfig{BotUsername: "bureau-bot"}
+		if err := config.Validate(); err != nil {
+			t.Errorf("Validate() = %v, want nil", err)
+		}
+	})
+
+	t.Run("valid_with_association", func(t *testing.T) {
+		config := &MentionDispatchConfig{
+			BotUsername:    "bureau-bot",
+			MinAssociation: AssociationMember,
+		}
+		if err := config.Validate(); err != nil {
+			t.Errorf("Validate() = %v, want nil", err)
+		}
+	})
+
+	t.Run("empty_bot_username", func(t *testing.T) {
+		config := &MentionDispatchConfig{}
+		err := config.Validate()
+		if err == nil {
+			t.Fatal("Validate() = nil, want error")
+		}
+		if !strings.Contains(err.Error(), "bot_username is required") {
+			t.Errorf("Validate() = %q, want error containing %q", err, "bot_username is required")
+		}
+	})
+
+	t.Run("unknown_association", func(t *testing.T) {
+		config := &MentionDispatchConfig{
+			BotUsername:    "bureau-bot",
+			MinAssociation: "UNKNOWN",
+		}
+		err := config.Validate()
+		if err == nil {
+			t.Fatal("Validate() = nil, want error")
+		}
+		if !strings.Contains(err.Error(), "unknown min_association") {
+			t.Errorf("Validate() = %q, want error containing %q", err, "unknown min_association")
+		}
+	})
+}
+
+func TestMentionDispatchConfigEffectiveMinAssociation(t *testing.T) {
+	t.Run("default", func(t *testing.T) {
+		config := &MentionDispatchConfig{BotUsername: "bureau-bot"}
+		got := config.EffectiveMinAssociation()
+		if got != AssociationCollaborator {
+			t.Errorf("EffectiveMinAssociation() = %q, want %q", got, AssociationCollaborator)
+		}
+	})
+
+	t.Run("explicit", func(t *testing.T) {
+		config := &MentionDispatchConfig{
+			BotUsername:    "bureau-bot",
+			MinAssociation: AssociationMember,
+		}
+		got := config.EffectiveMinAssociation()
+		if got != AssociationMember {
+			t.Errorf("EffectiveMinAssociation() = %q, want %q", got, AssociationMember)
+		}
+	})
+}
+
+func TestForgeConfigValidateMentionDispatch(t *testing.T) {
+	t.Run("valid_with_mention_dispatch", func(t *testing.T) {
+		config := validForgeConfig()
+		config.MentionDispatch = &MentionDispatchConfig{
+			BotUsername: "bureau-bot",
+		}
+		if err := config.Validate(); err != nil {
+			t.Errorf("Validate() = %v, want nil", err)
+		}
+	})
+
+	t.Run("invalid_mention_dispatch", func(t *testing.T) {
+		config := validForgeConfig()
+		config.MentionDispatch = &MentionDispatchConfig{} // missing bot_username
+		err := config.Validate()
+		if err == nil {
+			t.Fatal("Validate() = nil, want error")
+		}
+		if !strings.Contains(err.Error(), "bot_username is required") {
+			t.Errorf("Validate() = %q, want error containing %q", err, "bot_username is required")
+		}
+	})
+}
+
 // --- ForgeWorkIdentity ---
 
 func validForgeWorkIdentity() ForgeWorkIdentity {

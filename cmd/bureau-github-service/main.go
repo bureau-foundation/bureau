@@ -87,8 +87,12 @@ func run() error {
 		serviceRoomID: boot.ServiceRoomID,
 		manager:       forgesub.NewManager(boot.Logger),
 		ticketSyncer:  ticketSyncer,
-		clock:         boot.Clock,
-		logger:        boot.Logger,
+		mentionDispatcher: &MentionDispatcher{
+			session: boot.Session,
+			logger:  boot.Logger,
+		},
+		clock:  boot.Clock,
+		logger: boot.Logger,
 	}
 
 	// Create the webhook handler. Events are dispatched to the

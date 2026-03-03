@@ -75,13 +75,14 @@ func buildSyncFilter() string {
 // dispatch, subscriptions, and entity mapping between GitHub and
 // Bureau's forge schema.
 type GitHubService struct {
-	session       messaging.Session
-	service       ref.Service
-	serviceRoomID ref.RoomID
-	manager       *forgesub.Manager
-	ticketSyncer  *TicketSyncer // nil if ticket service not configured
-	clock         clock.Clock
-	logger        *slog.Logger
+	session           messaging.Session
+	service           ref.Service
+	serviceRoomID     ref.RoomID
+	manager           *forgesub.Manager
+	ticketSyncer      *TicketSyncer // nil if ticket service not configured
+	mentionDispatcher *MentionDispatcher
+	clock             clock.Clock
+	logger            *slog.Logger
 }
 
 // handleEvent processes a translated forge event from the webhook
@@ -104,12 +105,17 @@ func (gs *GitHubService) handleEvent(event *forge.Event) {
 
 	gs.manager.Dispatch(event)
 
+	// Resolve matching rooms once for all post-dispatch consumers.
+	rooms := gs.manager.RoomsForEvent(event)
+
 	// Sync issue events to the ticket service if configured.
-	if gs.ticketSyncer != nil {
-		rooms := gs.manager.RoomsForEvent(event)
-		if len(rooms) > 0 {
-			gs.ticketSyncer.SyncEvent(context.Background(), event, rooms)
-		}
+	if gs.ticketSyncer != nil && len(rooms) > 0 {
+		gs.ticketSyncer.SyncEvent(context.Background(), event, rooms)
+	}
+
+	// Dispatch @bot-mention comments to rooms as Matrix messages.
+	if len(rooms) > 0 && mentionDispatchEnabled(rooms) {
+		gs.mentionDispatcher.Dispatch(context.Background(), event, rooms)
 	}
 }
 

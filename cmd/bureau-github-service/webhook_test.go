@@ -515,9 +515,10 @@ func TestWebhookTranslateIssueComment(t *testing.T) {
 			User:    ghUser{Login: "octocat"},
 		},
 		Comment: ghComment{
-			Body:    "I can reproduce this.",
-			HTMLURL: "https://github.com/octocat/Hello-World/issues/42#issuecomment-1",
-			User:    ghUser{Login: "helper"},
+			Body:              "I can reproduce this.",
+			HTMLURL:           "https://github.com/octocat/Hello-World/issues/42#issuecomment-1",
+			User:              ghUser{Login: "helper"},
+			AuthorAssociation: "COLLABORATOR",
 		},
 		Repository: ghRepository{FullName: "octocat/Hello-World"},
 		Sender:     ghUser{Login: "helper"},
@@ -555,6 +556,12 @@ func TestWebhookTranslateIssueComment(t *testing.T) {
 	if event.Comment.EntityNumber != 42 {
 		t.Errorf("entity number = %d, want 42", event.Comment.EntityNumber)
 	}
+	if event.Comment.EntityTitle != "Bug report" {
+		t.Errorf("entity title = %q, want %q", event.Comment.EntityTitle, "Bug report")
+	}
+	if event.Comment.AuthorAssociation != "COLLABORATOR" {
+		t.Errorf("author association = %q, want %q", event.Comment.AuthorAssociation, "COLLABORATOR")
+	}
 }
 
 // --- PR comment detection ---
@@ -572,9 +579,10 @@ func TestWebhookTranslatePRComment(t *testing.T) {
 			User:    ghUser{Login: "contributor"},
 		},
 		Comment: ghComment{
-			Body:    "Please update the tests.",
-			HTMLURL: "https://github.com/octocat/Hello-World/pull/99#issuecomment-2",
-			User:    ghUser{Login: "reviewer"},
+			Body:              "Please update the tests.",
+			HTMLURL:           "https://github.com/octocat/Hello-World/pull/99#issuecomment-2",
+			User:              ghUser{Login: "reviewer"},
+			AuthorAssociation: "MEMBER",
 		},
 		Repository: ghRepository{FullName: "octocat/Hello-World"},
 		Sender:     ghUser{Login: "reviewer"},
@@ -602,6 +610,12 @@ func TestWebhookTranslatePRComment(t *testing.T) {
 	}
 	if event.Comment.EntityType != forge.EntityTypePullRequest {
 		t.Errorf("entity type = %q, want %q", event.Comment.EntityType, forge.EntityTypePullRequest)
+	}
+	if event.Comment.EntityTitle != "Add feature X" {
+		t.Errorf("entity title = %q, want %q", event.Comment.EntityTitle, "Add feature X")
+	}
+	if event.Comment.AuthorAssociation != "MEMBER" {
+		t.Errorf("author association = %q, want %q", event.Comment.AuthorAssociation, "MEMBER")
 	}
 }
 

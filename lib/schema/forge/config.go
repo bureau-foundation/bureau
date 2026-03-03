@@ -115,6 +115,13 @@ type ForgeConfig struct {
 	// AutoSubscribe enables webhook-driven auto-subscribe for this
 	// repo's events.
 	AutoSubscribe bool `json:"auto_subscribe"`
+
+	// MentionDispatch configures routing of @bot-mention comments to
+	// this room as Matrix messages. When nil, mention dispatch is
+	// disabled for this room/repo binding. Independent of the Events
+	// category filter — a room can receive mention dispatches without
+	// subscribing to all comment events.
+	MentionDispatch *MentionDispatchConfig `json:"mention_dispatch,omitempty"`
 }
 
 // TriageFilter restricts the events delivered to room-level
@@ -146,6 +153,11 @@ func (c *ForgeConfig) Validate() error {
 	if c.IssueSync != "" && !c.IssueSync.IsKnown() {
 		return fmt.Errorf("forge config: unknown issue_sync mode %q", c.IssueSync)
 	}
+	if c.MentionDispatch != nil {
+		if err := c.MentionDispatch.Validate(); err != nil {
+			return fmt.Errorf("forge config: %w", err)
+		}
+	}
 	return nil
 }
 
@@ -174,6 +186,98 @@ func (w *ForgeWorkIdentity) Validate() error {
 	}
 	if w.Email == "" {
 		return fmt.Errorf("forge work identity: email is required")
+	}
+	return nil
+}
+
+// --- Author association ---
+
+// AuthorAssociation represents the relationship between a comment
+// author and a repository. GitHub (and Forgejo/GitLab equivalents)
+// include this in webhook payloads, allowing authorization decisions
+// without additional API calls.
+type AuthorAssociation string
+
+const (
+	AssociationOwner                AuthorAssociation = "OWNER"
+	AssociationMember               AuthorAssociation = "MEMBER"
+	AssociationCollaborator         AuthorAssociation = "COLLABORATOR"
+	AssociationContributor          AuthorAssociation = "CONTRIBUTOR"
+	AssociationFirstTimeContributor AuthorAssociation = "FIRST_TIME_CONTRIBUTOR"
+	AssociationFirstTimer           AuthorAssociation = "FIRST_TIMER"
+	AssociationNone                 AuthorAssociation = "NONE"
+)
+
+// Level returns a numeric level for the association, higher values
+// indicating stronger relationship to the repository. Used for
+// minimum-level comparisons in mention dispatch authorization.
+func (a AuthorAssociation) Level() int {
+	switch a {
+	case AssociationOwner:
+		return 6
+	case AssociationMember:
+		return 5
+	case AssociationCollaborator:
+		return 4
+	case AssociationContributor:
+		return 3
+	case AssociationFirstTimeContributor:
+		return 2
+	case AssociationFirstTimer:
+		return 1
+	case AssociationNone:
+		return 0
+	default:
+		return -1
+	}
+}
+
+// MeetsMinimum reports whether this association meets or exceeds the
+// given minimum level.
+func (a AuthorAssociation) MeetsMinimum(minimum AuthorAssociation) bool {
+	return a.Level() >= minimum.Level()
+}
+
+// IsKnown reports whether the association is a recognized value.
+func (a AuthorAssociation) IsKnown() bool {
+	return a.Level() >= 0
+}
+
+// --- Mention dispatch ---
+
+// MentionDispatchConfig configures routing of @bot-mention comments
+// from forge webhooks to Bureau rooms. When present (non-nil) on a
+// ForgeConfig, comments that mention the bot username are posted to
+// the room as Matrix messages, allowing agents to act on them.
+type MentionDispatchConfig struct {
+	// BotUsername is the forge username to watch for @mentions.
+	// For GitHub App installations, this is the app's bot account
+	// (e.g., "bureau-bot", "my-org-bureau[bot]"). Required.
+	BotUsername string `json:"bot_username"`
+
+	// MinAssociation is the minimum author_association level required
+	// for a comment to be dispatched. Comments from authors below
+	// this level are silently ignored. Defaults to "COLLABORATOR"
+	// (write-access users) when empty.
+	MinAssociation AuthorAssociation `json:"min_association,omitempty"`
+}
+
+// EffectiveMinAssociation returns the minimum association level,
+// defaulting to COLLABORATOR when not explicitly configured.
+func (c *MentionDispatchConfig) EffectiveMinAssociation() AuthorAssociation {
+	if c.MinAssociation == "" {
+		return AssociationCollaborator
+	}
+	return c.MinAssociation
+}
+
+// Validate checks that the config is well-formed.
+func (c *MentionDispatchConfig) Validate() error {
+	if c.BotUsername == "" {
+		return fmt.Errorf("mention dispatch: bot_username is required")
+	}
+	if c.MinAssociation != "" && !c.MinAssociation.IsKnown() {
+		return fmt.Errorf("mention dispatch: unknown min_association %q", c.MinAssociation)
 	}
 	return nil
 }

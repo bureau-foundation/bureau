@@ -161,11 +161,18 @@ type CommentEvent struct {
 	Repo         string     `cbor:"repo"`
 	EntityType   EntityType `cbor:"entity_type"`
 	EntityNumber int        `cbor:"entity_number"`
+	EntityTitle  string     `cbor:"entity_title"` // issue/PR title for context
 	Author       string     `cbor:"author"`
 	BureauEntity string     `cbor:"bureau_entity,omitempty"`
 	Body         string     `cbor:"body"`
 	Summary      string     `cbor:"summary"`
 	URL          string     `cbor:"url"`
+
+	// AuthorAssociation is the comment author's relationship to the
+	// repository (e.g., "OWNER", "MEMBER", "COLLABORATOR"). Provided
+	// by the forge webhook payload. Used for mention dispatch
+	// authorization without additional API calls.
+	AuthorAssociation string `cbor:"author_association,omitempty"`
 }
 
 // CIStatus enumerates the common CI/CD run statuses.

@@ -133,9 +133,10 @@ type ghPullRequestReviewPayload struct {
 
 // ghComment is a GitHub issue or PR comment.
 type ghComment struct {
-	Body    string `json:"body"`
-	HTMLURL string `json:"html_url"`
-	User    ghUser `json:"user"`
+	Body              string `json:"body"`
+	HTMLURL           string `json:"html_url"`
+	User              ghUser `json:"user"`
+	AuthorAssociation string `json:"author_association"` // OWNER, MEMBER, COLLABORATOR, etc.
 }
 
 // ghIssueCommentPayload is the webhook payload for an

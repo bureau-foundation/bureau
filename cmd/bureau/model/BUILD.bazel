@@ -12,6 +12,7 @@ go_library(
         "connection.go",
         "doc.go",
         "embed.go",
+        "enable.go",
         "list.go",
         "status.go",
         "sync.go",
@@ -21,8 +22,11 @@ go_library(
     deps = [
         "//cmd/bureau/cli",
         "//lib/modeldiscovery",
+        "//lib/ref",
+        "//lib/schema",
         "//lib/schema/model",
         "//lib/service",
+        "//messaging",
         "@com_github_spf13_pflag//:pflag",
     ],
 )

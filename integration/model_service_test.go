@@ -12,6 +12,7 @@ import (
 	"encoding/hex"
 	"encoding/json"
 	"fmt"
+	"log/slog"
 	"net"
 	"net/http"
 	"net/http/httptest"
@@ -21,6 +22,7 @@ import (
 	"strings"
 	"testing"
 
+	modelcmd "github.com/bureau-foundation/bureau/cmd/bureau/model"
 	"github.com/bureau-foundation/bureau/lib/ref"
 	"github.com/bureau-foundation/bureau/lib/schema"
 	"github.com/bureau-foundation/bureau/lib/schema/model"
@@ -466,18 +468,12 @@ func configureModelRoom(
 		t.Fatalf("publish model account: %v", err)
 	}
 
-	// Invite the model service to the config room. The service's /sync
-	// loop accepts invites and reads state events from joined rooms.
-	if err := admin.InviteUser(ctx, roomID, modelSvc.Account.UserID); err != nil {
-		t.Fatalf("invite model service to config room: %v", err)
-	}
-
-	// Grant the model service power level 50 so it can publish state
-	// events (needed for the model/sync action to create aliases).
-	if err := schema.GrantPowerLevels(ctx, admin, roomID, schema.PowerLevelGrants{
-		Users: map[ref.UserID]int{modelSvc.Account.UserID: 50},
-	}); err != nil {
-		t.Fatalf("grant model service power levels: %v", err)
+	// Configure the room for model service use: publish service binding,
+	// invite service, and grant power levels. Uses the production
+	// ConfigureModelRoom function.
+	logger := slog.New(slog.NewTextHandler(os.Stderr, nil))
+	if err := modelcmd.ConfigureModelRoom(ctx, logger, admin, roomID, modelSvc.Entity); err != nil {
+		t.Fatalf("configure model room: %v", err)
 	}
 }
 

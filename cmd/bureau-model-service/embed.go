@@ -5,7 +5,6 @@ package main
 
 import (
 	"context"
-	"errors"
 	"fmt"
 	"time"
 
@@ -36,15 +35,14 @@ func (ms *ModelService) handleEmbed(ctx context.Context, token *servicetoken.Tok
 		return nil, fmt.Errorf("missing required field: input")
 	}
 
-	// Resolve the model alias.
-	resolution, err := ms.resolveModel(request.Model)
+	// Resolve the model alias to a fallback chain.
+	chain, err := ms.resolveModelChain(request.Model)
 	if err != nil {
 		return nil, err
 	}
 
-	// Authorize: check that the token grants model/embed on the
-	// resolved alias.
-	if err := requireModelGrant(token, model.ActionEmbed, resolution.Alias); err != nil {
+	// Authorize using the primary alias.
+	if err := requireModelGrant(token, model.ActionEmbed, chain[0].Alias); err != nil {
 		return nil, err
 	}
 
@@ -52,22 +50,6 @@ func (ms *ModelService) handleEmbed(ctx context.Context, token *servicetoken.Tok
 	project := token.Project
 	if project == "" {
 		return nil, fmt.Errorf("service token missing project identity")
-	}
-
-	// Select account and check quota.
-	account, err := ms.registry.SelectAccount(project, resolution.ProviderName)
-	if err != nil {
-		return nil, fmt.Errorf("no account for project %q, provider %q", project, resolution.ProviderName)
-	}
-
-	if err := ms.quotaTracker.Check(account.AccountName, account.Quota); err != nil {
-		var quotaError *modelregistry.QuotaExceededError
-		if errors.As(err, &quotaError) {
-			return nil, fmt.Errorf("quota exceeded: %s limit for account %q (resets %s)",
-				quotaError.Window, quotaError.AccountName,
-				quotaError.ResetsAt.Format(time.RFC3339))
-		}
-		return nil, fmt.Errorf("quota check failed: %w", err)
 	}
 
 	// Determine latency policy. Defaults to immediate when unset.
@@ -79,40 +61,92 @@ func (ms *ModelService) handleEmbed(ctx context.Context, token *servicetoken.Tok
 		return nil, fmt.Errorf("unknown latency policy: %q", request.LatencyPolicy)
 	}
 
-	// Look up credential and get provider.
-	credential := ms.lookupCredential(resolution, account)
-	provider := ms.getOrCreateProvider(resolution.ProviderName, resolution.Provider)
+	// Try each resolution in the chain until one succeeds.
+	var lastError error
+	for chainIndex, candidate := range chain {
+		candidateAccount, accountErr := ms.registry.SelectAccount(project, candidate.ProviderName)
+		if accountErr != nil {
+			ms.logger.Warn("embed fallback chain: no account, skipping",
+				"provider", candidate.ProviderName,
+				"chain_index", chainIndex,
+				"error", accountErr,
+			)
+			lastError = accountErr
+			continue
+		}
 
-	// Route through the latency router. For immediate requests, this
-	// calls the provider directly. For batch, it merges with other
-	// requests into a single provider call. For background, it waits
-	// for the provider to become idle first.
-	result, err := ms.latencyRouter.SubmitEmbed(
-		ctx, policy, provider,
-		resolution.ProviderName, resolution.ProviderModel, credential,
-		request.Input,
-		resolution.Provider.MaxBatchSize,
-		resolution.Provider.BatchSupport,
-	)
-	if err != nil {
-		return nil, fmt.Errorf("provider error: %w", err)
+		if quotaErr := ms.quotaTracker.Check(candidateAccount.AccountName, candidateAccount.Quota); quotaErr != nil {
+			ms.logger.Warn("embed fallback chain: quota exceeded, skipping",
+				"provider", candidate.ProviderName,
+				"account", candidateAccount.AccountName,
+				"chain_index", chainIndex,
+				"error", quotaErr,
+			)
+			lastError = quotaErr
+			continue
+		}
+
+		credential := ms.lookupCredential(candidate, candidateAccount)
+		provider := ms.getOrCreateProvider(candidate.ProviderName, candidate.Provider)
+
+		// Use the requested latency policy for the primary, immediate
+		// for fallbacks (minimize degraded-state latency).
+		attemptPolicy := policy
+		if chainIndex > 0 {
+			attemptPolicy = model.LatencyImmediate
+		}
+
+		result, attemptErr := ms.latencyRouter.SubmitEmbed(
+			ctx, attemptPolicy, provider,
+			candidate.ProviderName, candidate.ProviderModel, credential,
+			request.Input,
+			candidate.Provider.MaxBatchSize,
+			candidate.Provider.BatchSupport,
+		)
+
+		if attemptErr != nil {
+			if !isRetriableProviderError(attemptErr) || ctx.Err() != nil {
+				return nil, fmt.Errorf("provider error: %w", attemptErr)
+			}
+			ms.logger.Warn("embed provider failed, trying next in chain",
+				"provider", candidate.ProviderName,
+				"chain_index", chainIndex,
+				"error", attemptErr,
+			)
+			lastError = attemptErr
+			continue
+		}
+
+		if chainIndex > 0 {
+			ms.logger.Warn("embed fallback activated",
+				"alias", candidate.Alias,
+				"primary_provider", chain[0].ProviderName,
+				"fallback_provider", candidate.ProviderName,
+				"chain_index", chainIndex,
+			)
+		}
+
+		// Success — calculate cost, record, emit telemetry, return.
+		cost := calculateCost(&result.Usage, candidate.Pricing)
+		ms.quotaTracker.Record(candidateAccount.AccountName, cost)
+
+		latency := ms.clock.Now().Sub(startTime)
+		ms.emitEmbedTelemetry(token, request.Model, candidate, candidateAccount,
+			&result.Usage, result.Model, cost, latency, result.BatchSize,
+			chainIndex > 0, chain[0].ProviderName)
+
+		return &model.EmbedResponse{
+			Embeddings:       result.Embeddings,
+			Model:            result.Model,
+			Usage:            &result.Usage,
+			CostMicrodollars: cost,
+		}, nil
 	}
 
-	// Calculate cost and record to quota tracker.
-	cost := calculateCost(&result.Usage, resolution.Pricing)
-	ms.quotaTracker.Record(account.AccountName, cost)
-
-	// Emit telemetry.
-	latency := ms.clock.Now().Sub(startTime)
-	ms.emitEmbedTelemetry(token, request.Model, resolution, account, &result.Usage, result.Model, cost, latency, result.BatchSize)
-
-	// Return the response for the socket server to encode and send.
-	return &model.EmbedResponse{
-		Embeddings:       result.Embeddings,
-		Model:            result.Model,
-		Usage:            &result.Usage,
-		CostMicrodollars: cost,
-	}, nil
+	if lastError != nil {
+		return nil, fmt.Errorf("all providers in fallback chain failed: %w", lastError)
+	}
+	return nil, fmt.Errorf("all providers in fallback chain failed")
 }
 
 // emitEmbedTelemetry records a telemetry span for a completed
@@ -127,6 +161,8 @@ func (ms *ModelService) emitEmbedTelemetry(
 	costMicrodollars int64,
 	latency time.Duration,
 	batchSize int,
+	degraded bool,
+	primaryProvider string,
 ) {
 	if ms.telemetry == nil {
 		return
@@ -137,23 +173,30 @@ func (ms *ModelService) emitEmbedTelemetry(
 		inputTokens = usage.InputTokens
 	}
 
+	attributes := map[string]any{
+		"project":           token.Project,
+		"agent":             token.Subject.String(),
+		"model_alias":       requestedAlias,
+		"provider":          resolution.ProviderName,
+		"provider_model":    providerModel,
+		"account":           account.AccountName,
+		"input_tokens":      inputTokens,
+		"cost_microdollars": costMicrodollars,
+		"batch_size":        batchSize,
+	}
+
+	if degraded {
+		attributes["fallback"] = true
+		attributes["primary_provider"] = primaryProvider
+	}
+
 	ms.telemetry.RecordSpan(telemetry.Span{
-		TraceID:   telemetry.NewTraceID(),
-		SpanID:    telemetry.NewSpanID(),
-		Operation: "model.embed",
-		StartTime: ms.clock.Now().Add(-latency).UnixNano(),
-		Duration:  latency.Nanoseconds(),
-		Status:    telemetry.SpanStatusOK,
-		Attributes: map[string]any{
-			"project":           token.Project,
-			"agent":             token.Subject.String(),
-			"model_alias":       requestedAlias,
-			"provider":          resolution.ProviderName,
-			"provider_model":    providerModel,
-			"account":           account.AccountName,
-			"input_tokens":      inputTokens,
-			"cost_microdollars": costMicrodollars,
-			"batch_size":        batchSize,
-		},
+		TraceID:    telemetry.NewTraceID(),
+		SpanID:     telemetry.NewSpanID(),
+		Operation:  "model.embed",
+		StartTime:  ms.clock.Now().Add(-latency).UnixNano(),
+		Duration:   latency.Nanoseconds(),
+		Status:     telemetry.SpanStatusOK,
+		Attributes: attributes,
 	})
 }

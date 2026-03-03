@@ -82,24 +82,6 @@ type infoResponse struct {
 	ConfigRooms   int `cbor:"config_rooms"`
 }
 
-// machinesResponse mirrors the fleet controller's list-machines response.
-type machinesResponse struct {
-	Machines []machineEntry `cbor:"machines"`
-}
-
-// machineEntry mirrors the fleet controller's machineSummary.
-type machineEntry struct {
-	Localpart     string            `cbor:"localpart"`
-	Hostname      string            `cbor:"hostname"`
-	CPUPercent    int               `cbor:"cpu_percent"`
-	MemoryUsedMB  int               `cbor:"memory_used_mb"`
-	MemoryTotalMB int               `cbor:"memory_total_mb"`
-	GPUCount      int               `cbor:"gpu_count"`
-	Labels        map[string]string `cbor:"labels"`
-	Assignments   int               `cbor:"assignments"`
-	ConfigRoomID  string            `cbor:"config_room_id"`
-}
-
 func runStatus(ctx context.Context, logger *slog.Logger, params *statusParams) error {
 	client, err := params.Connect()
 	if err != nil {
@@ -116,7 +98,7 @@ func runStatus(ctx context.Context, logger *slog.Logger, params *statusParams) e
 	}
 
 	// Fetch per-machine health.
-	var machines machinesResponse
+	var machines MachinesResponse
 	if err := client.Call(ctx, "list-machines", nil, &machines); err != nil {
 		return cli.Transient("fetching machine list: %w", err)
 	}

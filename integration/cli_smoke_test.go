@@ -99,15 +99,19 @@ func TestCLIMachineList(t *testing.T) {
 	output := op.run(t,
 		"machine", "list", "--credential-file", op.CredentialFile, "--json")
 
-	var entries []struct {
-		Name      string `json:"name"`
-		PublicKey string `json:"public_key"`
-		Algorithm string `json:"algorithm"`
+	var result struct {
+		Machines []struct {
+			Name      string `json:"name"`
+			PublicKey string `json:"public_key"`
+			Algorithm string `json:"algorithm"`
+		} `json:"machines"`
+		FleetEnriched bool `json:"fleet_enriched"`
 	}
-	if err := json.Unmarshal([]byte(output), &entries); err != nil {
+	if err := json.Unmarshal([]byte(output), &result); err != nil {
 		t.Fatalf("parse machine list JSON: %v\noutput:\n%s", err, output)
 	}
 
+	entries := result.Machines
 	if len(entries) == 0 {
 		t.Fatal("machine list returned no entries")
 	}

@@ -15,6 +15,14 @@ func Command() *cli.Command {
 		Description: `Manage fleet machines: provisioning, deployment, health checks, upgrades,
 decommission, uninstall, and emergency revocation.
 
+The "list" subcommand shows all machines in the fleet. When a fleet
+controller is reachable, the output is enriched with live operational
+data: CPU and memory utilization, assignment counts, and labels.
+
+The "show" subcommand displays detailed info for a single machine:
+hardware inventory, current resource usage, and all assigned principals.
+Requires a reachable fleet controller.
+
 The "provision" subcommand creates a machine's Matrix account and writes
 a bootstrap config file. Transfer this file to the new machine and run
 "deploy local" to complete setup.
@@ -26,9 +34,6 @@ launcher first boot for homeserver registration, and starts services.
 The "doctor" subcommand checks and optionally repairs the local machine's
 Bureau infrastructure (system user, directories, binaries, systemd units,
 sockets, Matrix connectivity).
-
-The "list" subcommand shows all machines that have published keys to the
-fleet's machine room.
 
 The "upgrade" subcommand publishes a BureauVersion state event to trigger
 the daemon's binary self-update mechanism. Point it at a bureau-host-env
@@ -50,6 +55,7 @@ services, removes unit files, binaries, directories, and configuration.`,
 			deployCommand(),
 			provisionCommand(),
 			listCommand(),
+			showCommand(),
 			upgradeCommand(),
 			decommissionCommand(),
 			revokeCommand(),
@@ -57,16 +63,20 @@ services, removes unit files, binaries, directories, and configuration.`,
 		},
 		Examples: []cli.Example{
 			{
+				Description: "List all fleet machines",
+				Command:     "bureau machine list bureau/fleet/prod --credential-file ./bureau-creds",
+			},
+			{
+				Description: "Show detailed info for a machine",
+				Command:     "bureau machine show machine/workstation",
+			},
+			{
 				Description: "Provision a new worker machine",
 				Command:     "bureau machine provision bureau/fleet/prod/machine/worker-01 --credential-file ./bureau-creds --output bootstrap.json",
 			},
 			{
 				Description: "Deploy Bureau locally from a bootstrap config",
 				Command:     "sudo bureau machine deploy local --bootstrap-file bootstrap.json",
-			},
-			{
-				Description: "List all fleet machines",
-				Command:     "bureau machine list bureau/fleet/prod --credential-file ./bureau-creds",
 			},
 			{
 				Description: "Upgrade the local machine's Bureau binaries",

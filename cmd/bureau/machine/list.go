@@ -13,6 +13,7 @@ import (
 	"time"
 
 	"github.com/bureau-foundation/bureau/cmd/bureau/cli"
+	"github.com/bureau-foundation/bureau/cmd/bureau/fleet"
 	"github.com/bureau-foundation/bureau/lib/ref"
 	"github.com/bureau-foundation/bureau/lib/schema"
 	"github.com/bureau-foundation/bureau/messaging"
@@ -21,7 +22,14 @@ import (
 // listParams holds the parameters for the machine list command.
 type listParams struct {
 	cli.SessionConfig
+	fleet.FleetConnection
 	cli.JSONOutput
+}
+
+// listResult is the JSON output of machine list.
+type listResult struct {
+	Machines      []*MachineEntry `json:"machines"       desc:"machines found"`
+	FleetEnriched bool            `json:"fleet_enriched" desc:"whether fleet controller data is included"`
 }
 
 func listCommand() *cli.Command {
@@ -36,11 +44,13 @@ The fleet localpart is optional — on a Bureau machine, it is auto-detected
 from /etc/bureau/machine.conf. The server name is derived from the
 connected session's identity.
 
-Shows each machine's name, public key, and last status heartbeat
-(if available). Reads from the fleet's machine room state.`,
+When a fleet controller is reachable, the output is enriched with live
+operational data: CPU and memory utilization, assignment counts, and
+operator-assigned labels. Without a fleet controller, the output shows
+static inventory from Matrix state events.`,
 		Usage:          "bureau machine list [fleet-localpart] [flags]",
 		Params:         func() any { return &params },
-		Output:         func() any { return &[]MachineEntry{} },
+		Output:         func() any { return &listResult{} },
 		RequiredGrants: []string{"command/machine/list"},
 		Annotations:    cli.ReadOnly(),
 		Examples: []cli.Example{
@@ -79,28 +89,35 @@ Shows each machine's name, public key, and last status heartbeat
 			}
 			defer matrixSession.Close()
 
-			return runList(ctx, matrixSession, fleetLocalpart, &params.JSONOutput, logger)
+			return runList(ctx, matrixSession, fleetLocalpart, &params, logger)
 		},
 	}
 }
 
 // MachineEntry collects the key, status, and hardware info for a single machine.
 type MachineEntry struct {
-	Name      string `json:"name"                  desc:"machine name"`
-	PublicKey string `json:"public_key"            desc:"SSH public key"`
-	Algorithm string `json:"algorithm"             desc:"key algorithm"`
-	LastSeen  string `json:"last_seen,omitempty"   desc:"last heartbeat timestamp"`
-	GPUCount  int    `json:"gpu_count"             desc:"number of GPUs"`
-	GPUModel  string `json:"gpu_model,omitempty"   desc:"GPU model name"`
-	CPUModel  string `json:"cpu_model,omitempty"   desc:"CPU model name"`
-	MemoryMB  int    `json:"memory_mb"             desc:"total memory in megabytes"`
+	Name      string `json:"name"                    desc:"machine name"`
+	PublicKey string `json:"public_key"              desc:"age public key"`
+	Algorithm string `json:"algorithm"               desc:"key algorithm"`
+	LastSeen  string `json:"last_seen,omitempty"     desc:"last heartbeat timestamp"`
+	GPUCount  int    `json:"gpu_count"               desc:"number of GPUs"`
+	GPUModel  string `json:"gpu_model,omitempty"     desc:"GPU model name"`
+	CPUModel  string `json:"cpu_model,omitempty"     desc:"CPU model name"`
+	MemoryMB  int    `json:"memory_mb"               desc:"total memory in megabytes"`
+
+	// Fleet-enriched fields (present when fleet controller is reachable).
+	Hostname     string            `json:"hostname,omitempty"       desc:"reported hostname"`
+	CPUPercent   int               `json:"cpu_percent,omitempty"    desc:"CPU utilization percentage"`
+	MemoryUsedMB int               `json:"memory_used_mb,omitempty" desc:"memory used in MB"`
+	Assignments  int               `json:"assignments,omitempty"    desc:"number of assigned principals"`
+	Labels       map[string]string `json:"labels,omitempty"         desc:"operator-assigned labels"`
 }
 
 // ListMachines returns all machines that have published keys or status to
 // the fleet's machine room. The caller provides a connected session, a
 // typed Fleet reference, and a context with an appropriate deadline.
-func ListMachines(ctx context.Context, session messaging.Session, fleet ref.Fleet) ([]*MachineEntry, error) {
-	machineAlias := fleet.MachineRoomAlias()
+func ListMachines(ctx context.Context, session messaging.Session, fleetRef ref.Fleet) ([]*MachineEntry, error) {
+	machineAlias := fleetRef.MachineRoomAlias()
 	machineRoomID, err := session.ResolveAlias(ctx, machineAlias)
 	if err != nil {
 		return nil, cli.NotFound("resolve fleet machine room %q: %w", machineAlias, err).
@@ -187,18 +204,59 @@ func ListMachines(ctx context.Context, session messaging.Session, fleet ref.Flee
 	return entries, nil
 }
 
-func runList(ctx context.Context, session messaging.Session, fleetLocalpart string, jsonOutput *cli.JSONOutput, logger *slog.Logger) error {
+func runList(ctx context.Context, session messaging.Session, fleetLocalpart string, params *listParams, logger *slog.Logger) error {
 	server, err := ref.ServerFromUserID(session.UserID().String())
 	if err != nil {
 		return cli.Internal("cannot determine server name from session: %w", err)
 	}
-	fleet, err := ref.ParseFleet(fleetLocalpart, server)
+	fleetRef, err := ref.ParseFleet(fleetLocalpart, server)
 	if err != nil {
 		return cli.Validation("%v", err)
 	}
 
-	entries, err := ListMachines(ctx, session, fleet)
+	// Matrix scan: ground truth of fleet membership.
+	entries, err := ListMachines(ctx, session, fleetRef)
 	if err != nil {
+		return err
+	}
+
+	// Fleet enrichment: optional, non-fatal.
+	fleetClient := tryFleetConnect(&params.FleetConnection, logger)
+	var fleetIndex map[string]fleet.MachineEntry
+	if fleetClient != nil {
+		fleetCtx, fleetCancel := fleet.CallContext(ctx)
+		defer fleetCancel()
+
+		var fleetResponse fleet.MachinesResponse
+		if err := fleetClient.Call(fleetCtx, "list-machines", nil, &fleetResponse); err != nil {
+			logger.Debug("fleet list-machines failed, continuing without fleet data", "error", err)
+		} else {
+			fleetIndex = make(map[string]fleet.MachineEntry, len(fleetResponse.Machines))
+			for _, machine := range fleetResponse.Machines {
+				fleetIndex[machine.Localpart] = machine
+			}
+		}
+	}
+
+	fleetEnriched := fleetIndex != nil
+
+	// Merge fleet data into Matrix entries.
+	if fleetEnriched {
+		for _, entry := range entries {
+			if fleetData, exists := fleetIndex[entry.Name]; exists {
+				entry.Hostname = fleetData.Hostname
+				entry.CPUPercent = fleetData.CPUPercent
+				entry.MemoryUsedMB = fleetData.MemoryUsedMB
+				entry.Assignments = fleetData.Assignments
+				entry.Labels = fleetData.Labels
+			}
+		}
+	}
+
+	if done, err := params.EmitJSON(listResult{
+		Machines:      entries,
+		FleetEnriched: fleetEnriched,
+	}); done {
 		return err
 	}
 
@@ -207,13 +265,21 @@ func runList(ctx context.Context, session messaging.Session, fleetLocalpart stri
 		return nil
 	}
 
-	if done, err := jsonOutput.EmitJSON(entries); done {
-		return err
-	}
-
+	// Table format adapts to whether fleet data is available.
 	writer := tabwriter.NewWriter(os.Stdout, 0, 4, 2, ' ', 0)
-	fmt.Fprintln(writer, "MACHINE\tGPUS\tMEMORY\tLAST SEEN")
+	if fleetEnriched {
+		printFleetEnrichedTable(writer, entries)
+	} else {
+		printMatrixOnlyTable(writer, entries)
+	}
+	writer.Flush()
 
+	return nil
+}
+
+// printMatrixOnlyTable prints the original Matrix-only table format.
+func printMatrixOnlyTable(writer *tabwriter.Writer, entries []*MachineEntry) {
+	fmt.Fprintln(writer, "MACHINE\tGPUS\tMEMORY\tLAST SEEN")
 	for _, entry := range entries {
 		gpuDisplay := "-"
 		if entry.GPUCount > 0 {
@@ -233,12 +299,38 @@ func runList(ctx context.Context, session messaging.Session, fleetLocalpart stri
 		}
 		fmt.Fprintf(writer, "%s\t%s\t%s\t%s\n", entry.Name, gpuDisplay, memoryDisplay, lastSeen)
 	}
-	writer.Flush()
-
-	return nil
 }
 
-// getOrCreate returns the machineEntry for the given name, creating it
+// printFleetEnrichedTable prints a table with fleet operational data.
+func printFleetEnrichedTable(writer *tabwriter.Writer, entries []*MachineEntry) {
+	fmt.Fprintln(writer, "MACHINE\tHOSTNAME\tCPU\tMEMORY\tGPUS\tASSIGNMENTS\tLABELS")
+	for _, entry := range entries {
+		hostname := entry.Hostname
+		if hostname == "" {
+			hostname = "-"
+		}
+		memoryDisplay := "-"
+		if entry.MemoryMB > 0 {
+			if entry.MemoryUsedMB > 0 {
+				memoryDisplay = fmt.Sprintf("%d/%d MB", entry.MemoryUsedMB, entry.MemoryMB)
+			} else {
+				memoryDisplay = fmt.Sprintf("%d MB", entry.MemoryMB)
+			}
+		}
+		labels := fleet.FormatLabels(entry.Labels)
+		fmt.Fprintf(writer, "%s\t%s\t%d%%\t%s\t%d\t%d\t%s\n",
+			entry.Name,
+			hostname,
+			entry.CPUPercent,
+			memoryDisplay,
+			entry.GPUCount,
+			entry.Assignments,
+			labels,
+		)
+	}
+}
+
+// getOrCreate returns the MachineEntry for the given name, creating it
 // if it doesn't exist yet.
 func getOrCreate(machines map[string]*MachineEntry, name string) *MachineEntry {
 	entry, exists := machines[name]

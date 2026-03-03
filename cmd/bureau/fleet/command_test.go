@@ -19,12 +19,10 @@ func TestFleetCommandHasSubcommands(t *testing.T) {
 	}
 
 	expectedSubcommands := map[string]bool{
-		"create":        false,
-		"enable":        false,
-		"config":        false,
-		"status":        false,
-		"list-machines": false,
-		"show-machine":  false,
+		"create": false,
+		"enable": false,
+		"config": false,
+		"status": false,
 	}
 
 	for _, sub := range command.Subcommands {

@@ -82,7 +82,7 @@ Requires a reachable fleet controller.`,
 			if err := client.Call(ctx, "place", fields, &response); err != nil {
 				return cli.Transient("placing service %q: %w", serviceLocalpart, err).
 					WithHint("Run 'bureau service list' to verify the service exists, " +
-						"and 'bureau fleet list-machines' to verify eligible machines.")
+						"and 'bureau machine list' to verify eligible machines.")
 			}
 
 			result := placeResult{

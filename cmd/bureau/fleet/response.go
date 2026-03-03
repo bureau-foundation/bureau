@@ -4,6 +4,8 @@
 package fleet
 
 import (
+	"strings"
+
 	"github.com/bureau-foundation/bureau/lib/schema"
 	fleetschema "github.com/bureau-foundation/bureau/lib/schema/fleet"
 )
@@ -71,6 +73,36 @@ type PlanResponse struct {
 	CurrentMachines []string        `cbor:"current_machines"`
 }
 
+// MachineEntry is a machine summary from the fleet controller's
+// list-machines response.
+type MachineEntry struct {
+	Localpart     string            `cbor:"localpart"`
+	Hostname      string            `cbor:"hostname"`
+	CPUPercent    int               `cbor:"cpu_percent"`
+	MemoryUsedMB  int               `cbor:"memory_used_mb"`
+	MemoryTotalMB int               `cbor:"memory_total_mb"`
+	GPUCount      int               `cbor:"gpu_count"`
+	Labels        map[string]string `cbor:"labels"`
+	Assignments   int               `cbor:"assignments"`
+	ConfigRoomID  string            `cbor:"config_room_id"`
+}
+
+// MachinesResponse is the fleet controller's response to the
+// "list-machines" action.
+type MachinesResponse struct {
+	Machines []MachineEntry `cbor:"machines"`
+}
+
+// ShowMachineResponse is the fleet controller's response to the
+// "show-machine" action.
+type ShowMachineResponse struct {
+	Localpart    string                       `cbor:"localpart"`
+	Info         *schema.MachineInfo          `cbor:"info"`
+	Status       *schema.MachineStatus        `cbor:"status"`
+	Assignments  []schema.PrincipalAssignment `cbor:"assignments"`
+	ConfigRoomID string                       `cbor:"config_room_id"`
+}
+
 // FormatStringList joins a string slice for display, returning "-" for
 // empty slices.
 func FormatStringList(items []string) string {
@@ -82,4 +114,17 @@ func FormatStringList(items []string) string {
 		result += ", " + item
 	}
 	return result
+}
+
+// FormatLabels formats a label map as "key=value, ..." for display,
+// returning "-" for empty maps.
+func FormatLabels(labels map[string]string) string {
+	if len(labels) == 0 {
+		return "-"
+	}
+	parts := make([]string, 0, len(labels))
+	for key, value := range labels {
+		parts = append(parts, key+"="+value)
+	}
+	return strings.Join(parts, ", ")
 }

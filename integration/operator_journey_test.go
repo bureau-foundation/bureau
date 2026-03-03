@@ -234,16 +234,18 @@ func TestNewOperatorJourney(t *testing.T) {
 	machineListOutput := runBureauWithEnvOrFail(t, env,
 		"machine", "list", "--credential-file", credentialFile, "--json")
 
-	var machineEntries []struct {
-		Name      string `json:"name"`
-		PublicKey string `json:"public_key"`
+	var machineListResult struct {
+		Machines []struct {
+			Name      string `json:"name"`
+			PublicKey string `json:"public_key"`
+		} `json:"machines"`
 	}
-	if err := json.Unmarshal([]byte(machineListOutput), &machineEntries); err != nil {
+	if err := json.Unmarshal([]byte(machineListOutput), &machineListResult); err != nil {
 		t.Fatalf("parse machine list JSON: %v\noutput:\n%s", err, machineListOutput)
 	}
 
 	var foundMachine bool
-	for _, entry := range machineEntries {
+	for _, entry := range machineListResult.Machines {
 		if entry.Name == machine.Name {
 			foundMachine = true
 			if entry.PublicKey == "" {
@@ -253,7 +255,7 @@ func TestNewOperatorJourney(t *testing.T) {
 		}
 	}
 	if !foundMachine {
-		t.Errorf("machine list: %q not found in %d entries", machine.Name, len(machineEntries))
+		t.Errorf("machine list: %q not found in %d entries", machine.Name, len(machineListResult.Machines))
 	}
 
 	// ================================================================

@@ -46,7 +46,7 @@ func run() error {
 		upstreamSocket     string
 		encryptionKeyStdin bool
 	)
-	flag.StringVar(&storeDir, "store-dir", "", "artifact store root directory (required)")
+	flag.StringVar(&storeDir, "store-dir", "/var/bureau/artifacts", "artifact store root directory")
 	flag.StringVar(&cacheDir, "cache-dir", "", "local cache directory (optional, enables ring cache)")
 	flag.Int64Var(&cacheSize, "cache-size", 0, "cache device size in bytes (required if --cache-dir is set)")
 	flag.StringVar(&mountpoint, "mountpoint", "", "FUSE mount directory for read-only artifact access (optional)")
@@ -60,7 +60,7 @@ func run() error {
 	}
 
 	if storeDir == "" {
-		return fmt.Errorf("--store-dir is required")
+		return fmt.Errorf("--store-dir is required (set a path or use the default /var/bureau/artifacts)")
 	}
 
 	// Create the logger early — needed for stdin read logging

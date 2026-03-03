@@ -598,9 +598,10 @@ func baseTemplates() []namedTemplate {
 		{
 			name: "agent-service",
 			content: schema.TemplateContent{
-				Description: "Bureau agent service for agent session management, context tracking, and metrics",
-				Inherits:    []string{"bureau/template:service-base"},
-				Command:     []string{"bureau-agent-service"},
+				Description:      "Bureau agent service for agent session management, context tracking, and metrics",
+				Inherits:         []string{"bureau/template:service-base"},
+				Command:          []string{"bureau-agent-service"},
+				RequiredServices: []string{"artifact"},
 			},
 		},
 		{

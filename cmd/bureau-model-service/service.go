@@ -61,6 +61,12 @@ type ModelService struct {
 	// until initialization in main.go.
 	latencyRouter *LatencyRouter
 
+	// configRoomID is the Matrix room where model configuration
+	// events (providers, aliases, accounts) live. Set during initial
+	// sync to the first room where model config events are found.
+	// The sync handler uses this for publishing alias state events.
+	configRoomID ref.RoomID
+
 	// providersMu protects the providers map. Providers are
 	// long-lived HTTP clients keyed by provider name. Created lazily
 	// on first request to that provider.
@@ -92,6 +98,7 @@ func (ms *ModelService) registerActions(server *service.SocketServer) {
 	server.HandleAuth(model.ActionEmbed, ms.handleEmbed)
 	server.HandleAuth(model.ActionList, ms.handleList)
 	server.HandleAuth(model.ActionStatus, ms.handleStatus)
+	server.HandleAuth(model.ActionSync, ms.handleAliasSync)
 }
 
 // getOrCreateProvider returns a provider for the given name and

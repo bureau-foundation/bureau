@@ -6,10 +6,13 @@ package main
 import (
 	"context"
 	"encoding/json"
+	"fmt"
 
+	"github.com/bureau-foundation/bureau/lib/codec"
 	"github.com/bureau-foundation/bureau/lib/ref"
 	"github.com/bureau-foundation/bureau/lib/schema/model"
 	"github.com/bureau-foundation/bureau/lib/service"
+	"github.com/bureau-foundation/bureau/lib/servicetoken"
 	"github.com/bureau-foundation/bureau/messaging"
 )
 
@@ -99,7 +102,12 @@ func (ms *ModelService) initialSync(ctx context.Context) (string, error) {
 	service.AcceptInvites(ctx, ms.session, response.Rooms.Invite, ms.logger)
 
 	// Process state from all joined rooms to populate the registry.
-	for _, room := range response.Rooms.Join {
+	// Track the config room — the first room where model config
+	// events appear becomes the target for publishing alias updates.
+	for roomID, room := range response.Rooms.Join {
+		if ms.configRoomID.IsZero() && hasModelConfigEvents(room.State.Events) {
+			ms.configRoomID = roomID
+		}
 		ms.processStateEvents(room.State.Events)
 		ms.processStateEvents(room.Timeline.Events)
 	}
@@ -276,6 +284,107 @@ func (ms *ModelService) removeProviderInstance(providerName string) {
 		provider.Close()
 		delete(ms.providers, providerName)
 	}
+}
+
+// hasModelConfigEvents reports whether any event in the list is a
+// model configuration event type (provider, alias, or account).
+func hasModelConfigEvents(events []messaging.Event) bool {
+	for _, event := range events {
+		switch ref.EventType(event.Type) {
+		case model.EventTypeModelProvider, model.EventTypeModelAlias, model.EventTypeModelAccount:
+			return true
+		}
+	}
+	return false
+}
+
+// handleAliasSync processes a batch of alias operations (create,
+// update, delete) by publishing the corresponding Matrix state events.
+// This is an AuthActionFunc: the socket server handles the response
+// envelope. Requires the model/sync grant.
+func (ms *ModelService) handleAliasSync(ctx context.Context, token *servicetoken.Token, raw []byte) (any, error) {
+	if err := requireActionGrant(token, model.ActionSync); err != nil {
+		return nil, err
+	}
+
+	if ms.configRoomID.IsZero() {
+		return nil, fmt.Errorf("model config room not discovered (no config events seen during sync)")
+	}
+
+	var request model.SyncRequest
+	if err := codec.Unmarshal(raw, &request); err != nil {
+		return nil, fmt.Errorf("invalid sync request: %w", err)
+	}
+
+	if len(request.Operations) == 0 {
+		return &model.SyncResponse{}, nil
+	}
+
+	var created, updated, deleted int
+	var errors []string
+
+	for _, operation := range request.Operations {
+		if operation.Alias == "" {
+			errors = append(errors, "operation with empty alias name")
+			continue
+		}
+
+		switch operation.Action {
+		case "create", "update":
+			if operation.Content == nil {
+				errors = append(errors, fmt.Sprintf("alias %q: missing content for %s", operation.Alias, operation.Action))
+				continue
+			}
+			if err := operation.Content.Validate(); err != nil {
+				errors = append(errors, fmt.Sprintf("alias %q: %v", operation.Alias, err))
+				continue
+			}
+
+			_, err := ms.session.SendStateEvent(ctx, ms.configRoomID,
+				model.EventTypeModelAlias, operation.Alias, operation.Content)
+			if err != nil {
+				errors = append(errors, fmt.Sprintf("alias %q: publish failed: %v", operation.Alias, err))
+				continue
+			}
+
+			if operation.Action == "create" {
+				created++
+			} else {
+				updated++
+			}
+			ms.logger.Info("alias synced",
+				"action", operation.Action,
+				"alias", operation.Alias,
+				"provider", operation.Content.Provider,
+				"model", operation.Content.ProviderModel,
+				"subject", token.Subject,
+			)
+
+		case "delete":
+			// Delete by publishing empty content.
+			_, err := ms.session.SendStateEvent(ctx, ms.configRoomID,
+				model.EventTypeModelAlias, operation.Alias, map[string]any{})
+			if err != nil {
+				errors = append(errors, fmt.Sprintf("alias %q: delete failed: %v", operation.Alias, err))
+				continue
+			}
+			deleted++
+			ms.logger.Info("alias deleted",
+				"alias", operation.Alias,
+				"subject", token.Subject,
+			)
+
+		default:
+			errors = append(errors, fmt.Sprintf("alias %q: unknown action %q", operation.Alias, operation.Action))
+		}
+	}
+
+	return &model.SyncResponse{
+		Created: created,
+		Updated: updated,
+		Deleted: deleted,
+		Errors:  errors,
+	}, nil
 }
 
 // remarshal converts a map[string]any (from Matrix event JSON

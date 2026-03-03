@@ -6,6 +6,7 @@ load("@rules_go//go:def.bzl", "go_library", "go_test")
 go_library(
     name = "modeldiscovery",
     srcs = [
+        "alias.go",
         "catalog.go",
         "doc.go",
         "filter.go",
@@ -14,7 +15,10 @@ go_library(
     ],
     importpath = "github.com/bureau-foundation/bureau/lib/modeldiscovery",
     visibility = ["//visibility:public"],
-    deps = ["//lib/principal"],
+    deps = [
+        "//lib/principal",
+        "//lib/schema/model",
+    ],
 )
 
 go_test(

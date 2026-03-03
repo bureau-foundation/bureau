@@ -28,6 +28,7 @@ login') or explicit --socket and --token-file flags.`,
 			embedCommand(),
 			listCommand(),
 			statusCommand(),
+			syncCommand(),
 		},
 		Examples: []cli.Example{
 			{

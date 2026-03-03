@@ -78,3 +78,42 @@ type AccountStatusResponse struct {
 	// Accounts lists quota status for all registered accounts.
 	Accounts []AccountStatusEntry `json:"accounts" desc:"account quota status entries"`
 }
+
+// --- Sync request/response types ---
+
+// SyncRequest describes a batch of alias operations to apply. Used
+// by the model/sync action to create, update, or delete model aliases
+// from catalog discovery rules.
+type SyncRequest struct {
+	// Operations is the list of alias operations to apply.
+	Operations []AliasOperation `json:"operations" desc:"alias operations to apply"`
+}
+
+// AliasOperation is a single create, update, or delete operation on
+// a model alias.
+type AliasOperation struct {
+	// Action is "create", "update", or "delete".
+	Action string `json:"action" desc:"operation type: create, update, or delete"`
+
+	// Alias is the alias name (state key in m.bureau.model_alias).
+	Alias string `json:"alias" desc:"alias name"`
+
+	// Content is the alias configuration. Required for create and
+	// update operations. Ignored for delete.
+	Content *ModelAliasContent `json:"content,omitempty" desc:"alias configuration"`
+}
+
+// SyncResponse summarizes the result of a sync operation.
+type SyncResponse struct {
+	// Created is the number of new aliases created.
+	Created int `json:"created" desc:"aliases created"`
+
+	// Updated is the number of existing aliases updated.
+	Updated int `json:"updated" desc:"aliases updated"`
+
+	// Deleted is the number of aliases deleted.
+	Deleted int `json:"deleted" desc:"aliases deleted"`
+
+	// Errors lists any operations that failed, with details.
+	Errors []string `json:"errors,omitempty" desc:"failed operations"`
+}

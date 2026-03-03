@@ -47,6 +47,15 @@ compromised machine. It deactivates the machine's Matrix account (forcing
 the daemon to self-destruct), clears all state, and publishes a
 revocation event for fleet-wide notification.
 
+The "cordon" subcommand adds the "cordoned" label to a machine, making
+it ineligible for new fleet placements. Existing workloads continue.
+
+The "uncordon" subcommand removes the "cordoned" label, re-enabling
+the machine for new placements.
+
+The "label" subcommand adds, updates, or removes arbitrary labels on a
+machine. Labels drive fleet placement constraints.
+
 The "uninstall" subcommand removes Bureau from the local machine: stops
 services, removes unit files, binaries, directories, and configuration.`,
 		Subcommands: []*cli.Command{
@@ -56,6 +65,9 @@ services, removes unit files, binaries, directories, and configuration.`,
 			listCommand(),
 			showCommand(),
 			upgradeCommand(),
+			cordonCommand(),
+			uncordonCommand(),
+			labelCommand(),
 			decommissionCommand(),
 			revokeCommand(),
 			uninstallCommand(),
@@ -80,6 +92,14 @@ services, removes unit files, binaries, directories, and configuration.`,
 			{
 				Description: "Upgrade the local machine's Bureau binaries",
 				Command:     "bureau machine upgrade --local --host-env /nix/store/...-bureau-host-env --credential-file ./bureau-creds",
+			},
+			{
+				Description: "Cordon a machine for maintenance",
+				Command:     "bureau machine cordon bureau/fleet/prod/machine/worker-01 --credential-file ./bureau-creds",
+			},
+			{
+				Description: "Set labels for placement constraints",
+				Command:     "bureau machine label bureau/fleet/prod/machine/worker-01 gpu=h100 tier=production --credential-file ./bureau-creds",
 			},
 			{
 				Description: "Remove a machine from the fleet",

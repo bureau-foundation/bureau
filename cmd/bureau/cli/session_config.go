@@ -21,15 +21,20 @@ import (
 	"github.com/bureau-foundation/bureau/messaging"
 )
 
-// SessionConfig holds the shared flags for connecting to a Matrix homeserver
-// via a credential file or explicit flags. Used by CLI commands that need
-// admin-level Matrix access (workspace create, matrix room create, etc.).
+// SessionConfig holds the shared flags for connecting to a Matrix homeserver.
+// Used by CLI commands that need Matrix access (doctor, workspace create,
+// matrix room create, etc.).
 //
-// The credential file is the key=value file produced by "bureau matrix setup".
-// It contains MATRIX_HOMESERVER_URL, MATRIX_ADMIN_USER, and MATRIX_ADMIN_TOKEN.
+// Connect resolves credentials in priority order:
+//  1. Explicit flags (--homeserver, --token, --user-id)
+//  2. Credential file (--credential-file, the admin key=value file from
+//     "bureau matrix setup" — only when explicitly specified)
+//  3. Operator session (~/.config/bureau/session.json from "bureau login")
+//  4. Proxy socket (BUREAU_PROXY_SOCKET, inside Bureau sandboxes)
 //
-// Alternatively, --homeserver, --token, and --user-id can be specified directly
-// for environments where the credential file is not available.
+// Most commands need zero flags: if the operator has run "bureau login",
+// Connect finds their session automatically. The credential file flags
+// are overrides for admin operations that require the bootstrap credentials.
 //
 // Usage pattern:
 //
@@ -53,32 +58,30 @@ type SessionConfig struct {
 }
 
 // AddFlags registers --credential-file, --homeserver, --token, and --user-id
-// on the given flag set. --credential-file is the primary interface; the
-// others are overrides for when you need to specify values directly.
+// on the given flag set. All flags are optional when the operator has run
+// "bureau login" — Connect auto-discovers the operator session. Flags
+// override auto-discovered values.
 func (c *SessionConfig) AddFlags(flagSet *pflag.FlagSet) {
-	flagSet.StringVar(&c.CredentialFile, "credential-file", "", "path to Bureau credential file from 'bureau matrix setup' (required unless --homeserver/--token/--user-id are all set)")
-	flagSet.StringVar(&c.HomeserverURL, "homeserver", "", "Matrix homeserver URL (overrides credential file)")
-	flagSet.StringVar(&c.Token, "token", "", "Matrix access token (overrides credential file)")
-	flagSet.StringVar(&c.UserID, "user-id", "", "Matrix user ID (overrides credential file)")
+	flagSet.StringVar(&c.CredentialFile, "credential-file", "", "path to admin credential file from 'bureau matrix setup' (overrides operator session)")
+	flagSet.StringVar(&c.HomeserverURL, "homeserver", "", "Matrix homeserver URL (overrides all other sources)")
+	flagSet.StringVar(&c.Token, "token", "", "Matrix access token (overrides operator session and credential file)")
+	flagSet.StringVar(&c.UserID, "user-id", "", "Matrix user ID (overrides operator session and credential file)")
 }
 
-// Connect creates an authenticated Matrix session from the configured flags.
-// If --credential-file is set, it reads the credential file and uses those
-// values. Individual flags (--homeserver, --token, --user-id) override the
-// credential file values.
+// Connect creates an authenticated Matrix session. Resolution order:
 //
-// When no explicit credentials are provided and BUREAU_PROXY_SOCKET is set,
-// Connect falls through to a proxy-routed path: it creates a
-// proxyclient.ProxySession that delegates to the proxy's structured /v1/matrix/*
-// endpoints. The proxy injects credentials on outgoing Matrix API requests.
-// This is the connection path for CLI commands running inside a Bureau sandbox
-// (both via MCP tools and direct shell invocation).
+//  1. Explicit flags (--homeserver, --token, --user-id)
+//  2. Credential file (--credential-file, if specified)
+//  3. Operator session (~/.config/bureau/session.json from "bureau login")
+//  4. Proxy socket (BUREAU_PROXY_SOCKET, for commands inside sandboxes)
+//
+// Individual flags override values from any lower-priority source.
 func (c *SessionConfig) Connect(ctx context.Context) (messaging.Session, error) {
 	homeserverURL := c.HomeserverURL
 	token := c.Token
 	userID := c.UserID
 
-	// Load from credential file if provided.
+	// Load from credential file if explicitly provided.
 	if c.CredentialFile != "" {
 		credentials, err := ReadCredentialFile(c.CredentialFile)
 		if err != nil {
@@ -97,28 +100,45 @@ func (c *SessionConfig) Connect(ctx context.Context) (messaging.Session, error) 
 		}
 	}
 
-	// When no credentials are available, try the proxy socket. Inside a
-	// Bureau sandbox, all Matrix access goes through the proxy's structured
-	// /v1/matrix/* endpoints. The proxy injects the principal's access
-	// token. No credentials needed in the sandbox.
+	// Try operator session for any still-missing values. The operator
+	// session is per-user, created by "bureau login", and carries only
+	// the operator's own credentials (not server admin keys).
+	if homeserverURL == "" || token == "" || userID == "" {
+		if operatorSession, err := LoadSession(); err == nil {
+			if homeserverURL == "" {
+				homeserverURL = operatorSession.Homeserver
+			}
+			if token == "" {
+				token = operatorSession.AccessToken
+			}
+			if userID == "" {
+				userID = operatorSession.UserID
+			}
+		}
+	}
+
+	// When nothing is available, try the proxy socket. Inside a Bureau
+	// sandbox, all Matrix access goes through the proxy's structured
+	// /v1/matrix/* endpoints.
 	if homeserverURL == "" && token == "" && userID == "" {
 		return c.connectViaProxy(ctx)
 	}
 
-	// Direct connection with explicit credentials.
-	credentialHint := "Pass --credential-file with the file from 'bureau matrix setup', " +
-		"or set all three flags: --homeserver, --token, --user-id."
-	if homeserverURL == "" {
-		return nil, Validation("--homeserver is required (or use --credential-file)").
-			WithHint(credentialHint)
-	}
-	if token == "" {
-		return nil, Validation("--token is required (or use --credential-file)").
-			WithHint(credentialHint)
-	}
-	if userID == "" {
-		return nil, Validation("--user-id is required (or use --credential-file)").
-			WithHint(credentialHint)
+	// Direct connection — report what's missing.
+	if homeserverURL == "" || token == "" || userID == "" {
+		missing := []string{}
+		if homeserverURL == "" {
+			missing = append(missing, "homeserver URL")
+		}
+		if token == "" {
+			missing = append(missing, "access token")
+		}
+		if userID == "" {
+			missing = append(missing, "user ID")
+		}
+		return nil, Validation("missing %s", strings.Join(missing, ", ")).
+			WithHint("Run 'bureau login' to authenticate, or pass --credential-file " +
+				"with the admin credential file from 'bureau matrix setup'.")
 	}
 
 	logger := NewClientLogger(slog.LevelInfo)
@@ -149,9 +169,9 @@ func (c *SessionConfig) Connect(ctx context.Context) (messaging.Session, error) 
 func (c *SessionConfig) connectViaProxy(ctx context.Context) (messaging.Session, error) {
 	socketPath := os.Getenv("BUREAU_PROXY_SOCKET")
 	if socketPath == "" {
-		return nil, Validation("no credentials provided and BUREAU_PROXY_SOCKET is not set").
-			WithHint("Use --credential-file with the file from 'bureau matrix setup', " +
-				"or run inside a Bureau sandbox where the proxy socket is available.")
+		return nil, Validation("no credentials available").
+			WithHint("Run 'bureau login' to authenticate, or pass --credential-file " +
+				"with the admin credential file from 'bureau matrix setup'.")
 	}
 
 	proxy := proxyclient.New(socketPath, ref.ServerName{})
@@ -175,13 +195,21 @@ func (c *SessionConfig) connectViaProxy(ctx context.Context) (messaging.Session,
 	return proxyclient.NewProxySession(proxy, proxyUserID), nil
 }
 
-// ResolveHomeserverURL extracts the homeserver URL from flags or credential
-// file without creating a full session. Useful for performing unauthenticated
-// checks (like server version probing) before attempting authentication.
+// ResolveHomeserverURL extracts the homeserver URL without creating a
+// full session. Useful for performing unauthenticated checks (like
+// server version probing) before attempting authentication.
+//
+// Resolution order:
+//  1. --homeserver flag
+//  2. --credential-file (if specified)
+//  3. Operator session (~/.config/bureau/session.json)
+//  4. machine.conf (BUREAU_HOMESERVER_URL)
 func (c *SessionConfig) ResolveHomeserverURL() (string, error) {
 	if c.HomeserverURL != "" {
 		return c.HomeserverURL, nil
 	}
+
+	// Explicit credential file: error if unreadable or missing the URL.
 	if c.CredentialFile != "" {
 		credentials, err := ReadCredentialFile(c.CredentialFile)
 		if err != nil {
@@ -196,9 +224,21 @@ func (c *SessionConfig) ResolveHomeserverURL() (string, error) {
 			WithHint("The credential file may be incomplete. " +
 				"Re-run 'bureau matrix setup' to regenerate it, or add MATRIX_HOMESERVER_URL=<url> to the file.")
 	}
-	return "", Validation("--homeserver or --credential-file is required").
-		WithHint("Pass --homeserver <url> (e.g., http://localhost:6167) or " +
-			"--credential-file with the file from 'bureau matrix setup'.")
+
+	// Operator session.
+	if operatorSession, err := LoadSession(); err == nil {
+		if operatorSession.Homeserver != "" {
+			return operatorSession.Homeserver, nil
+		}
+	}
+
+	// Machine config.
+	if conf := LoadMachineConf(); conf.HomeserverURL != "" {
+		return conf.HomeserverURL, nil
+	}
+
+	return "", Validation("cannot determine homeserver URL").
+		WithHint("Run 'bureau login' to authenticate, or pass --homeserver <url>.")
 }
 
 // ReadCredentialFile parses a key=value credential file. Lines starting

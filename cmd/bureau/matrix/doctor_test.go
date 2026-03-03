@@ -13,6 +13,7 @@ import (
 	"net/http/httptest"
 	"net/url"
 	"os"
+	"path/filepath"
 	"strings"
 	"sync"
 	"testing"
@@ -229,7 +230,6 @@ func (m *mockDoctorServer) handle(t *testing.T) http.HandlerFunc {
 		if method == http.MethodGet && strings.Contains(rawPath, "/state/m.bureau.template") {
 			roomID := extractRoomIDFromStatePath(rawPath)
 			if roomID == m.templateID {
-				// Extract the state key (template name) from the path.
 				idx := strings.Index(rawPath, "/state/m.bureau.template/")
 				if idx >= 0 {
 					stateKey := rawPath[idx+len("/state/m.bureau.template/"):]
@@ -503,8 +503,6 @@ func TestRunDoctor_AllHealthy(t *testing.T) {
 		"dev team room admin power",
 		"dev team room state_default",
 		"dev team room join rules",
-		`template "base"`,
-		`template "base-networked"`,
 		"bureau space dev team",
 		"system room dev team",
 		"template room dev team",
@@ -512,7 +510,10 @@ func TestRunDoctor_AllHealthy(t *testing.T) {
 		"artifact room dev team",
 		"dev team room dev team",
 	}
-	// Add expected pipeline checks dynamically from embedded content.
+	// Add expected template and pipeline checks dynamically from embedded content.
+	for _, template := range baseTemplates("bureau/template") {
+		expectedChecks = append(expectedChecks, fmt.Sprintf("template %q", template.name))
+	}
 	pipelines, err := content.Pipelines()
 	if err != nil {
 		t.Fatalf("content.Pipelines(): %v", err)
@@ -1217,6 +1218,157 @@ func TestCheckSpaceChild(t *testing.T) {
 	}
 }
 
+func TestJSONContentMatches(t *testing.T) {
+	t.Run("identical struct", func(t *testing.T) {
+		content := schema.TemplateContent{
+			Description: "test template",
+			Command:     []string{"echo", "hello"},
+		}
+		stored, err := json.Marshal(content)
+		if err != nil {
+			t.Fatal(err)
+		}
+		matches, err := jsonContentMatches(content, stored)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if !matches {
+			t.Error("expected match for identical content")
+		}
+	})
+
+	t.Run("different key order", func(t *testing.T) {
+		content := schema.TemplateContent{
+			Description: "test",
+			Inherits:    []string{"parent:base"},
+		}
+		// Manually construct JSON with reversed key order.
+		stored := json.RawMessage(`{"inherits":["parent:base"],"description":"test"}`)
+		matches, err := jsonContentMatches(content, stored)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if !matches {
+			t.Error("expected match despite different key ordering")
+		}
+	})
+
+	t.Run("different description", func(t *testing.T) {
+		expected := schema.TemplateContent{
+			Description: "new description",
+		}
+		stored := json.RawMessage(`{"description":"old description"}`)
+		matches, err := jsonContentMatches(expected, stored)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if matches {
+			t.Error("expected mismatch for different description")
+		}
+	})
+
+	t.Run("added field", func(t *testing.T) {
+		expected := schema.TemplateContent{
+			Description:      "agent template",
+			RequiredServices: []string{"agent", "artifact"},
+		}
+		// Stored version lacks RequiredServices (the scenario from the bead).
+		stored := json.RawMessage(`{"description":"agent template"}`)
+		matches, err := jsonContentMatches(expected, stored)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if matches {
+			t.Error("expected mismatch when expected has fields not in stored")
+		}
+	})
+
+	t.Run("extra field in stored", func(t *testing.T) {
+		expected := schema.TemplateContent{
+			Description: "base template",
+		}
+		// Stored has a field the expected content doesn't.
+		stored := json.RawMessage(`{"description":"base template","command":["echo"]}`)
+		matches, err := jsonContentMatches(expected, stored)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if matches {
+			t.Error("expected mismatch when stored has extra fields")
+		}
+	})
+
+	t.Run("nested struct match", func(t *testing.T) {
+		expected := schema.TemplateContent{
+			Description: "namespaced",
+			Namespaces: &schema.TemplateNamespaces{
+				PID: true,
+				Net: true,
+				IPC: true,
+				UTS: true,
+			},
+		}
+		stored := json.RawMessage(`{"description":"namespaced","namespaces":{"pid":true,"net":true,"ipc":true,"uts":true}}`)
+		matches, err := jsonContentMatches(expected, stored)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if !matches {
+			t.Error("expected match for nested struct")
+		}
+	})
+
+	t.Run("nested struct mismatch", func(t *testing.T) {
+		expected := schema.TemplateContent{
+			Namespaces: &schema.TemplateNamespaces{
+				PID: true,
+				Net: false,
+			},
+		}
+		stored := json.RawMessage(`{"namespaces":{"pid":true,"net":true}}`)
+		matches, err := jsonContentMatches(expected, stored)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if matches {
+			t.Error("expected mismatch for different namespace values")
+		}
+	})
+
+	t.Run("empty content matches", func(t *testing.T) {
+		expected := schema.TemplateContent{}
+		stored := json.RawMessage(`{}`)
+		matches, err := jsonContentMatches(expected, stored)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if !matches {
+			t.Error("expected match for empty content")
+		}
+	})
+
+	t.Run("map content", func(t *testing.T) {
+		expected := map[string]string{"key": "value"}
+		stored := json.RawMessage(`{"key":"value"}`)
+		matches, err := jsonContentMatches(expected, stored)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if !matches {
+			t.Error("expected match for map content")
+		}
+	})
+
+	t.Run("invalid stored JSON", func(t *testing.T) {
+		expected := schema.TemplateContent{Description: "test"}
+		stored := json.RawMessage(`not json`)
+		_, err := jsonContentMatches(expected, stored)
+		if err == nil {
+			t.Error("expected error for invalid stored JSON")
+		}
+	})
+}
+
 func TestCheckCredentialMatch(t *testing.T) {
 	creds := map[string]string{
 		"MATRIX_SYSTEM_ROOM": "!system:local",
@@ -1279,11 +1431,16 @@ func TestResolveHomeserverURL(t *testing.T) {
 		}
 	})
 
-	t.Run("missing both", func(t *testing.T) {
+	t.Run("missing all sources", func(t *testing.T) {
+		// Point operator session and machine.conf at nonexistent paths
+		// so the test doesn't pick up host state.
+		t.Setenv("BUREAU_SESSION_FILE", filepath.Join(t.TempDir(), "nonexistent.json"))
+		t.Setenv("BUREAU_MACHINE_CONF", filepath.Join(t.TempDir(), "nonexistent.conf"))
+
 		config := cli.SessionConfig{}
 		_, err := config.ResolveHomeserverURL()
 		if err == nil {
-			t.Fatal("expected error for missing homeserver and credential file")
+			t.Fatal("expected error when no homeserver source is available")
 		}
 	})
 }

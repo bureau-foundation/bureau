@@ -4,6 +4,7 @@
 package matrix
 
 import (
+	"bytes"
 	"context"
 	"encoding/json"
 	"fmt"
@@ -61,20 +62,20 @@ Use --json for machine-readable output suitable for monitoring or CI.`,
 		Usage: "bureau matrix doctor [flags]",
 		Examples: []cli.Example{
 			{
-				Description: "Check with credential file",
-				Command:     "bureau matrix doctor --credential-file ./creds",
+				Description: "Check health (uses operator session from 'bureau login')",
+				Command:     "bureau matrix doctor",
 			},
 			{
 				Description: "Check and repair fixable issues",
-				Command:     "bureau matrix doctor --credential-file ./creds --fix",
+				Command:     "bureau matrix doctor --fix",
 			},
 			{
-				Description: "Preview repairs without executing",
-				Command:     "bureau matrix doctor --credential-file ./creds --fix --dry-run",
+				Description: "Fix with admin credentials (when operator lacks power levels)",
+				Command:     "bureau matrix doctor --fix --credential-file /path/to/admin-creds",
 			},
 			{
 				Description: "Machine-readable output",
-				Command:     "bureau matrix doctor --credential-file ./creds --json",
+				Command:     "bureau matrix doctor --json",
 			},
 		},
 		Annotations:    cli.ReadOnly(),
@@ -814,14 +815,15 @@ type stateEventItem struct {
 }
 
 // checkPublishedStateEvents verifies that each item in the list is present
-// as a state event in the given room. Missing items produce a fixable failure
-// that re-publishes the expected content.
+// as a state event in the given room with the expected content. Missing items
+// and items with drifted content produce fixable failures that publish the
+// expected content.
 func checkPublishedStateEvents(ctx context.Context, session messaging.Session, roomID ref.RoomID, items []stateEventItem) []doctor.Result {
 	var results []doctor.Result
 
 	for _, item := range items {
 		checkName := fmt.Sprintf("%s %q", item.label, item.name)
-		_, err := session.GetStateEvent(ctx, roomID, item.eventType, item.name)
+		storedContent, err := session.GetStateEvent(ctx, roomID, item.eventType, item.name)
 		if err != nil {
 			if messaging.IsMatrixError(err, messaging.ErrCodeNotFound) {
 				capturedItem := item
@@ -841,10 +843,71 @@ func checkPublishedStateEvents(ctx context.Context, session messaging.Session, r
 			results = append(results, doctor.Fail(checkName, fmt.Sprintf("cannot read: %v", err)))
 			continue
 		}
-		results = append(results, doctor.Pass(checkName, "published"))
+
+		matches, err := jsonContentMatches(item.content, storedContent)
+		if err != nil {
+			results = append(results, doctor.Fail(checkName, fmt.Sprintf("content comparison failed: %v", err)))
+			continue
+		}
+		if !matches {
+			capturedItem := item
+			capturedRoomID := roomID
+			results = append(results, doctor.FailWithFix(
+				checkName,
+				fmt.Sprintf("%s %q content differs from expected", item.label, item.name),
+				fmt.Sprintf("update %s %q", item.label, item.name),
+				func(ctx context.Context) error {
+					_, err := session.SendStateEvent(ctx, capturedRoomID, capturedItem.eventType,
+						capturedItem.name, capturedItem.content)
+					return err
+				},
+			))
+			continue
+		}
+
+		results = append(results, doctor.Pass(checkName, "up to date"))
 	}
 
 	return results
+}
+
+// jsonContentMatches reports whether the expected content (a Go value) matches
+// the stored content (raw JSON from Matrix). Comparison normalizes key ordering
+// by round-tripping both through json.Unmarshal into generic types and then
+// re-marshaling to canonical JSON. This handles differences in struct field
+// order between Go's encoder and the homeserver's storage.
+func jsonContentMatches(expected any, stored json.RawMessage) (bool, error) {
+	expectedJSON, err := json.Marshal(expected)
+	if err != nil {
+		return false, fmt.Errorf("marshal expected content: %w", err)
+	}
+
+	// Fast path: byte-equal means identical.
+	if bytes.Equal(expectedJSON, []byte(stored)) {
+		return true, nil
+	}
+
+	// Normalize both to canonical form by round-tripping through any.
+	// json.Marshal sorts map keys alphabetically, producing stable output
+	// regardless of the original key ordering.
+	var expectedNormalized, storedNormalized any
+	if err := json.Unmarshal(expectedJSON, &expectedNormalized); err != nil {
+		return false, fmt.Errorf("normalize expected: %w", err)
+	}
+	if err := json.Unmarshal(stored, &storedNormalized); err != nil {
+		return false, fmt.Errorf("normalize stored: %w", err)
+	}
+
+	expectedCanonical, err := json.Marshal(expectedNormalized)
+	if err != nil {
+		return false, fmt.Errorf("re-marshal expected: %w", err)
+	}
+	storedCanonical, err := json.Marshal(storedNormalized)
+	if err != nil {
+		return false, fmt.Errorf("re-marshal stored: %w", err)
+	}
+
+	return bytes.Equal(expectedCanonical, storedCanonical), nil
 }
 
 // checkBaseTemplates verifies that the standard Bureau templates ("base" and

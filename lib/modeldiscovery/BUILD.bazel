@@ -24,6 +24,7 @@ go_library(
 go_test(
     name = "modeldiscovery_test",
     srcs = [
+        "alias_test.go",
         "filter_test.go",
         "openrouter_test.go",
         "pricing_test.go",

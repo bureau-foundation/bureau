@@ -292,6 +292,80 @@ func TestModelService(t *testing.T) {
 			t.Errorf("HTTP streamed content = %q, want %q", got, "Hello from mock")
 		}
 	})
+
+	t.Run("Sync", func(t *testing.T) {
+		// Test the model/sync action: create a new alias via the
+		// service's CBOR socket. The model service publishes the
+		// alias as a Matrix state event, its /sync loop picks it up,
+		// and the registry is updated. We verify by polling model/list.
+		entity, err := ref.NewEntityFromAccountLocalpart(fleet.Ref, "agent/model-syncer")
+		if err != nil {
+			t.Fatalf("build sync entity: %v", err)
+		}
+		syncToken := mintModelServiceToken(t, machine, entity, "test-project")
+		syncClient := service.NewServiceClientFromToken(modelSvc.SocketPath, syncToken)
+
+		syncRequest := model.SyncRequest{
+			Operations: []model.AliasOperation{
+				{
+					Action: "create",
+					Alias:  "synced-alias",
+					Content: &model.ModelAliasContent{
+						Provider:      "mock-provider",
+						ProviderModel: "mock-gpt",
+						Pricing: model.Pricing{
+							InputPerMtokMicrodollars:  1_000_000,
+							OutputPerMtokMicrodollars: 5_000_000,
+						},
+						Capabilities: []string{"chat"},
+					},
+				},
+			},
+		}
+
+		var syncResponse model.SyncResponse
+		if err := syncClient.Call(ctx, model.ActionSync, syncRequest, &syncResponse); err != nil {
+			t.Fatalf("model/sync: %v", err)
+		}
+
+		if syncResponse.Created != 1 {
+			t.Errorf("created = %d, want 1", syncResponse.Created)
+		}
+		if len(syncResponse.Errors) > 0 {
+			t.Errorf("sync errors: %v", syncResponse.Errors)
+		}
+
+		// Wait for the alias to appear in the registry. The model
+		// service publishes the state event, then its /sync loop
+		// picks it up and indexes it — typically within one sync cycle.
+		waitForModelAlias(t, queryClient, "synced-alias")
+
+		// Verify the synced alias has correct content.
+		var result model.ModelListResponse
+		if err := queryClient.Call(ctx, model.ActionList, nil, &result); err != nil {
+			t.Fatalf("model/list after sync: %v", err)
+		}
+
+		var found bool
+		for _, entry := range result.Aliases {
+			if entry.Alias == "synced-alias" {
+				found = true
+				if entry.Provider != "mock-provider" {
+					t.Errorf("synced alias provider = %q, want %q", entry.Provider, "mock-provider")
+				}
+				if entry.ProviderModel != "mock-gpt" {
+					t.Errorf("synced alias model = %q, want %q", entry.ProviderModel, "mock-gpt")
+				}
+				if entry.Pricing.InputPerMtokMicrodollars != 1_000_000 {
+					t.Errorf("synced alias input price = %d, want 1000000", entry.Pricing.InputPerMtokMicrodollars)
+				}
+				break
+			}
+		}
+		if !found {
+			t.Fatal("synced-alias not found in model/list response")
+		}
+	})
 }
 
 // --- Model service deployment helpers ---
@@ -396,6 +470,14 @@ func configureModelRoom(
 	// loop accepts invites and reads state events from joined rooms.
 	if err := admin.InviteUser(ctx, roomID, modelSvc.Account.UserID); err != nil {
 		t.Fatalf("invite model service to config room: %v", err)
+	}
+
+	// Grant the model service power level 50 so it can publish state
+	// events (needed for the model/sync action to create aliases).
+	if err := schema.GrantPowerLevels(ctx, admin, roomID, schema.PowerLevelGrants{
+		Users: map[ref.UserID]int{modelSvc.Account.UserID: 50},
+	}); err != nil {
+		t.Fatalf("grant model service power levels: %v", err)
 	}
 }
 

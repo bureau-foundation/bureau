@@ -130,7 +130,11 @@ func (ms *ModelService) handleSync(ctx context.Context, response *messaging.Sync
 	}
 
 	// Process state events from joined rooms.
-	for _, room := range response.Rooms.Join {
+	for roomID, room := range response.Rooms.Join {
+		if ms.configRoomID.IsZero() && (hasModelConfigEvents(room.State.Events) || hasModelConfigEvents(room.Timeline.Events)) {
+			ms.configRoomID = roomID
+			ms.logger.Info("config room discovered via incremental sync", "room_id", roomID)
+		}
 		ms.processStateEvents(room.State.Events)
 		ms.processStateEvents(room.Timeline.Events)
 	}

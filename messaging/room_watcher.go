@@ -122,10 +122,12 @@ func WatchRoom(ctx context.Context, session Session, roomID ref.RoomID, filter *
 	}, nil
 }
 
-// maxSyncRetries is the number of consecutive /sync failures allowed
-// before WaitForEvent returns an error. Each retry uses a 1-second
-// server-side timeout so the HTTP round-trip itself provides backoff.
-const maxSyncRetries = 5
+// maxConsecutiveSyncErrors is the number of consecutive /sync failures
+// before WaitForEvent logs at ERROR level instead of DEBUG. There is
+// no hard retry limit — the caller's context is the bound. This
+// threshold exists so that sustained connection problems produce
+// visible ERROR logs while brief hiccups stay at DEBUG.
+const maxConsecutiveSyncErrors = 5
 
 // longPollTimeout is the server-side long-poll hold time in
 // milliseconds for normal /sync calls. The server holds the connection
@@ -145,10 +147,11 @@ const retryTimeout = 1000
 // scans pending events before issuing a new /sync, so events are never
 // dropped when multiple matching events arrive in the same batch.
 //
-// Uses a 30-second server-side long-poll hold. Bounded by ctx. On
-// transient /sync errors, retries up to 5 times with 1-second server
-// timeout (the HTTP round-trip provides backoff). Resets idle
-// connections on error if the Session supports it.
+// Uses a 30-second server-side long-poll hold. Bounded by ctx — there
+// is no retry limit. On transient /sync errors, retries with 1-second
+// server timeout (the HTTP round-trip itself provides backoff). Resets
+// idle connections on error if the Session supports it. Errors escalate
+// from DEBUG to ERROR after 5 consecutive failures.
 func (w *RoomWatcher) WaitForEvent(ctx context.Context, predicate func(Event) bool) (Event, error) {
 	var syncRetries int
 
@@ -163,7 +166,7 @@ func (w *RoomWatcher) WaitForEvent(ctx context.Context, predicate func(Event) bo
 		}
 	}
 
-	var totalSyncs, emptySyncs, wrongRoomSyncs int
+	var totalSyncs, emptySyncs, wrongRoomSyncs, totalEventsReceived int
 	startTime := time.Now()
 
 	for {
@@ -184,8 +187,11 @@ func (w *RoomWatcher) WaitForEvent(ctx context.Context, predicate func(Event) bo
 		})
 		if err != nil {
 			if ctx.Err() != nil {
-				return Event{}, fmt.Errorf("context cancelled waiting for event in room %s (syncs: %d total, %d wrong_room, %d empty, elapsed %s): %w",
-					w.roomID, totalSyncs, wrongRoomSyncs, emptySyncs, time.Since(startTime).Round(time.Millisecond), ctx.Err())
+				return Event{}, fmt.Errorf("context cancelled waiting for event in room %s "+
+					"(syncs: %d total, %d wrong_room, %d empty, %d events_received, %d pending, %d consecutive_errors, elapsed %s): %w",
+					w.roomID, totalSyncs, wrongRoomSyncs, emptySyncs,
+					totalEventsReceived, len(w.pending), syncRetries+1,
+					time.Since(startTime).Round(time.Millisecond), ctx.Err())
 			}
 			syncRetries++
 			// TCP-level errors (connection reset, EOF) often indicate
@@ -194,14 +200,13 @@ func (w *RoomWatcher) WaitForEvent(ctx context.Context, predicate func(Event) bo
 			if closer, ok := w.session.(interface{ CloseIdleConnections() }); ok {
 				closer.CloseIdleConnections()
 			}
-			if syncRetries > maxSyncRetries {
-				return Event{}, fmt.Errorf("sync failed %d consecutive times waiting for event in room %s: %w",
-					syncRetries, w.roomID, err)
+			logLevel := slog.LevelDebug
+			if syncRetries >= maxConsecutiveSyncErrors {
+				logLevel = slog.LevelError
 			}
-			slog.Debug("room watcher sync error, retrying",
+			slog.Log(ctx, logLevel, "room watcher sync error, retrying",
 				"room_id", w.roomID,
-				"attempt", syncRetries,
-				"max_attempts", maxSyncRetries,
+				"consecutive_errors", syncRetries,
 				"error", err,
 			)
 			continue
@@ -222,11 +227,14 @@ func (w *RoomWatcher) WaitForEvent(ctx context.Context, predicate func(Event) bo
 			continue
 		}
 
+		totalEventsReceived += stateCount + timelineCount
+
 		slog.Info("room watcher received events",
 			"room_id", w.roomID,
 			"state_events", stateCount,
 			"timeline_events", timelineCount,
 			"pending_before", len(w.pending),
+			"events", summarizeEvents(joined.State.Events, joined.Timeline.Events),
 		)
 
 		// Append new events to pending and scan the entire buffer.
@@ -260,4 +268,19 @@ func (w *RoomWatcher) SyncPosition() string {
 // RoomID returns the room being watched.
 func (w *RoomWatcher) RoomID() ref.RoomID {
 	return w.roomID
+}
+
+// summarizeEvents produces compact diagnostic strings for a batch of
+// state and timeline events. Each entry identifies the event type,
+// event ID, and (for timeline events) the sender — enough to diagnose
+// missing event delivery without logging full event content.
+func summarizeEvents(stateEvents, timelineEvents []Event) []string {
+	summaries := make([]string, 0, len(stateEvents)+len(timelineEvents))
+	for _, event := range stateEvents {
+		summaries = append(summaries, fmt.Sprintf("state:%s/%s", event.Type, event.EventID))
+	}
+	for _, event := range timelineEvents {
+		summaries = append(summaries, fmt.Sprintf("timeline:%s/%s/from:%s", event.Type, event.EventID, event.Sender))
+	}
+	return summaries
 }

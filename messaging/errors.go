@@ -20,6 +20,10 @@ type MatrixError struct {
 	Code string `json:"errcode"`
 	// Message is the human-readable error description from the server.
 	Message string `json:"error"`
+	// RetryAfterMS is the server-recommended retry delay in milliseconds.
+	// Present in 429 (M_LIMIT_EXCEEDED) responses per the Matrix spec.
+	// Zero when the server does not provide a recommendation.
+	RetryAfterMS int `json:"retry_after_ms,omitempty"`
 	// StatusCode is the HTTP status code of the response.
 	StatusCode int `json:"-"`
 }

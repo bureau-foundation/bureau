@@ -282,13 +282,22 @@ func (d *Daemon) postCommandResult(ctx context.Context, roomID ref.RoomID, comma
 		RelatesTo:  schema.NewThreadRelation(commandEventID),
 	}
 
-	if _, err := d.sendEventRetry(ctx, roomID, schema.MatrixEventTypeMessage, message); err != nil {
+	resultEventID, err := d.sendEventRetry(ctx, roomID, schema.MatrixEventTypeMessage, message)
+	if err != nil {
 		d.logger.Error("failed to post command result",
 			"room_id", roomID, "room", d.displayRoom(roomID),
 			"command", command.Command,
+			"request_id", command.RequestID,
 			"error", err,
 		)
+		return
 	}
+	d.logger.Info("command result posted",
+		"room_id", roomID, "room", d.displayRoom(roomID),
+		"command", command.Command,
+		"request_id", command.RequestID,
+		"result_event_id", resultEventID,
+	)
 }
 
 // postCommandError posts a command error as a threaded reply to the
@@ -299,6 +308,7 @@ func (d *Daemon) postCommandError(ctx context.Context, roomID ref.RoomID, comman
 	d.logger.Warn("command failed",
 		"room_id", roomID, "room", d.displayRoom(roomID),
 		"command", command.Command,
+		"request_id", command.RequestID,
 		"error", errorMessage,
 	)
 
@@ -312,13 +322,22 @@ func (d *Daemon) postCommandError(ctx context.Context, roomID ref.RoomID, comman
 		RelatesTo:  schema.NewThreadRelation(commandEventID),
 	}
 
-	if _, err := d.sendEventRetry(ctx, roomID, schema.MatrixEventTypeMessage, message); err != nil {
+	resultEventID, err := d.sendEventRetry(ctx, roomID, schema.MatrixEventTypeMessage, message)
+	if err != nil {
 		d.logger.Error("failed to post command error",
 			"room_id", roomID, "room", d.displayRoom(roomID),
 			"command", command.Command,
+			"request_id", command.RequestID,
 			"error", err,
 		)
+		return
 	}
+	d.logger.Info("command error posted",
+		"room_id", roomID, "room", d.displayRoom(roomID),
+		"command", command.Command,
+		"request_id", command.RequestID,
+		"result_event_id", resultEventID,
+	)
 }
 
 // --- Built-in command handlers ---

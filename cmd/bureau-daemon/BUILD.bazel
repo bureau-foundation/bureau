@@ -100,6 +100,7 @@ go_test(
         "prefetch_test.go",
         "query_layout_test.go",
         "reconcile_test.go",
+        "retry_test.go",
         "service_resolution_test.go",
         "services_test.go",
         "shutdown_test.go",

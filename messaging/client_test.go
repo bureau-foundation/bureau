@@ -332,4 +332,29 @@ func TestMatrixError(t *testing.T) {
 			t.Error("IsMatrixError should return false for non-matrix errors")
 		}
 	})
+
+	t.Run("retry_after_ms parsed from 429", func(t *testing.T) {
+		body := `{"errcode":"M_LIMIT_EXCEEDED","error":"Too many requests","retry_after_ms":5000}`
+		var matrixErr MatrixError
+		if err := json.Unmarshal([]byte(body), &matrixErr); err != nil {
+			t.Fatalf("unmarshal: %v", err)
+		}
+		if matrixErr.Code != ErrCodeLimitExceeded {
+			t.Errorf("code = %q, want %q", matrixErr.Code, ErrCodeLimitExceeded)
+		}
+		if matrixErr.RetryAfterMS != 5000 {
+			t.Errorf("retry_after_ms = %d, want 5000", matrixErr.RetryAfterMS)
+		}
+	})
+
+	t.Run("retry_after_ms zero when absent", func(t *testing.T) {
+		body := `{"errcode":"M_FORBIDDEN","error":"Access denied"}`
+		var matrixErr MatrixError
+		if err := json.Unmarshal([]byte(body), &matrixErr); err != nil {
+			t.Fatalf("unmarshal: %v", err)
+		}
+		if matrixErr.RetryAfterMS != 0 {
+			t.Errorf("retry_after_ms = %d, want 0", matrixErr.RetryAfterMS)
+		}
+	})
 }

@@ -999,19 +999,39 @@ func adminClient(t *testing.T) *messaging.Client {
 	return client
 }
 
-// homeserverAdmin creates a HomeserverAdmin using the shared @bureau-admin
-// session. HomeserverAdmin operations (password reset, account deactivation,
-// force logout) require actual server admin privileges, which per-test admin
-// accounts do not have. On Continuwuity, only the server admin can access the
-// #admins room where admin commands are processed.
+// sharedHSAdmin is a singleton HomeserverAdmin shared by all tests.
+// The ContinuwuityAdmin implementation serializes commands via a mutex
+// because the admin room protocol has no request-response correlation
+// (commands are plain text messages, responses are the next bot message).
+// Sharing a single instance ensures the mutex serializes ALL admin
+// commands across all parallel tests, preventing response cross-talk.
+var (
+	sharedHSAdmin   messaging.HomeserverAdmin
+	sharedHSAdminMu sync.Mutex
+)
+
+// homeserverAdmin returns the shared HomeserverAdmin using the
+// @bureau-admin session. HomeserverAdmin operations (password reset,
+// account deactivation, force logout) require server admin privileges,
+// which per-test admin accounts do not have. On Continuwuity, only the
+// server admin can access the #admins room.
 func homeserverAdmin(t *testing.T) messaging.HomeserverAdmin {
 	t.Helper()
+
+	sharedHSAdminMu.Lock()
+	defer sharedHSAdminMu.Unlock()
+
+	if sharedHSAdmin != nil {
+		return sharedHSAdmin
+	}
+
 	shared := getSharedAdminSession(t)
 	hsAdmin, err := messaging.NewHomeserverAdmin(t.Context(), shared)
 	if err != nil {
 		t.Fatalf("create homeserver admin: %v", err)
 	}
-	return hsAdmin
+	sharedHSAdmin = hsAdmin
+	return sharedHSAdmin
 }
 
 // provisionMachine provisions a machine via the production API (not the

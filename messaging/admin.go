@@ -13,6 +13,7 @@ import (
 	"net/http"
 	"net/url"
 	"strings"
+	"sync"
 
 	"github.com/bureau-foundation/bureau/lib/ref"
 )
@@ -143,7 +144,14 @@ func (a *SynapseAdmin) synapsePutUser(ctx context.Context, userID ref.UserID, bo
 // The admin room is created once during construction and reused for
 // all subsequent commands. The room history serves as an audit trail
 // of admin operations.
+//
+// ContinuwuityAdmin serializes commands via a mutex because the admin
+// room protocol has no request-response correlation. Commands are sent
+// as plain text messages and the bot's response is the next message
+// from the bot user. Concurrent commands cause response mismatches
+// where one caller reads another's response.
 type ContinuwuityAdmin struct {
+	mu        sync.Mutex
 	session   *DirectSession
 	adminRoom ref.RoomID
 	botUserID ref.UserID
@@ -230,6 +238,13 @@ func (a *ContinuwuityAdmin) UnsuspendUser(ctx context.Context, userID ref.UserID
 // for the response. Returns nil on success, or an error containing the
 // bot's response text on failure.
 func (a *ContinuwuityAdmin) sendCommand(ctx context.Context, command string, operationName string) error {
+	// Serialize admin commands. The admin room protocol has no
+	// request-response correlation — the bot responds with the next
+	// message, and concurrent commands cause cross-talk. This mutex
+	// ensures only one command is in flight at a time.
+	a.mu.Lock()
+	defer a.mu.Unlock()
+
 	// Create a watcher BEFORE sending the command so we don't miss
 	// the bot's response.
 	watcher, err := WatchRoom(ctx, a.session, a.adminRoom, &SyncFilter{

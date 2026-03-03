@@ -5,7 +5,6 @@ package main
 
 import (
 	"context"
-	"errors"
 	"fmt"
 	"net"
 	"strings"
@@ -79,18 +78,16 @@ func (ms *ModelService) handleComplete(ctx context.Context, token *servicetoken.
 		}
 	}
 
-	// Resolve the model alias to a concrete provider and model.
-	resolution, err := ms.resolveModel(request.Model)
+	// Resolve the model alias to a fallback chain (primary + fallbacks).
+	chain, err := ms.resolveModelChain(request.Model)
 	if err != nil {
 		stream.SendError(err.Error())
 		return
 	}
 
-	// Authorize: check that the token grants model/complete on
-	// the resolved alias. The check uses the resolved alias (not
-	// the raw request model) so that "auto" resolution is subject
-	// to the same access control as explicit alias requests.
-	if err := requireModelGrant(token, model.ActionComplete, resolution.Alias); err != nil {
+	// Authorize using the primary alias. All chain entries share the
+	// same alias name, so one grant check covers the whole chain.
+	if err := requireModelGrant(token, model.ActionComplete, chain[0].Alias); err != nil {
 		stream.SendError(err.Error())
 		return
 	}
@@ -100,26 +97,6 @@ func (ms *ModelService) handleComplete(ctx context.Context, token *servicetoken.
 	project := token.Project
 	if project == "" {
 		stream.SendError("service token missing project identity")
-		return
-	}
-
-	// Select the account for this (project, provider) pair.
-	account, err := ms.registry.SelectAccount(project, resolution.ProviderName)
-	if err != nil {
-		stream.SendError(fmt.Sprintf("no account for project %q, provider %q", project, resolution.ProviderName))
-		return
-	}
-
-	// Check quota before forwarding the request.
-	if err := ms.quotaTracker.Check(account.AccountName, account.Quota); err != nil {
-		var quotaError *modelregistry.QuotaExceededError
-		if errors.As(err, &quotaError) {
-			stream.SendError(fmt.Sprintf("quota exceeded: %s limit for account %q (resets %s)",
-				quotaError.Window, quotaError.AccountName,
-				quotaError.ResetsAt.Format(time.RFC3339)))
-			return
-		}
-		stream.SendError(fmt.Sprintf("quota check failed: %v", err))
 		return
 	}
 
@@ -133,35 +110,18 @@ func (ms *ModelService) handleComplete(ctx context.Context, token *servicetoken.
 		return
 	}
 
-	// Look up the API credential for this account.
-	credential := ms.lookupCredential(resolution, account)
-
-	// Get or create the provider HTTP client.
-	provider := ms.getOrCreateProvider(resolution.ProviderName, resolution.Provider)
-
-	// Track active requests for background scheduling. Immediate and
-	// batch requests count as "active" so background requests wait
-	// for them to complete. Background requests are NOT tracked — they
-	// should not block other background requests.
+	// Apply latency gating for the primary provider. Fallback
+	// attempts use immediate mode — when degraded, minimize latency
+	// rather than waiting for batching.
+	primaryResolution := chain[0]
 	if policy != model.LatencyBackground {
-		ms.latencyRouter.RecordActiveStart(resolution.ProviderName)
-		defer ms.latencyRouter.RecordActiveEnd(resolution.ProviderName)
+		ms.latencyRouter.RecordActiveStart(primaryResolution.ProviderName)
+		defer ms.latencyRouter.RecordActiveEnd(primaryResolution.ProviderName)
 	}
-
-	// Apply latency gating. For batch policy, blocks until enough
-	// concurrent requests accumulate (or a timer fires) so the
-	// inference engine sees concurrent requests it can batch
-	// internally. For background, blocks until the provider is idle.
-	// For immediate, returns nil without blocking.
-	//
-	// Gating BEFORE the ack is correct: the client's OpenStream
-	// blocks until we ack, and batch/background clients expect
-	// latency. Context cancellation (client disconnect) triggers
-	// the pre-ack error path.
 	if err := ms.latencyRouter.GateComplete(
 		ctx, policy,
-		resolution.ProviderName, resolution.ProviderModel,
-		resolution.Provider.MaxBatchSize,
+		primaryResolution.ProviderName, primaryResolution.ProviderModel,
+		primaryResolution.Provider.MaxBatchSize,
 	); err != nil {
 		stream.SendError(fmt.Sprintf("cancelled while waiting: %v", err))
 		return
@@ -179,18 +139,84 @@ func (ms *ModelService) handleComplete(ctx context.Context, token *servicetoken.
 		return
 	}
 
-	// Forward the request to the provider. When a continuation is
-	// active, providerMessages includes the prepended history.
-	completionStream, err := provider.Complete(ctx, &modelprovider.CompleteRequest{
-		Model:      resolution.ProviderModel,
-		Messages:   providerMessages,
-		Stream:     request.Stream,
-		Credential: credential,
-	})
-	if err != nil {
+	// Try each resolution in the chain until one succeeds.
+	var completionStream modelprovider.CompletionStream
+	var resolution modelregistry.Resolution
+	var account modelregistry.AccountSelection
+	degraded := false
+
+	for chainIndex, candidate := range chain {
+		// Select account and credential for this provider.
+		candidateAccount, accountErr := ms.registry.SelectAccount(project, candidate.ProviderName)
+		if accountErr != nil {
+			ms.logger.Warn("fallback chain: no account for provider, skipping",
+				"alias", candidate.Alias,
+				"provider", candidate.ProviderName,
+				"chain_index", chainIndex,
+				"error", accountErr,
+			)
+			continue
+		}
+
+		if quotaErr := ms.quotaTracker.Check(candidateAccount.AccountName, candidateAccount.Quota); quotaErr != nil {
+			ms.logger.Warn("fallback chain: quota exceeded, skipping",
+				"alias", candidate.Alias,
+				"provider", candidate.ProviderName,
+				"account", candidateAccount.AccountName,
+				"chain_index", chainIndex,
+				"error", quotaErr,
+			)
+			continue
+		}
+
+		credential := ms.lookupCredential(candidate, candidateAccount)
+		provider := ms.getOrCreateProvider(candidate.ProviderName, candidate.Provider)
+
+		attemptStream, attemptErr := provider.Complete(ctx, &modelprovider.CompleteRequest{
+			Model:      candidate.ProviderModel,
+			Messages:   providerMessages,
+			Stream:     request.Stream,
+			Credential: credential,
+		})
+
+		if attemptErr == nil {
+			completionStream = attemptStream
+			resolution = candidate
+			account = candidateAccount
+			degraded = chainIndex > 0
+			if degraded {
+				ms.logger.Warn("fallback activated",
+					"alias", candidate.Alias,
+					"primary_provider", chain[0].ProviderName,
+					"fallback_provider", candidate.ProviderName,
+					"fallback_model", candidate.ProviderModel,
+					"chain_index", chainIndex,
+				)
+			}
+			break
+		}
+
+		// Check if the error is retriable (connection/server failure).
+		if !isRetriableProviderError(attemptErr) || ctx.Err() != nil {
+			stream.Send(model.Response{
+				Type:  model.ResponseError,
+				Error: fmt.Sprintf("provider error: %v", attemptErr),
+			})
+			return
+		}
+
+		ms.logger.Warn("provider failed, trying next in chain",
+			"alias", candidate.Alias,
+			"provider", candidate.ProviderName,
+			"chain_index", chainIndex,
+			"error", attemptErr,
+		)
+	}
+
+	if completionStream == nil {
 		stream.Send(model.Response{
 			Type:  model.ResponseError,
-			Error: fmt.Sprintf("provider error: %v", err),
+			Error: "all providers in fallback chain failed",
 		})
 		return
 	}
@@ -224,6 +250,12 @@ func (ms *ModelService) handleComplete(ctx context.Context, token *servicetoken.
 			// Echo the continuation_id so the agent can use it
 			// in subsequent requests.
 			chunk.ContinuationID = request.ContinuationID
+
+			// Set the Degraded flag if the agent opted in and a
+			// fallback was used.
+			if degraded && request.ReportDegraded {
+				chunk.Degraded = true
+			}
 		}
 
 		if err := stream.Send(chunk); err != nil {
@@ -264,7 +296,7 @@ func (ms *ModelService) handleComplete(ctx context.Context, token *servicetoken.
 	ms.quotaTracker.Record(account.AccountName, cost)
 
 	latency := ms.clock.Now().Sub(startTime)
-	ms.emitUsageTelemetry(token, request.Model, resolution, account, finalUsage, finalModel, cost, latency)
+	ms.emitUsageTelemetry(token, request.Model, resolution, account, finalUsage, finalModel, cost, latency, degraded, chain[0].ProviderName)
 }
 
 // resolveModel resolves a model alias (or "auto") to a Resolution.
@@ -273,6 +305,54 @@ func (ms *ModelService) resolveModel(alias string) (modelregistry.Resolution, er
 		return ms.registry.ResolveAuto(nil)
 	}
 	return ms.registry.Resolve(alias)
+}
+
+// resolveModelChain resolves a model alias to a fallback chain.
+// For "auto" resolution, returns a single-element chain (auto doesn't
+// support fallbacks — it already picks from all available models).
+func (ms *ModelService) resolveModelChain(alias string) ([]modelregistry.Resolution, error) {
+	if alias == "auto" {
+		resolution, err := ms.registry.ResolveAuto(nil)
+		if err != nil {
+			return nil, err
+		}
+		return []modelregistry.Resolution{resolution}, nil
+	}
+	return ms.registry.ResolveChain(alias)
+}
+
+// isRetriableProviderError returns true if the error indicates a
+// transient provider failure that should trigger a fallback attempt.
+// Connection failures, server errors (5xx), and rate limits (429)
+// are retriable. Client errors (4xx except 429) and context
+// cancellation are not.
+func isRetriableProviderError(err error) bool {
+	if err == nil {
+		return false
+	}
+
+	message := err.Error()
+
+	// Connection-level failures are always retriable.
+	if strings.Contains(message, "connection refused") ||
+		strings.Contains(message, "no such host") ||
+		strings.Contains(message, "i/o timeout") ||
+		strings.Contains(message, "connection reset") ||
+		strings.Contains(message, "EOF") {
+		return true
+	}
+
+	// HTTP 5xx and 429 are retriable. Look for status codes in
+	// error messages from the provider layer.
+	if strings.Contains(message, "status 5") ||
+		strings.Contains(message, "status 429") ||
+		strings.Contains(message, "502") ||
+		strings.Contains(message, "503") ||
+		strings.Contains(message, "504") {
+		return true
+	}
+
+	return false
 }
 
 // lookupCredential returns the API key for the given account. Returns
@@ -290,7 +370,9 @@ func (ms *ModelService) lookupCredential(resolution modelregistry.Resolution, ac
 }
 
 // emitUsageTelemetry records a telemetry span for a completed model
-// request. No-op when the telemetry emitter is nil.
+// request. No-op when the telemetry emitter is nil. When degraded is
+// true, the span includes fallback attributes so operators can see
+// which agents are running on non-primary models.
 func (ms *ModelService) emitUsageTelemetry(
 	token *servicetoken.Token,
 	requestedAlias string,
@@ -300,6 +382,8 @@ func (ms *ModelService) emitUsageTelemetry(
 	providerModel string,
 	costMicrodollars int64,
 	latency time.Duration,
+	degraded bool,
+	primaryProvider string,
 ) {
 	if ms.telemetry == nil {
 		return
@@ -311,23 +395,30 @@ func (ms *ModelService) emitUsageTelemetry(
 		outputTokens = usage.OutputTokens
 	}
 
+	attributes := map[string]any{
+		"project":           token.Project,
+		"agent":             token.Subject.String(),
+		"model_alias":       requestedAlias,
+		"provider":          resolution.ProviderName,
+		"provider_model":    providerModel,
+		"account":           account.AccountName,
+		"input_tokens":      inputTokens,
+		"output_tokens":     outputTokens,
+		"cost_microdollars": costMicrodollars,
+	}
+
+	if degraded {
+		attributes["fallback"] = true
+		attributes["primary_provider"] = primaryProvider
+	}
+
 	ms.telemetry.RecordSpan(telemetry.Span{
-		TraceID:   telemetry.NewTraceID(),
-		SpanID:    telemetry.NewSpanID(),
-		Operation: "model.complete",
-		StartTime: ms.clock.Now().Add(-latency).UnixNano(),
-		Duration:  latency.Nanoseconds(),
-		Status:    telemetry.SpanStatusOK,
-		Attributes: map[string]any{
-			"project":           token.Project,
-			"agent":             token.Subject.String(),
-			"model_alias":       requestedAlias,
-			"provider":          resolution.ProviderName,
-			"provider_model":    providerModel,
-			"account":           account.AccountName,
-			"input_tokens":      inputTokens,
-			"output_tokens":     outputTokens,
-			"cost_microdollars": costMicrodollars,
-		},
+		TraceID:    telemetry.NewTraceID(),
+		SpanID:     telemetry.NewSpanID(),
+		Operation:  "model.complete",
+		StartTime:  ms.clock.Now().Add(-latency).UnixNano(),
+		Duration:   latency.Nanoseconds(),
+		Status:     telemetry.SpanStatusOK,
+		Attributes: attributes,
 	})
 }

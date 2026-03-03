@@ -1,20 +1,21 @@
 // Copyright 2026 The Bureau Authors
 // SPDX-License-Identifier: Apache-2.0
 
-package fleet
+package service
 
 import (
 	"context"
 	"log/slog"
 
 	"github.com/bureau-foundation/bureau/cmd/bureau/cli"
+	"github.com/bureau-foundation/bureau/cmd/bureau/fleet"
 )
 
 // --- place ---
 
 // placeParams holds the parameters for the place command.
 type placeParams struct {
-	FleetConnection
+	fleet.FleetConnection
 	cli.JSONOutput
 	Machine string `json:"machine" flag:"machine" desc:"target machine localpart (if omitted, the scoring engine selects)"`
 }
@@ -26,53 +27,48 @@ type placeResult struct {
 	Score   int    `json:"score"   desc:"placement score (-1 for manual placement)"`
 }
 
-// placeResponse mirrors the fleet controller's place response.
-type placeResponse struct {
-	Service string `cbor:"service"`
-	Machine string `cbor:"machine"`
-	Score   int    `cbor:"score"`
-}
-
 func placeCommand() *cli.Command {
 	var params placeParams
 
 	return &cli.Command{
 		Name:    "place",
-		Summary: "Place a service on a machine",
-		Usage:   "bureau fleet place <service> [flags]",
+		Summary: "Place a service on a machine via the fleet controller",
+		Usage:   "bureau service place <service> [flags]",
 		Description: `Place a fleet-managed service on a machine. If --machine is omitted,
 the scoring engine selects the best eligible candidate based on
 resource availability, placement constraints, and anti-affinity rules.
 
 If --machine is specified, the service is placed on that machine
 directly (manual placement bypasses scoring but still validates
-eligibility).`,
+eligibility).
+
+Requires a reachable fleet controller.`,
 		Examples: []cli.Example{
 			{
 				Description: "Place a service (auto-select machine)",
-				Command:     "bureau fleet place service/stt/whisper",
+				Command:     "bureau service place service/stt/whisper",
 			},
 			{
 				Description: "Place on a specific machine",
-				Command:     "bureau fleet place service/stt/whisper --machine machine/gpu-server-1",
+				Command:     "bureau service place service/stt/whisper --machine machine/gpu-server-1",
 			},
 		},
 		Params:         func() any { return &params },
 		Output:         func() any { return &placeResult{} },
 		Annotations:    cli.Create(),
-		RequiredGrants: []string{"command/fleet/place"},
+		RequiredGrants: []string{"command/service/place"},
 		Run: func(ctx context.Context, args []string, logger *slog.Logger) error {
 			if len(args) == 0 {
-				return cli.Validation("service localpart required\n\nUsage: bureau fleet place <service> [flags]")
+				return cli.Validation("service localpart required\n\nUsage: bureau service place <service> [flags]")
 			}
 			serviceLocalpart := args[0]
 
-			client, err := params.connect()
+			client, err := params.Connect()
 			if err != nil {
 				return err
 			}
 
-			ctx, cancel := callContext(ctx)
+			ctx, cancel := fleet.CallContext(ctx)
 			defer cancel()
 
 			fields := map[string]any{
@@ -82,10 +78,10 @@ eligibility).`,
 				fields["machine"] = params.Machine
 			}
 
-			var response placeResponse
+			var response fleet.PlaceResponse
 			if err := client.Call(ctx, "place", fields, &response); err != nil {
 				return cli.Transient("placing service %q: %w", serviceLocalpart, err).
-					WithHint("Run 'bureau fleet list-services' to verify the service exists, " +
+					WithHint("Run 'bureau service list' to verify the service exists, " +
 						"and 'bureau fleet list-machines' to verify eligible machines.")
 			}
 
@@ -109,7 +105,7 @@ eligibility).`,
 
 // unplaceParams holds the parameters for the unplace command.
 type unplaceParams struct {
-	FleetConnection
+	fleet.FleetConnection
 	cli.JSONOutput
 	Machine string `json:"machine" flag:"machine" desc:"machine to remove the service from (required)"`
 }
@@ -120,56 +116,52 @@ type unplaceResult struct {
 	Machine string `json:"machine" desc:"machine the service was removed from"`
 }
 
-// unplaceResponse mirrors the fleet controller's unplace response.
-type unplaceResponse struct {
-	Service string `cbor:"service"`
-	Machine string `cbor:"machine"`
-}
-
 func unplaceCommand() *cli.Command {
 	var params unplaceParams
 
 	return &cli.Command{
 		Name:    "unplace",
-		Summary: "Remove a service from a machine",
-		Usage:   "bureau fleet unplace <service> --machine <machine> [flags]",
+		Summary: "Remove a service from a machine via the fleet controller",
+		Usage:   "bureau service unplace <service> --machine <machine> [flags]",
 		Description: `Remove a fleet-managed service from a specific machine. This removes
 the PrincipalAssignment from the machine's config room, causing the
-daemon to tear down the service's sandbox.`,
+daemon to tear down the service's sandbox.
+
+Requires a reachable fleet controller.`,
 		Examples: []cli.Example{
 			{
 				Description: "Remove a service from a machine",
-				Command:     "bureau fleet unplace service/stt/whisper --machine machine/workstation",
+				Command:     "bureau service unplace service/stt/whisper --machine machine/workstation",
 			},
 		},
 		Params:         func() any { return &params },
 		Output:         func() any { return &unplaceResult{} },
 		Annotations:    cli.Destructive(),
-		RequiredGrants: []string{"command/fleet/unplace"},
+		RequiredGrants: []string{"command/service/unplace"},
 		Run: func(ctx context.Context, args []string, logger *slog.Logger) error {
 			if len(args) == 0 {
-				return cli.Validation("service localpart required\n\nUsage: bureau fleet unplace <service> --machine <machine> [flags]")
+				return cli.Validation("service localpart required\n\nUsage: bureau service unplace <service> --machine <machine> [flags]")
 			}
 			serviceLocalpart := args[0]
 			if params.Machine == "" {
 				return cli.Validation("--machine is required")
 			}
 
-			client, err := params.connect()
+			client, err := params.Connect()
 			if err != nil {
 				return err
 			}
 
-			ctx, cancel := callContext(ctx)
+			ctx, cancel := fleet.CallContext(ctx)
 			defer cancel()
 
-			var response unplaceResponse
+			var response fleet.UnplaceResponse
 			if err := client.Call(ctx, "unplace", map[string]any{
 				"service": serviceLocalpart,
 				"machine": params.Machine,
 			}, &response); err != nil {
 				return cli.Transient("removing service %q from machine %q: %w", serviceLocalpart, params.Machine, err).
-					WithHint("Run 'bureau fleet show-service " + serviceLocalpart + "' to check current placement.")
+					WithHint("Run 'bureau service show " + serviceLocalpart + "' to check current placement.")
 			}
 
 			result := unplaceResult{
@@ -189,25 +181,6 @@ daemon to tear down the service's sandbox.`,
 
 // --- plan ---
 
-// planParams holds the parameters for the plan command.
-type planParams struct {
-	FleetConnection
-	cli.JSONOutput
-}
-
-// planCandidate mirrors the fleet controller's planCandidate.
-type planCandidate struct {
-	Machine string `cbor:"machine"`
-	Score   int    `cbor:"score"`
-}
-
-// planResponse mirrors the fleet controller's plan response.
-type planResponseData struct {
-	Service         string          `cbor:"service"`
-	Candidates      []planCandidate `cbor:"candidates"`
-	CurrentMachines []string        `cbor:"current_machines"`
-}
-
 // planResult is the JSON output of the plan command.
 type planResult struct {
 	Service         string              `json:"service"          desc:"service evaluated"`
@@ -222,49 +195,54 @@ type planCandidateJSON struct {
 }
 
 func planCommand() *cli.Command {
-	var params planParams
+	var params struct {
+		fleet.FleetConnection
+		cli.JSONOutput
+	}
 
 	return &cli.Command{
 		Name:    "plan",
 		Summary: "Dry-run placement scoring for a service",
-		Usage:   "bureau fleet plan <service> [flags]",
+		Usage:   "bureau service plan <service> [flags]",
 		Description: `Evaluate placement scoring for a service without making any changes.
 Shows all eligible machines with their scores and the service's current
-placement. Use this to preview what "place" would choose.`,
+placement. Use this to preview what "place" would choose.
+
+Requires a reachable fleet controller.`,
 		Examples: []cli.Example{
 			{
 				Description: "Preview placement scoring",
-				Command:     "bureau fleet plan service/stt/whisper",
+				Command:     "bureau service plan service/stt/whisper",
 			},
 			{
 				Description: "Preview scoring as JSON",
-				Command:     "bureau fleet plan service/stt/whisper --json",
+				Command:     "bureau service plan service/stt/whisper --json",
 			},
 		},
 		Params:         func() any { return &params },
 		Output:         func() any { return &planResult{} },
 		Annotations:    cli.ReadOnly(),
-		RequiredGrants: []string{"command/fleet/plan"},
+		RequiredGrants: []string{"command/service/plan"},
 		Run: func(ctx context.Context, args []string, logger *slog.Logger) error {
 			if len(args) == 0 {
-				return cli.Validation("service localpart required\n\nUsage: bureau fleet plan <service> [flags]")
+				return cli.Validation("service localpart required\n\nUsage: bureau service plan <service> [flags]")
 			}
 			serviceLocalpart := args[0]
 
-			client, err := params.connect()
+			client, err := params.Connect()
 			if err != nil {
 				return err
 			}
 
-			ctx, cancel := callContext(ctx)
+			ctx, cancel := fleet.CallContext(ctx)
 			defer cancel()
 
-			var response planResponseData
+			var response fleet.PlanResponse
 			if err := client.Call(ctx, "plan", map[string]any{
 				"service": serviceLocalpart,
 			}, &response); err != nil {
 				return cli.Transient("planning placement for service %q: %w", serviceLocalpart, err).
-					WithHint("Run 'bureau fleet list-services' to verify the service exists.")
+					WithHint("Run 'bureau service list' to verify the service exists.")
 			}
 
 			candidates := make([]planCandidateJSON, len(response.Candidates))
@@ -285,7 +263,6 @@ placement. Use this to preview what "place" would choose.`,
 				return err
 			}
 
-			// Structured log output: one line per candidate, plus a summary.
 			logger.Info("placement plan",
 				"service", result.Service,
 				"current_machines", result.CurrentMachines,

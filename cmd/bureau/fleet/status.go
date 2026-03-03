@@ -101,12 +101,12 @@ type machineEntry struct {
 }
 
 func runStatus(ctx context.Context, logger *slog.Logger, params *statusParams) error {
-	client, err := params.connect()
+	client, err := params.Connect()
 	if err != nil {
 		return err
 	}
 
-	ctx, cancel := callContext(ctx)
+	ctx, cancel := CallContext(ctx)
 	defer cancel()
 
 	// Fetch aggregate info.
@@ -166,13 +166,6 @@ func runStatus(ctx context.Context, logger *slog.Logger, params *statusParams) e
 	}
 
 	return nil
-}
-
-// callContext returns a context with a reasonable timeout for fleet
-// service calls. Fleet operations involve in-memory index queries
-// or single Matrix writes.
-func callContext(parent context.Context) (context.Context, context.CancelFunc) {
-	return context.WithTimeout(parent, 30*time.Second)
 }
 
 // formatDuration formats a duration as a human-readable string

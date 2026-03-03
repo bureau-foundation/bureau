@@ -4,7 +4,9 @@
 package fleet
 
 import (
+	"context"
 	"strings"
+	"time"
 
 	"github.com/spf13/pflag"
 
@@ -12,10 +14,11 @@ import (
 	"github.com/bureau-foundation/bureau/lib/service"
 )
 
-// fleetConnectionConfig is the ServiceConnectionConfig for the fleet
-// service role. Shared between AddFlags (for zero-value params struct
-// construction) and any explicit callers.
-var fleetConnectionConfig = cli.ServiceConnectionConfig{
+// FleetConnectionConfig is the ServiceConnectionConfig for the fleet
+// service role. Exported so that other CLI packages (e.g., service)
+// can build their own FleetConnection using the same socket paths and
+// environment variable names.
+var FleetConnectionConfig = cli.ServiceConnectionConfig{
 	Role:          "fleet",
 	SocketEnvVar:  "BUREAU_FLEET_SOCKET",
 	TokenEnvVar:   "BUREAU_FLEET_TOKEN",
@@ -25,7 +28,7 @@ var fleetConnectionConfig = cli.ServiceConnectionConfig{
 
 // FleetConnection manages connection parameters for fleet commands.
 // Embeds [cli.ServiceConnection] for shared flag registration and
-// daemon token minting. The connect() method creates a fleet-specific
+// daemon token minting. The [Connect] method creates a fleet-specific
 // [service.ServiceClient] with tailored error messages.
 //
 // Excluded from JSON Schema generation since MCP callers don't specify
@@ -39,14 +42,14 @@ type FleetConnection struct {
 // connection flags. Safe to call on a zero-value FleetConnection —
 // the embedded ServiceConnection is configured before flag registration.
 func (c *FleetConnection) AddFlags(flagSet *pflag.FlagSet) {
-	c.ServiceConnection = cli.NewServiceConnection(fleetConnectionConfig)
+	c.ServiceConnection = cli.NewServiceConnection(FleetConnectionConfig)
 	c.ServiceConnection.AddFlags(flagSet)
 }
 
-// connect creates a service client from the connection parameters.
+// Connect creates a service client from the connection parameters.
 // In service mode, mints a token via the daemon and uses the returned
 // socket path. In direct mode, reads the token from a file.
-func (c *FleetConnection) connect() (*service.ServiceClient, error) {
+func (c *FleetConnection) Connect() (*service.ServiceClient, error) {
 	if c.ServiceMode {
 		result, err := c.mintFleetToken()
 		if err != nil {
@@ -79,4 +82,11 @@ func (c *FleetConnection) mintFleetToken() (*cli.MintResult, error) {
 			WithHint("Run 'bureau fleet enable <fleet-localpart> --host <machine>' to set up service bindings.")
 	}
 	return nil, err
+}
+
+// CallContext returns a context with a 30-second timeout for fleet
+// controller socket calls. Fleet operations involve in-memory index
+// queries or single Matrix writes, so 30 seconds is generous.
+func CallContext(parent context.Context) (context.Context, context.CancelFunc) {
+	return context.WithTimeout(parent, 30*time.Second)
 }

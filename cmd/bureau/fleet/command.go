@@ -9,27 +9,25 @@ import "github.com/bureau-foundation/bureau/cmd/bureau/cli"
 func Command() *cli.Command {
 	return &cli.Command{
 		Name:    "fleet",
-		Summary: "Fleet management operations",
-		Description: `Commands for managing fleets, fleet controller placement, health
-monitoring, and configuration.
+		Summary: "Fleet controller setup and machine diagnostics",
+		Description: `Commands for fleet controller setup, configuration, and machine
+diagnostics.
 
 A fleet is an infrastructure isolation boundary within a namespace.
 Each fleet has its own machines, services, and fleet controller.
 Use "bureau fleet create" to create the fleet rooms, then
 "bureau fleet enable" to bootstrap a fleet controller on a machine.
 
-The fleet controller manages service placement across machines. It
-watches for FleetServiceContent events in the fleet room, scores
-candidate machines based on resource availability and placement
-constraints, and writes PrincipalAssignment events to machine config
-rooms.
+Service-related operations (list, show, plan, place, unplace) live
+under "bureau service". The service commands automatically enrich
+output with fleet controller data when a fleet controller is
+reachable.
 
-Socket-based commands (status, list-machines, list-services, show,
-place, unplace, plan) connect to the fleet controller's Unix socket.
-Inside a sandbox, the socket and token paths default to the standard
-provisioned locations. Outside a sandbox, use --socket and
---token-file flags (or BUREAU_FLEET_SOCKET and BUREAU_FLEET_TOKEN
-environment variables).
+Socket-based commands (status, list-machines, show-machine) connect
+to the fleet controller's Unix socket. Inside a sandbox, the socket
+and token paths default to the standard provisioned locations. Outside
+a sandbox, use --socket and --token-file flags (or BUREAU_FLEET_SOCKET
+and BUREAU_FLEET_TOKEN environment variables).
 
 Operator commands (create, enable, config) use direct Matrix access
 via --credential-file.`,
@@ -42,14 +40,7 @@ via --credential-file.`,
 			// Query commands.
 			statusCommand(),
 			listMachinesCommand(),
-			listServicesCommand(),
 			showMachineCommand(),
-			showServiceCommand(),
-			planCommand(),
-
-			// Mutation commands.
-			placeCommand(),
-			unplaceCommand(),
 		},
 		Examples: []cli.Example{
 			{
@@ -65,24 +56,8 @@ via --credential-file.`,
 				Command:     "bureau fleet list-machines",
 			},
 			{
-				Description: "List all fleet-managed services",
-				Command:     "bureau fleet list-services",
-			},
-			{
 				Description: "Show detailed info for a machine",
 				Command:     "bureau fleet show-machine machine/workstation",
-			},
-			{
-				Description: "Show a service's placement and definition",
-				Command:     "bureau fleet show-service service/stt/whisper",
-			},
-			{
-				Description: "Dry-run placement scoring for a service",
-				Command:     "bureau fleet plan service/stt/whisper",
-			},
-			{
-				Description: "Place a service on the best candidate machine",
-				Command:     "bureau fleet place service/stt/whisper",
 			},
 			{
 				Description: "Bootstrap the fleet controller on a machine",

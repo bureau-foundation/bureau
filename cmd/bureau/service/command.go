@@ -23,13 +23,22 @@ account, provision encrypted credentials, and assign the service to a machine.
 The daemon detects the assignment and creates the sandbox.
 
 Inspection commands (list, show) read Matrix state events from machine config
-rooms. When --machine is not specified, they scan all machines to find the
-service automatically.`,
+rooms. When a fleet controller is reachable, the output is automatically
+enriched with fleet metadata: replica counts, placement scores, failover
+policies, and instance details.
+
+Placement commands (plan, place, unplace) require a fleet controller and
+manage fleet-managed service placement across machines.`,
 		Subcommands: []*cli.Command{
 			createCommand(),
 			listCommand(),
 			showCommand(),
 			destroyCommand(),
+
+			// Fleet controller commands.
+			planCommand(),
+			placeCommand(),
+			unplaceCommand(),
 		},
 		Examples: []cli.Example{
 			{
@@ -43,6 +52,14 @@ service automatically.`,
 			{
 				Description: "Show service details (auto-discovers machine)",
 				Command:     "bureau service show service/ticket --credential-file ./creds",
+			},
+			{
+				Description: "Preview placement scoring for a service",
+				Command:     "bureau service plan service/stt/whisper",
+			},
+			{
+				Description: "Place a service on the best candidate machine",
+				Command:     "bureau service place service/stt/whisper",
 			},
 			{
 				Description: "Remove a service assignment",

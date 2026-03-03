@@ -24,12 +24,7 @@ func TestFleetCommandHasSubcommands(t *testing.T) {
 		"config":        false,
 		"status":        false,
 		"list-machines": false,
-		"list-services": false,
 		"show-machine":  false,
-		"show-service":  false,
-		"plan":          false,
-		"place":         false,
-		"unplace":       false,
 	}
 
 	for _, sub := range command.Subcommands {
@@ -50,20 +45,20 @@ func TestFleetCommandHasSubcommands(t *testing.T) {
 // TestFleetConnectionConfig verifies that the fleet service connection
 // config has the expected sandbox paths and environment variable names.
 func TestFleetConnectionConfig(t *testing.T) {
-	if fleetConnectionConfig.Role != "fleet" {
-		t.Errorf("role: got %q, want %q", fleetConnectionConfig.Role, "fleet")
+	if FleetConnectionConfig.Role != "fleet" {
+		t.Errorf("role: got %q, want %q", FleetConnectionConfig.Role, "fleet")
 	}
-	if fleetConnectionConfig.SandboxSocket != "/run/bureau/service/fleet.sock" {
-		t.Errorf("sandbox socket: got %q, want %q", fleetConnectionConfig.SandboxSocket, "/run/bureau/service/fleet.sock")
+	if FleetConnectionConfig.SandboxSocket != "/run/bureau/service/fleet.sock" {
+		t.Errorf("sandbox socket: got %q, want %q", FleetConnectionConfig.SandboxSocket, "/run/bureau/service/fleet.sock")
 	}
-	if fleetConnectionConfig.SandboxToken != "/run/bureau/service/token/fleet.token" {
-		t.Errorf("sandbox token: got %q, want %q", fleetConnectionConfig.SandboxToken, "/run/bureau/service/token/fleet.token")
+	if FleetConnectionConfig.SandboxToken != "/run/bureau/service/token/fleet.token" {
+		t.Errorf("sandbox token: got %q, want %q", FleetConnectionConfig.SandboxToken, "/run/bureau/service/token/fleet.token")
 	}
-	if fleetConnectionConfig.SocketEnvVar != "BUREAU_FLEET_SOCKET" {
-		t.Errorf("socket env var: got %q, want %q", fleetConnectionConfig.SocketEnvVar, "BUREAU_FLEET_SOCKET")
+	if FleetConnectionConfig.SocketEnvVar != "BUREAU_FLEET_SOCKET" {
+		t.Errorf("socket env var: got %q, want %q", FleetConnectionConfig.SocketEnvVar, "BUREAU_FLEET_SOCKET")
 	}
-	if fleetConnectionConfig.TokenEnvVar != "BUREAU_FLEET_TOKEN" {
-		t.Errorf("token env var: got %q, want %q", fleetConnectionConfig.TokenEnvVar, "BUREAU_FLEET_TOKEN")
+	if FleetConnectionConfig.TokenEnvVar != "BUREAU_FLEET_TOKEN" {
+		t.Errorf("token env var: got %q, want %q", FleetConnectionConfig.TokenEnvVar, "BUREAU_FLEET_TOKEN")
 	}
 }
 
@@ -76,9 +71,9 @@ func TestConnectionAddFlags(t *testing.T) {
 	connection.AddFlags(flagSet)
 
 	// Verify flags exist. Outside a sandbox (the test environment), the
-	// defaults come from the sandbox paths in fleetConnectionConfig.
-	expectedSocket := fleetConnectionConfig.SandboxSocket
-	expectedToken := fleetConnectionConfig.SandboxToken
+	// defaults come from the sandbox paths in FleetConnectionConfig.
+	expectedSocket := FleetConnectionConfig.SandboxSocket
+	expectedToken := FleetConnectionConfig.SandboxToken
 
 	socketFlag := flagSet.Lookup("socket")
 	if socketFlag == nil {
@@ -154,7 +149,7 @@ func TestConnectDirectModeRequiresTokenFile(t *testing.T) {
 	connection.SocketPath = "/tmp/nonexistent.sock"
 	connection.TokenPath = "/tmp/nonexistent-token"
 
-	_, err := connection.connect()
+	_, err := connection.Connect()
 	if err == nil {
 		t.Fatal("expected error when token file does not exist, got nil")
 	}
@@ -177,7 +172,7 @@ func TestConnectServiceModeRequiresSession(t *testing.T) {
 		t.Fatalf("parsing flags: %v", err)
 	}
 
-	_, err = connection.connect()
+	_, err = connection.Connect()
 	if err == nil {
 		t.Fatal("expected error when no operator session exists, got nil")
 	}

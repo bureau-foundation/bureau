@@ -1,7 +1,7 @@
 # Copyright 2026 The Bureau Authors
 # SPDX-License-Identifier: Apache-2.0
 
-load("@rules_go//go:def.bzl", "go_library")
+load("@rules_go//go:def.bzl", "go_library", "go_test")
 
 go_library(
     name = "service",
@@ -10,20 +10,32 @@ go_library(
         "create.go",
         "destroy.go",
         "doc.go",
+        "fleet_connection.go",
         "helpers.go",
         "list.go",
+        "placement.go",
         "show.go",
     ],
     importpath = "github.com/bureau-foundation/bureau/cmd/bureau/service",
     visibility = ["//visibility:public"],
     deps = [
         "//cmd/bureau/cli",
+        "//cmd/bureau/fleet",
         "//lib/credential",
         "//lib/principal",
         "//lib/ref",
         "//lib/schema",
+        "//lib/schema/fleet",
         "//lib/secret",
+        "//lib/service",
         "//lib/templatedef",
         "//messaging",
     ],
+)
+
+go_test(
+    name = "service_test",
+    srcs = ["command_test.go"],
+    embed = [":service"],
+    deps = ["//cmd/bureau/cli"],
 )

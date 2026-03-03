@@ -57,12 +57,12 @@ the number of assigned principals.`,
 				return cli.Validation("unexpected argument: %s", args[0])
 			}
 
-			client, err := params.connect()
+			client, err := params.Connect()
 			if err != nil {
 				return err
 			}
 
-			ctx, cancel := callContext(ctx)
+			ctx, cancel := CallContext(ctx)
 			defer cancel()
 
 			var response machinesResponse
@@ -158,12 +158,12 @@ current resource usage, and all assigned principals.`,
 			}
 			machineLocalpart := args[0]
 
-			client, err := params.connect()
+			client, err := params.Connect()
 			if err != nil {
 				return err
 			}
 
-			ctx, cancel := callContext(ctx)
+			ctx, cancel := CallContext(ctx)
 			defer cancel()
 
 			var response showMachineResponse

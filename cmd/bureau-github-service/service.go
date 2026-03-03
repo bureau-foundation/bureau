@@ -33,10 +33,12 @@ func buildSyncFilter() string {
 		schema.MatrixEventTypeRoomMember,
 	}
 
-	// Timeline includes the same state event types — state events can
-	// appear as timeline events during incremental sync.
+	// Timeline includes the same state event types (state events can
+	// appear as timeline events during incremental sync) plus
+	// timeline-only event types like attribution.
 	timelineEventTypes := make([]ref.EventType, len(stateEventTypes))
 	copy(timelineEventTypes, stateEventTypes)
+	timelineEventTypes = append(timelineEventTypes, forge.EventTypeForgeAttribution)
 
 	emptyTypes := []string{}
 
@@ -99,6 +101,13 @@ func (gs *GitHubService) handleEvent(event *forge.Event) {
 	// created pending subscriptions are recorded before the event
 	// reaches existing subscribers.
 	involved := extractInvolvedUsers(event)
+
+	// Check proxy attribution records for the real agent behind
+	// shared-account operations. If an attribution record exists
+	// for this entity, add the attributed agent as RoleAuthor.
+	// This runs regardless of who the webhook says the author is.
+	involved = gs.enrichWithAttribution(event, involved)
+
 	if len(involved) > 0 {
 		gs.manager.ProcessAutoSubscribe(event, involved)
 	}
@@ -185,6 +194,8 @@ func (gs *GitHubService) processRoomEvents(roomID ref.RoomID, events []messaging
 				"room_id", roomID,
 				"state_key", event.StateKey,
 			)
+		case forge.EventTypeForgeAttribution:
+			gs.processForgeAttribution(event)
 		}
 	}
 }
@@ -371,6 +382,114 @@ func (gs *GitHubService) processAutoSubscribeRules(event messaging.Event) {
 	}
 
 	gs.manager.UpdateAutoSubscribeRules(stateKey, rules)
+}
+
+// processForgeAttribution parses an m.bureau.forge_attribution
+// timeline event and records it in the Manager's attribution map.
+// These events are published by proxies when agents create entities
+// through shared-account forges like GitHub.
+func (gs *GitHubService) processForgeAttribution(event messaging.Event) {
+	if len(event.Content) == 0 {
+		return
+	}
+
+	contentJSON, err := json.Marshal(event.Content)
+	if err != nil {
+		gs.logger.Warn("failed to marshal forge attribution content",
+			"error", err,
+		)
+		return
+	}
+
+	var attribution forge.ForgeAttribution
+	if err := json.Unmarshal(contentJSON, &attribution); err != nil {
+		gs.logger.Warn("failed to parse forge attribution",
+			"error", err,
+		)
+		return
+	}
+
+	if err := attribution.Validate(); err != nil {
+		gs.logger.Warn("invalid forge attribution",
+			"error", err,
+		)
+		return
+	}
+
+	agentLocalpart := extractLocalpart(attribution.Agent)
+	if agentLocalpart == "" {
+		gs.logger.Warn("forge attribution has invalid agent ID",
+			"agent", attribution.Agent,
+		)
+		return
+	}
+
+	gs.manager.RecordAttribution(
+		attribution.Provider,
+		attribution.Repo,
+		attribution.EntityType,
+		attribution.EntityNumber,
+		attribution.EntitySHA,
+		agentLocalpart,
+	)
+}
+
+// extractLocalpart extracts the localpart from a Matrix user ID
+// ("@localpart:server" → "localpart"). Returns empty string if the
+// ID is malformed. Duplicated from forgesub to avoid exporting an
+// internal helper.
+func extractLocalpart(matrixUserID string) string {
+	if len(matrixUserID) < 3 || matrixUserID[0] != '@' {
+		return ""
+	}
+	for i := 1; i < len(matrixUserID); i++ {
+		if matrixUserID[i] == ':' {
+			return matrixUserID[1:i]
+		}
+	}
+	return ""
+}
+
+// enrichWithAttribution checks the Manager's attribution map for the
+// event's entity and adds a RoleAuthor entry for the attributed agent
+// if found. This bridges the gap for shared-account forges (GitHub
+// App) where the webhook shows the bot as the author but the proxy
+// recorded which agent actually made the API call.
+func (gs *GitHubService) enrichWithAttribution(event *forge.Event, involved []forgesub.InvolvedUser) []forgesub.InvolvedUser {
+	entityRef, hasEntity := event.EntityRefFromEvent()
+	if !hasEntity {
+		return involved
+	}
+
+	var entitySHA string
+	agentLocalpart, found := gs.manager.LookupAttribution(
+		entityRef.Provider,
+		entityRef.Repo,
+		string(entityRef.EntityType),
+		entityRef.Number,
+		entitySHA,
+	)
+	if !found {
+		return involved
+	}
+
+	// Check if this agent is already in the involved list (e.g.,
+	// if they're also the forge_user on a per-principal forge).
+	for _, user := range involved {
+		if strings.EqualFold(user.ForgeUsername, agentLocalpart) && user.Role == forgesub.RoleAuthor {
+			return involved
+		}
+	}
+
+	gs.logger.Info("attribution resolved",
+		"entity", entityRef,
+		"agent", agentLocalpart,
+	)
+
+	return append(involved, forgesub.InvolvedUser{
+		ForgeUsername: agentLocalpart,
+		Role:          forgesub.RoleAuthor,
+	})
 }
 
 // extractInvolvedUsers extracts forge usernames and their roles from

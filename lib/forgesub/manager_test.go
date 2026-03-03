@@ -6,7 +6,9 @@ package forgesub
 import (
 	"log/slog"
 	"testing"
+	"time"
 
+	"github.com/bureau-foundation/bureau/lib/clock"
 	"github.com/bureau-foundation/bureau/lib/ref"
 	"github.com/bureau-foundation/bureau/lib/schema/forge"
 )
@@ -21,9 +23,10 @@ func testRoomID(name string) ref.RoomID {
 	return roomID
 }
 
-// newTestManager creates a Manager with a discard logger for testing.
+// newTestManager creates a Manager with a real clock and default
+// logger for testing.
 func newTestManager() *Manager {
-	return NewManager(slog.Default())
+	return NewManager(clock.Real(), slog.Default())
 }
 
 // newTestSubscriber creates a Subscriber with a done channel for test
@@ -1384,5 +1387,96 @@ func TestExtractLocalpart(t *testing.T) {
 		if result != test.expected {
 			t.Errorf("extractLocalpart(%q) = %q, want %q", test.input, result, test.expected)
 		}
+	}
+}
+
+// --- Attribution tracking tests ---
+
+func TestRecordAndLookupAttribution(t *testing.T) {
+	manager := newTestManager()
+
+	manager.RecordAttribution("github", "org/repo", "pull_request", 42, "", "bureau/fleet/prod/agent/coder")
+
+	agent, found := manager.LookupAttribution("github", "org/repo", "pull_request", 42, "")
+	if !found {
+		t.Fatal("expected attribution record to be found")
+	}
+	if agent != "bureau/fleet/prod/agent/coder" {
+		t.Fatalf("expected agent bureau/fleet/prod/agent/coder, got %q", agent)
+	}
+}
+
+func TestLookupAttribution_NotFound(t *testing.T) {
+	manager := newTestManager()
+
+	_, found := manager.LookupAttribution("github", "org/repo", "pull_request", 99, "")
+	if found {
+		t.Fatal("expected no attribution record")
+	}
+}
+
+func TestLookupAttribution_CommitSHA(t *testing.T) {
+	manager := newTestManager()
+
+	manager.RecordAttribution("github", "org/repo", "commit", 0, "abc123def456", "bureau/fleet/prod/agent/coder")
+
+	agent, found := manager.LookupAttribution("github", "org/repo", "commit", 0, "abc123def456")
+	if !found {
+		t.Fatal("expected attribution record for commit SHA")
+	}
+	if agent != "bureau/fleet/prod/agent/coder" {
+		t.Fatalf("expected agent bureau/fleet/prod/agent/coder, got %q", agent)
+	}
+}
+
+func TestAttribution_TTLExpiry(t *testing.T) {
+	fakeClock := clock.Fake(time.Unix(1735689600, 0))
+	manager := NewManager(fakeClock, slog.Default())
+
+	manager.RecordAttribution("github", "org/repo", "pull_request", 10, "", "bureau/fleet/prod/agent/old")
+
+	// Before expiry: should be found.
+	agent, found := manager.LookupAttribution("github", "org/repo", "pull_request", 10, "")
+	if !found || agent != "bureau/fleet/prod/agent/old" {
+		t.Fatalf("expected attribution before expiry, got found=%v agent=%q", found, agent)
+	}
+
+	// Advance past TTL.
+	fakeClock.Advance(attributionTTL + time.Second)
+
+	// After expiry: should not be found.
+	_, found = manager.LookupAttribution("github", "org/repo", "pull_request", 10, "")
+	if found {
+		t.Fatal("expected attribution to expire after TTL")
+	}
+}
+
+func TestAttribution_LazyCleanup(t *testing.T) {
+	fakeClock := clock.Fake(time.Unix(1735689600, 0))
+	manager := NewManager(fakeClock, slog.Default())
+
+	// Record two attributions.
+	manager.RecordAttribution("github", "org/repo", "pull_request", 1, "", "agent-a")
+	manager.RecordAttribution("github", "org/repo", "pull_request", 2, "", "agent-b")
+
+	// Advance past TTL.
+	fakeClock.Advance(attributionTTL + time.Second)
+
+	// Recording a new attribution triggers lazy cleanup.
+	manager.RecordAttribution("github", "org/repo", "pull_request", 3, "", "agent-c")
+
+	// Old records should be cleaned.
+	manager.mu.RLock()
+	count := len(manager.attributions)
+	manager.mu.RUnlock()
+
+	if count != 1 {
+		t.Fatalf("expected 1 attribution after cleanup, got %d", count)
+	}
+
+	// The surviving record should be the new one.
+	agent, found := manager.LookupAttribution("github", "org/repo", "pull_request", 3, "")
+	if !found || agent != "agent-c" {
+		t.Fatalf("expected agent-c, got found=%v agent=%q", found, agent)
 	}
 }

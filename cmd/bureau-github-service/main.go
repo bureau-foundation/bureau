@@ -85,7 +85,7 @@ func run() error {
 		session:       boot.Session,
 		service:       boot.Service,
 		serviceRoomID: boot.ServiceRoomID,
-		manager:       forgesub.NewManager(boot.Logger),
+		manager:       forgesub.NewManager(boot.Clock, boot.Logger),
 		ticketSyncer:  ticketSyncer,
 		mentionDispatcher: &MentionDispatcher{
 			session: boot.Session,

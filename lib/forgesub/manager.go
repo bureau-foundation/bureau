@@ -8,10 +8,33 @@ import (
 	"log/slog"
 	"strings"
 	"sync"
+	"time"
 
+	"github.com/bureau-foundation/bureau/lib/clock"
 	"github.com/bureau-foundation/bureau/lib/ref"
 	"github.com/bureau-foundation/bureau/lib/schema/forge"
 )
+
+// attributionTTL is how long attribution records are kept before
+// expiry. Webhooks arrive within seconds of the triggering API call;
+// 15 minutes is conservative headroom.
+const attributionTTL = 15 * time.Minute
+
+// attributionKey identifies a specific forge entity for attribution
+// lookup. Used as a map key in the attribution TTL map.
+type attributionKey struct {
+	Provider   string
+	Repo       string
+	EntityType string
+	Number     int    // issue/PR number (0 for commits)
+	SHA        string // commit SHA (empty for issues/PRs)
+}
+
+// attributionRecord stores who created an entity and when.
+type attributionRecord struct {
+	AgentLocalpart string
+	RecordedAt     time.Time
+}
 
 // repoKey uniquely identifies a repository on a forge provider. Used
 // as a map key for the repo-to-rooms index.
@@ -41,6 +64,7 @@ type roomConfig struct {
 // goroutines, and config update methods from the /sync loop.
 type Manager struct {
 	mu     sync.RWMutex
+	clock  clock.Clock
 	logger *slog.Logger
 
 	// Repo binding index: repo → rooms with that binding.
@@ -68,11 +92,18 @@ type Manager struct {
 	// Created by ProcessAutoSubscribe, consumed by
 	// ClaimAutoSubscriptions.
 	pendingAutoSubscriptions map[string]map[forge.EntityRef]struct{}
+
+	// Attribution records: entity → agent mapping for shared-account
+	// forges. Published by proxies as Matrix events, ingested by
+	// the connector from /sync. Entries expire after attributionTTL.
+	// Cleaned lazily during RecordAttribution and LookupAttribution.
+	attributions map[attributionKey]attributionRecord
 }
 
 // NewManager creates a subscription manager for a forge connector.
-func NewManager(logger *slog.Logger) *Manager {
+func NewManager(clk clock.Clock, logger *slog.Logger) *Manager {
 	return &Manager{
+		clock:                    clk,
 		logger:                   logger,
 		repoToRooms:              make(map[repoKey]map[ref.RoomID]*roomConfig),
 		roomToRepos:              make(map[ref.RoomID]map[repoKey]struct{}),
@@ -81,6 +112,7 @@ func NewManager(logger *slog.Logger) *Manager {
 		identities:               make(map[identityKey]string),
 		autoSubscribeRules:       make(map[string]forge.ForgeAutoSubscribeRules),
 		pendingAutoSubscriptions: make(map[string]map[forge.EntityRef]struct{}),
+		attributions:             make(map[attributionKey]attributionRecord),
 	}
 }
 
@@ -752,6 +784,82 @@ func roleMatchesRules(role InvolvementRole, rules forge.ForgeAutoSubscribeRules)
 		return false
 	}
 }
+
+// --- Attribution tracking ---
+
+// RecordAttribution stores an entity → agent mapping from a proxy
+// attribution event. The connector calls this when it ingests
+// m.bureau.forge_attribution events from /sync. Records expire
+// after attributionTTL; expired entries are cleaned lazily.
+func (m *Manager) RecordAttribution(provider, repo, entityType string, entityNumber int, entitySHA, agentLocalpart string) {
+	key := attributionKey{
+		Provider:   provider,
+		Repo:       repo,
+		EntityType: entityType,
+		Number:     entityNumber,
+		SHA:        entitySHA,
+	}
+
+	m.mu.Lock()
+	defer m.mu.Unlock()
+
+	m.attributions[key] = attributionRecord{
+		AgentLocalpart: agentLocalpart,
+		RecordedAt:     m.clock.Now(),
+	}
+
+	m.logger.Debug("attribution recorded",
+		"provider", provider,
+		"repo", repo,
+		"entity_type", entityType,
+		"entity_number", entityNumber,
+		"entity_sha", entitySHA,
+		"agent", agentLocalpart,
+	)
+
+	// Lazy cleanup: remove expired entries while we hold the lock.
+	m.cleanExpiredAttributions()
+}
+
+// LookupAttribution finds the agent that created a specific entity.
+// Returns the agent localpart and true if a non-expired record exists,
+// or empty string and false if not found.
+func (m *Manager) LookupAttribution(provider, repo, entityType string, entityNumber int, entitySHA string) (string, bool) {
+	key := attributionKey{
+		Provider:   provider,
+		Repo:       repo,
+		EntityType: entityType,
+		Number:     entityNumber,
+		SHA:        entitySHA,
+	}
+
+	m.mu.RLock()
+	defer m.mu.RUnlock()
+
+	record, exists := m.attributions[key]
+	if !exists {
+		return "", false
+	}
+
+	if m.clock.Now().Sub(record.RecordedAt) > attributionTTL {
+		return "", false
+	}
+
+	return record.AgentLocalpart, true
+}
+
+// cleanExpiredAttributions removes attribution records older than
+// attributionTTL. Must be called with m.mu held as write lock.
+func (m *Manager) cleanExpiredAttributions() {
+	now := m.clock.Now()
+	for key, record := range m.attributions {
+		if now.Sub(record.RecordedAt) > attributionTTL {
+			delete(m.attributions, key)
+		}
+	}
+}
+
+// --- Helpers ---
 
 // extractLocalpart extracts the localpart from a Matrix user ID
 // ("@localpart:server" → "localpart"). Returns empty string if the

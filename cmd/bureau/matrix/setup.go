@@ -445,6 +445,10 @@ type namedTemplate struct {
 // "agent-base" inherits from base-networked and adds proxy socket,
 // machine name, and server name environment variables for agent processes.
 //
+// Individual agent templates (bureau-agent, bureau-agent-claude) inherit
+// from agent-base, set their Command, and declare RequiredServices for
+// the services they need (agent service, artifact service, etc.).
+//
 // "service-base" inherits from base-networked and adds the environment
 // variables needed by service.BootstrapViaProxy. The launcher injects
 // additional service-specific variables (BUREAU_SERVICE_SOCKET,
@@ -454,6 +458,9 @@ type namedTemplate struct {
 //
 // Individual service templates (ticket-service, fleet-controller, etc.)
 // inherit from service-base and set their Command to the bare binary name.
+// The model-service template also sets BUREAU_MODEL_HTTP_SOCKET to enable
+// the HTTP compatibility proxy alongside the native CBOR socket.
+//
 // Deployment requires either a Nix environment (via EnvironmentOverride
 // in the PrincipalAssignment) that provides the binary, or a
 // CommandOverride with the absolute binary path plus filesystem mounts.
@@ -514,6 +521,24 @@ func baseTemplates() []namedTemplate {
 			},
 		},
 		{
+			name: "bureau-agent",
+			content: schema.TemplateContent{
+				Description:      "Bureau-native agent with in-process LLM loop and CLI tools",
+				Inherits:         []string{"bureau/template:agent-base"},
+				Command:          []string{"bureau-agent"},
+				RequiredServices: []string{"agent", "artifact"},
+			},
+		},
+		{
+			name: "bureau-agent-claude",
+			content: schema.TemplateContent{
+				Description:      "Claude Code agent with MCP tool integration and hook handler",
+				Inherits:         []string{"bureau/template:agent-base"},
+				Command:          []string{"bureau-agent-claude"},
+				RequiredServices: []string{"agent"},
+			},
+		},
+		{
 			name: "service-base",
 			content: schema.TemplateContent{
 				Description: "Base service template with proxy bootstrap environment variables",
@@ -563,6 +588,17 @@ func baseTemplates() []namedTemplate {
 				Description: "Bureau telemetry service for span, metric, and log aggregation and query",
 				Inherits:    []string{"bureau/template:service-base"},
 				Command:     []string{"bureau-telemetry-service"},
+			},
+		},
+		{
+			name: "model-service",
+			content: schema.TemplateContent{
+				Description: "Bureau model service for inference routing, provider management, and quota tracking",
+				Inherits:    []string{"bureau/template:service-base"},
+				Command:     []string{"bureau-model-service"},
+				EnvironmentVariables: map[string]string{
+					"BUREAU_MODEL_HTTP_SOCKET": "/run/bureau/listen/http.sock",
+				},
 			},
 		},
 	}

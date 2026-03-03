@@ -14,8 +14,8 @@ func TestBaseTemplates(t *testing.T) {
 
 	templates := baseTemplates()
 
-	if len(templates) != 9 {
-		t.Fatalf("expected 9 base templates, got %d", len(templates))
+	if len(templates) != 12 {
+		t.Fatalf("expected 12 base templates, got %d", len(templates))
 	}
 
 	// Find templates by name.
@@ -137,6 +137,50 @@ func TestBaseTemplates(t *testing.T) {
 		}
 	}
 
+	// Verify individual agent templates inherit from agent-base and
+	// declare the correct command and required services.
+	agentTemplates := []struct {
+		name             string
+		command          string
+		requiredServices []string
+	}{
+		{"bureau-agent", "bureau-agent", []string{"agent", "artifact"}},
+		{"bureau-agent-claude", "bureau-agent-claude", []string{"agent"}},
+	}
+
+	for _, agentTemplate := range agentTemplates {
+		template, ok := byName[agentTemplate.name]
+		if !ok {
+			t.Fatalf("missing %q template", agentTemplate.name)
+		}
+		if template.Description == "" {
+			t.Errorf("%s template has empty description", agentTemplate.name)
+		}
+		if len(template.Inherits) != 1 {
+			t.Fatalf("%s should inherit from exactly one parent, got %v", agentTemplate.name, template.Inherits)
+		}
+		templateRef, err := schema.ParseTemplateRef(template.Inherits[0])
+		if err != nil {
+			t.Fatalf("%s Inherits[0] %q is not a valid template reference: %v",
+				agentTemplate.name, template.Inherits[0], err)
+		}
+		if templateRef.Template != "agent-base" {
+			t.Errorf("%s should inherit from 'agent-base', got %q", agentTemplate.name, templateRef.Template)
+		}
+		if len(template.Command) != 1 || template.Command[0] != agentTemplate.command {
+			t.Errorf("%s command = %v, want [%q]", agentTemplate.name, template.Command, agentTemplate.command)
+		}
+		if len(template.RequiredServices) != len(agentTemplate.requiredServices) {
+			t.Errorf("%s RequiredServices = %v, want %v", agentTemplate.name, template.RequiredServices, agentTemplate.requiredServices)
+		} else {
+			for i, service := range agentTemplate.requiredServices {
+				if template.RequiredServices[i] != service {
+					t.Errorf("%s RequiredServices[%d] = %q, want %q", agentTemplate.name, i, template.RequiredServices[i], service)
+				}
+			}
+		}
+	}
+
 	// Verify the "service-base" template.
 	serviceBase, ok := byName["service-base"]
 	if !ok {
@@ -177,6 +221,7 @@ func TestBaseTemplates(t *testing.T) {
 		{"artifact-service", "bureau-artifact-service"},
 		{"agent-service", "bureau-agent-service"},
 		{"telemetry-service", "bureau-telemetry-service"},
+		{"model-service", "bureau-model-service"},
 	}
 
 	for _, serviceTemplate := range serviceTemplates {
@@ -201,5 +246,12 @@ func TestBaseTemplates(t *testing.T) {
 		if len(template.Command) != 1 || template.Command[0] != serviceTemplate.command {
 			t.Errorf("%s command = %v, want [%q]", serviceTemplate.name, template.Command, serviceTemplate.command)
 		}
+	}
+
+	// Verify model-service exposes the HTTP compatibility socket.
+	modelSvc := byName["model-service"]
+	if modelSvc.EnvironmentVariables["BUREAU_MODEL_HTTP_SOCKET"] != "/run/bureau/listen/http.sock" {
+		t.Errorf("model-service BUREAU_MODEL_HTTP_SOCKET = %q, want %q",
+			modelSvc.EnvironmentVariables["BUREAU_MODEL_HTTP_SOCKET"], "/run/bureau/listen/http.sock")
 	}
 }

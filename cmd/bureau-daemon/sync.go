@@ -413,6 +413,23 @@ func (d *Daemon) processSyncResponse(ctx context.Context, response *messaging.Sy
 		// that were blocked by a now-potentially-resolved issue (new
 		// credentials provisioned, template updated, config changed, etc.).
 
+		// When the daemon was unconfigured (lastConfig == nil), the service
+		// room handler above suppresses service directory processing to
+		// avoid wasted GetRoomState calls. If this reconcile is the first
+		// to receive a MachineConfig, any service events that arrived
+		// during the unconfigured phase were skipped and won't be
+		// re-delivered by /sync. Force a service directory sync before
+		// reconcile so RequiredServices resolution can find services that
+		// were registered while the daemon had no config.
+		if d.lastConfig == nil {
+			if added, _, _, syncErr := d.syncServiceDirectory(ctx); syncErr != nil {
+				d.logger.Error("pre-reconcile service directory sync failed", "error", syncErr)
+			} else if len(added) > 0 {
+				d.logger.Info("pre-reconcile service directory sync discovered services",
+					"added", len(added))
+			}
+		}
+
 		// Capture sandbox count before reconcile to detect new starts.
 		d.reconcileMu.RLock()
 		runningBefore := len(d.running)

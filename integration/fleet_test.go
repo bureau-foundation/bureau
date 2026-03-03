@@ -892,3 +892,87 @@ func TestServiceReEnable(t *testing.T) {
 		t.Fatal("status after re-enable returned empty principal")
 	}
 }
+
+// TestCrossMachineRequiredService verifies that a principal on one machine
+// can declare a RequiredService that runs on a different machine. The daemon
+// creates a transport tunnel to bridge the local sandbox socket to the
+// remote service, proving the full cross-machine service resolution path:
+//
+//   - Service deployed on provider machine and registered in fleet directory
+//   - Admin publishes a service binding on the consumer's config room
+//   - Agent deployed on consumer with RequiredServices referencing the binding
+//   - Consumer daemon's first MachineConfig triggers a pre-reconcile service
+//     directory sync (discovering the provider's service via GetRoomState)
+//   - Consumer daemon resolves the binding → finds service is remote →
+//     creates a WebRTC transport tunnel → mounts tunnel socket into sandbox
+//   - Proxy socket appearing proves sandbox creation succeeded, which
+//     requires successful tunnel creation and service mount resolution
+func TestCrossMachineRequiredService(t *testing.T) {
+	t.Parallel()
+
+	ns := setupTestNamespace(t)
+	admin := ns.Admin
+	fleet := createTestFleet(t, admin, ns)
+
+	ctx := t.Context()
+
+	// Boot two machines. The provider hosts the service and needs
+	// ProxyBinary to create the service sandbox. The consumer needs
+	// ProxyBinary to create the agent sandbox that depends on the
+	// remote service.
+	provider := newTestMachine(t, fleet, "xm-svc-prov")
+	consumer := newTestMachine(t, fleet, "xm-svc-cons")
+
+	startMachine(t, admin, provider, machineOptions{
+		LauncherBinary: resolvedBinary(t, "LAUNCHER_BINARY"),
+		DaemonBinary:   resolvedBinary(t, "DAEMON_BINARY"),
+		Fleet:          fleet,
+		ProxyBinary:    resolvedBinary(t, "PROXY_BINARY"),
+	})
+	startMachine(t, admin, consumer, machineOptions{
+		LauncherBinary: resolvedBinary(t, "LAUNCHER_BINARY"),
+		DaemonBinary:   resolvedBinary(t, "DAEMON_BINARY"),
+		Fleet:          fleet,
+		ProxyBinary:    resolvedBinary(t, "PROXY_BINARY"),
+	})
+
+	// Phase 1: Deploy the service on the provider. deployTestService
+	// returns after the provider daemon has synced the registration, so
+	// the service event is in the fleet service room. The consumer daemon
+	// discovers the service via its pre-reconcile service directory sync
+	// (triggered when the first MachineConfig arrives in Phase 3).
+	svc := deployTestService(t, admin, fleet, provider, "xm-svc")
+
+	// Phase 2: Publish a service binding on the consumer's config room.
+	// RequiredServices entries resolve through bindings: the daemon reads
+	// m.bureau.service_binding state events to find the principal entity,
+	// then checks d.services to determine whether the service is local
+	// or remote.
+	_, err := admin.SendStateEvent(ctx, consumer.ConfigRoomID,
+		schema.EventTypeServiceBinding, "test-svc",
+		schema.ServiceBindingContent{Principal: svc.Entity})
+	if err != nil {
+		t.Fatalf("publish service binding on consumer: %v", err)
+	}
+
+	// Phase 3: Deploy an agent on the consumer with RequiredServices.
+	// The daemon's reconcile path for this agent:
+	//   resolveServiceMounts("test-svc")
+	//     → resolveServiceBinding("test-svc") → svc.Entity
+	//     → d.services[entity.Localpart()] → service on provider machine
+	//     → resolveRemoteServiceMount → startTunnel → tunnel socket
+	//     → launcherServiceMount{Role: "test-svc", SocketPath: tunnel}
+	//   create-sandbox IPC with the tunnel socket as a service mount
+	//
+	// The proxy socket appearing proves the entire chain worked:
+	// binding resolution, service directory lookup, peer address
+	// discovery, WebRTC tunnel creation, and sandbox creation with
+	// the remote service mount.
+	testAgentBinary := resolvedBinary(t, "TEST_AGENT_BINARY")
+	deployAgent(t, admin, consumer, agentOptions{
+		Binary:           testAgentBinary,
+		Localpart:        "agent/xm-svc-test",
+		RequiredServices: []string{"test-svc"},
+		SkipWaitForReady: true,
+	})
+}

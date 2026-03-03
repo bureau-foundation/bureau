@@ -341,6 +341,120 @@ func TestProcessSyncResponse_ConfigRoom(t *testing.T) {
 	}
 }
 
+// TestProcessSyncResponse_PreReconcileServiceSync verifies that when the
+// daemon's first MachineConfig arrives, it forces a service directory sync
+// before reconcile. This handles the case where service events arrived in
+// /sync while the daemon was unconfigured (lastConfig == nil) — the service
+// room handler suppresses processing when unconfigured, and /sync won't
+// re-deliver those events. Without the pre-reconcile sync, RequiredServices
+// resolution would fail with "not yet in the service directory" and the
+// daemon would never discover the service.
+func TestProcessSyncResponse_PreReconcileServiceSync(t *testing.T) {
+	t.Parallel()
+
+	machine, fleet := testMachineSetup(t, "test", "bureau.local")
+	machineName := machine.Localpart()
+
+	matrixState := newMockMatrixState()
+	matrixServer := httptest.NewServer(matrixState.handler())
+	t.Cleanup(matrixServer.Close)
+
+	const configRoomID = "!config:test"
+	const machineRoomID = "!machine:test"
+	const serviceRoomID = "!service:test"
+
+	// Set up a MachineConfig for reconcile to find.
+	matrixState.setStateEvent(configRoomID, schema.EventTypeMachineConfig, machineName, schema.MachineConfig{
+		Principals: []schema.PrincipalAssignment{{
+			Principal: testEntity(t, fleet, "test/agent"),
+			AutoStart: true,
+		}},
+	})
+
+	// Set up a service in the service room. This simulates a service
+	// that registered while the daemon was unconfigured — the event was
+	// in a /sync response that was suppressed.
+	serviceKey := "bureau/fleet/test/service/stt/whisper"
+	matrixState.setRoomState(serviceRoomID, []mockRoomStateEvent{
+		{
+			Type:     schema.EventTypeService,
+			StateKey: &serviceKey,
+			Content: map[string]any{
+				"principal":   "@bureau/fleet/test/service/stt/whisper:bureau.local",
+				"machine":     "@bureau/fleet/test/machine/remote:bureau.local",
+				"endpoints":   map[string]any{"cbor": "service.sock"},
+				"description": "Pre-existing service",
+			},
+		},
+	})
+
+	matrixClient, err := messaging.NewClient(messaging.ClientConfig{
+		HomeserverURL: matrixServer.URL,
+	})
+	if err != nil {
+		t.Fatalf("NewClient: %v", err)
+	}
+	session, err := matrixClient.SessionFromToken(machine.UserID(), "syt_test_token")
+	if err != nil {
+		t.Fatalf("SessionFromToken: %v", err)
+	}
+	t.Cleanup(func() { session.Close() })
+
+	daemon, _ := newTestDaemon(t)
+	daemon.session = session
+	daemon.runDir = principal.DefaultRunDir
+	daemon.machine = machine
+	daemon.fleet = fleet
+	daemon.configRoomID = mustRoomID(configRoomID)
+	daemon.machineRoomID = mustRoomID(machineRoomID)
+	daemon.serviceRoomID = mustRoomID(serviceRoomID)
+	daemon.launcherSocket = "/nonexistent/launcher.sock"
+	daemon.logger = slog.New(slog.NewJSONHandler(os.Stderr, nil))
+	t.Cleanup(daemon.stopAllLayoutWatchers)
+
+	// Verify precondition: service directory is empty, lastConfig is nil.
+	if len(daemon.services) != 0 {
+		t.Fatalf("precondition: services should be empty, got %d", len(daemon.services))
+	}
+	if daemon.lastConfig != nil {
+		t.Fatal("precondition: lastConfig should be nil")
+	}
+
+	// Send a config room change while the daemon is unconfigured.
+	// The pre-reconcile service sync should discover the service
+	// BEFORE reconcile runs, so RequiredServices resolution would
+	// succeed if the agent had any.
+	configStateKey := machineName
+	response := &messaging.SyncResponse{
+		NextBatch: "batch_1",
+		Rooms: messaging.RoomsSection{
+			Join: map[ref.RoomID]messaging.JoinedRoom{
+				mustRoomID(configRoomID): {
+					State: messaging.StateSection{
+						Events: []messaging.Event{
+							{Type: schema.EventTypeMachineConfig, StateKey: &configStateKey},
+						},
+					},
+				},
+			},
+		},
+	}
+	daemon.processSyncResponse(context.Background(), response)
+
+	// The pre-reconcile sync should have populated d.services.
+	if len(daemon.services) != 1 {
+		t.Errorf("services count = %d, want 1 (pre-reconcile sync should have discovered the service)", len(daemon.services))
+	}
+	if _, ok := daemon.services[serviceKey]; !ok {
+		t.Errorf("service %q not found in directory after pre-reconcile sync", serviceKey)
+	}
+
+	// lastConfig should now be set by reconcile.
+	if daemon.lastConfig == nil {
+		t.Error("lastConfig should be set after reconcile")
+	}
+}
+
 func TestProcessSyncResponse_ServicesRoom(t *testing.T) {
 	t.Parallel()
 

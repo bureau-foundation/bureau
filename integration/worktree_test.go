@@ -15,7 +15,6 @@ import (
 	"github.com/bureau-foundation/bureau/lib/schema/pipeline"
 	"github.com/bureau-foundation/bureau/lib/schema/workspace"
 	"github.com/bureau-foundation/bureau/lib/templatedef"
-	"github.com/bureau-foundation/bureau/messaging"
 )
 
 // TestWorkspaceCommands exercises the daemon's synchronous workspace command
@@ -84,7 +83,7 @@ func TestWorkspaceCommands(t *testing.T) {
 	// --- Deploy ticket service and create workspace via production API ---
 	deployTicketService(t, admin, fleet, machine, "ws-cmds")
 
-	wsResult := createWorkspace(t, admin, machine.Ref, "wscmds/main",
+	wsResult := createWorkspace(t, admin, fleet, machine.Ref, "wscmds/main",
 		"bureau/template:base", nil)
 	workspaceRoomID := wsResult.RoomID
 
@@ -352,7 +351,7 @@ func TestWorkspaceWorktreeHandlers(t *testing.T) {
 	// workspace room.
 	deployTicketService(t, admin, fleet, machine, "ws-wt-hdlr")
 
-	wsResult := createWorkspace(t, admin, machine.Ref, "wtproj/main",
+	wsResult := createWorkspace(t, admin, fleet, machine.Ref, "wtproj/main",
 		"bureau/template:base", nil)
 	workspaceRoomID := wsResult.RoomID
 
@@ -609,11 +608,6 @@ func TestWorkspaceWorktreeLifecycle(t *testing.T) {
 	// after the CLI creates it.
 	deployTicketService(t, admin, fleet, machine, "ws-wt")
 
-	// Resolve the pipeline room for principal invitations. The machine
-	// itself was invited to all global rooms (template, pipeline, system,
-	// machine, service, fleet) during provisioning (startMachineLauncher).
-	pipelineRoomID := resolvePipelineRoom(t, admin)
-
 	// --- Publish agent template ---
 	agentTemplateRef, err := schema.ParseTemplateRef("bureau/template:test-wt-agent")
 	if err != nil {
@@ -647,32 +641,11 @@ func TestWorkspaceWorktreeLifecycle(t *testing.T) {
 	seedRepoPath := machine.WorkspaceRoot + "/seed.git"
 	initTestGitRepo(t, ctx, seedRepoPath)
 
-	// --- Register principals ---
-	// workspace create generates localparts: agent/<alias>/setup,
-	// agent/<alias>/<index>, agent/<alias>/teardown. Use fleet-scoped
-	// registration so the proxy authenticates as the fleet-scoped user
-	// that the daemon invites to the workspace room.
-	setupAccount := registerFleetPrincipal(t, fleet, "agent/wswt/main/setup", "test-password")
-	agentAccount := registerFleetPrincipal(t, fleet, "agent/wswt/main/0", "test-password")
-	teardownAccount := registerFleetPrincipal(t, fleet, "agent/wswt/main/teardown", "test-password")
-
-	// --- Push encrypted credentials ---
-	pushCredentials(t, admin, machine, setupAccount)
-	pushCredentials(t, admin, machine, agentAccount)
-	pushCredentials(t, admin, machine, teardownAccount)
-
-	// --- Invite pipeline principals to the pipeline room ---
-	for _, account := range []principalAccount{setupAccount, teardownAccount} {
-		if err := admin.InviteUser(ctx, pipelineRoomID, account.UserID); err != nil {
-			if !messaging.IsMatrixError(err, "M_FORBIDDEN") {
-				t.Fatalf("invite %s to pipeline room: %v", account.Localpart, err)
-			}
-		}
-	}
-
 	// --- Phase 1: Create workspace via API ---
+	// workspace.Create handles account registration, credential provisioning,
+	// pipeline room invitations, and MachineConfig publishing.
 	t.Log("phase 1: creating workspace")
-	createWorkspace(t, admin, machine.Ref, "wswt/main", "bureau/template:test-wt-agent",
+	createWorkspace(t, admin, fleet, machine.Ref, "wswt/main", "bureau/template:test-wt-agent",
 		map[string]string{"repository": "/workspace/seed.git"})
 
 	workspaceRoomID, err := admin.ResolveAlias(ctx, ref.MustParseRoomAlias("#wswt/main:"+testServerName))
@@ -687,13 +660,15 @@ func TestWorkspaceWorktreeLifecycle(t *testing.T) {
 	t.Log("workspace is active — setup pipeline completed")
 
 	// --- Phase 3: Agent starts ---
-	agentSocket := machine.PrincipalProxySocketPath(t, agentAccount.Localpart)
+	agentLocalpart := fleet.Prefix + "/agent/wswt/main/0"
+	agentSocket := machine.PrincipalProxySocketPath(t, agentLocalpart)
 	waitForFile(t, agentSocket)
 
 	agentProxyClient := proxyHTTPClient(agentSocket)
 	agentIdentity := proxyWhoami(t, agentProxyClient)
-	if agentIdentity != agentAccount.UserID.String() {
-		t.Fatalf("agent whoami = %q, want %q", agentIdentity, agentAccount.UserID)
+	expectedAgentUserID := "@" + agentLocalpart + ":" + testServerName
+	if agentIdentity != expectedAgentUserID {
+		t.Fatalf("agent whoami = %q, want %q", agentIdentity, expectedAgentUserID)
 	}
 	t.Log("agent started with verified proxy identity: " + agentIdentity)
 

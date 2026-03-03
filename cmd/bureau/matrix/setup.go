@@ -532,10 +532,31 @@ func baseTemplates() []namedTemplate {
 		{
 			name: "bureau-agent-claude",
 			content: schema.TemplateContent{
-				Description:      "Claude Code agent with MCP tool integration and hook handler",
-				Inherits:         []string{"bureau/template:agent-base"},
-				Command:          []string{"bureau-agent-claude"},
+				Description: "Claude Code agent with MCP tool integration and hook handler",
+				Inherits:    []string{"bureau/template:agent-base"},
+				Command: []string{
+					"bureau-bridge",
+					"--listen", "127.0.0.1:8642",
+					"--socket", "/run/bureau/proxy.sock",
+					"--", "bureau-agent-claude",
+				},
 				RequiredServices: []string{"agent"},
+				EnvironmentVariables: map[string]string{
+					"ANTHROPIC_BASE_URL": "http://127.0.0.1:8642/http/anthropic",
+				},
+				ProxyServices: map[string]schema.TemplateProxyService{
+					"anthropic": {
+						Upstream:      "https://api.anthropic.com",
+						InjectHeaders: map[string]string{"x-api-key": "ANTHROPIC_API_KEY"},
+						StripHeaders:  []string{"x-api-key", "authorization"},
+					},
+				},
+				Filesystem: []schema.TemplateMount{
+					{Source: "${CACHE_ROOT}/bin", Dest: "/usr/local/bin", Mode: schema.MountModeRO, Optional: true},
+					{Source: "/lib64", Dest: "/lib64", Mode: schema.MountModeRO},
+					{Source: "/lib", Dest: "/lib", Mode: schema.MountModeRO},
+					{Dest: "/workspace", Type: "tmpfs"},
+				},
 			},
 		},
 		{

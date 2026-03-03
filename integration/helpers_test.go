@@ -641,12 +641,14 @@ func writeOperatorSession(t *testing.T, userID, accessToken, homeserverURL strin
 }
 
 // writeTestCredentialFile writes a credential file in the KEY=VALUE format
-// that SessionConfig.Connect() reads. Returns the file path for use with
-// the --credential-file flag.
+// that SessionConfig.Connect() reads. Includes the registration token so
+// commands that create principals (workspace create, agent create, service
+// create) can register Matrix accounts. Returns the file path for use
+// with the --credential-file flag.
 func writeTestCredentialFile(t *testing.T, homeserverURL, userID, token string) string {
 	t.Helper()
-	content := fmt.Sprintf("MATRIX_HOMESERVER_URL=%s\nMATRIX_ADMIN_USER=%s\nMATRIX_ADMIN_TOKEN=%s\n",
-		homeserverURL, userID, token)
+	content := fmt.Sprintf("MATRIX_HOMESERVER_URL=%s\nMATRIX_ADMIN_USER=%s\nMATRIX_ADMIN_TOKEN=%s\nMATRIX_REGISTRATION_TOKEN=%s\n",
+		homeserverURL, userID, token, testRegistrationToken)
 	path := filepath.Join(t.TempDir(), "credentials")
 	if err := os.WriteFile(path, []byte(content), 0600); err != nil {
 		t.Fatalf("write credential file: %v", err)
@@ -1144,18 +1146,36 @@ func listMachines(t *testing.T, session messaging.Session, fleet ref.Fleet) []*m
 }
 
 // createWorkspace creates a workspace via the production API (not the CLI
-// subprocess). Returns the creation result.
-func createWorkspace(t *testing.T, session messaging.Session, machineRef ref.Machine, alias, template string, params map[string]string) *workspace.CreateResult {
+// subprocess). Registers Matrix accounts for all workspace principals and
+// provisions encrypted credentials — the same flow that the CLI uses.
+func createWorkspace(t *testing.T, session messaging.Session, fleet *testFleet, machineRef ref.Machine, alias, template string, params map[string]string) *workspace.CreateResult {
 	t.Helper()
 	ctx := t.Context()
 
+	registrationTokenBuffer, err := secret.NewFromString(testRegistrationToken)
+	if err != nil {
+		t.Fatalf("protect registration token: %v", err)
+	}
+	defer registrationTokenBuffer.Close()
+
+	matrixClient, err := messaging.NewClient(messaging.ClientConfig{
+		HomeserverURL: testHomeserverURL,
+	})
+	if err != nil {
+		t.Fatalf("create matrix client: %v", err)
+	}
+
 	logger := slog.New(slog.NewJSONHandler(os.Stderr, nil)).With("test", t.Name())
 	result, err := workspace.Create(ctx, session, workspace.CreateParams{
-		Alias:      alias,
-		Machine:    machineRef,
-		Template:   template,
-		Params:     params,
-		AgentCount: 1,
+		Alias:             alias,
+		Machine:           machineRef,
+		Template:          template,
+		Params:            params,
+		AgentCount:        1,
+		Client:            matrixClient,
+		RegistrationToken: registrationTokenBuffer,
+		HomeserverURL:     testHomeserverURL,
+		MachineRoomID:     fleet.MachineRoomID,
 	}, logger)
 	if err != nil {
 		t.Fatalf("create workspace %s: %v", alias, err)

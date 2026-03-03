@@ -247,6 +247,9 @@
 
         binaries = [
           "bureau"
+          "bureau-agent"
+          "bureau-agent-claude"
+          "bureau-agent-mock"
           "bureau-agent-service"
           "bureau-artifact-service"
           "bureau-bridge"
@@ -350,13 +353,29 @@
             };
 
             # Environment for coding agents working on projects. Bureau
-            # runtime + full developer preset + language runtimes (Node.js,
-            # Python, uv, bun). Agents install additional tools on-demand
-            # into /var/bureau/cache/ via these package managers.
+            # runtime + sandbox tools (CLI, bridge, pipeline executor) +
+            # full developer preset + language runtimes (Node.js, Python,
+            # uv, bun). Agents install additional tools on-demand into
+            # /var/bureau/cache/ via these package managers.
             developer-runner-env = pkgs.buildEnv {
               name = "bureau-developer-runner-env";
               paths =
                 self.lib.bureauRuntime pkgs
+                ++ [ self.packages.${system}.bureau-sandbox-env ]
+                ++ self.lib.presets.developer pkgs
+                ++ self.lib.applyModules self.lib.modules.runtime pkgs;
+            };
+
+            # Developer environment for Claude Code agents. Extends the
+            # developer runner with the bureau-agent-claude wrapper binary
+            # that integrates Claude Code with the Bureau agent driver
+            # (Matrix message pump, session tracking, metrics).
+            claude-developer-runner-env = pkgs.buildEnv {
+              name = "bureau-claude-developer-runner-env";
+              paths =
+                self.lib.bureauRuntime pkgs
+                ++ [ self.packages.${system}.bureau-sandbox-env ]
+                ++ [ self.packages.${system}.bureau-agent-claude ]
                 ++ self.lib.presets.developer pkgs
                 ++ self.lib.applyModules self.lib.modules.runtime pkgs;
             };

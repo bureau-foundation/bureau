@@ -5,7 +5,9 @@ package agent
 
 import (
 	"context"
+	"fmt"
 	"log/slog"
+	"strings"
 	"time"
 
 	"github.com/bureau-foundation/bureau/cmd/bureau/cli"
@@ -23,10 +25,12 @@ import (
 // it needs the registration token for Matrix account creation.
 type agentCreateParams struct {
 	cli.SessionConfig
-	Machine    string `json:"machine"      flag:"machine"         desc:"target machine localpart (required)"`
-	Name       string `json:"name"         flag:"name"            desc:"agent principal localpart (required)"`
-	ServerName string `json:"server_name"  flag:"server-name"     desc:"Matrix server name (auto-detected from machine.conf)"`
-	AutoStart  bool   `json:"auto_start"   flag:"auto-start"      desc:"start sandbox automatically" default:"true"`
+	Machine         string   `json:"machine"          flag:"machine"           desc:"target machine localpart (required)"`
+	Name            string   `json:"name"             flag:"name"              desc:"agent principal localpart (required)"`
+	ServerName      string   `json:"server_name"      flag:"server-name"       desc:"Matrix server name (auto-detected from machine.conf)"`
+	AutoStart       bool     `json:"auto_start"       flag:"auto-start"        desc:"start sandbox automatically" default:"true"`
+	ExtraCredential []string `json:"extra_credential" flag:"extra-credential"  desc:"extra credential KEY=VALUE for the agent's encrypted bundle (repeatable)"`
+	ExtraEnv        []string `json:"extra_env"        flag:"extra-env"         desc:"extra environment variable KEY=VALUE for the sandbox (repeatable)"`
 
 	cli.JSONOutput
 }
@@ -185,6 +189,15 @@ func runCreate(ctx context.Context, logger *slog.Logger, templateRef schema.Temp
 			WithHint("Run 'bureau machine list' to see machines, or 'bureau machine provision' to register one.")
 	}
 
+	extraCredentials, err := parseKeyValuePairs(params.ExtraCredential)
+	if err != nil {
+		return cli.Validation("invalid --extra-credential: %w", err)
+	}
+	extraEnvironmentVariables, err := parseKeyValuePairs(params.ExtraEnv)
+	if err != nil {
+		return cli.Validation("invalid --extra-env: %w", err)
+	}
+
 	logger.Info("creating agent", "name", params.Name, "machine", params.Machine, "template", templateRef.String())
 
 	principalEntity, err := ref.NewEntityFromAccountLocalpart(fleet, params.Name)
@@ -200,9 +213,11 @@ func runCreate(ctx context.Context, logger *slog.Logger, templateRef schema.Temp
 			_, err := templatedef.Fetch(ctx, adminSession, templateRef, serverName)
 			return err
 		},
-		HomeserverURL: homeserverURL,
-		AutoStart:     params.AutoStart,
-		MachineRoomID: machineRoomID,
+		HomeserverURL:             homeserverURL,
+		AutoStart:                 params.AutoStart,
+		MachineRoomID:             machineRoomID,
+		ExtraCredentials:          extraCredentials,
+		ExtraEnvironmentVariables: extraEnvironmentVariables,
 	})
 	if err != nil {
 		return cli.Internal("create agent: %w", err)
@@ -227,4 +242,24 @@ func runCreate(ctx context.Context, logger *slog.Logger, templateRef schema.Temp
 	)
 
 	return nil
+}
+
+// parseKeyValuePairs parses a list of "KEY=VALUE" strings into a map.
+// Returns an error for malformed entries (missing "=" or empty key).
+func parseKeyValuePairs(pairs []string) (map[string]string, error) {
+	if len(pairs) == 0 {
+		return nil, nil
+	}
+	result := make(map[string]string, len(pairs))
+	for _, pair := range pairs {
+		key, value, found := strings.Cut(pair, "=")
+		if !found {
+			return nil, fmt.Errorf("expected KEY=VALUE, got %q", pair)
+		}
+		if key == "" {
+			return nil, fmt.Errorf("empty key in %q", pair)
+		}
+		result[key] = value
+	}
+	return result, nil
 }

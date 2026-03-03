@@ -256,11 +256,6 @@ func TestWorkspaceCLILifecycle(t *testing.T) {
 	// --- Resolve pipeline room for principal invitations ---
 	// The machine was invited to all global rooms (template, pipeline,
 	// system, machine, service, fleet) during provisioning. Principal
-	// accounts still need pipeline room membership for workspace
-	// setup/teardown pipelines (the pipeline executor authenticates
-	// as the principal via the proxy).
-	pipelineRoomID := resolvePipelineRoom(t, admin)
-
 	// --- Publish agent template ---
 	// The agent principal needs a sandbox command that stays alive. The
 	// runner environment provides coreutils (including sleep). Uses the
@@ -305,38 +300,12 @@ func TestWorkspaceCLILifecycle(t *testing.T) {
 	seedRepoPath := machine.WorkspaceRoot + "/seed.git"
 	initTestGitRepo(t, ctx, seedRepoPath)
 
-	// --- Register principals ---
-	// workspace create generates localparts: agent/<alias>/setup,
-	// agent/<alias>/<index>, agent/<alias>/teardown. In production,
-	// credential provisioning (principal.Create) registers accounts with
-	// fleet-scoped localparts. Use registerFleetPrincipal to match production:
-	// the proxy authenticates as the fleet-scoped user, which the daemon
-	// invites to the workspace room via ensurePrincipalRoomAccess.
-	setupAccount := registerFleetPrincipal(t, fleet, "agent/wscli/main/setup", "test-password")
-	agentAccount := registerFleetPrincipal(t, fleet, "agent/wscli/main/0", "test-password")
-	teardownAccount := registerFleetPrincipal(t, fleet, "agent/wscli/main/teardown", "test-password")
-
-	// --- Push encrypted credentials ---
-	pushCredentials(t, admin, machine, setupAccount)
-	pushCredentials(t, admin, machine, agentAccount)
-	pushCredentials(t, admin, machine, teardownAccount)
-
-	// --- Invite pipeline principals to the pipeline room ---
-	// The pipeline executor resolves pipeline refs (bureau/pipeline:dev-workspace-init,
-	// bureau/pipeline:dev-workspace-deinit) via the proxy, which authenticates
-	// as the principal. The principal needs pipeline room membership to read
-	// state events in the private room.
-	for _, account := range []principalAccount{setupAccount, teardownAccount} {
-		if err := admin.InviteUser(ctx, pipelineRoomID, account.UserID); err != nil {
-			if !messaging.IsMatrixError(err, "M_FORBIDDEN") {
-				t.Fatalf("invite %s to pipeline room: %v", account.Localpart, err)
-			}
-		}
-	}
-
 	// --- Phase 1: Create workspace via API ---
+	// workspace.Create registers accounts, provisions encrypted credentials,
+	// publishes MachineConfig, and invites pipeline principals to the
+	// pipeline room — the full production flow.
 	t.Log("phase 1: creating workspace")
-	createWorkspace(t, admin, machine.Ref, "wscli/main", "bureau/template:test-ws-agent",
+	createWorkspace(t, admin, fleet, machine.Ref, "wscli/main", "bureau/template:test-ws-agent",
 		map[string]string{"repository": "/workspace/seed.git"})
 
 	// Resolve the workspace room so we can watch its status transitions.
@@ -406,7 +375,9 @@ func TestWorkspaceCLILifecycle(t *testing.T) {
 	}
 
 	// --- Phase 3: Verify agent started and its proxy works ---
-	agentSocket := machine.PrincipalProxySocketPath(t, agentAccount.Localpart)
+	// The agent localpart is deterministic: agent/<alias>/<index>.
+	agentLocalpart := fleet.Prefix + "/agent/wscli/main/0"
+	agentSocket := machine.PrincipalProxySocketPath(t, agentLocalpart)
 	waitForFile(t, agentSocket)
 	t.Log("agent proxy socket appeared after workspace became active")
 
@@ -417,8 +388,9 @@ func TestWorkspaceCLILifecycle(t *testing.T) {
 	// token on HTTP requests.
 	agentProxyClient := proxyHTTPClient(agentSocket)
 	agentIdentity := proxyWhoami(t, agentProxyClient)
-	if agentIdentity != agentAccount.UserID.String() {
-		t.Fatalf("agent whoami = %q, want %q", agentIdentity, agentAccount.UserID)
+	expectedAgentUserID := "@" + agentLocalpart + ":" + testServerName
+	if agentIdentity != expectedAgentUserID {
+		t.Fatalf("agent whoami = %q, want %q", agentIdentity, expectedAgentUserID)
 	}
 	t.Log("agent proxy identity verified: " + agentIdentity)
 

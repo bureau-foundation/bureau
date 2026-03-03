@@ -15,7 +15,6 @@ import (
 	"github.com/bureau-foundation/bureau/lib/schema/pipeline"
 	"github.com/bureau-foundation/bureau/lib/schema/workspace"
 	"github.com/bureau-foundation/bureau/lib/templatedef"
-	"github.com/bureau-foundation/bureau/messaging"
 	"github.com/bureau-foundation/bureau/observe"
 )
 
@@ -130,34 +129,7 @@ func TestNewOperatorJourney(t *testing.T) {
 		t.Fatalf("push agent template: %v", err)
 	}
 
-	// Pre-register workspace principals and provision credentials.
-	// In production, the operator runs "bureau credential provision"
-	// for each principal after workspace create. Here we pre-provision
-	// so the daemon can create sandboxes immediately when MachineConfig
-	// arrives. The localparts are deterministic from the workspace alias.
 	workspaceAlias := "opjourney/main"
-	principalLocalparts := []string{
-		"agent/" + workspaceAlias + "/setup",
-		"agent/" + workspaceAlias + "/0",
-		"agent/" + workspaceAlias + "/teardown",
-	}
-	var principalAccounts []principalAccount
-	for _, localpart := range principalLocalparts {
-		account := registerFleetPrincipal(t, fleet, localpart, "test-password")
-		pushCredentials(t, admin, machine, account)
-		principalAccounts = append(principalAccounts, account)
-	}
-
-	// Invite pipeline principals (setup + teardown) to the pipeline room
-	// so the pipeline executor can read pipeline definitions.
-	pipelineRoomID := resolvePipelineRoom(t, admin)
-	for _, index := range []int{0, 2} { // setup=0, teardown=2
-		if err := admin.InviteUser(t.Context(), pipelineRoomID, principalAccounts[index].UserID); err != nil {
-			if !messaging.IsMatrixError(err, "M_FORBIDDEN") {
-				t.Fatalf("invite %s to pipeline room: %v", principalAccounts[index].Localpart, err)
-			}
-		}
-	}
 
 	// ================================================================
 	// Operator environment: session file, credential file, machine.conf
@@ -383,7 +355,8 @@ func TestNewOperatorJourney(t *testing.T) {
 	// is gated on "active"). The observe socket is at a test-specific
 	// path — on a real machine it defaults to /run/bureau/observe.sock.
 	t.Log("step 7: bureau list (observe)")
-	agentSocket := machine.PrincipalProxySocketPath(t, principalAccounts[1].Localpart)
+	agentLocalpart := fleet.Prefix + "/agent/" + workspaceAlias + "/0"
+	agentSocket := machine.PrincipalProxySocketPath(t, agentLocalpart)
 	waitForFile(t, agentSocket)
 
 	observeListOutput := runBureauWithEnvOrFail(t, env,
@@ -395,9 +368,9 @@ func TestNewOperatorJourney(t *testing.T) {
 	}
 
 	var foundAgent bool
-	agentLocalpart := "agent/" + workspaceAlias + "/0"
+	agentShortLocalpart := "agent/" + workspaceAlias + "/0"
 	for _, entry := range listResponse.Principals {
-		if entry.Localpart == agentLocalpart {
+		if entry.Localpart == agentShortLocalpart {
 			foundAgent = true
 			break
 		}
@@ -407,7 +380,7 @@ func TestNewOperatorJourney(t *testing.T) {
 		for index, entry := range listResponse.Principals {
 			localparts[index] = entry.Localpart
 		}
-		t.Errorf("observe list: agent %q not found in %v", agentLocalpart, localparts)
+		t.Errorf("observe list: agent %q not found in %v", agentShortLocalpart, localparts)
 	}
 
 	// ================================================================

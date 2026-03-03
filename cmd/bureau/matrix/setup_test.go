@@ -141,7 +141,7 @@ func TestBaseTemplates(t *testing.T) {
 	// declare the correct command and required services.
 	agentTemplates := []struct {
 		name             string
-		command          string
+		commandContains  string
 		requiredServices []string
 	}{
 		{"bureau-agent", "bureau-agent", []string{"agent", "artifact"}},
@@ -167,8 +167,17 @@ func TestBaseTemplates(t *testing.T) {
 		if templateRef.Template != "agent-base" {
 			t.Errorf("%s should inherit from 'agent-base', got %q", agentTemplate.name, templateRef.Template)
 		}
-		if len(template.Command) != 1 || template.Command[0] != agentTemplate.command {
-			t.Errorf("%s command = %v, want [%q]", agentTemplate.name, template.Command, agentTemplate.command)
+		// The command array must contain the agent binary (possibly
+		// wrapped by bureau-bridge for TCP→Unix socket forwarding).
+		commandFound := false
+		for _, arg := range template.Command {
+			if arg == agentTemplate.commandContains {
+				commandFound = true
+				break
+			}
+		}
+		if !commandFound {
+			t.Errorf("%s command = %v, should contain %q", agentTemplate.name, template.Command, agentTemplate.commandContains)
 		}
 		if len(template.RequiredServices) != len(agentTemplate.requiredServices) {
 			t.Errorf("%s RequiredServices = %v, want %v", agentTemplate.name, template.RequiredServices, agentTemplate.requiredServices)

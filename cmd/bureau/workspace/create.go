@@ -13,11 +13,14 @@ import (
 	"github.com/bureau-foundation/bureau/cmd/bureau/cli"
 	"github.com/bureau-foundation/bureau/cmd/bureau/pipeline"
 	"github.com/bureau-foundation/bureau/cmd/bureau/ticket"
+	"github.com/bureau-foundation/bureau/lib/credential"
 	"github.com/bureau-foundation/bureau/lib/principal"
 	"github.com/bureau-foundation/bureau/lib/ref"
 	"github.com/bureau-foundation/bureau/lib/schema"
 	"github.com/bureau-foundation/bureau/lib/schema/workspace"
+	"github.com/bureau-foundation/bureau/lib/secret"
 	"github.com/bureau-foundation/bureau/lib/service"
+	"github.com/bureau-foundation/bureau/lib/templatedef"
 	"github.com/bureau-foundation/bureau/messaging"
 )
 
@@ -63,6 +66,27 @@ type CreateParams struct {
 	// (e.g., "#iree/dev:bureau.local"). When empty, defaults to the
 	// namespace convention: #<project>/dev:<server>.
 	DevTeam string
+
+	// Client is an unauthenticated Matrix client for account registration.
+	// Required for credential provisioning.
+	Client *messaging.Client
+
+	// RegistrationToken is the homeserver registration token for creating
+	// principal accounts. Read from the credential file.
+	RegistrationToken *secret.Buffer
+
+	// HomeserverURL is included in each principal's encrypted credential
+	// bundle so the proxy knows which homeserver to connect to.
+	HomeserverURL string
+
+	// MachineRoomID is the fleet-scoped machine room where the machine's
+	// age public key is published. Required for credential encryption.
+	MachineRoomID ref.RoomID
+
+	// ExtraCredentials are additional key-value pairs included in each
+	// agent principal's encrypted credential bundle (e.g., API keys).
+	// Setup and teardown principals do not receive extra credentials.
+	ExtraCredentials map[string]string
 }
 
 // CreateResult holds the result of workspace creation.
@@ -187,6 +211,40 @@ func runCreate(ctx context.Context, logger *slog.Logger, alias string, sessionCo
 		return err
 	}
 
+	// Read the credential file for the registration token. Workspace
+	// creation registers Matrix accounts for each principal (setup,
+	// agents, teardown) and provisions encrypted credentials.
+	if sessionConfig.CredentialFile == "" {
+		return cli.Validation("--credential-file is required")
+	}
+	credentials, err := cli.ReadCredentialFile(sessionConfig.CredentialFile)
+	if err != nil {
+		return cli.Internal("read credential file: %w", err)
+	}
+	registrationToken := credentials["MATRIX_REGISTRATION_TOKEN"]
+	if registrationToken == "" {
+		return cli.Validation("credential file missing MATRIX_REGISTRATION_TOKEN").
+			WithHint("The credential file must contain MATRIX_REGISTRATION_TOKEN. " +
+				"Re-run 'bureau matrix setup' to regenerate the credential file.")
+	}
+	registrationTokenBuffer, err := secret.NewFromString(registrationToken)
+	if err != nil {
+		return cli.Internal("protecting registration token: %w", err)
+	}
+	defer registrationTokenBuffer.Close()
+
+	homeserverURL, err := sessionConfig.ResolveHomeserverURL()
+	if err != nil {
+		return err
+	}
+
+	matrixClient, err := messaging.NewClient(messaging.ClientConfig{
+		HomeserverURL: homeserverURL,
+	})
+	if err != nil {
+		return cli.Internal("create matrix client: %w", err)
+	}
+
 	ctx, cancel := context.WithTimeout(ctx, 60*time.Second)
 	defer cancel()
 
@@ -196,13 +254,26 @@ func runCreate(ctx context.Context, logger *slog.Logger, alias string, sessionCo
 	}
 	defer session.Close()
 
+	// Resolve the fleet machine room for credential provisioning.
+	fleet := machineRef.Fleet()
+	machineRoomAlias := fleet.MachineRoomAlias()
+	machineRoomID, err := session.ResolveAlias(ctx, machineRoomAlias)
+	if err != nil {
+		return cli.NotFound("fleet machine room %s not found: %w", machineRoomAlias, err).
+			WithHint("Run 'bureau machine list' to see machines, or 'bureau machine provision' to register one.")
+	}
+
 	result, err := Create(ctx, session, CreateParams{
-		Alias:      alias,
-		Machine:    machineRef,
-		Template:   templateRef,
-		Params:     paramMap,
-		AgentCount: agentCount,
-		DevTeam:    devTeam,
+		Alias:             alias,
+		Machine:           machineRef,
+		Template:          templateRef,
+		Params:            paramMap,
+		AgentCount:        agentCount,
+		DevTeam:           devTeam,
+		Client:            matrixClient,
+		RegistrationToken: registrationTokenBuffer,
+		HomeserverURL:     homeserverURL,
+		MachineRoomID:     machineRoomID,
 	}, logger)
 	if err != nil {
 		return err
@@ -374,16 +445,84 @@ func Create(ctx context.Context, session messaging.Session, params CreateParams,
 		return nil, cli.Internal("configuring pipeline execution: %w", err)
 	}
 
-	// Build principal assignments (setup + agents + teardown).
+	// Build principal assignments and provision credentials. Each
+	// workspace principal (setup, agents, teardown) needs a registered
+	// Matrix account and encrypted credentials before the daemon can
+	// create its sandbox.
 	assignments, err := buildPrincipalAssignments(params.Alias, params.Template, params.AgentCount, serverName, machineRef, workspaceRoomID, paramMap)
 	if err != nil {
 		return nil, cli.Internal("building principal assignments: %w", err)
 	}
 
-	// Update the machine's MachineConfig with the new principals.
-	err = updateMachineConfig(ctx, session, machineRef, assignments, logger)
+	// Convert assignments to principal.CreateParams for account
+	// registration and credential provisioning.
+	validateTemplate := func(ctx context.Context, templateRef schema.TemplateRef, serverName ref.ServerName) error {
+		_, err := templatedef.Fetch(ctx, session, templateRef, serverName)
+		return err
+	}
+	var createParamsList []principal.CreateParams
+	for _, assignment := range assignments {
+		templateRef, parseError := schema.ParseTemplateRef(assignment.Template)
+		if parseError != nil {
+			return nil, cli.Internal("parsing template ref %q: %w", assignment.Template, parseError)
+		}
+
+		// Agent principals receive extra credentials (API keys);
+		// setup and teardown principals are pipeline executors that
+		// only need their Matrix token.
+		var extraCredentials map[string]string
+		if assignment.Labels["role"] == "agent" {
+			extraCredentials = params.ExtraCredentials
+		}
+
+		createParamsList = append(createParamsList, principal.CreateParams{
+			Machine:                   machineRef,
+			Principal:                 assignment.Principal,
+			TemplateRef:               templateRef,
+			ValidateTemplate:          validateTemplate,
+			HomeserverURL:             params.HomeserverURL,
+			AutoStart:                 assignment.AutoStart,
+			MachineRoomID:             params.MachineRoomID,
+			StartCondition:            assignment.StartCondition,
+			Labels:                    assignment.Labels,
+			Payload:                   assignment.Payload,
+			ExtraEnvironmentVariables: assignment.ExtraEnvironmentVariables,
+			ExtraCredentials:          extraCredentials,
+		})
+	}
+
+	// Register accounts, provision encrypted credentials, and publish
+	// MachineConfig in one atomic operation.
+	_, err = principal.CreateMultiple(ctx, params.Client, session, params.RegistrationToken, credential.AsProvisionFunc(), createParamsList)
 	if err != nil {
-		return nil, cli.Internal("updating machine config: %w", err)
+		return nil, cli.Internal("provisioning workspace principals: %w", err)
+	}
+
+	// Invite pipeline principals (setup, teardown) to the pipeline room
+	// so the pipeline executor can read pipeline definitions via the
+	// proxy. The proxy authenticates as the principal and needs pipeline
+	// room membership to access m.bureau.pipeline state events.
+	namespace, err := ref.NewNamespace(serverName, "bureau")
+	if err != nil {
+		return nil, cli.Internal("deriving namespace for pipeline room: %w", err)
+	}
+	pipelineRoomAlias := namespace.PipelineRoomAlias()
+	pipelineRoomID, err := session.ResolveAlias(ctx, pipelineRoomAlias)
+	if err != nil {
+		logger.Warn("could not resolve pipeline room for principal invitations",
+			"alias", pipelineRoomAlias, "error", err)
+	} else {
+		for _, assignment := range assignments {
+			role := assignment.Labels["role"]
+			if role != "setup" && role != "teardown" {
+				continue
+			}
+			if err := session.InviteUser(ctx, pipelineRoomID, assignment.Principal.UserID()); err != nil {
+				if !messaging.IsMatrixError(err, messaging.ErrCodeForbidden) {
+					return nil, cli.Internal("inviting %s to pipeline room: %w", assignment.Principal.Localpart(), err)
+				}
+			}
+		}
 	}
 
 	// Invite the machine daemon to the workspace room so it can read
@@ -602,54 +741,6 @@ func buildPrincipalAssignments(alias, agentTemplate string, agentCount int, serv
 	})
 
 	return assignments, nil
-}
-
-// updateMachineConfig performs a read-modify-write on the machine's
-// MachineConfig state event: reads the existing config (if any), appends
-// new principal assignments (skipping duplicates by localpart), and
-// publishes the updated config.
-func updateMachineConfig(ctx context.Context, session messaging.Session, machine ref.Machine, newAssignments []schema.PrincipalAssignment, logger *slog.Logger) error {
-	configRoomAlias := machine.RoomAlias()
-	configRoomID, err := session.ResolveAlias(ctx, configRoomAlias)
-	if err != nil {
-		return cli.NotFound("resolve machine config room %s: %w", configRoomAlias, err).
-			WithHint("Run 'bureau machine list' to see machines, or 'bureau machine provision' to register one.")
-	}
-
-	// Read the existing MachineConfig.
-	config, err := messaging.GetState[schema.MachineConfig](ctx, session, configRoomID, schema.EventTypeMachineConfig, machine.Localpart())
-	if err != nil && !messaging.IsMatrixError(err, messaging.ErrCodeNotFound) {
-		return cli.Internal("reading machine config: %w", err)
-	}
-
-	// Build a set of existing principal localparts for deduplication.
-	existingLocalparts := make(map[string]bool)
-	for _, assignment := range config.Principals {
-		existingLocalparts[assignment.Principal.Localpart()] = true
-	}
-
-	// Append new assignments, skipping any that already exist.
-	addedCount := 0
-	for _, assignment := range newAssignments {
-		if existingLocalparts[assignment.Principal.Localpart()] {
-			logger.Info("principal already assigned, skipping", "principal", assignment.Principal.Localpart())
-			continue
-		}
-		config.Principals = append(config.Principals, assignment)
-		addedCount++
-	}
-
-	if addedCount == 0 {
-		logger.Info("all principals already assigned, skipping MachineConfig update")
-		return nil
-	}
-
-	_, err = session.SendStateEvent(ctx, configRoomID, schema.EventTypeMachineConfig, machine.Localpart(), config)
-	if err != nil {
-		return cli.Internal("publishing machine config: %w", err)
-	}
-
-	return nil
 }
 
 // parseParams parses a list of "key=value" strings into a map. Returns an

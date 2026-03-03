@@ -298,7 +298,7 @@ func onboardOperator(ctx context.Context, logger *slog.Logger, client *messaging
 
 	// Bureau infrastructure rooms from the credential file. The space is
 	// first (so the user can see the hierarchy), then all standard rooms
-	// defined in standardRooms (same list doctor validates against).
+	// defined in standardRoomsForNamespace (same list doctor validates against).
 	type bureauRoom struct {
 		name          string
 		credentialKey string
@@ -306,7 +306,7 @@ func onboardOperator(ctx context.Context, logger *slog.Logger, client *messaging
 	bureauRooms := []bureauRoom{
 		{"bureau (space)", "MATRIX_SPACE_ROOM"},
 	}
-	for _, room := range standardRooms {
+	for _, room := range standardRoomsForNamespace("bureau") {
 		bureauRooms = append(bureauRooms, bureauRoom{
 			name:          room.alias,
 			credentialKey: room.credentialKey,

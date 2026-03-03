@@ -120,7 +120,7 @@ func TestUserCreate_Operator_NewUser(t *testing.T) {
 	if !gotRegister {
 		t.Error("register endpoint was not called")
 	}
-	expectedRoomCount := 1 + len(standardRooms) // space + all standard rooms
+	expectedRoomCount := 1 + len(standardRoomsForNamespace("bureau")) // space + all standard rooms
 	if len(invitedRoomIDs) != expectedRoomCount {
 		t.Errorf("expected %d room invites, got %d: %v", expectedRoomCount, len(invitedRoomIDs), invitedRoomIDs)
 	}
@@ -218,7 +218,7 @@ func TestUserCreate_Operator_ExistingUser(t *testing.T) {
 	if !gotLogin {
 		t.Error("login was not called for existing account")
 	}
-	expectedRoomCount := 1 + len(standardRooms) // space + all standard rooms
+	expectedRoomCount := 1 + len(standardRoomsForNamespace("bureau")) // space + all standard rooms
 	if inviteCount != expectedRoomCount {
 		t.Errorf("expected %d invites, got %d", expectedRoomCount, inviteCount)
 	}
@@ -420,7 +420,7 @@ func TestUserCreate_Operator_ExistingUser_PasswordVerified(t *testing.T) {
 	if !gotLogin {
 		t.Error("login endpoint was not called to verify password")
 	}
-	expectedRoomCount := 1 + len(standardRooms) // space + all standard rooms
+	expectedRoomCount := 1 + len(standardRoomsForNamespace("bureau")) // space + all standard rooms
 	if inviteCount != expectedRoomCount {
 		t.Errorf("expected %d invites after password verification, got %d", expectedRoomCount, inviteCount)
 	}

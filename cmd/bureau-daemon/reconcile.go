@@ -611,6 +611,15 @@ func (d *Daemon) reconcile(ctx context.Context) error {
 			d.ensurePrincipalRoomAccess(ctx, assignment.Principal, workspaceRoomID)
 		}
 
+		// Pipeline executor principals need access to the pipeline room
+		// to resolve pipeline definitions via their proxy. Without this
+		// invitation, the proxy's GetState call to read
+		// m.bureau.pipeline/<name> fails because the principal's Matrix
+		// account isn't a room member.
+		if pipelineTicketTokenDir != "" && !d.pipelineRoomID.IsZero() {
+			d.ensurePrincipalRoomAccess(ctx, assignment.Principal, d.pipelineRoomID)
+		}
+
 		// Resolve required service sockets to host-side paths. The daemon
 		// looks up m.bureau.service_binding state events in rooms the principal
 		// will be a member of (workspace room first, then config room).
@@ -1624,12 +1633,18 @@ func appendAllowanceDenialsWithSource(destination []schema.AllowanceDenial, entr
 // pending by the time the proxy starts.
 //
 // The invite is best-effort: failures are logged but do not block sandbox
-// creation. M_FORBIDDEN typically means the user is already a member.
+// creation. M_FORBIDDEN means the user is already a member/invited (common
+// for the config room after principal.Create) or the daemon lacks sufficient
+// power level to invite.
 func (d *Daemon) ensurePrincipalRoomAccess(ctx context.Context, principalEntity ref.Entity, roomID ref.RoomID) {
 	if err := d.session.InviteUser(ctx, roomID, principalEntity.UserID()); err != nil {
-		// M_FORBIDDEN means the user is already a member or already
-		// invited — expected for the config room after principal.Create.
-		if !messaging.IsMatrixError(err, "M_FORBIDDEN") {
+		if messaging.IsMatrixError(err, "M_FORBIDDEN") {
+			d.logger.Debug("invite returned M_FORBIDDEN (already member or insufficient power level)",
+				"principal", principalEntity,
+				"room_id", roomID, "room", d.displayRoom(roomID),
+				"error", err,
+			)
+		} else {
 			d.logger.Warn("failed to invite principal to room",
 				"principal", principalEntity,
 				"room_id", roomID, "room", d.displayRoom(roomID),

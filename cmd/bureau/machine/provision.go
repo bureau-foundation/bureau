@@ -301,7 +301,8 @@ func Provision(ctx context.Context, client *messaging.Client, adminSession *mess
 	}
 
 	systemRoomAlias := namespace.SystemRoomAlias()
-	var systemRoomID ref.RoomID
+	pipelineRoomAlias := namespace.PipelineRoomAlias()
+	var systemRoomID, pipelineRoomID ref.RoomID
 	for _, room := range globalRooms {
 		if err := adminSession.InviteUser(ctx, room.roomID, machineUserID); err != nil {
 			if !messaging.IsMatrixError(err, messaging.ErrCodeForbidden) {
@@ -311,8 +312,11 @@ func Provision(ctx context.Context, client *messaging.Client, adminSession *mess
 		} else {
 			logger.Info("invited to room", "room", room.alias)
 		}
-		if room.alias == systemRoomAlias {
+		switch room.alias {
+		case systemRoomAlias:
 			systemRoomID = room.roomID
+		case pipelineRoomAlias:
+			pipelineRoomID = room.roomID
 		}
 	}
 
@@ -325,6 +329,17 @@ func Provision(ctx context.Context, client *messaging.Client, adminSession *mess
 		return nil, cli.Transient("grant machine power level in system room: %w", err)
 	}
 	logger.Info("granted PL 50 in system room", "machine", machineUserID)
+
+	// Grant the machine PL 50 in the pipeline room so its daemon can
+	// invite pipeline executor principals (workspace setup/teardown
+	// principals need pipeline room membership to resolve pipeline
+	// definitions via their proxy).
+	if err := schema.GrantPowerLevels(ctx, adminSession, pipelineRoomID, schema.PowerLevelGrants{
+		Users: map[ref.UserID]int{machineUserID: 50},
+	}); err != nil {
+		return nil, cli.Transient("grant machine power level in pipeline room: %w", err)
+	}
+	logger.Info("granted PL 50 in pipeline room", "machine", machineUserID)
 
 	// Resolve and invite to fleet-scoped rooms.
 	machineRoomID, serviceRoomID, fleetRoomID, err := resolveFleetRooms(ctx, adminSession, fleet)

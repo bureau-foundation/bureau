@@ -340,14 +340,14 @@ func Create(ctx context.Context, session messaging.Session, params CreateParams,
 	adminUserID := session.UserID()
 	machineUserID := machineRef.UserID()
 
-	// Resolve the Bureau space. The workspace room will be added as a child.
-	spaceAlias, err := ref.ParseRoomAlias(schema.FullRoomAlias("bureau", serverName))
-	if err != nil {
-		return nil, cli.Validation("invalid space alias: %w", err)
-	}
+	// Resolve the Bureau namespace space. The workspace room will be added
+	// as a child of the namespace's space room. The namespace is derived
+	// from the machine's fleet, so workspaces are always scoped to the
+	// same namespace as their fleet.
+	spaceAlias := machineRef.Fleet().Namespace().SpaceAlias()
 	spaceRoomID, err := session.ResolveAlias(ctx, spaceAlias)
 	if err != nil {
-		return nil, cli.NotFound("resolve Bureau space %s: %w", spaceAlias, err).
+		return nil, cli.NotFound("resolve namespace space %s: %w", spaceAlias, err).
 			WithHint("Run 'bureau matrix setup' to initialize the homeserver and create the Bureau space.")
 	}
 
@@ -625,6 +625,9 @@ func buildPrincipalAssignments(alias, agentTemplate string, agentCount int, serv
 		return nil, cli.Internal("constructing workspace room alias: %w", err)
 	}
 	fleet := machineRef.Fleet()
+	namespace := fleet.Namespace()
+	templatePrefix := namespace.TemplateRoomAliasLocalpart()
+	pipelinePrefix := namespace.PipelineRoomAliasLocalpart()
 
 	// Derive workspace path components from the alias. The first segment
 	// is the project name; everything after is the worktree path (if any).
@@ -654,11 +657,11 @@ func buildPrincipalAssignments(alias, agentTemplate string, agentCount int, serv
 	assignments := []schema.PrincipalAssignment{
 		{
 			Principal: setupEntity,
-			Template:  "bureau/template:base",
+			Template:  templatePrefix + ":base",
 			AutoStart: true,
 			Labels:    map[string]string{"role": "setup"},
 			Payload: map[string]any{
-				"pipeline_ref":      "bureau/pipeline:dev-workspace-init",
+				"pipeline_ref":      pipelinePrefix + ":dev-workspace-init",
 				"REPOSITORY":        params["repository"],
 				"PROJECT":           project,
 				"WORKSPACE_ROOM_ID": workspaceRoomID.String(),
@@ -723,11 +726,11 @@ func buildPrincipalAssignments(alias, agentTemplate string, agentCount int, serv
 	}
 	assignments = append(assignments, schema.PrincipalAssignment{
 		Principal: teardownEntity,
-		Template:  "bureau/template:base",
+		Template:  templatePrefix + ":base",
 		AutoStart: true,
 		Labels:    map[string]string{"role": "teardown"},
 		Payload: map[string]any{
-			"pipeline_ref":      "bureau/pipeline:dev-workspace-deinit",
+			"pipeline_ref":      pipelinePrefix + ":dev-workspace-deinit",
 			"PROJECT":           project,
 			"WORKSPACE_ROOM_ID": workspaceRoomID.String(),
 			"MACHINE":           machineRef.Localpart(),

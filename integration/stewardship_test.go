@@ -39,10 +39,10 @@ func TestStewardshipReview(t *testing.T) {
 	t.Parallel()
 
 	ctx := t.Context()
-	admin := adminSession(t)
-	defer admin.Close()
+	ns := setupTestNamespace(t)
+	admin := ns.Admin
 
-	fleet := createTestFleet(t, admin)
+	fleet := createTestFleet(t, admin, ns)
 
 	// Boot a machine.
 	machine := newTestMachine(t, fleet, "stw-review")
@@ -288,7 +288,7 @@ func TestStewardshipReview(t *testing.T) {
 		t.Fatalf("create agent room: %v", err)
 	}
 
-	adminPattern := "admin-*:" + testServerName
+	adminPattern := admin.UserID().Localpart() + ":" + testServerName
 	if _, err := admin.SendStateEvent(ctx, agentRoomID.RoomID,
 		schema.EventTypeStewardship, "agent-review",
 		stewardship.StewardshipContent{
@@ -881,7 +881,7 @@ func TestStewardshipReview(t *testing.T) {
 			t.Errorf("gate type = %q, want review", gate.Type)
 		}
 
-		// Verify admin is a reviewer (matched by admin-*:test.bureau.local).
+		// Verify admin is a reviewer (matched by per-test admin pattern).
 		if ticketContent.Review == nil || len(ticketContent.Review.Reviewers) == 0 {
 			t.Fatal("no reviewers on agent-created ticket")
 		}

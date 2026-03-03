@@ -86,10 +86,10 @@ func TestCLILoginAndWhoAmI(t *testing.T) {
 func TestCLIMachineList(t *testing.T) {
 	t.Parallel()
 
-	admin := adminSession(t)
-	defer admin.Close()
+	ns := setupTestNamespace(t)
+	admin := ns.Admin
 
-	fleet := createTestFleet(t, admin)
+	fleet := createTestFleet(t, admin, ns)
 	machine := newTestMachine(t, fleet, "cli-machine-list")
 
 	startMachine(t, admin, machine, machineOptions{
@@ -161,7 +161,7 @@ func TestCLITemplateList(t *testing.T) {
 
 	op := setupOperatorEnv(t)
 
-	output := op.run(t, "template", "list", "bureau/template", "--json")
+	output := op.run(t, "template", "list", op.Namespace.TemplateRoomAliasLocalpart(), "--json")
 
 	var templates []struct {
 		Name        string   `json:"name"`
@@ -191,11 +191,12 @@ func TestCLITemplateList(t *testing.T) {
 		t.Error("base template not found in template list output")
 	}
 
-	// Verify "base-networked" inherits from "bureau/template:base".
+	// Verify "base-networked" inherits from the namespace-scoped base template.
+	expectedBaseRef := op.Namespace.TemplateRoomAliasLocalpart() + ":base"
 	for _, template := range templates {
 		if template.Name == "base-networked" {
-			if !slices.Contains(template.Inherits, "bureau/template:base") {
-				t.Errorf("base-networked inherits = %v, want to contain \"bureau/template:base\"", template.Inherits)
+			if !slices.Contains(template.Inherits, expectedBaseRef) {
+				t.Errorf("base-networked inherits = %v, want to contain %q", template.Inherits, expectedBaseRef)
 			}
 			return
 		}
@@ -211,7 +212,7 @@ func TestCLITemplateShow(t *testing.T) {
 
 	op := setupOperatorEnv(t)
 
-	output := op.run(t, "template", "show", "bureau/template:base-networked", "--json")
+	output := op.run(t, "template", "show", op.Namespace.TemplateRoomAliasLocalpart()+":base-networked", "--json")
 
 	var template struct {
 		Description string                     `json:"description"`
@@ -251,7 +252,8 @@ func TestCLIDoctorJSON(t *testing.T) {
 
 	// Doctor exits non-zero when any check fails (systemd checks will fail
 	// in the test environment), so use the non-fatal variant.
-	output, _ := runBureauWithEnv(op.Env, "doctor", "--json")
+	output, _ := runBureauWithEnv(op.Env, "doctor", "--json",
+		"--namespace", op.Namespace.Name())
 
 	var result doctor.JSONOutput
 	if err := json.Unmarshal([]byte(output), &result); err != nil {
@@ -284,7 +286,8 @@ func TestCLIDoctorJSON(t *testing.T) {
 	}
 
 	// Standard rooms should be accessible.
-	standardRooms := []string{"bureau/system", "bureau/template", "bureau/pipeline", "bureau/artifact"}
+	nsPrefix := op.Namespace.Name()
+	standardRooms := []string{nsPrefix + "/system", nsPrefix + "/template", nsPrefix + "/pipeline", nsPrefix + "/artifact"}
 	for _, room := range standardRooms {
 		check, ok := checks[room]
 		if !ok {

@@ -29,9 +29,9 @@ import (
 func TestMachineJoinsFleet(t *testing.T) {
 	t.Parallel()
 
-	admin := adminSession(t)
-	defer admin.Close()
-	fleet := createTestFleet(t, admin)
+	ns := setupTestNamespace(t)
+	admin := ns.Admin
+	fleet := createTestFleet(t, admin, ns)
 
 	machine := newTestMachine(t, fleet, "test")
 	startMachine(t, admin, machine, machineOptions{
@@ -170,9 +170,9 @@ func TestMachineJoinsFleet(t *testing.T) {
 func TestPrincipalAssignment(t *testing.T) {
 	t.Parallel()
 
-	admin := adminSession(t)
-	defer admin.Close()
-	fleet := createTestFleet(t, admin)
+	ns := setupTestNamespace(t)
+	admin := ns.Admin
+	fleet := createTestFleet(t, admin, ns)
 
 	machine := newTestMachine(t, fleet, "sandbox")
 	startMachine(t, admin, machine, machineOptions{
@@ -209,9 +209,9 @@ func TestPrincipalAssignment(t *testing.T) {
 func TestOperatorFlow(t *testing.T) {
 	t.Parallel()
 
-	admin := adminSession(t)
-	defer admin.Close()
-	fleet := createTestFleet(t, admin)
+	ns := setupTestNamespace(t)
+	admin := ns.Admin
+	fleet := createTestFleet(t, admin, ns)
 
 	machine := newTestMachine(t, fleet, "observe")
 	startMachine(t, admin, machine, machineOptions{
@@ -395,9 +395,9 @@ func TestOperatorFlow(t *testing.T) {
 func TestCredentialRotation(t *testing.T) {
 	t.Parallel()
 
-	admin := adminSession(t)
-	defer admin.Close()
-	fleet := createTestFleet(t, admin)
+	ns := setupTestNamespace(t)
+	admin := ns.Admin
+	fleet := createTestFleet(t, admin, ns)
 
 	machine := newTestMachine(t, fleet, "rotate")
 	startMachine(t, admin, machine, machineOptions{
@@ -475,9 +475,9 @@ func TestCredentialRotation(t *testing.T) {
 func TestCrossMachineObservation(t *testing.T) {
 	t.Parallel()
 
-	admin := adminSession(t)
-	defer admin.Close()
-	fleet := createTestFleet(t, admin)
+	ns := setupTestNamespace(t)
+	admin := ns.Admin
+	fleet := createTestFleet(t, admin, ns)
 
 	ctx := t.Context()
 
@@ -666,9 +666,9 @@ func TestCrossMachineObservation(t *testing.T) {
 func TestConfigReconciliation(t *testing.T) {
 	t.Parallel()
 
-	admin := adminSession(t)
-	defer admin.Close()
-	fleet := createTestFleet(t, admin)
+	ns := setupTestNamespace(t)
+	admin := ns.Admin
+	fleet := createTestFleet(t, admin, ns)
 
 	machine := newTestMachine(t, fleet, "reconcile")
 	startMachine(t, admin, machine, machineOptions{
@@ -785,9 +785,9 @@ func TestConfigReconciliation(t *testing.T) {
 func TestServiceReEnable(t *testing.T) {
 	t.Parallel()
 
-	admin := adminSession(t)
-	defer admin.Close()
-	fleet := createTestFleet(t, admin)
+	ns := setupTestNamespace(t)
+	admin := ns.Admin
+	fleet := createTestFleet(t, admin, ns)
 
 	machine := newTestMachine(t, fleet, "reenable")
 	startMachine(t, admin, machine, machineOptions{
@@ -833,7 +833,7 @@ func TestServiceReEnable(t *testing.T) {
 	// M_USER_IN_USE. The test verifies the daemon reconciles and
 	// restarts the sandbox.
 	templateName := strings.ReplaceAll(svc.Account.Localpart, "/", "-")
-	templateRef, err := schema.ParseTemplateRef("bureau/template:" + templateName)
+	templateRef, err := schema.ParseTemplateRef(ns.Namespace.TemplateRoomAliasLocalpart() + ":" + templateName)
 	if err != nil {
 		t.Fatalf("parse template ref: %v", err)
 	}

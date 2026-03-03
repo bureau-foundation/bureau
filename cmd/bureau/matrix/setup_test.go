@@ -12,7 +12,7 @@ import (
 func TestBaseTemplates(t *testing.T) {
 	t.Parallel()
 
-	templates := baseTemplates()
+	templates := baseTemplates("bureau/template")
 
 	if len(templates) != 12 {
 		t.Fatalf("expected 12 base templates, got %d", len(templates))

@@ -234,7 +234,7 @@ func (m *mockDoctorServer) handle(t *testing.T) http.HandlerFunc {
 				if idx >= 0 {
 					stateKey := rawPath[idx+len("/state/m.bureau.template/"):]
 					stateKey, _ = url.PathUnescape(stateKey)
-					for _, template := range baseTemplates() {
+					for _, template := range baseTemplates("bureau/template") {
 						if template.name == stateKey {
 							json.NewEncoder(writer).Encode(template.content)
 							return
@@ -454,7 +454,7 @@ func TestRunDoctor_AllHealthy(t *testing.T) {
 	}
 	defer session.Close()
 
-	results := runDoctor(t.Context(), client, session, ref.MustParseServerName("local"), nil, "", testLogger())
+	results := runDoctor(t.Context(), client, session, ref.MustParseServerName("local"), "bureau", nil, "", testLogger())
 
 	for _, result := range results {
 		if result.Status == doctor.StatusFail {
@@ -551,7 +551,7 @@ func TestRunDoctor_WithCredentials(t *testing.T) {
 		"MATRIX_DEV_TEAM_ROOM": "!devteam:local",
 	}
 
-	results := runDoctor(t.Context(), client, session, ref.MustParseServerName("local"), credentials, "", testLogger())
+	results := runDoctor(t.Context(), client, session, ref.MustParseServerName("local"), "bureau", credentials, "", testLogger())
 
 	for _, result := range results {
 		if strings.HasSuffix(result.Name, " credential") && result.Status != doctor.StatusPass {
@@ -584,7 +584,7 @@ func TestRunDoctor_StaleCredentials(t *testing.T) {
 		"MATRIX_DEV_TEAM_ROOM": "!devteam:local",
 	}
 
-	results := runDoctor(t.Context(), client, session, ref.MustParseServerName("local"), credentials, "", testLogger())
+	results := runDoctor(t.Context(), client, session, ref.MustParseServerName("local"), "bureau", credentials, "", testLogger())
 
 	found := false
 	for _, result := range results {
@@ -614,7 +614,7 @@ func TestRunDoctor_HomeserverUnreachable(t *testing.T) {
 	}
 	defer session.Close()
 
-	results := runDoctor(t.Context(), client, session, ref.MustParseServerName("local"), nil, "", testLogger())
+	results := runDoctor(t.Context(), client, session, ref.MustParseServerName("local"), "bureau", nil, "", testLogger())
 
 	if len(results) == 0 {
 		t.Fatal("expected at least one result")
@@ -659,7 +659,7 @@ func TestRunDoctor_AuthFailure(t *testing.T) {
 	}
 	defer session.Close()
 
-	results := runDoctor(t.Context(), client, session, ref.MustParseServerName("local"), nil, "", testLogger())
+	results := runDoctor(t.Context(), client, session, ref.MustParseServerName("local"), "bureau", nil, "", testLogger())
 
 	if results[0].Status != doctor.StatusPass {
 		t.Errorf("expected homeserver PASS, got %s: %s", results[0].Status, results[0].Message)
@@ -698,7 +698,7 @@ func TestRunDoctor_FixMissingSpaceChild(t *testing.T) {
 	}
 	defer session.Close()
 
-	results := runDoctor(t.Context(), client, session, ref.MustParseServerName("local"), nil, "", testLogger())
+	results := runDoctor(t.Context(), client, session, ref.MustParseServerName("local"), "bureau", nil, "", testLogger())
 
 	// Space child checks should fail with fix hints.
 	for _, result := range results {
@@ -725,8 +725,8 @@ func TestRunDoctor_FixMissingSpaceChild(t *testing.T) {
 			spaceChildCount++
 		}
 	}
-	if spaceChildCount != len(standardRooms) {
-		t.Errorf("expected %d m.space.child state events, got %d", len(standardRooms), spaceChildCount)
+	if spaceChildCount != len(standardRoomsForNamespace("bureau")) {
+		t.Errorf("expected %d m.space.child state events, got %d", len(standardRoomsForNamespace("bureau")), spaceChildCount)
 	}
 
 	// Verify results updated to fixed.
@@ -758,7 +758,7 @@ func TestRunDoctor_FixJoinRules(t *testing.T) {
 	}
 	defer session.Close()
 
-	results := runDoctor(t.Context(), client, session, ref.MustParseServerName("local"), nil, "", testLogger())
+	results := runDoctor(t.Context(), client, session, ref.MustParseServerName("local"), "bureau", nil, "", testLogger())
 
 	// System room join rules should fail.
 	var systemJoinRulesIndex int
@@ -832,7 +832,7 @@ func TestRunDoctor_FixPowerLevels(t *testing.T) {
 	}
 	defer session.Close()
 
-	results := runDoctor(t.Context(), client, session, ref.MustParseServerName("local"), nil, "", testLogger())
+	results := runDoctor(t.Context(), client, session, ref.MustParseServerName("local"), "bureau", nil, "", testLogger())
 
 	// Find the system room state_default check.
 	found := false
@@ -892,7 +892,7 @@ func TestRunDoctor_FixMissingDevTeamMetadata(t *testing.T) {
 	}
 	defer session.Close()
 
-	results := runDoctor(t.Context(), client, session, ref.MustParseServerName("local"), nil, "", testLogger())
+	results := runDoctor(t.Context(), client, session, ref.MustParseServerName("local"), "bureau", nil, "", testLogger())
 
 	// Space and system room dev team checks should fail.
 	for _, result := range results {
@@ -958,7 +958,7 @@ func TestRunDoctor_FixCredentialFile(t *testing.T) {
 		t.Fatalf("ReadCredentialFile: %v", err)
 	}
 
-	results := runDoctor(t.Context(), client, session, ref.MustParseServerName("local"), storedCredentials, credentialFile, testLogger())
+	results := runDoctor(t.Context(), client, session, ref.MustParseServerName("local"), "bureau", storedCredentials, credentialFile, testLogger())
 
 	// System room credential should be FAIL (was !wrong:local, should be !system:local).
 	// Missing keys (machine, service, template, pipeline) should also be FAIL.
@@ -1032,7 +1032,7 @@ func TestRunDoctor_CredentialWarnWithoutFilePath(t *testing.T) {
 		"MATRIX_SYSTEM_ROOM": "!system:local",
 	}
 
-	results := runDoctor(t.Context(), client, session, ref.MustParseServerName("local"), credentials, "", testLogger())
+	results := runDoctor(t.Context(), client, session, ref.MustParseServerName("local"), "bureau", credentials, "", testLogger())
 
 	for _, result := range results {
 		if strings.HasSuffix(result.Name, " credential") && result.Status == doctor.StatusWarn {
@@ -1060,7 +1060,7 @@ func TestRunDoctor_DryRunNoMutations(t *testing.T) {
 	}
 	defer session.Close()
 
-	results := runDoctor(t.Context(), client, session, ref.MustParseServerName("local"), nil, "", testLogger())
+	results := runDoctor(t.Context(), client, session, ref.MustParseServerName("local"), "bureau", nil, "", testLogger())
 
 	doctor.ExecuteFixes(t.Context(), results, true, nil)
 
@@ -1093,7 +1093,7 @@ func TestRunDoctor_FixHintsPresent(t *testing.T) {
 	}
 	defer session.Close()
 
-	results := runDoctor(t.Context(), client, session, ref.MustParseServerName("local"), nil, "", testLogger())
+	results := runDoctor(t.Context(), client, session, ref.MustParseServerName("local"), "bureau", nil, "", testLogger())
 
 	for _, result := range results {
 		if result.Status == doctor.StatusFail && result.HasFix() && result.FixHint == "" {

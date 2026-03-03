@@ -51,10 +51,10 @@ func TestClaudeAgentLifecycle(t *testing.T) {
 	t.Parallel()
 
 	ctx := t.Context()
-	admin := adminSession(t)
-	defer admin.Close()
+	ns := setupTestNamespace(t)
+	admin := ns.Admin
 
-	fleet := createTestFleet(t, admin)
+	fleet := createTestFleet(t, admin, ns)
 
 	machine := newTestMachine(t, fleet, "claude-agent")
 	startMachine(t, admin, machine, machineOptions{

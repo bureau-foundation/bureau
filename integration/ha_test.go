@@ -23,9 +23,9 @@ import (
 func TestHALeaseAcquisition(t *testing.T) {
 	t.Parallel()
 
-	admin := adminSession(t)
-	defer admin.Close()
-	fleet := createTestFleet(t, admin)
+	ns := setupTestNamespace(t)
+	admin := ns.Admin
+	fleet := createTestFleet(t, admin, ns)
 
 	machine := newTestMachine(t, fleet, "ha-acq")
 	startMachine(t, admin, machine, machineOptions{
@@ -123,9 +123,9 @@ func TestHALeaseAcquisition(t *testing.T) {
 func TestHALeaseFailover(t *testing.T) {
 	t.Parallel()
 
-	admin := adminSession(t)
-	defer admin.Close()
-	fleet := createTestFleet(t, admin)
+	ns := setupTestNamespace(t)
+	admin := ns.Admin
+	fleet := createTestFleet(t, admin, ns)
 
 	// Boot two machines with manual daemon lifecycle so we can kill
 	// the winner mid-test. Both use startMachineLauncher +

@@ -56,10 +56,10 @@ func TestMachineRevocation_DaemonSelfDestruct(t *testing.T) {
 	daemonBinary := resolvedBinary(t, "DAEMON_BINARY")
 	proxyBinary := resolvedBinary(t, "PROXY_BINARY")
 
-	admin := adminSession(t)
-	defer admin.Close()
+	ns := setupTestNamespace(t)
+	admin := ns.Admin
 
-	fleet := createTestFleet(t, admin)
+	fleet := createTestFleet(t, admin, ns)
 
 	// Set up and start the machine.
 	machine := newTestMachine(t, fleet, "revoke-destruct")
@@ -136,10 +136,10 @@ func TestMachineRevocation_CLIRevoke(t *testing.T) {
 	proxyBinary := resolvedBinary(t, "PROXY_BINARY")
 
 	ctx := t.Context()
-	admin := adminSession(t)
-	defer admin.Close()
+	ns := setupTestNamespace(t)
+	admin := ns.Admin
 
-	fleet := createTestFleet(t, admin)
+	fleet := createTestFleet(t, admin, ns)
 
 	// Set up and start the machine.
 	machine := newTestMachine(t, fleet, "revoke-cli")

@@ -18,9 +18,9 @@ import (
 func TestTelemetryMock(t *testing.T) {
 	t.Parallel()
 
-	admin := adminSession(t)
-	defer admin.Close()
-	fleet := createTestFleet(t, admin)
+	ns := setupTestNamespace(t)
+	admin := ns.Admin
+	fleet := createTestFleet(t, admin, ns)
 
 	machine := newTestMachine(t, fleet, "telem")
 	startMachine(t, admin, machine, machineOptions{

@@ -42,10 +42,10 @@ func TestMachineLifecycle(t *testing.T) {
 	logRelayBinary := resolvedBinary(t, "LOG_RELAY_BINARY")
 
 	ctx := t.Context()
-	admin := adminSession(t)
-	defer admin.Close()
+	ns := setupTestNamespace(t)
+	admin := ns.Admin
 
-	fleet := createTestFleet(t, admin)
+	fleet := createTestFleet(t, admin, ns)
 	machineRef, err := ref.NewMachine(fleet.Ref, "lifecycle")
 	if err != nil {
 		t.Fatalf("create machine ref: %v", err)
@@ -327,10 +327,10 @@ func TestMachineReProvision(t *testing.T) {
 	logRelayBinary := resolvedBinary(t, "LOG_RELAY_BINARY")
 
 	ctx := t.Context()
-	admin := adminSession(t)
-	defer admin.Close()
+	ns := setupTestNamespace(t)
+	admin := ns.Admin
 
-	fleet := createTestFleet(t, admin)
+	fleet := createTestFleet(t, admin, ns)
 	machineRef, err := ref.NewMachine(fleet.Ref, "reprovision")
 	if err != nil {
 		t.Fatalf("create machine ref: %v", err)
@@ -513,10 +513,10 @@ func TestTwoMachineFleet(t *testing.T) {
 	logRelayBinary := resolvedBinary(t, "LOG_RELAY_BINARY")
 
 	ctx := t.Context()
-	admin := adminSession(t)
-	defer admin.Close()
+	ns := setupTestNamespace(t)
+	admin := ns.Admin
 
-	twoMachineFleet := createTestFleet(t, admin)
+	twoMachineFleet := createTestFleet(t, admin, ns)
 	machineA := newTestMachine(t, twoMachineFleet, "fleet-a")
 	machineB := newTestMachine(t, twoMachineFleet, "fleet-b")
 	machineRoomID := twoMachineFleet.MachineRoomID
@@ -534,7 +534,7 @@ func TestTwoMachineFleet(t *testing.T) {
 	t.Log("both machines provisioned, booted, and publishing status")
 
 	// --- Verify mutual visibility ---
-	// Both machines should see each other's keys in #bureau/machine.
+	// Both machines should see each other's keys in the fleet machine room.
 	events, err := admin.GetRoomState(ctx, machineRoomID)
 	if err != nil {
 		t.Fatalf("get machine room state: %v", err)
@@ -555,7 +555,7 @@ func TestTwoMachineFleet(t *testing.T) {
 	// other tests that ran earlier in the same homeserver, but at minimum
 	// these two must be present).
 	if keyCount < 2 {
-		t.Errorf("expected at least 2 machine keys in #bureau/machine, got %d", keyCount)
+		t.Errorf("expected at least 2 machine keys in fleet machine room, got %d", keyCount)
 	}
 
 	// --- Register principals, provision credentials, and wait for proxies ---

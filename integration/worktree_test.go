@@ -31,10 +31,10 @@ import (
 func TestWorkspaceCommands(t *testing.T) {
 	t.Parallel()
 
-	admin := adminSession(t)
-	defer admin.Close()
+	ns := setupTestNamespace(t)
+	admin := ns.Admin
 
-	fleet := createTestFleet(t, admin)
+	fleet := createTestFleet(t, admin, ns)
 
 	machine := newTestMachine(t, fleet, "ws-cmds")
 	if err := os.MkdirAll(machine.WorkspaceRoot, 0755); err != nil {
@@ -84,7 +84,7 @@ func TestWorkspaceCommands(t *testing.T) {
 	deployTicketService(t, admin, fleet, machine, "ws-cmds")
 
 	wsResult := createWorkspace(t, admin, fleet, machine.Ref, "wscmds/main",
-		"bureau/template:base", nil)
+		ns.Namespace.TemplateRoomAliasLocalpart()+":base", nil)
 	workspaceRoomID := wsResult.RoomID
 
 	// The workspace alias "wscmds/main" exercises multi-segment path
@@ -306,10 +306,10 @@ func TestWorkspaceCommands(t *testing.T) {
 func TestWorkspaceWorktreeHandlers(t *testing.T) {
 	t.Parallel()
 
-	admin := adminSession(t)
-	defer admin.Close()
+	ns := setupTestNamespace(t)
+	admin := ns.Admin
 
-	fleet := createTestFleet(t, admin)
+	fleet := createTestFleet(t, admin, ns)
 
 	machine := newTestMachine(t, fleet, "ws-worktree")
 	if err := os.MkdirAll(machine.WorkspaceRoot, 0755); err != nil {
@@ -352,7 +352,7 @@ func TestWorkspaceWorktreeHandlers(t *testing.T) {
 	deployTicketService(t, admin, fleet, machine, "ws-wt-hdlr")
 
 	wsResult := createWorkspace(t, admin, fleet, machine.Ref, "wtproj/main",
-		"bureau/template:base", nil)
+		ns.Namespace.TemplateRoomAliasLocalpart()+":base", nil)
 	workspaceRoomID := wsResult.RoomID
 
 	// --- Test worktree.add accepted ack ---
@@ -577,10 +577,10 @@ func TestWorkspaceWorktreeHandlers(t *testing.T) {
 func TestWorkspaceWorktreeLifecycle(t *testing.T) {
 	t.Parallel()
 
-	admin := adminSession(t)
-	defer admin.Close()
+	ns := setupTestNamespace(t)
+	admin := ns.Admin
 
-	fleet := createTestFleet(t, admin)
+	fleet := createTestFleet(t, admin, ns)
 
 	machine := newTestMachine(t, fleet, "ws-wt-lifecycle")
 	if err := os.MkdirAll(machine.WorkspaceRoot, 0755); err != nil {
@@ -609,7 +609,7 @@ func TestWorkspaceWorktreeLifecycle(t *testing.T) {
 	deployTicketService(t, admin, fleet, machine, "ws-wt")
 
 	// --- Publish agent template ---
-	agentTemplateRef, err := schema.ParseTemplateRef("bureau/template:test-wt-agent")
+	agentTemplateRef, err := schema.ParseTemplateRef(ns.Namespace.TemplateRoomAliasLocalpart() + ":test-wt-agent")
 	if err != nil {
 		t.Fatalf("parse agent template ref: %v", err)
 	}
@@ -645,7 +645,7 @@ func TestWorkspaceWorktreeLifecycle(t *testing.T) {
 	// workspace.Create handles account registration, credential provisioning,
 	// pipeline room invitations, and MachineConfig publishing.
 	t.Log("phase 1: creating workspace")
-	createWorkspace(t, admin, fleet, machine.Ref, "wswt/main", "bureau/template:test-wt-agent",
+	createWorkspace(t, admin, fleet, machine.Ref, "wswt/main", ns.Namespace.TemplateRoomAliasLocalpart()+":test-wt-agent",
 		map[string]string{"repository": "/workspace/seed.git"})
 
 	workspaceRoomID, err := admin.ResolveAlias(ctx, ref.MustParseRoomAlias("#wswt/main:"+testServerName))

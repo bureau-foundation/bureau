@@ -73,10 +73,10 @@ func TestBootstrapScript(t *testing.T) {
 	}
 
 	ctx := t.Context()
-	admin := adminSession(t)
-	defer admin.Close()
+	ns := setupTestNamespace(t)
+	admin := ns.Admin
 
-	bootstrapFleet := createTestFleet(t, admin)
+	bootstrapFleet := createTestFleet(t, admin, ns)
 
 	// --- Provision the machine account on Matrix ---
 	machineRef, err := ref.NewMachine(bootstrapFleet.Ref, "bootstrap-script")

@@ -25,11 +25,11 @@ import (
 func TestServiceDiscovery(t *testing.T) {
 	t.Parallel()
 
-	admin := adminSession(t)
-	defer admin.Close()
+	ns := setupTestNamespace(t)
+	admin := ns.Admin
 
 	ctx := t.Context()
-	fleet := createTestFleet(t, admin)
+	fleet := createTestFleet(t, admin, ns)
 
 	// Boot two machines. The provider hosts the service principal. The
 	// consumer has principals that query for services through their proxies.

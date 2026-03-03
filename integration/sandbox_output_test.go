@@ -25,10 +25,10 @@ import (
 func TestSandboxExitOutputCapture(t *testing.T) {
 	t.Parallel()
 
-	admin := adminSession(t)
-	defer admin.Close()
+	ns := setupTestNamespace(t)
+	admin := ns.Admin
 
-	fleet := createTestFleet(t, admin)
+	fleet := createTestFleet(t, admin, ns)
 
 	machine := newTestMachine(t, fleet, "output-capture")
 	if err := os.MkdirAll(machine.WorkspaceRoot, 0755); err != nil {
@@ -48,7 +48,7 @@ func TestSandboxExitOutputCapture(t *testing.T) {
 	// distinctive so we can verify it appears in the captured output.
 	grantTemplateAccess(t, admin, machine)
 
-	failingRef, err := schema.ParseTemplateRef("bureau/template:failing-agent")
+	failingRef, err := schema.ParseTemplateRef(ns.Namespace.TemplateRoomAliasLocalpart() + ":failing-agent")
 	if err != nil {
 		t.Fatalf("parse template ref: %v", err)
 	}
@@ -91,7 +91,7 @@ func TestSandboxExitOutputCapture(t *testing.T) {
 	pushMachineConfig(t, admin, machine, deploymentConfig{
 		Principals: []principalSpec{{
 			Localpart: agent.Localpart,
-			Template:  "bureau/template:failing-agent",
+			Template:  ns.Namespace.TemplateRoomAliasLocalpart() + ":failing-agent",
 		}},
 	})
 

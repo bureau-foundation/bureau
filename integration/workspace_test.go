@@ -43,10 +43,10 @@ import (
 func TestWorkspaceStartConditionLifecycle(t *testing.T) {
 	t.Parallel()
 
-	admin := adminSession(t)
-	defer admin.Close()
+	ns := setupTestNamespace(t)
+	admin := ns.Admin
 
-	fleet := createTestFleet(t, admin)
+	fleet := createTestFleet(t, admin, ns)
 
 	machine := newTestMachine(t, fleet, "ws-lifecycle")
 	if err := os.MkdirAll(machine.WorkspaceRoot, 0755); err != nil {
@@ -67,18 +67,13 @@ func TestWorkspaceStartConditionLifecycle(t *testing.T) {
 	workspaceRoomAlias := ref.MustParseRoomAlias("#wst/lifecycle:" + testServerName)
 	adminUserID := admin.UserID()
 
-	spaceRoomID, err := admin.ResolveAlias(ctx, ref.MustParseRoomAlias("#bureau:"+testServerName))
-	if err != nil {
-		t.Fatalf("resolve bureau space: %v", err)
-	}
-
-	workspaceRoomID := createTestWorkspaceRoom(t, admin, workspaceAlias, machine.UserID, adminUserID, spaceRoomID)
+	workspaceRoomID := createTestWorkspaceRoom(t, admin, workspaceAlias, machine.UserID, adminUserID, ns.SpaceRoomID)
 
 	// Publish initial workspace state (pending). This is the state the
 	// daemon sees when it first evaluates StartConditions. Setup (no
 	// condition) starts immediately; agent (gated on "active") and
 	// teardown (gated on "teardown") are both deferred.
-	_, err = admin.SendStateEvent(ctx, workspaceRoomID,
+	_, err := admin.SendStateEvent(ctx, workspaceRoomID,
 		schema.EventTypeWorkspace, "", workspace.WorkspaceState{
 			Status:    workspace.WorkspaceStatusPending,
 			Project:   "wst",
@@ -223,10 +218,10 @@ func TestWorkspaceStartConditionLifecycle(t *testing.T) {
 func TestWorkspaceCLILifecycle(t *testing.T) {
 	t.Parallel()
 
-	admin := adminSession(t)
-	defer admin.Close()
+	ns := setupTestNamespace(t)
+	admin := ns.Admin
 
-	fleet := createTestFleet(t, admin)
+	fleet := createTestFleet(t, admin, ns)
 
 	machine := newTestMachine(t, fleet, "ws-cli")
 	if err := os.MkdirAll(machine.WorkspaceRoot, 0755); err != nil {
@@ -261,7 +256,7 @@ func TestWorkspaceCLILifecycle(t *testing.T) {
 	// runner environment provides coreutils (including sleep). Uses the
 	// production templatedef.Push path to exercise room resolution and
 	// state event publication identically to "bureau template push".
-	agentTemplateRef, err := schema.ParseTemplateRef("bureau/template:test-ws-agent")
+	agentTemplateRef, err := schema.ParseTemplateRef(ns.Namespace.TemplateRoomAliasLocalpart() + ":test-ws-agent")
 	if err != nil {
 		t.Fatalf("parse agent template ref: %v", err)
 	}
@@ -305,7 +300,7 @@ func TestWorkspaceCLILifecycle(t *testing.T) {
 	// publishes MachineConfig, and invites pipeline principals to the
 	// pipeline room — the full production flow.
 	t.Log("phase 1: creating workspace")
-	createWorkspace(t, admin, fleet, machine.Ref, "wscli/main", "bureau/template:test-ws-agent",
+	createWorkspace(t, admin, fleet, machine.Ref, "wscli/main", ns.Namespace.TemplateRoomAliasLocalpart()+":test-ws-agent",
 		map[string]string{"repository": "/workspace/seed.git"})
 
 	// Resolve the workspace room so we can watch its status transitions.
@@ -315,7 +310,7 @@ func TestWorkspaceCLILifecycle(t *testing.T) {
 	}
 
 	// --- Phase 2: Wait for setup pipeline to complete ---
-	// The daemon picks up the MachineConfig, resolves bureau/template:base
+	// The daemon picks up the MachineConfig, resolves the template ref
 	// for the setup principal, applies the pipeline executor overlay (since
 	// the payload has pipeline_ref and base has no command), and creates the
 	// sandbox. The executor runs dev-workspace-init: clones the seed repo,

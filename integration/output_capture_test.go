@@ -52,10 +52,10 @@ type telemetryMockOutputDeltaResult struct {
 func TestOutputCapturePipeline(t *testing.T) {
 	t.Parallel()
 
-	admin := adminSession(t)
-	defer admin.Close()
+	ns := setupTestNamespace(t)
+	admin := ns.Admin
 
-	fleet := createTestFleet(t, admin)
+	fleet := createTestFleet(t, admin, ns)
 
 	machine := newTestMachine(t, fleet, "outcap")
 	if err := os.MkdirAll(machine.WorkspaceRoot, 0755); err != nil {
@@ -109,7 +109,7 @@ func TestOutputCapturePipeline(t *testing.T) {
 	// interference if the mock receives telemetry from other sources.
 	marker := fmt.Sprintf("OUTPUT_CAPTURE_MARKER_%s", t.Name())
 
-	publishPipelineDefinition(t, admin, "test-outcap", pipeline.PipelineContent{
+	publishPipelineDefinition(t, admin, ns.Namespace, "test-outcap", pipeline.PipelineContent{
 		Description: "Output capture integration test pipeline",
 		Steps: []pipeline.PipelineStep{
 			{Name: "emit-marker", Run: fmt.Sprintf("echo %s", marker)},
@@ -122,7 +122,7 @@ func TestOutputCapturePipeline(t *testing.T) {
 		RoomID:  machine.ConfigRoomID,
 		Command: "pipeline.execute",
 		Parameters: map[string]any{
-			"pipeline": "bureau/pipeline:test-outcap",
+			"pipeline": ns.Namespace.PipelineRoomAliasLocalpart() + ":test-outcap",
 			"room":     projectRoomID.String(),
 		},
 	})

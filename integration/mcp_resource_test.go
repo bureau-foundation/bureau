@@ -33,10 +33,10 @@ func TestMCPResourceTicketSubscribe(t *testing.T) {
 	t.Parallel()
 
 	ctx := t.Context()
-	admin := adminSession(t)
-	defer admin.Close()
+	ns := setupTestNamespace(t)
+	admin := ns.Admin
 
-	fleet := createTestFleet(t, admin)
+	fleet := createTestFleet(t, admin, ns)
 
 	// Boot a machine.
 	machine := newTestMachine(t, fleet, "mcp-res")

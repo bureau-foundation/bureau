@@ -33,10 +33,10 @@ import (
 func TestPipelineExecution(t *testing.T) {
 	t.Parallel()
 
-	admin := adminSession(t)
-	defer admin.Close()
+	ns := setupTestNamespace(t)
+	admin := ns.Admin
 
-	fleet := createTestFleet(t, admin)
+	fleet := createTestFleet(t, admin, ns)
 
 	machine := newTestMachine(t, fleet, "pipeline")
 	if err := os.MkdirAll(machine.WorkspaceRoot, 0755); err != nil {
@@ -67,7 +67,7 @@ func TestPipelineExecution(t *testing.T) {
 	}
 
 	// --- Publish pipeline definition ---
-	publishPipelineDefinition(t, admin, "test-greet", pipeline.PipelineContent{
+	publishPipelineDefinition(t, admin, ns.Namespace, "test-greet", pipeline.PipelineContent{
 		Description: "Integration test pipeline",
 		Steps: []pipeline.PipelineStep{
 			{Name: "greet", Run: "echo hello"},
@@ -81,7 +81,7 @@ func TestPipelineExecution(t *testing.T) {
 		RoomID:  machine.ConfigRoomID,
 		Command: "pipeline.execute",
 		Parameters: map[string]any{
-			"pipeline": "bureau/pipeline:test-greet",
+			"pipeline": ns.Namespace.PipelineRoomAliasLocalpart() + ":test-greet",
 			"room":     projectRoomID.String(),
 		},
 	})
@@ -133,10 +133,10 @@ func TestPipelineExecution(t *testing.T) {
 func TestPipelineExecutionFailure(t *testing.T) {
 	t.Parallel()
 
-	admin := adminSession(t)
-	defer admin.Close()
+	ns := setupTestNamespace(t)
+	admin := ns.Admin
 
-	fleet := createTestFleet(t, admin)
+	fleet := createTestFleet(t, admin, ns)
 
 	machine := newTestMachine(t, fleet, "pipeline-fail")
 	if err := os.MkdirAll(machine.WorkspaceRoot, 0755); err != nil {
@@ -165,7 +165,7 @@ func TestPipelineExecutionFailure(t *testing.T) {
 	}
 
 	// --- Publish failing pipeline definition ---
-	publishPipelineDefinition(t, admin, "test-fail", pipeline.PipelineContent{
+	publishPipelineDefinition(t, admin, ns.Namespace, "test-fail", pipeline.PipelineContent{
 		Description: "Failing pipeline",
 		Steps: []pipeline.PipelineStep{
 			{Name: "setup", Run: "echo starting"},
@@ -179,7 +179,7 @@ func TestPipelineExecutionFailure(t *testing.T) {
 		RoomID:  machine.ConfigRoomID,
 		Command: "pipeline.execute",
 		Parameters: map[string]any{
-			"pipeline": "bureau/pipeline:test-fail",
+			"pipeline": ns.Namespace.PipelineRoomAliasLocalpart() + ":test-fail",
 			"room":     projectRoomID.String(),
 		},
 	})
@@ -231,10 +231,10 @@ func TestPipelineExecutionFailure(t *testing.T) {
 func TestPipelineParameterPropagation(t *testing.T) {
 	t.Parallel()
 
-	admin := adminSession(t)
-	defer admin.Close()
+	ns := setupTestNamespace(t)
+	admin := ns.Admin
 
-	fleet := createTestFleet(t, admin)
+	fleet := createTestFleet(t, admin, ns)
 
 	machine := newTestMachine(t, fleet, "pipeline-params")
 	if err := os.MkdirAll(machine.WorkspaceRoot, 0755); err != nil {
@@ -263,7 +263,7 @@ func TestPipelineParameterPropagation(t *testing.T) {
 	}
 
 	// --- Publish pipeline definition with variable declaration ---
-	publishPipelineDefinition(t, admin, "test-params", pipeline.PipelineContent{
+	publishPipelineDefinition(t, admin, ns.Namespace, "test-params", pipeline.PipelineContent{
 		Description: "Parameter propagation test",
 		Variables: map[string]pipeline.PipelineVariable{
 			"PROJECT": {
@@ -285,7 +285,7 @@ func TestPipelineParameterPropagation(t *testing.T) {
 		RoomID:  machine.ConfigRoomID,
 		Command: "pipeline.execute",
 		Parameters: map[string]any{
-			"pipeline": "bureau/pipeline:test-params",
+			"pipeline": ns.Namespace.PipelineRoomAliasLocalpart() + ":test-params",
 			"room":     projectRoomID.String(),
 			// This top-level parameter becomes a ticket variable.
 			// The executor reads it from TicketContent.Pipeline.Variables,
@@ -349,10 +349,10 @@ func TestPipelineParameterPropagation(t *testing.T) {
 func TestPipelineArtifactAttachment(t *testing.T) {
 	t.Parallel()
 
-	admin := adminSession(t)
-	defer admin.Close()
+	ns := setupTestNamespace(t)
+	admin := ns.Admin
 
-	fleet := createTestFleet(t, admin)
+	fleet := createTestFleet(t, admin, ns)
 
 	machine := newTestMachine(t, fleet, "pipeline-attach")
 	if err := os.MkdirAll(machine.WorkspaceRoot, 0755); err != nil {
@@ -414,7 +414,7 @@ func TestPipelineArtifactAttachment(t *testing.T) {
 		t.Fatalf("marshal output declaration: %v", err)
 	}
 
-	publishPipelineDefinition(t, admin, "test-artifact-attach", pipeline.PipelineContent{
+	publishPipelineDefinition(t, admin, ns.Namespace, "test-artifact-attach", pipeline.PipelineContent{
 		Description: "Pipeline with artifact output and ticket attachment",
 		Steps: []pipeline.PipelineStep{
 			{
@@ -434,7 +434,7 @@ func TestPipelineArtifactAttachment(t *testing.T) {
 		RoomID:  machine.ConfigRoomID,
 		Command: "pipeline.execute",
 		Parameters: map[string]any{
-			"pipeline": "bureau/pipeline:test-artifact-attach",
+			"pipeline": ns.Namespace.PipelineRoomAliasLocalpart() + ":test-artifact-attach",
 			"room":     projectRoomID.String(),
 		},
 	})

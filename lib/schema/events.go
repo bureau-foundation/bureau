@@ -488,8 +488,10 @@ func ConfigRoomPowerLevels(adminUserID, machineUserID ref.UserID) map[string]any
 //
 // Unlike workspace rooms (events_default: 0 for collaboration) or config
 // rooms (machine at PL 50 for layouts), pipeline rooms are admin-only
-// for writes. No machine tier is needed — machines read pipelines via
-// their proxy, they don't write them.
+// for writes. The invite threshold is 50 so that machine daemons (PL 50)
+// can invite pipeline executor principals — workspace setup/teardown
+// principals need pipeline room membership to resolve pipeline definitions
+// via their proxy.
 func PipelineRoomPowerLevels(adminUserID ref.UserID) map[string]any {
 	events := AdminProtectedEvents()
 	events[EventTypePipeline] = 100
@@ -501,7 +503,7 @@ func PipelineRoomPowerLevels(adminUserID ref.UserID) map[string]any {
 		events:        events,
 		eventsDefault: 100,
 		stateDefault:  100,
-		invite:        100,
+		invite:        50,
 	})
 }
 

@@ -25,6 +25,7 @@ import (
 type doctorParams struct {
 	cli.SessionConfig
 	ServerName string `json:"server_name"  flag:"server-name"  desc:"Matrix server name for constructing aliases (auto-detected from machine.conf)"`
+	Namespace  string `json:"namespace"    flag:"namespace"    desc:"Bureau namespace prefix for room aliases" default:"bureau"`
 	cli.JSONOutput
 	Fix    bool `json:"fix"    flag:"fix"     desc:"automatically repair fixable issues"`
 	DryRun bool `json:"dry_run" flag:"dry-run" desc:"preview repairs without executing (requires --fix)"`
@@ -140,7 +141,7 @@ Use --json for machine-readable output suitable for monitoring or CI.`,
 
 			for iteration := range maxFixIterations {
 				_ = iteration
-				results = runDoctor(ctx, client, sess, serverName, storedCredentials, params.SessionConfig.CredentialFile, logger)
+				results = runDoctor(ctx, client, sess, serverName, params.Namespace, storedCredentials, params.SessionConfig.CredentialFile, logger)
 
 				if !params.Fix {
 					break
@@ -225,48 +226,54 @@ func (r standardRoom) powerLevels(adminUserID ref.UserID) map[string]any {
 	return adminOnlyPowerLevels(adminUserID, r.memberSettableEventTypes)
 }
 
-var standardRooms = []standardRoom{
-	{
-		alias:           "bureau/system",
-		displayName:     "Bureau System",
-		topic:           "Operational messages",
-		name:            "system room",
-		credentialKey:   "MATRIX_SYSTEM_ROOM",
-		powerLevelsFunc: schema.SystemRoomPowerLevels,
-		memberSettableEventTypes: []ref.EventType{
-			schema.EventTypeTokenSigningKey,
+// standardRoomsForNamespace returns the standard rooms for a given namespace
+// prefix. Room aliases are constructed as "<namespace>/<suffix>" (e.g.,
+// "bureau/system", "myns/template"). This is the single source of truth for
+// room aliases, display names, topics, and power level structures.
+func standardRoomsForNamespace(namespacePrefix string) []standardRoom {
+	return []standardRoom{
+		{
+			alias:           namespacePrefix + "/system",
+			displayName:     "Bureau System",
+			topic:           "Operational messages",
+			name:            "system room",
+			credentialKey:   "MATRIX_SYSTEM_ROOM",
+			powerLevelsFunc: schema.SystemRoomPowerLevels,
+			memberSettableEventTypes: []ref.EventType{
+				schema.EventTypeTokenSigningKey,
+			},
 		},
-	},
-	{
-		alias:         "bureau/template",
-		displayName:   "Bureau Template",
-		topic:         "Sandbox templates",
-		name:          "template room",
-		credentialKey: "MATRIX_TEMPLATE_ROOM",
-	},
-	{
-		alias:           "bureau/pipeline",
-		displayName:     "Bureau Pipeline",
-		topic:           "Pipeline definitions",
-		name:            "pipeline room",
-		credentialKey:   "MATRIX_PIPELINE_ROOM",
-		powerLevelsFunc: schema.PipelineRoomPowerLevels,
-	},
-	{
-		alias:           "bureau/artifact",
-		displayName:     "Bureau Artifact",
-		topic:           "Artifact coordination",
-		name:            "artifact room",
-		credentialKey:   "MATRIX_ARTIFACT_ROOM",
-		powerLevelsFunc: schema.ArtifactRoomPowerLevels,
-	},
-	{
-		alias:         "bureau/dev",
-		displayName:   "Bureau Dev Team",
-		topic:         "Development team coordination and work routing",
-		name:          "dev team room",
-		credentialKey: "MATRIX_DEV_TEAM_ROOM",
-	},
+		{
+			alias:         namespacePrefix + "/template",
+			displayName:   "Bureau Template",
+			topic:         "Sandbox templates",
+			name:          "template room",
+			credentialKey: "MATRIX_TEMPLATE_ROOM",
+		},
+		{
+			alias:           namespacePrefix + "/pipeline",
+			displayName:     "Bureau Pipeline",
+			topic:           "Pipeline definitions",
+			name:            "pipeline room",
+			credentialKey:   "MATRIX_PIPELINE_ROOM",
+			powerLevelsFunc: schema.PipelineRoomPowerLevels,
+		},
+		{
+			alias:           namespacePrefix + "/artifact",
+			displayName:     "Bureau Artifact",
+			topic:           "Artifact coordination",
+			name:            "artifact room",
+			credentialKey:   "MATRIX_ARTIFACT_ROOM",
+			powerLevelsFunc: schema.ArtifactRoomPowerLevels,
+		},
+		{
+			alias:         namespacePrefix + "/dev",
+			displayName:   "Bureau Dev Team",
+			topic:         "Development team coordination and work routing",
+			name:          "dev team room",
+			credentialKey: "MATRIX_DEV_TEAM_ROOM",
+		},
+	}
 }
 
 // runDoctor executes all health checks and returns the results. Fixable
@@ -275,7 +282,8 @@ var standardRooms = []standardRoom{
 // When credentialFilePath is non-empty, credential mismatches are reported
 // as fixable failures (the fix updates the credential file). When empty,
 // credential mismatches remain warnings since there is no file to update.
-func runDoctor(ctx context.Context, client *messaging.Client, session messaging.Session, serverName ref.ServerName, storedCredentials map[string]string, credentialFilePath string, logger *slog.Logger) []doctor.Result {
+func runDoctor(ctx context.Context, client *messaging.Client, session messaging.Session, serverName ref.ServerName, namespacePrefix string, storedCredentials map[string]string, credentialFilePath string, logger *slog.Logger) []doctor.Result {
+	rooms := standardRoomsForNamespace(namespacePrefix)
 	var results []doctor.Result
 
 	// Section 1: Connectivity and authentication.
@@ -285,7 +293,7 @@ func runDoctor(ctx context.Context, client *messaging.Client, session messaging.
 	if versionsResult.Status == doctor.StatusFail {
 		results = append(results, doctor.Skip("authentication", "skipped: homeserver unreachable"))
 		results = append(results, doctor.Skip("bureau space", "skipped: homeserver unreachable"))
-		for _, room := range standardRooms {
+		for _, room := range rooms {
 			results = append(results, doctor.Skip(room.name, "skipped: homeserver unreachable"))
 		}
 		return results
@@ -296,20 +304,20 @@ func runDoctor(ctx context.Context, client *messaging.Client, session messaging.
 
 	if authResult.Status == doctor.StatusFail {
 		results = append(results, doctor.Skip("bureau space", "skipped: authentication failed"))
-		for _, room := range standardRooms {
+		for _, room := range rooms {
 			results = append(results, doctor.Skip(room.name, "skipped: authentication failed"))
 		}
 		return results
 	}
 
 	// Section 2: Space and rooms exist.
-	spaceAlias := ref.MustParseRoomAlias(schema.FullRoomAlias("bureau", serverName))
+	spaceAlias := ref.MustParseRoomAlias(schema.FullRoomAlias(namespacePrefix, serverName))
 	spaceResult, spaceRoomID := checkRoomExists(ctx, session, "bureau space", spaceAlias)
 	if spaceResult.Status == doctor.StatusFail {
 		spaceResult.FixHint = "create Bureau space"
 		spaceResult = doctor.FailWithFix(spaceResult.Name, spaceResult.Message, "create Bureau space",
 			func(ctx context.Context) error {
-				id, err := ensureSpace(ctx, session, serverName, logger)
+				id, err := ensureSpace(ctx, session, namespacePrefix, serverName, logger)
 				if err != nil {
 					return err
 				}
@@ -320,7 +328,7 @@ func runDoctor(ctx context.Context, client *messaging.Client, session messaging.
 	results = append(results, spaceResult)
 
 	roomIDs := make(map[string]ref.RoomID) // local alias → room ID
-	for _, room := range standardRooms {
+	for _, room := range rooms {
 		room := room // capture for closure
 		fullAlias := ref.MustParseRoomAlias(schema.FullRoomAlias(room.alias, serverName))
 		result, roomID := checkRoomExists(ctx, session, room.name, fullAlias)
@@ -353,7 +361,7 @@ func runDoctor(ctx context.Context, client *messaging.Client, session messaging.
 		if !spaceRoomID.IsZero() {
 			correctRoomIDs["MATRIX_SPACE_ROOM"] = spaceRoomID.String()
 		}
-		for _, room := range standardRooms {
+		for _, room := range rooms {
 			if roomID, ok := roomIDs[room.alias]; ok {
 				correctRoomIDs[room.credentialKey] = roomID.String()
 			}
@@ -378,7 +386,7 @@ func runDoctor(ctx context.Context, client *messaging.Client, session messaging.
 			}
 			results = append(results, result)
 		}
-		for _, room := range standardRooms {
+		for _, room := range rooms {
 			if roomID, ok := roomIDs[room.alias]; ok {
 				result := checkCredentialMatch(room.name, room.credentialKey, roomID.String(), storedCredentials)
 				if credentialFix != nil && (result.Status == doctor.StatusWarn || result.Status == doctor.StatusFail) {
@@ -399,7 +407,7 @@ func runDoctor(ctx context.Context, client *messaging.Client, session messaging.
 		if err != nil {
 			results = append(results, doctor.Fail("space hierarchy", fmt.Sprintf("cannot read space state: %v", err)))
 		} else {
-			for _, room := range standardRooms {
+			for _, room := range rooms {
 				roomID, ok := roomIDs[room.alias]
 				if !ok {
 					continue
@@ -427,7 +435,7 @@ func runDoctor(ctx context.Context, client *messaging.Client, session messaging.
 		results = append(results, checkPowerLevels(ctx, session, "bureau space", spaceRoomID, adminUserID,
 			nil, adminOnlyPowerLevels(adminUserID, nil))...)
 	}
-	for _, room := range standardRooms {
+	for _, room := range rooms {
 		roomID, ok := roomIDs[room.alias]
 		if !ok {
 			continue
@@ -440,7 +448,7 @@ func runDoctor(ctx context.Context, client *messaging.Client, session messaging.
 	if !spaceRoomID.IsZero() {
 		results = append(results, checkJoinRules(ctx, session, "bureau space", spaceRoomID))
 	}
-	for _, room := range standardRooms {
+	for _, room := range rooms {
 		roomID, ok := roomIDs[room.alias]
 		if !ok {
 			continue
@@ -452,21 +460,23 @@ func runDoctor(ctx context.Context, client *messaging.Client, session messaging.
 	// the Bureau space should be in every standard room. The space is
 	// invite-only, so anyone who's joined it was deliberately onboarded.
 	if !spaceRoomID.IsZero() {
-		results = append(results, checkOperatorMembership(ctx, session, spaceRoomID, serverName, roomIDs)...)
+		results = append(results, checkOperatorMembership(ctx, session, spaceRoomID, serverName, rooms, roomIDs)...)
 	}
 
 	// Section 9: Base templates published.
-	if templateRoomID, ok := roomIDs["bureau/template"]; ok {
-		results = append(results, checkBaseTemplates(ctx, session, templateRoomID)...)
+	templateAlias := namespacePrefix + "/template"
+	if templateRoomID, ok := roomIDs[templateAlias]; ok {
+		results = append(results, checkBaseTemplates(ctx, session, templateRoomID, templateAlias)...)
 	}
 
 	// Section 10: Base pipelines published.
-	if pipelineRoomID, ok := roomIDs["bureau/pipeline"]; ok {
+	pipelineAlias := namespacePrefix + "/pipeline"
+	if pipelineRoomID, ok := roomIDs[pipelineAlias]; ok {
 		results = append(results, checkBasePipelines(ctx, session, pipelineRoomID)...)
 	}
 
 	// Section 11: Dev team metadata on all Bureau rooms.
-	results = append(results, checkDevTeamMetadata(ctx, session, serverName, spaceRoomID, roomIDs)...)
+	results = append(results, checkDevTeamMetadata(ctx, session, namespacePrefix, serverName, spaceRoomID, rooms, roomIDs)...)
 
 	return results
 }
@@ -722,7 +732,7 @@ func checkJoinRules(ctx context.Context, session messaging.Session, name string,
 // invite-only, so any joined user was deliberately onboarded. Machine
 // accounts (localparts starting with "machine/") are excluded because
 // they are only invited to global rooms during provisioning.
-func checkOperatorMembership(ctx context.Context, session messaging.Session, spaceRoomID ref.RoomID, serverName ref.ServerName, roomIDs map[string]ref.RoomID) []doctor.Result {
+func checkOperatorMembership(ctx context.Context, session messaging.Session, spaceRoomID ref.RoomID, serverName ref.ServerName, rooms []standardRoom, roomIDs map[string]ref.RoomID) []doctor.Result {
 	// Get all joined members of the Bureau space.
 	spaceMembers, err := session.GetRoomMembers(ctx, spaceRoomID)
 	if err != nil {
@@ -752,7 +762,7 @@ func checkOperatorMembership(ctx context.Context, session messaging.Session, spa
 
 	var results []doctor.Result
 
-	for _, room := range standardRooms {
+	for _, room := range rooms {
 		roomID, ok := roomIDs[room.alias]
 		if !ok {
 			continue
@@ -840,9 +850,9 @@ func checkPublishedStateEvents(ctx context.Context, session messaging.Session, r
 // checkBaseTemplates verifies that the standard Bureau templates ("base" and
 // "base-networked") are published as m.bureau.template state events in the
 // template room. Missing templates are fixable by re-publishing them.
-func checkBaseTemplates(ctx context.Context, session messaging.Session, templateRoomID ref.RoomID) []doctor.Result {
+func checkBaseTemplates(ctx context.Context, session messaging.Session, templateRoomID ref.RoomID, templatePrefix string) []doctor.Result {
 	var items []stateEventItem
-	for _, template := range baseTemplates() {
+	for _, template := range baseTemplates(templatePrefix) {
 		items = append(items, stateEventItem{
 			label:     "template",
 			name:      template.name,
@@ -878,8 +888,8 @@ func checkBasePipelines(ctx context.Context, session messaging.Session, pipeline
 // state events pointing to the convention dev team room alias
 // (#bureau/dev:<server>). This catches setups bootstrapped before the dev team
 // feature was added, or rooms where the metadata was accidentally removed.
-func checkDevTeamMetadata(ctx context.Context, session messaging.Session, serverName ref.ServerName, spaceRoomID ref.RoomID, roomIDs map[string]ref.RoomID) []doctor.Result {
-	bureauNamespace, err := ref.NewNamespace(serverName, "bureau")
+func checkDevTeamMetadata(ctx context.Context, session messaging.Session, namespacePrefix string, serverName ref.ServerName, spaceRoomID ref.RoomID, rooms []standardRoom, roomIDs map[string]ref.RoomID) []doctor.Result {
+	bureauNamespace, err := ref.NewNamespace(serverName, namespacePrefix)
 	if err != nil {
 		return []doctor.Result{doctor.Fail("dev team metadata", fmt.Sprintf("construct bureau namespace: %v", err))}
 	}
@@ -891,18 +901,18 @@ func checkDevTeamMetadata(ctx context.Context, session messaging.Session, server
 		roomID ref.RoomID
 	}
 
-	var rooms []roomCheck
+	var roomChecks []roomCheck
 	if !spaceRoomID.IsZero() {
-		rooms = append(rooms, roomCheck{"bureau space", spaceRoomID})
+		roomChecks = append(roomChecks, roomCheck{"bureau space", spaceRoomID})
 	}
-	for _, room := range standardRooms {
+	for _, room := range rooms {
 		if roomID, ok := roomIDs[room.alias]; ok {
-			rooms = append(rooms, roomCheck{room.name, roomID})
+			roomChecks = append(roomChecks, roomCheck{room.name, roomID})
 		}
 	}
 
 	var results []doctor.Result
-	for _, room := range rooms {
+	for _, room := range roomChecks {
 		checkName := room.name + " dev team"
 		content, err := messaging.GetState[schema.DevTeamContent](ctx, session, room.roomID, schema.EventTypeDevTeam, "")
 		if err != nil {

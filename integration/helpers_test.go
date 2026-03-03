@@ -686,6 +686,7 @@ func writeTokenFile(t *testing.T, tokenBytes []byte) string {
 type operatorEnv struct {
 	Admin          *messaging.DirectSession
 	Fleet          *testFleet
+	Namespace      ref.Namespace
 	CredentialFile string   // path for --credential-file flag
 	SessionFile    string   // path, set via BUREAU_SESSION_FILE in Env
 	MachineConf    string   // path, set via BUREAU_MACHINE_CONF in Env
@@ -698,10 +699,10 @@ type operatorEnv struct {
 func setupOperatorEnv(t *testing.T) *operatorEnv {
 	t.Helper()
 
-	admin := adminSession(t)
-	t.Cleanup(func() { admin.Close() })
+	ns := setupTestNamespace(t)
+	admin := ns.Admin
 
-	fleet := createTestFleet(t, admin)
+	fleet := createTestFleet(t, admin, ns)
 
 	credentialFile := writeTestCredentialFile(t,
 		testHomeserverURL, admin.UserID().String(), admin.AccessToken())
@@ -721,6 +722,7 @@ func setupOperatorEnv(t *testing.T) *operatorEnv {
 	return &operatorEnv{
 		Admin:          admin,
 		Fleet:          fleet,
+		Namespace:      ns.Namespace,
 		CredentialFile: credentialFile,
 		SessionFile:    sessionFile,
 		MachineConf:    machineConf,
@@ -1226,6 +1228,192 @@ func loadCredentials(t *testing.T) map[string]string {
 	return credentials
 }
 
+// --- Per-Test Namespace Isolation ---
+
+// testNamespaceResult holds the per-test Bureau namespace: the admin session
+// that owns the namespace, the namespace itself, and the room IDs for all
+// standard rooms (space, system, template, pipeline, artifact, dev team).
+//
+// Each test that creates machines or fleets gets its own namespace via
+// setupTestNamespace. The admin session is the room creator for all rooms
+// in the namespace and has PL 100 automatically. No shared global rooms are
+// involved — all /sync activity is scoped to the per-test namespace, making
+// cross-test event interference structurally impossible.
+type testNamespaceResult struct {
+	Namespace      ref.Namespace
+	Admin          *messaging.DirectSession
+	CredentialFile string
+	SpaceRoomID    ref.RoomID
+	SystemRoomID   ref.RoomID
+	TemplateRoomID ref.RoomID
+	PipelineRoomID ref.RoomID
+	ArtifactRoomID ref.RoomID
+	DevTeamRoomID  ref.RoomID
+}
+
+// setupTestNamespace creates a fully independent Bureau namespace for this
+// test by running `bureau matrix setup --namespace <unique>` via the
+// production CLI path. The namespace includes its own space, standard rooms,
+// base templates, and base pipelines — identical to a production setup but
+// completely isolated from other tests.
+//
+// The admin account name is derived from the namespace prefix so each test
+// gets its own admin with PL 100 in all namespace rooms. The per-test admin
+// is NOT a member of any global rooms, eliminating /sync cross-talk.
+func setupTestNamespace(t *testing.T) *testNamespaceResult {
+	t.Helper()
+
+	prefix := uniqueNamespacePrefix(t)
+	adminUsername := "nsadmin-" + prefix
+	namespaceCredentialFile := filepath.Join(t.TempDir(), "ns-creds")
+
+	cmd := exec.Command(bureauBinary, "matrix", "setup",
+		"--homeserver", testHomeserverURL,
+		"--server-name", testServerName,
+		"--namespace", prefix,
+		"--admin-user", adminUsername,
+		"--registration-token-file", "-",
+		"--credential-file", namespaceCredentialFile,
+	)
+	cmd.Stdin = strings.NewReader(testRegistrationToken)
+	cmd.Stdout = os.Stderr
+	cmd.Stderr = os.Stderr
+	if err := cmd.Run(); err != nil {
+		t.Fatalf("bureau matrix setup --namespace %s: %v", prefix, err)
+	}
+
+	// Parse the credential file to extract room IDs and admin session.
+	credentials := loadCredentialFileAt(t, namespaceCredentialFile)
+
+	homeserverURL := credentials["MATRIX_HOMESERVER_URL"]
+	if homeserverURL == "" {
+		t.Fatal("namespace credential file missing MATRIX_HOMESERVER_URL")
+	}
+	adminToken := credentials["MATRIX_ADMIN_TOKEN"]
+	if adminToken == "" {
+		t.Fatal("namespace credential file missing MATRIX_ADMIN_TOKEN")
+	}
+	adminUserRaw := credentials["MATRIX_ADMIN_USER"]
+	if adminUserRaw == "" {
+		t.Fatal("namespace credential file missing MATRIX_ADMIN_USER")
+	}
+	adminUserID, err := ref.ParseUserID(adminUserRaw)
+	if err != nil {
+		t.Fatalf("parse namespace admin user ID %q: %v", adminUserRaw, err)
+	}
+
+	client, err := messaging.NewClient(messaging.ClientConfig{
+		HomeserverURL: homeserverURL,
+	})
+	if err != nil {
+		t.Fatalf("create namespace client: %v", err)
+	}
+
+	session, err := client.SessionFromToken(adminUserID, adminToken)
+	if err != nil {
+		t.Fatalf("create namespace admin session: %v", err)
+	}
+	t.Cleanup(func() { session.Close() })
+
+	namespace, err := ref.NewNamespace(testServer, prefix)
+	if err != nil {
+		t.Fatalf("construct namespace %q: %v", prefix, err)
+	}
+
+	result := &testNamespaceResult{
+		Namespace:      namespace,
+		Admin:          session,
+		CredentialFile: namespaceCredentialFile,
+	}
+
+	type roomMapping struct {
+		key    string
+		target *ref.RoomID
+	}
+	mappings := []roomMapping{
+		{"MATRIX_SPACE_ROOM", &result.SpaceRoomID},
+		{"MATRIX_SYSTEM_ROOM", &result.SystemRoomID},
+		{"MATRIX_TEMPLATE_ROOM", &result.TemplateRoomID},
+		{"MATRIX_PIPELINE_ROOM", &result.PipelineRoomID},
+		{"MATRIX_ARTIFACT_ROOM", &result.ArtifactRoomID},
+		{"MATRIX_DEV_TEAM_ROOM", &result.DevTeamRoomID},
+	}
+	for _, mapping := range mappings {
+		raw := credentials[mapping.key]
+		if raw == "" {
+			t.Fatalf("namespace credential file missing %s", mapping.key)
+		}
+		roomID, err := ref.ParseRoomID(raw)
+		if err != nil {
+			t.Fatalf("parse %s=%q: %v", mapping.key, raw, err)
+		}
+		*mapping.target = roomID
+	}
+
+	return result
+}
+
+// uniqueNamespacePrefix generates a short, unique namespace name for this
+// test. Format: "tns-<truncated-test-name>-<4-random-hex>".
+// Matrix room alias localparts allow [a-z0-9._=/-] and must be <=84 chars.
+// The namespace is a single segment (no slashes) so we use only [a-z0-9-].
+func uniqueNamespacePrefix(t *testing.T) string {
+	t.Helper()
+
+	name := strings.ToLower(t.Name())
+	var sanitized strings.Builder
+	for _, character := range name {
+		if (character >= 'a' && character <= 'z') ||
+			(character >= '0' && character <= '9') {
+			sanitized.WriteRune(character)
+		} else {
+			sanitized.WriteByte('-')
+		}
+	}
+
+	truncated := sanitized.String()
+	if len(truncated) > 20 {
+		truncated = truncated[:20]
+	}
+	// Trim trailing hyphens that could result from truncation.
+	truncated = strings.TrimRight(truncated, "-")
+
+	randomBytes := make([]byte, 2)
+	if _, err := rand.Read(randomBytes); err != nil {
+		t.Fatalf("generate random suffix: %v", err)
+	}
+
+	return "tns-" + truncated + "-" + hex.EncodeToString(randomBytes)
+}
+
+// loadCredentialFileAt parses a Bureau credential file in KEY=VALUE format.
+func loadCredentialFileAt(t *testing.T, path string) map[string]string {
+	t.Helper()
+
+	file, err := os.Open(path)
+	if err != nil {
+		t.Fatalf("open credential file %s: %v", path, err)
+	}
+	defer file.Close()
+
+	credentials := make(map[string]string)
+	scanner := bufio.NewScanner(file)
+	for scanner.Scan() {
+		line := strings.TrimSpace(scanner.Text())
+		if line == "" || strings.HasPrefix(line, "#") {
+			continue
+		}
+		key, value, found := strings.Cut(line, "=")
+		if found {
+			credentials[key] = value
+		}
+	}
+	if err := scanner.Err(); err != nil {
+		t.Fatalf("read credential file %s: %v", path, err)
+	}
+	return credentials
+}
+
 // --- Fleet Test Helpers ---
 
 // testFleet holds the fleet-scoped rooms for a single test. Every test
@@ -1237,27 +1425,29 @@ type testFleet struct {
 	FleetRoomID   ref.RoomID // fleet config room
 	MachineRoomID ref.RoomID // fleet machine presence room
 	ServiceRoomID ref.RoomID // fleet service directory room
+	Namespace     *testNamespaceResult
 }
 
 // createTestFleet creates the three fleet-scoped rooms (config, machine,
 // service) using the production fleet.EnsureFleetRooms path. This
 // ensures test fleets are created identically to production: proper
 // aliases, power levels, names/topics, and space-child linking.
-func createTestFleet(t *testing.T, admin *messaging.DirectSession) *testFleet {
+//
+// The fleet is created under the per-test namespace, so all room
+// resolution (template, pipeline, system) automatically targets
+// per-test rooms via fleet.Namespace().
+func createTestFleet(t *testing.T, admin *messaging.DirectSession, namespace *testNamespaceResult) *testFleet {
 	t.Helper()
 	ctx := t.Context()
 
-	// Derive a fleet prefix from the test name. The homeserver is fresh
-	// per test run, so t.Name() is sufficient for uniqueness. Lowercased
-	// because Matrix localparts only allow a-z, and ref.ParseFleet
-	// validates this constraint.
-	fleetName := strings.ToLower(t.Name())
+	// Use a short fixed fleet name. The per-test namespace already
+	// carries the test identity (via setupTestNamespace), so there's no
+	// need to repeat the test name in the fleet. A fixed name keeps
+	// localparts well within the 84-character Matrix limit:
+	//   <ns-prefix>/fleet/test/machine/<name> ≤ 84
+	fleetName := "test"
 
-	namespaceRef, err := ref.NewNamespace(testServer, "bureau")
-	if err != nil {
-		t.Fatalf("create namespace ref: %v", err)
-	}
-	fleetRef, err := ref.NewFleet(namespaceRef, fleetName)
+	fleetRef, err := ref.NewFleet(namespace.Namespace, fleetName)
 	if err != nil {
 		t.Fatalf("create fleet ref: %v", err)
 	}
@@ -1274,28 +1464,21 @@ func createTestFleet(t *testing.T, admin *messaging.DirectSession) *testFleet {
 		FleetRoomID:   rooms.ConfigRoomID,
 		MachineRoomID: rooms.MachineRoomID,
 		ServiceRoomID: rooms.ServiceRoomID,
+		Namespace:     namespace,
 	}
 }
 
 // --- Namespace Room Helpers ---
 
-// resolvePipelineRoom returns the cached pipeline room ID. The room is
-// created during TestMain's bureau matrix setup and its ID is cached in
-// cacheGlobalRoomIDs. The per-test admin is already a member (joined
-// during adminSession).
-func resolvePipelineRoom(t *testing.T, _ *messaging.DirectSession) ref.RoomID {
-	t.Helper()
-	return globalPipelineRoomID
-}
-
 // publishPipelineDefinition publishes a pipeline definition using the
-// production pipelinedef.Push path. The pipeline name is automatically
-// scoped to the "bureau/pipeline" room (the standard test namespace).
-func publishPipelineDefinition(t *testing.T, admin *messaging.DirectSession, name string, content pipeline.PipelineContent) {
+// production pipelinedef.Push path. The pipeline room is resolved from
+// the namespace embedded in the fleet reference.
+func publishPipelineDefinition(t *testing.T, admin *messaging.DirectSession, namespace ref.Namespace, name string, content pipeline.PipelineContent) {
 	t.Helper()
-	pipelineRef, err := schema.ParsePipelineRef("bureau/pipeline:" + name)
+	pipelineRefString := namespace.PipelineRoomAliasLocalpart() + ":" + name
+	pipelineRef, err := schema.ParsePipelineRef(pipelineRefString)
 	if err != nil {
-		t.Fatalf("parse pipeline ref %q: %v", name, err)
+		t.Fatalf("parse pipeline ref %q: %v", pipelineRefString, err)
 	}
 	if _, err := pipelinedef.Push(t.Context(), admin, pipelineRef, content, testServer); err != nil {
 		t.Fatalf("push pipeline %s: %v", name, err)

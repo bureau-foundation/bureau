@@ -26,9 +26,9 @@ import (
 func TestSocketHealthDestroy(t *testing.T) {
 	t.Parallel()
 
-	admin := adminSession(t)
-	defer admin.Close()
-	fleet := createTestFleet(t, admin)
+	ns := setupTestNamespace(t)
+	admin := ns.Admin
+	fleet := createTestFleet(t, admin, ns)
 
 	machine := newTestMachine(t, fleet, "sockhealth")
 	startMachine(t, admin, machine, machineOptions{
@@ -109,9 +109,9 @@ func TestSocketHealthDestroy(t *testing.T) {
 func TestSocketHealthCredRotation(t *testing.T) {
 	t.Parallel()
 
-	admin := adminSession(t)
-	defer admin.Close()
-	fleet := createTestFleet(t, admin)
+	ns := setupTestNamespace(t)
+	admin := ns.Admin
+	fleet := createTestFleet(t, admin, ns)
 
 	machine := newTestMachine(t, fleet, "credrot")
 	startMachine(t, admin, machine, machineOptions{
@@ -142,7 +142,7 @@ func TestSocketHealthCredRotation(t *testing.T) {
 	// These rooms have PL 100 for invites, so only the admin can do
 	// this. principal.Create handles it automatically; manual
 	// deployment paths must do it explicitly.
-	systemRoomID := resolveSystemRoom(t, admin)
+	systemRoomID := resolveSystemRoom(t, admin, ns.Namespace)
 	if err := admin.InviteUser(t.Context(), systemRoomID, account.UserID); err != nil {
 		if !messaging.IsMatrixError(err, messaging.ErrCodeForbidden) {
 			t.Fatalf("invite service to system room: %v", err)
@@ -158,7 +158,7 @@ func TestSocketHealthCredRotation(t *testing.T) {
 	pushCredentials(t, admin, machine, account)
 	grantTemplateAccess(t, admin, machine)
 
-	templateRef, err := schema.ParseTemplateRef("bureau/template:service-telemetry-credrot")
+	templateRef, err := schema.ParseTemplateRef(ns.Namespace.TemplateRoomAliasLocalpart() + ":service-telemetry-credrot")
 	if err != nil {
 		t.Fatalf("parse template ref: %v", err)
 	}

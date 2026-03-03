@@ -138,7 +138,7 @@ type principalAccount struct {
 // localpart is constructed internally from the machine's fleet reference.
 type principalSpec struct {
 	Localpart                 string                      // required: account localpart
-	Template                  string                      // optional: template ref (e.g., "bureau/template:name"); defaults to "bureau/template:test-agent"
+	Template                  string                      // optional: template ref (e.g., "<namespace>/template:name"); auto-derived if empty
 	Payload                   map[string]any              // optional: per-instance payload merged over template defaults
 	MatrixPolicy              *schema.MatrixPolicy        // optional per-principal policy
 	ServiceVisibility         []string                    // optional: glob patterns for service discovery
@@ -1016,7 +1016,9 @@ func deployAgent(t *testing.T, admin *messaging.DirectSession, machine *testMach
 	// Publish the template — Create() validates it exists but doesn't push it.
 	grantTemplateAccess(t, admin, machine)
 
-	templateRef, err := schema.ParseTemplateRef("bureau/template:" + templateName)
+	namespace := machine.Ref.Fleet().Namespace()
+	templateRefString := namespace.TemplateRoomAliasLocalpart() + ":" + templateName
+	templateRef, err := schema.ParseTemplateRef(templateRefString)
 	if err != nil {
 		t.Fatalf("parse template ref for %q: %v", templateName, err)
 	}
@@ -1289,7 +1291,9 @@ func deployService(
 	// build the sandbox spec (command, mounts, env vars, security).
 	grantTemplateAccess(t, admin, machine)
 
-	templateRef, err := schema.ParseTemplateRef("bureau/template:" + templateName)
+	namespace := machine.Ref.Fleet().Namespace()
+	templateRefString := namespace.TemplateRoomAliasLocalpart() + ":" + templateName
+	templateRef, err := schema.ParseTemplateRef(templateRefString)
 	if err != nil {
 		t.Fatalf("parse service template ref for %q: %v", templateName, err)
 	}
@@ -1406,7 +1410,7 @@ func deployService(
 	// the service missing from the new config and destroy its sandbox.
 	machine.deployedServices = append(machine.deployedServices, principalSpec{
 		Localpart:                 options.Localpart,
-		Template:                  "bureau/template:" + templateName,
+		Template:                  namespace.TemplateRoomAliasLocalpart() + ":" + templateName,
 		MatrixPolicy:              options.MatrixPolicy,
 		ExtraEnvironmentVariables: options.ExtraEnvironmentVariables,
 	})
@@ -1422,13 +1426,13 @@ func deployService(
 	}
 }
 
-// resolveSystemRoom resolves the #bureau/system room ID.
-func resolveSystemRoom(t *testing.T, admin *messaging.DirectSession) ref.RoomID {
+// resolveSystemRoom resolves the system room for a given namespace.
+func resolveSystemRoom(t *testing.T, admin *messaging.DirectSession, namespace ref.Namespace) ref.RoomID {
 	t.Helper()
 
-	systemRoomID, err := admin.ResolveAlias(t.Context(), testNamespace.SystemRoomAlias())
+	systemRoomID, err := admin.ResolveAlias(t.Context(), namespace.SystemRoomAlias())
 	if err != nil {
-		t.Fatalf("resolve system room: %v", err)
+		t.Fatalf("resolve system room (%s): %v", namespace.SystemRoomAlias(), err)
 	}
 	return systemRoomID
 }
@@ -1448,10 +1452,10 @@ func inviteToRooms(t *testing.T, admin *messaging.DirectSession, userID ref.User
 	}
 }
 
-// grantTemplateAccess resolves the #bureau/template room and invites the
-// machine so the daemon can read templates during config reconciliation.
-// Returns the template room ID for tests that need to publish custom
-// templates.
+// grantTemplateAccess resolves the template room for the machine's namespace
+// and invites the machine so the daemon can read templates during config
+// reconciliation. Returns the template room ID for tests that need to
+// publish custom templates.
 func grantTemplateAccess(t *testing.T, admin *messaging.DirectSession, machine *testMachine) ref.RoomID {
 	t.Helper()
 
@@ -1459,10 +1463,11 @@ func grantTemplateAccess(t *testing.T, admin *messaging.DirectSession, machine *
 		t.Fatal("machine.UserID is required")
 	}
 
+	namespace := machine.Ref.Fleet().Namespace()
 	templateRoomID, err := admin.ResolveAlias(t.Context(),
-		testNamespace.TemplateRoomAlias())
+		namespace.TemplateRoomAlias())
 	if err != nil {
-		t.Fatalf("resolve template room: %v", err)
+		t.Fatalf("resolve template room (%s): %v", namespace.TemplateRoomAlias(), err)
 	}
 	if err := admin.InviteUser(t.Context(), templateRoomID, machine.UserID); err != nil {
 		if !messaging.IsMatrixError(err, "M_FORBIDDEN") {
@@ -1476,7 +1481,7 @@ func grantTemplateAccess(t *testing.T, admin *messaging.DirectSession, machine *
 // minimal test-agent template suitable for sandbox creation. Uses the
 // production template push library to resolve the room and publish the
 // state event. Returns the template reference string (e.g.,
-// "bureau/template:fleet-test-agent") for use in fleet service
+// "tns-xxx/template:fleet-test-agent") for use in fleet service
 // definitions or PrincipalAssignment templates.
 func publishTestAgentTemplate(t *testing.T, admin *messaging.DirectSession, machine *testMachine, templateName string) string {
 	t.Helper()
@@ -1488,19 +1493,21 @@ func publishTestAgentTemplate(t *testing.T, admin *messaging.DirectSession, mach
 	testAgentBinary := resolvedBinary(t, "TEST_AGENT_BINARY")
 	grantTemplateAccess(t, admin, machine)
 
-	ref, err := schema.ParseTemplateRef("bureau/template:" + templateName)
+	namespace := machine.Ref.Fleet().Namespace()
+	templateRefString := namespace.TemplateRoomAliasLocalpart() + ":" + templateName
+	templateRef, err := schema.ParseTemplateRef(templateRefString)
 	if err != nil {
-		t.Fatalf("parse template ref for %q: %v", templateName, err)
+		t.Fatalf("parse template ref for %q: %v", templateRefString, err)
 	}
 
-	_, err = templatedef.Push(t.Context(), admin, ref,
+	_, err = templatedef.Push(t.Context(), admin, templateRef,
 		agentTemplateContent(testAgentBinary, agentOptions{TemplateName: templateName}),
 		testServer)
 	if err != nil {
 		t.Fatalf("push test agent template %q: %v", templateName, err)
 	}
 
-	return ref.String()
+	return templateRef.String()
 }
 
 // joinConfigRoom invites an agent to the config room and joins via a

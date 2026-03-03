@@ -21,8 +21,8 @@ func TestPowerLevelEnforcement(t *testing.T) {
 	t.Parallel()
 
 	ctx := t.Context()
-	admin := adminSession(t)
-	defer admin.Close()
+	ns := setupTestNamespace(t)
+	admin := ns.Admin
 
 	adminUserID := admin.UserID()
 
@@ -74,10 +74,10 @@ func TestPowerLevelEnforcement(t *testing.T) {
 		t.Fatalf("agent join workspace room: %v", err)
 	}
 
-	// Resolve global rooms (created by TestMain's bureau matrix setup) and
-	// create fleet-scoped rooms for machine/service power level testing.
-	pipelineRoomID := resolvePipelineRoom(t, admin)
-	fleet := createTestFleet(t, admin)
+	// Resolve per-test namespace rooms and create fleet-scoped rooms for
+	// machine/service power level testing.
+	pipelineRoomID := ns.PipelineRoomID
+	fleet := createTestFleet(t, admin, ns)
 	machineRoomID := fleet.MachineRoomID
 	serviceRoomID := fleet.ServiceRoomID
 

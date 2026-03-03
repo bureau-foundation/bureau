@@ -329,14 +329,14 @@ func mintFleetToken(t *testing.T, fleet *testFleet, machine *testMachine, grants
 func TestFleetControllerLifecycle(t *testing.T) {
 	t.Parallel()
 
-	admin := adminSession(t)
-	defer admin.Close()
+	ns := setupTestNamespace(t)
+	admin := ns.Admin
 
 	// Boot a machine. The daemon publishes MachineInfo and MachineStatus
 	// to #bureau/machine, and creates the per-machine config room.
 	// startMachine blocks until the first status heartbeat arrives, so
 	// the fleet controller's initial /sync will see this machine.
-	fleet := createTestFleet(t, admin)
+	fleet := createTestFleet(t, admin, ns)
 
 	machine := newTestMachine(t, fleet, "fleet-lifecycle")
 	startMachine(t, admin, machine, machineOptions{
@@ -479,7 +479,7 @@ func TestFleetControllerLifecycle(t *testing.T) {
 		fleetWatch := watchRoom(t, admin, fleet.FleetRoomID)
 
 		publishFleetService(t, admin, fleet.FleetRoomID, serviceLocalpart, fleetschema.FleetServiceContent{
-			Template: "bureau/template:whisper-stt",
+			Template: ns.Namespace.TemplateRoomAliasLocalpart() + ":whisper-stt",
 			Replicas: fleetschema.ReplicaSpec{Min: 0},
 			Failover: "migrate",
 			Priority: 10,
@@ -498,8 +498,9 @@ func TestFleetControllerLifecycle(t *testing.T) {
 		for _, svc := range listResponse.Services {
 			if svc.Localpart == serviceLocalpart {
 				found = true
-				if svc.Template != "bureau/template:whisper-stt" {
-					t.Errorf("service template = %q, want %q", svc.Template, "bureau/template:whisper-stt")
+				expectedTemplate := ns.Namespace.TemplateRoomAliasLocalpart() + ":whisper-stt"
+				if svc.Template != expectedTemplate {
+					t.Errorf("service template = %q, want %q", svc.Template, expectedTemplate)
 				}
 				if svc.Replicas != 0 {
 					t.Errorf("service replicas = %d, want 0", svc.Replicas)
@@ -542,9 +543,10 @@ func TestFleetControllerLifecycle(t *testing.T) {
 		if response.Definition == nil {
 			t.Fatal("show-service definition is nil")
 		}
-		if response.Definition.Template != "bureau/template:whisper-stt" {
+		expectedTemplate := ns.Namespace.TemplateRoomAliasLocalpart() + ":whisper-stt"
+		if response.Definition.Template != expectedTemplate {
 			t.Errorf("definition template = %q, want %q",
-				response.Definition.Template, "bureau/template:whisper-stt")
+				response.Definition.Template, expectedTemplate)
 		}
 		if len(response.Instances) != 0 {
 			t.Errorf("show-service instances = %d, want 0 (no placement performed)",
@@ -636,10 +638,10 @@ func TestFleetControllerLifecycle(t *testing.T) {
 func TestFleetPlaceAndUnplace(t *testing.T) {
 	t.Parallel()
 
-	admin := adminSession(t)
-	defer admin.Close()
+	ns := setupTestNamespace(t)
+	admin := ns.Admin
 
-	fleet := createTestFleet(t, admin)
+	fleet := createTestFleet(t, admin, ns)
 
 	// Boot a machine with proxy support. The daemon needs the proxy
 	// binary to create sandboxes when the fleet controller places a
@@ -827,9 +829,9 @@ func TestFleetPlaceAndUnplace(t *testing.T) {
 func TestFleetReconciliation(t *testing.T) {
 	t.Parallel()
 
-	admin := adminSession(t)
-	defer admin.Close()
-	fleet := createTestFleet(t, admin)
+	ns := setupTestNamespace(t)
+	admin := ns.Admin
+	fleet := createTestFleet(t, admin, ns)
 
 	// Boot two machines with proxy support.
 	machineA := newTestMachine(t, fleet, "fleet-recon-a")
@@ -997,9 +999,9 @@ func TestFleetReconciliation(t *testing.T) {
 func TestFleetAuthorizationDenied(t *testing.T) {
 	t.Parallel()
 
-	admin := adminSession(t)
-	defer admin.Close()
-	fleet := createTestFleet(t, admin)
+	ns := setupTestNamespace(t)
+	admin := ns.Admin
+	fleet := createTestFleet(t, admin, ns)
 
 	machine := newTestMachine(t, fleet, "fleet-auth")
 	startMachine(t, admin, machine, machineOptions{
@@ -1136,9 +1138,9 @@ func TestFleetAuthorizationDenied(t *testing.T) {
 func TestFleetEligibilityConstraints(t *testing.T) {
 	t.Parallel()
 
-	admin := adminSession(t)
-	defer admin.Close()
-	fleet := createTestFleet(t, admin)
+	ns := setupTestNamespace(t)
+	admin := ns.Admin
+	fleet := createTestFleet(t, admin, ns)
 	ctx := t.Context()
 
 	// Boot two machines with proxy support. Proxy is needed for the
@@ -1225,7 +1227,7 @@ func TestFleetEligibilityConstraints(t *testing.T) {
 	t.Run("RequiredLabels", func(t *testing.T) {
 		serviceLocalpart := "service/stt/elig-required"
 		publishAndDiscover(t, serviceLocalpart, fleetschema.FleetServiceContent{
-			Template: "bureau/template:whisper-stt",
+			Template: ns.Namespace.TemplateRoomAliasLocalpart() + ":whisper-stt",
 			Replicas: fleetschema.ReplicaSpec{Min: 0},
 			Placement: fleetschema.PlacementConstraints{
 				Requires:        []string{"gpu=h100"},
@@ -1249,7 +1251,7 @@ func TestFleetEligibilityConstraints(t *testing.T) {
 	t.Run("LabelPresenceOnly", func(t *testing.T) {
 		serviceLocalpart := "service/stt/elig-presence"
 		publishAndDiscover(t, serviceLocalpart, fleetschema.FleetServiceContent{
-			Template: "bureau/template:whisper-stt",
+			Template: ns.Namespace.TemplateRoomAliasLocalpart() + ":whisper-stt",
 			Replicas: fleetschema.ReplicaSpec{Min: 0},
 			Placement: fleetschema.PlacementConstraints{
 				Requires:        []string{"gpu"},
@@ -1276,7 +1278,7 @@ func TestFleetEligibilityConstraints(t *testing.T) {
 		// Publish and discover the baseline service.
 		baselineLocalpart := "service/stt/elig-baseline"
 		publishAndDiscover(t, baselineLocalpart, fleetschema.FleetServiceContent{
-			Template: "bureau/template:baseline-stt",
+			Template: ns.Namespace.TemplateRoomAliasLocalpart() + ":baseline-stt",
 			Replicas: fleetschema.ReplicaSpec{Min: 0},
 			Placement: fleetschema.PlacementConstraints{
 				AllowedMachines: []string{machineA.Name, machineB.Name},
@@ -1302,7 +1304,7 @@ func TestFleetEligibilityConstraints(t *testing.T) {
 		// Publish a second service with anti-affinity to the baseline.
 		antiAffinityLocalpart := "service/stt/elig-anti"
 		publishAndDiscover(t, antiAffinityLocalpart, fleetschema.FleetServiceContent{
-			Template: "bureau/template:anti-stt",
+			Template: ns.Namespace.TemplateRoomAliasLocalpart() + ":anti-stt",
 			Replicas: fleetschema.ReplicaSpec{Min: 0},
 			Placement: fleetschema.PlacementConstraints{
 				AntiAffinity:    []string{baselineLocalpart},
@@ -1344,10 +1346,10 @@ func TestFleetPresenceDetection(t *testing.T) {
 
 	daemonBinary := resolvedBinary(t, "DAEMON_BINARY")
 
-	admin := adminSession(t)
-	defer admin.Close()
+	ns := setupTestNamespace(t)
+	admin := ns.Admin
 
-	fleet := createTestFleet(t, admin)
+	fleet := createTestFleet(t, admin, ns)
 	machine := newTestMachine(t, fleet, "presence")
 
 	options := machineOptions{
@@ -1485,10 +1487,10 @@ func TestFleetPresenceDetection(t *testing.T) {
 func TestServiceFleetRegistration(t *testing.T) {
 	t.Parallel()
 
-	admin := adminSession(t)
-	defer admin.Close()
+	ns := setupTestNamespace(t)
+	admin := ns.Admin
 
-	fleet := createTestFleet(t, admin)
+	fleet := createTestFleet(t, admin, ns)
 
 	machine := newTestMachine(t, fleet, "fleet-reg")
 	startMachine(t, admin, machine, machineOptions{
@@ -1578,7 +1580,7 @@ func TestServiceFleetRegistration(t *testing.T) {
 
 	clearFleetService(t, admin, fleet.FleetRoomID, "service/test/fleet-reg")
 	publishFleetService(t, admin, fleet.FleetRoomID, "service/test/fleet-reg-sentinel", fleetschema.FleetServiceContent{
-		Template: "bureau/template:sentinel",
+		Template: ns.Namespace.TemplateRoomAliasLocalpart() + ":sentinel",
 		Replicas: fleetschema.ReplicaSpec{Min: 0},
 	})
 

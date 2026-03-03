@@ -45,10 +45,10 @@ func TestNewOperatorJourney(t *testing.T) {
 	// Infrastructure setup (production deployment simulation)
 	// ================================================================
 
-	admin := adminSession(t)
-	defer admin.Close()
+	ns := setupTestNamespace(t)
+	admin := ns.Admin
 
-	fleet := createTestFleet(t, admin)
+	fleet := createTestFleet(t, admin, ns)
 	machine := newTestMachine(t, fleet, "op-journey")
 	if err := os.MkdirAll(machine.WorkspaceRoot, 0755); err != nil {
 		t.Fatalf("create workspace root: %v", err)
@@ -100,7 +100,7 @@ func TestNewOperatorJourney(t *testing.T) {
 	// Publish an agent template with a long-running command. The base
 	// template has no command (it's used as a parent), so workspace
 	// agents need their own template.
-	agentTemplateRef, err := schema.ParseTemplateRef("bureau/template:test-op-journey-agent")
+	agentTemplateRef, err := schema.ParseTemplateRef(ns.Namespace.TemplateRoomAliasLocalpart() + ":test-op-journey-agent")
 	if err != nil {
 		t.Fatalf("parse agent template ref: %v", err)
 	}
@@ -159,7 +159,8 @@ func TestNewOperatorJourney(t *testing.T) {
 	// override), so that check passes. Systemd checks fail because
 	// there's no systemd in the test environment.
 	t.Log("step 1: bureau doctor")
-	doctorOutput, doctorError := runBureauWithEnv(env, "doctor", "--json")
+	doctorOutput, doctorError := runBureauWithEnv(env, "doctor", "--json",
+		"--namespace", ns.Namespace.Name())
 
 	var doctorJSON doctor.JSONOutput
 	if err := json.Unmarshal([]byte(doctorOutput), &doctorJSON); err != nil {
@@ -244,7 +245,7 @@ func TestNewOperatorJourney(t *testing.T) {
 	// ================================================================
 	t.Log("step 3: bureau template list")
 	templateListOutput := runBureauWithEnvOrFail(t, env,
-		"template", "list", "bureau/template", "--json")
+		"template", "list", ns.Namespace.TemplateRoomAliasLocalpart(), "--json")
 
 	var templates []struct {
 		Name        string `json:"name"`
@@ -274,7 +275,7 @@ func TestNewOperatorJourney(t *testing.T) {
 	createOutput := runBureauWithEnvOrFail(t, env,
 		"workspace", "create", workspaceAlias,
 		"--machine", machineLocalpart,
-		"--template", "bureau/template:test-op-journey-agent",
+		"--template", ns.Namespace.TemplateRoomAliasLocalpart()+":test-op-journey-agent",
 		"--param", "repository=/workspace/seed.git",
 		"--credential-file", credentialFile,
 		"--json")

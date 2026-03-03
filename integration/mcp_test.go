@@ -42,10 +42,10 @@ func TestMCPServer(t *testing.T) {
 	t.Parallel()
 
 	ctx := t.Context()
-	admin := adminSession(t)
-	defer admin.Close()
+	ns := setupTestNamespace(t)
+	admin := ns.Admin
 
-	fleet := createTestFleet(t, admin)
+	fleet := createTestFleet(t, admin, ns)
 
 	// Boot a machine.
 	machine := newTestMachine(t, fleet, "mcp")
@@ -76,7 +76,7 @@ func TestMCPServer(t *testing.T) {
 
 	// Start the mock Anthropic server. The mock drives a 3-request sequence:
 	// authorized tool → unauthorized tool → validate error.
-	mock := newMockMCPAuthSequence(t, machine.ConfigRoomID)
+	mock := newMockMCPAuthSequence(t, machine.ConfigRoomID, "#"+ns.Namespace.TemplateRoomAliasLocalpart()+":"+testServerName)
 	registerProxyHTTPService(t, agent.AdminSocketPath, "anthropic", mock.Server.URL)
 
 	// Watch for the authorized tool's Matrix message before sending the prompt.
@@ -135,7 +135,7 @@ func (m *mockMCPAuthServer) AuthorizationError() string {
 //     bureau_template_list (unauthorized — agent lacks grant).
 //   - Request 2: validate tool_result for request 1 contains "not authorized",
 //     return text "done", signal AllRequestsHandled.
-func newMockMCPAuthSequence(t *testing.T, configRoomID ref.RoomID) *mockMCPAuthServer {
+func newMockMCPAuthSequence(t *testing.T, configRoomID ref.RoomID, templateRoomAlias string) *mockMCPAuthServer {
 	t.Helper()
 
 	var (
@@ -197,7 +197,7 @@ func newMockMCPAuthSequence(t *testing.T, configRoomID ref.RoomID) *mockMCPAuthS
 			}
 
 			toolInput, _ := json.Marshal(map[string]string{
-				"room": "#bureau/template:" + testServerName,
+				"room": templateRoomAlias,
 			})
 			writeSSE(writer, anthropicSSEResponse{
 				Model:        wireRequest.Model,

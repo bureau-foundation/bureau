@@ -21,6 +21,7 @@ import (
 
 // commandParams holds the parameters for the top-level doctor command.
 type commandParams struct {
+	Namespace string `json:"namespace" flag:"namespace" desc:"Bureau namespace prefix for room aliases" default:"bureau"`
 	cli.JSONOutput
 }
 
@@ -84,6 +85,10 @@ type checkState struct {
 	// user ID (e.g., "bureau.local").
 	serverName string
 
+	// namespacePrefix is the Bureau namespace prefix used for room alias
+	// resolution (e.g., "bureau" for #bureau/system:server).
+	namespacePrefix string
+
 	// machineConfig holds parsed values from /etc/bureau/machine.conf.
 	machineConfig map[string]string
 
@@ -96,6 +101,7 @@ type checkState struct {
 
 func runDoctor(ctx context.Context, params commandParams, logger *slog.Logger) error {
 	var state checkState
+	state.namespacePrefix = params.Namespace
 	var results []doctor.Result
 
 	// Section 1: Operator session.
@@ -366,11 +372,13 @@ func checkBureauSpace(ctx context.Context, state *checkState) []doctor.Result {
 
 	var results []doctor.Result
 
+	namespacePrefix := state.namespacePrefix
+
 	// Resolve the Bureau space.
-	spaceAlias, err := ref.ParseRoomAlias("#bureau:" + state.serverName)
+	spaceAlias, err := ref.ParseRoomAlias("#" + namespacePrefix + ":" + state.serverName)
 	if err != nil {
 		return []doctor.Result{doctor.Fail("bureau space",
-			fmt.Sprintf("invalid space alias #bureau:%s: %v", state.serverName, err))}
+			fmt.Sprintf("invalid space alias #%s:%s: %v", namespacePrefix, state.serverName, err))}
 	}
 
 	_, err = state.session.ResolveAlias(ctx, spaceAlias)
@@ -385,10 +393,10 @@ func checkBureauSpace(ctx context.Context, state *checkState) []doctor.Result {
 
 	// Check standard rooms.
 	standardRooms := []string{
-		"bureau/system",
-		"bureau/template",
-		"bureau/pipeline",
-		"bureau/artifact",
+		namespacePrefix + "/system",
+		namespacePrefix + "/template",
+		namespacePrefix + "/pipeline",
+		namespacePrefix + "/artifact",
 	}
 
 	failedRooms := 0
@@ -455,19 +463,21 @@ func printGuidance(results []doctor.Result) {
 		}
 		anyFailed = true
 
-		switch result.Name {
-		case "operator session":
+		switch {
+		case result.Name == "operator session":
 			addStep("bureau login <username>", "Authenticate as an operator")
-		case "machine configuration":
+		case result.Name == "machine configuration":
 			addStep("sudo bureau machine doctor --fix", "Repair machine infrastructure")
-		case "bureau-launcher", "bureau-daemon",
-			"launcher.sock", "observe.sock":
+		case result.Name == "bureau-launcher" || result.Name == "bureau-daemon" ||
+			result.Name == "launcher.sock" || result.Name == "observe.sock":
 			addStep("sudo bureau machine doctor --fix", "Repair machine infrastructure")
-		case "homeserver reachable":
+		case result.Name == "homeserver reachable":
 			addStep("sudo bureau machine doctor --fix", "Repair machine infrastructure")
-		case "bureau space",
-			"bureau/system", "bureau/template",
-			"bureau/pipeline", "bureau/artifact":
+		case result.Name == "bureau space" ||
+			strings.HasSuffix(result.Name, "/system") ||
+			strings.HasSuffix(result.Name, "/template") ||
+			strings.HasSuffix(result.Name, "/pipeline") ||
+			strings.HasSuffix(result.Name, "/artifact"):
 			addStep("bureau matrix doctor --fix --credential-file ./bureau-creds", "Repair Matrix infrastructure")
 		}
 	}

@@ -60,15 +60,16 @@ func TestPipelineRoomPowerLevels(t *testing.T) {
 	}
 
 	// Administrative actions all require power level 100.
-	for _, field := range []string{"state_default", "ban", "kick", "invite", "redact"} {
+	for _, field := range []string{"state_default", "ban", "kick", "redact"} {
 		if levels[field] != 100 {
 			t.Errorf("%s = %v, want 100", field, levels[field])
 		}
 	}
 
-	// Invite is 100 (unlike config/workspace rooms where machine can
-	// invite at PL 50 — pipeline rooms have no machine tier).
-	if levels["invite"] != 100 {
-		t.Errorf("invite = %v, want 100", levels["invite"])
+	// Invite is 50 so machine daemons (PL 50) can invite pipeline
+	// executor principals (workspace setup/teardown principals need
+	// pipeline room membership to resolve pipeline definitions).
+	if levels["invite"] != 50 {
+		t.Errorf("invite = %v, want 50", levels["invite"])
 	}
 }

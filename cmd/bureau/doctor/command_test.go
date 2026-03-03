@@ -362,7 +362,7 @@ func TestCheckBureauSpace_SpaceResolvable(t *testing.T) {
 	}
 	defer session.Close()
 
-	state := checkState{session: session, serverName: "test.local"}
+	state := checkState{session: session, serverName: "test.local", namespacePrefix: "bureau"}
 	results := checkBureauSpace(context.Background(), &state)
 
 	// Should have: space + 4 standard rooms = 5 results.
@@ -396,7 +396,7 @@ func TestCheckBureauSpace_SpaceUnresolvable(t *testing.T) {
 	}
 	defer session.Close()
 
-	state := checkState{session: session, serverName: "test.local"}
+	state := checkState{session: session, serverName: "test.local", namespacePrefix: "bureau"}
 	results := checkBureauSpace(context.Background(), &state)
 
 	// Space resolution fails → early return with single failure.
@@ -454,7 +454,7 @@ func TestCheckBureauSpace_PartialRoomFailure(t *testing.T) {
 	}
 	defer session.Close()
 
-	state := checkState{session: session, serverName: "test.local"}
+	state := checkState{session: session, serverName: "test.local", namespacePrefix: "bureau"}
 	results := checkBureauSpace(context.Background(), &state)
 
 	// space=pass, system=pass, template=pass, pipeline=fail, artifact=fail.

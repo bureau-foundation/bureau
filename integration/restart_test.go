@@ -29,10 +29,10 @@ func TestDaemonRestartRecovery(t *testing.T) {
 
 	daemonBinary := resolvedBinary(t, "DAEMON_BINARY")
 
-	admin := adminSession(t)
-	defer admin.Close()
+	ns := setupTestNamespace(t)
+	admin := ns.Admin
 
-	fleet := createTestFleet(t, admin)
+	fleet := createTestFleet(t, admin, ns)
 	machine := newTestMachine(t, fleet, "restart")
 
 	options := machineOptions{

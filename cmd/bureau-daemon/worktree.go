@@ -65,7 +65,7 @@ func handleWorkspaceWorktreeAdd(ctx context.Context, d *Daemon, roomID ref.RoomI
 		return nil, fmt.Errorf("invalid worktree localpart: %w", err)
 	}
 
-	pipelineRef := "bureau/pipeline:dev-worktree-init"
+	pipelineRef := d.fleet.Namespace().PipelineRoomAliasLocalpart() + ":dev-worktree-init"
 	pipelineVariables := map[string]string{
 		"PROJECT":           project,
 		"WORKTREE_PATH":     worktreePath,
@@ -160,7 +160,7 @@ func handleWorkspaceWorktreeRemove(ctx context.Context, d *Daemon, roomID ref.Ro
 		return nil, fmt.Errorf("invalid worktree localpart: %w", err)
 	}
 
-	pipelineRef := "bureau/pipeline:dev-worktree-deinit"
+	pipelineRef := d.fleet.Namespace().PipelineRoomAliasLocalpart() + ":dev-worktree-deinit"
 	pipelineVariables := map[string]string{
 		"PROJECT":           project,
 		"WORKTREE_PATH":     worktreePath,

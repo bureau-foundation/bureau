@@ -71,10 +71,10 @@ func TestUpdateLifecycle(t *testing.T) {
 	}
 
 	ctx := t.Context()
-	admin := adminSession(t)
-	defer admin.Close()
+	ns := setupTestNamespace(t)
+	admin := ns.Admin
 
-	updateFleet := createTestFleet(t, admin)
+	updateFleet := createTestFleet(t, admin, ns)
 
 	// --- Provision the machine ---
 	machineRef, err := ref.NewMachine(updateFleet.Ref, "update-lifecycle")

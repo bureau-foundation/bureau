@@ -145,9 +145,9 @@ func fetchLogMetadata(t *testing.T, client *artifactstore.Client, tagName string
 func TestTelemetryServiceTail(t *testing.T) {
 	t.Parallel()
 
-	admin := adminSession(t)
-	defer admin.Close()
-	fleet := createTestFleet(t, admin)
+	ns := setupTestNamespace(t)
+	admin := ns.Admin
+	fleet := createTestFleet(t, admin, ns)
 
 	machine := newTestMachine(t, fleet, "tailtelem")
 	startMachine(t, admin, machine, machineOptions{
@@ -420,9 +420,9 @@ func TestTelemetryServiceTail(t *testing.T) {
 func TestTelemetryRelayPipeline(t *testing.T) {
 	t.Parallel()
 
-	admin := adminSession(t)
-	defer admin.Close()
-	fleet := createTestFleet(t, admin)
+	ns := setupTestNamespace(t)
+	admin := ns.Admin
+	fleet := createTestFleet(t, admin, ns)
 
 	machine := newTestMachine(t, fleet, "relaypipe")
 	startMachine(t, admin, machine, machineOptions{
@@ -579,9 +579,9 @@ func TestTelemetryRelayPipeline(t *testing.T) {
 func TestSocketServerTelemetryEmission(t *testing.T) {
 	t.Parallel()
 
-	admin := adminSession(t)
-	defer admin.Close()
-	fleet := createTestFleet(t, admin)
+	ns := setupTestNamespace(t)
+	admin := ns.Admin
+	fleet := createTestFleet(t, admin, ns)
 
 	machine := newTestMachine(t, fleet, "sockspan")
 	startMachine(t, admin, machine, machineOptions{
@@ -698,9 +698,9 @@ func TestSocketServerTelemetryEmission(t *testing.T) {
 func TestProxyTelemetryEmission(t *testing.T) {
 	t.Parallel()
 
-	admin := adminSession(t)
-	defer admin.Close()
-	fleet := createTestFleet(t, admin)
+	ns := setupTestNamespace(t)
+	admin := ns.Admin
+	fleet := createTestFleet(t, admin, ns)
 
 	machine := newTestMachine(t, fleet, "proxytel")
 	startMachine(t, admin, machine, machineOptions{
@@ -834,9 +834,9 @@ func summarizeSpans(spans []telemetry.Span) string {
 func TestTelemetryOutputDeltaPersistence(t *testing.T) {
 	t.Parallel()
 
-	admin := adminSession(t)
-	defer admin.Close()
-	fleet := createTestFleet(t, admin)
+	ns := setupTestNamespace(t)
+	admin := ns.Admin
+	fleet := createTestFleet(t, admin, ns)
 	ctx := t.Context()
 
 	machine := newTestMachine(t, fleet, "logpersist")
@@ -1104,9 +1104,9 @@ func TestTelemetryOutputDeltaPersistence(t *testing.T) {
 func TestTelemetryOutputRotation(t *testing.T) {
 	t.Parallel()
 
-	admin := adminSession(t)
-	defer admin.Close()
-	fleet := createTestFleet(t, admin)
+	ns := setupTestNamespace(t)
+	admin := ns.Admin
+	fleet := createTestFleet(t, admin, ns)
 	ctx := t.Context()
 
 	machine := newTestMachine(t, fleet, "logrotate")
@@ -1531,9 +1531,9 @@ func discoverLogTag(t *testing.T, artifactClient *artifactstore.Client, source r
 func TestTelemetryOutputLogPipeline(t *testing.T) {
 	t.Parallel()
 
-	admin := adminSession(t)
-	defer admin.Close()
-	fleet := createTestFleet(t, admin)
+	ns := setupTestNamespace(t)
+	admin := ns.Admin
+	fleet := createTestFleet(t, admin, ns)
 
 	runnerEnv := findRunnerEnv(t)
 	testAgentBinary := resolvedBinary(t, "TEST_AGENT_BINARY")
@@ -1694,9 +1694,9 @@ func TestTelemetryOutputLogPipeline(t *testing.T) {
 func TestTelemetryOutputLogDrain(t *testing.T) {
 	t.Parallel()
 
-	admin := adminSession(t)
-	defer admin.Close()
-	fleet := createTestFleet(t, admin)
+	ns := setupTestNamespace(t)
+	admin := ns.Admin
+	fleet := createTestFleet(t, admin, ns)
 
 	runnerEnv := findRunnerEnv(t)
 	testAgentBinary := resolvedBinary(t, "TEST_AGENT_BINARY")

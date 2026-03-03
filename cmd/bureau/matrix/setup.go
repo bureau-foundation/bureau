@@ -33,6 +33,7 @@ type setupParams struct {
 	RegistrationTokenFile string   `json:"-"            flag:"registration-token-file" desc:"path to file containing registration token, or - for stdin"`
 	CredentialFile        string   `json:"-"            flag:"credential-file"         desc:"path to Bureau credentials file (read on re-run, written on first run; required)"`
 	ServerName            string   `json:"server_name"  flag:"server-name"             desc:"Matrix server name for constructing user/room IDs (auto-detected from machine.conf)"`
+	Namespace             string   `json:"namespace"    flag:"namespace"               desc:"namespace prefix for room aliases (space, system, template, etc.)" default:"bureau"`
 	AdminUsername         string   `json:"admin_user"   flag:"admin-user"              desc:"admin account username" default:"bureau-admin"`
 	InviteUsers           []string `json:"invite_users" flag:"invite"                  desc:"Matrix user ID to invite to all Bureau rooms (repeatable)"`
 }
@@ -44,18 +45,19 @@ func SetupCommand() *cli.Command {
 		Name:    "setup",
 		Summary: "Bootstrap a Matrix homeserver for Bureau",
 		Description: `Bootstrap a Matrix homeserver for Bureau. Creates the admin account,
-Bureau space, and standard rooms. Safe to re-run: all operations are
+namespace space, and standard rooms. Safe to re-run: all operations are
 idempotent.
 
 The registration token is read from a file (or stdin with "-") to avoid
 exposing secrets in CLI arguments, process listings, or shell history.
 
-Standard rooms created:
-  bureau/system      Operational messages
-  bureau/template    Sandbox templates (base, base-networked)
-  bureau/pipeline    Pipeline definitions (dev-workspace-init, dev-workspace-deinit)
-  bureau/artifact    Artifact coordination
-  bureau/dev         Development team coordination and work routing
+The --namespace flag controls the room alias prefix (default: "bureau").
+Standard rooms created under the namespace:
+  <namespace>/system      Operational messages
+  <namespace>/template    Sandbox templates (base, base-networked)
+  <namespace>/pipeline    Pipeline definitions (dev-workspace-init, dev-workspace-deinit)
+  <namespace>/artifact    Artifact coordination
+  <namespace>/dev         Development team coordination and work routing
 
 Fleet-scoped rooms (machine, service, fleet config) are created per-fleet
 by "bureau fleet enable" and resolved via the fleet prefix.`,
@@ -127,6 +129,7 @@ by "bureau fleet enable" and resolved via the fleet prefix.`,
 				registrationToken: registrationToken,
 				credentialFile:    params.CredentialFile,
 				serverName:        serverName,
+				namespace:         params.Namespace,
 				adminUsername:     params.AdminUsername,
 				inviteUsers:       params.InviteUsers,
 			})
@@ -139,6 +142,7 @@ type setupConfig struct {
 	registrationToken *secret.Buffer
 	credentialFile    string
 	serverName        ref.ServerName
+	namespace         string
 	adminUsername     string
 	inviteUsers       []string
 }
@@ -166,17 +170,18 @@ func runSetup(ctx context.Context, logger *slog.Logger, config setupConfig) erro
 	logger.Info("admin session established", "user_id", session.UserID())
 
 	// Step 2: Create Bureau space.
-	spaceRoomID, err := ensureSpace(ctx, session, config.serverName, logger)
+	spaceRoomID, err := ensureSpace(ctx, session, config.namespace, config.serverName, logger)
 	if err != nil {
 		return cli.Internal("create bureau space: %w", err)
 	}
 	logger.Info("bureau space ready", "room_id", spaceRoomID)
 
 	// Step 3: Create standard rooms. Room definitions come from
-	// standardRooms (doctor.go) — the single source of truth for room
+	// standardRoomsForNamespace — the single source of truth for room
 	// aliases, names, topics, and power level structures.
-	roomIDs := make(map[string]ref.RoomID, len(standardRooms))
-	for _, room := range standardRooms {
+	rooms := standardRoomsForNamespace(config.namespace)
+	roomIDs := make(map[string]ref.RoomID, len(rooms))
+	for _, room := range rooms {
 		roomID, err := ensureRoom(ctx, session, room.alias, room.displayName, room.topic,
 			spaceRoomID, config.serverName, room.powerLevels(session.UserID()), logger)
 		if err != nil {
@@ -190,12 +195,12 @@ func runSetup(ctx context.Context, logger *slog.Logger, config setupConfig) erro
 	// alias #bureau/dev:<server> points to the Bureau project's own
 	// dev team room. The room may not exist yet — the alias is a
 	// stable pointer that resolves when the dev team is created.
-	bureauNamespace, err := ref.NewNamespace(config.serverName, "bureau")
+	bureauNamespace, err := ref.NewNamespace(config.serverName, config.namespace)
 	if err != nil {
-		return cli.Internal("construct bureau namespace: %w", err)
+		return cli.Internal("construct namespace: %w", err)
 	}
 	devTeamContent := schema.DevTeamContent{Room: schema.DevTeamRoomAlias(bureauNamespace)}
-	for _, room := range standardRooms {
+	for _, room := range rooms {
 		roomID := roomIDs[room.alias]
 		if _, err := session.SendStateEvent(ctx, roomID, schema.EventTypeDevTeam, "", devTeamContent); err != nil {
 			return cli.Internal("publish dev team metadata on %s: %w", room.alias, err)
@@ -208,14 +213,16 @@ func runSetup(ctx context.Context, logger *slog.Logger, config setupConfig) erro
 	logger.Info("dev team metadata published on all bureau rooms", "dev_team", devTeamContent.Room.String())
 
 	// Publish base templates into the template room.
-	if templateRoomID, ok := roomIDs["bureau/template"]; ok {
-		if err := publishBaseTemplates(ctx, session, templateRoomID, logger); err != nil {
+	templateAlias := config.namespace + "/template"
+	if templateRoomID, ok := roomIDs[templateAlias]; ok {
+		if err := publishBaseTemplates(ctx, session, templateRoomID, templateAlias, logger); err != nil {
 			return cli.Internal("publish base templates: %w", err)
 		}
 	}
 
 	// Publish base pipelines into the pipeline room.
-	if pipelineRoomID, ok := roomIDs["bureau/pipeline"]; ok {
+	pipelineAlias := config.namespace + "/pipeline"
+	if pipelineRoomID, ok := roomIDs[pipelineAlias]; ok {
 		if err := publishBasePipelines(ctx, session, pipelineRoomID, logger); err != nil {
 			return cli.Internal("publish base pipelines: %w", err)
 		}
@@ -232,7 +239,7 @@ func runSetup(ctx context.Context, logger *slog.Logger, config setupConfig) erro
 			if err := inviteIfNeeded(ctx, session, spaceRoomID, "bureau (space)", parsedUserID, logger); err != nil {
 				return err
 			}
-			for _, room := range standardRooms {
+			for _, room := range rooms {
 				roomID, ok := roomIDs[room.alias]
 				if !ok {
 					continue
@@ -246,7 +253,7 @@ func runSetup(ctx context.Context, logger *slog.Logger, config setupConfig) erro
 
 	// Step 5: Write credentials.
 	if err := writeCredentials(config.credentialFile, config.homeserverURL, session, config.registrationToken,
-		spaceRoomID, roomIDs); err != nil {
+		spaceRoomID, rooms, roomIDs); err != nil {
 		return cli.Internal("write credentials: %w", err)
 	}
 	logger.Info("credentials written", "path", config.credentialFile)
@@ -255,7 +262,7 @@ func runSetup(ctx context.Context, logger *slog.Logger, config setupConfig) erro
 		"admin_user", session.UserID(),
 		"space", spaceRoomID,
 	}
-	for _, room := range standardRooms {
+	for _, room := range rooms {
 		logArgs = append(logArgs, room.name, roomIDs[room.alias])
 	}
 	logger.Info("bureau matrix setup complete", logArgs...)
@@ -282,13 +289,13 @@ func registerOrLogin(ctx context.Context, client *messaging.Client, username str
 	return nil, err
 }
 
-// ensureSpace creates the Bureau space if it doesn't exist.
-func ensureSpace(ctx context.Context, session messaging.Session, serverName ref.ServerName, logger *slog.Logger) (ref.RoomID, error) {
-	alias := ref.MustParseRoomAlias(schema.FullRoomAlias("bureau", serverName))
+// ensureSpace creates the namespace space if it doesn't exist.
+func ensureSpace(ctx context.Context, session messaging.Session, namespacePrefix string, serverName ref.ServerName, logger *slog.Logger) (ref.RoomID, error) {
+	alias := ref.MustParseRoomAlias(schema.FullRoomAlias(namespacePrefix, serverName))
 
 	roomID, err := session.ResolveAlias(ctx, alias)
 	if err == nil {
-		logger.Info("bureau space already exists", "alias", alias, "room_id", roomID)
+		logger.Info("space already exists", "alias", alias, "room_id", roomID)
 		return roomID, nil
 	}
 	if !messaging.IsMatrixError(err, messaging.ErrCodeNotFound) {
@@ -296,8 +303,8 @@ func ensureSpace(ctx context.Context, session messaging.Session, serverName ref.
 	}
 
 	response, err := session.CreateRoom(ctx, messaging.CreateRoomRequest{
-		Name:       "Bureau",
-		Alias:      "bureau",
+		Name:       namespacePrefix,
+		Alias:      namespacePrefix,
 		Topic:      "Bureau agent orchestration",
 		Preset:     "private_chat",
 		Visibility: "private",
@@ -371,8 +378,8 @@ func inviteIfNeeded(ctx context.Context, session messaging.Session, roomID ref.R
 
 // writeCredentials writes Bureau credentials to a file in key=value format
 // compatible with proxy/credentials.go:FileCredentialSource. Room IDs are
-// written in standardRooms order for consistency.
-func writeCredentials(path, homeserverURL string, session *messaging.DirectSession, registrationToken *secret.Buffer, spaceRoomID ref.RoomID, roomIDs map[string]ref.RoomID) error {
+// written in standard room order for consistency.
+func writeCredentials(path, homeserverURL string, session *messaging.DirectSession, registrationToken *secret.Buffer, spaceRoomID ref.RoomID, rooms []standardRoom, roomIDs map[string]ref.RoomID) error {
 	var builder strings.Builder
 	builder.WriteString("# Bureau Matrix credentials\n")
 	builder.WriteString("# Written by bureau matrix setup. Do not edit manually.\n")
@@ -382,7 +389,7 @@ func writeCredentials(path, homeserverURL string, session *messaging.DirectSessi
 	fmt.Fprintf(&builder, "MATRIX_ADMIN_TOKEN=%s\n", session.AccessToken())
 	fmt.Fprintf(&builder, "MATRIX_REGISTRATION_TOKEN=%s\n", registrationToken.String())
 	fmt.Fprintf(&builder, "MATRIX_SPACE_ROOM=%s\n", spaceRoomID)
-	for _, room := range standardRooms {
+	for _, room := range rooms {
 		if roomID, ok := roomIDs[room.alias]; ok {
 			fmt.Fprintf(&builder, "%s=%s\n", room.credentialKey, roomID)
 		}
@@ -394,8 +401,8 @@ func writeCredentials(path, homeserverURL string, session *messaging.DirectSessi
 // publishBaseTemplates publishes the built-in sandbox templates to the
 // template room as m.bureau.template state events. Idempotent: re-publishing
 // overwrites the existing state event with the same content.
-func publishBaseTemplates(ctx context.Context, session messaging.Session, templateRoomID ref.RoomID, logger *slog.Logger) error {
-	for _, template := range baseTemplates() {
+func publishBaseTemplates(ctx context.Context, session messaging.Session, templateRoomID ref.RoomID, templatePrefix string, logger *slog.Logger) error {
+	for _, template := range baseTemplates(templatePrefix) {
 		_, err := session.SendStateEvent(ctx, templateRoomID, schema.EventTypeTemplate, template.name, template.content)
 		if err != nil {
 			return cli.Internal("publishing template %q: %w", template.name, err)
@@ -464,7 +471,7 @@ type namedTemplate struct {
 // Deployment requires either a Nix environment (via EnvironmentOverride
 // in the PrincipalAssignment) that provides the binary, or a
 // CommandOverride with the absolute binary path plus filesystem mounts.
-func baseTemplates() []namedTemplate {
+func baseTemplates(templatePrefix string) []namedTemplate {
 	return []namedTemplate{
 		{
 			name: "base",
@@ -499,7 +506,7 @@ func baseTemplates() []namedTemplate {
 			name: "base-networked",
 			content: schema.TemplateContent{
 				Description: "Base sandbox with host network access (no network namespace isolation)",
-				Inherits:    []string{"bureau/template:base"},
+				Inherits:    []string{templatePrefix + ":base"},
 				Namespaces: &schema.TemplateNamespaces{
 					PID: true,
 					Net: false,
@@ -512,7 +519,7 @@ func baseTemplates() []namedTemplate {
 			name: "agent-base",
 			content: schema.TemplateContent{
 				Description: "Base agent template with proxy socket, payload, and session log support",
-				Inherits:    []string{"bureau/template:base-networked"},
+				Inherits:    []string{templatePrefix + ":base-networked"},
 				EnvironmentVariables: map[string]string{
 					"BUREAU_PROXY_SOCKET": "${PROXY_SOCKET}",
 					"BUREAU_MACHINE_NAME": "${MACHINE_NAME}",
@@ -524,7 +531,7 @@ func baseTemplates() []namedTemplate {
 			name: "bureau-agent",
 			content: schema.TemplateContent{
 				Description:      "Bureau-native agent with in-process LLM loop and CLI tools",
-				Inherits:         []string{"bureau/template:agent-base"},
+				Inherits:         []string{templatePrefix + ":agent-base"},
 				Command:          []string{"bureau-agent"},
 				RequiredServices: []string{"agent", "artifact"},
 			},
@@ -533,7 +540,7 @@ func baseTemplates() []namedTemplate {
 			name: "bureau-agent-claude",
 			content: schema.TemplateContent{
 				Description: "Claude Code agent with MCP tool integration and hook handler",
-				Inherits:    []string{"bureau/template:agent-base"},
+				Inherits:    []string{templatePrefix + ":agent-base"},
 				Command: []string{
 					"bureau-bridge",
 					"--listen", "127.0.0.1:8642",
@@ -564,7 +571,7 @@ func baseTemplates() []namedTemplate {
 			name: "service-base",
 			content: schema.TemplateContent{
 				Description: "Base service template with proxy bootstrap environment variables",
-				Inherits:    []string{"bureau/template:base-networked"},
+				Inherits:    []string{templatePrefix + ":base-networked"},
 				EnvironmentVariables: map[string]string{
 					"BUREAU_PROXY_SOCKET": "${PROXY_SOCKET}",
 					"BUREAU_MACHINE_NAME": "${MACHINE_NAME}",
@@ -576,7 +583,7 @@ func baseTemplates() []namedTemplate {
 			name: "ticket-service",
 			content: schema.TemplateContent{
 				Description: "Bureau ticket service for work item tracking, dependencies, and gates",
-				Inherits:    []string{"bureau/template:service-base"},
+				Inherits:    []string{templatePrefix + ":service-base"},
 				Command:     []string{"bureau-ticket-service"},
 			},
 		},
@@ -584,7 +591,7 @@ func baseTemplates() []namedTemplate {
 			name: "fleet-controller",
 			content: schema.TemplateContent{
 				Description: "Bureau fleet controller for service placement, scaling, and machine lifecycle",
-				Inherits:    []string{"bureau/template:service-base"},
+				Inherits:    []string{templatePrefix + ":service-base"},
 				Command:     []string{"bureau-fleet-controller"},
 			},
 		},
@@ -592,7 +599,7 @@ func baseTemplates() []namedTemplate {
 			name: "artifact-service",
 			content: schema.TemplateContent{
 				Description: "Bureau artifact service for content-addressable storage, caching, and distribution",
-				Inherits:    []string{"bureau/template:service-base"},
+				Inherits:    []string{templatePrefix + ":service-base"},
 				Command:     []string{"bureau-artifact-service"},
 			},
 		},
@@ -600,7 +607,7 @@ func baseTemplates() []namedTemplate {
 			name: "agent-service",
 			content: schema.TemplateContent{
 				Description:      "Bureau agent service for agent session management, context tracking, and metrics",
-				Inherits:         []string{"bureau/template:service-base"},
+				Inherits:         []string{templatePrefix + ":service-base"},
 				Command:          []string{"bureau-agent-service"},
 				RequiredServices: []string{"artifact"},
 			},
@@ -609,7 +616,7 @@ func baseTemplates() []namedTemplate {
 			name: "telemetry-service",
 			content: schema.TemplateContent{
 				Description: "Bureau telemetry service for span, metric, and log aggregation and query",
-				Inherits:    []string{"bureau/template:service-base"},
+				Inherits:    []string{templatePrefix + ":service-base"},
 				Command:     []string{"bureau-telemetry-service"},
 			},
 		},
@@ -617,7 +624,7 @@ func baseTemplates() []namedTemplate {
 			name: "model-service",
 			content: schema.TemplateContent{
 				Description: "Bureau model service for inference routing, provider management, and quota tracking",
-				Inherits:    []string{"bureau/template:service-base"},
+				Inherits:    []string{templatePrefix + ":service-base"},
 				Command:     []string{"bureau-model-service"},
 				EnvironmentVariables: map[string]string{
 					"BUREAU_MODEL_HTTP_SOCKET": "/run/bureau/listen/http.sock",

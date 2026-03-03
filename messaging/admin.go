@@ -14,8 +14,10 @@ import (
 	"net/url"
 	"strings"
 	"sync"
+	"time"
 
 	"github.com/bureau-foundation/bureau/lib/ref"
+	"github.com/bureau-foundation/bureau/lib/secret"
 )
 
 // HomeserverAdmin abstracts server-specific administrative operations
@@ -208,7 +210,51 @@ func (a *ContinuwuityAdmin) ResetUserPassword(ctx context.Context, userID ref.Us
 	// The logoutDevices parameter is noted but cannot be controlled
 	// independently via the admin room command.
 	command := fmt.Sprintf("!admin users reset-password %s %s", userID, newPassword)
-	return a.sendCommand(ctx, command, "reset-password")
+	if err := a.sendCommand(ctx, command, "reset-password"); err != nil {
+		return err
+	}
+
+	// Continuwuity processes admin commands asynchronously — the bot
+	// response confirms receipt, not completion. The password may not
+	// be effective for login immediately. Verify by attempting login
+	// with the new credentials, retrying briefly to allow Continuwuity's
+	// internal propagation to complete.
+	passwordBuffer, err := secret.NewFromString(newPassword)
+	if err != nil {
+		return fmt.Errorf("create password buffer for login verification: %w", err)
+	}
+	defer passwordBuffer.Close()
+
+	username := userID.Localpart()
+	const maxAttempts = 20
+	const retryDelay = 50 * time.Millisecond
+
+	var lastLoginError error
+	for attempt := range maxAttempts {
+		if attempt > 0 {
+			select {
+			case <-ctx.Done():
+				return fmt.Errorf("context canceled waiting for password propagation: %w (last login error: %v)", ctx.Err(), lastLoginError)
+			case <-time.After(retryDelay):
+			}
+		}
+
+		verifySession, loginError := a.session.client.Login(ctx, username, passwordBuffer)
+		if loginError == nil {
+			verifySession.Close()
+			if attempt > 0 {
+				slog.Info("password reset verified after retry",
+					"user_id", userID,
+					"attempts", attempt+1,
+				)
+			}
+			return nil
+		}
+		lastLoginError = loginError
+	}
+
+	return fmt.Errorf("admin bot acknowledged password reset for %s but login verification failed after %d attempts over %v (last error: %w)",
+		userID, maxAttempts, time.Duration(maxAttempts)*retryDelay, lastLoginError)
 }
 
 func (a *ContinuwuityAdmin) DeactivateUser(ctx context.Context, userID ref.UserID, erase bool) error {

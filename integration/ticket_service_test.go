@@ -35,10 +35,10 @@ func TestTicketServiceAgent(t *testing.T) {
 	t.Parallel()
 
 	ctx := t.Context()
-	admin := adminSession(t)
-	defer admin.Close()
+	ns := setupTestNamespace(t)
+	admin := ns.Admin
 
-	fleet := createTestFleet(t, admin)
+	fleet := createTestFleet(t, admin, ns)
 
 	// Boot a machine.
 	machine := newTestMachine(t, fleet, "ticket-agent")
@@ -144,10 +144,10 @@ func TestTicketLifecycleAgent(t *testing.T) {
 	t.Parallel()
 
 	ctx := t.Context()
-	admin := adminSession(t)
-	defer admin.Close()
+	ns := setupTestNamespace(t)
+	admin := ns.Admin
 
-	fleet := createTestFleet(t, admin)
+	fleet := createTestFleet(t, admin, ns)
 
 	// Boot a machine.
 	machine := newTestMachine(t, fleet, "ticket-lifecycle")
@@ -180,7 +180,7 @@ func TestTicketLifecycleAgent(t *testing.T) {
 	agentBinary := testutil.DataBinary(t, "BUREAU_AGENT_BINARY")
 	grantTemplateAccess(t, admin, machine)
 
-	agentTemplateRef, err := schema.ParseTemplateRef("bureau/template:ticket-lifecycle-agent")
+	agentTemplateRef, err := schema.ParseTemplateRef(ns.Namespace.TemplateRoomAliasLocalpart() + ":ticket-lifecycle-agent")
 	if err != nil {
 		t.Fatalf("parse template ref: %v", err)
 	}
@@ -238,7 +238,7 @@ func TestTicketLifecycleAgent(t *testing.T) {
 		ticket.ActionShow,
 	}
 
-	templateRef := "bureau/template:ticket-lifecycle-agent"
+	templateRef := ns.Namespace.TemplateRoomAliasLocalpart() + ":ticket-lifecycle-agent"
 
 	// deployAgent pushes a machine config with the given principal and
 	// grants, waits for the agent to be ready, and returns its admin
@@ -752,10 +752,10 @@ func TestStewardship(t *testing.T) {
 	t.Parallel()
 
 	ctx := t.Context()
-	admin := adminSession(t)
-	defer admin.Close()
+	ns := setupTestNamespace(t)
+	admin := ns.Admin
 
-	fleet := createTestFleet(t, admin)
+	fleet := createTestFleet(t, admin, ns)
 
 	// Boot a machine.
 	machine := newTestMachine(t, fleet, "stewardship")
@@ -828,9 +828,9 @@ func TestStewardship(t *testing.T) {
 	// --- Shared project room for core stewardship tests ---
 	//
 	// Single-tier declaration: gate_types=["task"], pattern fleet/gpu/**,
-	// principals matching admin-*:test.bureau.local (the per-test admin
-	// created by adminSession), threshold 1.
+	// principals matching the per-test admin (nsadmin-<prefix>), threshold 1.
 	tierThreshold := 1
+	adminPattern := admin.UserID().Localpart() + ":" + testServerName
 	projectRoomID := publishStewardshipRoom(t,
 		"stewardship-project", "fleet/gpu",
 		stewardship.StewardshipContent{
@@ -838,7 +838,7 @@ func TestStewardship(t *testing.T) {
 			ResourcePatterns: []string{"fleet/gpu/**"},
 			GateTypes:        []ticket.TicketType{ticket.TypeTask},
 			Tiers: []stewardship.StewardshipTier{{
-				Principals: []string{"admin-*:" + testServerName},
+				Principals: []string{adminPattern},
 				Threshold:  &tierThreshold,
 			}},
 		},
@@ -878,7 +878,7 @@ func TestStewardship(t *testing.T) {
 			t.Errorf("gate type = %q, want review", stewardshipGate.Type)
 		}
 
-		// Verify reviewers include the admin (matched by admin-*:test.bureau.local).
+		// Verify reviewers include the admin (matched by per-test admin pattern).
 		if content.Review == nil {
 			t.Fatal("no review section")
 		}

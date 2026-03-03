@@ -5,6 +5,7 @@ package modelregistry
 
 import (
 	"errors"
+	"log/slog"
 	"testing"
 
 	"github.com/bureau-foundation/bureau/lib/schema/model"
@@ -139,7 +140,7 @@ func TestSelectAccount_NoMatchingProvider(t *testing.T) {
 }
 
 func TestSelectAccount_NoMatchingProject(t *testing.T) {
-	registry := New()
+	registry := New(slog.Default())
 	// Account only covers specific projects, no wildcard.
 	registry.SetAccount("narrow", model.ModelAccountContent{
 		Provider:      "openrouter",
@@ -155,7 +156,7 @@ func TestSelectAccount_NoMatchingProject(t *testing.T) {
 }
 
 func TestSelectAccount_HigherPriorityWins(t *testing.T) {
-	registry := New()
+	registry := New(slog.Default())
 	registry.SetAccount("low-priority", model.ModelAccountContent{
 		Provider:      "openrouter",
 		CredentialRef: "cred-low",
@@ -183,7 +184,7 @@ func TestSelectAccount_HigherPriorityWins(t *testing.T) {
 }
 
 func TestSelectAccount_ExplicitBeatsHigherPriorityWildcard(t *testing.T) {
-	registry := New()
+	registry := New(slog.Default())
 	// High-priority wildcard account.
 	registry.SetAccount("wildcard-high", model.ModelAccountContent{
 		Provider:      "openrouter",
@@ -211,7 +212,7 @@ func TestSelectAccount_ExplicitBeatsHigherPriorityWildcard(t *testing.T) {
 }
 
 func TestSelectAccount_DeterministicTieBreaking(t *testing.T) {
-	registry := New()
+	registry := New(slog.Default())
 	// Two accounts with identical specificity and priority.
 	registry.SetAccount("beta-account", model.ModelAccountContent{
 		Provider:      "openrouter",
@@ -239,7 +240,7 @@ func TestSelectAccount_DeterministicTieBreaking(t *testing.T) {
 }
 
 func TestSelectAccount_EmptyRegistry(t *testing.T) {
-	registry := New()
+	registry := New(slog.Default())
 
 	_, err := registry.SelectAccount("project", "provider")
 	if !errors.Is(err, ErrNoMatchingAccount) {
@@ -248,7 +249,7 @@ func TestSelectAccount_EmptyRegistry(t *testing.T) {
 }
 
 func TestSetRemove_Account(t *testing.T) {
-	registry := New()
+	registry := New(slog.Default())
 
 	registry.SetAccount("test", aliceAccount())
 	if registry.AccountCount() != 1 {
@@ -262,7 +263,7 @@ func TestSetRemove_Account(t *testing.T) {
 }
 
 func TestUpdate_AccountOverwrite(t *testing.T) {
-	registry := New()
+	registry := New(slog.Default())
 	registry.SetAccount("alice", aliceAccount())
 
 	// Update with different credential.
@@ -291,7 +292,7 @@ func TestAccountSnapshot_IsCopy(t *testing.T) {
 }
 
 func TestSelectAccount_MultipleExplicitSameProject(t *testing.T) {
-	registry := New()
+	registry := New(slog.Default())
 	// Two explicit accounts for the same project and provider,
 	// different priorities.
 	registry.SetAccount("personal", model.ModelAccountContent{
@@ -319,7 +320,7 @@ func TestSelectAccount_MultipleExplicitSameProject(t *testing.T) {
 }
 
 func TestRemoveAccount_NonexistentIsNoop(t *testing.T) {
-	registry := New()
+	registry := New(slog.Default())
 
 	// Should not panic.
 	registry.RemoveAccount("nonexistent")

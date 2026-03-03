@@ -84,7 +84,7 @@ func newModelService(boot *service.BootstrapResult, credentials *credentialStore
 		machine:       boot.Machine,
 		telemetry:     boot.Telemetry,
 		logger:        boot.Logger,
-		registry:      modelregistry.New(),
+		registry:      modelregistry.New(boot.Logger),
 		quotaTracker:  modelregistry.NewQuotaTracker(boot.Clock),
 		credentials:   credentials,
 		continuations: newContinuationStore(defaultContinuationTTL, boot.Clock),

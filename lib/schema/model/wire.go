@@ -123,6 +123,12 @@ type Request struct {
 	// strings allows non-UTF-8 binary input for future multimodal
 	// embedding models.
 	Input [][]byte `cbor:"7,keyasint,omitempty"`
+
+	// ReportDegraded requests that the response include a Degraded
+	// flag when the request was served by a fallback model instead
+	// of the primary. Default false — agents that don't care about
+	// degraded mode don't see the flag.
+	ReportDegraded bool `cbor:"8,keyasint,omitempty"`
 }
 
 // Message is a single turn in a completion conversation.
@@ -201,6 +207,13 @@ type Response struct {
 	// subsequent requests to continue the conversation with
 	// server-side history prepending.
 	ContinuationID string `cbor:"7,keyasint,omitempty"`
+
+	// Degraded indicates the response came from a fallback model
+	// because the primary was unavailable. Only set when the request
+	// included ReportDegraded: true AND a fallback was actually used.
+	// The Model field always reflects the actual provider model used,
+	// regardless of this flag.
+	Degraded bool `cbor:"8,keyasint,omitempty"`
 }
 
 // EmbedResponse is the response for an embedding request. Unlike

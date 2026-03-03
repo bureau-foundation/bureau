@@ -18,6 +18,7 @@ package modelregistry
 import (
 	"errors"
 	"fmt"
+	"log/slog"
 	"math"
 	"slices"
 	"sync"
@@ -84,14 +85,16 @@ type Resolution struct {
 // call Resolve and SelectAccount to route model requests.
 type Registry struct {
 	mu        sync.RWMutex
+	logger    *slog.Logger
 	providers map[string]model.ModelProviderContent // state key (provider name) → content
 	aliases   map[string]model.ModelAliasContent    // state key (alias name) → content
 	accounts  map[string]model.ModelAccountContent  // state key (account name) → content
 }
 
 // New creates an empty registry.
-func New() *Registry {
+func New(logger *slog.Logger) *Registry {
 	return &Registry{
+		logger:    logger,
 		providers: make(map[string]model.ModelProviderContent),
 		aliases:   make(map[string]model.ModelAliasContent),
 		accounts:  make(map[string]model.ModelAccountContent),
@@ -162,6 +165,64 @@ func (r *Registry) Resolve(alias string) (Resolution, error) {
 		Pricing:       aliasContent.Pricing,
 		Capabilities:  aliasContent.Capabilities,
 	}, nil
+}
+
+// ResolveChain looks up a model alias and returns an ordered list of
+// resolutions: the primary followed by any fallbacks defined in the
+// alias configuration. Returns ErrUnknownAlias if the alias doesn't
+// exist. Returns ErrUnknownProvider only if the PRIMARY provider is
+// missing — fallback entries with missing providers are silently
+// skipped (the provider may not be configured on this instance).
+//
+// An alias with no fallbacks returns a single-element slice. Callers
+// iterate the chain and try each resolution until one succeeds.
+func (r *Registry) ResolveChain(alias string) ([]Resolution, error) {
+	r.mu.RLock()
+	defer r.mu.RUnlock()
+
+	aliasContent, ok := r.aliases[alias]
+	if !ok {
+		return nil, fmt.Errorf("%w: %q", ErrUnknownAlias, alias)
+	}
+
+	primaryProvider, ok := r.providers[aliasContent.Provider]
+	if !ok {
+		return nil, fmt.Errorf("%w: alias %q references provider %q",
+			ErrUnknownProvider, alias, aliasContent.Provider)
+	}
+
+	chain := make([]Resolution, 0, 1+len(aliasContent.Fallbacks))
+	chain = append(chain, Resolution{
+		Alias:         alias,
+		ProviderName:  aliasContent.Provider,
+		Provider:      primaryProvider,
+		ProviderModel: aliasContent.ProviderModel,
+		Pricing:       aliasContent.Pricing,
+		Capabilities:  aliasContent.Capabilities,
+	})
+
+	for i, fallback := range aliasContent.Fallbacks {
+		provider, exists := r.providers[fallback.Provider]
+		if !exists {
+			r.logger.Warn("fallback provider not registered, skipping",
+				"alias", alias,
+				"fallback_index", i,
+				"fallback_provider", fallback.Provider,
+				"fallback_model", fallback.ProviderModel,
+			)
+			continue
+		}
+		chain = append(chain, Resolution{
+			Alias:         alias,
+			ProviderName:  fallback.Provider,
+			Provider:      provider,
+			ProviderModel: fallback.ProviderModel,
+			Pricing:       aliasContent.Pricing,
+			Capabilities:  aliasContent.Capabilities,
+		})
+	}
+
+	return chain, nil
 }
 
 // ResolveAuto selects the cheapest model whose capabilities are a

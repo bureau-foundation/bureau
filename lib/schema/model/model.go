@@ -212,6 +212,38 @@ type ModelAliasContent struct {
 	// for auto-selection when agents request model="auto". Examples:
 	// "code", "reasoning", "embeddings", "streaming", "vision", "batch".
 	Capabilities []string `json:"capabilities,omitempty"`
+
+	// Fallbacks is an ordered list of alternative (provider, model)
+	// pairs to try when the primary is unavailable. Used by HA agents
+	// (sysadmins, fleet controllers) that must not die when their
+	// primary model provider goes down or rotates models.
+	//
+	// Non-HA agents omit this field — fail-loud is correct when model
+	// identity matters (code review agents, specialized analysis).
+	Fallbacks []ModelAliasFallback `json:"fallbacks,omitempty"`
+}
+
+// ModelAliasFallback is an alternative (provider, model) pair in a
+// fallback chain. Resolution tries the primary first, then fallbacks
+// in order.
+type ModelAliasFallback struct {
+	// Provider is the name of the fallback provider (state key in
+	// EventTypeModelProvider).
+	Provider string `json:"provider"`
+
+	// ProviderModel is the model identifier at the fallback provider.
+	ProviderModel string `json:"provider_model"`
+}
+
+// Validate checks that the fallback entry is well-formed.
+func (fallback *ModelAliasFallback) Validate() error {
+	if fallback.Provider == "" {
+		return errors.New("model alias fallback: provider must not be empty")
+	}
+	if fallback.ProviderModel == "" {
+		return errors.New("model alias fallback: provider_model must not be empty")
+	}
+	return nil
 }
 
 // Validate checks that the alias content is well-formed.
@@ -227,6 +259,11 @@ func (content *ModelAliasContent) Validate() error {
 	}
 	if content.Pricing.OutputPerMtokMicrodollars < 0 {
 		return fmt.Errorf("model alias: output pricing must be non-negative, got %d", content.Pricing.OutputPerMtokMicrodollars)
+	}
+	for i := range content.Fallbacks {
+		if err := content.Fallbacks[i].Validate(); err != nil {
+			return fmt.Errorf("model alias: fallback[%d]: %w", i, err)
+		}
 	}
 	return nil
 }

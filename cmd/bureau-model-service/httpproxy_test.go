@@ -428,7 +428,7 @@ func newTestFixture(t *testing.T) *testFixture {
 		service:      serviceRef,
 		machine:      machineRef,
 		logger:       logger,
-		registry:     modelregistry.New(),
+		registry:     modelregistry.New(logger),
 		quotaTracker: modelregistry.NewQuotaTracker(fakeClock),
 		credentials:  credentials,
 		providers:    make(map[string]modelprovider.Provider),

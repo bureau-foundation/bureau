@@ -5,6 +5,7 @@ package modelregistry
 
 import (
 	"errors"
+	"log/slog"
 	"testing"
 
 	"github.com/bureau-foundation/bureau/lib/schema/model"
@@ -64,7 +65,7 @@ func reasoningAlias() model.ModelAliasContent {
 }
 
 func populatedRegistry() *Registry {
-	registry := New()
+	registry := New(slog.Default())
 	registry.SetProvider("openrouter", openrouterProvider())
 	registry.SetProvider("llama-local", llamaLocalProvider())
 	registry.SetAlias("codex", codexAlias())
@@ -130,7 +131,7 @@ func TestResolve_UnknownAlias(t *testing.T) {
 }
 
 func TestResolve_UnknownProvider(t *testing.T) {
-	registry := New()
+	registry := New(slog.Default())
 	// Alias references a provider that doesn't exist.
 	registry.SetAlias("broken", model.ModelAliasContent{
 		Provider:      "deleted-provider",
@@ -213,7 +214,7 @@ func TestResolveAuto_EmptyCapabilities(t *testing.T) {
 }
 
 func TestResolveAuto_SkipsMissingProvider(t *testing.T) {
-	registry := New()
+	registry := New(slog.Default())
 	registry.SetProvider("openrouter", openrouterProvider())
 	// Don't register "llama-local" but add an alias referencing it.
 	registry.SetAlias("broken-embed", model.ModelAliasContent{
@@ -234,7 +235,7 @@ func TestResolveAuto_SkipsMissingProvider(t *testing.T) {
 }
 
 func TestResolveAuto_DeterministicTieBreaking(t *testing.T) {
-	registry := New()
+	registry := New(slog.Default())
 	registry.SetProvider("same-provider", model.ModelProviderContent{
 		Endpoint:     "https://example.com",
 		AuthMethod:   model.AuthMethodBearer,
@@ -267,7 +268,7 @@ func TestResolveAuto_DeterministicTieBreaking(t *testing.T) {
 }
 
 func TestSetRemove_Provider(t *testing.T) {
-	registry := New()
+	registry := New(slog.Default())
 
 	registry.SetProvider("test", openrouterProvider())
 	if registry.ProviderCount() != 1 {
@@ -281,7 +282,7 @@ func TestSetRemove_Provider(t *testing.T) {
 }
 
 func TestSetRemove_Alias(t *testing.T) {
-	registry := New()
+	registry := New(slog.Default())
 
 	registry.SetAlias("test", codexAlias())
 	if registry.AliasCount() != 1 {
@@ -295,7 +296,7 @@ func TestSetRemove_Alias(t *testing.T) {
 }
 
 func TestUpdate_ProviderOverwrite(t *testing.T) {
-	registry := New()
+	registry := New(slog.Default())
 	registry.SetProvider("openrouter", openrouterProvider())
 
 	// Update with different endpoint.
@@ -313,7 +314,7 @@ func TestUpdate_ProviderOverwrite(t *testing.T) {
 }
 
 func TestUpdate_AliasOverwrite(t *testing.T) {
-	registry := New()
+	registry := New(slog.Default())
 	registry.SetProvider("openrouter", openrouterProvider())
 	registry.SetAlias("codex", codexAlias())
 
@@ -350,7 +351,7 @@ func TestSnapshots_AreCopies(t *testing.T) {
 }
 
 func TestEmptyRegistry(t *testing.T) {
-	registry := New()
+	registry := New(slog.Default())
 
 	if registry.AliasCount() != 0 {
 		t.Errorf("AliasCount = %d, want 0", registry.AliasCount())
@@ -371,7 +372,7 @@ func TestEmptyRegistry(t *testing.T) {
 }
 
 func TestRemove_NonexistentIsNoop(t *testing.T) {
-	registry := New()
+	registry := New(slog.Default())
 
 	// Should not panic or error.
 	registry.RemoveProvider("nonexistent")
@@ -379,5 +380,153 @@ func TestRemove_NonexistentIsNoop(t *testing.T) {
 
 	if registry.ProviderCount() != 0 {
 		t.Errorf("ProviderCount = %d after removing nonexistent", registry.ProviderCount())
+	}
+}
+
+// --- ResolveChain tests ---
+
+func TestResolveChain_NoFallbacks(t *testing.T) {
+	registry := New(slog.Default())
+	registry.SetProvider("openrouter", openrouterProvider())
+	registry.SetAlias("codex", codexAlias())
+
+	chain, err := registry.ResolveChain("codex")
+	if err != nil {
+		t.Fatalf("ResolveChain: %v", err)
+	}
+	if len(chain) != 1 {
+		t.Fatalf("expected 1 resolution, got %d", len(chain))
+	}
+	if chain[0].ProviderName != "openrouter" {
+		t.Errorf("provider = %q, want openrouter", chain[0].ProviderName)
+	}
+	if chain[0].ProviderModel != "openai/gpt-4.1" {
+		t.Errorf("model = %q, want openai/gpt-4.1", chain[0].ProviderModel)
+	}
+}
+
+func TestResolveChain_WithFallbacks(t *testing.T) {
+	registry := New(slog.Default())
+	registry.SetProvider("openrouter", openrouterProvider())
+	registry.SetProvider("anthropic-direct", model.ModelProviderContent{
+		Endpoint:     "https://api.anthropic.com",
+		AuthMethod:   model.AuthMethodBearer,
+		Capabilities: []string{"chat", "streaming"},
+	})
+
+	alias := codexAlias()
+	alias.Fallbacks = []model.ModelAliasFallback{
+		{Provider: "anthropic-direct", ProviderModel: "claude-sonnet-4-6"},
+	}
+	registry.SetAlias("codex", alias)
+
+	chain, err := registry.ResolveChain("codex")
+	if err != nil {
+		t.Fatalf("ResolveChain: %v", err)
+	}
+	if len(chain) != 2 {
+		t.Fatalf("expected 2 resolutions, got %d", len(chain))
+	}
+
+	if chain[0].ProviderName != "openrouter" {
+		t.Errorf("chain[0] provider = %q, want openrouter", chain[0].ProviderName)
+	}
+	if chain[1].ProviderName != "anthropic-direct" {
+		t.Errorf("chain[1] provider = %q, want anthropic-direct", chain[1].ProviderName)
+	}
+	if chain[1].ProviderModel != "claude-sonnet-4-6" {
+		t.Errorf("chain[1] model = %q, want claude-sonnet-4-6", chain[1].ProviderModel)
+	}
+	// Fallback inherits the alias name and pricing from the primary.
+	if chain[1].Alias != "codex" {
+		t.Errorf("chain[1] alias = %q, want codex", chain[1].Alias)
+	}
+}
+
+func TestResolveChain_MissingFallbackProvider(t *testing.T) {
+	registry := New(slog.Default())
+	registry.SetProvider("openrouter", openrouterProvider())
+
+	alias := codexAlias()
+	alias.Fallbacks = []model.ModelAliasFallback{
+		{Provider: "nonexistent", ProviderModel: "some-model"},
+	}
+	registry.SetAlias("codex", alias)
+
+	chain, err := registry.ResolveChain("codex")
+	if err != nil {
+		t.Fatalf("ResolveChain: %v", err)
+	}
+	// Missing fallback provider is skipped with a warning (not an error).
+	// The chain contains only the primary.
+	if len(chain) != 1 {
+		t.Fatalf("expected 1 resolution (fallback skipped), got %d", len(chain))
+	}
+}
+
+func TestResolveChain_UnknownAlias(t *testing.T) {
+	registry := New(slog.Default())
+
+	_, err := registry.ResolveChain("nonexistent")
+	if !errors.Is(err, ErrUnknownAlias) {
+		t.Fatalf("expected ErrUnknownAlias, got %v", err)
+	}
+}
+
+func TestResolveChain_MissingPrimaryProvider(t *testing.T) {
+	registry := New(slog.Default())
+	// Alias references a provider that isn't registered.
+	registry.SetAlias("broken", codexAlias())
+
+	_, err := registry.ResolveChain("broken")
+	if !errors.Is(err, ErrUnknownProvider) {
+		t.Fatalf("expected ErrUnknownProvider, got %v", err)
+	}
+}
+
+func TestResolveChain_MultipleFallbacks(t *testing.T) {
+	registry := New(slog.Default())
+	registry.SetProvider("primary", model.ModelProviderContent{
+		Endpoint:     "https://primary.ai",
+		AuthMethod:   model.AuthMethodBearer,
+		Capabilities: []string{"chat"},
+	})
+	registry.SetProvider("secondary", model.ModelProviderContent{
+		Endpoint:     "https://secondary.ai",
+		AuthMethod:   model.AuthMethodBearer,
+		Capabilities: []string{"chat"},
+	})
+	registry.SetProvider("tertiary", model.ModelProviderContent{
+		Endpoint:     "unix:///run/local-llm.sock",
+		AuthMethod:   model.AuthMethodNone,
+		Capabilities: []string{"chat"},
+	})
+
+	alias := model.ModelAliasContent{
+		Provider:      "primary",
+		ProviderModel: "gpt-5",
+		Pricing:       model.Pricing{InputPerMtokMicrodollars: 5000},
+		Fallbacks: []model.ModelAliasFallback{
+			{Provider: "secondary", ProviderModel: "claude-opus-4.6"},
+			{Provider: "tertiary", ProviderModel: "qwen3-32b"},
+		},
+	}
+	registry.SetAlias("ha-reasoning", alias)
+
+	chain, err := registry.ResolveChain("ha-reasoning")
+	if err != nil {
+		t.Fatalf("ResolveChain: %v", err)
+	}
+	if len(chain) != 3 {
+		t.Fatalf("expected 3 resolutions, got %d", len(chain))
+	}
+	if chain[0].ProviderName != "primary" {
+		t.Errorf("chain[0] = %q, want primary", chain[0].ProviderName)
+	}
+	if chain[1].ProviderName != "secondary" {
+		t.Errorf("chain[1] = %q, want secondary", chain[1].ProviderName)
+	}
+	if chain[2].ProviderName != "tertiary" {
+		t.Errorf("chain[2] = %q, want tertiary", chain[2].ProviderName)
 	}
 }

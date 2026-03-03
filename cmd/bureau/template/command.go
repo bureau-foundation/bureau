@@ -37,6 +37,7 @@ All commands that access Matrix require an operator session. Run
 			listCommand(),
 			showCommand(),
 			pushCommand(),
+			publishCommand(),
 			validateCommand(),
 			diffCommand(),
 			impactCommand(),

@@ -131,6 +131,10 @@ func Merge(parent, child *schema.TemplateContent) schema.TemplateContent {
 	result := *parent
 	// Inherits is consumed during resolution; never carry it forward.
 	result.Inherits = nil
+	// Origin is metadata about the published template source, not a
+	// property that should propagate through inheritance. The child's
+	// origin (if set) replaces it below via the pointer-wins-if-non-nil rule.
+	result.Origin = nil
 
 	// Scalars: child wins if non-zero.
 	if child.Description != "" {
@@ -172,6 +176,9 @@ func Merge(parent, child *schema.TemplateContent) schema.TemplateContent {
 	}
 	if child.OutputCapture != nil {
 		result.OutputCapture = child.OutputCapture
+	}
+	if child.Origin != nil {
+		result.Origin = child.Origin
 	}
 
 	return result

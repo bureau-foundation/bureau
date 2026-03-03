@@ -78,6 +78,15 @@ a Matrix account and a unix socket API.
   first-class artifact: context commits, delta chains, forking,
   materialization, format versioning, review discussion resumption.
 
+### Distribution
+
+How services are built, packaged, delivered to machines, and kept up to date.
+
+- **[service-distribution.md](service-distribution.md)** — Out-of-tree
+  service development: flake-as-package model, Go SDK extraction,
+  template publishing from flake references, binary delivery, update
+  workflow, service template repository conventions.
+
 ### Operations
 
 How machines join, run, update, and leave a Bureau fleet.

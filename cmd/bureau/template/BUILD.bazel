@@ -11,6 +11,7 @@ go_library(
         "doc.go",
         "impact.go",
         "list.go",
+        "publish.go",
         "push.go",
         "show.go",
         "validate.go",

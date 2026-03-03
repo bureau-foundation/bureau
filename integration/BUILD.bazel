@@ -53,6 +53,7 @@ go_test(
         "structured_api_test.go",
         "telemetry_mock_test.go",
         "telemetry_test.go",
+        "template_publish_test.go",
         "ticket_service_test.go",
         "update_test.go",
         "workspace_test.go",

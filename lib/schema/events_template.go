@@ -267,6 +267,31 @@ type MatrixPolicy struct {
 	AllowRoomCreate bool `json:"allow_room_create,omitempty"`
 }
 
+// TemplateOrigin records where a template was published from, enabling
+// bureau template update to find and fetch newer versions. Templates
+// published from local files or inline in setup code have no origin.
+type TemplateOrigin struct {
+	// FlakeRef is the Nix flake reference used to publish this template
+	// (e.g., "github:bureau-foundation/bureau-discord/v1.2.0"). Empty
+	// when the template was published from a URL or local file.
+	FlakeRef string `json:"flake_ref,omitempty"`
+
+	// URL is the HTTP(S) URL the template was fetched from. Empty when
+	// the template was published from a flake or local file.
+	URL string `json:"url,omitempty"`
+
+	// ResolvedRev is the git commit hash that the flake reference
+	// resolved to at publish time. Enables "N commits behind"
+	// diagnostics during update checks. Empty for non-flake origins.
+	ResolvedRev string `json:"resolved_rev,omitempty"`
+
+	// ContentHash is the SHA-256 hash of the template content at
+	// publish time. Used to detect whether re-evaluation or
+	// re-fetching produces a different template without diffing
+	// the full content.
+	ContentHash string `json:"content_hash"`
+}
+
 // TemplateContent is the content of an EventTypeTemplate state event. It
 // defines the complete sandbox specification for a class of principals:
 // filesystem mounts, namespace isolation, resource limits, security settings,
@@ -421,6 +446,14 @@ type TemplateContent struct {
 	// socket clients, or via the bridge's TCP endpoint for HTTP clients
 	// that require a URL).
 	ProxyServices map[string]TemplateProxyService `json:"proxy_services,omitempty"`
+
+	// Origin records where this template was published from: a Nix
+	// flake reference, a URL, or nothing (local file / inline). This
+	// is metadata for the template management workflow — it does not
+	// affect template resolution, inheritance, or sandbox creation.
+	// When set, bureau template update uses it to check for newer
+	// versions at the source.
+	Origin *TemplateOrigin `json:"origin,omitempty"`
 }
 
 // TemplateProxyService declares an external HTTP API upstream that the

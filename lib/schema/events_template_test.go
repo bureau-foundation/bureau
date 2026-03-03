@@ -280,7 +280,7 @@ func TestTemplateContentOmitsEmptyFields(t *testing.T) {
 		"description", "inherits", "environment", "environment_variables",
 		"filesystem", "namespaces", "resources", "security",
 		"create_dirs", "roles", "required_credentials", "default_payload",
-		"health_check", "proxy_services",
+		"health_check", "proxy_services", "origin",
 	}
 	for _, field := range omittedFields {
 		if _, exists := raw[field]; exists {
@@ -291,6 +291,105 @@ func TestTemplateContentOmitsEmptyFields(t *testing.T) {
 	// Command should be present.
 	if _, exists := raw["command"]; !exists {
 		t.Error("command should be present")
+	}
+}
+
+func TestTemplateOriginFlakeRoundTrip(t *testing.T) {
+	original := TemplateContent{
+		Command:     []string{"/nix/store/abc-bureau-discord/bin/bureau-discord"},
+		Description: "Discord connector service",
+		Origin: &TemplateOrigin{
+			FlakeRef:    "github:bureau-foundation/bureau-discord/v1.2.0",
+			ResolvedRev: "a1b2c3d4e5f6a1b2c3d4e5f6a1b2c3d4e5f6a1b2",
+			ContentHash: "sha256:9f86d081884c7d659a2feaa0c55ad015a3bf4f1b2b0b822cd15d6c15b0f00a08",
+		},
+	}
+
+	data, err := json.Marshal(original)
+	if err != nil {
+		t.Fatalf("Marshal: %v", err)
+	}
+
+	var raw map[string]any
+	if err := json.Unmarshal(data, &raw); err != nil {
+		t.Fatalf("Unmarshal to map: %v", err)
+	}
+
+	origin, ok := raw["origin"].(map[string]any)
+	if !ok {
+		t.Fatal("origin field missing or wrong type")
+	}
+	assertField(t, origin, "flake_ref", "github:bureau-foundation/bureau-discord/v1.2.0")
+	assertField(t, origin, "resolved_rev", "a1b2c3d4e5f6a1b2c3d4e5f6a1b2c3d4e5f6a1b2")
+	assertField(t, origin, "content_hash", "sha256:9f86d081884c7d659a2feaa0c55ad015a3bf4f1b2b0b822cd15d6c15b0f00a08")
+	// URL should be omitted for flake origins.
+	if _, exists := origin["url"]; exists {
+		t.Error("url should be omitted for flake origin")
+	}
+
+	var decoded TemplateContent
+	if err := json.Unmarshal(data, &decoded); err != nil {
+		t.Fatalf("Unmarshal: %v", err)
+	}
+	if decoded.Origin == nil {
+		t.Fatal("Origin should not be nil after round-trip")
+	}
+	if decoded.Origin.FlakeRef != original.Origin.FlakeRef {
+		t.Errorf("FlakeRef: got %q, want %q", decoded.Origin.FlakeRef, original.Origin.FlakeRef)
+	}
+	if decoded.Origin.ResolvedRev != original.Origin.ResolvedRev {
+		t.Errorf("ResolvedRev: got %q, want %q", decoded.Origin.ResolvedRev, original.Origin.ResolvedRev)
+	}
+	if decoded.Origin.ContentHash != original.Origin.ContentHash {
+		t.Errorf("ContentHash: got %q, want %q", decoded.Origin.ContentHash, original.Origin.ContentHash)
+	}
+}
+
+func TestTemplateOriginURLRoundTrip(t *testing.T) {
+	original := TemplateContent{
+		Command: []string{"/usr/local/bin/my-service"},
+		Origin: &TemplateOrigin{
+			URL:         "https://raw.githubusercontent.com/bureau-foundation/bureau-discord/main/template.jsonc",
+			ContentHash: "sha256:e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+		},
+	}
+
+	data, err := json.Marshal(original)
+	if err != nil {
+		t.Fatalf("Marshal: %v", err)
+	}
+
+	var raw map[string]any
+	if err := json.Unmarshal(data, &raw); err != nil {
+		t.Fatalf("Unmarshal to map: %v", err)
+	}
+
+	origin, ok := raw["origin"].(map[string]any)
+	if !ok {
+		t.Fatal("origin field missing or wrong type")
+	}
+	assertField(t, origin, "url", "https://raw.githubusercontent.com/bureau-foundation/bureau-discord/main/template.jsonc")
+	assertField(t, origin, "content_hash", "sha256:e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855")
+	// FlakeRef and ResolvedRev should be omitted for URL origins.
+	if _, exists := origin["flake_ref"]; exists {
+		t.Error("flake_ref should be omitted for URL origin")
+	}
+	if _, exists := origin["resolved_rev"]; exists {
+		t.Error("resolved_rev should be omitted for URL origin")
+	}
+
+	var decoded TemplateContent
+	if err := json.Unmarshal(data, &decoded); err != nil {
+		t.Fatalf("Unmarshal: %v", err)
+	}
+	if decoded.Origin == nil {
+		t.Fatal("Origin should not be nil after round-trip")
+	}
+	if decoded.Origin.URL != original.Origin.URL {
+		t.Errorf("URL: got %q, want %q", decoded.Origin.URL, original.Origin.URL)
+	}
+	if decoded.Origin.FlakeRef != "" {
+		t.Errorf("FlakeRef should be empty for URL origin, got %q", decoded.Origin.FlakeRef)
 	}
 }
 

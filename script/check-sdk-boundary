@@ -1,0 +1,115 @@
+#!/usr/bin/env bash
+# Copyright 2026 The Bureau Authors
+# SPDX-License-Identifier: Apache-2.0
+
+# Enforce the Go SDK package boundary.
+#
+# SDK packages are the subset of the Bureau codebase that will be extracted
+# into a standalone Go module for external consumers. They must not import
+# non-SDK packages from the Bureau repo — doing so would pull the entire
+# monorepo into the SDK module's dependency graph.
+#
+# This script uses `go list -json` to get the real import graph (no text
+# parsing of .go files) and checks that every intra-repo import from an
+# SDK package targets another SDK package.
+#
+# SDK packages:
+#   lib/clock, lib/codec, lib/cron, lib/netutil, lib/ref, lib/secret,
+#   lib/testutil, lib/servicetoken, lib/principal, lib/proxyclient,
+#   lib/schema (and all sub-packages), lib/service, messaging
+#
+# Usage:
+#   script/check-sdk-boundary            # check and report violations
+#   script/check-sdk-boundary --verbose   # also print each package checked
+
+set -euo pipefail
+
+verbose=false
+if [[ "${1:-}" == "--verbose" ]]; then
+    verbose=true
+fi
+
+module="github.com/bureau-foundation/bureau"
+
+# SDK package patterns for go list. lib/schema/... covers lib/schema and all
+# sub-packages.
+sdk_patterns=(
+    ./lib/clock
+    ./lib/codec
+    ./lib/cron
+    ./lib/netutil
+    ./lib/ref
+    ./lib/secret
+    ./lib/testutil
+    ./lib/servicetoken
+    ./lib/principal
+    ./lib/proxyclient
+    ./lib/schema/...
+    ./lib/service
+    ./messaging
+)
+
+# Build an associative array of SDK import paths for O(1) lookup.
+declare -A sdk_packages
+
+# First, resolve the patterns to actual import paths. go list (non-JSON) is
+# the fastest way to expand the ... wildcard.
+while IFS= read -r import_path; do
+    sdk_packages["$import_path"]=1
+done < <(go list "${sdk_patterns[@]}" 2>&1)
+
+if [[ ${#sdk_packages[@]} -eq 0 ]]; then
+    echo "ERROR: go list returned no SDK packages. Is the Go module set up?" >&2
+    exit 1
+fi
+
+if $verbose; then
+    echo "SDK packages (${#sdk_packages[@]}):"
+    for package in "${!sdk_packages[@]}"; do
+        echo "  $package"
+    done
+    echo ""
+fi
+
+# Now get the full import graph for all SDK packages. go list -json emits
+# concatenated JSON objects (one per package). jq handles this natively.
+violations=0
+
+while IFS=$'\t' read -r package_path imported_path; do
+    # Only check intra-repo imports.
+    if [[ "$imported_path" != "$module/"* ]]; then
+        continue
+    fi
+
+    # Check if the imported package is in the SDK set.
+    if [[ -z "${sdk_packages[$imported_path]+exists}" ]]; then
+        echo "VIOLATION: $package_path imports non-SDK package $imported_path"
+        violations=$((violations + 1))
+    fi
+done < <(
+    go list -json "${sdk_patterns[@]}" 2>&1 |
+    jq -r '
+        .ImportPath as $pkg |
+        (.Imports // [])[] |
+        "\($pkg)\t\(.)"
+    '
+)
+
+if [[ $violations -gt 0 ]]; then
+    echo ""
+    echo "$violations SDK boundary violation(s) found."
+    echo ""
+    echo "SDK packages must only import other SDK packages, the Go standard"
+    echo "library, or approved third-party modules. Importing non-SDK Bureau"
+    echo "packages would pull the entire monorepo into the SDK module."
+    echo ""
+    echo "To fix:"
+    echo "  - Move the needed functionality into an SDK package, or"
+    echo "  - Extract a new SDK package with the shared code, or"
+    echo "  - Remove the dependency by restructuring the code"
+    exit 1
+fi
+
+if $verbose; then
+    echo "All SDK packages clean. No boundary violations."
+fi

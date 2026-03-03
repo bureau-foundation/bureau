@@ -98,13 +98,18 @@ func readTemplateFile(path string) (*schema.TemplateContent, error) {
 	if err != nil {
 		return nil, cli.Validation("reading %s: %w", path, err)
 	}
+	return parseTemplateBytes(data)
+}
 
+// parseTemplateBytes parses JSONC bytes into a TemplateContent. Comments
+// and trailing commas are stripped before parsing.
+func parseTemplateBytes(data []byte) (*schema.TemplateContent, error) {
 	// Strip comments and trailing commas before parsing as standard JSON.
 	stripped := jsonc.ToJSON(data)
 
 	var content schema.TemplateContent
 	if err := json.Unmarshal(stripped, &content); err != nil {
-		return nil, cli.Validation("parsing %s as template JSON: %w", path, err)
+		return nil, cli.Validation("parsing template JSON: %w", err)
 	}
 
 	return &content, nil

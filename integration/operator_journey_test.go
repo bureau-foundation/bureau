@@ -65,30 +65,26 @@ func TestNewOperatorJourney(t *testing.T) {
 		Fleet:                  fleet,
 	})
 
-	// Set a DefaultPolicy allowing observation. This is part of the
-	// production deployment configuration — the machine operator sets
-	// authorization policy when provisioning the machine. Without it,
-	// the daemon's authorization index has no allowances for the admin
-	// to observe workspace agents, so "bureau list" returns nothing.
-	// Push this BEFORE service deployments: each subsequent config
-	// writer (deployTicketService, startFleetController, workspace
-	// create) does a read-modify-write that preserves DefaultPolicy.
+	// Publish a room-level authorization policy on the config room with
+	// observation allowances. This exercises the production path: room-level
+	// MemberAllowances are merged into each principal's effective allowances
+	// during daemon reconcile. Every principal belongs to the config room,
+	// so this applies to all principals on this machine. Published before
+	// service deployments so the daemon sees it during the first reconcile.
 	if _, err := admin.SendStateEvent(t.Context(), machine.ConfigRoomID,
-		schema.EventTypeMachineConfig, machine.Name, schema.MachineConfig{
-			DefaultPolicy: &schema.AuthorizationPolicy{
-				Allowances: []schema.Allowance{
-					{Actions: []string{observation.ActionObserve}, Actors: []string{"**:**"}},
-				},
+		schema.EventTypeAuthorization, "", schema.RoomAuthorizationPolicy{
+			MemberAllowances: []schema.Allowance{
+				{Actions: []string{observation.ActionObserve}, Actors: []string{"**:**"}},
 			},
 		}); err != nil {
-		t.Fatalf("set default authorization policy: %v", err)
+		t.Fatalf("publish room authorization policy: %v", err)
 	}
 
 	deployTicketService(t, admin, fleet, machine, "op-journey")
 
 	// Fleet controller: required for bureau machine list. Deployed
-	// after DefaultPolicy and ticket service so the fleet controller's
-	// read-modify-write MachineConfig preserves both.
+	// after the ticket service so the fleet controller's
+	// read-modify-write MachineConfig preserves the ticket service.
 	fleetController := startFleetController(t, admin, machine, "service/fleet/op-journey", fleet)
 	fleetTokenBytes := mintFleetToken(t, fleet, machine, []string{"fleet/*"})
 	fleetTokenFile := writeTokenFile(t, fleetTokenBytes)

@@ -5,6 +5,7 @@ package schema
 
 import (
 	"encoding/json"
+	"strings"
 	"testing"
 
 	"github.com/bureau-foundation/bureau/lib/ref"
@@ -245,6 +246,64 @@ func TestRoomAuthorizationPolicyJSONRoundTrip(t *testing.T) {
 	}
 	if grants, ok := decoded.PowerLevelGrants["50"]; !ok || len(grants) != 1 {
 		t.Errorf("PowerLevelGrants[50] = %v, want 1 grant", grants)
+	}
+}
+
+func TestRoomAuthorizationPolicyAllowancesJSONRoundTrip(t *testing.T) {
+	original := RoomAuthorizationPolicy{
+		MemberGrants: []Grant{
+			{Actions: []string{"ticket/create"}},
+		},
+		MemberAllowances: []Allowance{
+			{Actions: []string{observation.ActionObserve}, Actors: []string{"ops/**:bureau.local"}},
+		},
+		PowerLevelAllowances: map[string][]Allowance{
+			"50": {
+				{Actions: []string{observation.ActionReadWrite}, Actors: []string{"ops/**:bureau.local"}},
+			},
+		},
+	}
+
+	data, err := json.Marshal(original)
+	if err != nil {
+		t.Fatalf("Marshal: %v", err)
+	}
+
+	var decoded RoomAuthorizationPolicy
+	if err := json.Unmarshal(data, &decoded); err != nil {
+		t.Fatalf("Unmarshal: %v", err)
+	}
+
+	if len(decoded.MemberGrants) != 1 {
+		t.Errorf("MemberGrants length = %d, want 1", len(decoded.MemberGrants))
+	}
+	if len(decoded.MemberAllowances) != 1 {
+		t.Errorf("MemberAllowances length = %d, want 1", len(decoded.MemberAllowances))
+	}
+	if decoded.MemberAllowances[0].Actions[0] != observation.ActionObserve {
+		t.Errorf("MemberAllowances[0].Actions[0] = %q, want %q", decoded.MemberAllowances[0].Actions[0], observation.ActionObserve)
+	}
+	if decoded.MemberAllowances[0].Actors[0] != "ops/**:bureau.local" {
+		t.Errorf("MemberAllowances[0].Actors[0] = %q, want %q", decoded.MemberAllowances[0].Actors[0], "ops/**:bureau.local")
+	}
+	if len(decoded.PowerLevelAllowances) != 1 {
+		t.Errorf("PowerLevelAllowances length = %d, want 1", len(decoded.PowerLevelAllowances))
+	}
+	if allowances, ok := decoded.PowerLevelAllowances["50"]; !ok || len(allowances) != 1 {
+		t.Errorf("PowerLevelAllowances[50] = %v, want 1 allowance", allowances)
+	}
+
+	// Verify omitempty: empty fields should not appear in JSON.
+	empty := RoomAuthorizationPolicy{}
+	emptyData, err := json.Marshal(empty)
+	if err != nil {
+		t.Fatalf("Marshal empty: %v", err)
+	}
+	emptyJSON := string(emptyData)
+	for _, field := range []string{"member_allowances", "power_level_allowances"} {
+		if strings.Contains(emptyJSON, field) {
+			t.Errorf("field %q should be omitted from JSON when empty", field)
+		}
 	}
 }
 

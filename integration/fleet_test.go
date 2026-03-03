@@ -222,14 +222,26 @@ func TestOperatorFlow(t *testing.T) {
 		ObserveRelayBinary: resolvedBinary(t, "OBSERVE_RELAY_BINARY"),
 	})
 
-	deployPrincipals(t, admin, machine, deploymentConfig{
-		Principals: []principalSpec{{Localpart: "test/observed"}},
-		DefaultPolicy: &schema.AuthorizationPolicy{
-			Allowances: []schema.Allowance{
+	// Publish a room-level authorization policy on the config room with
+	// observation allowances. This exercises the production path: workspace
+	// and config rooms carry RoomAuthorizationPolicy state events with
+	// MemberAllowances, and the daemon merges these into each principal's
+	// effective allowances during reconcile. Every principal belongs to
+	// the config room, so MemberAllowances here apply to all principals
+	// on this machine.
+	_, err := admin.SendStateEvent(t.Context(), machine.ConfigRoomID,
+		schema.EventTypeAuthorization, "", schema.RoomAuthorizationPolicy{
+			MemberAllowances: []schema.Allowance{
 				{Actions: []string{observation.ActionObserve}, Actors: []string{"**:**"}},
 				{Actions: []string{observation.ActionReadWrite}, Actors: []string{admin.UserID().Localpart() + ":**"}},
 			},
-		},
+		})
+	if err != nil {
+		t.Fatalf("publish room authorization policy: %v", err)
+	}
+
+	deployPrincipals(t, admin, machine, deploymentConfig{
+		Principals: []principalSpec{{Localpart: "test/observed"}},
 	})
 
 	// Wait for the observe socket to be ready (separate from proxy sockets).
@@ -502,16 +514,24 @@ func TestCrossMachineObservation(t *testing.T) {
 		Fleet:          fleet,
 	})
 
-	// Deploy a principal on the provider with observation allowances
-	// that let the admin observe in readwrite mode.
-	deployPrincipals(t, admin, provider, deploymentConfig{
-		Principals: []principalSpec{{Localpart: "test/xm-obs"}},
-		DefaultPolicy: &schema.AuthorizationPolicy{
-			Allowances: []schema.Allowance{
+	// Publish a room-level authorization policy on the provider's config
+	// room with observation allowances. This exercises the production
+	// path: room-level MemberAllowances are merged into each principal's
+	// effective allowances during daemon reconcile. The provider daemon
+	// performs authorization locally when forwarding observation sessions.
+	_, err := admin.SendStateEvent(ctx, provider.ConfigRoomID,
+		schema.EventTypeAuthorization, "", schema.RoomAuthorizationPolicy{
+			MemberAllowances: []schema.Allowance{
 				{Actions: []string{observation.ActionObserve}, Actors: []string{"**:**"}},
 				{Actions: []string{observation.ActionReadWrite}, Actors: []string{admin.UserID().Localpart() + ":**"}},
 			},
-		},
+		})
+	if err != nil {
+		t.Fatalf("publish room authorization policy on provider: %v", err)
+	}
+
+	deployPrincipals(t, admin, provider, deploymentConfig{
+		Principals: []principalSpec{{Localpart: "test/xm-obs"}},
 	})
 
 	// Push a MachineConfig on the consumer. The consumer doesn't host

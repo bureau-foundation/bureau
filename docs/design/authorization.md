@@ -80,8 +80,8 @@ An action is something a principal can do. Actions are hierarchical
 strings using `/` as separator:
 
 ```
-observe                  — observe a principal's terminal (read-only)
-observe/read-write       — observe with interactive access
+observe                  — observe a principal's terminal output
+observe/read-write       — observe with interactive input access
 interrupt                — send interrupt signal
 interrupt/terminate      — send termination signal
 credential/provision     — provision credentials
@@ -104,8 +104,9 @@ fleet/provision          — provision/deprovision machines
 Actions form a tree. A grant for `ticket/*` implies `ticket/create`,
 `ticket/assign`, and `ticket/close`. A grant for `artifact/**` implies
 all artifact operations including nested ones. A grant for `observe`
-implies only read-only observation (not `observe/read-write`). The
-`*` wildcard matches one level; `**` matches all descendants.
+does not imply `observe/read-write` — interactive access requires an
+explicit grant. The `*` wildcard matches one level; `**` matches all
+descendants.
 
 #### Service action namespaces
 
@@ -246,7 +247,7 @@ Examples:
 // Allow the operator to do anything
 {"actions": ["**"], "actors": ["bureau-admin"]}
 
-// Allow any reviewer to observe this agent (read-only)
+// Allow any reviewer to observe this agent's terminal output
 {"actions": ["observe"], "actors": ["bureau/dev/reviewer/**"]}
 ```
 
@@ -270,12 +271,20 @@ principal:
 - **Event type:** `m.bureau.authorization`
 - **State key:** `""` (room-level singleton)
 
-A room authorization policy carries:
+A room authorization policy carries both subject-side grants (what
+room members can do) and target-side allowances (what others can do to
+room members):
 
 - **Member grants** — grants given to every member of the room.
 - **Power level grants** — additional grants keyed by Matrix power
   level. A principal with power level >= the key gets the associated
   grants on top of member grants.
+- **Member allowances** — allowances added to every member of the
+  room. They define what actors can do *to* the principal (e.g.,
+  observe its terminal). This is the primary mechanism for scoping
+  observation access by workspace.
+- **Power level allowances** — additional allowances keyed by power
+  level, following the same threshold logic as power level grants.
 
 Example for a workstream room:
 
@@ -285,6 +294,9 @@ Example for a workstream room:
     {"actions": ["ticket/create", "ticket/assign"], "targets": ["bureau/dev/workspace/**"]},
     {"actions": ["observe"], "targets": ["bureau/dev/workspace/**"]}
   ],
+  "member_allowances": [
+    {"actions": ["observe"], "actors": ["ops/**:bureau.local"]}
+  ],
   "power_level_grants": {
     "50": [
       {"actions": ["interrupt", "observe/read-write"], "targets": ["bureau/dev/workspace/**"]}
@@ -292,13 +304,25 @@ Example for a workstream room:
     "100": [
       {"actions": ["**"], "targets": ["bureau/dev/workspace/**"]}
     ]
+  },
+  "power_level_allowances": {
+    "50": [
+      {"actions": ["observe/read-write"], "actors": ["ops/**:bureau.local"]}
+    ]
   }
 }
 ```
 
-Members can create tickets and observe workspace agents. Power level
-50+ (TPM, daemon) can also interrupt and interactively observe. Power
-level 100 (admin, PM) can do anything to workspace agents.
+The grant side (member_grants, power_level_grants) controls what
+principals in this room can do to others — members can create tickets
+and observe workspace agents, PL 50+ can interrupt and interactively
+observe, PL 100 can do anything. The allowance side
+(member_allowances, power_level_allowances) controls what others can
+do to principals in this room — operators can observe terminals, and
+PL 50+ principals additionally allow interactive observation.
+Observation requires both sides to agree: the observer needs an
+observe grant targeting the principal, and the principal needs an
+observe allowance permitting that observer.
 
 ### Machine-Level Defaults
 
@@ -678,10 +702,10 @@ fine-grained control via Bureau-native grants.
 
 ### The problem
 
-Static authorization (template-defined grants, room-level grants)
-handles the common case: coders can create tickets, PMs can interrupt
-agents, operators can observe everything. But some access needs are
-dynamic:
+Static authorization (template-defined grants, room-level grants and
+allowances) handles the common case: coders can create tickets, PMs
+can interrupt agents, operators can observe principals in their
+workspace rooms. But some access needs are dynamic:
 
 - A coder debugging a database issue needs temporary observation
   access to the database service principal.

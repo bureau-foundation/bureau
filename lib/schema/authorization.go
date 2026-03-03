@@ -236,13 +236,23 @@ type AuthorizationPolicy struct {
 }
 
 // RoomAuthorizationPolicy is the content of an EventTypeAuthorization
-// state event. It grants actions to all members of a room, optionally
-// differentiated by power level.
+// state event. It carries both subject-side grants (what room members
+// can do) and target-side allowances (what others can do to room
+// members), optionally differentiated by power level.
 //
 // The daemon reads these during /sync and merges them with per-principal
 // policies. A principal's effective grants are the union of their
 // per-principal grants, all room-level MemberGrants from rooms they
-// belong to, and any PowerLevelGrants they qualify for.
+// belong to, and any PowerLevelGrants they qualify for. Allowances
+// follow the same merge pattern: MemberAllowances are added to every
+// room member's allowance set, and PowerLevelAllowances are added
+// based on power level thresholds.
+//
+// The grant side controls what principals in this room can do to
+// others (e.g., create tickets targeting workspace agents). The
+// allowance side controls what others can do to principals in this
+// room (e.g., observe their terminals). Both sides must agree for
+// two-sided actions like observation.
 type RoomAuthorizationPolicy struct {
 	// MemberGrants are grants automatically given to every member
 	// of this room. Merged with per-principal grants.
@@ -253,6 +263,18 @@ type RoomAuthorizationPolicy struct {
 	// grants in addition to MemberGrants. Keys are strings because
 	// JSON object keys must be strings; values are parsed as integers.
 	PowerLevelGrants map[string][]Grant `json:"power_level_grants,omitempty"`
+
+	// MemberAllowances are allowances automatically added to every
+	// member of this room. They define what actors outside this
+	// principal can do to it. For example, a workspace room with
+	// MemberAllowances granting "observe" to "ops/**" means every
+	// principal in that room allows observation by operators.
+	MemberAllowances []Allowance `json:"member_allowances,omitempty"`
+
+	// PowerLevelAllowances map Matrix power levels to additional
+	// allowances. A principal with power level >= the key gets the
+	// associated allowances in addition to MemberAllowances.
+	PowerLevelAllowances map[string][]Allowance `json:"power_level_allowances,omitempty"`
 }
 
 // TemporalGrantContent is the content of an EventTypeTemporalGrant

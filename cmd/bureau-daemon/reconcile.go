@@ -1407,17 +1407,18 @@ func (d *Daemon) fetchRoomAuthorizationPolicies(
 
 		fetched := &fetchedRoomPolicy{policy: policy}
 
-		// Fetch power levels if the policy has PowerLevelGrants.
-		if len(policy.PowerLevelGrants) > 0 {
+		// Fetch power levels if the policy has power-level-gated entries.
+		if len(policy.PowerLevelGrants) > 0 || len(policy.PowerLevelAllowances) > 0 {
 			powerLevels, err := messaging.GetState[schema.PowerLevels](ctx, d.session, roomID, schema.MatrixEventTypePowerLevels, "")
 			if err != nil {
-				d.logger.Warn("failed to fetch power levels for room with PowerLevelGrants",
+				d.logger.Warn("failed to fetch power levels for room with power-level-gated policy",
 					"room_id", roomID, "room", d.displayRoom(roomID),
 					"error", err,
 				)
-				// Proceed without power levels — MemberGrants still apply,
-				// but PowerLevelGrants cannot be evaluated without knowing
-				// each user's power level.
+				// Proceed without power levels — MemberGrants and
+				// MemberAllowances still apply, but power-level-gated
+				// entries cannot be evaluated without knowing each
+				// user's power level.
 			} else {
 				fetched.powerLevels = powerLevels
 			}
@@ -1433,9 +1434,17 @@ func (d *Daemon) fetchRoomAuthorizationPolicies(
 // config, it merges:
 //   - Machine-wide DefaultPolicy
 //   - Per-principal Authorization policy
-//   - Room-level MemberGrants from all rooms the principal belongs to
-//   - Room-level PowerLevelGrants the principal qualifies for (based on
-//     their power level in each room)
+//   - Room-level MemberGrants and MemberAllowances from all rooms the
+//     principal belongs to
+//   - Room-level PowerLevelGrants and PowerLevelAllowances the principal
+//     qualifies for (based on their power level in each room)
+//
+// Grants (subject-side) control what this principal can do to others.
+// Allowances (target-side) control what others can do to this principal.
+// Room-level allowances are the primary mechanism for scoping observation
+// access: a workspace room with MemberAllowances for "observe" means
+// every principal in that room allows observation by actors matching
+// the allowance patterns.
 //
 // SetPrincipal preserves any temporal grants that were added incrementally
 // via /sync. Principals removed from config are cleaned up from the index.
@@ -1481,9 +1490,10 @@ func (d *Daemon) rebuildAuthorizationIndex(
 		shorthandGrants := synthesizeGrants(assignment.MatrixPolicy, assignment.ServiceVisibility)
 		merged.Grants = appendGrantsWithSource(merged.Grants, shorthandGrants, schema.SourcePrincipalShorthand)
 
-		// Merge room-level grants from all rooms this principal belongs to.
-		// A principal belongs to the config room (always) plus their
-		// workspace room (from StartCondition or Payload).
+		// Merge room-level grants and allowances from all rooms this
+		// principal belongs to. A principal belongs to the config room
+		// (always) plus their workspace room (from StartCondition or
+		// Payload).
 		if len(roomPolicies) > 0 {
 			principalRooms := d.resolvePrincipalRooms(assignment.Principal, conditionRoomIDs, assignment.Payload)
 			for _, roomID := range principalRooms {
@@ -1493,13 +1503,16 @@ func (d *Daemon) rebuildAuthorizationIndex(
 				}
 				source := schema.SourceRoom(roomID.String())
 
-				// MemberGrants apply to all room members.
+				// MemberGrants apply to all room members (subject-side).
 				merged.Grants = appendGrantsWithSource(merged.Grants, fetched.policy.MemberGrants, source)
 
-				// PowerLevelGrants apply based on the principal's power
-				// level in the room. A principal with PL >= key gets the
-				// associated grants.
-				if len(fetched.policy.PowerLevelGrants) > 0 {
+				// MemberAllowances apply to all room members (target-side).
+				merged.Allowances = appendAllowancesWithSource(merged.Allowances, fetched.policy.MemberAllowances, source)
+
+				// Power-level-gated entries require knowing the principal's
+				// power level in this room. Both grant and allowance maps
+				// use the same threshold logic.
+				if len(fetched.policy.PowerLevelGrants) > 0 || len(fetched.policy.PowerLevelAllowances) > 0 {
 					userLevel := fetched.powerLevels.UserLevel(userID.String())
 					for levelString, grants := range fetched.policy.PowerLevelGrants {
 						level, err := strconv.Atoi(levelString)
@@ -1513,6 +1526,20 @@ func (d *Daemon) rebuildAuthorizationIndex(
 						}
 						if userLevel >= level {
 							merged.Grants = appendGrantsWithSource(merged.Grants, grants, source)
+						}
+					}
+					for levelString, allowances := range fetched.policy.PowerLevelAllowances {
+						level, err := strconv.Atoi(levelString)
+						if err != nil {
+							d.logger.Warn("invalid power level key in room authorization policy",
+								"room_id", roomID, "room", d.displayRoom(roomID),
+								"level_key", levelString,
+								"error", err,
+							)
+							continue
+						}
+						if userLevel >= level {
+							merged.Allowances = appendAllowancesWithSource(merged.Allowances, allowances, source)
 						}
 					}
 				}

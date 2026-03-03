@@ -422,8 +422,8 @@ room at `#bureau/fleet/prod/machine/workstation:bureau.local`.
 A `MachineConfig` event contains:
 
 - **Principals**: list of `PrincipalAssignment` entries
-- **DefaultObservePolicy**: fallback observation policy for principals
-  without an explicit one
+- **DefaultPolicy**: machine-wide default authorization policy
+  (grants, allowances) applied to all principals
 - **BureauVersion**: desired versions for daemon, launcher, and proxy
   binaries
 
@@ -434,7 +434,8 @@ Each `PrincipalAssignment` specifies:
 - **AutoStart**: whether to launch at daemon boot
 - **Labels**: free-form metadata (role, team, tier)
 - **MatrixPolicy**: per-principal policy for Matrix operations
-- **ObservePolicy**: per-principal observation access control
+- **Authorization**: per-principal authorization policy (grants,
+  denials, allowances, allowance denials)
 - **ServiceVisibility**: glob patterns filtering which external services
   are available
 - **CommandOverride**: replace the template's command for this instance

@@ -1626,6 +1626,201 @@ func TestRebuildAuthorizationIndex_PayloadWorkspaceRoomID(t *testing.T) {
 	}
 }
 
+func TestRebuildAuthorizationIndex_RoomLevelMemberAllowances(t *testing.T) {
+	t.Parallel()
+
+	daemon, _ := newTestDaemon(t)
+	workspaceRoomID := mustRoomID("!workspace:test")
+	daemon.configRoomID = mustRoomID("!config:test")
+
+	alpha := testEntity(t, daemon.fleet, "agent/alpha")
+	beta := testEntity(t, daemon.fleet, "agent/beta")
+
+	config := &schema.MachineConfig{
+		Principals: []schema.PrincipalAssignment{
+			{Principal: alpha, AutoStart: true},
+			{Principal: beta, AutoStart: true},
+		},
+	}
+
+	// alpha is in the workspace room; beta is not.
+	conditionRoomIDs := map[ref.Entity]ref.RoomID{
+		alpha: workspaceRoomID,
+	}
+
+	// The workspace room has MemberAllowances permitting observation
+	// by operators. The config room has no policy.
+	roomPolicies := map[ref.RoomID]*fetchedRoomPolicy{
+		workspaceRoomID: {
+			policy: schema.RoomAuthorizationPolicy{
+				MemberAllowances: []schema.Allowance{
+					{Actions: []string{observation.ActionObserve}, Actors: []string{"ops/**:bureau.local"}},
+				},
+			},
+		},
+	}
+
+	daemon.rebuildAuthorizationIndex(config, conditionRoomIDs, roomPolicies)
+
+	// alpha should have the room-level MemberAllowances.
+	alphaAllowances := daemon.authorizationIndex.Allowances(alpha.UserID())
+	if len(alphaAllowances) != 1 {
+		t.Fatalf("alpha allowances = %d, want 1 (room-level MemberAllowance)", len(alphaAllowances))
+	}
+	if alphaAllowances[0].Actions[0] != observation.ActionObserve {
+		t.Errorf("alpha allowance action = %q, want %q", alphaAllowances[0].Actions[0], observation.ActionObserve)
+	}
+	if alphaAllowances[0].Actors[0] != "ops/**:bureau.local" {
+		t.Errorf("alpha allowance actor = %q, want %q", alphaAllowances[0].Actors[0], "ops/**:bureau.local")
+	}
+	expectedSource := schema.SourceRoom(workspaceRoomID.String())
+	if alphaAllowances[0].Source != expectedSource {
+		t.Errorf("alpha allowance source = %q, want %q", alphaAllowances[0].Source, expectedSource)
+	}
+
+	// beta is only in the config room (which has no policy), so no
+	// room-level allowances.
+	betaAllowances := daemon.authorizationIndex.Allowances(beta.UserID())
+	if len(betaAllowances) != 0 {
+		t.Fatalf("beta allowances = %d, want 0 (no room-level allowances)", len(betaAllowances))
+	}
+}
+
+func TestRebuildAuthorizationIndex_PowerLevelAllowances(t *testing.T) {
+	t.Parallel()
+
+	daemon, _ := newTestDaemon(t)
+	workspaceRoomID := mustRoomID("!workspace:test")
+	daemon.configRoomID = mustRoomID("!config:test")
+
+	alpha := testEntity(t, daemon.fleet, "agent/alpha")
+	beta := testEntity(t, daemon.fleet, "agent/beta")
+
+	config := &schema.MachineConfig{
+		Principals: []schema.PrincipalAssignment{
+			{Principal: alpha, AutoStart: true},
+			{Principal: beta, AutoStart: true},
+		},
+	}
+
+	// Both principals are in the workspace room.
+	conditionRoomIDs := map[ref.Entity]ref.RoomID{
+		alpha: workspaceRoomID,
+		beta:  workspaceRoomID,
+	}
+
+	// Room has MemberAllowances (PL 0) and PowerLevelAllowances at PL 50.
+	// alpha has PL 100, beta has PL 0 (default).
+	roomPolicies := map[ref.RoomID]*fetchedRoomPolicy{
+		workspaceRoomID: {
+			policy: schema.RoomAuthorizationPolicy{
+				MemberAllowances: []schema.Allowance{
+					{Actions: []string{observation.ActionObserve}, Actors: []string{"ops/**:bureau.local"}},
+				},
+				PowerLevelAllowances: map[string][]schema.Allowance{
+					"50": {
+						{Actions: []string{observation.ActionReadWrite}, Actors: []string{"ops/**:bureau.local"}},
+					},
+				},
+			},
+			powerLevels: schema.PowerLevels{
+				Users: map[string]int{
+					alpha.UserID().String(): 100,
+				},
+			},
+		},
+	}
+
+	daemon.rebuildAuthorizationIndex(config, conditionRoomIDs, roomPolicies)
+
+	// alpha (PL 100) gets both MemberAllowances and PL 50 allowances.
+	alphaAllowances := daemon.authorizationIndex.Allowances(alpha.UserID())
+	if len(alphaAllowances) != 2 {
+		t.Fatalf("alpha allowances = %d, want 2 (MemberAllowance + PowerLevelAllowance)", len(alphaAllowances))
+	}
+	if alphaAllowances[0].Actions[0] != observation.ActionObserve {
+		t.Errorf("alpha allowances[0] action = %q, want %q", alphaAllowances[0].Actions[0], observation.ActionObserve)
+	}
+	if alphaAllowances[1].Actions[0] != observation.ActionReadWrite {
+		t.Errorf("alpha allowances[1] action = %q, want %q", alphaAllowances[1].Actions[0], observation.ActionReadWrite)
+	}
+
+	// beta (PL 0, below 50) gets only MemberAllowances.
+	betaAllowances := daemon.authorizationIndex.Allowances(beta.UserID())
+	if len(betaAllowances) != 1 {
+		t.Fatalf("beta allowances = %d, want 1 (MemberAllowance only)", len(betaAllowances))
+	}
+	if betaAllowances[0].Actions[0] != observation.ActionObserve {
+		t.Errorf("beta allowances[0] action = %q, want %q", betaAllowances[0].Actions[0], observation.ActionObserve)
+	}
+}
+
+func TestRebuildAuthorizationIndex_RoomAllowancesMergeWithPrincipalPolicy(t *testing.T) {
+	t.Parallel()
+
+	daemon, _ := newTestDaemon(t)
+	workspaceRoomID := mustRoomID("!workspace:test")
+	daemon.configRoomID = mustRoomID("!config:test")
+
+	alpha := testEntity(t, daemon.fleet, "agent/alpha")
+
+	config := &schema.MachineConfig{
+		DefaultPolicy: &schema.AuthorizationPolicy{
+			Allowances: []schema.Allowance{
+				{Actions: []string{observation.ActionObserve}, Actors: []string{"bureau-admin:bureau.local"}},
+			},
+		},
+		Principals: []schema.PrincipalAssignment{
+			{
+				Principal: alpha,
+				AutoStart: true,
+				Authorization: &schema.AuthorizationPolicy{
+					Allowances: []schema.Allowance{
+						{Actions: []string{observation.ActionObserve}, Actors: []string{"bureau/dev/pm:bureau.local"}},
+					},
+				},
+			},
+		},
+	}
+
+	conditionRoomIDs := map[ref.Entity]ref.RoomID{
+		alpha: workspaceRoomID,
+	}
+
+	roomPolicies := map[ref.RoomID]*fetchedRoomPolicy{
+		workspaceRoomID: {
+			policy: schema.RoomAuthorizationPolicy{
+				MemberAllowances: []schema.Allowance{
+					{Actions: []string{observation.ActionObserve}, Actors: []string{"ops/**:bureau.local"}},
+				},
+			},
+		},
+	}
+
+	daemon.rebuildAuthorizationIndex(config, conditionRoomIDs, roomPolicies)
+
+	// alpha should have all three allowance sources:
+	// 1. machine-default: bureau-admin can observe
+	// 2. per-principal: PM can observe
+	// 3. room-level: operators can observe
+	allowances := daemon.authorizationIndex.Allowances(alpha.UserID())
+	if len(allowances) != 3 {
+		t.Fatalf("allowances = %d, want 3 (default + principal + room)", len(allowances))
+	}
+
+	// Verify source provenance and ordering.
+	if allowances[0].Source != schema.SourceMachineDefault {
+		t.Errorf("allowances[0].Source = %q, want %q", allowances[0].Source, schema.SourceMachineDefault)
+	}
+	if allowances[1].Source != schema.SourcePrincipal {
+		t.Errorf("allowances[1].Source = %q, want %q", allowances[1].Source, schema.SourcePrincipal)
+	}
+	expectedRoomSource := schema.SourceRoom(workspaceRoomID.String())
+	if allowances[2].Source != expectedRoomSource {
+		t.Errorf("allowances[2].Source = %q, want %q", allowances[2].Source, expectedRoomSource)
+	}
+}
+
 // TestRebuildAuthorizationIndex_ShorthandWithDefaultPolicy verifies that
 // MatrixPolicy and ServiceVisibility shorthand fields are merged into the
 // authorization index alongside DefaultPolicy. Before this fix,

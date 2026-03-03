@@ -510,8 +510,15 @@ require the observer to hold a grant.
 
 Observation allowances use two actions:
 
-- **`observe`**: permits read-only observation of the target principal.
-- **`observe/read-write`**: permits interactive observation (send input).
+- **`observe`**: permits observation of the target principal's terminal
+  output. The observer sees the full byte stream including terminal
+  escape sequences, application output, and any secrets visible in
+  the terminal (credentials typed at prompts, environment variables
+  echoed to stdout, API responses containing tokens). Observation
+  access is a sensitive capability.
+- **`observe/read-write`**: permits interactive observation — the
+  observer can send input to the terminal. This is effectively
+  remote shell access and should be granted sparingly.
 
 Each allowance specifies actor patterns (glob matching on observer
 identity). Example allowances in an authorization policy:
@@ -535,13 +542,14 @@ target has no matching `observe/read-write` allowance, the daemon
 downgrades to read-only. The relay attaches to tmux with the read-only
 flag (`tmux attach -r`) and does not write to the PTY master.
 
-**ObservePolicy synthesis**: for principals whose configuration uses
-the legacy `ObservePolicy` fields (`AllowedObservers`,
-`ReadWriteObservers`) rather than an explicit `Authorization` block,
-the daemon synthesizes equivalent allowances during authorization index
-rebuild. `AllowedObservers` patterns become `observe` allowances;
-`ReadWriteObservers` patterns become `observe/read-write` allowances.
-Per-principal `ObservePolicy` overrides `DefaultObservePolicy`.
+**Room-level allowances**: the most common way to configure observation
+access is through room-level `member_allowances` on the workspace
+room's `m.bureau.authorization` state event. Every principal in the
+room inherits the room's member allowances, scoping observation access
+to room membership. An operator who is a member of workspace room W
+can observe principals in W; principals in other workspaces are
+invisible unless explicitly granted. See authorization.md for the full
+room-level policy structure.
 
 ### Authentication
 

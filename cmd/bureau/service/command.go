@@ -22,13 +22,12 @@ The "create" command performs the full deployment sequence: register a Matrix
 account, provision encrypted credentials, and assign the service to a machine.
 The daemon detects the assignment and creates the sandbox.
 
-Inspection commands (list, show) read Matrix state events from machine config
-rooms. When a fleet controller is reachable, the output is automatically
-enriched with fleet metadata: replica counts, placement scores, failover
-policies, and instance details.
+Inspection commands (list, show) combine Matrix state events with fleet
+controller data: replica counts, placement scores, failover policies, and
+instance details. Both Matrix and the fleet controller are required.
 
-Placement commands (plan, place, unplace) require a fleet controller and
-manage fleet-managed service placement across machines.`,
+Placement commands (plan, place, unplace) manage fleet-managed service
+placement across machines.`,
 		Subcommands: []*cli.Command{
 			createCommand(),
 			listCommand(),

@@ -11,7 +11,6 @@ go_library(
         "deploy.go",
         "doc.go",
         "doctor.go",
-        "fleet_connection.go",
         "list.go",
         "provision.go",
         "revoke.go",
@@ -33,7 +32,6 @@ go_library(
         "//lib/ref",
         "//lib/schema",
         "//lib/secret",
-        "//lib/service",
         "//messaging",
     ],
 )

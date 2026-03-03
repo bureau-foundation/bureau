@@ -15,13 +15,12 @@ func Command() *cli.Command {
 		Description: `Manage fleet machines: provisioning, deployment, health checks, upgrades,
 decommission, uninstall, and emergency revocation.
 
-The "list" subcommand shows all machines in the fleet. When a fleet
-controller is reachable, the output is enriched with live operational
-data: CPU and memory utilization, assignment counts, and labels.
+The "list" subcommand shows all machines in the fleet with live
+operational data from the fleet controller: CPU and memory utilization,
+assignment counts, and labels.
 
 The "show" subcommand displays detailed info for a single machine:
 hardware inventory, current resource usage, and all assigned principals.
-Requires a reachable fleet controller.
 
 The "provision" subcommand creates a machine's Matrix account and writes
 a bootstrap config file. Transfer this file to the new machine and run

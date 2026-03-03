@@ -665,6 +665,18 @@ func writePasswordFile(t *testing.T, password string) string {
 	return passwordFile
 }
 
+// writeTokenFile writes raw service token bytes to a temporary file and returns
+// the file path. Used for BUREAU_FLEET_TOKEN and similar service token env vars
+// in CLI tests that need direct-mode fleet controller access.
+func writeTokenFile(t *testing.T, tokenBytes []byte) string {
+	t.Helper()
+	tokenFile := filepath.Join(t.TempDir(), "fleet.token")
+	if err := os.WriteFile(tokenFile, tokenBytes, 0600); err != nil {
+		t.Fatalf("write token file: %v", err)
+	}
+	return tokenFile
+}
+
 // operatorEnv bundles everything needed for a CLI test that runs bureau
 // commands as an operator. Provides an authenticated admin session, fleet,
 // credential file, operator session file, machine.conf, and ready-to-use

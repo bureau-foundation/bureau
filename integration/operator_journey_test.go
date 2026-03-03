@@ -71,9 +71,9 @@ func TestNewOperatorJourney(t *testing.T) {
 	// authorization policy when provisioning the machine. Without it,
 	// the daemon's authorization index has no allowances for the admin
 	// to observe workspace agents, so "bureau list" returns nothing.
-	// Push this BEFORE deployTicketService: each subsequent config
-	// writer (deployTicketService, workspace create) does a
-	// read-modify-write that preserves DefaultPolicy.
+	// Push this BEFORE service deployments: each subsequent config
+	// writer (deployTicketService, startFleetController, workspace
+	// create) does a read-modify-write that preserves DefaultPolicy.
 	if _, err := admin.SendStateEvent(t.Context(), machine.ConfigRoomID,
 		schema.EventTypeMachineConfig, machine.Name, schema.MachineConfig{
 			DefaultPolicy: &schema.AuthorizationPolicy{
@@ -86,6 +86,13 @@ func TestNewOperatorJourney(t *testing.T) {
 	}
 
 	deployTicketService(t, admin, fleet, machine, "op-journey")
+
+	// Fleet controller: required for bureau machine list. Deployed
+	// after DefaultPolicy and ticket service so the fleet controller's
+	// read-modify-write MachineConfig preserves both.
+	fleetController := startFleetController(t, admin, machine, "service/fleet/op-journey", fleet)
+	fleetTokenBytes := mintFleetToken(t, fleet, machine, []string{"fleet/*"})
+	fleetTokenFile := writeTokenFile(t, fleetTokenBytes)
 
 	// Seed git repository for the workspace setup pipeline to clone.
 	seedRepoPath := machine.WorkspaceRoot + "/seed.git"
@@ -167,6 +174,8 @@ func TestNewOperatorJourney(t *testing.T) {
 	env := []string{
 		"BUREAU_MACHINE_CONF=" + machineConf,
 		"BUREAU_SESSION_FILE=" + sessionFile,
+		"BUREAU_FLEET_SOCKET=" + fleetController.SocketPath,
+		"BUREAU_FLEET_TOKEN=" + fleetTokenFile,
 	}
 
 	// ================================================================

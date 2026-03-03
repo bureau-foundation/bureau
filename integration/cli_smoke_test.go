@@ -79,25 +79,45 @@ func TestCLILoginAndWhoAmI(t *testing.T) {
 	}
 }
 
-// TestCLIMachineList exercises bureau machine list --json with fleet
-// auto-detected from machine.conf. Authenticates via --credential-file
-// (the SessionConfig.Connect path). Publishes a synthetic machine key
-// so the output is non-empty.
+// TestCLIMachineList exercises bureau machine list --json with a real machine
+// stack and fleet controller. The fleet controller is required — machine list
+// queries both Matrix state events (machine keys, hardware info) and the fleet
+// controller (CPU, memory, assignments, labels).
 func TestCLIMachineList(t *testing.T) {
 	t.Parallel()
 
-	op := setupOperatorEnv(t)
+	admin := adminSession(t)
+	defer admin.Close()
 
-	// Publish a synthetic machine key so machine list has something to return.
-	_, err := op.Admin.SendStateEvent(t.Context(), op.Fleet.MachineRoomID,
-		schema.EventTypeMachineKey, "smoke-test-machine",
-		schema.MachineKey{Algorithm: "age-x25519", PublicKey: "age1smoketestfakekey"})
-	if err != nil {
-		t.Fatalf("publish machine key: %v", err)
+	fleet := createTestFleet(t, admin)
+	machine := newTestMachine(t, fleet, "cli-machine-list")
+
+	startMachine(t, admin, machine, machineOptions{
+		LauncherBinary: resolvedBinary(t, "LAUNCHER_BINARY"),
+		DaemonBinary:   resolvedBinary(t, "DAEMON_BINARY"),
+		ProxyBinary:    resolvedBinary(t, "PROXY_BINARY"),
+		Fleet:          fleet,
+	})
+
+	fleetController := startFleetController(t, admin, machine, "service/fleet/cli-machine-list", fleet)
+
+	// Mint a fleet token for CLI direct-mode access.
+	tokenBytes := mintFleetToken(t, fleet, machine, []string{"fleet/*"})
+	tokenFile := writeTokenFile(t, tokenBytes)
+
+	credentialFile := writeTestCredentialFile(t,
+		testHomeserverURL, admin.UserID().String(), admin.AccessToken())
+	machineConf := writeMachineConf(t,
+		testHomeserverURL, testServerName, fleet.Prefix, machine.Name)
+
+	env := []string{
+		"BUREAU_MACHINE_CONF=" + machineConf,
+		"BUREAU_FLEET_SOCKET=" + fleetController.SocketPath,
+		"BUREAU_FLEET_TOKEN=" + tokenFile,
 	}
 
-	output := op.run(t,
-		"machine", "list", "--credential-file", op.CredentialFile, "--json")
+	output := runBureauWithEnvOrFail(t, env,
+		"machine", "list", "--credential-file", credentialFile, "--json")
 
 	var result struct {
 		Machines []struct {
@@ -105,32 +125,30 @@ func TestCLIMachineList(t *testing.T) {
 			PublicKey string `json:"public_key"`
 			Algorithm string `json:"algorithm"`
 		} `json:"machines"`
-		FleetEnriched bool `json:"fleet_enriched"`
 	}
 	if err := json.Unmarshal([]byte(output), &result); err != nil {
 		t.Fatalf("parse machine list JSON: %v\noutput:\n%s", err, output)
 	}
 
-	entries := result.Machines
-	if len(entries) == 0 {
+	if len(result.Machines) == 0 {
 		t.Fatal("machine list returned no entries")
 	}
 
-	found := false
-	for _, entry := range entries {
-		if entry.Name == "smoke-test-machine" {
+	var found bool
+	for _, entry := range result.Machines {
+		if entry.Name == machine.Name {
 			found = true
-			if entry.PublicKey != "age1smoketestfakekey" {
-				t.Errorf("public_key = %q, want %q", entry.PublicKey, "age1smoketestfakekey")
+			if entry.PublicKey == "" {
+				t.Error("machine has empty public key")
 			}
-			if entry.Algorithm != "age-x25519" {
-				t.Errorf("algorithm = %q, want %q", entry.Algorithm, "age-x25519")
+			if entry.Algorithm == "" {
+				t.Error("machine has empty algorithm")
 			}
 			break
 		}
 	}
 	if !found {
-		t.Errorf("smoke-test-machine not found in %d entries", len(entries))
+		t.Errorf("machine %q not found in %d entries", machine.Name, len(result.Machines))
 	}
 }
 

@@ -28,21 +28,19 @@ type serviceListParams struct {
 
 // serviceListEntry is a single row in the unified list output.
 type serviceListEntry struct {
-	Localpart    string `json:"localpart"              desc:"service localpart"`
-	Template     string `json:"template"               desc:"template reference"`
-	MachineName  string `json:"machine,omitempty"       desc:"machine hosting this service"`
-	AutoStart    bool   `json:"auto_start,omitempty"    desc:"whether the service starts automatically"`
-	FleetManaged bool   `json:"fleet_managed"           desc:"whether this service has a fleet definition"`
-	Replicas     int    `json:"replicas,omitempty"      desc:"desired minimum replicas (fleet-managed only)"`
-	Instances    int    `json:"instances,omitempty"      desc:"current instance count (fleet-managed only)"`
-	Failover     string `json:"failover,omitempty"      desc:"failover policy (fleet-managed only)"`
-	Priority     int    `json:"priority,omitempty"      desc:"scheduling priority (fleet-managed only)"`
+	Localpart   string `json:"localpart"          desc:"service localpart"`
+	Template    string `json:"template"           desc:"template reference"`
+	MachineName string `json:"machine,omitempty"  desc:"machine hosting this service"`
+	AutoStart   bool   `json:"auto_start"         desc:"whether the service starts automatically"`
+	Replicas    int    `json:"replicas"           desc:"desired minimum replicas"`
+	Instances   int    `json:"instances"          desc:"current instance count"`
+	Failover    string `json:"failover"           desc:"failover policy"`
+	Priority    int    `json:"priority"           desc:"scheduling priority"`
 }
 
 type serviceListResult struct {
-	Services      []serviceListEntry `json:"services"       desc:"services found"`
-	MachineCount  int                `json:"machine_count"  desc:"machines scanned (when --machine omitted)"`
-	FleetEnriched bool               `json:"fleet_enriched" desc:"whether fleet controller data is included"`
+	Services     []serviceListEntry `json:"services"      desc:"services found"`
+	MachineCount int                `json:"machine_count" desc:"machines scanned (when --machine omitted)"`
 }
 
 func listCommand() *cli.Command {
@@ -51,14 +49,15 @@ func listCommand() *cli.Command {
 	return &cli.Command{
 		Name:    "list",
 		Summary: "List services across machines",
-		Description: `List all service principals, optionally filtered to a specific machine.
+		Description: `List all service principals with fleet metadata.
 
 When --machine is omitted, scans all machines from the fleet's machine room and
 lists every assigned principal. The scan count is reported for diagnostics.
 
-If a fleet controller is reachable, the output is enriched with fleet metadata:
-replica counts, failover policy, priority, and instance counts. Fleet-defined
-services that have no running instances are included as unplaced entries.`,
+Service assignments come from Matrix state events. Fleet metadata (replica
+counts, failover policy, priority, instance counts) comes from the fleet
+controller. Fleet-defined services with no running instances are included
+as unplaced entries. Both sources are required.`,
 		Usage: "bureau service list [--machine <machine>]",
 		Examples: []cli.Example{
 			{
@@ -121,25 +120,25 @@ func runList(ctx context.Context, logger *slog.Logger, params serviceListParams)
 		return cli.Internal("list services: %w", err)
 	}
 
-	// Fleet enrichment: optional, non-fatal.
-	fleetClient := tryFleetConnect(&params.FleetConnection, logger)
-	var fleetIndex map[string]fleet.ServiceEntry
-	if fleetClient != nil {
-		fleetCtx, fleetCancel := fleet.CallContext(ctx)
-		defer fleetCancel()
-
-		var fleetResponse fleet.ListServicesResponse
-		if err := fleetClient.Call(fleetCtx, "list-services", nil, &fleetResponse); err != nil {
-			logger.Debug("fleet list-services failed, continuing without fleet data", "error", err)
-		} else {
-			fleetIndex = make(map[string]fleet.ServiceEntry, len(fleetResponse.Services))
-			for _, entry := range fleetResponse.Services {
-				fleetIndex[entry.Localpart] = entry
-			}
-		}
+	// Fleet controller: fleet metadata.
+	fleetClient, err := params.FleetConnection.Connect()
+	if err != nil {
+		return err
 	}
 
-	fleetEnriched := fleetIndex != nil
+	fleetCtx, fleetCancel := fleet.CallContext(ctx)
+	defer fleetCancel()
+
+	var fleetResponse fleet.ListServicesResponse
+	if err := fleetClient.Call(fleetCtx, "list-services", nil, &fleetResponse); err != nil {
+		return cli.Transient("fetching service data from fleet controller: %w", err).
+			WithHint("Is the fleet controller running? Check with 'bureau fleet status'.")
+	}
+
+	fleetIndex := make(map[string]fleet.ServiceEntry, len(fleetResponse.Services))
+	for _, entry := range fleetResponse.Services {
+		fleetIndex[entry.Localpart] = entry
+	}
 
 	// Build unified entries from Matrix locations.
 	seen := make(map[string]bool)
@@ -156,7 +155,6 @@ func runList(ctx context.Context, logger *slog.Logger, params serviceListParams)
 		}
 
 		if fleetData, exists := fleetIndex[localpart]; exists {
-			entry.FleetManaged = true
 			entry.Replicas = fleetData.Replicas
 			entry.Instances = fleetData.Instances
 			entry.Failover = fleetData.Failover
@@ -168,27 +166,23 @@ func runList(ctx context.Context, logger *slog.Logger, params serviceListParams)
 
 	// Add fleet-defined services that have no Matrix assignments (defined
 	// but not yet placed, or placed on machines not in the scan scope).
-	if fleetEnriched {
-		for localpart, fleetData := range fleetIndex {
-			if seen[localpart] {
-				continue
-			}
-			entries = append(entries, serviceListEntry{
-				Localpart:    localpart,
-				Template:     fleetData.Template,
-				FleetManaged: true,
-				Replicas:     fleetData.Replicas,
-				Instances:    fleetData.Instances,
-				Failover:     fleetData.Failover,
-				Priority:     fleetData.Priority,
-			})
+	for localpart, fleetData := range fleetIndex {
+		if seen[localpart] {
+			continue
 		}
+		entries = append(entries, serviceListEntry{
+			Localpart: localpart,
+			Template:  fleetData.Template,
+			Replicas:  fleetData.Replicas,
+			Instances: fleetData.Instances,
+			Failover:  fleetData.Failover,
+			Priority:  fleetData.Priority,
+		})
 	}
 
 	if done, err := params.EmitJSON(serviceListResult{
-		Services:      entries,
-		MachineCount:  machineCount,
-		FleetEnriched: fleetEnriched,
+		Services:     entries,
+		MachineCount: machineCount,
 	}); done {
 		return err
 	}
@@ -202,37 +196,15 @@ func runList(ctx context.Context, logger *slog.Logger, params serviceListParams)
 		return nil
 	}
 
-	// Table format adapts to whether fleet data is available.
 	writer := tabwriter.NewWriter(os.Stdout, 0, 4, 2, ' ', 0)
-	if fleetEnriched {
-		printFleetEnrichedTable(writer, entries, params.Machine == "")
-	} else {
-		printMatrixOnlyTable(writer, entries, params.Machine == "")
-	}
+	printTable(writer, entries, params.Machine == "")
 	writer.Flush()
 
 	return nil
 }
 
-// printMatrixOnlyTable prints the original Matrix-only table format.
-func printMatrixOnlyTable(writer *tabwriter.Writer, entries []serviceListEntry, showMachine bool) {
-	if showMachine {
-		fmt.Fprintln(writer, "MACHINE\tNAME\tTEMPLATE\tAUTO-START")
-		for _, entry := range entries {
-			fmt.Fprintf(writer, "%s\t%s\t%s\t%v\n",
-				entry.MachineName, entry.Localpart, entry.Template, entry.AutoStart)
-		}
-	} else {
-		fmt.Fprintln(writer, "NAME\tTEMPLATE\tAUTO-START")
-		for _, entry := range entries {
-			fmt.Fprintf(writer, "%s\t%s\t%v\n",
-				entry.Localpart, entry.Template, entry.AutoStart)
-		}
-	}
-}
-
-// printFleetEnrichedTable prints a table with fleet metadata columns.
-func printFleetEnrichedTable(writer *tabwriter.Writer, entries []serviceListEntry, showMachine bool) {
+// printTable prints the service list table with fleet metadata columns.
+func printTable(writer *tabwriter.Writer, entries []serviceListEntry, showMachine bool) {
 	if showMachine {
 		fmt.Fprintln(writer, "NAME\tTEMPLATE\tMACHINE\tREPLICAS\tINSTANCES\tFAILOVER\tPRIORITY")
 		for _, entry := range entries {

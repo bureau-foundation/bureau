@@ -40,9 +40,8 @@ type serviceShowResult struct {
 	Template        string                           `json:"template"                    desc:"template reference"`
 	AutoStart       bool                             `json:"auto_start,omitempty"        desc:"whether the service starts automatically"`
 	Labels          map[string]string                `json:"labels,omitempty"            desc:"assignment labels"`
-	FleetManaged    bool                             `json:"fleet_managed"               desc:"whether this service has a fleet definition"`
 	Definition      *fleetschema.FleetServiceContent `json:"definition,omitempty"        desc:"fleet service definition"`
-	Instances       []serviceInstanceResult          `json:"instances,omitempty"         desc:"current placement instances (fleet-managed)"`
+	Instances       []serviceInstanceResult          `json:"instances,omitempty"         desc:"current placement instances"`
 }
 
 func showCommand() *cli.Command {
@@ -56,8 +55,9 @@ func showCommand() *cli.Command {
 If --machine is omitted, scans all machines to find where the service
 is assigned. The scan count is reported for diagnostics.
 
-If a fleet controller is reachable, the output includes the fleet service
-definition (resources, placement constraints, failover) and all instances.`,
+The output includes the fleet service definition (resources, placement
+constraints, failover) and all instances from the fleet controller.
+Both Matrix and fleet controller are required.`,
 		Usage: "bureau service show <localpart> [--machine <machine>]",
 		Examples: []cli.Example{
 			{
@@ -134,39 +134,45 @@ func runShow(ctx context.Context, localpart string, logger *slog.Logger, params 
 		result.Labels = location.Assignment.Labels
 	}
 
-	// Fleet enrichment: optional, non-fatal.
-	fleetClient := tryFleetConnect(&params.FleetConnection, logger)
-	if fleetClient != nil {
-		fleetCtx, fleetCancel := fleet.CallContext(ctx)
-		defer fleetCancel()
+	// Fleet controller: fleet definition and instance data.
+	fleetClient, err := params.FleetConnection.Connect()
+	if err != nil {
+		return err
+	}
 
-		var fleetResponse fleet.ShowServiceResponse
-		if err := fleetClient.Call(fleetCtx, "show-service", map[string]any{
-			"service": localpart,
-		}, &fleetResponse); err != nil {
-			logger.Debug("fleet show-service failed, continuing without fleet data", "error", err)
-		} else {
-			result.FleetManaged = true
-			result.Definition = fleetResponse.Definition
-			instances := make([]serviceInstanceResult, len(fleetResponse.Instances))
-			for i, instance := range fleetResponse.Instances {
-				instances[i] = serviceInstanceResult{
-					Machine:    instance.Machine,
-					Assignment: instance.Assignment,
-				}
-			}
-			result.Instances = instances
+	fleetCtx, fleetCancel := fleet.CallContext(ctx)
+	defer fleetCancel()
 
-			// If Matrix didn't find the service but fleet did, fill in
-			// basic fields from the fleet definition.
-			if !matrixFound && fleetResponse.Definition != nil {
-				result.Template = fleetResponse.Definition.Template
+	fleetFound := false
+	var fleetResponse fleet.ShowServiceResponse
+	if err := fleetClient.Call(fleetCtx, "show-service", map[string]any{
+		"service": localpart,
+	}, &fleetResponse); err != nil {
+		// The fleet connection is required, but a specific service not
+		// being in the fleet controller's index is valid (manually placed
+		// services without fleet definitions). Log and continue.
+		logger.Debug("fleet show-service returned no data for this service", "error", err)
+	} else {
+		fleetFound = true
+		result.Definition = fleetResponse.Definition
+		instances := make([]serviceInstanceResult, len(fleetResponse.Instances))
+		for i, instance := range fleetResponse.Instances {
+			instances[i] = serviceInstanceResult{
+				Machine:    instance.Machine,
+				Assignment: instance.Assignment,
 			}
+		}
+		result.Instances = instances
+
+		// If Matrix didn't find the service but fleet did, fill in
+		// basic fields from the fleet definition.
+		if !matrixFound && fleetResponse.Definition != nil {
+			result.Template = fleetResponse.Definition.Template
 		}
 	}
 
 	// If neither source found the service, report not found.
-	if !matrixFound && !result.FleetManaged {
+	if !matrixFound && !fleetFound {
 		return cli.NotFound("service %q not found: %w", localpart, matrixErr).
 			WithHint("Run 'bureau service list' to see running services.")
 	}
@@ -235,7 +241,7 @@ func runShow(ctx context.Context, localpart string, logger *slog.Logger, params 
 			}
 			fmt.Printf("  %s  %s\n", instance.Machine, template)
 		}
-	} else if result.FleetManaged {
+	} else if result.Definition != nil {
 		fmt.Printf("\nInstances:  none\n")
 	}
 

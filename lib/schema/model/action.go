@@ -16,6 +16,11 @@ const (
 	ActionList   = "model/list"
 	ActionStatus = "model/status"
 
+	// Sync publishes alias state events from catalog discovery.
+	// Used by the CLI sync command to create, update, and remove
+	// aliases based on provider catalog data and selection rules.
+	ActionSync = "model/sync"
+
 	// Wildcard — matches all model service actions.
 	ActionAll = "model/**"
 )

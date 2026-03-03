@@ -6,6 +6,7 @@ load("@rules_go//go:def.bzl", "go_library")
 go_library(
     name = "model",
     srcs = [
+        "catalog.go",
         "command.go",
         "complete.go",
         "connection.go",
@@ -18,6 +19,7 @@ go_library(
     visibility = ["//visibility:public"],
     deps = [
         "//cmd/bureau/cli",
+        "//lib/modeldiscovery",
         "//lib/schema/model",
         "//lib/service",
         "@com_github_spf13_pflag//:pflag",

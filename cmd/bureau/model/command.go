@@ -23,6 +23,7 @@ the socket and token paths default to the standard provisioned
 locations. Outside a sandbox, use --service mode (requires 'bureau
 login') or explicit --socket and --token-file flags.`,
 		Subcommands: []*cli.Command{
+			catalogCommand(),
 			completeCommand(),
 			embedCommand(),
 			listCommand(),

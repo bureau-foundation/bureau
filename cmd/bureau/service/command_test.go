@@ -20,13 +20,17 @@ func TestServiceCommandHasSubcommands(t *testing.T) {
 	}
 
 	expectedSubcommands := map[string]bool{
-		"create":  false,
-		"list":    false,
-		"show":    false,
-		"destroy": false,
-		"plan":    false,
-		"place":   false,
-		"unplace": false,
+		"create":    false,
+		"define":    false,
+		"list":      false,
+		"show":      false,
+		"instances": false,
+		"destroy":   false,
+		"delete":    false,
+		"scale":     false,
+		"plan":      false,
+		"place":     false,
+		"unplace":   false,
 	}
 
 	for _, sub := range command.Subcommands {
@@ -112,5 +116,82 @@ func TestUnplaceRequiresMachineFlag(t *testing.T) {
 	}
 	if !strings.Contains(err.Error(), "--machine is required") {
 		t.Errorf("error: got %q, want to contain %q", err.Error(), "--machine is required")
+	}
+}
+
+func TestDefineRequiresLocalpart(t *testing.T) {
+	command := defineCommand()
+	err := command.Execute(nil)
+	if err == nil {
+		t.Fatal("expected error, got nil")
+	}
+	if !strings.HasPrefix(err.Error(), "service localpart is required") {
+		t.Errorf("error: got %q, want prefix %q", err.Error(), "service localpart is required")
+	}
+}
+
+func TestDefineRequiresTemplate(t *testing.T) {
+	command := defineCommand()
+	err := command.Execute([]string{"service/test"})
+	if err == nil {
+		t.Fatal("expected error for missing --template, got nil")
+	}
+	if !strings.Contains(err.Error(), "--template is required") {
+		t.Errorf("error: got %q, want to contain %q", err.Error(), "--template is required")
+	}
+}
+
+func TestDefineRequiresFailover(t *testing.T) {
+	command := defineCommand()
+	err := command.Execute([]string{"service/test", "--template", "bureau/template:test"})
+	if err == nil {
+		t.Fatal("expected error for missing --failover, got nil")
+	}
+	if !strings.Contains(err.Error(), "--failover is required") {
+		t.Errorf("error: got %q, want to contain %q", err.Error(), "--failover is required")
+	}
+}
+
+func TestDefineRejectsInvalidFailover(t *testing.T) {
+	command := defineCommand()
+	err := command.Execute([]string{"service/test", "--template", "bureau/template:test", "--failover", "invalid"})
+	if err == nil {
+		t.Fatal("expected error for invalid --failover, got nil")
+	}
+	if !strings.Contains(err.Error(), "--failover must be one of") {
+		t.Errorf("error: got %q, want to contain %q", err.Error(), "--failover must be one of")
+	}
+}
+
+func TestScaleRequiresReplicaFlag(t *testing.T) {
+	command := scaleCommand()
+	err := command.Execute([]string{"service/test"})
+	if err == nil {
+		t.Fatal("expected error, got nil")
+	}
+	if !strings.Contains(err.Error(), "at least one of --replicas or --max-replicas") {
+		t.Errorf("error: got %q, want to contain replica requirement", err.Error())
+	}
+}
+
+func TestDeleteRequiresLocalpart(t *testing.T) {
+	command := deleteCommand()
+	err := command.Execute(nil)
+	if err == nil {
+		t.Fatal("expected error, got nil")
+	}
+	if !strings.HasPrefix(err.Error(), "service localpart is required") {
+		t.Errorf("error: got %q, want prefix %q", err.Error(), "service localpart is required")
+	}
+}
+
+func TestInstancesRequiresLocalpart(t *testing.T) {
+	command := instancesCommand()
+	err := command.Execute(nil)
+	if err == nil {
+		t.Fatal("expected error, got nil")
+	}
+	if !strings.HasPrefix(err.Error(), "service localpart is required") {
+		t.Errorf("error: got %q, want prefix %q", err.Error(), "service localpart is required")
 	}
 }

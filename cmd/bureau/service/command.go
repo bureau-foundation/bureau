@@ -22,6 +22,19 @@ The "create" command performs the full deployment sequence: register a Matrix
 account, provision encrypted credentials, and assign the service to a machine.
 The daemon detects the assignment and creates the sandbox.
 
+The "define" command publishes a fleet service definition to the fleet room.
+The fleet controller discovers it and manages the service lifecycle: placing
+instances, handling failover, and maintaining replica counts.
+
+The "instances" command shows the current placement instances of a fleet-managed
+service — which machines host it and the instance configuration.
+
+The "scale" command updates the replica count of an existing fleet service
+definition. The fleet controller reconciles by placing or removing instances.
+
+The "delete" command removes a fleet service definition. The fleet controller
+removes all managed instances across the fleet.
+
 Inspection commands (list, show) combine Matrix state events with fleet
 controller data: replica counts, placement scores, failover policies, and
 instance details. Both Matrix and the fleet controller are required.
@@ -30,11 +43,15 @@ Placement commands (plan, place, unplace) manage fleet-managed service
 placement across machines.`,
 		Subcommands: []*cli.Command{
 			createCommand(),
+			defineCommand(),
 			listCommand(),
 			showCommand(),
+			instancesCommand(),
 			destroyCommand(),
+			deleteCommand(),
+			scaleCommand(),
 
-			// Fleet controller commands.
+			// Fleet controller placement commands.
 			planCommand(),
 			placeCommand(),
 			unplaceCommand(),
@@ -61,8 +78,24 @@ placement across machines.`,
 				Command:     "bureau service place service/stt/whisper",
 			},
 			{
+				Description: "Define a fleet-managed service",
+				Command:     "bureau service define service/stt/whisper --template bureau/template:whisper-stt --failover migrate --credential-file ./creds",
+			},
+			{
+				Description: "Show instances of a fleet service",
+				Command:     "bureau service instances service/stt/whisper",
+			},
+			{
+				Description: "Scale a fleet service",
+				Command:     "bureau service scale service/stt/whisper --replicas 3 --credential-file ./creds",
+			},
+			{
 				Description: "Remove a service assignment",
 				Command:     "bureau service destroy service/ticket --credential-file ./creds",
+			},
+			{
+				Description: "Delete a fleet service definition",
+				Command:     "bureau service delete service/batch/worker --yes --credential-file ./creds",
 			},
 		},
 	}

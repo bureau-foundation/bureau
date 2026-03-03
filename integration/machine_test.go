@@ -1075,7 +1075,7 @@ func deployAgent(t *testing.T, admin *messaging.DirectSession, machine *testMach
 	waitForFile(t, proxySocketPath)
 
 	if !options.SkipWaitForReady {
-		readyWatch.WaitForMessage(t, "agent-ready", result.PrincipalUserID)
+		waitForAgentReady(t, &readyWatch, result.PrincipalUserID, options.Localpart, machine.UserID)
 	}
 
 	return agentDeployment{
@@ -1088,6 +1088,42 @@ func deployAgent(t *testing.T, admin *messaging.DirectSession, machine *testMach
 		ProxySocketPath: proxySocketPath,
 		AdminSocketPath: machine.PrincipalProxyAdminSocketPath(t, options.Localpart),
 	}
+}
+
+// waitForAgentReady waits for the agent to post "agent-ready" in the
+// config room. If the daemon posts a sandbox_exited notification for
+// this agent instead (indicating the agent crashed on startup), the
+// test is failed immediately with the captured output — avoiding a
+// slow timeout waiting for a message that will never arrive.
+func waitForAgentReady(t *testing.T, watch *roomWatch, agentUserID ref.UserID, agentLocalpart string, daemonUserID ref.UserID) {
+	t.Helper()
+	watch.WaitForEvent(t, func(event messaging.Event) bool {
+		if event.Type != schema.MatrixEventTypeMessage {
+			return false
+		}
+
+		// Success: "agent-ready" from the agent.
+		if event.Sender == agentUserID {
+			body, _ := event.Content["body"].(string)
+			if strings.Contains(body, "agent-ready") {
+				return true
+			}
+		}
+
+		// Failure: sandbox_exited from the daemon for this agent.
+		msgtype, _ := event.Content["msgtype"].(string)
+		if event.Sender == daemonUserID && msgtype == schema.MsgTypeSandboxExited {
+			principal, _ := event.Content["principal"].(string)
+			if principal == agentLocalpart {
+				exitCode, _ := event.Content["exit_code"].(float64)
+				capturedOutput, _ := event.Content["captured_output"].(string)
+				t.Fatalf("agent %q crashed during startup (exit code %d): %s",
+					agentLocalpart, int(exitCode), capturedOutput)
+			}
+		}
+
+		return false
+	}, "agent-ready or sandbox crash for "+agentLocalpart)
 }
 
 // --- Service deployment ---

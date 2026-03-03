@@ -146,10 +146,10 @@ func TestNativeAgentContextTruncation(t *testing.T) {
 
 	// Deploy bureau-agent with a context window that leaves a moderate
 	// message budget after the real overhead estimate. Budget math:
-	//   overhead ≈ 18000-20000 tokens (full Bureau tool catalog, varies
+	//   overhead ≈ 28000-30000 tokens (full Bureau tool catalog, varies
 	//             with number of authorized commands)
 	//   messageBudget = contextWindow - maxOutputTokens - overhead
-	//                 = 30000 - 1024 - ~19000 ≈ ~10000 tokens
+	//                 = 40000 - 1024 - ~29000 ≈ ~10000 tokens
 	//
 	// The mock reports 1500 input_tokens per message (see
 	// newMockMultiTurnToolSequence), so the estimator converges to a
@@ -163,7 +163,7 @@ func TestNativeAgentContextTruncation(t *testing.T) {
 			"BUREAU_AGENT_MODEL":          "mock-model",
 			"BUREAU_AGENT_SERVICE":        "anthropic",
 			"BUREAU_AGENT_MAX_TOKENS":     "1024",
-			"BUREAU_AGENT_CONTEXT_WINDOW": "30000",
+			"BUREAU_AGENT_CONTEXT_WINDOW": "40000",
 		},
 		Authorization: &schema.AuthorizationPolicy{
 			Grants: []schema.Grant{

@@ -37,6 +37,11 @@ func (d *Daemon) reconcile(ctx context.Context) error {
 	d.reconcileMu.Lock()
 	defer d.reconcileMu.Unlock()
 
+	// Reset the active service tunnel tracker. resolveRemoteServiceMount
+	// populates this during sandbox creation; cleanupServiceTunnels uses
+	// it afterward to remove stale tunnels.
+	d.activeServiceTunnels = make(map[string]bool)
+
 	config, err := d.readMachineConfig(ctx)
 	if err != nil {
 		if messaging.IsMatrixError(err, messaging.ErrCodeNotFound) {
@@ -1733,9 +1738,27 @@ func (d *Daemon) resolveServiceMounts(ctx context.Context, requiredServices []st
 			return nil, fmt.Errorf("resolving required service %q: %w", spec, err)
 		}
 
-		socketPath, err := d.resolveEndpointSocket(principal, endpoint)
-		if err != nil {
-			return nil, fmt.Errorf("resolving endpoint for service %q: %w", spec, err)
+		// Look up the service in the in-memory directory to determine
+		// whether it runs on this machine or a remote one.
+		service, ok := d.services[principal.Localpart()]
+		if !ok {
+			return nil, fmt.Errorf("service binding for %q resolved to principal %s, but the principal is not yet in the service directory (may still be starting)", spec, principal)
+		}
+
+		var socketPath string
+		if service.Machine == d.machine {
+			// Local service: resolve the endpoint via filesystem symlink.
+			socketPath, err = d.resolveEndpointSocket(principal, endpoint)
+			if err != nil {
+				return nil, fmt.Errorf("resolving endpoint for local service %q: %w", spec, err)
+			}
+		} else {
+			// Remote service: create a transport tunnel to bridge
+			// connections to the remote machine.
+			socketPath, err = d.resolveRemoteServiceMount(principal, service, role, endpoint)
+			if err != nil {
+				return nil, fmt.Errorf("resolving remote service %q on machine %s: %w", spec, service.Machine, err)
+			}
 		}
 
 		// Mount name: bare role for default/cbor, "role-endpoint" for named endpoints.
@@ -1750,6 +1773,71 @@ func (d *Daemon) resolveServiceMounts(ctx context.Context, requiredServices []st
 		})
 	}
 	return mounts, nil
+}
+
+// resolveRemoteServiceMount creates a transport tunnel to a remote service
+// and returns the local tunnel socket path. The tunnel bridges connections
+// from the local sandbox to the remote service via the daemon-to-daemon
+// WebRTC transport.
+//
+// Returns an error if transport is not configured, no peer address is known
+// for the remote machine, or the requested endpoint is not declared by the
+// service. No silent fallbacks — the operator must configure transport for
+// cross-machine service access.
+func (d *Daemon) resolveRemoteServiceMount(principal ref.Entity, service *schema.Service, role, endpoint string) (string, error) {
+	if d.transportDialer == nil {
+		return "", fmt.Errorf("service %s runs on remote machine %s but transport is not configured", principal, service.Machine)
+	}
+
+	peerAddress, ok := d.peerAddresses[service.Machine.UserID().String()]
+	if !ok || peerAddress == "" {
+		return "", fmt.Errorf("service %s runs on remote machine %s but no transport address is known for that machine", principal, service.Machine)
+	}
+
+	// Validate the requested endpoint exists in the service's declaration.
+	// For the default CBOR endpoint, every service has "service.sock".
+	if endpoint != "" && endpoint != "cbor" {
+		if _, ok := service.Endpoints[endpoint]; !ok {
+			available := make([]string, 0, len(service.Endpoints))
+			for name := range service.Endpoints {
+				available = append(available, name)
+			}
+			slices.Sort(available)
+			return "", fmt.Errorf("service %s does not declare endpoint %q (available: %v)", principal, endpoint, available)
+		}
+	}
+
+	// Tunnel naming: "service/<role>" for default endpoint,
+	// "service/<role>-<endpoint>" for named endpoints. The tunnel name
+	// is a map key (slashes are fine). The socket filename must be flat
+	// — sanitize slashes to dashes so roles like "stt/whisper" produce
+	// "service-stt-whisper.sock" instead of a nested directory path.
+	tunnelName := "service/" + role
+	sanitizedRole := strings.ReplaceAll(role, "/", "-")
+	socketFilename := "service-" + sanitizedRole + ".sock"
+	if endpoint != "" && endpoint != "cbor" {
+		tunnelName = "service/" + role + "-" + endpoint
+		socketFilename = "service-" + sanitizedRole + "-" + endpoint + ".sock"
+	}
+
+	tunnelSocketPath := filepath.Join(d.runDir, "tunnel", socketFilename)
+	if err := d.startTunnel(tunnelName, principal.Localpart(), endpoint, peerAddress, tunnelSocketPath); err != nil {
+		return "", fmt.Errorf("starting tunnel to remote service %s: %w", principal, err)
+	}
+
+	// Track this tunnel as active so cleanupServiceTunnels knows not
+	// to remove it. The map is reset at the start of each reconcile cycle.
+	d.activeServiceTunnels[tunnelName] = true
+
+	d.logger.Info("created tunnel for remote required service",
+		"role", role,
+		"endpoint", endpoint,
+		"principal", principal,
+		"machine", service.Machine,
+		"peer_address", peerAddress,
+		"tunnel_socket", tunnelSocketPath,
+	)
+	return tunnelSocketPath, nil
 }
 
 // resolveServiceBinding looks up a single service role in the given rooms.

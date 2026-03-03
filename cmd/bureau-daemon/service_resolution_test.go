@@ -54,6 +54,14 @@ func TestReconcile_ServiceMountsResolved(t *testing.T) {
 		Principal: ticketEntity,
 	})
 
+	// Register the service in the in-memory directory so that
+	// resolveServiceMounts can check locality (local vs remote).
+	daemon.services[ticketEntity.Localpart()] = &schema.Service{
+		Principal: ticketEntity,
+		Machine:   daemon.machine,
+		Endpoints: map[string]string{"cbor": "service.sock"},
+	}
+
 	// Principal assignment.
 	matrixState.setStateEvent(configRoomID, schema.EventTypeMachineConfig, machineName, schema.MachineConfig{
 		Principals: []schema.PrincipalAssignment{
@@ -251,6 +259,18 @@ func TestReconcile_ServiceMountsWorkspaceRoom(t *testing.T) {
 		Principal: wsTicketEntity,
 	})
 
+	// Register both service principals in the in-memory directory.
+	daemon.services[globalTicketEntity.Localpart()] = &schema.Service{
+		Principal: globalTicketEntity,
+		Machine:   daemon.machine,
+		Endpoints: map[string]string{"cbor": "service.sock"},
+	}
+	daemon.services[wsTicketEntity.Localpart()] = &schema.Service{
+		Principal: wsTicketEntity,
+		Machine:   daemon.machine,
+		Endpoints: map[string]string{"cbor": "service.sock"},
+	}
+
 	// Workspace event so the StartCondition resolves and gives us the workspace room ID.
 	matrixState.setStateEvent(workspaceRoomID, schema.EventTypeWorkspace, "", workspace.WorkspaceState{
 		Status:    workspace.WorkspaceStatusActive,
@@ -389,6 +409,18 @@ func TestReconcile_ServiceMountsMultipleServices(t *testing.T) {
 	matrixState.setStateEvent(configRoomID, schema.EventTypeServiceBinding, "rag", schema.ServiceBindingContent{
 		Principal: ragEntity,
 	})
+
+	// Register both services in the in-memory directory.
+	daemon.services[ticketEntity.Localpart()] = &schema.Service{
+		Principal: ticketEntity,
+		Machine:   daemon.machine,
+		Endpoints: map[string]string{"cbor": "service.sock"},
+	}
+	daemon.services[ragEntity.Localpart()] = &schema.Service{
+		Principal: ragEntity,
+		Machine:   daemon.machine,
+		Endpoints: map[string]string{"cbor": "service.sock"},
+	}
 
 	matrixState.setStateEvent(configRoomID, schema.EventTypeMachineConfig, machineName, schema.MachineConfig{
 		Principals: []schema.PrincipalAssignment{
@@ -889,4 +921,240 @@ func TestResolveEndpointSocket(t *testing.T) {
 			t.Errorf("error = %v, want 'not yet in the service directory'", err)
 		}
 	})
+}
+
+// TestResolveRemoteServiceMount verifies that resolveRemoteServiceMount
+// creates a tunnel socket when given a remote service with transport
+// configured and a known peer address.
+func TestResolveRemoteServiceMount(t *testing.T) {
+	t.Parallel()
+
+	daemon, _ := newTestDaemon(t)
+	daemon.machine, daemon.fleet = testMachineSetup(t, "workstation", "bureau.local")
+	daemon.runDir = t.TempDir()
+	daemon.fleetRunDir = daemon.fleet.RunDir(daemon.runDir)
+	daemon.operatorsGID = -1
+	daemon.transportDialer = &testTCPDialer{}
+
+	// Create a remote machine ref.
+	remoteMachine, err := ref.NewMachine(daemon.fleet, "gpu-box")
+	if err != nil {
+		t.Fatalf("construct remote machine: %v", err)
+	}
+
+	serviceRef, err := ref.NewService(daemon.fleet, "model/gpt")
+	if err != nil {
+		t.Fatalf("construct service ref: %v", err)
+	}
+	servicePrincipal := serviceRef.Entity()
+
+	service := &schema.Service{
+		Principal: servicePrincipal,
+		Machine:   remoteMachine,
+		Endpoints: map[string]string{
+			"cbor": "service.sock",
+			"http": "http.sock",
+		},
+	}
+
+	// Set peer address so transport can find the remote machine.
+	daemon.peerAddresses[remoteMachine.UserID().String()] = "127.0.0.1:9999"
+
+	t.Run("default endpoint", func(t *testing.T) {
+		socketPath, err := daemon.resolveRemoteServiceMount(servicePrincipal, service, "model", "")
+		if err != nil {
+			t.Fatalf("resolveRemoteServiceMount: %v", err)
+		}
+
+		wantSocket := filepath.Join(daemon.runDir, "tunnel", "service-model.sock")
+		if socketPath != wantSocket {
+			t.Errorf("socket = %q, want %q", socketPath, wantSocket)
+		}
+
+		// Tunnel should be tracked.
+		if _, ok := daemon.tunnels["service/model"]; !ok {
+			t.Error("expected tunnel 'service/model' to exist")
+		}
+		if !daemon.activeServiceTunnels["service/model"] {
+			t.Error("expected tunnel 'service/model' to be marked active")
+		}
+
+		daemon.stopTunnel("service/model")
+	})
+
+	t.Run("named endpoint", func(t *testing.T) {
+		socketPath, err := daemon.resolveRemoteServiceMount(servicePrincipal, service, "model", "http")
+		if err != nil {
+			t.Fatalf("resolveRemoteServiceMount: %v", err)
+		}
+
+		wantSocket := filepath.Join(daemon.runDir, "tunnel", "service-model-http.sock")
+		if socketPath != wantSocket {
+			t.Errorf("socket = %q, want %q", socketPath, wantSocket)
+		}
+
+		if _, ok := daemon.tunnels["service/model-http"]; !ok {
+			t.Error("expected tunnel 'service/model-http' to exist")
+		}
+		if !daemon.activeServiceTunnels["service/model-http"] {
+			t.Error("expected tunnel 'service/model-http' to be marked active")
+		}
+
+		daemon.stopTunnel("service/model-http")
+	})
+
+	t.Run("unknown endpoint", func(t *testing.T) {
+		_, err := daemon.resolveRemoteServiceMount(servicePrincipal, service, "model", "grpc")
+		if err == nil {
+			t.Fatal("expected error for unknown endpoint")
+		}
+		if !strings.Contains(err.Error(), "does not declare endpoint") {
+			t.Errorf("error = %v, want 'does not declare endpoint'", err)
+		}
+	})
+
+	t.Run("role with slashes sanitized in socket filename", func(t *testing.T) {
+		// Roles like "stt/whisper" should produce flat socket filenames
+		// ("service-stt-whisper.sock") not nested directory paths.
+		socketPath, err := daemon.resolveRemoteServiceMount(servicePrincipal, service, "stt/whisper", "")
+		if err != nil {
+			t.Fatalf("resolveRemoteServiceMount: %v", err)
+		}
+
+		wantSocket := filepath.Join(daemon.runDir, "tunnel", "service-stt-whisper.sock")
+		if socketPath != wantSocket {
+			t.Errorf("socket = %q, want %q", socketPath, wantSocket)
+		}
+
+		// Tunnel map key preserves slashes (it's a map key, not a path).
+		if _, ok := daemon.tunnels["service/stt/whisper"]; !ok {
+			t.Error("expected tunnel 'service/stt/whisper' to exist")
+		}
+
+		daemon.stopTunnel("service/stt/whisper")
+	})
+}
+
+// TestResolveRemoteServiceMount_NoTransport verifies that resolving a
+// remote service without transport configured returns an error.
+func TestResolveRemoteServiceMount_NoTransport(t *testing.T) {
+	t.Parallel()
+
+	daemon, _ := newTestDaemon(t)
+	daemon.machine, daemon.fleet = testMachineSetup(t, "workstation", "bureau.local")
+	daemon.runDir = t.TempDir()
+	// transportDialer is nil (not configured).
+
+	remoteMachine, err := ref.NewMachine(daemon.fleet, "gpu-box")
+	if err != nil {
+		t.Fatalf("construct remote machine: %v", err)
+	}
+	serviceRef, err := ref.NewService(daemon.fleet, "ticket")
+	if err != nil {
+		t.Fatalf("construct service ref: %v", err)
+	}
+
+	service := &schema.Service{
+		Principal: serviceRef.Entity(),
+		Machine:   remoteMachine,
+		Endpoints: map[string]string{"cbor": "service.sock"},
+	}
+
+	_, err = daemon.resolveRemoteServiceMount(serviceRef.Entity(), service, "ticket", "")
+	if err == nil {
+		t.Fatal("expected error when transport is not configured")
+	}
+	if !strings.Contains(err.Error(), "transport is not configured") {
+		t.Errorf("error = %v, want 'transport is not configured'", err)
+	}
+}
+
+// TestResolveRemoteServiceMount_NoPeerAddress verifies that resolving a
+// remote service without a known peer address returns an error.
+func TestResolveRemoteServiceMount_NoPeerAddress(t *testing.T) {
+	t.Parallel()
+
+	daemon, _ := newTestDaemon(t)
+	daemon.machine, daemon.fleet = testMachineSetup(t, "workstation", "bureau.local")
+	daemon.runDir = t.TempDir()
+	daemon.transportDialer = &testTCPDialer{}
+	// peerAddresses is empty (no address known for remote machine).
+
+	remoteMachine, err := ref.NewMachine(daemon.fleet, "gpu-box")
+	if err != nil {
+		t.Fatalf("construct remote machine: %v", err)
+	}
+	serviceRef, err := ref.NewService(daemon.fleet, "ticket")
+	if err != nil {
+		t.Fatalf("construct service ref: %v", err)
+	}
+
+	service := &schema.Service{
+		Principal: serviceRef.Entity(),
+		Machine:   remoteMachine,
+		Endpoints: map[string]string{"cbor": "service.sock"},
+	}
+
+	_, err = daemon.resolveRemoteServiceMount(serviceRef.Entity(), service, "ticket", "")
+	if err == nil {
+		t.Fatal("expected error when no peer address is known")
+	}
+	if !strings.Contains(err.Error(), "no transport address is known") {
+		t.Errorf("error = %v, want 'no transport address is known'", err)
+	}
+}
+
+// TestCleanupServiceTunnels verifies that service tunnels not in the
+// activeServiceTunnels set are stopped, while non-service tunnels and
+// active service tunnels are preserved.
+func TestCleanupServiceTunnels(t *testing.T) {
+	t.Parallel()
+
+	daemon, _ := newTestDaemon(t)
+	daemon.machine, daemon.fleet = testMachineSetup(t, "workstation", "bureau.local")
+	daemon.runDir = t.TempDir()
+	daemon.operatorsGID = -1
+	daemon.transportDialer = &testTCPDialer{}
+
+	socketDir := testutil.SocketDir(t)
+
+	// Create three tunnels: one active service, one stale service, one non-service.
+	activePath := filepath.Join(socketDir, "active.sock")
+	stalePath := filepath.Join(socketDir, "stale.sock")
+	upstreamPath := filepath.Join(socketDir, "upstream.sock")
+
+	if err := daemon.startTunnel("service/model", "service/model/gpt", "", "127.0.0.1:9999", activePath); err != nil {
+		t.Fatalf("start active tunnel: %v", err)
+	}
+	if err := daemon.startTunnel("service/ticket", "service/ticket", "", "127.0.0.1:9999", stalePath); err != nil {
+		t.Fatalf("start stale tunnel: %v", err)
+	}
+	if err := daemon.startTunnel("upstream", "service/artifact", "", "127.0.0.1:9999", upstreamPath); err != nil {
+		t.Fatalf("start upstream tunnel: %v", err)
+	}
+
+	if len(daemon.tunnels) != 3 {
+		t.Fatalf("expected 3 tunnels, got %d", len(daemon.tunnels))
+	}
+
+	// Mark only "service/model" as active.
+	daemon.activeServiceTunnels["service/model"] = true
+
+	daemon.cleanupServiceTunnels()
+
+	// "service/model" should remain (active).
+	if _, ok := daemon.tunnels["service/model"]; !ok {
+		t.Error("active service tunnel 'service/model' should not be removed")
+	}
+	// "service/ticket" should be removed (stale).
+	if _, ok := daemon.tunnels["service/ticket"]; ok {
+		t.Error("stale service tunnel 'service/ticket' should be removed")
+	}
+	// "upstream" should remain (not a service tunnel).
+	if _, ok := daemon.tunnels["upstream"]; !ok {
+		t.Error("non-service tunnel 'upstream' should not be removed")
+	}
+
+	// Clean up remaining tunnels.
+	daemon.stopAllTunnels()
 }

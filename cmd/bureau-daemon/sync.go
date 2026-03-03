@@ -216,6 +216,7 @@ func (d *Daemon) initialSync(ctx context.Context) (string, error) {
 		d.pushServiceDirectory(ctx, consumers)
 		d.discoverSharedCache(ctx)
 		d.discoverPushTargets(ctx)
+		d.cleanupServiceTunnels()
 	}
 
 	// Evaluate HA leases for pre-existing critical services. Without
@@ -477,6 +478,7 @@ func (d *Daemon) processSyncResponse(ctx context.Context, response *messaging.Sy
 			d.logger.Info("service directory pushed to consumers")
 			d.discoverSharedCache(ctx)
 			d.discoverPushTargets(ctx)
+			d.cleanupServiceTunnels()
 
 			// Post a message naming each changed service so that
 			// observers (tests, operators) can synchronize on specific

@@ -100,6 +100,7 @@ func newTestDaemon(t *testing.T) (*Daemon, *clock.FakeClock) {
 		peerTransports:        make(map[string]http.RoundTripper),
 		layoutWatchers:        make(map[ref.Entity]*layoutWatcher),
 		tunnels:               make(map[string]*tunnelInstance),
+		activeServiceTunnels:  make(map[string]bool),
 		validateCommandFunc:   func(string, string) error { return nil },
 	}
 	return daemon, fakeClock

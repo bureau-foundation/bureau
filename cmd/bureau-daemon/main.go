@@ -987,7 +987,16 @@ type Daemon struct {
 	// transport. Names follow a convention:
 	//   - "upstream": shared cache tunnel for artifact fallthrough
 	//   - "push/<machine-localpart>": push target tunnel
+	//   - "service/<role>": RequiredService tunnel (default endpoint)
+	//   - "service/<role>-<endpoint>": RequiredService tunnel (named endpoint)
 	tunnels map[string]*tunnelInstance
+
+	// activeServiceTunnels tracks which "service/*" tunnels were
+	// created or renewed during the most recent reconciliation cycle.
+	// cleanupServiceTunnels uses this to remove stale tunnels whose
+	// services are no longer remote. Reset at the start of each
+	// reconcile cycle, populated by resolveRemoteServiceMount.
+	activeServiceTunnels map[string]bool
 
 	// peerAddresses maps machine user IDs to their transport addresses,
 	// populated from MachineStatus state events in #bureau/machine.

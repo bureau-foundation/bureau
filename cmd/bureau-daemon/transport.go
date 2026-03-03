@@ -503,13 +503,23 @@ func (d *Daemon) handleTransportTunnel(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
+	// Read the optional endpoint query parameter. When present, the
+	// tunnel connects to a non-default service endpoint (e.g., "http"
+	// for the model service's HTTP compatibility socket). When absent,
+	// connects to the default CBOR endpoint.
+	endpoint := r.URL.Query().Get("endpoint")
+
 	// Connect to the local service's Unix socket.
 	serviceRef, parseErr := ref.ParseEntityLocalpart(serviceLocalpart, d.machine.Server())
 	if parseErr != nil {
 		http.Error(w, fmt.Sprintf("invalid service localpart: %v", parseErr), http.StatusBadRequest)
 		return
 	}
-	socketPath := serviceRef.ServiceSocketPath(d.fleetRunDir)
+	socketPath, resolveErr := d.resolveEndpointSocket(serviceRef, endpoint)
+	if resolveErr != nil {
+		http.Error(w, fmt.Sprintf("resolving endpoint %q for service %s: %v", endpoint, serviceLocalpart, resolveErr), http.StatusBadRequest)
+		return
+	}
 	serviceConnection, err := net.DialTimeout("unix", socketPath, 5*time.Second)
 	if err != nil {
 		d.logger.Error("tunnel: cannot connect to local service socket",
@@ -686,7 +696,7 @@ type tunnelInstance struct {
 // one transport data channel. This maps naturally to the transport's
 // one-data-channel-per-dial model. No persistent tunnel, no
 // multiplexing.
-func (d *Daemon) startTunnel(name, serviceLocalpart, peerAddress, tunnelSocketPath string) error {
+func (d *Daemon) startTunnel(name, serviceLocalpart, endpoint, peerAddress, tunnelSocketPath string) error {
 	// Stop any existing tunnel with this name (idempotent).
 	d.stopTunnel(name)
 
@@ -721,12 +731,13 @@ func (d *Daemon) startTunnel(name, serviceLocalpart, peerAddress, tunnelSocketPa
 		cancel:     tunnelCancel,
 	}
 
-	go d.tunnelAcceptLoop(tunnelContext, listener, serviceLocalpart, peerAddress)
+	go d.tunnelAcceptLoop(tunnelContext, listener, serviceLocalpart, endpoint, peerAddress)
 
 	d.logger.Info("tunnel socket started",
 		"name", name,
 		"socket", tunnelSocketPath,
 		"remote_localpart", serviceLocalpart,
+		"endpoint", endpoint,
 		"peer_address", peerAddress,
 	)
 	return nil
@@ -735,8 +746,10 @@ func (d *Daemon) startTunnel(name, serviceLocalpart, peerAddress, tunnelSocketPa
 // tunnelAcceptLoop accepts connections on the tunnel socket and bridges each
 // to the remote service. Each connection is handled in its own goroutine:
 // dial the peer via transport, send HTTP POST to /tunnel/<localpart>, read
-// the 200 OK response, then bridge bytes.
-func (d *Daemon) tunnelAcceptLoop(ctx context.Context, listener net.Listener, serviceLocalpart, peerAddress string) {
+// the 200 OK response, then bridge bytes. The endpoint parameter specifies
+// which service endpoint to connect to on the remote side (empty for default
+// CBOR endpoint).
+func (d *Daemon) tunnelAcceptLoop(ctx context.Context, listener net.Listener, serviceLocalpart, endpoint, peerAddress string) {
 	for {
 		localConnection, err := listener.Accept()
 		if err != nil {
@@ -746,15 +759,16 @@ func (d *Daemon) tunnelAcceptLoop(ctx context.Context, listener net.Listener, se
 			d.logger.Error("tunnel: accept error", "error", err)
 			return
 		}
-		go d.handleTunnelConnection(ctx, localConnection, serviceLocalpart, peerAddress)
+		go d.handleTunnelConnection(ctx, localConnection, serviceLocalpart, endpoint, peerAddress)
 	}
 }
 
-// handleTunnelConnection bridges a single connection from the local artifact
-// service to the remote shared cache service. It dials the peer daemon via
-// the transport, performs an HTTP POST handshake on /tunnel/<localpart>,
-// reads the 200 OK, and bridges bytes until either side closes.
-func (d *Daemon) handleTunnelConnection(ctx context.Context, localConnection net.Conn, serviceLocalpart, peerAddress string) {
+// handleTunnelConnection bridges a single connection from a local client
+// to a remote service. It dials the peer daemon via the transport, performs
+// an HTTP POST handshake on /tunnel/<localpart>?endpoint=<name>, reads the
+// 200 OK, and bridges bytes until either side closes. The endpoint parameter
+// specifies which service endpoint to connect to (empty for default CBOR).
+func (d *Daemon) handleTunnelConnection(ctx context.Context, localConnection net.Conn, serviceLocalpart, endpoint, peerAddress string) {
 	// Dial the remote daemon via the transport layer.
 	dialContext, dialCancel := context.WithTimeout(ctx, 30*time.Second)
 	defer dialCancel()
@@ -776,8 +790,13 @@ func (d *Daemon) handleTunnelConnection(ctx context.Context, localConnection net
 	}
 
 	// Send HTTP POST to /tunnel/<localpart> on the remote daemon.
-	httpRequest, err := http.NewRequest("POST",
-		"http://transport/tunnel/"+serviceLocalpart, nil)
+	// Include the endpoint query parameter when targeting a non-default
+	// endpoint so the remote handler connects to the correct socket.
+	tunnelURL := "http://transport/tunnel/" + serviceLocalpart
+	if endpoint != "" {
+		tunnelURL += "?endpoint=" + endpoint
+	}
+	httpRequest, err := http.NewRequest("POST", tunnelURL, nil)
 	if err != nil {
 		transportConnection.Close()
 		localConnection.Close()

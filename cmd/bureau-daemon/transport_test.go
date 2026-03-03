@@ -610,7 +610,7 @@ func TestTransportTunnel(t *testing.T) {
 
 	// 4. Start the tunnel socket.
 	tunnelSocketPath := filepath.Join(socketDir, "tunnel.sock")
-	if err := consumerDaemon.startTunnel("upstream", serviceLocalpart, peerAddress, tunnelSocketPath); err != nil {
+	if err := consumerDaemon.startTunnel("upstream", serviceLocalpart, "", peerAddress, tunnelSocketPath); err != nil {
 		t.Fatalf("startTunnel: %v", err)
 	}
 	defer consumerDaemon.stopTunnel("upstream")
@@ -817,10 +817,10 @@ func TestMultipleTunnels(t *testing.T) {
 	tunnel1Path := filepath.Join(socketDir, "tunnel1.sock")
 	tunnel2Path := filepath.Join(socketDir, "tunnel2.sock")
 
-	if err := consumerDaemon.startTunnel("push/machine-a", serviceLocalpart, peerAddress, tunnel1Path); err != nil {
+	if err := consumerDaemon.startTunnel("push/machine-a", serviceLocalpart, "", peerAddress, tunnel1Path); err != nil {
 		t.Fatalf("startTunnel push/machine-a: %v", err)
 	}
-	if err := consumerDaemon.startTunnel("push/machine-b", serviceLocalpart, peerAddress, tunnel2Path); err != nil {
+	if err := consumerDaemon.startTunnel("push/machine-b", serviceLocalpart, "", peerAddress, tunnel2Path); err != nil {
 		t.Fatalf("startTunnel push/machine-b: %v", err)
 	}
 
@@ -970,7 +970,7 @@ func TestStopAllTunnels(t *testing.T) {
 	for i := 0; i < 3; i++ {
 		name := fmt.Sprintf("push/machine-%d", i)
 		socketPath := filepath.Join(socketDir, fmt.Sprintf("tunnel-%d.sock", i))
-		if err := consumerDaemon.startTunnel(name, serviceLocalpart, peerAddress, socketPath); err != nil {
+		if err := consumerDaemon.startTunnel(name, serviceLocalpart, "", peerAddress, socketPath); err != nil {
 			t.Fatalf("startTunnel %s: %v", name, err)
 		}
 	}
@@ -994,4 +994,179 @@ func TestStopAllTunnels(t *testing.T) {
 			t.Errorf("tunnel %d socket still accepting connections after stopAllTunnels", i)
 		}
 	}
+}
+
+// TestTunnelEndpointRouting verifies that the handleTransportTunnel inbound
+// handler correctly routes connections to different service endpoints based
+// on the ?endpoint= query parameter. When endpoint is "http", the tunnel
+// connects to the service's HTTP socket; when absent, it connects to the
+// default CBOR socket.
+func TestTunnelEndpointRouting(t *testing.T) {
+	t.Parallel()
+
+	socketDir := testutil.SocketDir(t)
+
+	// Provider daemon with a model service that has both CBOR and HTTP endpoints.
+	providerDaemon, _ := newTestDaemon(t)
+	providerDaemon.runDir = socketDir
+	providerDaemon.machine, providerDaemon.fleet = testMachineSetup(t, "gpu-box", "bureau.local")
+	providerDaemon.fleetRunDir = providerDaemon.fleet.RunDir(socketDir)
+	providerDaemon.logger = slog.New(slog.NewJSONHandler(os.Stderr, nil))
+
+	serviceRef, err := ref.NewService(providerDaemon.fleet, "model/gpt")
+	if err != nil {
+		t.Fatalf("construct service ref: %v", err)
+	}
+	serviceLocalpart := serviceRef.Localpart()
+	servicePrincipal := serviceRef.Entity()
+
+	// Register the service with both endpoints in the provider daemon's directory.
+	providerDaemon.services[serviceLocalpart] = &schema.Service{
+		Principal: servicePrincipal,
+		Machine:   providerDaemon.machine,
+		Endpoints: map[string]string{
+			"cbor": "service.sock",
+			"http": "http.sock",
+		},
+	}
+
+	// Create a "listen directory" with both socket files, each backed
+	// by an echo server that prefixes responses with the endpoint name
+	// so we can verify which one was connected to.
+	listenDir := filepath.Join(socketDir, "listen")
+	if err := os.MkdirAll(listenDir, 0755); err != nil {
+		t.Fatalf("mkdir listen dir: %v", err)
+	}
+
+	cborSocketPath := filepath.Join(listenDir, "service.sock")
+	httpSocketPath := filepath.Join(listenDir, "http.sock")
+
+	// Start a prefix-echo server: reads N bytes, writes back
+	// "prefix:" + those N bytes. The response is always prefix(5) + ":"
+	// + N bytes = N+6 bytes for a 5-char prefix. This lets us verify
+	// which endpoint was connected to without needing half-close.
+	startPrefixEchoServer := func(t *testing.T, socketPath, prefix string) net.Listener {
+		t.Helper()
+		listener, err := net.Listen("unix", socketPath)
+		if err != nil {
+			t.Fatalf("listen %s: %v", socketPath, err)
+		}
+		go func() {
+			for {
+				conn, err := listener.Accept()
+				if err != nil {
+					return
+				}
+				go func(connection net.Conn) {
+					defer connection.Close()
+					buffer := make([]byte, 1024)
+					count, readErr := connection.Read(buffer)
+					if readErr != nil {
+						return
+					}
+					response := prefix + ":" + string(buffer[:count])
+					connection.Write([]byte(response))
+				}(conn)
+			}
+		}()
+		return listener
+	}
+
+	cborListener := startPrefixEchoServer(t, cborSocketPath, "cbor")
+	defer cborListener.Close()
+	httpListener := startPrefixEchoServer(t, httpSocketPath, "http")
+	defer httpListener.Close()
+
+	// Create a symlink from the canonical ServiceSocketPath to the
+	// CBOR socket in the listen directory. This is how the daemon
+	// resolves endpoints: follow the symlink, swap the filename.
+	canonicalPath := servicePrincipal.ServiceSocketPath(providerDaemon.fleetRunDir)
+	if err := os.MkdirAll(filepath.Dir(canonicalPath), 0755); err != nil {
+		t.Fatalf("mkdir canonical parent: %v", err)
+	}
+	if err := os.Symlink(cborSocketPath, canonicalPath); err != nil {
+		t.Fatalf("create canonical symlink: %v", err)
+	}
+
+	// Start the provider's inbound tunnel handler on a TCP listener.
+	inboundMux := http.NewServeMux()
+	inboundMux.HandleFunc("/tunnel/", providerDaemon.handleTransportTunnel)
+
+	transportListener, err := net.Listen("tcp", "127.0.0.1:0")
+	if err != nil {
+		t.Fatalf("transport Listen: %v", err)
+	}
+	defer transportListener.Close()
+
+	transportServer := &http.Server{Handler: inboundMux}
+	go transportServer.Serve(transportListener)
+	defer transportServer.Close()
+
+	peerAddress := transportListener.Addr().String()
+
+	// Consumer daemon.
+	consumerDaemon, _ := newTestDaemon(t)
+	consumerDaemon.runDir = socketDir
+	consumerDaemon.machine, consumerDaemon.fleet = testMachineSetup(t, "workstation", "bureau.local")
+	consumerDaemon.fleetRunDir = consumerDaemon.fleet.RunDir(socketDir)
+	consumerDaemon.logger = slog.New(slog.NewJSONHandler(os.Stderr, nil))
+	consumerDaemon.transportDialer = &testTCPDialer{}
+
+	t.Run("default endpoint connects to cbor socket", func(t *testing.T) {
+		tunnelPath := filepath.Join(socketDir, "tunnel-default.sock")
+		if err := consumerDaemon.startTunnel("test-default", serviceLocalpart, "", peerAddress, tunnelPath); err != nil {
+			t.Fatalf("startTunnel: %v", err)
+		}
+		defer consumerDaemon.stopTunnel("test-default")
+
+		conn, err := net.DialTimeout("unix", tunnelPath, 5*time.Second)
+		if err != nil {
+			t.Fatalf("dial tunnel: %v", err)
+		}
+		defer conn.Close()
+
+		message := []byte("hello")
+		conn.Write(message)
+
+		// Read back "cbor:" + "hello" = 10 bytes.
+		want := "cbor:hello"
+		response := make([]byte, len(want))
+		conn.SetReadDeadline(time.Now().Add(5 * time.Second)) //nolint:realclock
+		if _, err := io.ReadFull(conn, response); err != nil {
+			t.Fatalf("read response: %v", err)
+		}
+
+		if string(response) != want {
+			t.Errorf("response = %q, want %q (should route to CBOR socket)", string(response), want)
+		}
+	})
+
+	t.Run("http endpoint connects to http socket", func(t *testing.T) {
+		tunnelPath := filepath.Join(socketDir, "tunnel-http.sock")
+		if err := consumerDaemon.startTunnel("test-http", serviceLocalpart, "http", peerAddress, tunnelPath); err != nil {
+			t.Fatalf("startTunnel: %v", err)
+		}
+		defer consumerDaemon.stopTunnel("test-http")
+
+		conn, err := net.DialTimeout("unix", tunnelPath, 5*time.Second)
+		if err != nil {
+			t.Fatalf("dial tunnel: %v", err)
+		}
+		defer conn.Close()
+
+		message := []byte("hello")
+		conn.Write(message)
+
+		// Read back "http:" + "hello" = 10 bytes.
+		want := "http:hello"
+		response := make([]byte, len(want))
+		conn.SetReadDeadline(time.Now().Add(5 * time.Second)) //nolint:realclock
+		if _, err := io.ReadFull(conn, response); err != nil {
+			t.Fatalf("read response: %v", err)
+		}
+
+		if string(response) != want {
+			t.Errorf("response = %q, want %q (should route to HTTP socket)", string(response), want)
+		}
+	})
 }

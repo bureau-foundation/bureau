@@ -761,7 +761,7 @@ func (d *Daemon) discoverSharedCache(ctx context.Context) {
 		}
 
 		tunnelSocketPath := filepath.Join(d.runDir, "tunnel", "artifact-cache.sock")
-		if err := d.startTunnel("upstream", binding.Principal.Localpart(), peerAddress, tunnelSocketPath); err != nil {
+		if err := d.startTunnel("upstream", binding.Principal.Localpart(), "", peerAddress, tunnelSocketPath); err != nil {
 			d.logger.Error("failed to start tunnel socket for shared cache",
 				"principal", binding.Principal,
 				"peer_address", peerAddress,
@@ -920,7 +920,7 @@ func (d *Daemon) discoverPushTargets(ctx context.Context) {
 		sanitized := strings.ReplaceAll(machineLocalpart, "/", "-")
 		tunnelSocketPath := filepath.Join(d.runDir, "tunnel", "push-"+sanitized+".sock")
 
-		if err := d.startTunnel(tunnelName, localpart, peerAddress, tunnelSocketPath); err != nil {
+		if err := d.startTunnel(tunnelName, localpart, "", peerAddress, tunnelSocketPath); err != nil {
 			d.logger.Error("failed to start push tunnel",
 				"machine", machineLocalpart,
 				"peer_address", peerAddress,
@@ -994,6 +994,25 @@ func (d *Daemon) pushPushTargetsConfig(ctx context.Context, targets map[string]s
 		"artifact_socket", artifactSocketPath,
 		"targets", len(targets),
 	)
+}
+
+// cleanupServiceTunnels removes tunnels with the "service/" prefix that
+// were not created or renewed during the most recent reconciliation cycle.
+// The activeServiceTunnels set is populated by resolveRemoteServiceMount
+// during sandbox reconciliation. Any service tunnel not in the set is
+// stale — its service either moved to this machine, was removed from the
+// directory, or the sandbox that needed it was destroyed.
+func (d *Daemon) cleanupServiceTunnels() {
+	for name := range d.tunnels {
+		if !strings.HasPrefix(name, "service/") {
+			continue
+		}
+		if d.activeServiceTunnels[name] {
+			continue
+		}
+		d.logger.Info("stopping stale service tunnel", "name", name)
+		d.stopTunnel(name)
+	}
 }
 
 // isTunnelSocket returns true if the given socket path belongs to a

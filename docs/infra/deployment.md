@@ -268,6 +268,115 @@ assignments from the machine config. No sudo needed.
 
 ---
 
+## Deploying a Claude Code Agent
+
+Deploy the `bureau-agent-claude` template, which wraps Claude Code with the
+Bureau agent driver (Matrix message pump, session tracking, metrics).
+
+### Install Claude Code
+
+Claude Code must be available at `/var/bureau/cache/bin/claude`. The template
+mounts this directory into the sandbox at `/usr/local/bin`.
+
+```bash
+# If claude is installed at ~/.local/bin/claude:
+sudo ln -s /home/$USER/.local/bin/claude /var/bureau/cache/bin/claude
+```
+
+### Provide Authentication
+
+The agent needs Anthropic authentication. Two options:
+
+**Subscription account (Claude Pro/Team/Enterprise):** Authenticate with
+`claude login` on the host, then make the credential file accessible to
+Bureau. The template mounts `${CACHE_ROOT}/claude-credentials.json`
+read-only into the sandbox.
+
+```bash
+# Symlink so re-login automatically updates the sandbox credential.
+sudo ln -sf ~/.claude/.credentials.json /var/bureau/cache/claude-credentials.json
+
+# Grant the bureau user read access (file is 600 by default). An ACL
+# is the least intrusive option — it doesn't change the visible mode.
+setfacl -m u:bureau:r ~/.claude/.credentials.json
+
+# Persist ACL across claude login (which rewrites the file): set a
+# default ACL on the directory so new files inherit it.
+setfacl -dm u:bureau:r ~/.claude/
+```
+
+**API key:** Deploy with `--extra-credential ANTHROPIC_API_KEY=sk-ant-...`.
+The proxy injects the key on outbound Anthropic API requests. No credential
+file mount needed.
+
+```bash
+bureau agent create bureau/template:bureau-agent-claude \
+    --machine bureau/fleet/prod/machine/sharkbox \
+    --name agent/my-agent \
+    --extra-credential ANTHROPIC_API_KEY=sk-ant-... \
+    --credential-file deploy/matrix/bureau-creds
+```
+
+### Deploy Supporting Services
+
+The agent needs the artifact and agent services running on the machine:
+
+```bash
+bureau service create bureau/template:artifact-service \
+    --machine bureau/fleet/prod/machine/sharkbox \
+    --name service/artifact \
+    --credential-file deploy/matrix/bureau-creds
+
+bureau service create bureau/template:agent-service \
+    --machine bureau/fleet/prod/machine/sharkbox \
+    --name service/agent \
+    --credential-file deploy/matrix/bureau-creds
+```
+
+Publish service bindings so the daemon can resolve `RequiredServices`:
+
+```bash
+bureau matrix state set --credential-file deploy/matrix/bureau-creds \
+    --key artifact \
+    '#bureau/fleet/prod/machine/sharkbox:bureau.local' \
+    m.bureau.service_binding \
+    '{"principal":"@bureau/fleet/prod/service/artifact:bureau.local"}'
+
+bureau matrix state set --credential-file deploy/matrix/bureau-creds \
+    --key agent \
+    '#bureau/fleet/prod/machine/sharkbox:bureau.local' \
+    m.bureau.service_binding \
+    '{"principal":"@bureau/fleet/prod/service/agent:bureau.local"}'
+```
+
+### Create Agent or Workspace
+
+**Standalone agent** (no workspace/worktree):
+
+```bash
+bureau agent create bureau/template:bureau-agent-claude \
+    --machine bureau/fleet/prod/machine/sharkbox \
+    --name agent/code-review \
+    --credential-file deploy/matrix/bureau-creds
+```
+
+**Workspace with agent** (includes git worktree setup):
+
+```bash
+bureau workspace create project/feature \
+    --machine bureau/fleet/prod/machine/sharkbox \
+    --template bureau/template:bureau-agent-claude \
+    --param repository=https://github.com/org/repo.git \
+    --credential-file deploy/matrix/bureau-creds
+```
+
+### Observe
+
+```bash
+bureau observe agent/code-review
+bureau dashboard
+```
+
 ## Adding More Machines
 
 Repeat steps 4-6 for each additional machine. The fleet controller

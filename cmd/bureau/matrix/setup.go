@@ -556,6 +556,7 @@ func baseTemplates() []namedTemplate {
 					{Source: "/lib64", Dest: "/lib64", Mode: schema.MountModeRO},
 					{Source: "/lib", Dest: "/lib", Mode: schema.MountModeRO},
 					{Dest: "/workspace", Type: "tmpfs"},
+					{Source: "${CACHE_ROOT}/claude-credentials.json", Dest: "/workspace/.claude/.credentials.json", Mode: schema.MountModeRO, Optional: true},
 				},
 			},
 		},

@@ -1399,3 +1399,66 @@ func TestAnthropicThinkingConversationReplay(t *testing.T) {
 		t.Errorf("block[1].text = %q", textBlock.Text)
 	}
 }
+
+func TestAnthropicEndpointDefault(t *testing.T) {
+	t.Parallel()
+
+	provider := NewAnthropic(nil, "my-service")
+	want := "http://proxy/http/my-service/v1/messages"
+	if got := provider.endpoint(); got != want {
+		t.Errorf("endpoint() = %q, want %q", got, want)
+	}
+}
+
+func TestAnthropicEndpointOverride(t *testing.T) {
+	t.Parallel()
+
+	provider := NewAnthropicWithEndpoint(nil, "http://model/anthropic/v1/messages")
+	want := "http://model/anthropic/v1/messages"
+	if got := provider.endpoint(); got != want {
+		t.Errorf("endpoint() = %q, want %q", got, want)
+	}
+}
+
+func TestAnthropicWithEndpoint(t *testing.T) {
+	t.Parallel()
+
+	mux := http.NewServeMux()
+	mux.HandleFunc("POST /anthropic/v1/messages", func(writer http.ResponseWriter, request *http.Request) {
+		json.NewEncoder(writer).Encode(map[string]any{
+			"id":    "msg-test",
+			"type":  "message",
+			"role":  "assistant",
+			"model": "claude-sonnet-4-5-20250929",
+			"content": []map[string]any{{
+				"type": "text",
+				"text": "hello from model service",
+			}},
+			"stop_reason": "end_turn",
+			"usage":       map[string]any{"input_tokens": 10, "output_tokens": 5},
+		})
+	})
+
+	server := httptest.NewServer(mux)
+	t.Cleanup(server.Close)
+
+	provider := NewAnthropicWithEndpoint(
+		&http.Client{
+			Transport: &testTransport{server: server, transport: http.DefaultTransport},
+		},
+		"http://model/anthropic/v1/messages",
+	)
+
+	response, err := provider.Complete(t.Context(), Request{
+		Model:     "test-model",
+		MaxTokens: 100,
+		Messages:  []Message{{Role: RoleUser, Content: []ContentBlock{TextBlock("hi")}}},
+	})
+	if err != nil {
+		t.Fatalf("Complete: %v", err)
+	}
+
+	if response.TextContent() != "hello from model service" {
+		t.Errorf("TextContent() = %q, want %q", response.TextContent(), "hello from model service")
+	}
+}

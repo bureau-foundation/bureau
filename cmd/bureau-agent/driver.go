@@ -6,10 +6,13 @@ package main
 import (
 	"bufio"
 	"context"
+	"encoding/base64"
 	"encoding/json"
 	"fmt"
 	"io"
 	"log/slog"
+	"net"
+	"net/http"
 	"os"
 	"strconv"
 	"sync"
@@ -19,6 +22,7 @@ import (
 	"github.com/bureau-foundation/bureau/cmd/bureau/mcp"
 	"github.com/bureau-foundation/bureau/lib/agentdriver"
 	"github.com/bureau-foundation/bureau/lib/artifactstore"
+	"github.com/bureau-foundation/bureau/lib/clock"
 	"github.com/bureau-foundation/bureau/lib/llm"
 	llmcontext "github.com/bureau-foundation/bureau/lib/llm/context"
 	"github.com/bureau-foundation/bureau/lib/proxyclient"
@@ -26,15 +30,27 @@ import (
 	"github.com/bureau-foundation/bureau/lib/toolserver"
 )
 
-// Artifact service socket paths for the native agent's direct artifact
-// access. The native agent stores bureau-agent-v1 checkpoints (full
-// []llm.Message snapshots) directly in the artifact service, bypassing
-// the agent service data path. These are the standard paths the daemon
-// bind-mounts when a template declares RequiredServices: ["artifact"].
+// Service socket paths for the native agent's direct service access.
+// These are the standard paths the daemon bind-mounts when a template
+// declares the corresponding RequiredServices entries.
 const (
 	artifactServiceSocketPath = "/run/bureau/service/artifact.sock"
 	artifactServiceTokenPath  = "/run/bureau/service/token/artifact.token"
+
+	// Model service HTTP compatibility socket. The daemon mounts this
+	// when the model service exposes an http.sock alongside its CBOR
+	// socket. The role suffix "-http" comes from the daemon's automatic
+	// HTTP socket detection in resolveServiceMounts.
+	modelServiceHTTPSocketPath = "/run/bureau/service/model-http.sock"
+	modelServiceTokenPath      = "/run/bureau/service/token/model.token"
 )
+
+// tokenCacheTTL is how long the bearer token transport caches a service
+// token before re-reading the file. The daemon refreshes service tokens
+// on a 5-minute TTL with 80% renewal (4 min). A 30-second cache ensures
+// the agent picks up refreshed tokens promptly without re-reading on
+// every HTTP request.
+const tokenCacheTTL = 30 * time.Second
 
 // nativeDriver implements agentdriver.Driver for the Bureau-native agent.
 // Instead of spawning an external process, it runs the LLM agent loop
@@ -103,7 +119,11 @@ func (driver *nativeDriver) Start(ctx context.Context, config agentdriver.Driver
 		providerName = "anthropic"
 	}
 
-	// Create LLM provider through the proxy HTTP passthrough.
+	// Create LLM provider. The "anthropic" and "openai" providers
+	// route through the Bureau proxy HTTP passthrough. The
+	// "model-service" provider routes through the model service's
+	// HTTP compatibility socket, which handles credential injection,
+	// model alias resolution, and quota tracking internally.
 	var provider llm.Provider
 	var selectedProviderType providerType
 	switch providerName {
@@ -113,8 +133,30 @@ func (driver *nativeDriver) Start(ctx context.Context, config agentdriver.Driver
 	case "openai":
 		provider = llm.NewOpenAI(proxy.HTTPClient(), service)
 		selectedProviderType = providerOpenAI
+	case "model-service":
+		modelClient := newModelServiceHTTPClient(modelServiceHTTPSocketPath, modelServiceTokenPath, clock.Real())
+
+		// The wire format determines which JSON structure is used on the
+		// wire. The model service HTTP proxy routes by path prefix
+		// (/openai/... or /anthropic/...) to the correct upstream.
+		wireFormat := os.Getenv("BUREAU_AGENT_WIRE_FORMAT")
+		if wireFormat == "" {
+			wireFormat = "openai"
+		}
+		switch wireFormat {
+		case "anthropic":
+			provider = llm.NewAnthropicWithEndpoint(modelClient,
+				"http://model/anthropic/v1/messages")
+			selectedProviderType = providerAnthropic
+		case "openai":
+			provider = llm.NewOpenAIWithEndpoint(modelClient,
+				"http://model/openai/v1/chat/completions")
+			selectedProviderType = providerOpenAI
+		default:
+			return nil, nil, fmt.Errorf("unknown wire format %q for model-service provider (supported: anthropic, openai)", wireFormat)
+		}
 	default:
-		return nil, nil, fmt.Errorf("unknown LLM provider %q (supported: anthropic, openai)", providerName)
+		return nil, nil, fmt.Errorf("unknown LLM provider %q (supported: anthropic, openai, model-service)", providerName)
 	}
 
 	// Read system prompt from the temp file written by agentdriver.Run.
@@ -488,4 +530,69 @@ func parseLoopEvent(line []byte) (agentdriver.Event, error) {
 			Output:    &agentdriver.OutputEvent{Raw: json.RawMessage(append([]byte(nil), line...))},
 		}, nil
 	}
+}
+
+// newModelServiceHTTPClient creates an HTTP client that dials the model
+// service's HTTP compatibility socket and injects a Bearer token on
+// every request. The token is read from the daemon-managed token file
+// and cached for tokenCacheTTL to avoid re-reading on every request.
+func newModelServiceHTTPClient(socketPath, tokenPath string, clock clock.Clock) *http.Client {
+	return &http.Client{
+		Timeout: 0, // No overall timeout — streaming responses are long-lived.
+		Transport: &bearerTokenTransport{
+			base: &http.Transport{
+				DialContext: func(ctx context.Context, _, _ string) (net.Conn, error) {
+					return (&net.Dialer{}).DialContext(ctx, "unix", socketPath)
+				},
+				MaxIdleConns:        10,
+				MaxIdleConnsPerHost: 10,
+				IdleConnTimeout:     90 * time.Second,
+			},
+			tokenPath: tokenPath,
+			clock:     clock,
+		},
+	}
+}
+
+// bearerTokenTransport is an http.RoundTripper that injects a
+// base64-encoded Bearer token from a file into every request's
+// Authorization header. The token is cached for tokenCacheTTL
+// to balance freshness against file read overhead. The daemon
+// atomically replaces the token file on refresh, so reads are safe.
+type bearerTokenTransport struct {
+	base      http.RoundTripper
+	tokenPath string
+	clock     clock.Clock
+	mutex     sync.Mutex
+	cached    string
+	expiry    time.Time
+}
+
+func (transport *bearerTokenTransport) RoundTrip(request *http.Request) (*http.Response, error) {
+	token, err := transport.token()
+	if err != nil {
+		return nil, err
+	}
+	request = request.Clone(request.Context())
+	request.Header.Set("Authorization", "Bearer "+token)
+	return transport.base.RoundTrip(request)
+}
+
+func (transport *bearerTokenTransport) token() (string, error) {
+	transport.mutex.Lock()
+	defer transport.mutex.Unlock()
+
+	now := transport.clock.Now()
+	if transport.cached != "" && now.Before(transport.expiry) {
+		return transport.cached, nil
+	}
+
+	raw, err := os.ReadFile(transport.tokenPath)
+	if err != nil {
+		return "", fmt.Errorf("reading model service token from %s: %w", transport.tokenPath, err)
+	}
+
+	transport.cached = base64.StdEncoding.EncodeToString(raw)
+	transport.expiry = now.Add(tokenCacheTTL)
+	return transport.cached, nil
 }

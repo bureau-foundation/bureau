@@ -8,11 +8,15 @@ import (
 	"encoding/json"
 	"fmt"
 	"log/slog"
+	"net/http"
+	"os"
 	"testing"
+	"time"
 
 	"github.com/bureau-foundation/bureau/cmd/bureau/cli"
 	"github.com/bureau-foundation/bureau/cmd/bureau/mcp"
 	"github.com/bureau-foundation/bureau/lib/agentdriver"
+	"github.com/bureau-foundation/bureau/lib/clock"
 	"github.com/bureau-foundation/bureau/lib/schema"
 )
 
@@ -422,4 +426,63 @@ func testCommandTree() *mcp.Server {
 	}
 
 	return mcp.NewServer(root, grants)
+}
+
+func TestBearerTokenTransport_CachesToken(t *testing.T) {
+	t.Parallel()
+
+	tokenDir := t.TempDir()
+	tokenPath := tokenDir + "/model.token"
+	os.WriteFile(tokenPath, []byte("secret-token-v1"), 0600)
+
+	fakeClock := clock.Fake(time.Date(2026, 1, 1, 0, 0, 0, 0, time.UTC))
+
+	transport := &bearerTokenTransport{
+		base:      http.DefaultTransport,
+		tokenPath: tokenPath,
+		clock:     fakeClock,
+	}
+
+	// First call reads from disk.
+	token1, err := transport.token()
+	if err != nil {
+		t.Fatalf("token() error: %v", err)
+	}
+
+	// Second call within TTL returns cached value.
+	token2, err := transport.token()
+	if err != nil {
+		t.Fatalf("token() error: %v", err)
+	}
+	if token1 != token2 {
+		t.Errorf("second call returned different token: %q vs %q", token1, token2)
+	}
+
+	// Write a new token and advance past cache TTL.
+	os.WriteFile(tokenPath, []byte("secret-token-v2"), 0600)
+	fakeClock.Advance(tokenCacheTTL + time.Second)
+
+	// Third call re-reads from disk.
+	token3, err := transport.token()
+	if err != nil {
+		t.Fatalf("token() error: %v", err)
+	}
+	if token3 == token1 {
+		t.Error("after expiry and file update, token() should return new value")
+	}
+}
+
+func TestBearerTokenTransport_MissingFile(t *testing.T) {
+	t.Parallel()
+
+	transport := &bearerTokenTransport{
+		base:      http.DefaultTransport,
+		tokenPath: "/nonexistent/model.token",
+		clock:     clock.Real(),
+	}
+
+	_, err := transport.token()
+	if err == nil {
+		t.Fatal("expected error for missing token file")
+	}
 }

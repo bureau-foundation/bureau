@@ -1671,6 +1671,22 @@ func (d *Daemon) resolveServiceMounts(ctx context.Context, requiredServices []st
 			Role:       role,
 			SocketPath: socketPath,
 		})
+
+		// Check if the service also exposes an HTTP compatibility socket
+		// alongside its CBOR socket. The model service does this for
+		// standard AI SDK compatibility (OpenAI/Anthropic JSON format).
+		// If found, mount it as <role>-http so agents can choose between
+		// native CBOR and HTTP access.
+		if httpPath := httpSocketForService(socketPath); httpPath != "" {
+			mounts = append(mounts, launcherServiceMount{
+				Role:       role + "-http",
+				SocketPath: httpPath,
+			})
+			d.logger.Info("resolved HTTP socket for service",
+				"role", role,
+				"http_socket", httpPath,
+			)
+		}
 	}
 	return mounts, nil
 }
@@ -1724,6 +1740,27 @@ func (d *Daemon) resolveServiceSocket(ctx context.Context, role string, rooms []
 	}
 
 	return "", fmt.Errorf("no service binding found for role %q — the service may not be enabled on this machine (checked %d config room(s))", role, len(rooms))
+}
+
+// httpSocketForService checks whether a service exposes an HTTP
+// compatibility socket alongside its primary CBOR socket. The CBOR socket
+// path (from ServiceSocketPath) is a symlink to configDir/listen/service.sock.
+// If configDir/listen/http.sock exists, the service has an HTTP endpoint.
+//
+// Returns the host-side path to the HTTP socket, or empty string if none
+// exists. Errors (broken symlink, permission denied) are treated as
+// "no HTTP socket" rather than fatal — an HTTP socket is an optional
+// enhancement, not a requirement.
+func httpSocketForService(serviceSocketPath string) string {
+	resolved, err := filepath.EvalSymlinks(serviceSocketPath)
+	if err != nil {
+		return ""
+	}
+	httpPath := filepath.Join(filepath.Dir(resolved), "http.sock")
+	if _, err := os.Stat(httpPath); err != nil {
+		return ""
+	}
+	return httpPath
 }
 
 // tokenTTL is the default TTL for service tokens. Set to 5 minutes to

@@ -725,3 +725,70 @@ func newServiceResolutionTestDaemon(t *testing.T, daemon *Daemon, matrixState *m
 
 	return tracker, cleanup
 }
+
+// TestHttpSocketForService verifies that httpSocketForService detects an
+// HTTP socket alongside a service's CBOR socket. The CBOR socket path is
+// a symlink to configDir/listen/service.sock. If http.sock exists in the
+// same directory, the function returns its path.
+func TestHttpSocketForService(t *testing.T) {
+	t.Parallel()
+
+	t.Run("http socket present", func(t *testing.T) {
+		t.Parallel()
+		listenDir := t.TempDir()
+
+		// Create the CBOR socket file and an HTTP socket file.
+		cborSocket := filepath.Join(listenDir, "service.sock")
+		httpSocket := filepath.Join(listenDir, "http.sock")
+		os.WriteFile(cborSocket, nil, 0600)
+		os.WriteFile(httpSocket, nil, 0600)
+
+		// Create a symlink that mimics ServiceSocketPath.
+		symlinkDir := t.TempDir()
+		symlink := filepath.Join(symlinkDir, "model.sock")
+		os.Symlink(cborSocket, symlink)
+
+		result := httpSocketForService(symlink)
+		if result != httpSocket {
+			t.Errorf("httpSocketForService() = %q, want %q", result, httpSocket)
+		}
+	})
+
+	t.Run("no http socket", func(t *testing.T) {
+		t.Parallel()
+		listenDir := t.TempDir()
+
+		// Only the CBOR socket — no http.sock.
+		cborSocket := filepath.Join(listenDir, "service.sock")
+		os.WriteFile(cborSocket, nil, 0600)
+
+		symlinkDir := t.TempDir()
+		symlink := filepath.Join(symlinkDir, "ticket.sock")
+		os.Symlink(cborSocket, symlink)
+
+		result := httpSocketForService(symlink)
+		if result != "" {
+			t.Errorf("httpSocketForService() = %q, want empty", result)
+		}
+	})
+
+	t.Run("broken symlink", func(t *testing.T) {
+		t.Parallel()
+		symlinkDir := t.TempDir()
+		symlink := filepath.Join(symlinkDir, "missing.sock")
+		os.Symlink("/nonexistent/path/service.sock", symlink)
+
+		result := httpSocketForService(symlink)
+		if result != "" {
+			t.Errorf("httpSocketForService() = %q, want empty for broken symlink", result)
+		}
+	})
+
+	t.Run("path does not exist", func(t *testing.T) {
+		t.Parallel()
+		result := httpSocketForService("/nonexistent/model.sock")
+		if result != "" {
+			t.Errorf("httpSocketForService() = %q, want empty for nonexistent path", result)
+		}
+	})
+}

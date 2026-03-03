@@ -791,3 +791,64 @@ func TestOpenAIStreamError(t *testing.T) {
 		t.Errorf("StatusCode = %d, want 503", providerErr.StatusCode)
 	}
 }
+
+func TestOpenAIWithEndpoint(t *testing.T) {
+	t.Parallel()
+
+	mux := http.NewServeMux()
+	mux.HandleFunc("POST /openai/v1/chat/completions", func(writer http.ResponseWriter, request *http.Request) {
+		json.NewEncoder(writer).Encode(map[string]any{
+			"id":    "chatcmpl-test",
+			"model": "gpt-4o",
+			"choices": []map[string]any{{
+				"index":         0,
+				"finish_reason": "stop",
+				"message":       map[string]any{"role": "assistant", "content": "hello"},
+			}},
+			"usage": map[string]any{"prompt_tokens": 10, "completion_tokens": 5},
+		})
+	})
+
+	server := httptest.NewServer(mux)
+	t.Cleanup(server.Close)
+
+	provider := NewOpenAIWithEndpoint(
+		&http.Client{
+			Transport: &testTransport{server: server, transport: http.DefaultTransport},
+		},
+		"http://model/openai/v1/chat/completions",
+	)
+
+	response, err := provider.Complete(t.Context(), Request{
+		Model:     "test-model",
+		MaxTokens: 100,
+		Messages:  []Message{{Role: RoleUser, Content: []ContentBlock{TextBlock("hi")}}},
+	})
+	if err != nil {
+		t.Fatalf("Complete: %v", err)
+	}
+
+	if response.TextContent() != "hello" {
+		t.Errorf("TextContent() = %q, want %q", response.TextContent(), "hello")
+	}
+}
+
+func TestOpenAIEndpointDefault(t *testing.T) {
+	t.Parallel()
+
+	provider := NewOpenAI(nil, "my-service")
+	want := "http://proxy/http/my-service/v1/chat/completions"
+	if got := provider.endpoint(); got != want {
+		t.Errorf("endpoint() = %q, want %q", got, want)
+	}
+}
+
+func TestOpenAIEndpointOverride(t *testing.T) {
+	t.Parallel()
+
+	provider := NewOpenAIWithEndpoint(nil, "http://model/openai/v1/chat/completions")
+	want := "http://model/openai/v1/chat/completions"
+	if got := provider.endpoint(); got != want {
+		t.Errorf("endpoint() = %q, want %q", got, want)
+	}
+}

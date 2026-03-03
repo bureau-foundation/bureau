@@ -17,8 +17,9 @@ import (
 // /http/{serviceName}/v1/messages, where the proxy injects the API
 // key and forwards to Anthropic's servers.
 type Anthropic struct {
-	httpClient  *http.Client
-	serviceName string
+	httpClient       *http.Client
+	serviceName      string
+	endpointOverride string
 }
 
 // NewAnthropic creates an Anthropic provider. The httpClient should
@@ -30,6 +31,18 @@ func NewAnthropic(httpClient *http.Client, serviceName string) *Anthropic {
 	return &Anthropic{
 		httpClient:  httpClient,
 		serviceName: serviceName,
+	}
+}
+
+// NewAnthropicWithEndpoint creates an Anthropic provider that sends
+// requests to a fixed endpoint URL instead of constructing the proxy
+// passthrough URL. Use this when routing through a service that speaks
+// the Anthropic wire format (e.g., the model service HTTP compatibility
+// proxy at http://model/anthropic/v1/messages).
+func NewAnthropicWithEndpoint(httpClient *http.Client, endpoint string) *Anthropic {
+	return &Anthropic{
+		httpClient:       httpClient,
+		endpointOverride: endpoint,
 	}
 }
 
@@ -59,8 +72,14 @@ func (provider *Anthropic) Stream(ctx context.Context, request Request) (*EventS
 	return provider.newEventStream(httpResponse.Body), nil
 }
 
-// endpoint returns the proxy passthrough URL for the Anthropic Messages API.
+// endpoint returns the URL for the Anthropic Messages API. When an
+// endpoint override is set (via NewAnthropicWithEndpoint), it is
+// returned directly. Otherwise, the proxy passthrough URL is constructed
+// from the service name.
 func (provider *Anthropic) endpoint() string {
+	if provider.endpointOverride != "" {
+		return provider.endpointOverride
+	}
 	return fmt.Sprintf("http://proxy/http/%s/v1/messages", provider.serviceName)
 }
 

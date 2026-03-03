@@ -327,6 +327,19 @@ func (client *Client) patch(ctx context.Context, path string, requestBody any, r
 	return nil
 }
 
+// put is a convenience method for PUT requests that return a JSON
+// object. Decodes the response into result.
+func (client *Client) put(ctx context.Context, path string, requestBody any, result any) error {
+	body, _, err := client.do(ctx, http.MethodPut, path, requestBody)
+	if err != nil {
+		return err
+	}
+	if result != nil {
+		return json.Unmarshal(body, result)
+	}
+	return nil
+}
+
 // delete is a convenience method for DELETE requests.
 func (client *Client) delete(ctx context.Context, path string) error {
 	_, _, err := client.do(ctx, http.MethodDelete, path, nil)

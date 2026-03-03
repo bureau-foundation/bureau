@@ -81,6 +81,18 @@ func run() error {
 		boot.Logger.Info("ticket sync disabled (BUREAU_TICKET_SERVICE_SOCKET or BUREAU_TICKET_SERVICE_TOKEN not set)")
 	}
 
+	// Create the GitHub API client for outbound operations. This is
+	// optional — the service can run without it for webhook-only mode.
+	githubClient, err := createGitHubClient(boot.Clock, boot.Logger)
+	if err != nil {
+		return fmt.Errorf("creating GitHub API client: %w", err)
+	}
+	if githubClient != nil {
+		boot.Logger.Info("outbound GitHub API enabled")
+	} else {
+		boot.Logger.Info("outbound GitHub API disabled (no credentials configured)")
+	}
+
 	githubService := &GitHubService{
 		session:       boot.Session,
 		service:       boot.Service,
@@ -91,8 +103,9 @@ func run() error {
 			session: boot.Session,
 			logger:  boot.Logger,
 		},
-		clock:  boot.Clock,
-		logger: boot.Logger,
+		githubClient: githubClient,
+		clock:        boot.Clock,
+		logger:       boot.Logger,
 	}
 
 	// Create the webhook handler. Events are dispatched to the

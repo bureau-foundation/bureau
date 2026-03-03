@@ -84,6 +84,53 @@ func TestGetPullRequest(t *testing.T) {
 	}
 }
 
+func TestMergePullRequest(t *testing.T) {
+	var receivedBody MergePullRequestRequest
+	var receivedMethod string
+	server := httptest.NewTLSServer(http.HandlerFunc(func(writer http.ResponseWriter, request *http.Request) {
+		receivedMethod = request.Method
+		if request.URL.Path != "/repos/owner/repo/pulls/7/merge" {
+			t.Errorf("unexpected path: %s", request.URL.Path)
+		}
+		json.NewDecoder(request.Body).Decode(&receivedBody)
+
+		writer.WriteHeader(http.StatusOK)
+		json.NewEncoder(writer).Encode(PullRequestMergeResult{
+			SHA:     "abc123merge",
+			Merged:  true,
+			Message: "Pull Request successfully merged",
+		})
+	}))
+	defer server.Close()
+
+	client := newTestClient(t, server)
+	result, err := client.MergePullRequest(context.Background(), "owner", "repo", 7, MergePullRequestRequest{
+		CommitTitle:   "Merge PR #7",
+		CommitMessage: "Approved by bureau",
+		MergeMethod:   "squash",
+		SHA:           "headsha123",
+	})
+	if err != nil {
+		t.Fatalf("MergePullRequest: %v", err)
+	}
+
+	if receivedMethod != "PUT" {
+		t.Errorf("method = %s, want PUT", receivedMethod)
+	}
+	if receivedBody.MergeMethod != "squash" {
+		t.Errorf("request.MergeMethod = %q, want %q", receivedBody.MergeMethod, "squash")
+	}
+	if receivedBody.SHA != "headsha123" {
+		t.Errorf("request.SHA = %q, want %q", receivedBody.SHA, "headsha123")
+	}
+	if !result.Merged {
+		t.Errorf("result.Merged = false, want true")
+	}
+	if result.SHA != "abc123merge" {
+		t.Errorf("result.SHA = %q, want %q", result.SHA, "abc123merge")
+	}
+}
+
 func TestCreateReview(t *testing.T) {
 	var receivedBody CreateReviewRequest
 	server := httptest.NewTLSServer(http.HandlerFunc(func(writer http.ResponseWriter, request *http.Request) {

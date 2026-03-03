@@ -11,6 +11,7 @@ go_library(
         "github_types.go",
         "main.go",
         "mention.go",
+        "outbound.go",
         "service.go",
         "subscribe.go",
         "ticketsync.go",
@@ -22,6 +23,7 @@ go_library(
         "//lib/clock",
         "//lib/codec",
         "//lib/forgesub",
+        "//lib/github",
         "//lib/process",
         "//lib/ref",
         "//lib/schema",
@@ -44,6 +46,7 @@ go_test(
     name = "bureau-github-service_test",
     srcs = [
         "mention_test.go",
+        "outbound_test.go",
         "ticketsync_test.go",
         "webhook_test.go",
     ],
@@ -51,9 +54,12 @@ go_test(
     deps = [
         "//lib/clock",
         "//lib/forgesub",
+        "//lib/github",
         "//lib/ref",
         "//lib/schema/forge",
         "//lib/schema/ticket",
+        "//lib/service",
+        "//lib/servicetoken",
         "//messaging",
     ],
 )

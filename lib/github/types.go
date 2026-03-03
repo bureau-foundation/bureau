@@ -80,6 +80,33 @@ type Review struct {
 	SubmittedAt time.Time `json:"submitted_at"`
 }
 
+// PullRequestMergeResult is the response from merging a pull request
+// via PUT /repos/{owner}/{repo}/pulls/{number}/merge.
+type PullRequestMergeResult struct {
+	SHA     string `json:"sha"`
+	Merged  bool   `json:"merged"`
+	Message string `json:"message"`
+}
+
+// MergePullRequestRequest is the request body for merging a pull request.
+type MergePullRequestRequest struct {
+	// CommitTitle is the title for the merge commit. If blank, GitHub
+	// uses the default merge commit title.
+	CommitTitle string `json:"commit_title,omitempty"`
+
+	// CommitMessage is the extra detail for the merge commit. If blank,
+	// GitHub uses the default merge commit message.
+	CommitMessage string `json:"commit_message,omitempty"`
+
+	// MergeMethod is the merge strategy: "merge", "squash", or "rebase".
+	// Defaults to "merge" if empty.
+	MergeMethod string `json:"merge_method,omitempty"`
+
+	// SHA is the head SHA that the caller expects. GitHub rejects the
+	// merge if HEAD has moved (optimistic locking). Optional.
+	SHA string `json:"sha,omitempty"`
+}
+
 // Tree is a GitHub git tree object.
 type Tree struct {
 	SHA       string      `json:"sha"`

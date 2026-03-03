@@ -11,6 +11,7 @@ import (
 
 	"github.com/bureau-foundation/bureau/lib/clock"
 	"github.com/bureau-foundation/bureau/lib/forgesub"
+	"github.com/bureau-foundation/bureau/lib/github"
 	"github.com/bureau-foundation/bureau/lib/ref"
 	"github.com/bureau-foundation/bureau/lib/schema"
 	"github.com/bureau-foundation/bureau/lib/schema/forge"
@@ -83,6 +84,7 @@ type GitHubService struct {
 	manager           *forgesub.Manager
 	ticketSyncer      *TicketSyncer // nil if ticket service not configured
 	mentionDispatcher *MentionDispatcher
+	githubClient      *github.Client // nil if outbound API not configured
 	clock             clock.Clock
 	logger            *slog.Logger
 }
@@ -597,6 +599,32 @@ func (gs *GitHubService) registerActions(server *service.SocketServer) {
 	server.HandleAuth(
 		forge.ProviderAction(forge.ProviderGitHub, forge.ActionAutoSubscribeConfig),
 		gs.handleAutoSubscribeConfig,
+	)
+
+	// Outbound GitHub API actions.
+	server.HandleAuth(
+		forge.ProviderAction(forge.ProviderGitHub, forge.ActionCreateIssue),
+		gs.handleCreateIssue,
+	)
+	server.HandleAuth(
+		forge.ProviderAction(forge.ProviderGitHub, forge.ActionCreateComment),
+		gs.handleCreateComment,
+	)
+	server.HandleAuth(
+		forge.ProviderAction(forge.ProviderGitHub, forge.ActionCreateReview),
+		gs.handleCreateReview,
+	)
+	server.HandleAuth(
+		forge.ProviderAction(forge.ProviderGitHub, forge.ActionMergePR),
+		gs.handleMergePR,
+	)
+	server.HandleAuth(
+		forge.ProviderAction(forge.ProviderGitHub, forge.ActionTriggerWorkflow),
+		gs.handleTriggerWorkflow,
+	)
+	server.HandleAuth(
+		forge.ProviderAction(forge.ProviderGitHub, forge.ActionReportStatus),
+		gs.handleReportStatus,
 	)
 }
 

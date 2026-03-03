@@ -42,6 +42,19 @@ func (client *Client) GetPullRequest(ctx context.Context, owner, repo string, nu
 	return &pullRequest, nil
 }
 
+// MergePullRequest merges a pull request. The merge method ("merge",
+// "squash", "rebase") is specified in the request. Returns the merge
+// commit SHA and status. GitHub returns 405 Method Not Allowed if the
+// PR is not mergeable (conflicts, status checks pending, etc.).
+func (client *Client) MergePullRequest(ctx context.Context, owner, repo string, number int, request MergePullRequestRequest) (*PullRequestMergeResult, error) {
+	var result PullRequestMergeResult
+	path := fmt.Sprintf("/repos/%s/%s/pulls/%d/merge", owner, repo, number)
+	if err := client.put(ctx, path, request, &result); err != nil {
+		return nil, fmt.Errorf("merging PR %s/%s#%d: %w", owner, repo, number, err)
+	}
+	return &result, nil
+}
+
 // ListPullRequests returns a paginated iterator over pull requests in
 // a repository.
 func (client *Client) ListPullRequests(ctx context.Context, owner, repo string, options ListPullRequestsOptions) *PageIterator[PullRequest] {

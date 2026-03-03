@@ -12,11 +12,20 @@ func Command() *cli.Command {
 	return &cli.Command{
 		Name:    "machine",
 		Summary: "Manage fleet machines",
-		Description: `Manage fleet machines: provisioning, listing, upgrades, decommission, and revocation.
+		Description: `Manage fleet machines: provisioning, deployment, health checks, upgrades,
+decommission, uninstall, and emergency revocation.
 
 The "provision" subcommand creates a machine's Matrix account and writes
-a bootstrap config file. Transfer this file to the new machine and start
-the launcher with --bootstrap-file to complete registration.
+a bootstrap config file. Transfer this file to the new machine and run
+"deploy local" to complete setup.
+
+The "deploy" subcommand sets up Bureau on a target machine from the
+bootstrap config: runs "doctor --fix" for infrastructure, executes
+launcher first boot for homeserver registration, and starts services.
+
+The "doctor" subcommand checks and optionally repairs the local machine's
+Bureau infrastructure (system user, directories, binaries, systemd units,
+sockets, Matrix connectivity).
 
 The "list" subcommand shows all machines that have published keys to the
 fleet's machine room.
@@ -32,19 +41,28 @@ its state events, kicks it from all rooms, and cleans up its config room.
 The "revoke" subcommand is for emergency credential revocation of a
 compromised machine. It deactivates the machine's Matrix account (forcing
 the daemon to self-destruct), clears all state, and publishes a
-revocation event for fleet-wide notification.`,
+revocation event for fleet-wide notification.
+
+The "uninstall" subcommand removes Bureau from the local machine: stops
+services, removes unit files, binaries, directories, and configuration.`,
 		Subcommands: []*cli.Command{
 			doctorCommand(),
+			deployCommand(),
 			provisionCommand(),
 			listCommand(),
 			upgradeCommand(),
 			decommissionCommand(),
 			revokeCommand(),
+			uninstallCommand(),
 		},
 		Examples: []cli.Example{
 			{
 				Description: "Provision a new worker machine",
 				Command:     "bureau machine provision bureau/fleet/prod/machine/worker-01 --credential-file ./bureau-creds --output bootstrap.json",
+			},
+			{
+				Description: "Deploy Bureau locally from a bootstrap config",
+				Command:     "sudo bureau machine deploy local --bootstrap-file bootstrap.json",
 			},
 			{
 				Description: "List all fleet machines",
@@ -61,6 +79,10 @@ revocation event for fleet-wide notification.`,
 			{
 				Description: "Emergency revoke a compromised machine",
 				Command:     "bureau machine revoke bureau/fleet/prod/machine/worker-01 --credential-file ./bureau-creds --reason 'suspected compromise'",
+			},
+			{
+				Description: "Remove Bureau from this machine",
+				Command:     "sudo bureau machine uninstall --dry-run",
 			},
 		},
 	}

@@ -198,6 +198,30 @@ Use --json for machine-readable output suitable for monitoring or CI.`,
 }
 
 func runMachineDoctor(ctx context.Context, params machineDoctorParams, logger *slog.Logger) error {
+	results, aggregateOutcome, err := runDoctorChecks(ctx, params, logger)
+	if err != nil {
+		return err
+	}
+
+	if done, err := params.EmitJSON(doctor.BuildJSON(results, params.DryRun, aggregateOutcome)); done {
+		if err != nil {
+			return err
+		}
+		for _, result := range results {
+			if result.Status == doctor.StatusFail {
+				return &cli.ExitError{Code: 1}
+			}
+		}
+		return nil
+	}
+	return doctor.PrintChecklist(results, params.Fix, params.DryRun, aggregateOutcome)
+}
+
+// runDoctorChecks runs the doctor check/fix loop and returns the final
+// results and aggregate outcome without producing output. This allows
+// callers like deploy to reuse the check/fix infrastructure while
+// controlling their own output format.
+func runDoctorChecks(ctx context.Context, params machineDoctorParams, logger *slog.Logger) ([]doctor.Result, doctor.Outcome, error) {
 	const maxFixIterations = 5
 	repairedNames := make(map[string]bool)
 	aggregateOutcome := doctor.Outcome{
@@ -240,24 +264,12 @@ func runMachineDoctor(ctx context.Context, params machineDoctorParams, logger *s
 		case <-settleTimer.C:
 		case <-ctx.Done():
 			settleTimer.Stop()
-			return ctx.Err()
+			return nil, aggregateOutcome, ctx.Err()
 		}
 	}
 
 	doctor.MarkRepaired(results, repairedNames)
-
-	if done, err := params.EmitJSON(doctor.BuildJSON(results, params.DryRun, aggregateOutcome)); done {
-		if err != nil {
-			return err
-		}
-		for _, result := range results {
-			if result.Status == doctor.StatusFail {
-				return &cli.ExitError{Code: 1}
-			}
-		}
-		return nil
-	}
-	return doctor.PrintChecklist(results, params.Fix, params.DryRun, aggregateOutcome)
+	return results, aggregateOutcome, nil
 }
 
 // checkMachine runs all machine health checks and returns results.

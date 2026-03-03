@@ -332,7 +332,13 @@ func (d *Daemon) processSyncResponse(ctx context.Context, response *messaging.Sy
 				needsPeerSync = true
 			}
 		case d.serviceRoomID:
-			needsServiceSync = true
+			// Skip service directory sync when unconfigured. Without
+			// a MachineConfig, there are no running proxies to push
+			// the directory to, and no principals that need service
+			// socket bindings.
+			if d.lastConfig != nil {
+				needsServiceSync = true
+			}
 		case d.fleetRoomID:
 			// Only react to fleet room changes from OTHER daemons or
 			// operators. The HA watchdog writes lease renewal events
@@ -341,10 +347,26 @@ func (d *Daemon) processSyncResponse(ctx context.Context, response *messaging.Sy
 			if roomHasExternalStateChanges(room, d.machine.UserID()) {
 				needsHAEval = true
 			}
+		case d.systemRoomID, d.templateRoomID, d.pipelineRoomID:
+			// These rooms are excluded from /sync via the not_rooms
+			// filter. If events arrive anyway (homeserver filter
+			// implementation gap), ignore them — their state is read
+			// on-demand, not reactively.
+			continue
 		default:
 			// Non-core rooms (workspace rooms joined via invite) with
 			// state changes trigger reconcile so deferred principals
 			// can re-evaluate StartConditions.
+			//
+			// Skip this when the daemon has no MachineConfig yet.
+			// Without a config, there are no principals, no deferred
+			// StartConditions, and nothing to reconcile. Suppressing
+			// this eliminates thousands of wasted reconcile cycles
+			// during parallel integration tests where 20+ daemons
+			// share global rooms but only a few have configs.
+			if d.lastConfig == nil {
+				continue
+			}
 			d.logger.Info("non-core room state change triggering reconcile",
 				"room_id", roomID,
 				"machine", d.machine.Localpart())

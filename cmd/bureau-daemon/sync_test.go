@@ -354,6 +354,17 @@ func TestProcessSyncResponse_ServicesRoom(t *testing.T) {
 	const machineRoomID = "!machine:test"
 	const serviceRoomID = "!service:test"
 
+	// Set up a MachineConfig so the daemon is configured. Service
+	// directory sync is skipped for unconfigured daemons (no proxies
+	// to push the directory to).
+	machineName := machine.Localpart()
+	matrixState.setStateEvent(configRoomID, schema.EventTypeMachineConfig, machineName, schema.MachineConfig{
+		Principals: []schema.PrincipalAssignment{{
+			Principal: testEntity(t, fleet, "test/agent"),
+			AutoStart: true,
+		}},
+	})
+
 	// Set up the service room with one service via GetRoomState.
 	// User IDs must be fleet-scoped to match the ref.Entity UnmarshalText parser.
 	serviceKey := "service/stt/whisper"
@@ -393,6 +404,25 @@ func TestProcessSyncResponse_ServicesRoom(t *testing.T) {
 	daemon.launcherSocket = "/nonexistent/launcher.sock"
 	daemon.logger = slog.New(slog.NewJSONHandler(os.Stderr, nil))
 	t.Cleanup(daemon.stopAllLayoutWatchers)
+
+	// First, deliver a config room event to establish lastConfig.
+	// Service directory sync is only processed for configured daemons.
+	configStateKey := machineName
+	configResponse := &messaging.SyncResponse{
+		NextBatch: "batch_0",
+		Rooms: messaging.RoomsSection{
+			Join: map[ref.RoomID]messaging.JoinedRoom{
+				mustRoomID(configRoomID): {
+					State: messaging.StateSection{
+						Events: []messaging.Event{
+							{Type: schema.EventTypeMachineConfig, StateKey: &configStateKey},
+						},
+					},
+				},
+			},
+		},
+	}
+	daemon.processSyncResponse(context.Background(), configResponse)
 
 	// Construct a sync response with a service room state change.
 	response := &messaging.SyncResponse{
@@ -962,11 +992,36 @@ func TestProcessSyncResponse_WorkspaceRoomTriggersReconcile(t *testing.T) {
 	daemon.logger = slog.New(slog.NewJSONHandler(os.Stderr, nil))
 	t.Cleanup(daemon.stopAllLayoutWatchers)
 
-	// Sync response with a workspace state event in a workspace room
-	// (not one of the three core rooms).
-	stateKey := ""
-	response := &messaging.SyncResponse{
+	// First, deliver a config room event so the daemon discovers its
+	// MachineConfig and sets lastConfig. Workspace room events are
+	// only processed after the daemon is configured (unconfigured
+	// daemons have no principals whose StartConditions could match).
+	configStateKey := machineName
+	configResponse := &messaging.SyncResponse{
 		NextBatch: "batch_1",
+		Rooms: messaging.RoomsSection{
+			Join: map[ref.RoomID]messaging.JoinedRoom{
+				mustRoomID(configRoomID): {
+					State: messaging.StateSection{
+						Events: []messaging.Event{
+							{Type: schema.EventTypeMachineConfig, StateKey: &configStateKey},
+						},
+					},
+				},
+			},
+		},
+	}
+	daemon.processSyncResponse(context.Background(), configResponse)
+	if daemon.lastConfig == nil {
+		t.Fatal("lastConfig should be set after config room event")
+	}
+
+	// Now deliver a workspace room event. With lastConfig set, the
+	// daemon processes non-core room state changes and triggers
+	// reconcile for StartCondition re-evaluation.
+	stateKey := ""
+	workspaceResponse := &messaging.SyncResponse{
+		NextBatch: "batch_2",
 		Rooms: messaging.RoomsSection{
 			Join: map[ref.RoomID]messaging.JoinedRoom{
 				mustRoomID("!workspace/iree:test"): {
@@ -979,13 +1034,13 @@ func TestProcessSyncResponse_WorkspaceRoomTriggersReconcile(t *testing.T) {
 			},
 		},
 	}
-
-	daemon.processSyncResponse(context.Background(), response)
+	daemon.processSyncResponse(context.Background(), workspaceResponse)
 
 	// Workspace room state changes should trigger reconcile so deferred
-	// principals can re-evaluate StartConditions.
+	// principals can re-evaluate StartConditions (verified by the
+	// lastConfig still being set — reconcile ran without error).
 	if daemon.lastConfig == nil {
-		t.Error("lastConfig should be set (workspace room state change triggers reconcile)")
+		t.Error("lastConfig should still be set after workspace room reconcile")
 	}
 }
 

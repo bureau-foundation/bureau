@@ -338,6 +338,8 @@ func run() error {
 		machineRoomID:          machineRoomID,
 		serviceRoomID:          serviceRoomID,
 		fleetRoomID:            fleetRoomID,
+		templateRoomID:         templateRoomID,
+		pipelineRoomID:         pipelineRoomID,
 		syncFilter:             syncFilter,
 		runDir:                 runDir,
 		fleetRunDir:            fleet.RunDir(runDir),
@@ -589,15 +591,17 @@ type Daemon struct {
 	// error message.
 	machinePublicKey string
 
-	machine       ref.Machine
-	fleet         ref.Fleet
-	adminUser     string // admin account localpart (for fleet controller PL grants)
-	systemRoomID  ref.RoomID
-	configRoomID  ref.RoomID
-	machineRoomID ref.RoomID
-	serviceRoomID ref.RoomID
-	fleetRoomID   ref.RoomID // fleet room for HA leases, service definitions, and alerts
-	syncFilter    string     // inline Matrix /sync filter JSON (room- and type-scoped)
+	machine        ref.Machine
+	fleet          ref.Fleet
+	adminUser      string // admin account localpart (for fleet controller PL grants)
+	systemRoomID   ref.RoomID
+	configRoomID   ref.RoomID
+	machineRoomID  ref.RoomID
+	serviceRoomID  ref.RoomID
+	fleetRoomID    ref.RoomID // fleet room for HA leases, service definitions, and alerts
+	templateRoomID ref.RoomID // excluded from /sync via not_rooms; matched as defense-in-depth
+	pipelineRoomID ref.RoomID // excluded from /sync via not_rooms; matched as defense-in-depth
+	syncFilter     string     // inline Matrix /sync filter JSON (room- and type-scoped)
 
 	// workspaceAliases maps room IDs to their canonical aliases for
 	// rooms discovered via /sync invites (workspace rooms). Populated

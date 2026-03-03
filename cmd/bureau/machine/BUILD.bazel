@@ -37,7 +37,9 @@ go_library(
 go_test(
     name = "machine_test",
     srcs = [
+        "deploy_test.go",
         "doctor_test.go",
+        "uninstall_test.go",
         "upgrade_test.go",
     ],
     embed = [":machine"],

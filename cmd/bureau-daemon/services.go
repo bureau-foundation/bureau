@@ -13,6 +13,7 @@ import (
 	"net"
 	"net/http"
 	"path/filepath"
+	"sort"
 	"strings"
 	"time"
 
@@ -88,7 +89,7 @@ func (d *Daemon) syncServiceDirectory(ctx context.Context) (added, removed, upda
 				"localpart", localpart,
 				"principal", service.Principal,
 				"machine", service.Machine,
-				"protocol", service.Protocol,
+				"endpoints", service.Endpoints,
 			)
 		} else if serviceChanged(previous, service) {
 			updated = append(updated, localpart)
@@ -96,7 +97,7 @@ func (d *Daemon) syncServiceDirectory(ctx context.Context) (added, removed, upda
 				"localpart", localpart,
 				"principal", service.Principal,
 				"machine", service.Machine,
-				"protocol", service.Protocol,
+				"endpoints", service.Endpoints,
 			)
 		}
 	}
@@ -120,7 +121,7 @@ func (d *Daemon) syncServiceDirectory(ctx context.Context) (added, removed, upda
 func serviceChanged(previous, current *schema.Service) bool {
 	return previous.Principal != current.Principal ||
 		previous.Machine != current.Machine ||
-		previous.Protocol != current.Protocol ||
+		!endpointMapsEqual(previous.Endpoints, current.Endpoints) ||
 		previous.Description != current.Description ||
 		!stringSlicesEqual(previous.Capabilities, current.Capabilities)
 }
@@ -133,6 +134,20 @@ func stringSlicesEqual(a, b []string) bool {
 	}
 	for i := range a {
 		if a[i] != b[i] {
+			return false
+		}
+	}
+	return true
+}
+
+// endpointMapsEqual returns true if two endpoint maps have identical key-value
+// pairs.
+func endpointMapsEqual(a, b map[string]string) bool {
+	if len(a) != len(b) {
+		return false
+	}
+	for key, valueA := range a {
+		if valueB, ok := b[key]; !ok || valueA != valueB {
 			return false
 		}
 	}
@@ -239,7 +254,7 @@ func (d *Daemon) reconcileServices(ctx context.Context, consumers []ref.Entity, 
 			d.logger.Warn("remote service registered but transport not configured",
 				"service", localpart,
 				"machine", service.Machine,
-				"protocol", service.Protocol,
+				"endpoints", service.Endpoints,
 			)
 		}
 	}
@@ -571,11 +586,17 @@ func (d *Daemon) pushDirectoryToProxy(ctx context.Context, consumer ref.Entity, 
 func (d *Daemon) buildServiceDirectory() []adminDirectoryEntry {
 	entries := make([]adminDirectoryEntry, 0, len(d.services))
 	for localpart, service := range d.services {
+		endpointNames := make([]string, 0, len(service.Endpoints))
+		for name := range service.Endpoints {
+			endpointNames = append(endpointNames, name)
+		}
+		sort.Strings(endpointNames)
+
 		entries = append(entries, adminDirectoryEntry{
 			Localpart:    localpart,
 			Principal:    service.Principal.UserID(),
 			Machine:      service.Machine.UserID(),
-			Protocol:     service.Protocol,
+			Endpoints:    endpointNames,
 			Description:  service.Description,
 			Capabilities: service.Capabilities,
 			Metadata:     service.Metadata,
@@ -592,7 +613,7 @@ type adminDirectoryEntry struct {
 	Localpart    string         `json:"localpart"`
 	Principal    ref.UserID     `json:"principal"`
 	Machine      ref.UserID     `json:"machine"`
-	Protocol     string         `json:"protocol"`
+	Endpoints    []string       `json:"endpoints"`
 	Description  string         `json:"description,omitempty"`
 	Capabilities []string       `json:"capabilities,omitempty"`
 	Metadata     map[string]any `json:"metadata,omitempty"`

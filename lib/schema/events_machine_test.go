@@ -556,7 +556,7 @@ func TestServiceRoundTrip(t *testing.T) {
 		Principal:    principal,
 		Machine:      machine,
 		Capabilities: []string{"streaming", "speaker-diarization"},
-		Protocol:     "http",
+		Endpoints:    map[string]string{"cbor": "service.sock", "http": "http.sock"},
 		Description:  "Whisper Large V3 streaming STT",
 		Metadata: map[string]any{
 			"languages":     []any{"en", "es", "ja"},
@@ -575,8 +575,18 @@ func TestServiceRoundTrip(t *testing.T) {
 	}
 	assertField(t, raw, "principal", principalUserID)
 	assertField(t, raw, "machine", machineUserID)
-	assertField(t, raw, "protocol", "http")
 	assertField(t, raw, "description", "Whisper Large V3 streaming STT")
+
+	endpointsRaw, ok := raw["endpoints"].(map[string]any)
+	if !ok {
+		t.Fatal("endpoints field missing or wrong type")
+	}
+	if endpointsRaw["cbor"] != "service.sock" {
+		t.Errorf("endpoints.cbor = %v, want service.sock", endpointsRaw["cbor"])
+	}
+	if endpointsRaw["http"] != "http.sock" {
+		t.Errorf("endpoints.http = %v, want http.sock", endpointsRaw["http"])
+	}
 
 	var decoded Service
 	if err := json.Unmarshal(data, &decoded); err != nil {
@@ -588,8 +598,8 @@ func TestServiceRoundTrip(t *testing.T) {
 	if decoded.Machine != original.Machine {
 		t.Errorf("Machine: got %v, want %v", decoded.Machine, original.Machine)
 	}
-	if decoded.Protocol != original.Protocol {
-		t.Errorf("Protocol: got %q, want %q", decoded.Protocol, original.Protocol)
+	if len(decoded.Endpoints) != 2 || decoded.Endpoints["cbor"] != "service.sock" || decoded.Endpoints["http"] != "http.sock" {
+		t.Errorf("Endpoints: got %v, want {cbor:service.sock http:http.sock}", decoded.Endpoints)
 	}
 	if len(decoded.Capabilities) != 2 {
 		t.Fatalf("Capabilities count = %d, want 2", len(decoded.Capabilities))
@@ -603,7 +613,7 @@ func TestServiceOmitsOptionalFields(t *testing.T) {
 	service := Service{
 		Principal: mustParseEntity(t, "@bureau/fleet/prod/service/tts/piper:bureau.local"),
 		Machine:   mustParseMachine(t, "@bureau/fleet/prod/machine/workstation:bureau.local"),
-		Protocol:  "http",
+		Endpoints: map[string]string{"cbor": "service.sock"},
 		// Capabilities, Description, Metadata deliberately empty.
 	}
 

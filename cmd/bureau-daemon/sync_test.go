@@ -375,7 +375,7 @@ func TestProcessSyncResponse_ServicesRoom(t *testing.T) {
 			Content: map[string]any{
 				"principal":   "@bureau/fleet/test/service/stt/whisper:bureau.local",
 				"machine":     "@bureau/fleet/test/machine/remote:bureau.local",
-				"protocol":    "http",
+				"endpoints":   map[string]any{"http": "http.sock"},
 				"description": "Speech to text",
 			},
 		},
@@ -438,7 +438,7 @@ func TestProcessSyncResponse_ServicesRoom(t *testing.T) {
 								Content: map[string]any{
 									"principal": "@bureau/fleet/test/service/stt/whisper:bureau.local",
 									"machine":   "@bureau/fleet/test/machine/remote:bureau.local",
-									"protocol":  "http",
+									"endpoints": map[string]any{"http": "http.sock"},
 								},
 							},
 						},
@@ -458,8 +458,14 @@ func TestProcessSyncResponse_ServicesRoom(t *testing.T) {
 	if !ok {
 		t.Fatalf("service %q not found in directory", serviceKey)
 	}
-	if service.Protocol != "http" {
-		t.Errorf("service protocol = %q, want %q", service.Protocol, "http")
+	wantEndpoints := map[string]string{"http": "http.sock"}
+	if len(service.Endpoints) != len(wantEndpoints) {
+		t.Errorf("service endpoints = %v, want %v", service.Endpoints, wantEndpoints)
+	}
+	for key, wantValue := range wantEndpoints {
+		if service.Endpoints[key] != wantValue {
+			t.Errorf("service endpoint %q = %q, want %q", key, service.Endpoints[key], wantValue)
+		}
 	}
 }
 
@@ -866,7 +872,7 @@ func TestInitialSync(t *testing.T) {
 			Content: map[string]any{
 				"principal":   "@bureau/fleet/test/service/tts/piper:bureau.local",
 				"machine":     "@bureau/fleet/test/machine/peer:bureau.local",
-				"protocol":    "http",
+				"endpoints":   map[string]any{"http": "http.sock"},
 				"description": "Text to speech",
 			},
 		},
@@ -935,8 +941,14 @@ func TestInitialSync(t *testing.T) {
 	if !ok {
 		t.Fatalf("service %q not found", serviceKey)
 	}
-	if service.Protocol != "http" {
-		t.Errorf("service protocol = %q, want %q", service.Protocol, "http")
+	wantEndpoints := map[string]string{"http": "http.sock"}
+	if len(service.Endpoints) != len(wantEndpoints) {
+		t.Errorf("service endpoints = %v, want %v", service.Endpoints, wantEndpoints)
+	}
+	for key, wantValue := range wantEndpoints {
+		if service.Endpoints[key] != wantValue {
+			t.Errorf("service endpoint %q = %q, want %q", key, service.Endpoints[key], wantValue)
+		}
 	}
 }
 

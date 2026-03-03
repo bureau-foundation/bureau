@@ -532,7 +532,7 @@ func TestCrossMachineObservation(t *testing.T) {
 		"test/xm-obs", schema.Service{
 			Principal:   observedEntity,
 			Machine:     provider.Ref,
-			Protocol:    "bureau-observe",
+			Endpoints:   map[string]string{"cbor": "service.sock"},
 			Description: "test principal for cross-machine observation",
 		})
 	if err != nil {

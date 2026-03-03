@@ -368,7 +368,7 @@ func TestHandlePipelineExecute_Accepted(t *testing.T) {
 		Principal:    ticketEntity,
 		Machine:      harness.daemon.machine,
 		Capabilities: []string{"dependency-graph"},
-		Protocol:     "cbor",
+		Endpoints:    map[string]string{"cbor": "service.sock"},
 	}
 
 	// Start a mock ticket service that handles the "create" action.

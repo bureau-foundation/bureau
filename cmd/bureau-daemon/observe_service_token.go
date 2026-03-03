@@ -85,11 +85,18 @@ func (d *Daemon) handleMintServiceToken(clientConnection net.Conn, request obser
 	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
 	defer cancel()
 
-	socketPath, err := d.resolveServiceSocket(ctx, request.ServiceRole, []ref.RoomID{d.configRoomID})
+	principal, err := d.resolveServiceBinding(ctx, request.ServiceRole, []ref.RoomID{d.configRoomID})
 	if err != nil {
 		d.sendObserveError(clientConnection,
 			fmt.Sprintf("no service binding found for role %q in config room %s (%s)",
 				request.ServiceRole, d.machine.RoomAlias(), d.configRoomID))
+		return
+	}
+
+	socketPath, err := d.resolveEndpointSocket(principal, "")
+	if err != nil {
+		d.sendObserveError(clientConnection,
+			fmt.Sprintf("resolving socket for service %q: %s", request.ServiceRole, err))
 		return
 	}
 

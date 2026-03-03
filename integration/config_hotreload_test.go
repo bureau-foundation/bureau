@@ -236,7 +236,7 @@ func TestServiceVisibilityHotReload(t *testing.T) {
 		"service/vis-hr/test", schema.Service{
 			Principal:   mockServiceEntity,
 			Machine:     machine.Ref,
-			Protocol:    "http",
+			Endpoints:   map[string]string{"http": "http.sock"},
 			Description: "Test service for visibility hot-reload",
 		})
 	if err != nil {

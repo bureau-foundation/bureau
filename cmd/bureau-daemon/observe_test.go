@@ -303,7 +303,7 @@ func TestListWithRemoteServices(t *testing.T) {
 	daemon.services["service/tts/piper"] = &schema.Service{
 		Principal: testEntity(t, daemon.fleet, "service/tts/piper"),
 		Machine:   remoteMachine,
-		Protocol:  "http",
+		Endpoints: map[string]string{"http": "http.sock"},
 	}
 	daemon.authorizationIndex.SetPrincipal(testEntity(t, daemon.fleet, "service/tts/piper").UserID(), permissiveObserveAllowances)
 	// Add the peer address so the remote service is reachable.
@@ -358,7 +358,7 @@ func TestListObservableFilter(t *testing.T) {
 	daemon.services["service/tts/piper"] = &schema.Service{
 		Principal: testEntity(t, daemon.fleet, "service/tts/piper"),
 		Machine:   remoteMachine,
-		Protocol:  "http",
+		Endpoints: map[string]string{"http": "http.sock"},
 	}
 	daemon.authorizationIndex.SetPrincipal(testEntity(t, daemon.fleet, "service/tts/piper").UserID(), permissiveObserveAllowances)
 	// No peer address and no transport dialer → not observable.

@@ -19,7 +19,7 @@ import (
 // filtering criteria that no built-in constructor covers, callers can
 // pass a function directly:
 //
-//	service.Matcher(func(s schema.Service) bool { return s.Protocol == "grpc" })
+//	service.Matcher(func(s schema.Service) bool { _, ok := s.Endpoints["grpc"]; return ok })
 type Matcher func(schema.Service) bool
 
 // HasCapability returns a Matcher that selects services advertising

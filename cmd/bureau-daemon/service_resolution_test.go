@@ -9,6 +9,7 @@ import (
 	"net/http/httptest"
 	"os"
 	"path/filepath"
+	"strings"
 	"sync"
 	"testing"
 
@@ -726,69 +727,166 @@ func newServiceResolutionTestDaemon(t *testing.T, daemon *Daemon, matrixState *m
 	return tracker, cleanup
 }
 
-// TestHttpSocketForService verifies that httpSocketForService detects an
-// HTTP socket alongside a service's CBOR socket. The CBOR socket path is
-// a symlink to configDir/listen/service.sock. If http.sock exists in the
-// same directory, the function returns its path.
-func TestHttpSocketForService(t *testing.T) {
+// TestParseServiceSpec verifies that service specs are correctly split
+// into role and endpoint parts.
+func TestParseServiceSpec(t *testing.T) {
 	t.Parallel()
 
-	t.Run("http socket present", func(t *testing.T) {
-		t.Parallel()
-		listenDir := t.TempDir()
+	tests := []struct {
+		spec         string
+		wantRole     string
+		wantEndpoint string
+	}{
+		{spec: "ticket", wantRole: "ticket", wantEndpoint: ""},
+		{spec: "model:http", wantRole: "model", wantEndpoint: "http"},
+		{spec: "stt/whisper", wantRole: "stt/whisper", wantEndpoint: ""},
+		{spec: "stt/whisper:grpc", wantRole: "stt/whisper", wantEndpoint: "grpc"},
+	}
 
-		// Create the CBOR socket file and an HTTP socket file.
+	for _, test := range tests {
+		role, endpoint := parseServiceSpec(test.spec)
+		if role != test.wantRole {
+			t.Errorf("parseServiceSpec(%q) role = %q, want %q", test.spec, role, test.wantRole)
+		}
+		if endpoint != test.wantEndpoint {
+			t.Errorf("parseServiceSpec(%q) endpoint = %q, want %q", test.spec, endpoint, test.wantEndpoint)
+		}
+	}
+}
+
+// TestResolveEndpointSocket verifies that the daemon correctly resolves
+// endpoint-specific socket paths from the in-memory service directory.
+func TestResolveEndpointSocket(t *testing.T) {
+	t.Parallel()
+
+	t.Run("default cbor endpoint", func(t *testing.T) {
+		t.Parallel()
+		daemon, _ := newTestDaemon(t)
+		daemon.machine, daemon.fleet = testMachineSetup(t, "workstation", "bureau.local")
+		daemon.fleetRunDir = daemon.fleet.RunDir(daemon.runDir)
+
+		serviceRef, err := ref.NewService(daemon.fleet, "stt/whisper")
+		if err != nil {
+			t.Fatalf("construct service ref: %v", err)
+		}
+		principal := serviceRef.Entity()
+
+		// Empty endpoint returns the canonical ServiceSocketPath.
+		socketPath, err := daemon.resolveEndpointSocket(principal, "")
+		if err != nil {
+			t.Fatalf("resolveEndpointSocket empty: %v", err)
+		}
+		wantPath := principal.ServiceSocketPath(daemon.fleetRunDir)
+		if socketPath != wantPath {
+			t.Errorf("socket = %q, want %q", socketPath, wantPath)
+		}
+
+		// Explicit "cbor" also returns the canonical path.
+		socketPath, err = daemon.resolveEndpointSocket(principal, "cbor")
+		if err != nil {
+			t.Fatalf("resolveEndpointSocket cbor: %v", err)
+		}
+		if socketPath != wantPath {
+			t.Errorf("socket = %q, want %q", socketPath, wantPath)
+		}
+	})
+
+	t.Run("named endpoint via symlink", func(t *testing.T) {
+		t.Parallel()
+		daemon, _ := newTestDaemon(t)
+		daemon.machine, daemon.fleet = testMachineSetup(t, "workstation", "bureau.local")
+
+		// Use a real temp dir for fleetRunDir so we can create symlinks.
+		runDir := t.TempDir()
+		daemon.runDir = runDir
+		daemon.fleetRunDir = daemon.fleet.RunDir(runDir)
+
+		serviceRef, err := ref.NewService(daemon.fleet, "model/gpt")
+		if err != nil {
+			t.Fatalf("construct service ref: %v", err)
+		}
+		servicePrincipal := serviceRef.Entity()
+
+		// Register the service with multiple endpoints.
+		daemon.services[servicePrincipal.Localpart()] = &schema.Service{
+			Principal: servicePrincipal,
+			Machine:   daemon.machine,
+			Endpoints: map[string]string{
+				"cbor": "service.sock",
+				"http": "http.sock",
+			},
+		}
+
+		// Set up the filesystem: create listen dir, symlink from
+		// ServiceSocketPath → listenDir/service.sock.
+		listenDir := t.TempDir()
 		cborSocket := filepath.Join(listenDir, "service.sock")
 		httpSocket := filepath.Join(listenDir, "http.sock")
 		os.WriteFile(cborSocket, nil, 0600)
 		os.WriteFile(httpSocket, nil, 0600)
 
-		// Create a symlink that mimics ServiceSocketPath.
-		symlinkDir := t.TempDir()
-		symlink := filepath.Join(symlinkDir, "model.sock")
-		os.Symlink(cborSocket, symlink)
+		symlinkPath := servicePrincipal.ServiceSocketPath(daemon.fleetRunDir)
+		if err := os.MkdirAll(filepath.Dir(symlinkPath), 0755); err != nil {
+			t.Fatalf("create symlink parent dir: %v", err)
+		}
+		if err := os.Symlink(cborSocket, symlinkPath); err != nil {
+			t.Fatalf("create symlink: %v", err)
+		}
 
-		result := httpSocketForService(symlink)
-		if result != httpSocket {
-			t.Errorf("httpSocketForService() = %q, want %q", result, httpSocket)
+		socketPath, err := daemon.resolveEndpointSocket(servicePrincipal, "http")
+		if err != nil {
+			t.Fatalf("resolveEndpointSocket http: %v", err)
+		}
+		if socketPath != httpSocket {
+			t.Errorf("socket = %q, want %q", socketPath, httpSocket)
 		}
 	})
 
-	t.Run("no http socket", func(t *testing.T) {
+	t.Run("unknown endpoint errors", func(t *testing.T) {
 		t.Parallel()
-		listenDir := t.TempDir()
+		daemon, _ := newTestDaemon(t)
+		daemon.machine, daemon.fleet = testMachineSetup(t, "workstation", "bureau.local")
+		daemon.fleetRunDir = daemon.fleet.RunDir(daemon.runDir)
 
-		// Only the CBOR socket — no http.sock.
-		cborSocket := filepath.Join(listenDir, "service.sock")
-		os.WriteFile(cborSocket, nil, 0600)
+		serviceRef, err := ref.NewService(daemon.fleet, "ticket")
+		if err != nil {
+			t.Fatalf("construct service ref: %v", err)
+		}
+		principal := serviceRef.Entity()
 
-		symlinkDir := t.TempDir()
-		symlink := filepath.Join(symlinkDir, "ticket.sock")
-		os.Symlink(cborSocket, symlink)
+		daemon.services[principal.Localpart()] = &schema.Service{
+			Principal: principal,
+			Machine:   daemon.machine,
+			Endpoints: map[string]string{"cbor": "service.sock"},
+		}
 
-		result := httpSocketForService(symlink)
-		if result != "" {
-			t.Errorf("httpSocketForService() = %q, want empty", result)
+		_, err = daemon.resolveEndpointSocket(principal, "grpc")
+		if err == nil {
+			t.Fatal("expected error for unknown endpoint, got nil")
+		}
+		if !strings.Contains(err.Error(), "does not declare endpoint") {
+			t.Errorf("error = %v, want 'does not declare endpoint'", err)
 		}
 	})
 
-	t.Run("broken symlink", func(t *testing.T) {
+	t.Run("service not in directory", func(t *testing.T) {
 		t.Parallel()
-		symlinkDir := t.TempDir()
-		symlink := filepath.Join(symlinkDir, "missing.sock")
-		os.Symlink("/nonexistent/path/service.sock", symlink)
+		daemon, _ := newTestDaemon(t)
+		daemon.machine, daemon.fleet = testMachineSetup(t, "workstation", "bureau.local")
+		daemon.fleetRunDir = daemon.fleet.RunDir(daemon.runDir)
 
-		result := httpSocketForService(symlink)
-		if result != "" {
-			t.Errorf("httpSocketForService() = %q, want empty for broken symlink", result)
+		serviceRef, err := ref.NewService(daemon.fleet, "unknown/service")
+		if err != nil {
+			t.Fatalf("construct service ref: %v", err)
 		}
-	})
+		principal := serviceRef.Entity()
 
-	t.Run("path does not exist", func(t *testing.T) {
-		t.Parallel()
-		result := httpSocketForService("/nonexistent/model.sock")
-		if result != "" {
-			t.Errorf("httpSocketForService() = %q, want empty for nonexistent path", result)
+		_, err = daemon.resolveEndpointSocket(principal, "http")
+		if err == nil {
+			t.Fatal("expected error for missing service, got nil")
+		}
+		if !strings.Contains(err.Error(), "not yet in the service directory") {
+			t.Errorf("error = %v, want 'not yet in the service directory'", err)
 		}
 	})
 }

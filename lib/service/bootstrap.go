@@ -114,6 +114,13 @@ type ProxyBootstrapConfig struct {
 	// entry (e.g., ["dependency-graph", "gate-evaluation"]).
 	Capabilities []string
 
+	// Endpoints maps endpoint names to socket filenames relative to
+	// the service's listen directory. When nil, the service registers
+	// a single default CBOR endpoint: {"cbor": "service.sock"}.
+	// Services with additional endpoints (e.g., HTTP compatibility)
+	// set this explicitly.
+	Endpoints map[string]string
+
 	// Logger is the structured logger for bootstrap output. If nil,
 	// BootstrapViaProxy creates a default JSON handler on stderr.
 	Logger *slog.Logger
@@ -256,7 +263,7 @@ func BootstrapViaProxy(ctx context.Context, config ProxyBootstrapConfig) (*Boots
 	// Register in the fleet service room.
 	if err := Register(ctx, session, serviceRoomID, serviceRef, Registration{
 		Machine:      machineRef,
-		Protocol:     "cbor",
+		Endpoints:    config.Endpoints,
 		Description:  config.Description,
 		Capabilities: config.Capabilities,
 	}); err != nil {

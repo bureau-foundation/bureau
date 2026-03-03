@@ -26,7 +26,7 @@ import (
 // testServiceEntry constructs a fleet-scoped service map entry for tests.
 // Returns the fleet-scoped localpart (map key) and the schema.Service value.
 // The service name uses hierarchical format (e.g., "stt/whisper").
-func testServiceEntry(t *testing.T, fleet ref.Fleet, serviceName string, machine ref.Machine, protocol string) (string, *schema.Service) {
+func testServiceEntry(t *testing.T, fleet ref.Fleet, serviceName string, machine ref.Machine, endpoints map[string]string) (string, *schema.Service) {
 	t.Helper()
 	serviceRef, err := ref.NewService(fleet, serviceName)
 	if err != nil {
@@ -35,7 +35,7 @@ func testServiceEntry(t *testing.T, fleet ref.Fleet, serviceName string, machine
 	return serviceRef.Localpart(), &schema.Service{
 		Principal: serviceRef.Entity(),
 		Machine:   machine,
-		Protocol:  protocol,
+		Endpoints: endpoints,
 	}
 }
 
@@ -90,8 +90,8 @@ func TestServiceByProxyName(t *testing.T) {
 	daemon.fleetRunDir = daemon.fleet.RunDir(daemon.runDir)
 	remoteMachine, _ := testMachineSetup(t, "cloud-gpu", "bureau.local")
 
-	sttLocalpart, sttService := testServiceEntry(t, daemon.fleet, "stt/whisper", daemon.machine, "")
-	ttsLocalpart, ttsService := testServiceEntry(t, daemon.fleet, "tts/piper", remoteMachine, "")
+	sttLocalpart, sttService := testServiceEntry(t, daemon.fleet, "stt/whisper", daemon.machine, nil)
+	ttsLocalpart, ttsService := testServiceEntry(t, daemon.fleet, "tts/piper", remoteMachine, nil)
 	daemon.services[sttLocalpart] = sttService
 	daemon.services[ttsLocalpart] = ttsService
 
@@ -126,8 +126,8 @@ func TestLocalProviderSocket(t *testing.T) {
 	daemon.logger = slog.New(slog.NewJSONHandler(os.Stderr, nil))
 	remoteMachine, _ := testMachineSetup(t, "cloud-gpu", "bureau.local")
 
-	sttLocalpart, sttService := testServiceEntry(t, daemon.fleet, "stt/whisper", daemon.machine, "")
-	ttsLocalpart, ttsService := testServiceEntry(t, daemon.fleet, "tts/piper", remoteMachine, "")
+	sttLocalpart, sttService := testServiceEntry(t, daemon.fleet, "stt/whisper", daemon.machine, nil)
+	ttsLocalpart, ttsService := testServiceEntry(t, daemon.fleet, "tts/piper", remoteMachine, nil)
 	daemon.services[sttLocalpart] = sttService
 	daemon.services[ttsLocalpart] = ttsService
 
@@ -191,7 +191,7 @@ func TestRelayHandler(t *testing.T) {
 	daemon.logger = slog.New(slog.NewJSONHandler(os.Stderr, nil))
 	remoteMachine, _ := testMachineSetup(t, "cloud-gpu", "bureau.local")
 
-	sttLocalpart, sttService := testServiceEntry(t, daemon.fleet, "stt/whisper", remoteMachine, "http")
+	sttLocalpart, sttService := testServiceEntry(t, daemon.fleet, "stt/whisper", remoteMachine, map[string]string{"http": "http.sock"})
 	daemon.services[sttLocalpart] = sttService
 	daemon.peerAddresses[remoteMachine.UserID().String()] = peerAddress
 	daemon.transportDialer = &testTCPDialer{}
@@ -309,7 +309,7 @@ func TestTransportInboundHandler(t *testing.T) {
 	daemon.fleetRunDir = daemon.fleet.RunDir(daemon.runDir)
 	daemon.logger = slog.New(slog.NewJSONHandler(os.Stderr, nil))
 
-	sttLocalpart, sttService := testServiceEntry(t, daemon.fleet, "stt/whisper", daemon.machine, "http")
+	sttLocalpart, sttService := testServiceEntry(t, daemon.fleet, "stt/whisper", daemon.machine, map[string]string{"http": "http.sock"})
 	daemon.services[sttLocalpart] = sttService
 
 	// Start the inbound handler on a TCP listener (simulating the
@@ -424,7 +424,7 @@ func TestCrossTransportRouting(t *testing.T) {
 	providerDaemon.fleetRunDir = providerDaemon.fleet.RunDir(providerDaemon.runDir)
 	providerDaemon.logger = slog.New(slog.NewJSONHandler(os.Stderr, nil))
 
-	sttLocalpart, sttProviderService := testServiceEntry(t, providerDaemon.fleet, "stt/whisper", providerDaemon.machine, "http")
+	sttLocalpart, sttProviderService := testServiceEntry(t, providerDaemon.fleet, "stt/whisper", providerDaemon.machine, map[string]string{"http": "http.sock"})
 	providerDaemon.services[sttLocalpart] = sttProviderService
 
 	// The inbound handler calls localProviderSocket which derives the
@@ -475,7 +475,7 @@ func TestCrossTransportRouting(t *testing.T) {
 	consumerDaemon.logger = slog.New(slog.NewJSONHandler(os.Stderr, nil))
 
 	// The consumer sees the same service but hosted on the provider machine.
-	sttConsumerLocalpart, sttConsumerService := testServiceEntry(t, consumerDaemon.fleet, "stt/whisper", providerDaemon.machine, "http")
+	sttConsumerLocalpart, sttConsumerService := testServiceEntry(t, consumerDaemon.fleet, "stt/whisper", providerDaemon.machine, map[string]string{"http": "http.sock"})
 	consumerDaemon.services[sttConsumerLocalpart] = sttConsumerService
 	consumerDaemon.peerAddresses[providerDaemon.machine.UserID().String()] = transportListener.Addr().String()
 	consumerDaemon.transportDialer = &testTCPDialer{}

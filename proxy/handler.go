@@ -92,9 +92,10 @@ type ServiceDirectoryEntry struct {
 	// service instance, e.g., "@machine/cloud-gpu-1:bureau.local".
 	Machine ref.UserID `json:"machine"`
 
-	// Protocol is the wire protocol spoken by the service
-	// (e.g., "http", "grpc", "raw-frames").
-	Protocol string `json:"protocol"`
+	// Endpoints lists the named endpoints this service exposes
+	// (e.g., ["cbor"], ["cbor", "http"]). Agents can filter by
+	// endpoint name using the ?protocol= query parameter.
+	Endpoints []string `json:"endpoints"`
 
 	// Description is a human-readable description of the service.
 	Description string `json:"description,omitempty"`
@@ -789,7 +790,7 @@ func (h *Handler) HandleServiceDirectory(w http.ResponseWriter, r *http.Request)
 	if capability != "" || protocol != "" {
 		filtered := make([]ServiceDirectoryEntry, 0, len(directory))
 		for _, entry := range directory {
-			if protocol != "" && entry.Protocol != protocol {
+			if protocol != "" && !slices.Contains(entry.Endpoints, protocol) {
 				continue
 			}
 			if capability != "" && !slices.Contains(entry.Capabilities, capability) {

@@ -103,7 +103,7 @@ func TestServiceDiscovery(t *testing.T) {
 		"service/stt/test", schema.Service{
 			Principal:    serviceEntity,
 			Machine:      provider.Ref,
-			Protocol:     "http",
+			Endpoints:    map[string]string{"http": "http.sock"},
 			Capabilities: []string{"streaming"},
 			Description:  "Test STT service",
 		})
@@ -142,8 +142,8 @@ func TestServiceDiscovery(t *testing.T) {
 		if entry.Machine != provider.UserID.String() {
 			t.Errorf("machine = %q, want %q", entry.Machine, provider.UserID)
 		}
-		if entry.Protocol != "http" {
-			t.Errorf("protocol = %q, want %q", entry.Protocol, "http")
+		if !slices.Contains(entry.Endpoints, "http") {
+			t.Errorf("endpoints = %v, want to contain %q", entry.Endpoints, "http")
 		}
 		if entry.Description != "Test STT service" {
 			t.Errorf("description = %q, want %q", entry.Description, "Test STT service")
@@ -163,7 +163,7 @@ func TestServiceDiscovery(t *testing.T) {
 		if len(entries) != 0 {
 			t.Errorf("narrow consumer should see 0 services (visibility blocks stt), got %d", len(entries))
 			for _, entry := range entries {
-				t.Logf("  visible: %s (protocol=%s)", entry.Localpart, entry.Protocol)
+				t.Logf("  visible: %s (endpoints=%v)", entry.Localpart, entry.Endpoints)
 			}
 		}
 	})
@@ -243,7 +243,7 @@ func TestServiceDiscovery(t *testing.T) {
 			"service/embedding/test", schema.Service{
 				Principal:    embeddingEntity,
 				Machine:      provider.Ref,
-				Protocol:     "http",
+				Endpoints:    map[string]string{"http": "http.sock"},
 				Capabilities: []string{"batch"},
 				Description:  "Test embedding service",
 			})

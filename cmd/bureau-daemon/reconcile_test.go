@@ -1986,6 +1986,56 @@ func TestMintServiceTokens_MultipleServices(t *testing.T) {
 	}
 }
 
+// TestMintServiceTokens_EndpointDedup verifies that when RequiredServices
+// contains both "model" and "model:http", only one token is minted for the
+// "model" role. Tokens are per-role, not per-endpoint.
+func TestMintServiceTokens_EndpointDedup(t *testing.T) {
+	t.Parallel()
+
+	_, privateKey, err := servicetoken.GenerateKeypair()
+	if err != nil {
+		t.Fatalf("GenerateKeypair: %v", err)
+	}
+
+	stateDir := t.TempDir()
+
+	daemon, _ := newTestDaemon(t)
+	daemon.machine, daemon.fleet = testMachineSetup(t, "test", "test.local")
+	daemon.stateDir = stateDir
+	daemon.tokenSigningPrivateKey = privateKey
+
+	daemon.authorizationIndex.SetPrincipal(testEntity(t, daemon.fleet, "agent/alpha").UserID(), schema.AuthorizationPolicy{
+		Grants: []schema.Grant{
+			{Actions: []string{"model/**"}},
+		},
+	})
+
+	// "model" and "model:http" should produce exactly one token for "model".
+	tokenDir, minted, err := daemon.mintServiceTokens(testEntity(t, daemon.fleet, "agent/alpha"), []string{"model", "model:http"})
+	if err != nil {
+		t.Fatalf("mintServiceTokens: %v", err)
+	}
+
+	if len(minted) != 1 {
+		t.Fatalf("minted = %d entries, want 1 (dedup should collapse model + model:http)", len(minted))
+	}
+	if minted[0].serviceRole != "model" {
+		t.Errorf("minted role = %q, want %q", minted[0].serviceRole, "model")
+	}
+
+	// Only one token file should exist.
+	tokenPath := filepath.Join(tokenDir, "model.token")
+	if _, err := os.Stat(tokenPath); os.IsNotExist(err) {
+		t.Error("token file for model should exist")
+	}
+
+	// There should NOT be a "model:http.token" file.
+	badPath := filepath.Join(tokenDir, "model:http.token")
+	if _, err := os.Stat(badPath); err == nil {
+		t.Error("model:http.token should NOT exist — tokens are per-role, not per-endpoint")
+	}
+}
+
 func TestSynthesizeGrants(t *testing.T) {
 	t.Parallel()
 

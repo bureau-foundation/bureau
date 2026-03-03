@@ -14,6 +14,7 @@ import (
 	"net/http"
 	"os"
 	"path/filepath"
+	"slices"
 	"strings"
 	"testing"
 	"time"
@@ -1595,7 +1596,7 @@ func TestServiceDirectory(t *testing.T) {
 			Localpart:    "service/stt/whisper",
 			Principal:    ref.MustParseUserID("@service/stt/whisper:bureau.local"),
 			Machine:      ref.MustParseUserID("@machine/gpu-1:bureau.local"),
-			Protocol:     "http",
+			Endpoints:    []string{"http"},
 			Description:  "Speech-to-text via Whisper",
 			Capabilities: []string{"streaming", "speaker-diarization"},
 		},
@@ -1603,7 +1604,7 @@ func TestServiceDirectory(t *testing.T) {
 			Localpart:    "service/tts/piper",
 			Principal:    ref.MustParseUserID("@service/tts/piper:bureau.local"),
 			Machine:      ref.MustParseUserID("@machine/gpu-1:bureau.local"),
-			Protocol:     "http",
+			Endpoints:    []string{"http"},
 			Description:  "Text-to-speech via Piper",
 			Capabilities: []string{"streaming"},
 		},
@@ -1611,7 +1612,7 @@ func TestServiceDirectory(t *testing.T) {
 			Localpart:   "service/embedding/e5",
 			Principal:   ref.MustParseUserID("@service/embedding/e5:bureau.local"),
 			Machine:     ref.MustParseUserID("@machine/cpu-1:bureau.local"),
-			Protocol:    "grpc",
+			Endpoints:   []string{"grpc"},
 			Description: "Text embeddings via E5",
 			Metadata:    map[string]any{"max_tokens": float64(512)},
 		},
@@ -1676,8 +1677,8 @@ func TestServiceDirectory(t *testing.T) {
 			t.Errorf("expected 2 http services, got %d", len(services))
 		}
 		for _, service := range services {
-			if service.Protocol != "http" {
-				t.Errorf("expected protocol http, got %q", service.Protocol)
+			if !slices.Contains(service.Endpoints, "http") {
+				t.Errorf("expected http endpoint, got %v", service.Endpoints)
 			}
 		}
 	})
@@ -1799,7 +1800,7 @@ func TestServiceDirectory(t *testing.T) {
 				Localpart: "service/llm/claude",
 				Principal: ref.MustParseUserID("@service/llm/claude:bureau.local"),
 				Machine:   ref.MustParseUserID("@machine/cpu-1:bureau.local"),
-				Protocol:  "http",
+				Endpoints: []string{"http"},
 			},
 		}
 		body, _ := json.Marshal(newDirectory)
@@ -1851,7 +1852,7 @@ func TestServiceDirectory(t *testing.T) {
 				Localpart: "service/test",
 				Principal: ref.MustParseUserID("@service/test:bureau.local"),
 				Machine:   ref.MustParseUserID("@machine/dev:bureau.local"),
-				Protocol:  "http",
+				Endpoints: []string{"http"},
 			},
 		})
 
@@ -1914,27 +1915,27 @@ func TestServiceVisibility(t *testing.T) {
 			Localpart:    "service/stt/whisper",
 			Principal:    ref.MustParseUserID("@service/stt/whisper:bureau.local"),
 			Machine:      ref.MustParseUserID("@machine/gpu-1:bureau.local"),
-			Protocol:     "http",
+			Endpoints:    []string{"http"},
 			Capabilities: []string{"streaming"},
 		},
 		{
 			Localpart: "service/stt/deepgram",
 			Principal: ref.MustParseUserID("@service/stt/deepgram:bureau.local"),
 			Machine:   ref.MustParseUserID("@machine/gpu-1:bureau.local"),
-			Protocol:  "http",
+			Endpoints: []string{"http"},
 		},
 		{
 			Localpart:    "service/tts/piper",
 			Principal:    ref.MustParseUserID("@service/tts/piper:bureau.local"),
 			Machine:      ref.MustParseUserID("@machine/gpu-1:bureau.local"),
-			Protocol:     "http",
+			Endpoints:    []string{"http"},
 			Capabilities: []string{"streaming"},
 		},
 		{
 			Localpart: "service/embedding/e5",
 			Principal: ref.MustParseUserID("@service/embedding/e5:bureau.local"),
 			Machine:   ref.MustParseUserID("@machine/cpu-1:bureau.local"),
-			Protocol:  "grpc",
+			Endpoints: []string{"grpc"},
 		},
 	}
 
@@ -2389,10 +2390,10 @@ func TestGrantsBasedServiceDiscovery(t *testing.T) {
 
 	// Push a service directory.
 	directory := []ServiceDirectoryEntry{
-		{Localpart: "service/stt/whisper", Principal: ref.MustParseUserID("@service/stt/whisper:bureau.local"), Machine: ref.MustParseUserID("@m:b"), Protocol: "http"},
-		{Localpart: "service/stt/deepgram", Principal: ref.MustParseUserID("@service/stt/deepgram:bureau.local"), Machine: ref.MustParseUserID("@m:b"), Protocol: "http"},
-		{Localpart: "service/tts/piper", Principal: ref.MustParseUserID("@service/tts/piper:bureau.local"), Machine: ref.MustParseUserID("@m:b"), Protocol: "http"},
-		{Localpart: "service/embedding/e5", Principal: ref.MustParseUserID("@service/embedding/e5:bureau.local"), Machine: ref.MustParseUserID("@m:b"), Protocol: "grpc"},
+		{Localpart: "service/stt/whisper", Principal: ref.MustParseUserID("@service/stt/whisper:bureau.local"), Machine: ref.MustParseUserID("@m:b"), Endpoints: []string{"http"}},
+		{Localpart: "service/stt/deepgram", Principal: ref.MustParseUserID("@service/stt/deepgram:bureau.local"), Machine: ref.MustParseUserID("@m:b"), Endpoints: []string{"http"}},
+		{Localpart: "service/tts/piper", Principal: ref.MustParseUserID("@service/tts/piper:bureau.local"), Machine: ref.MustParseUserID("@m:b"), Endpoints: []string{"http"}},
+		{Localpart: "service/embedding/e5", Principal: ref.MustParseUserID("@service/embedding/e5:bureau.local"), Machine: ref.MustParseUserID("@m:b"), Endpoints: []string{"grpc"}},
 	}
 	body, _ := json.Marshal(directory)
 	req, _ := http.NewRequest("PUT", "http://localhost/v1/admin/directory", bytes.NewReader(body))

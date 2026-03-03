@@ -466,9 +466,14 @@ type Service struct {
 	// a capability (e.g., ["streaming", "speaker-diarization"]).
 	Capabilities []string `json:"capabilities,omitempty"`
 
-	// Protocol is the wire protocol spoken on the service socket
-	// (e.g., "http", "grpc", "raw-frames").
-	Protocol string `json:"protocol"`
+	// Endpoints maps endpoint names to socket filenames relative to
+	// the service's listen directory. The key is the protocol/endpoint
+	// name (e.g., "cbor", "http", "grpc"). The value is the socket
+	// filename (e.g., "service.sock", "http.sock").
+	//
+	// Every service has at least a "cbor" endpoint at "service.sock".
+	// Additional endpoints are optional.
+	Endpoints map[string]string `json:"endpoints"`
 
 	// Description is a human-readable description of the service.
 	Description string `json:"description,omitempty"`

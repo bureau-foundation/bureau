@@ -17,10 +17,10 @@ type Registration struct {
 	// Machine is the machine running this service instance.
 	Machine ref.Machine
 
-	// Protocol is the wire protocol on the service socket. Bureau
-	// services use "cbor" (one CBOR request-response per connection).
-	// External services may use "http".
-	Protocol string
+	// Endpoints maps endpoint names to socket filenames relative to
+	// the service's listen directory. When nil, Register() uses the
+	// default {"cbor": "service.sock"}.
+	Endpoints map[string]string
 
 	// Description is a human-readable summary shown in service
 	// directory listings.
@@ -42,10 +42,14 @@ type Registration struct {
 // picks this up and makes the service available for routing.
 func Register(ctx context.Context, session messaging.Session, serviceRoomID ref.RoomID, svc ref.Service, reg Registration) error {
 	stateKey := svc.Localpart()
+	endpoints := reg.Endpoints
+	if endpoints == nil {
+		endpoints = map[string]string{"cbor": "service.sock"}
+	}
 	entry := schema.Service{
 		Principal:    svc.Entity(),
 		Machine:      reg.Machine,
-		Protocol:     reg.Protocol,
+		Endpoints:    endpoints,
 		Description:  reg.Description,
 		Capabilities: reg.Capabilities,
 		Metadata:     reg.Metadata,

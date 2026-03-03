@@ -2162,7 +2162,7 @@ type serviceDirectoryEntry struct {
 	Localpart    string         `json:"localpart"`
 	Principal    string         `json:"principal"`
 	Machine      string         `json:"machine"`
-	Protocol     string         `json:"protocol"`
+	Endpoints    []string       `json:"endpoints"`
 	Description  string         `json:"description,omitempty"`
 	Capabilities []string       `json:"capabilities,omitempty"`
 	Metadata     map[string]any `json:"metadata,omitempty"`

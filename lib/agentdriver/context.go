@@ -122,7 +122,7 @@ func (agentContext *AgentContext) SystemPrompt() string {
 	if len(agentContext.Services) > 0 {
 		builder.WriteString("\n## Available Services\n\n")
 		for _, service := range agentContext.Services {
-			builder.WriteString(fmt.Sprintf("- %s (%s)", service.Localpart, service.Protocol))
+			builder.WriteString(fmt.Sprintf("- %s (%s)", service.Localpart, strings.Join(service.Endpoints, ", ")))
 			if service.Description != "" {
 				builder.WriteString(fmt.Sprintf(": %s", service.Description))
 			}

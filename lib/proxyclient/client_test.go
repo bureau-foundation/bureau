@@ -176,7 +176,7 @@ func TestServices(t *testing.T) {
 				Localpart:   "service/stt/whisper",
 				Principal:   "@service/stt/whisper:test.local",
 				Machine:     "@machine/gpu:test.local",
-				Protocol:    "http",
+				Endpoints:   []string{"http"},
 				Description: "Speech to text",
 			},
 		})
@@ -193,8 +193,8 @@ func TestServices(t *testing.T) {
 	if services[0].Localpart != "service/stt/whisper" {
 		t.Errorf("Localpart = %q, want service/stt/whisper", services[0].Localpart)
 	}
-	if services[0].Protocol != "http" {
-		t.Errorf("Protocol = %q, want http", services[0].Protocol)
+	if len(services[0].Endpoints) != 1 || services[0].Endpoints[0] != "http" {
+		t.Errorf("Endpoints = %v, want [http]", services[0].Endpoints)
 	}
 }
 

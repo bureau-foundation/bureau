@@ -120,14 +120,18 @@ func TestAnd(t *testing.T) {
 
 func TestCustomMatcher(t *testing.T) {
 	// Callers can use any func(schema.Service) bool as a Matcher.
-	match := Matcher(func(s schema.Service) bool {
-		return s.Protocol == "grpc"
-	})
+	hasEndpoint := func(name string) Matcher {
+		return Matcher(func(s schema.Service) bool {
+			_, ok := s.Endpoints[name]
+			return ok
+		})
+	}
+	match := hasEndpoint("grpc")
 
-	if !match(schema.Service{Protocol: "grpc"}) {
+	if !match(schema.Service{Endpoints: map[string]string{"grpc": "grpc.sock"}}) {
 		t.Error("expected custom matcher to accept grpc service")
 	}
-	if match(schema.Service{Protocol: "cbor"}) {
+	if match(schema.Service{Endpoints: map[string]string{"cbor": "service.sock"}}) {
 		t.Error("expected custom matcher to reject cbor service")
 	}
 }
@@ -136,9 +140,9 @@ func TestCustomMatcher(t *testing.T) {
 
 func TestFindAll(t *testing.T) {
 	services := []schema.Service{
-		{Capabilities: []string{"streaming"}, Protocol: "grpc"},
-		{Capabilities: []string{"batch"}, Protocol: "cbor"},
-		{Capabilities: []string{"streaming", "batch"}, Protocol: "grpc"},
+		{Capabilities: []string{"streaming"}, Endpoints: map[string]string{"grpc": "grpc.sock"}},
+		{Capabilities: []string{"batch"}, Endpoints: map[string]string{"cbor": "service.sock"}},
+		{Capabilities: []string{"streaming", "batch"}, Endpoints: map[string]string{"grpc": "grpc.sock"}},
 	}
 	match := HasCapability("streaming")
 
@@ -147,8 +151,11 @@ func TestFindAll(t *testing.T) {
 		if length := len(result); length != 2 {
 			t.Fatalf("expected 2 matches, got %d", length)
 		}
-		if result[0].Protocol != "grpc" || result[1].Protocol != "grpc" {
-			t.Error("unexpected match contents")
+		if _, ok := result[0].Endpoints["grpc"]; !ok {
+			t.Error("expected result[0] to have grpc endpoint")
+		}
+		if _, ok := result[1].Endpoints["grpc"]; !ok {
+			t.Error("expected result[1] to have grpc endpoint")
 		}
 	})
 
@@ -169,9 +176,9 @@ func TestFindAll(t *testing.T) {
 
 func TestFindFirst(t *testing.T) {
 	services := []schema.Service{
-		{Capabilities: []string{"batch"}, Protocol: "cbor"},
-		{Capabilities: []string{"streaming"}, Protocol: "grpc"},
-		{Capabilities: []string{"streaming"}, Protocol: "http"},
+		{Capabilities: []string{"batch"}, Endpoints: map[string]string{"cbor": "service.sock"}},
+		{Capabilities: []string{"streaming"}, Endpoints: map[string]string{"grpc": "grpc.sock"}},
+		{Capabilities: []string{"streaming"}, Endpoints: map[string]string{"http": "http.sock"}},
 	}
 	match := HasCapability("streaming")
 
@@ -180,8 +187,8 @@ func TestFindFirst(t *testing.T) {
 		if !found {
 			t.Fatal("expected to find a match")
 		}
-		if result.Protocol != "grpc" {
-			t.Errorf("expected first streaming service (grpc), got %s", result.Protocol)
+		if _, ok := result.Endpoints["grpc"]; !ok {
+			t.Error("expected first streaming service to have grpc endpoint")
 		}
 	})
 
@@ -210,7 +217,7 @@ func TestParseServiceDirectory(t *testing.T) {
 		Principal:    entity,
 		Machine:      machine,
 		Capabilities: []string{"dependency-graph"},
-		Protocol:     "cbor",
+		Endpoints:    map[string]string{"cbor": "service.sock"},
 	}
 
 	t.Run("parses valid service events", func(t *testing.T) {
@@ -226,8 +233,8 @@ func TestParseServiceDirectory(t *testing.T) {
 		if length := len(services); length != 1 {
 			t.Fatalf("expected 1 service, got %d", length)
 		}
-		if services[0].Protocol != "cbor" {
-			t.Errorf("expected protocol cbor, got %s", services[0].Protocol)
+		if _, ok := services[0].Endpoints["cbor"]; !ok {
+			t.Error("expected service to have cbor endpoint")
 		}
 		if len(services[0].Capabilities) != 1 || services[0].Capabilities[0] != "dependency-graph" {
 			t.Errorf("unexpected capabilities: %v", services[0].Capabilities)
@@ -305,7 +312,7 @@ func TestParseServiceDirectory(t *testing.T) {
 			Principal:    entity2,
 			Machine:      machine,
 			Capabilities: []string{"content-addressed-store"},
-			Protocol:     "cbor",
+			Endpoints:    map[string]string{"cbor": "service.sock"},
 		}
 
 		events := []messaging.Event{

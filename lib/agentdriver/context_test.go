@@ -37,7 +37,7 @@ func TestSystemPrompt(t *testing.T) {
 		Services: []proxyclient.ServiceEntry{
 			{
 				Localpart:   "service/stt/whisper",
-				Protocol:    "http",
+				Endpoints:   []string{"http"},
 				Description: "Speech to text transcription",
 			},
 		},

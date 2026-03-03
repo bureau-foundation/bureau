@@ -40,6 +40,10 @@ func run() error {
 		Audience:     "model",
 		Description:  "Model inference gateway — completion, embedding, streaming",
 		Capabilities: []string{"completion", "embedding", "streaming"},
+		Endpoints: map[string]string{
+			"cbor": "service.sock",
+			"http": "http.sock",
+		},
 	})
 	if err != nil {
 		return err

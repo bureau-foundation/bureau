@@ -1659,10 +1659,31 @@ func (d *Daemon) ensurePrincipalRoomAccess(ctx context.Context, principalEntity 
 	}
 }
 
-// resolveServiceMounts resolves a list of required service roles to host-side
+// parseServiceSpec splits a RequiredServices entry into its role and endpoint
+// parts. Specs use the format "role" or "role:endpoint". A bare role (no colon)
+// returns an empty endpoint, which callers treat as the default CBOR endpoint.
+//
+// Examples:
+//
+//	"ticket"      → ("ticket", "")
+//	"model:http"  → ("model", "http")
+//	"stt/whisper" → ("stt/whisper", "")
+func parseServiceSpec(spec string) (role, endpoint string) {
+	if index := strings.IndexByte(spec, ':'); index >= 0 {
+		return spec[:index], spec[index+1:]
+	}
+	return spec, ""
+}
+
+// resolveServiceMounts resolves a list of required service specs to host-side
 // socket paths by looking up m.bureau.service_binding state events. Rooms are
 // checked in specificity order: workspace room first (if any), then the
 // machine config room. The first binding found for each role wins.
+//
+// Specs can be bare roles ("ticket") or role:endpoint pairs ("model:http").
+// Bare roles resolve to the default CBOR endpoint. The mount name is the bare
+// role for default endpoints, or "role-endpoint" for named endpoints (e.g.,
+// "model-http").
 //
 // Returns an error if any required service cannot be resolved — callers should
 // treat this as a fatal condition that blocks sandbox creation (no silent
@@ -1677,40 +1698,41 @@ func (d *Daemon) resolveServiceMounts(ctx context.Context, requiredServices []st
 	rooms = append(rooms, d.configRoomID)
 
 	var mounts []launcherServiceMount
-	for _, role := range requiredServices {
-		socketPath, err := d.resolveServiceSocket(ctx, role, rooms)
+	for _, spec := range requiredServices {
+		role, endpoint := parseServiceSpec(spec)
+
+		principal, err := d.resolveServiceBinding(ctx, role, rooms)
 		if err != nil {
-			return nil, fmt.Errorf("resolving required service %q: %w", role, err)
+			return nil, fmt.Errorf("resolving required service %q: %w", spec, err)
 		}
+
+		socketPath, err := d.resolveEndpointSocket(principal, endpoint)
+		if err != nil {
+			return nil, fmt.Errorf("resolving endpoint for service %q: %w", spec, err)
+		}
+
+		// Mount name: bare role for default/cbor, "role-endpoint" for named endpoints.
+		mountRole := role
+		if endpoint != "" && endpoint != "cbor" {
+			mountRole = role + "-" + endpoint
+		}
+
 		mounts = append(mounts, launcherServiceMount{
-			Role:       role,
+			Role:       mountRole,
 			SocketPath: socketPath,
 		})
-
-		// Check if the service also exposes an HTTP compatibility socket
-		// alongside its CBOR socket. The model service does this for
-		// standard AI SDK compatibility (OpenAI/Anthropic JSON format).
-		// If found, mount it as <role>-http so agents can choose between
-		// native CBOR and HTTP access.
-		if httpPath := httpSocketForService(socketPath); httpPath != "" {
-			mounts = append(mounts, launcherServiceMount{
-				Role:       role + "-http",
-				SocketPath: httpPath,
-			})
-			d.logger.Info("resolved HTTP socket for service",
-				"role", role,
-				"http_socket", httpPath,
-			)
-		}
 	}
 	return mounts, nil
 }
 
-// resolveServiceSocket looks up a single service role in the given rooms.
+// resolveServiceBinding looks up a single service role in the given rooms.
 // For each room, it fetches the m.bureau.service_binding state event with the
-// role as the state key. If found, derives the host-side socket path from
-// the binding's principal localpart.
-func (d *Daemon) resolveServiceSocket(ctx context.Context, role string, rooms []ref.RoomID) (string, error) {
+// role as the state key. Returns the binding's principal entity.
+//
+// Also ensures the service is invited to the room where its binding was found,
+// since services need room membership to write state events (session lifecycle,
+// metrics, context index, etc.).
+func (d *Daemon) resolveServiceBinding(ctx context.Context, role string, rooms []ref.RoomID) (ref.Entity, error) {
 	for _, roomID := range rooms {
 		binding, err := messaging.GetState[schema.ServiceBindingContent](ctx, d.session, roomID, schema.EventTypeServiceBinding, role)
 		if err != nil {
@@ -1721,11 +1743,11 @@ func (d *Daemon) resolveServiceSocket(ctx context.Context, role string, rooms []
 				)
 				continue // Not bound in this room, try next.
 			}
-			return "", fmt.Errorf("fetching service binding in room %s: %w", d.displayRoom(roomID), err)
+			return ref.Entity{}, fmt.Errorf("fetching service binding in room %s: %w", d.displayRoom(roomID), err)
 		}
 
 		if binding.Principal.IsZero() {
-			return "", fmt.Errorf("service binding for role %q in room %s has empty principal", role, d.displayRoom(roomID))
+			return ref.Entity{}, fmt.Errorf("service binding for role %q in room %s has empty principal", role, d.displayRoom(roomID))
 		}
 
 		// Ensure the service is a member of the room where its binding
@@ -1735,47 +1757,74 @@ func (d *Daemon) resolveServiceSocket(ctx context.Context, role string, rooms []
 		// joined or the invite is otherwise redundant.
 		if inviteErr := d.session.InviteUser(ctx, roomID, binding.Principal.UserID()); inviteErr != nil {
 			if !messaging.IsMatrixError(inviteErr, "M_FORBIDDEN") {
-				return "", fmt.Errorf("inviting service %s to room %s: %w", binding.Principal, d.displayRoom(roomID), inviteErr)
+				return ref.Entity{}, fmt.Errorf("inviting service %s to room %s: %w", binding.Principal, d.displayRoom(roomID), inviteErr)
 			}
 		}
 
-		// Derive the host-side service CBOR socket path from the service
-		// principal. For local services this is the path where the service
-		// binary listens for incoming requests. For remote services
-		// (future) the daemon would create a tunnel socket and use that
-		// path instead.
-		socketPath := binding.Principal.ServiceSocketPath(d.fleetRunDir)
 		d.logger.Info("resolved service binding",
 			"role", role,
 			"principal", binding.Principal,
-			"socket", socketPath,
 			"room", roomID,
 		)
-		return socketPath, nil
+		return binding.Principal, nil
 	}
 
-	return "", fmt.Errorf("no service binding found for role %q — the service may not be enabled on this machine (checked %d config room(s))", role, len(rooms))
+	return ref.Entity{}, fmt.Errorf("no service binding found for role %q — the service may not be enabled on this machine (checked %d config room(s))", role, len(rooms))
 }
 
-// httpSocketForService checks whether a service exposes an HTTP
-// compatibility socket alongside its primary CBOR socket. The CBOR socket
-// path (from ServiceSocketPath) is a symlink to configDir/listen/service.sock.
-// If configDir/listen/http.sock exists, the service has an HTTP endpoint.
+// resolveEndpointSocket derives the host-side socket path for a specific
+// endpoint of a service. The principal identifies the service; the endpoint
+// names which socket to use (empty or "cbor" for the default).
 //
-// Returns the host-side path to the HTTP socket, or empty string if none
-// exists. Errors (broken symlink, permission denied) are treated as
-// "no HTTP socket" rather than fatal — an HTTP socket is an optional
-// enhancement, not a requirement.
-func httpSocketForService(serviceSocketPath string) string {
-	resolved, err := filepath.EvalSymlinks(serviceSocketPath)
+// For the default CBOR endpoint, returns the canonical ServiceSocketPath
+// symlink. For other endpoints, follows the symlink to find the service's
+// listen directory and returns the path to the endpoint's socket file
+// within that directory. The socket filename is looked up from the service's
+// Endpoints map in the in-memory service directory.
+func (d *Daemon) resolveEndpointSocket(principal ref.Entity, endpoint string) (string, error) {
+	cborSocketPath := principal.ServiceSocketPath(d.fleetRunDir)
+
+	// Default to CBOR if no endpoint specified.
+	if endpoint == "" || endpoint == "cbor" {
+		d.logger.Info("resolved endpoint socket",
+			"principal", principal,
+			"endpoint", "cbor",
+			"socket", cborSocketPath,
+		)
+		return cborSocketPath, nil
+	}
+
+	// Look up the service's declared endpoints from the in-memory directory.
+	serviceLocalpart := principal.Localpart()
+	service, ok := d.services[serviceLocalpart]
+	if !ok {
+		return "", fmt.Errorf("service principal %s has a binding but is not yet in the service directory (may still be starting)", principal)
+	}
+
+	socketFilename, ok := service.Endpoints[endpoint]
+	if !ok {
+		available := make([]string, 0, len(service.Endpoints))
+		for name := range service.Endpoints {
+			available = append(available, name)
+		}
+		slices.Sort(available)
+		return "", fmt.Errorf("service %s does not declare endpoint %q (available: %v)", principal, endpoint, available)
+	}
+
+	// Follow the CBOR socket symlink to find the service's listen directory,
+	// then replace the filename with the endpoint's socket file.
+	resolved, err := filepath.EvalSymlinks(cborSocketPath)
 	if err != nil {
-		return ""
+		return "", fmt.Errorf("resolving service socket symlink %s: %w", cborSocketPath, err)
 	}
-	httpPath := filepath.Join(filepath.Dir(resolved), "http.sock")
-	if _, err := os.Stat(httpPath); err != nil {
-		return ""
-	}
-	return httpPath
+	endpointPath := filepath.Join(filepath.Dir(resolved), socketFilename)
+
+	d.logger.Info("resolved endpoint socket",
+		"principal", principal,
+		"endpoint", endpoint,
+		"socket", endpointPath,
+	)
+	return endpointPath, nil
 }
 
 // tokenTTL is the default TTL for service tokens. Set to 5 minutes to
@@ -1824,7 +1873,19 @@ func (d *Daemon) mintServiceTokens(principal ref.Entity, requiredServices []stri
 	now := d.clock.Now()
 	var minted []activeToken
 
-	for _, role := range requiredServices {
+	// Deduplicate specs by role: "model" and "model:http" both use the same
+	// service principal and should produce a single token for role "model".
+	seen := make(map[string]bool, len(requiredServices))
+	var roles []string
+	for _, spec := range requiredServices {
+		role, _ := parseServiceSpec(spec)
+		if !seen[role] {
+			seen[role] = true
+			roles = append(roles, role)
+		}
+	}
+
+	for _, role := range roles {
 		// Filter grants to those relevant to this service's namespace.
 		// A grant is relevant if any of its action patterns could match
 		// actions in the service's namespace (role + "/**"). We check

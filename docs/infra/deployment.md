@@ -288,22 +288,17 @@ sudo ln -s /home/$USER/.local/bin/claude /var/bureau/cache/bin/claude
 The agent needs Anthropic authentication. Two options:
 
 **Subscription account (Claude Pro/Team/Enterprise):** Authenticate with
-`claude login` on the host, then make the credential file accessible to
-Bureau. The template mounts `${CACHE_ROOT}/claude-credentials.json`
+`claude login` on the host, then copy the credential file to Bureau's
+cache directory. The template mounts `${CACHE_ROOT}/claude-credentials.json`
 read-only into the sandbox.
 
 ```bash
-# Symlink so re-login automatically updates the sandbox credential.
-sudo ln -sf ~/.claude/.credentials.json /var/bureau/cache/claude-credentials.json
-
-# Grant the bureau user read access (file is 600 by default). An ACL
-# is the least intrusive option — it doesn't change the visible mode.
-setfacl -m u:bureau:r ~/.claude/.credentials.json
-
-# Persist ACL across claude login (which rewrites the file): set a
-# default ACL on the directory so new files inherit it.
-setfacl -dm u:bureau:r ~/.claude/
+script/update-claude-credentials
 ```
+
+Re-run after `claude login` or when switching accounts. The credential
+file contains an OAuth token pair; the refresh token allows the sandbox
+to renew the access token automatically.
 
 **API key:** Deploy with `--extra-credential ANTHROPIC_API_KEY=sk-ant-...`.
 The proxy injects the key on outbound Anthropic API requests. No credential

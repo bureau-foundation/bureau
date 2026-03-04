@@ -16,7 +16,7 @@ func TestRecordStartFailure_ExponentialBackoff(t *testing.T) {
 
 	// First failure: backoff should be 1s.
 	daemon.recordStartFailure(principal, failureCategoryServiceResolution, "no binding found")
-	failure := daemon.startFailures[principal]
+	failure := daemon.startFailureFor(principal)
 	if failure == nil {
 		t.Fatal("expected start failure to be recorded")
 	}
@@ -34,7 +34,7 @@ func TestRecordStartFailure_ExponentialBackoff(t *testing.T) {
 	// Second failure: backoff should be 2s.
 	fakeClock.Advance(2 * time.Second)
 	daemon.recordStartFailure(principal, failureCategoryServiceResolution, "still no binding")
-	failure = daemon.startFailures[principal]
+	failure = daemon.startFailureFor(principal)
 	if failure.attempts != 2 {
 		t.Errorf("attempts = %d, want 2", failure.attempts)
 	}
@@ -46,7 +46,7 @@ func TestRecordStartFailure_ExponentialBackoff(t *testing.T) {
 	// Third failure: backoff should be 4s.
 	fakeClock.Advance(3 * time.Second)
 	daemon.recordStartFailure(principal, failureCategoryServiceResolution, "still no binding")
-	failure = daemon.startFailures[principal]
+	failure = daemon.startFailureFor(principal)
 	if failure.attempts != 3 {
 		t.Errorf("attempts = %d, want 3", failure.attempts)
 	}
@@ -74,7 +74,7 @@ func TestRecordStartFailure_BackoffCap(t *testing.T) {
 	timeAtFailure := fakeClock.Now()
 	daemon.recordStartFailure(principal, failureCategoryTemplate, "template not found")
 
-	failure := daemon.startFailures[principal]
+	failure := daemon.startFailureFor(principal)
 	if failure.attempts != 10 {
 		t.Errorf("attempts = %d, want 10", failure.attempts)
 	}
@@ -95,13 +95,13 @@ func TestClearStartFailures(t *testing.T) {
 	daemon.recordStartFailure(testEntity(t, daemon.fleet, "agent/two"), failureCategoryServiceResolution, "no binding")
 	daemon.recordStartFailure(testEntity(t, daemon.fleet, "agent/three"), failureCategoryTemplate, "not found")
 
-	if count := len(daemon.startFailures); count != 3 {
+	if count := daemon.startFailureCount(); count != 3 {
 		t.Fatalf("expected 3 failures, got %d", count)
 	}
 
 	daemon.clearStartFailures()
 
-	if count := len(daemon.startFailures); count != 0 {
+	if count := daemon.startFailureCount(); count != 0 {
 		t.Errorf("expected 0 failures after clear, got %d", count)
 	}
 }
@@ -124,15 +124,15 @@ func TestClearStartFailuresByCategory(t *testing.T) {
 		t.Errorf("cleared = %d, want 2", cleared)
 	}
 
-	if count := len(daemon.startFailures); count != 2 {
+	if count := daemon.startFailureCount(); count != 2 {
 		t.Errorf("expected 2 remaining failures, got %d", count)
 	}
 
 	// Verify the right ones remain.
-	if daemon.startFailures[agent3] == nil {
+	if daemon.startFailureFor(agent3) == nil {
 		t.Error("agent/three (credentials) should still have a failure entry")
 	}
-	if daemon.startFailures[agent4] == nil {
+	if daemon.startFailureFor(agent4) == nil {
 		t.Error("agent/four (template) should still have a failure entry")
 	}
 }
@@ -150,10 +150,10 @@ func TestClearStartFailure_SinglePrincipal(t *testing.T) {
 
 	daemon.clearStartFailure(agent1)
 
-	if daemon.startFailures[agent1] != nil {
+	if daemon.startFailureFor(agent1) != nil {
 		t.Error("agent/one should have been cleared")
 	}
-	if daemon.startFailures[agent2] == nil {
+	if daemon.startFailureFor(agent2) == nil {
 		t.Error("agent/two should still have a failure entry")
 	}
 }
@@ -169,7 +169,7 @@ func TestStartFailure_BackoffCheckInReconcileLoop(t *testing.T) {
 	daemon.recordStartFailure(principal, failureCategoryServiceResolution, "no binding")
 
 	// Before backoff expires: clock.Now() < nextRetryAt.
-	failure := daemon.startFailures[principal]
+	failure := daemon.startFailureFor(principal)
 	if !fakeClock.Now().Before(failure.nextRetryAt) {
 		t.Fatal("expected current time to be before nextRetryAt")
 	}
@@ -189,10 +189,10 @@ func TestRecordStartFailure_CategoryChange(t *testing.T) {
 
 	// First failure is service resolution.
 	daemon.recordStartFailure(principal, failureCategoryServiceResolution, "no binding")
-	if daemon.startFailures[principal].category != failureCategoryServiceResolution {
+	if daemon.startFailureFor(principal).category != failureCategoryServiceResolution {
 		t.Error("expected service_resolution category")
 	}
-	if daemon.startFailures[principal].attempts != 1 {
+	if daemon.startFailureFor(principal).attempts != 1 {
 		t.Error("expected 1 attempt")
 	}
 
@@ -204,11 +204,11 @@ func TestRecordStartFailure_CategoryChange(t *testing.T) {
 	// the principal, not the category. This prevents a principal from
 	// resetting its backoff by failing at a different stage.
 	daemon.recordStartFailure(principal, failureCategoryTokenMinting, "signing key error")
-	if daemon.startFailures[principal].category != failureCategoryTokenMinting {
+	if daemon.startFailureFor(principal).category != failureCategoryTokenMinting {
 		t.Error("expected token_minting category")
 	}
-	if daemon.startFailures[principal].attempts != 2 {
-		t.Errorf("attempts = %d, want 2", daemon.startFailures[principal].attempts)
+	if daemon.startFailureFor(principal).attempts != 2 {
+		t.Errorf("attempts = %d, want 2", daemon.startFailureFor(principal).attempts)
 	}
 }
 
@@ -220,7 +220,7 @@ func TestSandboxCrashBackoff(t *testing.T) {
 
 	// First crash: 1s backoff.
 	daemon.recordStartFailure(principal, failureCategorySandboxCrash, "sandbox command exited with code 1")
-	failure := daemon.startFailures[principal]
+	failure := daemon.startFailureFor(principal)
 	if failure == nil {
 		t.Fatal("expected crash failure to be recorded")
 	}
@@ -243,7 +243,7 @@ func TestSandboxCrashBackoff(t *testing.T) {
 	// Second crash after first backoff expires: 2s backoff.
 	fakeClock.Advance(2 * time.Second)
 	daemon.recordStartFailure(principal, failureCategorySandboxCrash, "sandbox command exited with code 1")
-	failure = daemon.startFailures[principal]
+	failure = daemon.startFailureFor(principal)
 	if failure.attempts != 2 {
 		t.Errorf("attempts = %d, want 2", failure.attempts)
 	}
@@ -255,7 +255,7 @@ func TestSandboxCrashBackoff(t *testing.T) {
 	// Third crash: 4s backoff.
 	fakeClock.Advance(3 * time.Second)
 	daemon.recordStartFailure(principal, failureCategorySandboxCrash, "sandbox command exited with code 1")
-	failure = daemon.startFailures[principal]
+	failure = daemon.startFailureFor(principal)
 	if failure.attempts != 3 {
 		t.Errorf("attempts = %d, want 3", failure.attempts)
 	}
@@ -275,8 +275,8 @@ func TestSandboxCrashBackoff_ClearedByConfigChange(t *testing.T) {
 	for range 5 {
 		daemon.recordStartFailure(principal, failureCategorySandboxCrash, "exited with code 1")
 	}
-	if daemon.startFailures[principal].attempts != 5 {
-		t.Fatalf("attempts = %d, want 5", daemon.startFailures[principal].attempts)
+	if daemon.startFailureFor(principal).attempts != 5 {
+		t.Fatalf("attempts = %d, want 5", daemon.startFailureFor(principal).attempts)
 	}
 
 	// A config change clears all start failures (including crash
@@ -284,7 +284,7 @@ func TestSandboxCrashBackoff_ClearedByConfigChange(t *testing.T) {
 	// credentials, the principal should retry immediately.
 	daemon.clearStartFailures()
 
-	if daemon.startFailures[principal] != nil {
+	if daemon.startFailureFor(principal) != nil {
 		t.Error("expected crash failure to be cleared by config change")
 	}
 }
@@ -297,7 +297,7 @@ func TestProxyCrashBackoff(t *testing.T) {
 
 	// First proxy crash: 1s backoff.
 	daemon.recordStartFailure(principal, failureCategoryProxyCrash, "proxy exited with code 1")
-	failure := daemon.startFailures[principal]
+	failure := daemon.startFailureFor(principal)
 	if failure == nil {
 		t.Fatal("expected proxy crash failure to be recorded")
 	}
@@ -311,8 +311,8 @@ func TestProxyCrashBackoff(t *testing.T) {
 	// Crash backoff accumulates across proxy crashes like any other failure.
 	fakeClock.Advance(2 * time.Second)
 	daemon.recordStartFailure(principal, failureCategoryProxyCrash, "proxy exited with code 1")
-	if daemon.startFailures[principal].attempts != 2 {
-		t.Errorf("attempts = %d, want 2", daemon.startFailures[principal].attempts)
+	if daemon.startFailureFor(principal).attempts != 2 {
+		t.Errorf("attempts = %d, want 2", daemon.startFailureFor(principal).attempts)
 	}
 }
 
@@ -326,8 +326,8 @@ func TestSandboxNormalExit_ClearsCrashBackoff(t *testing.T) {
 	daemon.recordStartFailure(principal, failureCategorySandboxCrash, "exited with code 1")
 	fakeClock.Advance(2 * time.Second)
 	daemon.recordStartFailure(principal, failureCategorySandboxCrash, "exited with code 1")
-	if daemon.startFailures[principal].attempts != 2 {
-		t.Fatalf("attempts = %d, want 2", daemon.startFailures[principal].attempts)
+	if daemon.startFailureFor(principal).attempts != 2 {
+		t.Fatalf("attempts = %d, want 2", daemon.startFailureFor(principal).attempts)
 	}
 
 	// A normal exit (code 0) clears the crash backoff. One-shot
@@ -335,7 +335,7 @@ func TestSandboxNormalExit_ClearsCrashBackoff(t *testing.T) {
 	// conditions immediately after completing.
 	daemon.clearStartFailure(principal)
 
-	if daemon.startFailures[principal] != nil {
+	if daemon.startFailureFor(principal) != nil {
 		t.Error("expected crash backoff to be cleared by normal exit")
 	}
 }

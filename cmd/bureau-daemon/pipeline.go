@@ -470,8 +470,8 @@ func (d *Daemon) startPipelineExecutor(
 		return
 	}
 
-	// Track the executor in standard daemon lifecycle maps.
-	d.running[pipelineEntity] = true
+	// Track the executor in standard daemon lifecycle state.
+	d.setRunning(pipelineEntity)
 	d.notifyStatusChange()
 	d.dynamicPrincipals[pipelineEntity] = true
 	d.pipelineTickets[ticketStateKey] = pipelineEntity
@@ -487,8 +487,9 @@ func (d *Daemon) startPipelineExecutor(
 	)
 
 	// Start exit watcher through standard lifecycle. The watcher
-	// cleans up d.running, d.dynamicPrincipals, d.pipelineTickets,
-	// and destroys the sandbox when the executor exits.
+	// cleans up the lifecycle entry, d.dynamicPrincipals,
+	// d.pipelineTickets, and destroys the sandbox when the executor
+	// exits.
 	if d.shutdownCtx != nil {
 		watcherCtx, watcherCancel := context.WithCancel(d.shutdownCtx)
 		d.exitWatchers[pipelineEntity] = watcherCancel
@@ -529,8 +530,8 @@ func (d *Daemon) watchPipelineSandboxExit(ctx context.Context, principal ref.Ent
 
 	d.reconcileMu.Lock()
 	var sessionID string
-	if d.running[principal] {
-		delete(d.running, principal)
+	if d.isAlive(principal) {
+		d.clearLifecycle(principal)
 		d.notifyStatusChange()
 		delete(d.dynamicPrincipals, principal)
 		d.removePipelineTicketByPrincipal(principal)

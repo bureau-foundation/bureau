@@ -94,9 +94,9 @@ func TestEmergencyShutdown_DestroysAllSandboxes(t *testing.T) {
 	alphaEntity := testEntity(t, daemon.fleet, "agent/alpha")
 	betaEntity := testEntity(t, daemon.fleet, "agent/beta")
 	gammaEntity := testEntity(t, daemon.fleet, "agent/gamma")
-	daemon.running[alphaEntity] = true
-	daemon.running[betaEntity] = true
-	daemon.running[gammaEntity] = true
+	daemon.setRunning(alphaEntity)
+	daemon.setRunning(betaEntity)
+	daemon.setRunning(gammaEntity)
 	daemon.lastSpecs[alphaEntity] = &schema.SandboxSpec{}
 	daemon.lastSpecs[betaEntity] = &schema.SandboxSpec{}
 	daemon.lastSpecs[gammaEntity] = &schema.SandboxSpec{}
@@ -109,8 +109,8 @@ func TestEmergencyShutdown_DestroysAllSandboxes(t *testing.T) {
 	daemon.emergencyShutdown()
 
 	// Verify all principals were destroyed.
-	if len(daemon.running) != 0 {
-		t.Errorf("running map should be empty, got %d entries", len(daemon.running))
+	if daemon.aliveCount() != 0 {
+		t.Errorf("no principals should be alive, got %d", daemon.aliveCount())
 	}
 
 	// Verify shutdownCtx was cancelled.
@@ -146,8 +146,8 @@ func TestEmergencyShutdown_LauncherIPCFailure(t *testing.T) {
 
 	alphaEntity := testEntity(t, daemon.fleet, "agent/alpha")
 	betaEntity := testEntity(t, daemon.fleet, "agent/beta")
-	daemon.running[alphaEntity] = true
-	daemon.running[betaEntity] = true
+	daemon.setRunning(alphaEntity)
+	daemon.setRunning(betaEntity)
 	daemon.lastSpecs[alphaEntity] = &schema.SandboxSpec{}
 	daemon.lastSpecs[betaEntity] = &schema.SandboxSpec{}
 
@@ -158,9 +158,9 @@ func TestEmergencyShutdown_LauncherIPCFailure(t *testing.T) {
 	// Should not hang or panic even when launcher IPC fails.
 	daemon.emergencyShutdown()
 
-	// Maps should still be cleaned up despite IPC failure.
-	if len(daemon.running) != 0 {
-		t.Errorf("running map should be empty despite IPC failure, got %d entries", len(daemon.running))
+	// Lifecycle state should still be cleaned up despite IPC failure.
+	if daemon.aliveCount() != 0 {
+		t.Errorf("no principals should be alive despite IPC failure, got %d", daemon.aliveCount())
 	}
 
 	// Shutdown should still be triggered.
@@ -210,7 +210,7 @@ func TestSyncLoop_AuthFailureTriggersShutdown(t *testing.T) {
 
 	// Pre-populate a running principal to verify it gets destroyed.
 	testAgentEntity := testEntity(t, daemon.fleet, "agent/test")
-	daemon.running[testAgentEntity] = true
+	daemon.setRunning(testAgentEntity)
 	daemon.lastSpecs[testAgentEntity] = &schema.SandboxSpec{}
 
 	shutdownCtx, shutdownCancel := context.WithCancel(context.Background())
@@ -245,12 +245,12 @@ func TestSyncLoop_AuthFailureTriggersShutdown(t *testing.T) {
 		t.Error("shutdownCtx should be cancelled after auth failure in sync loop")
 	}
 
-	// Verify running map was cleaned up.
+	// Verify lifecycle state was cleaned up.
 	daemon.reconcileMu.Lock()
-	runningCount := len(daemon.running)
+	runningCount := daemon.aliveCount()
 	daemon.reconcileMu.Unlock()
 	if runningCount != 0 {
-		t.Errorf("running map should be empty after auth failure, got %d entries", runningCount)
+		t.Errorf("no principals should be alive after auth failure, got %d", runningCount)
 	}
 }
 

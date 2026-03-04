@@ -198,7 +198,7 @@ func newTestDaemonWithObserve(t *testing.T, relayBinary string, runningPrincipal
 		Principals: principals,
 	}
 	for _, localpart := range runningPrincipals {
-		daemon.running[testEntity(t, daemon.fleet, localpart)] = true
+		daemon.setRunning(testEntity(t, daemon.fleet, localpart))
 		daemon.authorizationIndex.SetPrincipal(testEntity(t, daemon.fleet, localpart).UserID(), permissiveObserveAllowances)
 	}
 	daemon.observeSocketPath = observeSocketPath

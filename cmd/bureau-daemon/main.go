@@ -357,12 +357,9 @@ func run() error {
 		},
 		workspaceAliases:      make(map[ref.RoomID]ref.RoomAlias),
 		failedExecPaths:       make(map[string]bool),
-		startFailures:         make(map[ref.Entity]*startFailure),
-		running:               make(map[ref.Entity]bool),
+		lifecycle:             make(map[ref.Entity]principalLifecycle),
 		statusNotify:          make(chan struct{}, 1),
 		dynamicPrincipals:     make(map[ref.Entity]bool),
-		completed:             make(map[ref.Entity]bool),
-		draining:              make(map[ref.Entity]context.CancelFunc),
 		pipelineTickets:       make(map[string]ref.Entity),
 		pipelineEnabledRooms:  make(map[ref.RoomID]bool),
 		exitWatchers:          make(map[ref.Entity]context.CancelFunc),
@@ -456,10 +453,10 @@ func run() error {
 	defer daemon.stopAllHealthMonitors()
 
 	// Query the launcher for sandboxes that survived a daemon restart.
-	// Pre-populating d.running before reconcile prevents the daemon from
-	// trying to create-sandbox for principals the launcher already has,
-	// which would be rejected with "already has a running sandbox" and
-	// leave the principal orphaned from daemon management.
+	// Pre-populating the lifecycle map before reconcile prevents the
+	// daemon from trying to create-sandbox for principals the launcher
+	// already has, which would be rejected with "already has a running
+	// sandbox" and leave the principal orphaned from daemon management.
 	if err := daemon.adoptPreExistingSandboxes(ctx); err != nil {
 		logger.Warn("failed to query launcher for pre-existing sandboxes", "error", err)
 	}
@@ -665,39 +662,25 @@ type Daemon struct {
 	// every reconcile cycle. Keyed by desired daemon store path.
 	failedExecPaths map[string]bool
 
-	// startFailures tracks principals whose sandbox creation failed on a
-	// previous reconcile cycle. Each entry records the failure category,
-	// error message, attempt count, and a computed next-retry time using
-	// exponential backoff (1s, 2s, 4s, 8s, 16s, capped at 30s). The
-	// "create missing" pass in reconcile() skips principals whose
-	// nextRetryAt is still in the future, preventing a tight retry loop
-	// when a failure is persistent (e.g., service not yet registered,
-	// credentials not yet provisioned).
-	//
-	// Entries are cleared by event-driven signals: config room state
-	// changes clear all entries (the config may have changed); service
-	// directory syncs clear entries with category "service_resolution"
-	// (the missing service may have appeared). watchSandboxExit and
-	// watchProxyExit also clear entries so crash-restart isn't delayed.
-	//
-	// Protected by reconcileMu (same as running, lastSpecs, etc.).
-	startFailures map[ref.Entity]*startFailure
-
 	// execFunc replaces the current process with a new binary. Defaults
 	// to syscall.Exec. Tests override this to capture the exec call
 	// without replacing the test process.
 	execFunc func(binary string, argv []string, env []string) error
 
-	// reconcileMu serializes access to the running/lastSpecs/previousSpecs/
+	// reconcileMu serializes access to the lifecycle/lastSpecs/previousSpecs/
 	// lastTemplates maps and launcher IPC calls that modify sandbox state.
 	// The reconcile loop holds this during reconcile(); health monitor
 	// goroutines acquire it before performing rollback. Use RLock for
 	// read-only access (e.g., publishStatus counting running sandboxes).
 	reconcileMu sync.RWMutex
 
-	// running tracks which principals we've asked the launcher to create.
-	// Keys are ref.Entity values from PrincipalAssignment.Principal.
-	running map[ref.Entity]bool
+	// lifecycle tracks the mutually exclusive lifecycle phase of each
+	// principal. A principal is in exactly one phase (running, draining,
+	// completed, or start-failed) by construction — no coordinated
+	// inserts/deletes across separate maps required. Use the Daemon
+	// accessor methods (isAlive, phase, setRunning, etc.) instead of
+	// direct map access.
+	lifecycle map[ref.Entity]principalLifecycle
 
 	// statusNotify is signaled (non-blocking) whenever the running set
 	// changes. The statusLoop selects on this channel alongside the
@@ -726,22 +709,6 @@ type Daemon struct {
 	// are removed from this set when their sandbox exits (in
 	// watchSandboxExit) and default to RestartPolicy "on-failure".
 	dynamicPrincipals map[ref.Entity]bool
-
-	// completed tracks principals that exited cleanly and should not
-	// be restarted (based on their RestartPolicy). Principals with
-	// policy "on-failure" that exit 0, or "never" that exit at all,
-	// are added here. Entries are removed when the principal is removed
-	// from the config or when the daemon restarts (in-memory only).
-	completed map[ref.Entity]bool
-
-	// draining tracks principals that have been sent SIGTERM and are
-	// in their grace period before force-kill. The reconcile loop
-	// skips draining principals in the "destroy unneeded" pass. Each
-	// entry holds a cancel function that aborts the grace period
-	// timer goroutine. Entries are cleaned up by destroyPrincipal
-	// (force-kill after grace period) or watchSandboxExit (graceful
-	// exit during drain).
-	draining map[ref.Entity]context.CancelFunc
 
 	// pipelineTickets maps pip- ticket state keys (e.g., "pip-a3f9")
 	// to the principal entity running the executor for that ticket.
@@ -1216,7 +1183,7 @@ const startFailureBackoffCap = 30 * time.Second
 // Caller must hold reconcileMu.
 func (d *Daemon) recordStartFailure(principal ref.Entity, category startFailureCategory, message string) {
 	now := d.clock.Now()
-	existing := d.startFailures[principal]
+	existing := d.startFailureFor(principal)
 	attempts := 1
 	if existing != nil {
 		attempts = existing.attempts + 1
@@ -1232,12 +1199,15 @@ func (d *Daemon) recordStartFailure(principal ref.Entity, category startFailureC
 	}
 
 	nextRetryAt := now.Add(backoff)
-	d.startFailures[principal] = &startFailure{
-		category:    category,
-		message:     message,
-		failedAt:    now,
-		attempts:    attempts,
-		nextRetryAt: nextRetryAt,
+	d.lifecycle[principal] = principalLifecycle{
+		phase: phaseStartFailed,
+		startFailure: &startFailure{
+			category:    category,
+			message:     message,
+			failedAt:    now,
+			attempts:    attempts,
+			nextRetryAt: nextRetryAt,
+		},
 	}
 	d.logger.Info("start failure recorded",
 		"principal", principal,
@@ -1249,17 +1219,22 @@ func (d *Daemon) recordStartFailure(principal ref.Entity, category startFailureC
 	)
 }
 
-// clearStartFailures removes all start failure entries, allowing immediate
-// retry on the next reconcile cycle. Called when config room state changes
-// (the config may have fixed the root cause) or when a sandbox exits
-// unexpectedly (crash-restart should not be delayed by a previous failure).
+// clearStartFailures removes all start failure entries from the lifecycle
+// map, allowing immediate retry on the next reconcile cycle. Called when
+// config room state changes (the config may have fixed the root cause).
 //
 // Caller must hold reconcileMu.
 func (d *Daemon) clearStartFailures() {
-	if count := len(d.startFailures); count > 0 {
+	count := 0
+	for principal, lc := range d.lifecycle {
+		if lc.phase == phaseStartFailed {
+			delete(d.lifecycle, principal)
+			count++
+		}
+	}
+	if count > 0 {
 		d.logger.Info("clearing all start failures", "count", count)
 	}
-	clear(d.startFailures)
 }
 
 // clearStartFailuresByCategory removes start failure entries matching the
@@ -1270,9 +1245,9 @@ func (d *Daemon) clearStartFailures() {
 // Caller must hold reconcileMu.
 func (d *Daemon) clearStartFailuresByCategory(category startFailureCategory) int {
 	cleared := 0
-	for principal, failure := range d.startFailures {
-		if failure.category == category {
-			delete(d.startFailures, principal)
+	for principal, lc := range d.lifecycle {
+		if lc.phase == phaseStartFailed && lc.startFailure.category == category {
+			delete(d.lifecycle, principal)
 			cleared++
 		}
 	}
@@ -1281,11 +1256,15 @@ func (d *Daemon) clearStartFailuresByCategory(category startFailureCategory) int
 
 // clearStartFailure removes the start failure entry for a single principal.
 // Called when a principal starts successfully or when its sandbox exits
-// (the exit watcher should not inherit stale backoff state).
+// (the exit watcher should not inherit stale backoff state). Only removes
+// the entry if the principal is in the start-failed phase — does not
+// disturb other lifecycle phases.
 //
 // Caller must hold reconcileMu.
 func (d *Daemon) clearStartFailure(principal ref.Entity) {
-	delete(d.startFailures, principal)
+	if d.lifecycle[principal].phase == phaseStartFailed {
+		delete(d.lifecycle, principal)
+	}
 }
 
 // notifyReconcile sends a non-blocking signal on reconcileNotify.
@@ -1378,10 +1357,11 @@ func (d *Daemon) gatherStatus(ctx context.Context) schema.MachineStatus {
 	return d.collectStatus(ctx)
 }
 
-// notifyStatusChange signals that the running set has changed and a
-// MachineStatus heartbeat should be published immediately. Non-blocking:
-// if a notification is already pending, the signal is coalesced.
-// Must be called after any mutation to d.running.
+// notifyStatusChange signals that the set of alive principals has changed
+// and a MachineStatus heartbeat should be published immediately.
+// Non-blocking: if a notification is already pending, the signal is
+// coalesced. Must be called after any lifecycle transition that changes
+// whether a principal is alive.
 func (d *Daemon) notifyStatusChange() {
 	select {
 	case d.statusNotify <- struct{}{}:
@@ -1395,10 +1375,7 @@ func (d *Daemon) notifyStatusChange() {
 // regardless of whether the result is published.
 func (d *Daemon) collectStatus(ctx context.Context) schema.MachineStatus {
 	d.reconcileMu.RLock()
-	runningPrincipals := make([]ref.Entity, 0, len(d.running))
-	for principal := range d.running {
-		runningPrincipals = append(runningPrincipals, principal)
-	}
+	runningPrincipals := d.alivePrincipals()
 	var lastActivity string
 	if !d.lastActivityAt.IsZero() {
 		lastActivity = d.lastActivityAt.UTC().Format(time.RFC3339)

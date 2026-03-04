@@ -353,7 +353,7 @@ func TestProxyRouteRegistration(t *testing.T) {
 	expectedSocket := sttRef.ServiceSocketPath(daemon.fleetRunDir)
 
 	aliceEntity := testEntity(t, daemon.fleet, "agent/alice")
-	daemon.running[aliceEntity] = true
+	daemon.setRunning(aliceEntity)
 	daemon.adminSocketPathFunc = func(principal ref.Entity) string {
 		return filepath.Join(tempDir, principal.AccountLocalpart()+".admin.sock")
 	}
@@ -810,8 +810,8 @@ func TestPushServiceDirectory_AllConsumers(t *testing.T) {
 
 	aliceEntity := testEntity(t, daemon.fleet, "agent/alice")
 	bobEntity := testEntity(t, daemon.fleet, "agent/bob")
-	daemon.running[aliceEntity] = true
-	daemon.running[bobEntity] = true
+	daemon.setRunning(aliceEntity)
+	daemon.setRunning(bobEntity)
 	daemon.adminSocketPathFunc = func(principal ref.Entity) string {
 		return filepath.Join(tempDir, principal.AccountLocalpart()+".admin.sock")
 	}

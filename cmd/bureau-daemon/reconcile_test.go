@@ -730,7 +730,7 @@ func TestReconcileStructuralChangeTriggersRestart(t *testing.T) {
 	daemon.configRoomID = mustRoomID(configRoomID)
 	daemon.launcherSocket = launcherSocket
 	agentTestEntity := testEntity(t, daemon.fleet, "agent/test")
-	daemon.running[agentTestEntity] = true
+	daemon.setRunning(agentTestEntity)
 	daemon.lastSpecs[agentTestEntity] = &schema.SandboxSpec{
 		Command: []string{"/bin/agent", "--mode=v1"},
 	}
@@ -778,7 +778,7 @@ func TestReconcileStructuralChangeTriggersRestart(t *testing.T) {
 	}
 
 	// Principal should be running again after the cycle.
-	if !daemon.running[agentTestEntity] {
+	if !daemon.isAlive(agentTestEntity) {
 		t.Error("principal should be running after structural restart cycle")
 	}
 
@@ -868,7 +868,7 @@ func TestReconcileStructuralChangeOnly(t *testing.T) {
 	daemon.session = session
 	daemon.configRoomID = mustRoomID(configRoomID)
 	daemon.launcherSocket = launcherSocket
-	daemon.running[agentTestEntity] = true
+	daemon.setRunning(agentTestEntity)
 	daemon.lastSpecs[agentTestEntity] = &schema.SandboxSpec{
 		Command: []string{"/bin/agent", "--mode=v1"},
 	}
@@ -979,7 +979,7 @@ func TestReconcilePayloadOnlyChangeHotReloads(t *testing.T) {
 	if err := daemon.reconcile(context.Background()); err != nil {
 		t.Fatalf("first reconcile() error: %v", err)
 	}
-	if !daemon.running[agentTestEntity] {
+	if !daemon.isAlive(agentTestEntity) {
 		t.Fatal("principal should be running after first reconcile")
 	}
 
@@ -1022,7 +1022,7 @@ func TestReconcilePayloadOnlyChangeHotReloads(t *testing.T) {
 	}
 
 	// Principal should still be running (not restarted).
-	if !daemon.running[agentTestEntity] {
+	if !daemon.isAlive(agentTestEntity) {
 		t.Error("principal should still be running after payload-only hot-reload")
 	}
 }
@@ -2420,7 +2420,7 @@ func TestReconcileAuthorizationGrantsHotReload(t *testing.T) {
 	daemon.session = session
 	daemon.configRoomID = mustRoomID(configRoomID)
 	daemon.launcherSocket = launcherSocket
-	daemon.running[agentTestEntity] = true
+	daemon.setRunning(agentTestEntity)
 	daemon.lastCredentials[agentTestEntity] = "encrypted-test-credentials"
 	// Old grants differ from what the config now produces.
 	daemon.lastGrants[agentTestEntity] = []schema.Grant{
@@ -2815,8 +2815,8 @@ func TestReconcileNoConfig(t *testing.T) {
 		t.Fatalf("reconcile with no config should succeed, got: %v", err)
 	}
 
-	if len(daemon.running) != 0 {
-		t.Errorf("no principals should be running, got %d", len(daemon.running))
+	if daemon.aliveCount() != 0 {
+		t.Errorf("no principals should be running, got %d", daemon.aliveCount())
 	}
 }
 
@@ -3206,7 +3206,7 @@ func TestReconcileCommandBinaryValidationBlocksCreate(t *testing.T) {
 	}
 
 	// A command_binary failure should be recorded.
-	failure := daemon.startFailures[testEntity(t, daemon.fleet, "agent/test")]
+	failure := daemon.startFailureFor(testEntity(t, daemon.fleet, "agent/test"))
 	if failure == nil {
 		t.Fatal("expected a start failure for agent/test")
 	}

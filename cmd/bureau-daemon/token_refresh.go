@@ -84,8 +84,8 @@ func (d *Daemon) refreshTokens(ctx context.Context) {
 			affectedSet[userID] = true
 		}
 		d.reconcileMu.Lock()
-		for principal := range d.running {
-			if affectedSet[principal.UserID()] {
+		for principal, lc := range d.lifecycle {
+			if lc.isAlive() && affectedSet[principal.UserID()] {
 				d.lastTokenMint[principal] = time.Time{}
 			}
 		}
@@ -150,7 +150,10 @@ func (d *Daemon) tokenRefreshCandidates(now time.Time) []tokenRefreshCandidate {
 	defer d.reconcileMu.RUnlock()
 
 	var candidates []tokenRefreshCandidate
-	for principal := range d.running {
+	for principal, lc := range d.lifecycle {
+		if !lc.isAlive() {
+			continue
+		}
 		// Combine template-required services with daemon-managed
 		// services (credential provisioning for principals with
 		// credential/* grants, telemetry for all principals when

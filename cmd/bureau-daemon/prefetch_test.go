@@ -337,7 +337,7 @@ func TestReconcile_PrefetchFailureSkipsPrincipal(t *testing.T) {
 	}
 	launcherMu.Unlock()
 
-	if daemon.running[testEntity(t, daemon.fleet, "agent/test")] {
+	if daemon.isAlive(testEntity(t, daemon.fleet, "agent/test")) {
 		t.Error("principal should not be marked as running after prefetch failure")
 	}
 
@@ -376,7 +376,7 @@ func TestReconcile_PrefetchFailureSkipsPrincipal(t *testing.T) {
 	}
 	launcherMu.Unlock()
 
-	if !daemon.running[testEntity(t, daemon.fleet, "agent/test")] {
+	if !daemon.isAlive(testEntity(t, daemon.fleet, "agent/test")) {
 		t.Error("principal should be marked as running after successful prefetch")
 	}
 }
@@ -450,7 +450,7 @@ func TestReconcile_NoPrefetchWithoutEnvironmentPath(t *testing.T) {
 		t.Error("prefetchFunc should not be called when template has no EnvironmentPath")
 	}
 
-	if !daemon.running[testEntity(t, daemon.fleet, "agent/test")] {
+	if !daemon.isAlive(testEntity(t, daemon.fleet, "agent/test")) {
 		t.Error("principal should be running (no prefetch needed)")
 	}
 }

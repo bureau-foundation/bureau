@@ -138,7 +138,7 @@ func TestReconcile_ServiceMountsResolved(t *testing.T) {
 		t.Fatalf("reconcile() error: %v", err)
 	}
 
-	if !daemon.running[testEntity(t, daemon.fleet, "iree/amdgpu/pm")] {
+	if !daemon.isAlive(testEntity(t, daemon.fleet, "iree/amdgpu/pm")) {
 		t.Fatal("principal should be running")
 	}
 
@@ -211,7 +211,7 @@ func TestReconcile_ServiceMountsUnresolvable(t *testing.T) {
 	}
 
 	// Principal should NOT be running — the required service could not be resolved.
-	if daemon.running[testEntity(t, daemon.fleet, "iree/amdgpu/pm")] {
+	if daemon.isAlive(testEntity(t, daemon.fleet, "iree/amdgpu/pm")) {
 		t.Error("principal should not be running when a required service is unresolvable")
 	}
 
@@ -358,7 +358,7 @@ func TestReconcile_ServiceMountsWorkspaceRoom(t *testing.T) {
 		t.Fatalf("reconcile() error: %v", err)
 	}
 
-	if !daemon.running[testEntity(t, daemon.fleet, "iree/amdgpu/pm")] {
+	if !daemon.isAlive(testEntity(t, daemon.fleet, "iree/amdgpu/pm")) {
 		t.Fatal("principal should be running")
 	}
 
@@ -495,7 +495,7 @@ func TestReconcile_ServiceMountsMultipleServices(t *testing.T) {
 		t.Fatalf("reconcile() error: %v", err)
 	}
 
-	if !daemon.running[testEntity(t, daemon.fleet, "iree/amdgpu/pm")] {
+	if !daemon.isAlive(testEntity(t, daemon.fleet, "iree/amdgpu/pm")) {
 		t.Fatal("principal should be running")
 	}
 
@@ -572,7 +572,7 @@ func TestReconcile_ServiceMountsPartialFailure(t *testing.T) {
 		t.Fatalf("reconcile() error: %v", err)
 	}
 
-	if daemon.running[testEntity(t, daemon.fleet, "iree/amdgpu/pm")] {
+	if daemon.isAlive(testEntity(t, daemon.fleet, "iree/amdgpu/pm")) {
 		t.Error("principal should not be running when any required service is unresolvable")
 	}
 
@@ -678,7 +678,7 @@ func TestReconcile_NoServiceMountsWithoutRequiredServices(t *testing.T) {
 		t.Fatalf("reconcile() error: %v", err)
 	}
 
-	if !daemon.running[testEntity(t, daemon.fleet, "iree/amdgpu/pm")] {
+	if !daemon.isAlive(testEntity(t, daemon.fleet, "iree/amdgpu/pm")) {
 		t.Fatal("principal should be running (no required services)")
 	}
 

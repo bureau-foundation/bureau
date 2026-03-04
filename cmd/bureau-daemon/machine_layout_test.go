@@ -56,7 +56,7 @@ func TestMachineLayoutBasic(t *testing.T) {
 	// Mark three principals as running with permissive observe allowances.
 	for _, localpart := range []string{"iree/amdgpu/test", "iree/amdgpu/pm", "iree/amdgpu/codegen"} {
 		entity := testEntity(t, daemon.fleet, localpart)
-		daemon.running[entity] = true
+		daemon.setRunning(entity)
 		daemon.authorizationIndex.SetPrincipal(entity.UserID(), permissiveObserveAllowances)
 	}
 
@@ -123,7 +123,7 @@ func TestMachineLayoutAuthFiltering(t *testing.T) {
 	}
 	for _, localpart := range []string{"iree/amdgpu/pm", "service/stt/whisper", "infra/ci/runner"} {
 		entity := testEntity(t, daemon.fleet, localpart)
-		daemon.running[entity] = true
+		daemon.setRunning(entity)
 		daemon.authorizationIndex.SetPrincipal(entity.UserID(), restrictedPolicy)
 	}
 
@@ -142,11 +142,11 @@ func TestMachineLayoutPerPrincipalAuthFiltering(t *testing.T) {
 	// observer, so it should be filtered from the layout.
 	for _, localpart := range []string{"iree/amdgpu/pm", "iree/amdgpu/codegen"} {
 		entity := testEntity(t, daemon.fleet, localpart)
-		daemon.running[entity] = true
+		daemon.setRunning(entity)
 		daemon.authorizationIndex.SetPrincipal(entity.UserID(), permissiveObserveAllowances)
 	}
 	secretEntity := testEntity(t, daemon.fleet, "secret/agent")
-	daemon.running[secretEntity] = true
+	daemon.setRunning(secretEntity)
 	daemon.authorizationIndex.SetPrincipal(secretEntity.UserID(), schema.AuthorizationPolicy{
 		Allowances: []schema.Allowance{
 			{Actions: []string{observation.ActionObserve}, Actors: []string{"secret-admin:bureau.local"}},
@@ -193,7 +193,7 @@ func TestMachineLayoutNoPrincipals(t *testing.T) {
 func TestMachineLayoutMachineName(t *testing.T) {
 	daemon, _ := newTestDaemonWithQuery(t)
 	testAgentEntity := testEntity(t, daemon.fleet, "test/agent")
-	daemon.running[testAgentEntity] = true
+	daemon.setRunning(testAgentEntity)
 	daemon.authorizationIndex.SetPrincipal(testAgentEntity.UserID(), permissiveObserveAllowances)
 
 	response := sendMachineLayout(t, daemon.observeSocketPath)

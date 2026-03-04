@@ -6,8 +6,6 @@ package main
 import (
 	"context"
 	"time"
-
-	"github.com/bureau-foundation/bureau/lib/ref"
 )
 
 // emergencyShutdown destroys all running sandboxes and cancels the daemon
@@ -28,10 +26,7 @@ func (d *Daemon) emergencyShutdown() {
 
 	d.reconcileMu.Lock()
 	// Collect principals first — destroyPrincipal modifies the map.
-	principals := make([]ref.Entity, 0, len(d.running))
-	for principal := range d.running {
-		principals = append(principals, principal)
-	}
+	principals := d.alivePrincipals()
 	for _, principal := range principals {
 		if err := d.destroyPrincipal(ctx, principal, true); err != nil {
 			d.logger.Error("emergency shutdown: failed to destroy sandbox",

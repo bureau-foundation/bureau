@@ -332,7 +332,7 @@ func (d *Daemon) handleObserveSession(clientConnection net.Conn, request observe
 	}
 
 	// Construct a fleet-scoped Entity from the request's account
-	// localpart to look up in the Entity-keyed d.running map.
+	// localpart to look up in the lifecycle map.
 	principalEntity, err := ref.NewEntityFromAccountLocalpart(d.fleet, request.Principal)
 	if err != nil {
 		d.sendObserveError(clientConnection,
@@ -342,9 +342,9 @@ func (d *Daemon) handleObserveSession(clientConnection net.Conn, request observe
 
 	// Check if the principal is running locally. Snapshot under RLock
 	// to avoid racing with background goroutines (watchSandboxExit,
-	// rollbackPrincipal) that modify d.running under Lock.
+	// rollbackPrincipal) that modify the lifecycle map under Lock.
 	d.reconcileMu.RLock()
-	isLocallyRunning := d.running[principalEntity]
+	isLocallyRunning := d.isAlive(principalEntity)
 	d.reconcileMu.RUnlock()
 
 	if isLocallyRunning {
@@ -532,8 +532,8 @@ func (d *Daemon) handleQueryLayout(clientConnection net.Conn, request observeReq
 // by the observer's authorization.
 //
 // This is the "show me everything on this machine" entry point — the
-// daemon generates the layout dynamically from d.running rather than
-// fetching a stored layout from Matrix.
+// daemon generates the layout dynamically from the lifecycle map rather
+// than fetching a stored layout from Matrix.
 //
 // Authentication is handled by handleObserveClient before dispatch.
 // This is pure request/response — the connection is closed after the response.
@@ -542,8 +542,8 @@ func (d *Daemon) handleMachineLayout(clientConnection net.Conn, request observeR
 		"observer", request.Observer,
 	)
 
-	// Snapshot d.running under RLock to avoid racing with background
-	// goroutines that modify the map.
+	// Snapshot alive principals under RLock to avoid racing with
+	// background goroutines that modify the lifecycle map.
 	runningSnapshot := d.runningConsumers()
 
 	// Parse the verified observer identity for authorization checks.
@@ -594,7 +594,7 @@ func (d *Daemon) handleMachineLayout(clientConnection net.Conn, request observeR
 // observation session is established.
 //
 // Principals come from two sources:
-//   - d.running: principals with active sandboxes on this machine (always observable)
+//   - lifecycle map: principals with active sandboxes on this machine (always observable)
 //   - d.services: service directory entries across all machines (observable when
 //     local, or remote with a reachable transport address)
 //
@@ -605,15 +605,16 @@ func (d *Daemon) handleList(clientConnection net.Conn, request observeRequest) {
 		"observable", request.Observable,
 	)
 
-	// Snapshot d.running under RLock to avoid racing with background
-	// goroutines that modify the map. Build a set for O(1) membership
-	// checks against service directory entries below.
+	// Snapshot alive principals under RLock to avoid racing with
+	// background goroutines that modify the lifecycle map. Build a set
+	// for O(1) membership checks against service directory entries below.
 	d.reconcileMu.RLock()
-	runningSet := make(map[string]bool, len(d.running))
-	for principal := range d.running {
+	alivePrincipals := d.alivePrincipals()
+	d.reconcileMu.RUnlock()
+	runningSet := make(map[string]bool, len(alivePrincipals))
+	for _, principal := range alivePrincipals {
 		runningSet[principal.AccountLocalpart()] = true
 	}
-	d.reconcileMu.RUnlock()
 
 	// Collect principals. Use a map to deduplicate between running
 	// principals and d.services (a locally running service appears in
@@ -974,7 +975,7 @@ func (d *Daemon) handleTransportObserve(w http.ResponseWriter, r *http.Request) 
 	}
 
 	// Construct a fleet-scoped Entity from the request's account
-	// localpart to look up in the Entity-keyed d.running map.
+	// localpart to look up in the lifecycle map.
 	transportEntity, err := ref.NewEntityFromAccountLocalpart(d.fleet, request.Principal)
 	if err != nil {
 		w.Header().Set("Content-Type", "application/json")
@@ -1023,7 +1024,7 @@ func (d *Daemon) handleTransportObserve(w http.ResponseWriter, r *http.Request) 
 	}
 
 	d.reconcileMu.RLock()
-	principalRunning := d.running[transportEntity]
+	principalRunning := d.isAlive(transportEntity)
 	d.reconcileMu.RUnlock()
 
 	if !principalRunning {

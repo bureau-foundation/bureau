@@ -304,7 +304,7 @@ func (d *Daemon) rollbackPrincipal(ctx context.Context, principal ref.Entity) {
 
 	// Guard: the principal may have been destroyed by a concurrent
 	// reconcile while we were waiting for the mutex.
-	if !d.running[principal] {
+	if !d.isAlive(principal) {
 		d.logger.Info("health rollback skipped: principal already stopped",
 			"principal", principal)
 		return
@@ -438,7 +438,7 @@ func (d *Daemon) rollbackPrincipal(ctx context.Context, principal ref.Entity) {
 		return
 	}
 
-	d.running[principal] = true
+	d.setRunning(principal)
 	d.notifyStatusChange()
 	d.logSessionIDs[principal] = logSessionID
 	d.lastSpecs[principal] = previousSpec

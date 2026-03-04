@@ -70,13 +70,10 @@ func newTestDaemon(t *testing.T) (*Daemon, *clock.FakeClock) {
 		// All map fields — adding a new map to Daemon means adding
 		// it here so no test panics on nil map write.
 		failedExecPaths:       make(map[string]bool),
-		startFailures:         make(map[ref.Entity]*startFailure),
-		running:               make(map[ref.Entity]bool),
+		lifecycle:             make(map[ref.Entity]principalLifecycle),
 		drainGracePeriod:      defaultDrainGracePeriod,
 		maxIdleInterval:       defaultMaxIdleInterval,
 		dynamicPrincipals:     make(map[ref.Entity]bool),
-		completed:             make(map[ref.Entity]bool),
-		draining:              make(map[ref.Entity]context.CancelFunc),
 		pipelineTickets:       make(map[string]ref.Entity),
 		pipelineEnabledRooms:  make(map[ref.RoomID]bool),
 		exitWatchers:          make(map[ref.Entity]context.CancelFunc),

@@ -14,6 +14,7 @@ go_library(
         "ha.go",
         "health.go",
         "layout.go",
+        "lifecycle.go",
         "main.go",
         "observe.go",
         "observe_auth.go",

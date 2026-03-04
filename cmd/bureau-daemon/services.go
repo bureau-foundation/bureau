@@ -184,16 +184,12 @@ func (d *Daemon) remoteServices() map[string]*schema.Service {
 // can iterate it without holding the lock during network I/O. Used by
 // service directory operations that push to proxy admin sockets — taking
 // a snapshot avoids concurrent map iteration with background goroutines
-// (watchSandboxExit, rollbackPrincipal) that modify d.running under
-// reconcileMu.Lock.
+// (watchSandboxExit, rollbackPrincipal) that modify the lifecycle map
+// under reconcileMu.Lock.
 func (d *Daemon) runningConsumers() []ref.Entity {
 	d.reconcileMu.RLock()
 	defer d.reconcileMu.RUnlock()
-	consumers := make([]ref.Entity, 0, len(d.running))
-	for principal := range d.running {
-		consumers = append(consumers, principal)
-	}
-	return consumers
+	return d.alivePrincipals()
 }
 
 // reconcileServices is called after syncServiceDirectory detects changes. For
@@ -201,10 +197,10 @@ func (d *Daemon) runningConsumers() []ref.Entity {
 // be reachable and updates the consumer's proxy configuration via the admin
 // API.
 //
-// The consumers parameter is a snapshot of d.running taken under
+// The consumers parameter is a snapshot of alive principals taken under
 // reconcileMu.RLock by the caller. This avoids holding the lock during
 // proxy admin HTTP calls while preventing concurrent map iteration with
-// background goroutines that modify d.running.
+// background goroutines that modify the lifecycle map.
 //
 // For local services (provider on the same machine): the daemon derives the
 // provider's proxy socket path from its localpart and registers a route on
@@ -327,7 +323,7 @@ func (d *Daemon) reconcileServices(ctx context.Context, consumers []ref.Entity, 
 // configureProxyRoute registers a service route on each consumer proxy in
 // the snapshot. Each consumer's proxy gets a PUT /v1/admin/services/{name}
 // call pointing at the provider's Unix socket. The consumers slice is a
-// snapshot of d.running taken under reconcileMu.RLock, so this function
+// snapshot of alive principals taken under reconcileMu.RLock, so this function
 // does not need to hold the lock during the HTTP calls.
 func (d *Daemon) configureProxyRoute(ctx context.Context, consumers []ref.Entity, serviceName, providerSocket string) {
 	for _, consumer := range consumers {
@@ -342,7 +338,7 @@ func (d *Daemon) configureProxyRoute(ctx context.Context, consumers []ref.Entity
 }
 
 // removeProxyRoute unregisters a service from each consumer proxy in the
-// snapshot. The consumers slice is a snapshot of d.running taken under
+// snapshot. The consumers slice is a snapshot of alive principals taken under
 // reconcileMu.RLock.
 func (d *Daemon) removeProxyRoute(ctx context.Context, consumers []ref.Entity, serviceName string) {
 	for _, consumer := range consumers {
@@ -519,7 +515,7 @@ func (d *Daemon) registerProxyRoute(ctx context.Context, consumer ref.Entity, se
 
 // pushServiceDirectory pushes the current service directory to each consumer
 // proxy in the snapshot via the admin API (PUT /v1/admin/directory). The
-// consumers slice is a snapshot of d.running taken under reconcileMu.RLock,
+// consumers slice is a snapshot of alive principals taken under reconcileMu.RLock,
 // so this function does not need to hold the lock during the HTTP calls.
 // Called after syncServiceDirectory detects changes and after new consumers
 // start.

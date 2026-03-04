@@ -400,7 +400,7 @@ func TestHealthMonitorThresholdTriggersRollback(t *testing.T) {
 	daemon.session = session
 	daemon.configRoomID = mustRoomID(configRoomID)
 	daemon.launcherSocket = launcherSocket
-	daemon.running[ipcEntity] = true
+	daemon.setRunning(ipcEntity)
 	daemon.lastSpecs[ipcEntity] = &schema.SandboxSpec{Command: []string{"/bin/new-agent"}}
 	daemon.previousSpecs[ipcEntity] = previousSpec
 	daemon.lastTemplates[ipcEntity] = &schema.TemplateContent{
@@ -471,7 +471,7 @@ func TestHealthMonitorThresholdTriggersRollback(t *testing.T) {
 
 	// Verify principal is running again.
 	daemon.reconcileMu.RLock()
-	isRunning := daemon.running[ipcEntity]
+	isRunning := daemon.isAlive(ipcEntity)
 	daemon.reconcileMu.RUnlock()
 	if !isRunning {
 		t.Error("principal should be running after rollback")
@@ -577,7 +577,7 @@ func TestRollbackNoPreviousSpec(t *testing.T) {
 	daemon.session = session
 	daemon.configRoomID = mustRoomID(configRoomID)
 	daemon.launcherSocket = launcherSocket
-	daemon.running[ipcEntity] = true
+	daemon.setRunning(ipcEntity)
 	daemon.lastSpecs[ipcEntity] = &schema.SandboxSpec{Command: []string{"/bin/agent"}}
 	daemon.adminSocketPathFunc = func(ref.Entity) string {
 		return filepath.Join(socketDir, "admin.sock")
@@ -611,7 +611,7 @@ func TestRollbackNoPreviousSpec(t *testing.T) {
 	}
 
 	// Principal should NOT be running.
-	if daemon.running[ipcEntity] {
+	if daemon.isAlive(ipcEntity) {
 		t.Error("principal should not be running after rollback with no previous spec")
 	}
 
@@ -755,7 +755,7 @@ func TestRollbackCredentialRotation(t *testing.T) {
 	daemon.session = session
 	daemon.configRoomID = mustRoomID(configRoomID)
 	daemon.launcherSocket = launcherSocket
-	daemon.running[ipcEntity] = true
+	daemon.setRunning(ipcEntity)
 	daemon.lastSpecs[ipcEntity] = &schema.SandboxSpec{Command: []string{"/bin/new-agent"}}
 	daemon.previousSpecs[ipcEntity] = previousSpec
 	daemon.previousCredentials[ipcEntity] = oldCiphertext
@@ -827,7 +827,7 @@ func TestRollbackCredentialRotation(t *testing.T) {
 
 	// Verify principal is running again.
 	daemon.reconcileMu.RLock()
-	isRunning := daemon.running[ipcEntity]
+	isRunning := daemon.isAlive(ipcEntity)
 	daemon.reconcileMu.RUnlock()
 	if !isRunning {
 		t.Error("principal should be running after rollback")
@@ -944,7 +944,7 @@ func TestRollbackCredentialRotationNoPreviousCredentials(t *testing.T) {
 	daemon.session = session
 	daemon.configRoomID = mustRoomID(configRoomID)
 	daemon.launcherSocket = launcherSocket
-	daemon.running[ipcEntity] = true
+	daemon.setRunning(ipcEntity)
 	daemon.lastSpecs[ipcEntity] = &schema.SandboxSpec{Command: []string{"/bin/new-agent"}}
 	daemon.previousSpecs[ipcEntity] = previousSpec
 	// No previousCredentials — simulates daemon restart after rotation.
@@ -1080,7 +1080,7 @@ func TestReconcileStartsHealthMonitorForTemplate(t *testing.T) {
 		t.Fatalf("reconcile() error: %v", err)
 	}
 
-	if !daemon.running[fleetEntity] {
+	if !daemon.isAlive(fleetEntity) {
 		t.Fatal("principal should be running after reconcile")
 	}
 
@@ -1165,7 +1165,7 @@ func TestReconcileNoHealthMonitorWithoutHealthCheck(t *testing.T) {
 		t.Fatalf("reconcile() error: %v", err)
 	}
 
-	if !daemon.running[fleetEntity] {
+	if !daemon.isAlive(fleetEntity) {
 		t.Fatal("principal should be running")
 	}
 
@@ -1239,7 +1239,7 @@ func TestReconcileStopsHealthMonitorOnDestroy(t *testing.T) {
 	daemon.session = session
 	daemon.configRoomID = mustRoomID(configRoomID)
 	daemon.launcherSocket = launcherSocket
-	daemon.running[fleetEntity] = true
+	daemon.setRunning(fleetEntity)
 	daemon.lastSpecs[fleetEntity] = &schema.SandboxSpec{Command: []string{"/bin/agent"}}
 	daemon.adminSocketPathFunc = func(ref.Entity) string { return filepath.Join(socketDir, "admin.sock") }
 	daemon.logger = slog.New(slog.NewJSONHandler(os.Stderr, nil))
@@ -1266,7 +1266,7 @@ func TestReconcileStopsHealthMonitorOnDestroy(t *testing.T) {
 	}
 
 	// Principal should be draining, not yet destroyed.
-	if _, draining := daemon.draining[fleetEntity]; !draining {
+	if !daemon.isDraining(fleetEntity) {
 		t.Error("principal should be draining after removal from config")
 	}
 
@@ -1290,7 +1290,7 @@ func TestReconcileStopsHealthMonitorOnDestroy(t *testing.T) {
 	// up state). Acquire the lock to synchronize — this blocks until
 	// the goroutine completes.
 	daemon.reconcileMu.Lock()
-	running := daemon.running[fleetEntity]
+	running := daemon.isAlive(fleetEntity)
 	daemon.reconcileMu.Unlock()
 
 	if running {
@@ -1356,7 +1356,7 @@ func TestHealthMonitorRecoveryResetsCounter(t *testing.T) {
 	daemon.clock = fakeClock
 	daemon.runDir = principal.DefaultRunDir
 	entity := testEntity(t, daemon.fleet, "agent/test")
-	daemon.running[entity] = true
+	daemon.setRunning(entity)
 	daemon.lastSpecs[entity] = &schema.SandboxSpec{Command: []string{"/bin/agent"}}
 	daemon.adminSocketPathFunc = func(ref.Entity) string { return adminSocket }
 	daemon.logger = slog.New(slog.NewJSONHandler(os.Stderr, nil))
@@ -1391,7 +1391,7 @@ func TestHealthMonitorRecoveryResetsCounter(t *testing.T) {
 	// launcherRequest (which would fail with no launcher socket) and
 	// delete running[entity]. The principal still being marked as
 	// running proves the recovery resets prevented false rollback.
-	if !daemon.running[entity] {
+	if !daemon.isAlive(entity) {
 		t.Error("principal should still be running: transient failures with recovery should not trigger rollback")
 	}
 }
@@ -1431,7 +1431,7 @@ func TestHealthMonitorCancelDuringPolling(t *testing.T) {
 	daemon.clock = fakeClock
 	daemon.runDir = principal.DefaultRunDir
 	entity := testEntity(t, daemon.fleet, "agent/test")
-	daemon.running[entity] = true
+	daemon.setRunning(entity)
 	daemon.lastSpecs[entity] = &schema.SandboxSpec{Command: []string{"/bin/agent"}}
 	daemon.adminSocketPathFunc = func(ref.Entity) string { return adminSocket }
 	daemon.logger = slog.New(slog.NewJSONHandler(os.Stderr, nil))
@@ -1473,7 +1473,7 @@ func TestHealthMonitorCancelDuringPolling(t *testing.T) {
 	testutil.RequireClosed(t, done, 5*time.Second, "health monitor did not stop after context cancellation")
 
 	// No rollback should have occurred — ctx.Done exits cleanly.
-	if !daemon.running[entity] {
+	if !daemon.isAlive(entity) {
 		t.Error("principal should still be running: context cancellation should not trigger rollback")
 	}
 }
@@ -1566,7 +1566,7 @@ func TestRollbackLauncherRejectsCreate(t *testing.T) {
 	daemon.session = session
 	daemon.configRoomID = mustRoomID(configRoomID)
 	daemon.launcherSocket = launcherSocket
-	daemon.running[ipcEntity] = true
+	daemon.setRunning(ipcEntity)
 	daemon.lastSpecs[ipcEntity] = &schema.SandboxSpec{Command: []string{"/bin/new-agent"}}
 	daemon.previousSpecs[ipcEntity] = previousSpec
 	daemon.lastTemplates[ipcEntity] = &schema.TemplateContent{
@@ -1601,7 +1601,7 @@ func TestRollbackLauncherRejectsCreate(t *testing.T) {
 	}
 
 	// Principal should NOT be running — create was rejected.
-	if daemon.running[ipcEntity] {
+	if daemon.isAlive(ipcEntity) {
 		t.Error("principal should not be running after failed rollback create")
 	}
 
@@ -1705,7 +1705,7 @@ func TestRollbackCredentialsMissing(t *testing.T) {
 	daemon.session = session
 	daemon.configRoomID = mustRoomID(configRoomID)
 	daemon.launcherSocket = launcherSocket
-	daemon.running[ipcEntity] = true
+	daemon.setRunning(ipcEntity)
 	daemon.lastSpecs[ipcEntity] = &schema.SandboxSpec{Command: []string{"/bin/new-agent"}}
 	daemon.previousSpecs[ipcEntity] = previousSpec
 	daemon.lastTemplates[ipcEntity] = &schema.TemplateContent{
@@ -1741,7 +1741,7 @@ func TestRollbackCredentialsMissing(t *testing.T) {
 	}
 
 	// Principal should NOT be running.
-	if daemon.running[ipcEntity] {
+	if daemon.isAlive(ipcEntity) {
 		t.Error("principal should not be running after failed credential read")
 	}
 
@@ -1830,7 +1830,7 @@ func TestDestroyExtrasCleansPreviousSpecs(t *testing.T) {
 	daemon.session = session
 	daemon.configRoomID = mustRoomID(configRoomID)
 	daemon.launcherSocket = launcherSocket
-	daemon.running[fleetEntity] = true
+	daemon.setRunning(fleetEntity)
 	daemon.lastSpecs[fleetEntity] = &schema.SandboxSpec{Command: []string{"/bin/agent-v2"}}
 	daemon.previousSpecs[fleetEntity] = &schema.SandboxSpec{Command: []string{"/bin/agent-v1"}}
 	daemon.previousCredentials[fleetEntity] = "encrypted-old-creds"
@@ -1849,10 +1849,10 @@ func TestDestroyExtrasCleansPreviousSpecs(t *testing.T) {
 
 	// After reconcile, the principal should be draining (SIGTERM sent,
 	// grace period in progress), not yet destroyed.
-	if _, draining := daemon.draining[fleetEntity]; !draining {
+	if !daemon.isDraining(fleetEntity) {
 		t.Error("principal should be draining after removal from config")
 	}
-	if !daemon.running[fleetEntity] {
+	if !daemon.isAlive(fleetEntity) {
 		t.Error("principal should still be running while draining")
 	}
 
@@ -1869,7 +1869,7 @@ func TestDestroyExtrasCleansPreviousSpecs(t *testing.T) {
 	// request, but the drain goroutine still holds reconcileMu while
 	// finishing destroyPrincipal. Acquire the lock to synchronize.
 	daemon.reconcileMu.Lock()
-	running := daemon.running[fleetEntity]
+	running := daemon.isAlive(fleetEntity)
 	daemon.reconcileMu.Unlock()
 	if running {
 		t.Error("principal should not be running after drain grace period expired")

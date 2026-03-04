@@ -432,12 +432,12 @@ func (d *Daemon) processSyncResponse(ctx context.Context, response *messaging.Sy
 
 		// Capture sandbox count before reconcile to detect new starts.
 		d.reconcileMu.RLock()
-		runningBefore := len(d.running)
+		runningBefore := d.aliveCount()
 		d.reconcileMu.RUnlock()
 
 		d.reconcileMu.Lock()
 		d.clearStartFailures()
-		clear(d.completed)
+		d.clearCompletedPrincipals()
 		d.reconcileMu.Unlock()
 		if err := d.reconcile(ctx); err != nil {
 			d.logger.Error("reconciliation failed", "error", err)
@@ -449,7 +449,7 @@ func (d *Daemon) processSyncResponse(ctx context.Context, response *messaging.Sy
 		// the service room state to catch registrations that /sync
 		// might not deliver due to event position ordering races.
 		d.reconcileMu.RLock()
-		runningAfter := len(d.running)
+		runningAfter := d.aliveCount()
 		d.reconcileMu.RUnlock()
 		if runningAfter > runningBefore {
 			d.serviceResyncCountdown = 5

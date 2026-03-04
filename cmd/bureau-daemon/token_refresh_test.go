@@ -50,7 +50,7 @@ func TestRefreshTokens_RefreshesAtThreshold(t *testing.T) {
 			{Actions: []string{ticket.ActionCreate, "ticket/read"}},
 		},
 	})
-	daemon.running[alpha] = true
+	daemon.setRunning(alpha)
 	daemon.lastSpecs[alpha] = &schema.SandboxSpec{
 		RequiredServices: []string{"ticket"},
 	}
@@ -136,7 +136,7 @@ func TestRefreshTokens_SweepsExpiredTemporalGrants(t *testing.T) {
 		t.Fatalf("expected 2 grants before sweep, got %d", len(grants))
 	}
 
-	daemon.running[alpha] = true
+	daemon.setRunning(alpha)
 	daemon.lastSpecs[alpha] = &schema.SandboxSpec{
 		RequiredServices: []string{"ticket"},
 	}
@@ -179,11 +179,11 @@ func TestRefreshTokens_SkipsPrincipalsWithoutServices(t *testing.T) {
 	daemon, fakeClock, _ := newTokenRefreshDaemon(t)
 
 	// Running principal with no RequiredServices.
-	daemon.running[testEntity(t, daemon.fleet, "agent/noservices")] = true
+	daemon.setRunning(testEntity(t, daemon.fleet, "agent/noservices"))
 	daemon.lastSpecs[testEntity(t, daemon.fleet, "agent/noservices")] = &schema.SandboxSpec{}
 
 	// Running principal with nil spec.
-	daemon.running[testEntity(t, daemon.fleet, "agent/nospec")] = true
+	daemon.setRunning(testEntity(t, daemon.fleet, "agent/nospec"))
 
 	// Advance well past threshold.
 	fakeClock.Advance(10 * time.Minute)
@@ -213,7 +213,7 @@ func TestRefreshTokens_InitialSweepMintsForAdoptedPrincipals(t *testing.T) {
 			{Actions: []string{"artifact/read"}},
 		},
 	})
-	daemon.running[adopted] = true
+	daemon.setRunning(adopted)
 	daemon.lastSpecs[adopted] = &schema.SandboxSpec{
 		RequiredServices: []string{"artifact"},
 	}
@@ -253,7 +253,7 @@ func TestRefreshTokens_GrantChangeTriggersRemint(t *testing.T) {
 			{Actions: []string{"ticket/read"}},
 		},
 	})
-	daemon.running[alpha] = true
+	daemon.setRunning(alpha)
 	daemon.lastSpecs[alpha] = &schema.SandboxSpec{
 		RequiredServices: []string{"ticket"},
 	}
@@ -300,24 +300,24 @@ func TestTokenRefreshCandidates(t *testing.T) {
 	startTime := fakeClock.Now()
 
 	// Principal with tokens minted at start time (not yet due).
-	daemon.running[testEntity(t, daemon.fleet, "agent/fresh")] = true
+	daemon.setRunning(testEntity(t, daemon.fleet, "agent/fresh"))
 	daemon.lastSpecs[testEntity(t, daemon.fleet, "agent/fresh")] = &schema.SandboxSpec{
 		RequiredServices: []string{"ticket"},
 	}
 	daemon.lastTokenMint[testEntity(t, daemon.fleet, "agent/fresh")] = startTime
 
 	// Principal with zero lastTokenMint (adopted, never minted).
-	daemon.running[testEntity(t, daemon.fleet, "agent/adopted")] = true
+	daemon.setRunning(testEntity(t, daemon.fleet, "agent/adopted"))
 	daemon.lastSpecs[testEntity(t, daemon.fleet, "agent/adopted")] = &schema.SandboxSpec{
 		RequiredServices: []string{"artifact"},
 	}
 
 	// Principal with no required services (should be skipped).
-	daemon.running[testEntity(t, daemon.fleet, "agent/noservices")] = true
+	daemon.setRunning(testEntity(t, daemon.fleet, "agent/noservices"))
 	daemon.lastSpecs[testEntity(t, daemon.fleet, "agent/noservices")] = &schema.SandboxSpec{}
 
 	// Principal with nil spec (should be skipped).
-	daemon.running[testEntity(t, daemon.fleet, "agent/nospec")] = true
+	daemon.setRunning(testEntity(t, daemon.fleet, "agent/nospec"))
 
 	// At start time, only agent/adopted should be a candidate (zero mint time).
 	candidates := daemon.tokenRefreshCandidates(startTime)

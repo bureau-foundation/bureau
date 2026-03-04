@@ -80,7 +80,7 @@ func (d *Daemon) reconcile(ctx context.Context) error {
 		// Skip principals that completed their work and should not
 		// be restarted (RestartPolicy "on-failure" with exit 0, or
 		// "never" with any exit).
-		if d.completed[principal] {
+		if d.isCompleted(principal) {
 			continue
 		}
 
@@ -124,7 +124,10 @@ func (d *Daemon) reconcile(ctx context.Context) error {
 	// it with the new credentials. This handles API key rotation, token
 	// refresh, and any other credential update without manual intervention.
 	var rotatedPrincipals []ref.Entity
-	for principal := range d.running {
+	for principal, lc := range d.lifecycle {
+		if !lc.isAlive() {
+			continue
+		}
 		if _, shouldRun := desired[principal]; !shouldRun {
 			continue // Will be destroyed in the "remove" pass below.
 		}
@@ -191,7 +194,7 @@ func (d *Daemon) reconcile(ctx context.Context) error {
 		d.lastGrants = make(map[ref.Entity][]schema.Grant)
 	}
 	for principal := range desired {
-		if !d.running[principal] {
+		if !d.isAlive(principal) {
 			continue
 		}
 		newGrants := d.resolveGrantsForProxy(principal.UserID())
@@ -227,7 +230,7 @@ func (d *Daemon) reconcile(ctx context.Context) error {
 	// which principals changed by comparing index allowances to the
 	// last-known state.
 	for principal := range desired {
-		if !d.running[principal] {
+		if !d.isAlive(principal) {
 			continue
 		}
 		newAllowances := d.authorizationIndex.Allowances(principal.UserID())
@@ -247,7 +250,7 @@ func (d *Daemon) reconcile(ctx context.Context) error {
 	// context) against the running spec (with ticket context) would always
 	// detect a structural change, causing an infinite destroy-recreate loop.
 	for principal, assignment := range desired {
-		if !d.running[principal] {
+		if !d.isAlive(principal) {
 			continue
 		}
 		if d.dynamicPrincipals[principal] {
@@ -257,17 +260,18 @@ func (d *Daemon) reconcile(ctx context.Context) error {
 	}
 
 	// Set up management goroutines for principals that survived a daemon
-	// restart. After adoptPreExistingSandboxes populates d.running from
-	// the launcher's list-sandboxes response, those entries have no exit
-	// watcher, layout watcher, health monitor, or consumer proxy config.
-	// The earlier reconcile passes (credential tracking, authorization
-	// grants push, observe allowances, reconcileRunningPrincipal for lastSpecs)
-	// already handled their state — this pass starts the goroutines.
+	// restart. After adoptPreExistingSandboxes populates the lifecycle
+	// map from the launcher's list-sandboxes response, those entries have
+	// no exit watcher, layout watcher, health monitor, or consumer proxy
+	// config. The earlier reconcile passes (credential tracking,
+	// authorization grants push, observe allowances,
+	// reconcileRunningPrincipal for lastSpecs) already handled their
+	// state — this pass starts the goroutines.
 	//
-	// On subsequent reconcile calls all d.running entries have exit
+	// On subsequent reconcile calls all alive entries have exit
 	// watchers, so this loop is a no-op in steady state.
 	for principal, assignment := range desired {
-		if !d.running[principal] {
+		if !d.isAlive(principal) {
 			continue
 		}
 		if _, hasWatcher := d.exitWatchers[principal]; hasWatcher {
@@ -287,7 +291,7 @@ func (d *Daemon) reconcile(ctx context.Context) error {
 	// StartConditions were already evaluated when building the desired
 	// set above — only principals with satisfied conditions are here.
 	for principal, assignment := range desired {
-		if d.running[principal] {
+		if d.isAlive(principal) {
 			continue
 		}
 
@@ -295,7 +299,7 @@ func (d *Daemon) reconcile(ctx context.Context) error {
 		// Event-driven clearing (config change, service sync, sandbox
 		// exit) resets the backoff so retries happen immediately when
 		// the root cause may have been resolved.
-		if failure := d.startFailures[principal]; failure != nil {
+		if failure := d.startFailureFor(principal); failure != nil {
 			if d.clock.Now().Before(failure.nextRetryAt) {
 				d.logger.Info("principal in start backoff, skipping",
 					"principal", principal,
@@ -377,7 +381,7 @@ func (d *Daemon) reconcile(ctx context.Context) error {
 					d.logger.Error("pipeline executor overlay applied but no ticket service running",
 						"principal", principal,
 					)
-					isFirstFailure := d.startFailures[principal] == nil
+					isFirstFailure := d.startFailureFor(principal) == nil
 					d.recordStartFailure(principal, failureCategoryServiceResolution,
 						"no ticket service running (required for pipeline execution)")
 					if isFirstFailure {
@@ -422,7 +426,7 @@ func (d *Daemon) reconcile(ctx context.Context) error {
 						"pipeline_ref", pipelineRef,
 						"error", ticketErr,
 					)
-					isFirstFailure := d.startFailures[principal] == nil
+					isFirstFailure := d.startFailureFor(principal) == nil
 					d.recordStartFailure(principal, failureCategoryServiceResolution,
 						fmt.Sprintf("creating pipeline ticket: %v", ticketErr))
 					if isFirstFailure {
@@ -513,7 +517,7 @@ func (d *Daemon) reconcile(ctx context.Context) error {
 						"store_path", sandboxSpec.EnvironmentPath,
 						"error", err,
 					)
-					isFirstFailure := d.startFailures[principal] == nil
+					isFirstFailure := d.startFailureFor(principal) == nil
 					d.recordStartFailure(principal, failureCategoryNixPrefetch, err.Error())
 					if isFirstFailure {
 						if _, err := d.sendEventRetry(ctx, d.configRoomID, schema.MatrixEventTypeMessage,
@@ -541,7 +545,7 @@ func (d *Daemon) reconcile(ctx context.Context) error {
 					"command", sandboxSpec.Command,
 					"error", err,
 				)
-				isFirstFailure := d.startFailures[principal] == nil
+				isFirstFailure := d.startFailureFor(principal) == nil
 				d.recordStartFailure(principal, failureCategoryCommandBinary, err.Error())
 				if isFirstFailure {
 					if _, err := d.sendEventRetry(ctx, d.configRoomID, schema.MatrixEventTypeMessage,
@@ -638,7 +642,7 @@ func (d *Daemon) reconcile(ctx context.Context) error {
 					"required_services", sandboxSpec.RequiredServices,
 					"error", err,
 				)
-				isFirstFailure := d.startFailures[principal] == nil
+				isFirstFailure := d.startFailureFor(principal) == nil
 				d.recordStartFailure(principal, failureCategoryServiceResolution, err.Error())
 				if isFirstFailure {
 					if _, err := d.sendEventRetry(ctx, d.configRoomID, schema.MatrixEventTypeMessage,
@@ -681,7 +685,7 @@ func (d *Daemon) reconcile(ctx context.Context) error {
 					"principal", principal,
 					"error", err,
 				)
-				isFirstFailure := d.startFailures[principal] == nil
+				isFirstFailure := d.startFailureFor(principal) == nil
 				d.recordStartFailure(principal, failureCategoryTokenMinting, err.Error())
 				if isFirstFailure {
 					if _, err := d.sendEventRetry(ctx, d.configRoomID, schema.MatrixEventTypeMessage,
@@ -758,7 +762,7 @@ func (d *Daemon) reconcile(ctx context.Context) error {
 		}
 
 		d.clearStartFailure(principal)
-		d.running[principal] = true
+		d.setRunning(principal)
 		d.notifyStatusChange()
 		d.logSessionIDs[principal] = logSessionID
 		d.lastCredentials[principal] = credentials.Ciphertext
@@ -821,7 +825,7 @@ func (d *Daemon) reconcile(ctx context.Context) error {
 		// Watch for sandbox process exit and proxy process exit. Each
 		// goroutine blocks on a launcher IPC call (wait-sandbox or
 		// wait-proxy) until the respective process exits, then clears
-		// d.running and triggers re-reconciliation.
+		// the lifecycle entry and triggers re-reconciliation.
 		//
 		// Uses shutdownCtx (not the sync cycle's ctx) so the watchers
 		// survive across sync iterations but cancel on daemon shutdown.
@@ -832,7 +836,7 @@ func (d *Daemon) reconcile(ctx context.Context) error {
 		// daemon can cancel it before an intentional destroy (credential
 		// rotation, structural restart, condition change). Without this,
 		// the old watcher would see the destroy as an unexpected exit,
-		// clear d.running, and trigger a duplicate recreation.
+		// clear the lifecycle entry, and trigger a duplicate recreation.
 		if d.shutdownCtx != nil {
 			watcherCtx, watcherCancel := context.WithCancel(d.shutdownCtx)
 			d.exitWatchers[principal] = watcherCancel
@@ -849,7 +853,7 @@ func (d *Daemon) reconcile(ctx context.Context) error {
 	for _, principal := range rotatedPrincipals {
 		status := schema.CredRotationCompleted
 		var errorMessage string
-		if !d.running[principal] {
+		if !d.isAlive(principal) {
 			status = schema.CredRotationFailed
 			errorMessage = "principal not in desired state after credential rotation"
 		}
@@ -874,14 +878,17 @@ func (d *Daemon) reconcile(ctx context.Context) error {
 	// a grace period, then force-kill. This gives agents time to
 	// finish their current turn, write checkpoints, and post
 	// agent-complete before the sandbox is destroyed.
-	for principal := range d.running {
+	for principal, lc := range d.lifecycle {
+		if !lc.isAlive() {
+			continue
+		}
 		if _, shouldRun := desired[principal]; shouldRun {
 			continue
 		}
 		if d.dynamicPrincipals[principal] {
 			continue
 		}
-		if _, isDraining := d.draining[principal]; isDraining {
+		if lc.phase == phaseDraining {
 			continue // Grace period already in progress.
 		}
 
@@ -1040,7 +1047,7 @@ func (d *Daemon) reconcileRunningPrincipal(ctx context.Context, principal ref.En
 // adoptSurvivingPrincipal sets up the management goroutines for a principal
 // that survived a daemon restart. The launcher continued running the sandbox
 // while the daemon was down — adoptPreExistingSandboxes added the principal
-// to d.running, and earlier reconcile passes handled state tracking
+// to the lifecycle map, and earlier reconcile passes handled state tracking
 // (credentials, grants, observe allowances, lastSpecs). This method starts the
 // goroutines that the "create missing" pass normally starts: exit watcher,
 // layout watcher, health monitor, and consumer proxy configuration.
@@ -2167,7 +2174,13 @@ func (d *Daemon) destroyPrincipal(ctx context.Context, principal ref.Entity, for
 	}
 
 	d.revokeAndCleanupTokens(ctx, principal)
-	delete(d.running, principal)
+
+	// Cancel the drain grace period timer if this principal was
+	// being drained (e.g., force-kill after grace period expired,
+	// or daemon shutdown while draining).
+	d.cancelDrain(principal)
+	d.clearLifecycle(principal)
+
 	d.notifyStatusChange()
 	delete(d.dynamicPrincipals, principal)
 	d.removePipelineTicketByPrincipal(principal)
@@ -2182,14 +2195,6 @@ func (d *Daemon) destroyPrincipal(ctx context.Context, principal ref.Entity, for
 	delete(d.lastTokenMint, principal)
 	delete(d.lastObserveAllowances, principal)
 	d.lastActivityAt = d.clock.Now()
-
-	// Cancel the drain grace period timer if this principal was
-	// being drained (e.g., force-kill after grace period expired,
-	// or daemon shutdown while draining).
-	if drainCancel, draining := d.draining[principal]; draining {
-		drainCancel()
-		delete(d.draining, principal)
-	}
 
 	return destroyError
 }
@@ -2255,16 +2260,17 @@ func (d *Daemon) watchSandboxExit(ctx context.Context, principal ref.Entity) {
 
 	d.reconcileMu.Lock()
 
-	// If the principal is no longer tracked (proxy exit watcher or
+	// If the principal is no longer alive (proxy exit watcher or
 	// reconcile already cleaned it up), we still need to complete the
 	// log and post the sandbox_exited notification. The proxy exit
 	// watcher races with this goroutine because the launcher kills
 	// the proxy immediately after closing sb.done (which unblocks
 	// wait-sandbox). If the proxy exit watcher wins reconcileMu, it
-	// calls destroyPrincipal which clears d.running — but does not
-	// complete the log session. We must do it here so that log status
-	// transitions to "complete" before the notification is posted.
-	if !d.running[principal] {
+	// calls destroyPrincipal which clears the lifecycle entry — but
+	// does not complete the log session. We must do it here so that
+	// log status transitions to "complete" before the notification
+	// is posted.
+	if !d.isAlive(principal) {
 		sessionID := d.logSessionIDs[principal]
 		delete(d.logSessionIDs, principal)
 		d.reconcileMu.Unlock()
@@ -2283,11 +2289,16 @@ func (d *Daemon) watchSandboxExit(ctx context.Context, principal ref.Entity) {
 		return
 	}
 
+	// Capture dynamic and draining status before the cleanup block
+	// clears the maps that track them.
+	isDynamic := d.dynamicPrincipals[principal]
+	wasDraining := d.cancelDrain(principal)
+
 	d.cancelProxyExitWatcher(principal)
 	d.stopHealthMonitor(principal)
 	d.stopLayoutWatcher(principal)
 	d.revokeAndCleanupTokens(postExitCtx, principal)
-	delete(d.running, principal)
+	d.clearLifecycle(principal)
 	d.notifyStatusChange()
 	delete(d.dynamicPrincipals, principal)
 	d.removePipelineTicketByPrincipal(principal)
@@ -2304,24 +2315,12 @@ func (d *Daemon) watchSandboxExit(ctx context.Context, principal ref.Entity) {
 	delete(d.logSessionIDs, principal)
 	d.lastActivityAt = d.clock.Now()
 
-	// Cancel the drain grace period timer if this principal was being
-	// drained. The graceful exit means we don't need the force-kill.
-	// Track whether draining so we can destroy the proxy after
-	// releasing the lock — the sandbox is dead but the proxy is
-	// still alive and must be cleaned up via destroy-sandbox IPC.
-	wasDraining := false
-	if drainCancel, draining := d.draining[principal]; draining {
-		wasDraining = true
-		drainCancel()
-		delete(d.draining, principal)
-	}
-
 	// Determine restart policy. Dynamic principals (pipeline executors)
 	// default to on-failure — they run a bounded task and exit 0 on
 	// success. Config-driven principals read from their assignment;
 	// the default (empty string) means always.
 	var restartPolicy schema.RestartPolicy
-	if d.dynamicPrincipals[principal] {
+	if isDynamic {
 		restartPolicy = schema.RestartPolicyOnFailure
 	} else if assignment, found := d.findPrincipalAssignment(principal); found {
 		restartPolicy = assignment.RestartPolicy
@@ -2329,10 +2328,9 @@ func (d *Daemon) watchSandboxExit(ctx context.Context, principal ref.Entity) {
 
 	// Apply restart policy and crash backoff.
 	//
-	// For normal exits (code 0): clear any stale start failure so
-	// reconcile can immediately re-evaluate. If the restart policy
-	// says not to restart on success ("on-failure" or "never"), mark
-	// the principal as completed.
+	// For normal exits (code 0): if the restart policy says not to
+	// restart on success ("on-failure" or "never"), mark the principal
+	// as completed.
 	//
 	// For abnormal exits (code != 0): record a crash failure with
 	// exponential backoff to prevent a retry storm. If the restart
@@ -2342,15 +2340,13 @@ func (d *Daemon) watchSandboxExit(ctx context.Context, principal ref.Entity) {
 	// crash.
 	var crashBackoff time.Duration
 	if wasDraining {
-		d.clearStartFailure(principal)
 		d.logger.Info("drained principal exited",
 			"principal", principal,
 			"exit_code", exitCode,
 		)
 	} else if exitCode == 0 {
-		d.clearStartFailure(principal)
 		if restartPolicy == schema.RestartPolicyOnFailure || restartPolicy == schema.RestartPolicyNever {
-			d.completed[principal] = true
+			d.setCompleted(principal)
 			d.logger.Info("principal completed (restart policy prevents restart)",
 				"principal", principal,
 				"restart_policy", restartPolicy,
@@ -2358,7 +2354,7 @@ func (d *Daemon) watchSandboxExit(ctx context.Context, principal ref.Entity) {
 		}
 	} else {
 		if restartPolicy == schema.RestartPolicyNever {
-			d.completed[principal] = true
+			d.setCompleted(principal)
 			d.logger.Info("principal failed but restart policy prevents restart",
 				"principal", principal,
 				"exit_code", exitCode,
@@ -2366,12 +2362,13 @@ func (d *Daemon) watchSandboxExit(ctx context.Context, principal ref.Entity) {
 			)
 		} else {
 			d.recordStartFailure(principal, failureCategorySandboxCrash, exitDescription)
-			crashBackoff = time.Until(d.startFailures[principal].nextRetryAt)
+			failure := d.startFailureFor(principal)
+			crashBackoff = time.Until(failure.nextRetryAt)
 			d.logger.Warn("sandbox crash, backing off before retry",
 				"principal", principal,
 				"exit_code", exitCode,
-				"attempts", d.startFailures[principal].attempts,
-				"retry_at", d.startFailures[principal].nextRetryAt,
+				"attempts", failure.attempts,
+				"retry_at", failure.nextRetryAt,
 			)
 		}
 	}
@@ -2489,7 +2486,7 @@ func (d *Daemon) drainPrincipal(ctx context.Context, principal ref.Entity) error
 	// shutdownCtx (cancelled on daemon shutdown), in tests it's the
 	// test context.
 	drainCtx, drainCancel := context.WithCancel(ctx)
-	d.draining[principal] = drainCancel
+	d.setDraining(principal, drainCancel)
 
 	go func() {
 		select {
@@ -2505,7 +2502,7 @@ func (d *Daemon) drainPrincipal(ctx context.Context, principal ref.Entity) error
 
 		// Check if still draining — watchSandboxExit may have already
 		// cleaned up.
-		if _, stillDraining := d.draining[principal]; !stillDraining {
+		if !d.isDraining(principal) {
 			return
 		}
 
@@ -2568,17 +2565,17 @@ func (d *Daemon) queryLauncherStatus(ctx context.Context) (launcherHash, proxyBi
 }
 
 // adoptPreExistingSandboxes queries the launcher for running sandboxes and
-// pre-populates d.running. Called once during daemon startup, before the
-// initial sync and first reconcile. This handles daemon restart recovery:
-// when the daemon restarts while the launcher continues running, the
-// launcher still has sandbox processes alive. Without this call, reconcile
-// would try to create-sandbox for each desired principal, which the launcher
-// rejects ("already has a running sandbox"), leaving the principal orphaned
-// from daemon management.
+// pre-populates the lifecycle map with phaseRunning entries. Called once
+// during daemon startup, before the initial sync and first reconcile.
+// This handles daemon restart recovery: when the daemon restarts while
+// the launcher continues running, the launcher still has sandbox processes
+// alive. Without this call, reconcile would try to create-sandbox for
+// each desired principal, which the launcher rejects ("already has a
+// running sandbox"), leaving the principal orphaned from daemon management.
 //
 // The actual management goroutines (exit watchers, layout watchers, health
 // monitors) are started later during the first reconcile's "adopt surviving"
-// pass, which detects d.running entries without exit watchers.
+// pass, which detects alive entries without exit watchers.
 func (d *Daemon) adoptPreExistingSandboxes(ctx context.Context) error {
 	response, err := d.launcherRequest(ctx, launcherIPCRequest{
 		Action: ipc.ActionListSandboxes,
@@ -2597,7 +2594,7 @@ func (d *Daemon) adoptPreExistingSandboxes(ctx context.Context) error {
 				"localpart", entry.Localpart, "error", err)
 			continue
 		}
-		d.running[entity] = true
+		d.setRunning(entity)
 		d.notifyStatusChange()
 		d.logger.Info("adopted pre-existing sandbox",
 			"principal", entity,
@@ -2956,7 +2953,7 @@ func (d *Daemon) watchProxyExit(ctx context.Context, principal ref.Entity) {
 	)
 
 	d.reconcileMu.Lock()
-	if !d.running[principal] {
+	if !d.isAlive(principal) {
 		// Already handled by another path (sandbox exit, reconcile, etc.).
 		d.reconcileMu.Unlock()
 		return
@@ -2978,12 +2975,13 @@ func (d *Daemon) watchProxyExit(ctx context.Context, principal ref.Entity) {
 	// dying is always abnormal — without backoff, a crashing proxy
 	// causes the same retry storm as a crashing sandbox.
 	d.recordStartFailure(principal, failureCategoryProxyCrash, fmt.Sprintf("proxy exited with code %d", exitCode))
-	crashBackoff := time.Until(d.startFailures[principal].nextRetryAt)
+	failure := d.startFailureFor(principal)
+	crashBackoff := time.Until(failure.nextRetryAt)
 	d.logger.Warn("proxy crash, backing off before retry",
 		"principal", principal,
 		"exit_code", exitCode,
-		"attempts", d.startFailures[principal].attempts,
-		"retry_at", d.startFailures[principal].nextRetryAt,
+		"attempts", failure.attempts,
+		"retry_at", failure.nextRetryAt,
 	)
 	d.reconcileMu.Unlock()
 
@@ -3007,7 +3005,7 @@ func (d *Daemon) watchProxyExit(ctx context.Context, principal ref.Entity) {
 		}
 	} else {
 		d.reconcileMu.Lock()
-		recovered := d.running[principal]
+		recovered := d.isAlive(principal)
 		d.reconcileMu.Unlock()
 
 		status := schema.ProxyCrashRecovered
@@ -3042,7 +3040,7 @@ func (d *Daemon) watchProxyExit(ctx context.Context, principal ref.Entity) {
 					)
 				} else {
 					d.reconcileMu.Lock()
-					nowRunning := d.running[principal]
+					nowRunning := d.isAlive(principal)
 					d.reconcileMu.Unlock()
 					if nowRunning {
 						if _, err := d.sendEventRetry(d.shutdownCtx, d.configRoomID,

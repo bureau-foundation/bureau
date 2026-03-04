@@ -144,17 +144,13 @@ func TestPublishStatus_SandboxCount(t *testing.T) {
 	daemon, _ := newTestDaemon(t)
 	daemon.runDir = principal.DefaultRunDir
 	daemon.machine, daemon.fleet = testMachineSetup(t, "test", "bureau.local")
-	daemon.running[testEntity(t, daemon.fleet, "iree/amdgpu/pm")] = true
-	daemon.running[testEntity(t, daemon.fleet, "service/stt/whisper")] = true
-	daemon.running[testEntity(t, daemon.fleet, "service/tts/piper")] = true
+	daemon.setRunning(testEntity(t, daemon.fleet, "iree/amdgpu/pm"))
+	daemon.setRunning(testEntity(t, daemon.fleet, "service/stt/whisper"))
+	daemon.setRunning(testEntity(t, daemon.fleet, "service/tts/piper"))
 	daemon.logger = slog.New(slog.NewJSONHandler(os.Stderr, nil))
 
 	// Count running principals the same way collectStatus does.
-	runningCount := 0
-	for range daemon.running {
-		runningCount++
-	}
-	if runningCount != 3 {
+	if runningCount := daemon.aliveCount(); runningCount != 3 {
 		t.Errorf("running count = %d, want 3", runningCount)
 	}
 }

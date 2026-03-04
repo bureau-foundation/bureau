@@ -27,8 +27,8 @@ import (
 
 // waitForDrainComplete advances the daemon's fake clock past the drain
 // grace period and waits for the force-kill goroutine to complete. The
-// principal should be in d.draining after reconcile; this helper triggers
-// the force-kill path and waits for the principal to leave d.running.
+// principal should be draining after reconcile; this helper triggers
+// the force-kill path and waits for the principal to leave the alive set.
 func waitForDrainComplete(t *testing.T, daemon *Daemon, principal ref.Entity) {
 	t.Helper()
 
@@ -39,7 +39,7 @@ func waitForDrainComplete(t *testing.T, daemon *Daemon, principal ref.Entity) {
 	for i := 0; i < 100; i++ {
 		runtime.Gosched()
 		daemon.reconcileMu.Lock()
-		running := daemon.running[principal]
+		running := daemon.isAlive(principal)
 		daemon.reconcileMu.Unlock()
 		if !running {
 			return
@@ -107,7 +107,7 @@ func TestReconcile_StartConditionMet(t *testing.T) {
 	if len(tracker.created) != 1 || tracker.created[0] != "iree/amdgpu/pm" {
 		t.Errorf("expected create-sandbox for iree/amdgpu/pm, got %v", tracker.created)
 	}
-	if !daemon.running[testEntity(t, fleet, "iree/amdgpu/pm")] {
+	if !daemon.isAlive(testEntity(t, fleet, "iree/amdgpu/pm")) {
 		t.Error("principal should be running after start condition is met")
 	}
 }
@@ -164,7 +164,7 @@ func TestReconcile_StartConditionNotMet(t *testing.T) {
 	if len(tracker.created) != 0 {
 		t.Errorf("expected no create-sandbox calls (condition not met), got %v", tracker.created)
 	}
-	if daemon.running[testEntity(t, fleet, "iree/amdgpu/pm")] {
+	if daemon.isAlive(testEntity(t, fleet, "iree/amdgpu/pm")) {
 		t.Error("principal should not be running when start condition is not met")
 	}
 }
@@ -240,7 +240,7 @@ func TestReconcile_StartConditionDeferredThenLaunches(t *testing.T) {
 	if len(tracker.created) != 1 || tracker.created[0] != "iree/amdgpu/pm" {
 		t.Errorf("second reconcile: expected create-sandbox for iree/amdgpu/pm, got %v", tracker.created)
 	}
-	if !daemon.running[testEntity(t, fleet, "iree/amdgpu/pm")] {
+	if !daemon.isAlive(testEntity(t, fleet, "iree/amdgpu/pm")) {
 		t.Error("principal should be running after start condition becomes satisfied")
 	}
 }
@@ -393,7 +393,7 @@ func TestReconcile_StartConditionUnresolvableAlias(t *testing.T) {
 	if len(tracker.created) != 0 {
 		t.Errorf("expected no create-sandbox calls (alias unresolvable), got %v", tracker.created)
 	}
-	if daemon.running[testEntity(t, fleet, "agent/orphan")] {
+	if daemon.isAlive(testEntity(t, fleet, "agent/orphan")) {
 		t.Error("principal should not be running when room alias is unresolvable")
 	}
 }
@@ -479,7 +479,7 @@ func TestReconcile_StartConditionContentMismatch(t *testing.T) {
 	if len(tracker.created) != 1 || tracker.created[0] != "iree/amdgpu/pm" {
 		t.Errorf("second reconcile: expected create-sandbox for iree/amdgpu/pm, got %v", tracker.created)
 	}
-	if !daemon.running[testEntity(t, fleet, "iree/amdgpu/pm")] {
+	if !daemon.isAlive(testEntity(t, fleet, "iree/amdgpu/pm")) {
 		t.Error("principal should be running after content matches")
 	}
 }
@@ -902,7 +902,7 @@ func TestReconcile_RunningPrincipalStoppedWhenConditionFails(t *testing.T) {
 	if len(tracker.created) != 1 || tracker.created[0] != "iree/amdgpu/pm" {
 		t.Fatalf("first reconcile: expected create-sandbox for iree/amdgpu/pm, got %v", tracker.created)
 	}
-	if !daemon.running[testEntity(t, fleet, "iree/amdgpu/pm")] {
+	if !daemon.isAlive(testEntity(t, fleet, "iree/amdgpu/pm")) {
 		t.Fatal("first reconcile: principal should be running")
 	}
 	tracker.mu.Unlock()
@@ -938,7 +938,7 @@ func TestReconcile_RunningPrincipalStoppedWhenConditionFails(t *testing.T) {
 	if len(tracker.destroyed) != 1 || tracker.destroyed[0] != "iree/amdgpu/pm" {
 		t.Errorf("after drain: expected destroy-sandbox for iree/amdgpu/pm, got %v", tracker.destroyed)
 	}
-	if daemon.running[pmEntity] {
+	if daemon.isAlive(pmEntity) {
 		t.Error("principal should no longer be running after drain completed")
 	}
 }
@@ -1012,8 +1012,8 @@ func TestReconcile_ConditionFalseDoesNotStopUnconditionedPrincipal(t *testing.T)
 	if len(tracker.created) != 2 {
 		t.Fatalf("first reconcile: expected 2 create-sandbox calls, got %v", tracker.created)
 	}
-	if !daemon.running[testEntity(t, fleet, "iree/amdgpu/pm")] || !daemon.running[testEntity(t, fleet, "sysadmin/test")] {
-		t.Fatalf("first reconcile: both principals should be running, got %v", daemon.running)
+	if !daemon.isAlive(testEntity(t, fleet, "iree/amdgpu/pm")) || !daemon.isAlive(testEntity(t, fleet, "sysadmin/test")) {
+		t.Fatalf("first reconcile: both principals should be running, alive count: %d", daemon.aliveCount())
 	}
 	tracker.mu.Unlock()
 
@@ -1046,10 +1046,10 @@ func TestReconcile_ConditionFalseDoesNotStopUnconditionedPrincipal(t *testing.T)
 	if len(tracker.destroyed) != 1 || tracker.destroyed[0] != "iree/amdgpu/pm" {
 		t.Errorf("after drain: expected destroy-sandbox for iree/amdgpu/pm only, got %v", tracker.destroyed)
 	}
-	if daemon.running[pmEntity] {
+	if daemon.isAlive(pmEntity) {
 		t.Error("conditioned principal should have been stopped after drain")
 	}
-	if !daemon.running[testEntity(t, fleet, "sysadmin/test")] {
+	if !daemon.isAlive(testEntity(t, fleet, "sysadmin/test")) {
 		t.Error("unconditioned principal should still be running")
 	}
 }
@@ -1161,7 +1161,7 @@ func TestReconcile_TriggerContentPassedToLauncher(t *testing.T) {
 		t.Fatalf("reconcile() error: %v", err)
 	}
 
-	if !daemon.running[testEntity(t, fleet, "iree/amdgpu/inference/teardown")] {
+	if !daemon.isAlive(testEntity(t, fleet, "iree/amdgpu/inference/teardown")) {
 		t.Fatal("teardown principal should be running")
 	}
 
@@ -1276,7 +1276,7 @@ func TestReconcile_NoTriggerContentForUnconditionedPrincipal(t *testing.T) {
 		t.Fatalf("reconcile() error: %v", err)
 	}
 
-	if !daemon.running[testEntity(t, fleet, "agent/always")] {
+	if !daemon.isAlive(testEntity(t, fleet, "agent/always")) {
 		t.Fatal("principal should be running")
 	}
 
@@ -1394,7 +1394,7 @@ func TestReconcile_ArrayContainmentTriggerContent(t *testing.T) {
 		t.Fatalf("reconcile() error: %v", err)
 	}
 
-	if !daemon.running[testEntity(t, fleet, "agent/oncall")] {
+	if !daemon.isAlive(testEntity(t, fleet, "agent/oncall")) {
 		t.Fatal("agent/oncall should be running after array containment match")
 	}
 
@@ -1500,7 +1500,7 @@ func TestReconcile_ArrayContainmentDeferredThenLaunches(t *testing.T) {
 	if len(tracker.created) != 0 {
 		t.Errorf("first reconcile: expected no create-sandbox calls, got %v", tracker.created)
 	}
-	if daemon.running[testEntity(t, fleet, "agent/deployer")] {
+	if daemon.isAlive(testEntity(t, fleet, "agent/deployer")) {
 		t.Error("first reconcile: agent/deployer should not be running")
 	}
 	tracker.mu.Unlock()
@@ -1523,7 +1523,7 @@ func TestReconcile_ArrayContainmentDeferredThenLaunches(t *testing.T) {
 	if len(tracker.created) != 1 || tracker.created[0] != "agent/deployer" {
 		t.Errorf("second reconcile: expected create-sandbox for agent/deployer, got %v", tracker.created)
 	}
-	if !daemon.running[testEntity(t, fleet, "agent/deployer")] {
+	if !daemon.isAlive(testEntity(t, fleet, "agent/deployer")) {
 		t.Error("second reconcile: agent/deployer should be running after array now contains value")
 	}
 }
@@ -1587,7 +1587,7 @@ func TestReconcile_ArrayContainmentRunningPrincipalStopped(t *testing.T) {
 	if len(tracker.created) != 1 || tracker.created[0] != "agent/worker" {
 		t.Fatalf("first reconcile: expected create-sandbox for agent/worker, got %v", tracker.created)
 	}
-	if !daemon.running[testEntity(t, fleet, "agent/worker")] {
+	if !daemon.isAlive(testEntity(t, fleet, "agent/worker")) {
 		t.Fatal("first reconcile: agent/worker should be running")
 	}
 	tracker.mu.Unlock()
@@ -1618,7 +1618,7 @@ func TestReconcile_ArrayContainmentRunningPrincipalStopped(t *testing.T) {
 	if len(tracker.destroyed) != 1 || tracker.destroyed[0] != "agent/worker" {
 		t.Errorf("after drain: expected destroy-sandbox for agent/worker, got %v", tracker.destroyed)
 	}
-	if daemon.running[workerEntity] {
+	if daemon.isAlive(workerEntity) {
 		t.Error("agent/worker should not be running after drain completed")
 	}
 }
@@ -1730,13 +1730,13 @@ func TestReconcile_ArrayContainmentMultiplePrincipals(t *testing.T) {
 		t.Error("agent/backend should NOT have been created (labels does not contain 'backend')")
 	}
 
-	if !daemon.running[testEntity(t, fleet, "agent/bugfixer")] {
+	if !daemon.isAlive(testEntity(t, fleet, "agent/bugfixer")) {
 		t.Error("agent/bugfixer should be running")
 	}
-	if !daemon.running[testEntity(t, fleet, "agent/frontend")] {
+	if !daemon.isAlive(testEntity(t, fleet, "agent/frontend")) {
 		t.Error("agent/frontend should be running")
 	}
-	if daemon.running[testEntity(t, fleet, "agent/backend")] {
+	if daemon.isAlive(testEntity(t, fleet, "agent/backend")) {
 		t.Error("agent/backend should NOT be running")
 	}
 }
@@ -1801,7 +1801,7 @@ func TestReconcile_ArrayContainmentFieldTypeChangesToArray(t *testing.T) {
 	if len(tracker.created) != 1 || tracker.created[0] != "agent/infra" {
 		t.Fatalf("first reconcile: expected create-sandbox for agent/infra, got %v", tracker.created)
 	}
-	if !daemon.running[testEntity(t, fleet, "agent/infra")] {
+	if !daemon.isAlive(testEntity(t, fleet, "agent/infra")) {
 		t.Fatal("first reconcile: agent/infra should be running")
 	}
 	tracker.mu.Unlock()
@@ -1828,7 +1828,7 @@ func TestReconcile_ArrayContainmentFieldTypeChangesToArray(t *testing.T) {
 	if len(tracker.destroyed) != 0 {
 		t.Errorf("second reconcile: should not destroy (condition still met via array), destroyed %v", tracker.destroyed)
 	}
-	if !daemon.running[testEntity(t, fleet, "agent/infra")] {
+	if !daemon.isAlive(testEntity(t, fleet, "agent/infra")) {
 		t.Error("second reconcile: agent/infra should still be running after field became array containing the value")
 	}
 }
@@ -1918,9 +1918,11 @@ func newStartConditionTestDaemon(t *testing.T, matrixState *mockMatrixState, con
 	cleanup := func() {
 		// Cancel any in-flight drain goroutines so they don't leak
 		// after the test's mock launcher socket is closed.
-		for principal, cancel := range daemon.draining {
-			cancel()
-			delete(daemon.draining, principal)
+		for principal, lc := range daemon.lifecycle {
+			if lc.phase == phaseDraining {
+				daemon.cancelDrain(principal)
+				delete(daemon.lifecycle, principal)
+			}
 		}
 		daemon.stopAllHealthMonitors()
 		daemon.stopAllLayoutWatchers()

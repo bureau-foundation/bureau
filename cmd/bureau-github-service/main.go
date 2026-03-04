@@ -46,16 +46,22 @@ func run() error {
 		return err
 	}
 
-	// Resolve the webhook listen address. Defaults to localhost:9876 —
-	// external access requires a reverse proxy or Bureau bridge.
-	webhookAddress := os.Getenv("BUREAU_GITHUB_WEBHOOK_LISTEN")
-	if webhookAddress == "" {
-		webhookAddress = "127.0.0.1:9876"
+	// Resolve the webhook socket path. Set by the template's
+	// EnvironmentVariables (BUREAU_GITHUB_WEBHOOK_SOCKET). The daemon
+	// exposes this socket as the "http" endpoint alongside the CBOR
+	// service socket.
+	webhookSocketPath := os.Getenv("BUREAU_GITHUB_WEBHOOK_SOCKET")
+	if webhookSocketPath == "" {
+		return fmt.Errorf("BUREAU_GITHUB_WEBHOOK_SOCKET is required")
 	}
 
 	boot, cleanup, err := service.BootstrapViaProxy(ctx, service.ProxyBootstrapConfig{
 		Audience:    "github",
 		Description: "GitHub forge connector service",
+		Endpoints: map[string]string{
+			"cbor": "service.sock",
+			"http": "http.sock",
+		},
 	})
 	if err != nil {
 		return err
@@ -113,11 +119,13 @@ func run() error {
 	// subscription manager and entity mapping handlers.
 	webhookHandler := NewWebhookHandler(webhookSecret, boot.Clock, boot.Logger, githubService.handleEvent)
 
-	// Start the HTTP server for webhook ingestion.
+	// Start the HTTP server for webhook ingestion on a Unix socket.
+	// The daemon resolves this as the "http" endpoint and mounts it
+	// into consuming sandboxes (e.g., the webhook-tunnel principal).
 	httpServer := service.NewHTTPServer(service.HTTPServerConfig{
-		Address: webhookAddress,
-		Handler: webhookHandler,
-		Logger:  boot.Logger,
+		SocketPath: webhookSocketPath,
+		Handler:    webhookHandler,
+		Logger:     boot.Logger,
 	})
 
 	httpDone := make(chan error, 1)
@@ -129,7 +137,7 @@ func run() error {
 	select {
 	case <-httpServer.Ready():
 		boot.Logger.Info("webhook listener ready",
-			"address", httpServer.Addr().String(),
+			"socket", webhookSocketPath,
 		)
 	case <-ctx.Done():
 		return ctx.Err()
@@ -153,7 +161,7 @@ func run() error {
 	boot.Logger.Info("github service running",
 		"principal", boot.PrincipalName,
 		"socket", boot.SocketPath,
-		"webhook_address", webhookAddress,
+		"webhook_socket", webhookSocketPath,
 	)
 
 	// Wait for shutdown signal.

@@ -650,6 +650,42 @@ func baseTemplates(templatePrefix string) []namedTemplate {
 				},
 			},
 		},
+
+		// --- Forge connectors ---
+
+		{
+			name: "github-service",
+			content: schema.TemplateContent{
+				Description: "GitHub forge connector for webhook ingestion, forge event streaming, and issue-ticket sync",
+				Inherits:    []string{templatePrefix + ":service-base"},
+				Command:     []string{"bureau-github-service"},
+				EnvironmentVariables: map[string]string{
+					"BUREAU_GITHUB_WEBHOOK_SOCKET": "/run/bureau/listen/http.sock",
+				},
+			},
+		},
+
+		// --- Infrastructure ---
+		//
+		// Templates for infrastructure principals that bridge external
+		// traffic into the Bureau service mesh. These inherit from
+		// base-networked (shared host network for outbound access)
+		// and use RequiredServices + bridge for TCP-to-socket forwarding.
+
+		{
+			name: "webhook-tunnel",
+			content: schema.TemplateContent{
+				Description: "Cloudflare Tunnel for routing external webhook traffic to forge connector services",
+				Inherits:    []string{templatePrefix + ":base-networked"},
+				Command: []string{
+					"bureau-bridge",
+					"--listen", "127.0.0.1:8642",
+					"--socket", "/run/bureau/service/github-http.sock",
+					"--", "cloudflared", "tunnel", "run",
+				},
+				RequiredServices: []string{"github:http"},
+			},
+		},
 	}
 }
 

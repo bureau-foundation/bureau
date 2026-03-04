@@ -14,26 +14,48 @@ import (
 	"log/slog"
 	"net"
 	"net/http"
+	"os"
 	"strings"
 	"time"
 )
 
-// HTTPServer serves HTTP on a TCP listener. Used by forge connectors
-// for webhook ingestion — webhooks arrive as HTTP requests from
-// external forges (GitHub, Forgejo, GitLab). The server manages
-// listener lifecycle and graceful shutdown; the caller provides the
-// http.Handler (routing, signature verification, payload processing).
+// HTTPServer serves HTTP on either a TCP listener or a Unix domain
+// socket. Used by forge connectors for webhook ingestion and by the
+// model service for OpenAI-compatible HTTP endpoints. The server
+// manages listener lifecycle and graceful shutdown; the caller
+// provides the http.Handler (routing, signature verification,
+// payload processing).
 //
 // Follows the same lifecycle pattern as SocketServer: Serve(ctx)
 // blocks until the context is cancelled and active requests drain.
 type HTTPServer struct {
-	address string
-	handler http.Handler
-	logger  *slog.Logger
+	address    string
+	socketPath string
+	handler    http.Handler
+	logger     *slog.Logger
 
 	// shutdownTimeout is the maximum time to wait for active
 	// requests to complete after the context is cancelled.
 	shutdownTimeout time.Duration
+
+	// readTimeout overrides the default ReadTimeout on the
+	// underlying http.Server. Zero means no timeout. Negative
+	// values are treated as zero (no timeout).
+	readTimeout time.Duration
+
+	// writeTimeout overrides the default WriteTimeout on the
+	// underlying http.Server. Zero means no timeout.
+	writeTimeout time.Duration
+
+	// idleTimeout overrides the default IdleTimeout on the
+	// underlying http.Server. Zero means no timeout.
+	idleTimeout time.Duration
+
+	// hasReadTimeout distinguishes "caller set 0" (no timeout)
+	// from "caller didn't set anything" (use default).
+	hasReadTimeout  bool
+	hasWriteTimeout bool
+	hasIdleTimeout  bool
 
 	// ready is closed after the listener is bound and the server
 	// is accepting connections.
@@ -47,8 +69,16 @@ type HTTPServer struct {
 // HTTPServerConfig configures an HTTPServer.
 type HTTPServerConfig struct {
 	// Address is the TCP listen address (e.g., ":8080",
-	// "127.0.0.1:9000"). Required.
+	// "127.0.0.1:9000"). Mutually exclusive with SocketPath —
+	// exactly one must be set.
 	Address string
+
+	// SocketPath is the Unix domain socket path. The server
+	// removes any stale socket at this path before binding, sets
+	// permissions to 0770 (group-writable for setgid directories),
+	// and removes the socket on shutdown. Mutually exclusive with
+	// Address — exactly one must be set.
+	SocketPath string
 
 	// Handler is the HTTP handler for incoming requests. Required.
 	Handler http.Handler
@@ -58,15 +88,32 @@ type HTTPServerConfig struct {
 	// 10 seconds if zero.
 	ShutdownTimeout time.Duration
 
+	// ReadTimeout overrides the default 30s ReadTimeout on the
+	// http.Server. Set to a negative value to disable (0 uses the
+	// default). Services with long-lived streaming responses (SSE)
+	// should set this to -1.
+	ReadTimeout time.Duration
+
+	// WriteTimeout overrides the default 30s WriteTimeout. Set to
+	// a negative value to disable. Same SSE caveat as ReadTimeout.
+	WriteTimeout time.Duration
+
+	// IdleTimeout overrides the default 60s IdleTimeout. Set to a
+	// negative value to disable.
+	IdleTimeout time.Duration
+
 	// Logger is the structured logger. Required.
 	Logger *slog.Logger
 }
 
 // NewHTTPServer creates a server that will listen on the configured
-// TCP address. Call Serve to start accepting connections.
+// address or Unix socket. Call Serve to start accepting connections.
 func NewHTTPServer(config HTTPServerConfig) *HTTPServer {
-	if config.Address == "" {
-		panic("service.HTTPServer: Address is required")
+	if config.Address == "" && config.SocketPath == "" {
+		panic("service.HTTPServer: one of Address or SocketPath is required")
+	}
+	if config.Address != "" && config.SocketPath != "" {
+		panic("service.HTTPServer: Address and SocketPath are mutually exclusive")
 	}
 	if config.Handler == nil {
 		panic("service.HTTPServer: Handler is required")
@@ -82,9 +129,16 @@ func NewHTTPServer(config HTTPServerConfig) *HTTPServer {
 
 	return &HTTPServer{
 		address:         config.Address,
+		socketPath:      config.SocketPath,
 		handler:         config.Handler,
 		logger:          config.Logger,
 		shutdownTimeout: timeout,
+		readTimeout:     config.ReadTimeout,
+		writeTimeout:    config.WriteTimeout,
+		idleTimeout:     config.IdleTimeout,
+		hasReadTimeout:  config.ReadTimeout != 0,
+		hasWriteTimeout: config.WriteTimeout != 0,
+		hasIdleTimeout:  config.IdleTimeout != 0,
 		ready:           make(chan struct{}),
 	}
 }
@@ -107,28 +161,51 @@ func (s *HTTPServer) Addr() net.Addr {
 // connections and waits up to ShutdownTimeout for active requests
 // to complete.
 func (s *HTTPServer) Serve(ctx context.Context) error {
-	// Bind the listener early so we can extract the resolved
-	// address and signal readiness before entering the serve loop.
-	listener, err := net.Listen("tcp", s.address)
+	listener, err := s.listen()
 	if err != nil {
-		return fmt.Errorf("listening on %s: %w", s.address, err)
+		return err
 	}
 	s.addr = listener.Addr()
 	close(s.ready)
 
-	server := &http.Server{
-		Handler: s.handler,
-
-		// Timeouts protect against slow clients holding
-		// connections open. Webhook payloads are small (typically
-		// < 100KB) so generous timeouts are fine.
-		ReadHeaderTimeout: 10 * time.Second,
-		ReadTimeout:       30 * time.Second,
-		WriteTimeout:      30 * time.Second,
-		IdleTimeout:       60 * time.Second,
+	// Apply timeout defaults. Negative config values disable the
+	// timeout (set to 0). When the caller didn't set a value at
+	// all (hasXxxTimeout is false), use sensible defaults.
+	readTimeout := 30 * time.Second
+	if s.hasReadTimeout {
+		readTimeout = s.readTimeout
+		if readTimeout < 0 {
+			readTimeout = 0
+		}
+	}
+	writeTimeout := 30 * time.Second
+	if s.hasWriteTimeout {
+		writeTimeout = s.writeTimeout
+		if writeTimeout < 0 {
+			writeTimeout = 0
+		}
+	}
+	idleTimeout := 60 * time.Second
+	if s.hasIdleTimeout {
+		idleTimeout = s.idleTimeout
+		if idleTimeout < 0 {
+			idleTimeout = 0
+		}
 	}
 
-	s.logger.Info("http server listening", "address", s.addr.String())
+	server := &http.Server{
+		Handler:           s.handler,
+		ReadHeaderTimeout: 10 * time.Second,
+		ReadTimeout:       readTimeout,
+		WriteTimeout:      writeTimeout,
+		IdleTimeout:       idleTimeout,
+	}
+
+	if s.socketPath != "" {
+		s.logger.Info("http server listening", "socket", s.socketPath)
+	} else {
+		s.logger.Info("http server listening", "address", s.addr.String())
+	}
 
 	// Serve in a goroutine so we can wait for the context.
 	serveDone := make(chan error, 1)
@@ -162,8 +239,45 @@ func (s *HTTPServer) Serve(ctx context.Context) error {
 		return fmt.Errorf("http server shutdown: %w", err)
 	}
 
+	// Remove the socket file after shutdown so stale sockets don't
+	// confuse future startups or other processes.
+	if s.socketPath != "" {
+		os.Remove(s.socketPath)
+	}
+
 	s.logger.Info("http server stopped")
 	return nil
+}
+
+// listen creates and returns the net.Listener for this server. For
+// Unix sockets: removes stale socket files, binds, and sets 0770
+// permissions (group-writable for setgid directories — connect()
+// on Unix domain sockets requires write permission).
+func (s *HTTPServer) listen() (net.Listener, error) {
+	if s.socketPath != "" {
+		// Remove stale socket file from a previous run.
+		if err := os.Remove(s.socketPath); err != nil && !os.IsNotExist(err) {
+			return nil, fmt.Errorf("removing stale HTTP socket %s: %w", s.socketPath, err)
+		}
+
+		listener, err := net.Listen("unix", s.socketPath)
+		if err != nil {
+			return nil, fmt.Errorf("listening on HTTP socket %s: %w", s.socketPath, err)
+		}
+
+		if err := os.Chmod(s.socketPath, 0770); err != nil {
+			listener.Close()
+			return nil, fmt.Errorf("setting HTTP socket permissions on %s: %w", s.socketPath, err)
+		}
+
+		return listener, nil
+	}
+
+	listener, err := net.Listen("tcp", s.address)
+	if err != nil {
+		return nil, fmt.Errorf("listening on %s: %w", s.address, err)
+	}
+	return listener, nil
 }
 
 // --- Webhook signature verification ---

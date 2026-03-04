@@ -15,7 +15,6 @@ import (
 	"net"
 	"net/http"
 	"net/url"
-	"os"
 	"strings"
 	"time"
 
@@ -822,71 +821,4 @@ func isHopByHopHeader(name string) bool {
 // formatTraceparent builds a W3C Trace Context traceparent header.
 func formatTraceparent(traceID telemetry.TraceID, spanID telemetry.SpanID) string {
 	return fmt.Sprintf("00-%s-%s-01", traceID.String(), spanID.String())
-}
-
-// --- HTTP socket server ---
-
-// serveHTTPSocket serves an HTTP handler on a Unix socket. Blocks
-// until ctx is cancelled, then performs graceful shutdown. Follows
-// the same lifecycle pattern as service.SocketServer.Serve.
-func serveHTTPSocket(ctx context.Context, socketPath string, handler http.Handler, logger *slog.Logger) error {
-	// Remove stale socket file.
-	if err := os.Remove(socketPath); err != nil && !os.IsNotExist(err) {
-		return fmt.Errorf("removing stale HTTP socket %s: %w", socketPath, err)
-	}
-
-	listener, err := net.Listen("unix", socketPath)
-	if err != nil {
-		return fmt.Errorf("listening on HTTP socket %s: %w", socketPath, err)
-	}
-	defer func() {
-		listener.Close()
-		os.Remove(socketPath)
-	}()
-
-	// Make the socket group-writable for the same reason as the CBOR
-	// socket — Unix domain socket connect() requires write permission,
-	// and the socket inherits the directory's setgid group.
-	if err := os.Chmod(socketPath, 0770); err != nil {
-		return fmt.Errorf("setting HTTP socket permissions on %s: %w", socketPath, err)
-	}
-
-	server := &http.Server{
-		Handler:           handler,
-		ReadHeaderTimeout: 10 * time.Second,
-		// No ReadTimeout or WriteTimeout — SSE streams are long-lived.
-		IdleTimeout: 120 * time.Second,
-	}
-
-	logger.Info("http proxy listening", "path", socketPath)
-
-	// Serve in a goroutine so we can wait for the context.
-	serveDone := make(chan error, 1)
-	go func() {
-		if err := server.Serve(listener); err != nil && !errors.Is(err, http.ErrServerClosed) {
-			serveDone <- err
-		}
-		close(serveDone)
-	}()
-
-	// Wait for context cancellation.
-	select {
-	case <-ctx.Done():
-		logger.Info("http proxy shutting down")
-	case err := <-serveDone:
-		if err != nil {
-			return err
-		}
-		return nil
-	}
-
-	// Graceful shutdown.
-	shutdownCtx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
-	defer cancel()
-	if err := server.Shutdown(shutdownCtx); err != nil {
-		return fmt.Errorf("http proxy shutdown: %w", err)
-	}
-
-	logger.Info("http proxy stopped")
-	return nil
 }

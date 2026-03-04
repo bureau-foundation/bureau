@@ -11,7 +11,10 @@ import (
 	"fmt"
 	"io"
 	"log/slog"
+	"net"
 	"net/http"
+	"os"
+	"path/filepath"
 	"strings"
 	"testing"
 	"time"
@@ -182,6 +185,85 @@ func TestHTTPServerLifecycle(t *testing.T) {
 	}
 }
 
+func TestHTTPServerUnixSocket(t *testing.T) {
+	logger := slog.New(slog.NewTextHandler(io.Discard, nil))
+
+	handler := http.HandlerFunc(func(writer http.ResponseWriter, request *http.Request) {
+		writer.WriteHeader(http.StatusOK)
+		fmt.Fprintf(writer, "unix-ok")
+	})
+
+	socketPath := filepath.Join(t.TempDir(), "http.sock")
+
+	server := NewHTTPServer(HTTPServerConfig{
+		SocketPath:      socketPath,
+		Handler:         handler,
+		ShutdownTimeout: 2 * time.Second,
+		Logger:          logger,
+	})
+
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+
+	serveDone := make(chan error, 1)
+	go func() {
+		serveDone <- server.Serve(ctx)
+	}()
+
+	select {
+	case <-server.Ready():
+	case <-t.Context().Done():
+		t.Fatal("server did not become ready before test deadline")
+	}
+
+	// Verify the socket file exists and has the expected permissions.
+	info, err := os.Stat(socketPath)
+	if err != nil {
+		t.Fatalf("socket file stat: %v", err)
+	}
+	if info.Mode().Perm() != 0770 {
+		t.Errorf("socket permissions = %o, want 0770", info.Mode().Perm())
+	}
+
+	// Make a request via the Unix socket.
+	client := &http.Client{
+		Transport: &http.Transport{
+			DialContext: func(_ context.Context, _, _ string) (net.Conn, error) {
+				return net.Dial("unix", socketPath)
+			},
+		},
+	}
+	response, err := client.Get("http://localhost/test")
+	if err != nil {
+		t.Fatalf("GET /test via unix socket: %v", err)
+	}
+	defer response.Body.Close()
+	if response.StatusCode != http.StatusOK {
+		t.Errorf("GET /test status = %d, want 200", response.StatusCode)
+	}
+	responseBody, _ := io.ReadAll(response.Body)
+	if string(responseBody) != "unix-ok" {
+		t.Errorf("GET /test body = %q, want %q", responseBody, "unix-ok")
+	}
+
+	// Cancel the context to trigger shutdown.
+	cancel()
+
+	select {
+	case err := <-serveDone:
+		if err != nil {
+			t.Errorf("Serve() = %v, want nil", err)
+		}
+	case <-t.Context().Done():
+		t.Fatal("server did not shut down before test deadline")
+	}
+
+	// Verify the socket file was removed after shutdown.
+	if _, err := os.Stat(socketPath); !os.IsNotExist(err) {
+		t.Error("socket file still exists after shutdown")
+	}
+}
+
 func TestHTTPServerPanicsOnMissingConfig(t *testing.T) {
 	logger := slog.New(slog.NewTextHandler(io.Discard, nil))
 	handler := http.HandlerFunc(func(http.ResponseWriter, *http.Request) {})
@@ -191,8 +273,12 @@ func TestHTTPServerPanicsOnMissingConfig(t *testing.T) {
 		config HTTPServerConfig
 	}{
 		{
-			name:   "missing_address",
+			name:   "missing_address_and_socket",
 			config: HTTPServerConfig{Handler: handler, Logger: logger},
+		},
+		{
+			name:   "both_address_and_socket",
+			config: HTTPServerConfig{Address: ":0", SocketPath: "/tmp/test.sock", Handler: handler, Logger: logger},
 		},
 		{
 			name:   "missing_handler",

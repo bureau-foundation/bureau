@@ -85,9 +85,17 @@ func run() error {
 	var httpDone chan error
 	if httpSocketPath != "" {
 		proxy := newHTTPProxy(modelService, boot.AuthConfig)
+		httpServer := service.NewHTTPServer(service.HTTPServerConfig{
+			SocketPath:   httpSocketPath,
+			Handler:      proxy,
+			ReadTimeout:  -1, // SSE streams are long-lived
+			WriteTimeout: -1,
+			IdleTimeout:  120 * time.Second,
+			Logger:       boot.Logger,
+		})
 		httpDone = make(chan error, 1)
 		go func() {
-			httpDone <- serveHTTPSocket(ctx, httpSocketPath, proxy, boot.Logger)
+			httpDone <- httpServer.Serve(ctx)
 		}()
 	}
 

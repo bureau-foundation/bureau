@@ -2916,10 +2916,19 @@ func TestValidateCommandBinary(t *testing.T) {
 		t.Fatalf("writing test binary: %v", err)
 	}
 
+	// Create a mount source directory with a binary, simulating a
+	// template mount that maps a host directory to a sandbox path.
+	mountSourceDir := t.TempDir()
+	mountBinary := filepath.Join(mountSourceDir, "claude")
+	if err := os.WriteFile(mountBinary, []byte("#!/bin/sh\n"), 0755); err != nil {
+		t.Fatalf("writing mount binary: %v", err)
+	}
+
 	tests := []struct {
 		name            string
 		command         string
 		environmentPath string
+		mounts          []schema.TemplateMount
 		wantError       bool
 		wantSubstring   string
 	}{
@@ -2945,13 +2954,47 @@ func TestValidateCommandBinary(t *testing.T) {
 			wantError: false,
 		},
 		{
-			name:      "absolute path exists",
+			name:      "absolute path exists on host",
 			command:   "/bin/sh",
 			wantError: false,
 		},
 		{
-			name:          "absolute path missing",
+			name:          "absolute path missing everywhere",
 			command:       "/nonexistent/binary",
+			wantError:     true,
+			wantSubstring: "not found",
+		},
+		{
+			name:    "absolute path provided by directory mount",
+			command: "/usr/local/bin/claude",
+			mounts: []schema.TemplateMount{
+				{Source: mountSourceDir, Dest: "/usr/local/bin", Mode: schema.MountModeRO},
+			},
+			wantError: false,
+		},
+		{
+			name:    "absolute path provided by exact file mount",
+			command: "/opt/tools/agent",
+			mounts: []schema.TemplateMount{
+				{Source: mountBinary, Dest: "/opt/tools/agent", Mode: schema.MountModeRO},
+			},
+			wantError: false,
+		},
+		{
+			name:    "absolute path mount exists but source binary missing",
+			command: "/usr/local/bin/nonexistent",
+			mounts: []schema.TemplateMount{
+				{Source: mountSourceDir, Dest: "/usr/local/bin", Mode: schema.MountModeRO},
+			},
+			wantError:     true,
+			wantSubstring: "not found",
+		},
+		{
+			name:    "absolute path with tmpfs mount does not resolve",
+			command: "/tmp/something",
+			mounts: []schema.TemplateMount{
+				{Dest: "/tmp", Type: "tmpfs"},
+			},
 			wantError:     true,
 			wantSubstring: "not found",
 		},
@@ -2979,13 +3022,13 @@ func TestValidateCommandBinary(t *testing.T) {
 	for _, test := range tests {
 		t.Run(test.name, func(t *testing.T) {
 			t.Parallel()
-			err := validateCommandBinary(test.command, test.environmentPath)
+			err := validateCommandBinary(test.command, test.environmentPath, test.mounts)
 			if test.wantError && err == nil {
-				t.Errorf("validateCommandBinary(%q, %q) = nil, want error containing %q",
+				t.Errorf("validateCommandBinary(%q, %q, mounts) = nil, want error containing %q",
 					test.command, test.environmentPath, test.wantSubstring)
 			}
 			if !test.wantError && err != nil {
-				t.Errorf("validateCommandBinary(%q, %q) = %v, want nil",
+				t.Errorf("validateCommandBinary(%q, %q, mounts) = %v, want nil",
 					test.command, test.environmentPath, err)
 			}
 			if test.wantError && err != nil && test.wantSubstring != "" {
@@ -3080,6 +3123,24 @@ func TestEnsureCommandBinaryMounted(t *testing.T) {
 		ensureCommandBinaryMounted(spec)
 		if len(spec.Filesystem) != 1 {
 			t.Errorf("expected exactly 1 filesystem mount, got %d", len(spec.Filesystem))
+		}
+	})
+
+	t.Run("absolute path under remapped directory mount skips", func(t *testing.T) {
+		t.Parallel()
+		// Template mount maps a host directory to a different sandbox
+		// path (Source != Dest). The command is under the Dest path,
+		// so it's already covered inside the sandbox.
+		spec := &schema.SandboxSpec{
+			Command: []string{"/usr/local/bin/bureau-test-binary"},
+			Filesystem: []schema.TemplateMount{
+				{Source: tempDir, Dest: "/usr/local/bin", Mode: schema.MountModeRO},
+			},
+		}
+		ensureCommandBinaryMounted(spec)
+		if len(spec.Filesystem) != 1 {
+			t.Errorf("expected exactly 1 filesystem mount (the existing one), got %d: %v",
+				len(spec.Filesystem), spec.Filesystem)
 		}
 	})
 
@@ -3185,7 +3246,7 @@ func TestReconcileCommandBinaryValidationBlocksCreate(t *testing.T) {
 	t.Cleanup(daemon.stopAllHealthMonitors)
 
 	// Override the validator to reject the binary.
-	daemon.validateCommandFunc = func(command string, environmentPath string) error {
+	daemon.validateCommandFunc = func(command string, environmentPath string, _ []schema.TemplateMount) error {
 		if command == "missing-agent-binary" {
 			return fmt.Errorf("%q not found on PATH", command)
 		}

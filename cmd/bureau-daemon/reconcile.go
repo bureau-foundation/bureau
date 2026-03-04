@@ -537,7 +537,7 @@ func (d *Daemon) reconcile(ctx context.Context) error {
 		// PATH. Shell interpreters (sh, bash) are always available
 		// inside the sandbox and don't need host-side validation.
 		if sandboxSpec != nil && len(sandboxSpec.Command) > 0 {
-			if err := d.validateCommandFunc(sandboxSpec.Command[0], sandboxSpec.EnvironmentPath); err != nil {
+			if err := d.validateCommandFunc(sandboxSpec.Command[0], sandboxSpec.EnvironmentPath, sandboxSpec.Filesystem); err != nil {
 				templateName := assignment.Template
 				d.logger.Error("command binary not found",
 					"principal", principal,
@@ -3122,7 +3122,12 @@ var shellInterpreters = map[string]bool{
 // inside the sandbox). For host-resolved commands, exec.LookPath is used.
 // Shell interpreters are skipped since they are always available in the
 // sandbox's minimal /usr mount.
-func validateCommandBinary(command string, environmentPath string) error {
+//
+// For absolute paths that don't exist on the host, the function checks whether
+// a template mount makes the path available inside the sandbox (e.g., a mount
+// with Dest=/usr/local/bin and Source=/cache/bin would make /usr/local/bin/claude
+// valid if /cache/bin/claude exists on the host).
+func validateCommandBinary(command string, environmentPath string, mounts []schema.TemplateMount) error {
 	if command == "" {
 		return fmt.Errorf("command is empty")
 	}
@@ -3132,14 +3137,21 @@ func validateCommandBinary(command string, environmentPath string) error {
 		return nil
 	}
 
-	// Absolute paths: check the file directly. If the path is inside a
-	// Nix store, the prefetchEnvironment step already confirmed the
-	// closure exists on disk.
+	// Absolute paths: check the file directly. If it doesn't exist on
+	// the host, check whether a template mount makes it available inside
+	// the sandbox. If the path is inside a Nix store, the
+	// prefetchEnvironment step already confirmed the closure exists on
+	// disk.
 	if filepath.IsAbs(command) {
-		if _, err := os.Stat(command); err != nil {
-			return fmt.Errorf("%q not found: %w", command, err)
+		if _, err := os.Stat(command); err == nil {
+			return nil
 		}
-		return nil
+		if hostPath, ok := resolveCommandViaMounts(command, mounts); ok {
+			if _, err := os.Stat(hostPath); err == nil {
+				return nil
+			}
+		}
+		return fmt.Errorf("%q not found on host or via sandbox mounts", command)
 	}
 
 	// Bare command name: check the Nix environment first (if present),
@@ -3159,6 +3171,28 @@ func validateCommandBinary(command string, environmentPath string) error {
 	}
 
 	return nil
+}
+
+// resolveCommandViaMounts checks whether any template mount makes the given
+// absolute sandbox path available, and returns the corresponding host-side
+// path. For example, if command is /usr/local/bin/claude and a mount maps
+// Source=/cache/bin → Dest=/usr/local/bin, this returns /cache/bin/claude.
+func resolveCommandViaMounts(command string, mounts []schema.TemplateMount) (string, bool) {
+	for _, mount := range mounts {
+		if mount.Source == "" || mount.Type == "tmpfs" {
+			continue
+		}
+		// Exact file mount: Dest matches the command path exactly.
+		if mount.Dest == command {
+			return mount.Source, true
+		}
+		// Directory mount: command is under the mount destination.
+		if strings.HasPrefix(command, mount.Dest+"/") {
+			relative := command[len(mount.Dest):]
+			return mount.Source + relative, true
+		}
+	}
+	return "", false
 }
 
 // ensureCommandBinaryMounted resolves the command binary to an absolute path
@@ -3208,16 +3242,19 @@ func ensureCommandBinaryMounted(spec *schema.SandboxSpec) {
 	}
 
 	// Check if the binary is already covered by an existing mount.
+	// We check mount.Dest (the sandbox-side path) because that's where
+	// the binary will be visible inside the sandbox. Template mounts
+	// can have Source != Dest (e.g., Source=/cache/bin → Dest=/usr/local/bin).
 	for _, mount := range spec.Filesystem {
 		if mount.Source == "" || mount.Type == "tmpfs" {
 			continue
 		}
 		// Exact file mount.
-		if mount.Source == resolvedPath {
+		if mount.Dest == resolvedPath {
 			return
 		}
 		// Directory mount that contains the binary.
-		if strings.HasPrefix(resolvedPath, mount.Source+"/") {
+		if strings.HasPrefix(resolvedPath, mount.Dest+"/") {
 			return
 		}
 	}

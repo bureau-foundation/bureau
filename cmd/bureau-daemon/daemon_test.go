@@ -98,7 +98,7 @@ func newTestDaemon(t *testing.T) (*Daemon, *clock.FakeClock) {
 		layoutWatchers:        make(map[ref.Entity]*layoutWatcher),
 		tunnels:               make(map[string]*tunnelInstance),
 		activeServiceTunnels:  make(map[string]bool),
-		validateCommandFunc:   func(string, string) error { return nil },
+		validateCommandFunc:   func(string, string, []schema.TemplateMount) error { return nil },
 	}
 	return daemon, fakeClock
 }

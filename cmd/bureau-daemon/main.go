@@ -909,7 +909,7 @@ type Daemon struct {
 	// before sending a create-sandbox request to the launcher. Defaults
 	// to validateCommandBinary. Tests override this when using fictional
 	// binary paths that don't need to exist on the host.
-	validateCommandFunc func(command string, environmentPath string) error
+	validateCommandFunc func(command string, environmentPath string, mounts []schema.TemplateMount) error
 
 	// collectStatusFunc assembles a MachineStatus for the heartbeat
 	// loop. Defaults to nil, which means statusLoop calls the real

@@ -58,7 +58,7 @@ Requires a reachable fleet controller.`,
 		Output:         func() any { return &serviceInstancesResult{} },
 		RequiredGrants: []string{"command/service/instances"},
 		Annotations:    cli.ReadOnly(),
-		Run: requireLocalpart("bureau service instances <localpart> [flags]", func(ctx context.Context, localpart string, logger *slog.Logger) error {
+		Run: cli.RequireLocalpart("service", "bureau service instances <localpart> [flags]", func(ctx context.Context, localpart string, logger *slog.Logger) error {
 			return runInstances(ctx, localpart, logger, params)
 		}),
 	}

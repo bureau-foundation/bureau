@@ -14,16 +14,13 @@ import (
 	"github.com/bureau-foundation/bureau/cmd/bureau/cli"
 	"github.com/bureau-foundation/bureau/cmd/bureau/fleet"
 	"github.com/bureau-foundation/bureau/lib/principal"
-	"github.com/bureau-foundation/bureau/lib/ref"
 )
 
 type serviceListParams struct {
 	cli.SessionConfig
+	cli.FleetScope
 	fleet.FleetConnection
 	cli.JSONOutput
-	Machine    string `json:"machine"     flag:"machine"     desc:"filter to a specific machine (optional — lists all machines if omitted)"`
-	Fleet      string `json:"fleet"       flag:"fleet"       desc:"fleet prefix (e.g., bureau/fleet/prod) — required when --machine is omitted"`
-	ServerName string `json:"server_name" flag:"server-name" desc:"Matrix server name (auto-detected from machine.conf)"`
 }
 
 // serviceListEntry is a single row in the unified list output.
@@ -83,12 +80,9 @@ as unplaced entries. Both sources are required.`,
 }
 
 func runList(ctx context.Context, logger *slog.Logger, params serviceListParams) error {
-	params.ServerName = cli.ResolveServerName(params.ServerName)
-	params.Fleet = cli.ResolveFleet(params.Fleet)
-
-	serverName, err := ref.ParseServerName(params.ServerName)
+	scope, err := params.FleetScope.Resolve()
 	if err != nil {
-		return cli.Validation("invalid --server-name %q: %w", params.ServerName, err)
+		return err
 	}
 
 	ctx, cancel := context.WithTimeout(ctx, 30*time.Second)
@@ -100,22 +94,8 @@ func runList(ctx context.Context, logger *slog.Logger, params serviceListParams)
 	}
 	defer session.Close()
 
-	var machine ref.Machine
-	var fleetRef ref.Fleet
-	if params.Machine != "" {
-		machine, err = ref.ParseMachine(params.Machine, serverName)
-		if err != nil {
-			return cli.Validation("invalid machine: %v", err)
-		}
-	} else {
-		fleetRef, err = ref.ParseFleet(params.Fleet, serverName)
-		if err != nil {
-			return cli.Validation("invalid fleet: %v", err)
-		}
-	}
-
 	// Matrix scan: ground truth of what's deployed.
-	locations, machineCount, err := principal.List(ctx, session, machine, fleetRef)
+	locations, machineCount, err := principal.List(ctx, session, scope.Machine, scope.Fleet)
 	if err != nil {
 		return cli.Internal("list services: %w", err)
 	}

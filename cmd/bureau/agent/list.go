@@ -13,17 +13,14 @@ import (
 
 	"github.com/bureau-foundation/bureau/cmd/bureau/cli"
 	"github.com/bureau-foundation/bureau/lib/principal"
-	"github.com/bureau-foundation/bureau/lib/ref"
 	agentschema "github.com/bureau-foundation/bureau/lib/schema/agent"
 	"github.com/bureau-foundation/bureau/messaging"
 )
 
 type agentListParams struct {
 	cli.SessionConfig
+	cli.FleetScope
 	cli.JSONOutput
-	Machine    string `json:"machine"     flag:"machine"     desc:"filter to a specific machine (optional — lists all machines if omitted)"`
-	Fleet      string `json:"fleet"       flag:"fleet"       desc:"fleet prefix (e.g., bureau/fleet/prod) — required when --machine is omitted"`
-	ServerName string `json:"server_name" flag:"server-name" desc:"Matrix server name (auto-detected from machine.conf)"`
 }
 
 // agentListEntry is a single row in the list output.
@@ -83,12 +80,9 @@ Each agent's status is enriched from agent service state events (best-effort):
 }
 
 func runList(ctx context.Context, logger *slog.Logger, params agentListParams) error {
-	params.ServerName = cli.ResolveServerName(params.ServerName)
-	params.Fleet = cli.ResolveFleet(params.Fleet)
-
-	serverName, err := ref.ParseServerName(params.ServerName)
+	scope, err := params.FleetScope.Resolve()
 	if err != nil {
-		return cli.Validation("invalid --server-name %q: %w", params.ServerName, err)
+		return err
 	}
 
 	ctx, cancel := context.WithTimeout(ctx, 30*time.Second)
@@ -100,25 +94,7 @@ func runList(ctx context.Context, logger *slog.Logger, params agentListParams) e
 	}
 	defer session.Close()
 
-	var machine ref.Machine
-	if params.Machine != "" {
-		machine, err = ref.ParseMachine(params.Machine, serverName)
-		if err != nil {
-			return cli.Validation("invalid machine: %v", err)
-		}
-	}
-
-	var fleet ref.Fleet
-	if machine.IsZero() {
-		fleet, err = ref.ParseFleet(params.Fleet, serverName)
-		if err != nil {
-			return cli.Validation("invalid fleet: %v", err)
-		}
-	} else {
-		fleet = machine.Fleet()
-	}
-
-	locations, machineCount, err := principal.List(ctx, session, machine, fleet)
+	locations, machineCount, err := principal.List(ctx, session, scope.Machine, scope.Fleet)
 	if err != nil {
 		return cli.Internal("list agents: %w", err)
 	}

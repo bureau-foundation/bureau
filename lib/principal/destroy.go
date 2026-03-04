@@ -54,3 +54,14 @@ func Destroy(ctx context.Context, session messaging.Session, configRoomID ref.Ro
 
 	return &DestroyResult{ConfigEventID: eventID}, nil
 }
+
+// PurgeCredentials clears the credential bundle for a principal by
+// publishing empty content to the m.bureau.credentials state event.
+// This is a separate operation from Destroy because the caller may want
+// to keep credentials around for re-provisioning (destroy without purge)
+// or may want to purge without destroying the assignment (credential
+// rotation).
+func PurgeCredentials(ctx context.Context, session messaging.Session, configRoomID ref.RoomID, localpart string) error {
+	_, err := session.SendStateEvent(ctx, configRoomID, schema.EventTypeCredentials, localpart, struct{}{})
+	return err
+}

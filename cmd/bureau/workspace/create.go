@@ -245,39 +245,11 @@ func runCreate(ctx context.Context, logger *slog.Logger, params createParams) er
 		return err
 	}
 
-	// Read the credential file for the registration token. Workspace
-	// creation registers Matrix accounts for each principal (setup,
-	// agents, teardown) and provisions encrypted credentials.
-	if params.SessionConfig.CredentialFile == "" {
-		return cli.Validation("--credential-file is required")
-	}
-	credentials, err := cli.ReadCredentialFile(params.SessionConfig.CredentialFile)
-	if err != nil {
-		return cli.Internal("read credential file: %w", err)
-	}
-	registrationToken := credentials["MATRIX_REGISTRATION_TOKEN"]
-	if registrationToken == "" {
-		return cli.Validation("credential file missing MATRIX_REGISTRATION_TOKEN").
-			WithHint("The credential file must contain MATRIX_REGISTRATION_TOKEN. " +
-				"Re-run 'bureau matrix setup' to regenerate the credential file.")
-	}
-	registrationTokenBuffer, err := secret.NewFromString(registrationToken)
-	if err != nil {
-		return cli.Internal("protecting registration token: %w", err)
-	}
-	defer registrationTokenBuffer.Close()
-
-	homeserverURL, err := params.SessionConfig.ResolveHomeserverURL()
+	reg, err := cli.NewRegistrationContext(&params.SessionConfig)
 	if err != nil {
 		return err
 	}
-
-	matrixClient, err := messaging.NewClient(messaging.ClientConfig{
-		HomeserverURL: homeserverURL,
-	})
-	if err != nil {
-		return cli.Internal("create matrix client: %w", err)
-	}
+	defer reg.Close()
 
 	ctx, cancel := context.WithTimeout(ctx, 60*time.Second)
 	defer cancel()
@@ -304,9 +276,9 @@ func runCreate(ctx context.Context, logger *slog.Logger, params createParams) er
 		Params:                    paramMap,
 		AgentCount:                params.AgentCount,
 		DevTeam:                   params.DevTeam,
-		Client:                    matrixClient,
-		RegistrationToken:         registrationTokenBuffer,
-		HomeserverURL:             homeserverURL,
+		Client:                    reg.Client,
+		RegistrationToken:         reg.Token,
+		HomeserverURL:             reg.HomeserverURL,
 		MachineRoomID:             machineRoomID,
 		ExtraCredentials:          overrides.ExtraCredentials,
 		ExtraEnvironmentVariables: overrides.ExtraEnvironmentVariables,

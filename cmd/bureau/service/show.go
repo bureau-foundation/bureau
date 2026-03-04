@@ -22,10 +22,8 @@ import (
 type serviceShowParams struct {
 	cli.SessionConfig
 	fleet.FleetConnection
+	cli.FleetScope
 	cli.JSONOutput
-	Machine    string `json:"machine"     flag:"machine"     desc:"machine localpart (optional — auto-discovers if omitted)"`
-	Fleet      string `json:"fleet"       flag:"fleet"       desc:"fleet prefix (e.g., bureau/fleet/prod) — required when --machine is omitted"`
-	ServerName string `json:"server_name" flag:"server-name" desc:"Matrix server name (auto-detected from machine.conf)"`
 }
 
 // serviceInstanceResult is a single instance in the show output.
@@ -73,19 +71,16 @@ Both Matrix and fleet controller are required.`,
 		Output:         func() any { return &serviceShowResult{} },
 		RequiredGrants: []string{"command/service/show"},
 		Annotations:    cli.ReadOnly(),
-		Run: requireLocalpart("bureau service show <localpart> [--machine <machine>]", func(ctx context.Context, localpart string, logger *slog.Logger) error {
+		Run: cli.RequireLocalpart("service", "bureau service show <localpart> [--machine <machine>]", func(ctx context.Context, localpart string, logger *slog.Logger) error {
 			return runShow(ctx, localpart, logger, params)
 		}),
 	}
 }
 
 func runShow(ctx context.Context, localpart string, logger *slog.Logger, params serviceShowParams) error {
-	params.ServerName = cli.ResolveServerName(params.ServerName)
-	params.Fleet = cli.ResolveFleet(params.Fleet)
-
-	serverName, err := ref.ParseServerName(params.ServerName)
+	scope, err := params.FleetScope.Resolve()
 	if err != nil {
-		return cli.Validation("invalid --server-name %q: %w", params.ServerName, err)
+		return err
 	}
 
 	ctx, cancel := context.WithTimeout(ctx, 30*time.Second)
@@ -97,32 +92,18 @@ func runShow(ctx context.Context, localpart string, logger *slog.Logger, params 
 	}
 	defer session.Close()
 
-	var machine ref.Machine
-	var fleetRef ref.Fleet
-	if params.Machine != "" {
-		machine, err = ref.ParseMachine(params.Machine, serverName)
-		if err != nil {
-			return cli.Validation("invalid machine: %v", err)
-		}
-	} else {
-		fleetRef, err = ref.ParseFleet(params.Fleet, serverName)
-		if err != nil {
-			return cli.Validation("invalid fleet: %v", err)
-		}
-	}
-
 	// Matrix resolve: find the actual assignment.
 	var result serviceShowResult
 	matrixFound := false
 
-	location, machineCount, matrixErr := principal.Resolve(ctx, session, localpart, machine, fleetRef)
+	location, machineCount, matrixErr := principal.Resolve(ctx, session, localpart, scope.Machine, scope.Fleet)
 	if matrixErr == nil {
 		matrixFound = true
-		if machine.IsZero() && machineCount > 0 {
+		if scope.Machine.IsZero() && machineCount > 0 {
 			logger.Info("resolved service location", "machine", location.Machine.Localpart(), "machines_scanned", machineCount)
 		}
 
-		serviceRef, parseErr := ref.ParseService(localpart, serverName)
+		serviceRef, parseErr := ref.ParseService(localpart, scope.ServerName)
 		if parseErr != nil {
 			return cli.Validation("invalid service localpart: %v", parseErr)
 		}

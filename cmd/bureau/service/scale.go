@@ -10,7 +10,6 @@ import (
 	"time"
 
 	"github.com/bureau-foundation/bureau/cmd/bureau/cli"
-	"github.com/bureau-foundation/bureau/lib/ref"
 	"github.com/bureau-foundation/bureau/lib/schema"
 	"github.com/bureau-foundation/bureau/lib/schema/fleet"
 	"github.com/bureau-foundation/bureau/messaging"
@@ -18,11 +17,10 @@ import (
 
 type serviceScaleParams struct {
 	cli.SessionConfig
+	cli.FleetScope
 	cli.JSONOutput
-	Fleet       string `json:"fleet"        flag:"fleet"        desc:"fleet prefix (auto-detected from machine.conf)"`
-	ServerName  string `json:"server_name"  flag:"server-name"  desc:"Matrix server name (auto-detected)"`
-	Replicas    int    `json:"replicas"     flag:"replicas"     desc:"new minimum replica count"`
-	MaxReplicas int    `json:"max_replicas" flag:"max-replicas" desc:"new maximum replica count"`
+	Replicas    int `json:"replicas"     flag:"replicas"     desc:"new minimum replica count"`
+	MaxReplicas int `json:"max_replicas" flag:"max-replicas" desc:"new maximum replica count"`
 }
 
 type serviceScaleResult struct {
@@ -64,7 +62,7 @@ At least one of --replicas or --max-replicas must be specified.`,
 		Output:         func() any { return &serviceScaleResult{} },
 		RequiredGrants: []string{"command/service/scale"},
 		Annotations:    cli.Idempotent(),
-		Run: requireLocalpart("bureau service scale <localpart> --replicas <N> [flags]", func(ctx context.Context, localpart string, logger *slog.Logger) error {
+		Run: cli.RequireLocalpart("service", "bureau service scale <localpart> --replicas <N> [flags]", func(ctx context.Context, localpart string, logger *slog.Logger) error {
 			return runScale(ctx, localpart, logger, params)
 		}),
 	}
@@ -75,17 +73,9 @@ func runScale(ctx context.Context, localpart string, logger *slog.Logger, params
 		return cli.Validation("at least one of --replicas or --max-replicas must be specified")
 	}
 
-	params.ServerName = cli.ResolveServerName(params.ServerName)
-	params.Fleet = cli.ResolveFleet(params.Fleet)
-
-	serverName, err := ref.ParseServerName(params.ServerName)
+	scope, err := params.FleetScope.Resolve()
 	if err != nil {
-		return cli.Validation("invalid --server-name %q: %w", params.ServerName, err)
-	}
-
-	fleetRef, err := ref.ParseFleet(params.Fleet, serverName)
-	if err != nil {
-		return cli.Validation("invalid --fleet %q: %w", params.Fleet, err)
+		return err
 	}
 
 	ctx, cancel := context.WithTimeout(ctx, 30*time.Second)
@@ -97,7 +87,7 @@ func runScale(ctx context.Context, localpart string, logger *slog.Logger, params
 	}
 	defer session.Close()
 
-	fleetRoomAlias := fleetRef.RoomAlias()
+	fleetRoomAlias := scope.Fleet.RoomAlias()
 	fleetRoomID, err := session.ResolveAlias(ctx, fleetRoomAlias)
 	if err != nil {
 		if messaging.IsMatrixError(err, messaging.ErrCodeNotFound) {

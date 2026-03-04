@@ -40,11 +40,9 @@ to an artifact ref with metadata (size, content type, modification time).`,
 
 type contextListParams struct {
 	cli.SessionConfig
+	cli.FleetScope
 	cli.JSONOutput
-	Machine    string `json:"machine"     flag:"machine"     desc:"machine localpart (optional — auto-discovers if omitted)"`
-	Fleet      string `json:"fleet"       flag:"fleet"       desc:"fleet prefix (e.g., bureau/fleet/prod) — required when --machine is omitted"`
-	ServerName string `json:"server_name" flag:"server-name" desc:"Matrix server name (auto-detected from machine.conf)"`
-	Prefix     string `json:"prefix"      flag:"prefix"      desc:"filter keys by prefix"`
+	Prefix string `json:"prefix" flag:"prefix" desc:"filter keys by prefix"`
 }
 
 type contextListResult struct {
@@ -78,19 +76,16 @@ modification time. Use --prefix to filter keys (e.g., --prefix "summary/").`,
 		Output:         func() any { return &contextListResult{} },
 		RequiredGrants: []string{"command/agent/context/list"},
 		Annotations:    cli.ReadOnly(),
-		Run: requireLocalpart("bureau agent context list <localpart> [--prefix <prefix>]", func(ctx context.Context, localpart string, logger *slog.Logger) error {
+		Run: cli.RequireLocalpart("agent", "bureau agent context list <localpart> [--prefix <prefix>]", func(ctx context.Context, localpart string, logger *slog.Logger) error {
 			return runContextList(ctx, localpart, logger, params)
 		}),
 	}
 }
 
 func runContextList(ctx context.Context, localpart string, logger *slog.Logger, params contextListParams) error {
-	params.ServerName = cli.ResolveServerName(params.ServerName)
-	params.Fleet = cli.ResolveFleet(params.Fleet)
-
-	serverName, err := ref.ParseServerName(params.ServerName)
+	scope, err := params.FleetScope.Resolve()
 	if err != nil {
-		return cli.Validation("invalid --server-name %q: %w", params.ServerName, err)
+		return err
 	}
 
 	ctx, cancel := context.WithTimeout(ctx, 30*time.Second)
@@ -102,31 +97,13 @@ func runContextList(ctx context.Context, localpart string, logger *slog.Logger, 
 	}
 	defer session.Close()
 
-	var machine ref.Machine
-	if params.Machine != "" {
-		machine, err = ref.ParseMachine(params.Machine, serverName)
-		if err != nil {
-			return cli.Validation("invalid machine: %v", err)
-		}
-	}
-
-	var fleet ref.Fleet
-	if machine.IsZero() {
-		fleet, err = ref.ParseFleet(params.Fleet, serverName)
-		if err != nil {
-			return cli.Validation("invalid fleet: %v", err)
-		}
-	} else {
-		fleet = machine.Fleet()
-	}
-
-	location, machineCount, err := principal.Resolve(ctx, session, localpart, machine, fleet)
+	location, machineCount, err := principal.Resolve(ctx, session, localpart, scope.Machine, scope.Fleet)
 	if err != nil {
 		return cli.NotFound("agent %q not found: %w", localpart, err).
 			WithHint("Run 'bureau agent list' to see agents on this machine.")
 	}
 
-	if machine.IsZero() && machineCount > 0 {
+	if scope.Machine.IsZero() && machineCount > 0 {
 		logger.Info("resolved agent location", "localpart", localpart, "machine", location.Machine.Localpart(), "machines_scanned", machineCount)
 	}
 
@@ -184,10 +161,8 @@ func runContextList(ctx context.Context, localpart string, logger *slog.Logger, 
 
 type contextShowParams struct {
 	cli.SessionConfig
+	cli.FleetScope
 	cli.JSONOutput
-	Machine    string `json:"machine"     flag:"machine"     desc:"machine localpart (optional — auto-discovers if omitted)"`
-	Fleet      string `json:"fleet"       flag:"fleet"       desc:"fleet prefix (e.g., bureau/fleet/prod) — required when --machine is omitted"`
-	ServerName string `json:"server_name" flag:"server-name" desc:"Matrix server name (auto-detected from machine.conf)"`
 }
 
 func contextShowCommand() *cli.Command {
@@ -230,15 +205,12 @@ available.`,
 }
 
 func runContextShow(ctx context.Context, localpart, key string, logger *slog.Logger, params contextShowParams) error {
-	params.ServerName = cli.ResolveServerName(params.ServerName)
-	params.Fleet = cli.ResolveFleet(params.Fleet)
-
-	serverName, err := ref.ParseServerName(params.ServerName)
+	scope, err := params.FleetScope.Resolve()
 	if err != nil {
-		return cli.Validation("invalid --server-name %q: %w", params.ServerName, err)
+		return err
 	}
 
-	agentRef, err := ref.ParseAgent(localpart, serverName)
+	agentRef, err := ref.ParseAgent(localpart, scope.ServerName)
 	if err != nil {
 		return cli.Validation("invalid agent localpart: %v", err)
 	}
@@ -252,31 +224,13 @@ func runContextShow(ctx context.Context, localpart, key string, logger *slog.Log
 	}
 	defer session.Close()
 
-	var machine ref.Machine
-	if params.Machine != "" {
-		machine, err = ref.ParseMachine(params.Machine, serverName)
-		if err != nil {
-			return cli.Validation("invalid machine: %v", err)
-		}
-	}
-
-	var fleet ref.Fleet
-	if machine.IsZero() {
-		fleet, err = ref.ParseFleet(params.Fleet, serverName)
-		if err != nil {
-			return cli.Validation("invalid fleet: %v", err)
-		}
-	} else {
-		fleet = machine.Fleet()
-	}
-
-	location, machineCount, err := principal.Resolve(ctx, session, localpart, machine, fleet)
+	location, machineCount, err := principal.Resolve(ctx, session, localpart, scope.Machine, scope.Fleet)
 	if err != nil {
 		return cli.NotFound("agent %q not found: %w", localpart, err).
 			WithHint("Run 'bureau agent list' to see agents on this machine.")
 	}
 
-	if machine.IsZero() && machineCount > 0 {
+	if scope.Machine.IsZero() && machineCount > 0 {
 		logger.Info("resolved agent location", "localpart", localpart, "machine", location.Machine.Localpart(), "machines_scanned", machineCount)
 	}
 

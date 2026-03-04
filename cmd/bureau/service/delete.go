@@ -10,7 +10,6 @@ import (
 	"time"
 
 	"github.com/bureau-foundation/bureau/cmd/bureau/cli"
-	"github.com/bureau-foundation/bureau/lib/ref"
 	"github.com/bureau-foundation/bureau/lib/schema"
 	"github.com/bureau-foundation/bureau/lib/schema/fleet"
 	"github.com/bureau-foundation/bureau/messaging"
@@ -18,10 +17,9 @@ import (
 
 type serviceDeleteParams struct {
 	cli.SessionConfig
+	cli.FleetScope
 	cli.JSONOutput
-	Fleet      string `json:"fleet"       flag:"fleet"       desc:"fleet prefix (auto-detected from machine.conf)"`
-	ServerName string `json:"server_name" flag:"server-name" desc:"Matrix server name (auto-detected)"`
-	Yes        bool   `json:"yes"         flag:"yes"         desc:"confirm deletion without prompting"`
+	Yes bool `json:"yes" flag:"yes" desc:"confirm deletion without prompting"`
 }
 
 type serviceDeleteResult struct {
@@ -60,24 +58,16 @@ the fleet.`,
 		Output:         func() any { return &serviceDeleteResult{} },
 		RequiredGrants: []string{"command/service/delete"},
 		Annotations:    cli.Destructive(),
-		Run: requireLocalpart("bureau service delete <localpart> --yes [flags]", func(ctx context.Context, localpart string, logger *slog.Logger) error {
+		Run: cli.RequireLocalpart("service", "bureau service delete <localpart> --yes [flags]", func(ctx context.Context, localpart string, logger *slog.Logger) error {
 			return runDelete(ctx, localpart, logger, params)
 		}),
 	}
 }
 
 func runDelete(ctx context.Context, localpart string, logger *slog.Logger, params serviceDeleteParams) error {
-	params.ServerName = cli.ResolveServerName(params.ServerName)
-	params.Fleet = cli.ResolveFleet(params.Fleet)
-
-	serverName, err := ref.ParseServerName(params.ServerName)
+	scope, err := params.FleetScope.Resolve()
 	if err != nil {
-		return cli.Validation("invalid --server-name %q: %w", params.ServerName, err)
-	}
-
-	fleetRef, err := ref.ParseFleet(params.Fleet, serverName)
-	if err != nil {
-		return cli.Validation("invalid --fleet %q: %w", params.Fleet, err)
+		return err
 	}
 
 	ctx, cancel := context.WithTimeout(ctx, 30*time.Second)
@@ -89,7 +79,7 @@ func runDelete(ctx context.Context, localpart string, logger *slog.Logger, param
 	}
 	defer session.Close()
 
-	fleetRoomAlias := fleetRef.RoomAlias()
+	fleetRoomAlias := scope.Fleet.RoomAlias()
 	fleetRoomID, err := session.ResolveAlias(ctx, fleetRoomAlias)
 	if err != nil {
 		if messaging.IsMatrixError(err, messaging.ErrCodeNotFound) {

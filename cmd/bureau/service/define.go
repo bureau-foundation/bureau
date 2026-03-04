@@ -10,7 +10,6 @@ import (
 	"time"
 
 	"github.com/bureau-foundation/bureau/cmd/bureau/cli"
-	"github.com/bureau-foundation/bureau/lib/ref"
 	"github.com/bureau-foundation/bureau/lib/schema"
 	"github.com/bureau-foundation/bureau/lib/schema/fleet"
 	"github.com/bureau-foundation/bureau/messaging"
@@ -18,9 +17,8 @@ import (
 
 type serviceDefineParams struct {
 	cli.SessionConfig
+	cli.FleetScope
 	cli.JSONOutput
-	Fleet             string   `json:"fleet"              flag:"fleet"              desc:"fleet prefix (auto-detected from machine.conf)"`
-	ServerName        string   `json:"server_name"        flag:"server-name"        desc:"Matrix server name (auto-detected)"`
 	Template          string   `json:"template"           flag:"template"           desc:"template reference (required)"`
 	Failover          string   `json:"failover"           flag:"failover"           desc:"failover strategy: migrate, alert, or none (required)"`
 	Replicas          int      `json:"replicas"           flag:"replicas"           desc:"minimum replica count" default:"1"`
@@ -85,7 +83,7 @@ The state event is overwritten atomically.`,
 		Output:         func() any { return &serviceDefineResult{} },
 		RequiredGrants: []string{"command/service/define"},
 		Annotations:    cli.Create(),
-		Run: requireLocalpart("bureau service define <localpart> --template <ref> --failover <strategy> [flags]", func(ctx context.Context, localpart string, logger *slog.Logger) error {
+		Run: cli.RequireLocalpart("service", "bureau service define <localpart> --template <ref> --failover <strategy> [flags]", func(ctx context.Context, localpart string, logger *slog.Logger) error {
 			return runDefine(ctx, localpart, logger, params)
 		}),
 	}
@@ -132,17 +130,9 @@ func runDefine(ctx context.Context, localpart string, logger *slog.Logger, param
 	}
 
 	// Resolve fleet room.
-	params.ServerName = cli.ResolveServerName(params.ServerName)
-	params.Fleet = cli.ResolveFleet(params.Fleet)
-
-	serverName, err := ref.ParseServerName(params.ServerName)
+	scope, err := params.FleetScope.Resolve()
 	if err != nil {
-		return cli.Validation("invalid --server-name %q: %w", params.ServerName, err)
-	}
-
-	fleetRef, err := ref.ParseFleet(params.Fleet, serverName)
-	if err != nil {
-		return cli.Validation("invalid --fleet %q: %w", params.Fleet, err)
+		return err
 	}
 
 	ctx, cancel := context.WithTimeout(ctx, 30*time.Second)
@@ -154,7 +144,7 @@ func runDefine(ctx context.Context, localpart string, logger *slog.Logger, param
 	}
 	defer session.Close()
 
-	fleetRoomAlias := fleetRef.RoomAlias()
+	fleetRoomAlias := scope.Fleet.RoomAlias()
 	fleetRoomID, err := session.ResolveAlias(ctx, fleetRoomAlias)
 	if err != nil {
 		if messaging.IsMatrixError(err, messaging.ErrCodeNotFound) {

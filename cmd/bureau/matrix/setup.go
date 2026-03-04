@@ -513,6 +513,16 @@ func baseTemplates(templatePrefix string) []namedTemplate {
 					IPC: true,
 					UTS: true,
 				},
+				Filesystem: []schema.TemplateMount{
+					// DNS resolution requires the host's resolver config.
+					// Without this, any process needing hostname resolution
+					// (cloudflared, curl, git, etc.) fails with NXDOMAIN or
+					// connection refused to [::1]:53.
+					{Source: "/etc/resolv.conf", Dest: "/etc/resolv.conf", Mode: "ro"},
+					// NSS and SSL need these for hostname resolution and TLS.
+					{Source: "/etc/ssl", Dest: "/etc/ssl", Mode: "ro"},
+					{Source: "/etc/nsswitch.conf", Dest: "/etc/nsswitch.conf", Mode: "ro"},
+				},
 			},
 		},
 		{
@@ -664,7 +674,6 @@ func baseTemplates(templatePrefix string) []namedTemplate {
 				},
 			},
 		},
-
 	}
 }
 

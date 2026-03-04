@@ -145,8 +145,11 @@ fi
 # update automatically without symlink changes.
 echo "Publishing BureauVersion..."
 if [ "$USE_DEV" = true ]; then
-    # For dev, set BUREAU_LAUNCHER_SESSION so --local reads the dev
-    # session instead of the system launcher session.
+    # For dev, bypass /etc/bureau/machine.conf (which points at the prod
+    # fleet) by setting BUREAU_MACHINE_CONF to a nonexistent path. This
+    # forces --local to fall through to the launcher session file, which
+    # BUREAU_LAUNCHER_SESSION points at the dev instance's session.json.
+    BUREAU_MACHINE_CONF=/dev/null/nonexistent \
     BUREAU_LAUNCHER_SESSION="$DEV_DATA_DIR/state/session.json" \
         "$BUREAU_CLI" machine upgrade --local \
         --host-env "$HOST_ENV" \

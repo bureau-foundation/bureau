@@ -10,6 +10,7 @@ import (
 
 	"github.com/bureau-foundation/bureau/lib/ref"
 	"github.com/bureau-foundation/bureau/lib/schema"
+	"github.com/bureau-foundation/bureau/lib/templatedef"
 	"github.com/bureau-foundation/bureau/messaging"
 )
 
@@ -319,4 +320,121 @@ func TestServiceVisibilityHotReload(t *testing.T) {
 	t.Log("phase 3 passed: service visible again after visibility restored")
 
 	t.Log("grants hot-reload verified: match → no-match → match")
+}
+
+// TestTemplateChangeRestart verifies that updating a template definition
+// in the template room triggers the daemon to detect the change via /sync,
+// re-resolve the template, and restart the affected sandbox when the
+// resolved SandboxSpec has changed structurally.
+//
+//   - Phase 1: Deploy a principal with a test-agent template. Verify proxy.
+//   - Phase 2: Re-publish the template with an additional environment variable.
+//     Wait for the daemon's PrincipalRestartedMessage. Wait for the proxy
+//     socket to reappear. Verify proxy is operational.
+//
+// The daemon includes the template room in its /sync filter but only reacts
+// to m.bureau.template state events (not membership). When a template
+// definition changes, processSyncResponse triggers a reconcile cycle.
+// reconcileRunningPrincipal re-resolves the template, compares the new
+// SandboxSpec against the cached one, detects a structural difference, and
+// destroys the old sandbox. The "create missing" pass then recreates it
+// with the new spec.
+func TestTemplateChangeRestart(t *testing.T) {
+	t.Parallel()
+
+	ctx := t.Context()
+	ns := setupTestNamespace(t)
+	admin := ns.Admin
+
+	fleet := createTestFleet(t, admin, ns)
+
+	machine := newTestMachine(t, fleet, "tmpl-hr")
+	startMachine(t, admin, machine, machineOptions{
+		LauncherBinary: resolvedBinary(t, "LAUNCHER_BINARY"),
+		DaemonBinary:   resolvedBinary(t, "DAEMON_BINARY"),
+		ProxyBinary:    resolvedBinary(t, "PROXY_BINARY"),
+		Fleet:          fleet,
+	})
+
+	// Publish a test-agent template and deploy a principal using it.
+	testAgentBinary := resolvedBinary(t, "TEST_AGENT_BINARY")
+	grantTemplateAccess(t, admin, machine)
+
+	namespace := machine.Ref.Fleet().Namespace()
+	templateRefString := namespace.TemplateRoomAliasLocalpart() + ":tmpl-hr-agent"
+	templateRef, err := schema.ParseTemplateRef(templateRefString)
+	if err != nil {
+		t.Fatalf("parse template ref: %v", err)
+	}
+
+	originalContent := agentTemplateContent(testAgentBinary, agentOptions{
+		TemplateName: "tmpl-hr-agent",
+	})
+	_, err = templatedef.Push(ctx, admin, templateRef, originalContent, testServer)
+	if err != nil {
+		t.Fatalf("push original template: %v", err)
+	}
+
+	deployment := deployPrincipals(t, admin, machine, deploymentConfig{
+		Principals: []principalSpec{{
+			Localpart: "agent/tmpl-hr",
+			Template:  templateRefString,
+		}},
+	})
+	proxySocketPath := deployment.ProxySockets["agent/tmpl-hr"]
+
+	// Sanity check: proxy is operational with the original template.
+	proxyClient := proxyHTTPClient(proxySocketPath)
+	if userID := proxyWhoami(t, proxyClient); userID != deployment.Accounts["agent/tmpl-hr"].UserID.String() {
+		t.Fatalf("initial proxy whoami = %q, want %q", userID, deployment.Accounts["agent/tmpl-hr"].UserID)
+	}
+	t.Log("phase 1 passed: principal deployed with original template")
+
+	// --- Phase 2: Update template with a structural change ---
+
+	// Start watching BEFORE publishing the template update. The watch
+	// captures a sync checkpoint so we don't miss the restart notification.
+	watch := watchRoom(t, admin, machine.ConfigRoomID)
+
+	// Re-publish the template with an additional environment variable.
+	// This changes the resolved SandboxSpec's EnvironmentVariables map,
+	// which structurallyChanged detects (it compares all non-Payload
+	// fields via JSON serialization).
+	updatedContent := agentTemplateContent(testAgentBinary, agentOptions{
+		TemplateName: "tmpl-hr-agent",
+		ExtraEnv:     map[string]string{"TEMPLATE_VERSION": "v2"},
+	})
+	_, err = templatedef.Push(ctx, admin, templateRef, updatedContent, testServer)
+	if err != nil {
+		t.Fatalf("push updated template: %v", err)
+	}
+
+	// Wait for the daemon to detect the template change, re-resolve the
+	// template, and restart the sandbox. The PrincipalRestartedMessage is
+	// posted after destroyPrincipal succeeds but before the "create
+	// missing" pass recreates the sandbox.
+	waitForNotification[schema.PrincipalRestartedMessage](
+		t, &watch, schema.MsgTypePrincipalRestarted, machine.UserID,
+		func(m schema.PrincipalRestartedMessage) bool {
+			return m.Principal == "agent/tmpl-hr"
+		}, "principal restarted after template change")
+	t.Log("daemon confirmed structural restart for template change")
+
+	// Wait for the proxy socket to reappear. The "create missing" pass
+	// recreates the sandbox within the same reconcile cycle. By the time
+	// we process the restart message, the new sandbox may already be up
+	// (socket exists) or still being created (inotify catches the
+	// create event).
+	waitForFile(t, proxySocketPath)
+
+	// Verify the principal is operational after restart. Create a fresh
+	// HTTP client because the old Unix socket connection is to a socket
+	// that was deleted and recreated.
+	freshProxyClient := proxyHTTPClient(proxySocketPath)
+	if userID := proxyWhoami(t, freshProxyClient); userID != deployment.Accounts["agent/tmpl-hr"].UserID.String() {
+		t.Fatalf("post-restart proxy whoami = %q, want %q", userID, deployment.Accounts["agent/tmpl-hr"].UserID)
+	}
+	t.Log("phase 2 passed: principal restarted with updated template")
+
+	t.Log("template change restart verified: deploy → update template → restart → operational")
 }

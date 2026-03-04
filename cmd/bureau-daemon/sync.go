@@ -7,18 +7,19 @@ package main
 // waits for the homeserver to push state changes as they happen rather
 // than polling periodically.
 //
-// Five categories of rooms are monitored reactively:
+// Six categories of rooms are monitored reactively:
 //   - Config room: m.bureau.machine_config, m.bureau.credentials → reconcile
 //   - Machines room: m.bureau.machine_status → peer address updates
 //   - Services room: m.bureau.service → service directory updates
 //   - Fleet room: m.bureau.fleet_service, m.bureau.ha_lease → HA evaluation
+//   - Template room: m.bureau.template → reconcile (so template updates
+//     are detected without requiring a MachineConfig touch)
 //   - Workspace rooms: m.bureau.workspace, m.bureau.project → reconcile
 //     (joined dynamically when the daemon accepts invites)
 //
-// Three rooms the daemon is joined to are excluded from the sync filter
+// Two rooms the daemon is joined to are excluded from the sync filter
 // via the Matrix "not_rooms" field because they are only read on-demand:
 //   - System room: token signing keys (read via GetStateEvent in transport auth)
-//   - Template room: template definitions (read during reconciliation)
 //   - Pipeline room: pipeline definitions (read by executor, not daemon)
 //
 // The sync loop is purely a notification mechanism: when state changes are
@@ -48,12 +49,13 @@ import (
 //
 // The filter restricts two dimensions:
 //   - Event types: only the state and timeline event types the daemon
-//     processes (machine config, credentials, service, workspace, etc.).
+//     processes (machine config, credentials, service, template,
+//     workspace, etc.).
 //   - Rooms: excludes rooms the daemon is joined to but only reads
-//     on-demand (template, pipeline, system). This is done via the
-//     Matrix "not_rooms" filter field rather than a "rooms" allowlist
-//     so that invites for dynamically-joined workspace rooms remain
-//     visible without requiring filter updates.
+//     on-demand (pipeline, system). This is done via the Matrix
+//     "not_rooms" filter field rather than a "rooms" allowlist so that
+//     invites for dynamically-joined workspace rooms remain visible
+//     without requiring filter updates.
 //
 // The timeline section includes both state event types and m.room.message.
 // State events can appear as timeline events with a non-nil state_key on
@@ -77,6 +79,7 @@ func buildSyncFilter(excludeRooms []ref.RoomID) string {
 		schema.EventTypeCredentials,
 		schema.EventTypeMachineStatus,
 		schema.EventTypeService,
+		schema.EventTypeTemplate,
 		pipeline.EventTypePipelineConfig,
 		schema.EventTypeProject,
 		schema.EventTypeWorkspace,
@@ -348,7 +351,18 @@ func (d *Daemon) processSyncResponse(ctx context.Context, response *messaging.Sy
 			if roomHasExternalStateChanges(room, d.machine.UserID()) {
 				needsHAEval = true
 			}
-		case d.systemRoomID, d.templateRoomID, d.pipelineRoomID:
+		case d.templateRoomID:
+			// The template room is shared across all machines in the
+			// namespace. Only react to m.bureau.template state events
+			// (actual template definition changes). Membership and
+			// power level events from other machines joining are
+			// ignored to avoid spurious reconcile cycles.
+			if roomHasEventType(room, schema.EventTypeTemplate) {
+				d.logger.Info("template definition changed, triggering reconcile",
+					"room_id", roomID)
+				needsReconcile = true
+			}
+		case d.systemRoomID, d.pipelineRoomID:
 			// These rooms are excluded from /sync via the not_rooms
 			// filter. If events arrive anyway (homeserver filter
 			// implementation gap), ignore them — their state is read
@@ -696,6 +710,26 @@ func roomHasExternalStateChanges(room messaging.JoinedRoom, selfUserID ref.UserI
 	}
 	for _, event := range room.Timeline.Events {
 		if event.StateKey != nil && event.Sender != selfUserID {
+			return true
+		}
+	}
+	return false
+}
+
+// roomHasEventType returns true if the JoinedRoom contains state events
+// of the specified type. Used for the template room where the daemon
+// only cares about m.bureau.template state changes — membership and
+// power level events from other machines joining the shared room are
+// irrelevant and would cause spurious reconcile cycles if treated as
+// meaningful state changes.
+func roomHasEventType(room messaging.JoinedRoom, eventType ref.EventType) bool {
+	for _, event := range room.State.Events {
+		if event.Type == eventType {
+			return true
+		}
+	}
+	for _, event := range room.Timeline.Events {
+		if event.StateKey != nil && event.Type == eventType {
 			return true
 		}
 	}

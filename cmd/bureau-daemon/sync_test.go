@@ -1170,6 +1170,172 @@ func TestProcessSyncResponse_WorkspaceRoomTriggersReconcile(t *testing.T) {
 	}
 }
 
+// TestProcessSyncResponse_TemplateRoomTriggersReconcile verifies that
+// m.bureau.template state events in the template room trigger reconciliation.
+// Operators can update a template definition and have running principals
+// pick up the change without needing to also touch MachineConfig.
+func TestProcessSyncResponse_TemplateRoomTriggersReconcile(t *testing.T) {
+	t.Parallel()
+
+	machine, fleet := testMachineSetup(t, "test", "bureau.local")
+	machineName := machine.Localpart()
+
+	matrixState := newMockMatrixState()
+	matrixServer := httptest.NewServer(matrixState.handler())
+	t.Cleanup(matrixServer.Close)
+
+	const configRoomID = "!config:test"
+	const machineRoomID = "!machine:test"
+	const serviceRoomID = "!service:test"
+	const templateRoomID = "!template:test"
+
+	// Set up machine config so reconcile has something to work with.
+	matrixState.setStateEvent(configRoomID, schema.EventTypeMachineConfig, machineName, schema.MachineConfig{
+		Principals: []schema.PrincipalAssignment{{
+			Principal: testEntity(t, fleet, "test/agent"),
+			AutoStart: true,
+		}},
+	})
+
+	matrixClient, err := messaging.NewClient(messaging.ClientConfig{
+		HomeserverURL: matrixServer.URL,
+	})
+	if err != nil {
+		t.Fatalf("NewClient: %v", err)
+	}
+	session, err := matrixClient.SessionFromToken(machine.UserID(), "syt_test_token")
+	if err != nil {
+		t.Fatalf("SessionFromToken: %v", err)
+	}
+	t.Cleanup(func() { session.Close() })
+
+	daemon, _ := newTestDaemon(t)
+	daemon.session = session
+	daemon.runDir = principal.DefaultRunDir
+	daemon.machine = machine
+	daemon.fleet = fleet
+	daemon.configRoomID = mustRoomID(configRoomID)
+	daemon.machineRoomID = mustRoomID(machineRoomID)
+	daemon.serviceRoomID = mustRoomID(serviceRoomID)
+	daemon.templateRoomID = mustRoomID(templateRoomID)
+	daemon.launcherSocket = "/nonexistent/launcher.sock"
+	daemon.logger = slog.New(slog.NewJSONHandler(os.Stderr, nil))
+	t.Cleanup(daemon.stopAllLayoutWatchers)
+
+	// First, configure the daemon via a config room event.
+	configStateKey := machineName
+	configResponse := &messaging.SyncResponse{
+		NextBatch: "batch_1",
+		Rooms: messaging.RoomsSection{
+			Join: map[ref.RoomID]messaging.JoinedRoom{
+				mustRoomID(configRoomID): {
+					State: messaging.StateSection{
+						Events: []messaging.Event{
+							{Type: schema.EventTypeMachineConfig, StateKey: &configStateKey},
+						},
+					},
+				},
+			},
+		},
+	}
+	daemon.processSyncResponse(context.Background(), configResponse)
+	if daemon.lastConfig == nil {
+		t.Fatal("lastConfig should be set after config room event")
+	}
+
+	// Clear lastConfig to detect whether the next sync triggers reconcile.
+	daemon.lastConfig = nil
+
+	// Deliver a template state event in the template room.
+	templateStateKey := "cloudflare-tunnel"
+	templateResponse := &messaging.SyncResponse{
+		NextBatch: "batch_2",
+		Rooms: messaging.RoomsSection{
+			Join: map[ref.RoomID]messaging.JoinedRoom{
+				mustRoomID(templateRoomID): {
+					State: messaging.StateSection{
+						Events: []messaging.Event{
+							{Type: schema.EventTypeTemplate, StateKey: &templateStateKey},
+						},
+					},
+				},
+			},
+		},
+	}
+	daemon.processSyncResponse(context.Background(), templateResponse)
+
+	// Reconcile should have run, re-reading the config.
+	if daemon.lastConfig == nil {
+		t.Error("template state event should trigger reconcile (lastConfig should be set)")
+	}
+}
+
+// TestProcessSyncResponse_TemplateRoomMembershipIgnored verifies that
+// membership events in the template room do NOT trigger reconciliation.
+// The template room is shared across all machines in the namespace, and
+// member events from other machines joining would cause spurious
+// reconcile cycles if not filtered.
+func TestProcessSyncResponse_TemplateRoomMembershipIgnored(t *testing.T) {
+	t.Parallel()
+
+	machine, fleet := testMachineSetup(t, "test", "bureau.local")
+
+	matrixState := newMockMatrixState()
+	matrixServer := httptest.NewServer(matrixState.handler())
+	t.Cleanup(matrixServer.Close)
+
+	const templateRoomID = "!template:test"
+
+	matrixClient, err := messaging.NewClient(messaging.ClientConfig{
+		HomeserverURL: matrixServer.URL,
+	})
+	if err != nil {
+		t.Fatalf("NewClient: %v", err)
+	}
+	session, err := matrixClient.SessionFromToken(machine.UserID(), "syt_test_token")
+	if err != nil {
+		t.Fatalf("SessionFromToken: %v", err)
+	}
+	t.Cleanup(func() { session.Close() })
+
+	daemon, _ := newTestDaemon(t)
+	daemon.session = session
+	daemon.runDir = principal.DefaultRunDir
+	daemon.machine = machine
+	daemon.fleet = fleet
+	daemon.configRoomID = mustRoomID("!config:test")
+	daemon.machineRoomID = mustRoomID("!machine:test")
+	daemon.serviceRoomID = mustRoomID("!service:test")
+	daemon.templateRoomID = mustRoomID(templateRoomID)
+	daemon.launcherSocket = "/nonexistent/launcher.sock"
+	daemon.logger = slog.New(slog.NewJSONHandler(os.Stderr, nil))
+	t.Cleanup(daemon.stopAllLayoutWatchers)
+
+	// Deliver a membership event in the template room (another machine
+	// joining). This should NOT trigger reconcile.
+	memberStateKey := "@bureau/fleet/test/machine/other:bureau.local"
+	memberResponse := &messaging.SyncResponse{
+		NextBatch: "batch_1",
+		Rooms: messaging.RoomsSection{
+			Join: map[ref.RoomID]messaging.JoinedRoom{
+				mustRoomID(templateRoomID): {
+					State: messaging.StateSection{
+						Events: []messaging.Event{
+							{Type: schema.MatrixEventTypeRoomMember, StateKey: &memberStateKey},
+						},
+					},
+				},
+			},
+		},
+	}
+	daemon.processSyncResponse(context.Background(), memberResponse)
+
+	// lastConfig should remain nil — no reconcile should have run.
+	if daemon.lastConfig != nil {
+		t.Error("membership events in template room should NOT trigger reconcile")
+	}
+}
+
 // TestProcessSyncResponse_AcceptsInvites verifies that the daemon auto-joins
 // rooms it's invited to (workspace rooms from "bureau workspace create") and
 // triggers reconcile afterward.

@@ -272,10 +272,12 @@ func run() error {
 
 	// Resolve the namespace-scoped template and pipeline rooms. The daemon
 	// is invited to these during machine provisioning and auto-accepts. It
-	// needs membership to read templates on-demand, but state changes in
-	// these rooms must NOT trigger reconciliation — they are shared across
-	// all machines in the namespace, and member events from other machines
-	// joining would cause spurious reconcile cycles.
+	// needs membership to read templates on-demand. The template room is
+	// included in /sync so that template definition changes trigger
+	// reconciliation (processSyncResponse filters for m.bureau.template
+	// events, ignoring membership noise from other machines). The pipeline
+	// room is excluded from /sync — its definitions are read by the
+	// pipeline executor, not the daemon.
 	namespace := fleet.Namespace()
 	templateAlias := namespace.TemplateRoomAlias()
 	templateRoomID, err := session.ResolveAlias(ctx, templateAlias)
@@ -300,12 +302,13 @@ func run() error {
 		"pipeline_room", pipelineRoomID,
 	)
 
-	// Build the sync filter after room resolution. The system, template,
-	// and pipeline rooms are excluded via "not_rooms" because the daemon
-	// only reads their state on-demand (token signing keys, template
-	// definitions, pipeline definitions) and never needs reactive /sync
-	// delivery from them.
-	syncFilter := buildSyncFilter([]ref.RoomID{systemRoomID, templateRoomID, pipelineRoomID})
+	// Build the sync filter after room resolution. The system and pipeline
+	// rooms are excluded via "not_rooms" because the daemon only reads
+	// their state on-demand (token signing keys, pipeline definitions).
+	// The template room is NOT excluded: template definition changes must
+	// trigger reconciliation so updated templates are applied to running
+	// principals without requiring a MachineConfig touch.
+	syncFilter := buildSyncFilter([]ref.RoomID{systemRoomID, pipelineRoomID})
 
 	// Check the watchdog from a previous exec() attempt. This detects
 	// whether a prior daemon self-update succeeded (we're the new binary)
@@ -596,7 +599,7 @@ type Daemon struct {
 	machineRoomID  ref.RoomID
 	serviceRoomID  ref.RoomID
 	fleetRoomID    ref.RoomID // fleet room for HA leases, service definitions, and alerts
-	templateRoomID ref.RoomID // excluded from /sync via not_rooms; matched as defense-in-depth
+	templateRoomID ref.RoomID // included in /sync; filtered for m.bureau.template events only
 	pipelineRoomID ref.RoomID // excluded from /sync via not_rooms; matched as defense-in-depth
 	syncFilter     string     // inline Matrix /sync filter JSON (room- and type-scoped)
 

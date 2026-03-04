@@ -173,6 +173,14 @@ type PrincipalAssignment struct {
 	// template's RequiredServices — there is no merging.
 	RequiredServicesOverride []string `json:"required_services_override,omitempty"`
 
+	// SecretsOverride replaces the template's Secrets for this principal
+	// instance. Use this when a generic template needs different secret
+	// bindings per deployment (e.g., an inbound tunnel where the token
+	// credential key varies by operator). When nil, the template's
+	// Secrets are used unchanged. When set (even to an empty slice), it
+	// fully replaces the template's Secrets — there is no merging.
+	SecretsOverride []SecretBinding `json:"secrets_override,omitempty"`
+
 	// Payload is instance-specific data passed to the agent at startup
 	// and available for hot-reload via SIGHUP. The daemon merges this
 	// over the template's DefaultPayload (Payload values win on
@@ -393,7 +401,25 @@ type TemplateContent struct {
 	// in the principal's encrypted credential bundle before the sandbox
 	// can start. The daemon checks this against the Credentials state
 	// event and refuses to start the sandbox if any are missing.
+	//
+	// Keys referenced by Secrets entries are implicitly required and do
+	// not need to be repeated here.
 	RequiredCredentials []string `json:"required_credentials,omitempty"`
+
+	// Secrets declares how specific credentials from the encrypted
+	// credential bundle are exposed inside the sandbox. Each binding
+	// maps a credential key to either an environment variable (Env) or
+	// a file at /run/bureau/secrets/<name> (File), or both.
+	//
+	// This keeps secret values out of plaintext Matrix state events:
+	// the value lives only in the encrypted credential bundle, is
+	// decrypted by the launcher at sandbox creation time, and injected
+	// into the sandbox process's environment or filesystem.
+	//
+	// During template inheritance, child Secrets are appended after
+	// parent Secrets. When both parent and child declare a binding for
+	// the same Key, the child's binding replaces the parent's.
+	Secrets []SecretBinding `json:"secrets,omitempty"`
 
 	// RequiredServices lists service roles (e.g., "ticket", "rag")
 	// that must be available when a sandbox is created from this
@@ -494,6 +520,38 @@ type TemplateProxyService struct {
 	// other headers receive the raw credential value regardless of
 	// this setting. Empty means no scheme prefix (raw value).
 	AuthScheme string `json:"auth_scheme,omitempty"`
+}
+
+// SecretBinding declares how a credential from the encrypted credential
+// bundle is exposed inside a sandbox. At least one of Env or File must
+// be set.
+//
+// When Env is set, the launcher adds the decrypted value as an
+// environment variable in the sandbox process (via bwrap --setenv).
+//
+// When File is set, the launcher writes the decrypted value to
+// /run/bureau/secrets/<File> inside the sandbox (read-only bind mount).
+// The sandboxed process reads it at the well-known path. This is the
+// preferred mode for services that accept --credentials-file or similar.
+//
+// Both can be set simultaneously for services that need both a file and
+// an environment variable pointing at the file's well-known path (use
+// EnvironmentVariables for the path, Secrets for the file content).
+type SecretBinding struct {
+	// Key is the credential name in the encrypted credential bundle.
+	// Must match a key in the m.bureau.credentials state event payload.
+	Key string `json:"key"`
+
+	// Env, when non-empty, exposes the decrypted value as this
+	// environment variable inside the sandbox. The variable is set
+	// via bwrap --setenv at sandbox creation time.
+	Env string `json:"env,omitempty"`
+
+	// File, when non-empty, writes the decrypted value to
+	// /run/bureau/secrets/<File> inside the sandbox. The secrets
+	// directory is bind-mounted read-only; the launcher writes the
+	// file on the host side before creating the sandbox.
+	File string `json:"file,omitempty"`
 }
 
 // OutputCapture configures raw output capture for a principal's

@@ -293,7 +293,10 @@ func waitForSocket(socketPath string, processDone <-chan struct{}, timeout time.
 // are bind-mounted read-write at /run/bureau/service/<role>.sock, giving
 // the sandboxed process direct access to Bureau services. When tokenDirectory
 // is non-empty, it is bind-mounted read-only at /run/bureau/service/token/,
-// providing <role>.token files for service authentication.
+// providing <role>.token files for service authentication. When secretFiles
+// is non-empty, each entry is written to <configDir>/secrets/<filename> and
+// the directory is bind-mounted read-only at /run/bureau/secrets/ inside the
+// sandbox.
 //
 // When telemetrySocketPath is non-empty and the SandboxSpec has
 // OutputCapture.Enabled, the generated sandbox script passes capture-mode
@@ -304,7 +307,7 @@ func waitForSocket(socketPath string, processDone <-chan struct{}, timeout time.
 // The returned command is a single-element slice containing the script path.
 // The script handles all bwrap argument quoting internally, avoiding shell
 // escaping issues when tmux invokes the command.
-func (l *Launcher) buildSandboxCommand(principalLocalpart string, spec *schema.SandboxSpec, triggerContent []byte, serviceMounts []ServiceMount, tokenDirectory string, telemetrySocketPath string, telemetryTokenPath string, logSessionID string) ([]string, error) {
+func (l *Launcher) buildSandboxCommand(principalLocalpart string, spec *schema.SandboxSpec, triggerContent []byte, serviceMounts []ServiceMount, tokenDirectory string, telemetrySocketPath string, telemetryTokenPath string, logSessionID string, secretFiles map[string]string) ([]string, error) {
 	// Find the sandbox's config directory (created by spawnProxy).
 	sb, exists := l.sandboxes[principalLocalpart]
 	if !exists {
@@ -431,6 +434,29 @@ func (l *Launcher) buildSandboxCommand(principalLocalpart string, spec *schema.S
 		profile.Filesystem = append(profile.Filesystem, sandbox.Mount{
 			Source: tokenDirectory,
 			Dest:   "/run/bureau/service/token",
+			Mode:   sandbox.MountModeRO,
+		})
+	}
+
+	// Write secret files and bind-mount the secrets directory. Each
+	// entry in secretFiles maps a filename to a decrypted credential
+	// value. The launcher writes each file on the host (inside the
+	// sandbox's configDir) and bind-mounts the directory read-only at
+	// /run/bureau/secrets/ so the sandboxed process can read them.
+	if len(secretFiles) > 0 {
+		secretsDir := filepath.Join(sb.configDir, "secrets")
+		if err := os.MkdirAll(secretsDir, 0700); err != nil {
+			return nil, fmt.Errorf("creating secrets directory: %w", err)
+		}
+		for filename, value := range secretFiles {
+			secretPath := filepath.Join(secretsDir, filename)
+			if err := os.WriteFile(secretPath, []byte(value), 0600); err != nil {
+				return nil, fmt.Errorf("writing secret file %q: %w", filename, err)
+			}
+		}
+		profile.Filesystem = append(profile.Filesystem, sandbox.Mount{
+			Source: secretsDir,
+			Dest:   "/run/bureau/secrets",
 			Mode:   sandbox.MountModeRO,
 		})
 	}

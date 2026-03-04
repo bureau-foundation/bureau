@@ -753,3 +753,86 @@ func TestResolveInstanceConfigRequiredServicesOverride(t *testing.T) {
 		}
 	})
 }
+
+func TestResolveInstanceConfigSecrets(t *testing.T) {
+	t.Parallel()
+
+	template := &schema.TemplateContent{
+		Command: []string{"/usr/bin/cloudflared", "tunnel", "run"},
+		Secrets: []schema.SecretBinding{
+			{Key: "TUNNEL_TOKEN", Env: "TUNNEL_TOKEN"},
+			{Key: "CF_API_KEY", File: "cloudflare-api-key"},
+		},
+	}
+
+	_, fleet := testMachineSetup(t, "test", "test.local")
+
+	t.Run("template secrets flow through to spec", func(t *testing.T) {
+		t.Parallel()
+		assignment := &schema.PrincipalAssignment{
+			Principal: testEntity(t, fleet, "test/tunnel"),
+			Template:  "bureau/template:cloudflare-tunnel",
+		}
+
+		spec := resolveInstanceConfig(template, assignment)
+
+		if len(spec.Secrets) != 2 {
+			t.Fatalf("Secrets count = %d, want 2", len(spec.Secrets))
+		}
+		if spec.Secrets[0].Key != "TUNNEL_TOKEN" || spec.Secrets[0].Env != "TUNNEL_TOKEN" {
+			t.Errorf("Secrets[0] = %+v, want TUNNEL_TOKEN env binding", spec.Secrets[0])
+		}
+		if spec.Secrets[1].Key != "CF_API_KEY" || spec.Secrets[1].File != "cloudflare-api-key" {
+			t.Errorf("Secrets[1] = %+v, want CF_API_KEY file binding", spec.Secrets[1])
+		}
+	})
+
+	t.Run("secrets override replaces template secrets", func(t *testing.T) {
+		t.Parallel()
+		assignment := &schema.PrincipalAssignment{
+			Principal: testEntity(t, fleet, "test/tunnel"),
+			Template:  "bureau/template:cloudflare-tunnel",
+			SecretsOverride: []schema.SecretBinding{
+				{Key: "CUSTOM_TOKEN", Env: "MY_TOKEN"},
+			},
+		}
+
+		spec := resolveInstanceConfig(template, assignment)
+
+		if len(spec.Secrets) != 1 {
+			t.Fatalf("Secrets count = %d, want 1", len(spec.Secrets))
+		}
+		if spec.Secrets[0].Key != "CUSTOM_TOKEN" || spec.Secrets[0].Env != "MY_TOKEN" {
+			t.Errorf("Secrets[0] = %+v, want CUSTOM_TOKEN env binding", spec.Secrets[0])
+		}
+	})
+
+	t.Run("nil override preserves template secrets", func(t *testing.T) {
+		t.Parallel()
+		assignment := &schema.PrincipalAssignment{
+			Principal: testEntity(t, fleet, "test/tunnel"),
+			Template:  "bureau/template:cloudflare-tunnel",
+		}
+
+		spec := resolveInstanceConfig(template, assignment)
+
+		if len(spec.Secrets) != 2 {
+			t.Fatalf("Secrets count = %d, want 2", len(spec.Secrets))
+		}
+	})
+
+	t.Run("empty override clears template secrets", func(t *testing.T) {
+		t.Parallel()
+		assignment := &schema.PrincipalAssignment{
+			Principal:       testEntity(t, fleet, "test/tunnel"),
+			Template:        "bureau/template:cloudflare-tunnel",
+			SecretsOverride: []schema.SecretBinding{},
+		}
+
+		spec := resolveInstanceConfig(template, assignment)
+
+		if len(spec.Secrets) != 0 {
+			t.Errorf("Secrets = %v, want empty (empty override should clear)", spec.Secrets)
+		}
+	})
+}

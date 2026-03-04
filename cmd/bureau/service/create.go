@@ -24,14 +24,16 @@ import (
 // it needs the registration token for Matrix account creation.
 type serviceCreateParams struct {
 	cli.SessionConfig
-	Machine         string `json:"machine"           flag:"machine"           desc:"target machine localpart (required)"`
-	Name            string `json:"name"              flag:"name"              desc:"service principal localpart (required)"`
-	Fleet           string `json:"fleet"             flag:"fleet"             desc:"fleet prefix (e.g., bureau/fleet/prod) (required)"`
-	ServerName      string `json:"server_name"       flag:"server-name"       desc:"Matrix server name (auto-detected from machine.conf)"`
-	AutoStart       bool   `json:"auto_start"        flag:"auto-start"        desc:"start sandbox automatically" default:"true"`
-	NoFleetRegister bool   `json:"no_fleet_register" flag:"no-fleet-register" desc:"skip publishing a FleetServiceContent definition to the fleet room"`
-	Failover        string `json:"failover"          flag:"failover"          desc:"failover strategy: none (default), migrate, alert"`
-	Priority        int    `json:"priority"          flag:"priority"          desc:"fleet placement priority (0=critical, 10=production, 50=development, 100=batch)" default:"50"`
+	Machine         string   `json:"machine"           flag:"machine"           desc:"target machine localpart (required)"`
+	Name            string   `json:"name"              flag:"name"              desc:"service principal localpart (required)"`
+	Fleet           string   `json:"fleet"             flag:"fleet"             desc:"fleet prefix (e.g., bureau/fleet/prod) (required)"`
+	ServerName      string   `json:"server_name"       flag:"server-name"       desc:"Matrix server name (auto-detected from machine.conf)"`
+	AutoStart       bool     `json:"auto_start"        flag:"auto-start"        desc:"start sandbox automatically" default:"true"`
+	ExtraCredential []string `json:"extra_credential"  flag:"extra-credential"  desc:"extra credential KEY=VALUE for the service's encrypted bundle (repeatable)"`
+	ExtraEnv        []string `json:"extra_env"         flag:"extra-env"         desc:"extra environment variable KEY=VALUE for the sandbox (repeatable)"`
+	NoFleetRegister bool     `json:"no_fleet_register" flag:"no-fleet-register" desc:"skip publishing a FleetServiceContent definition to the fleet room"`
+	Failover        string   `json:"failover"          flag:"failover"          desc:"failover strategy: none (default), migrate, alert"`
+	Priority        int      `json:"priority"          flag:"priority"          desc:"fleet placement priority (0=critical, 10=production, 50=development, 100=batch)" default:"50"`
 
 	cli.JSONOutput
 }
@@ -198,6 +200,15 @@ func runCreate(ctx context.Context, logger *slog.Logger, templateRef schema.Temp
 			WithHint("Run 'bureau machine list' to see machines, or 'bureau machine provision' to register one.")
 	}
 
+	extraCredentials, err := cli.ParseKeyValuePairs(params.ExtraCredential)
+	if err != nil {
+		return cli.Validation("invalid --extra-credential: %w", err)
+	}
+	extraEnvironmentVariables, err := cli.ParseKeyValuePairs(params.ExtraEnv)
+	if err != nil {
+		return cli.Validation("invalid --extra-env: %w", err)
+	}
+
 	logger.Info("creating service", "name", params.Name, "machine", params.Machine, "template", templateRef.String())
 
 	principalEntity, err := ref.NewEntityFromAccountLocalpart(fleet, params.Name)
@@ -213,9 +224,11 @@ func runCreate(ctx context.Context, logger *slog.Logger, templateRef schema.Temp
 			_, err := templatedef.Fetch(ctx, adminSession, templateReference, server)
 			return err
 		},
-		HomeserverURL: homeserverURL,
-		AutoStart:     params.AutoStart,
-		MachineRoomID: machineRoomID,
+		HomeserverURL:             homeserverURL,
+		AutoStart:                 params.AutoStart,
+		MachineRoomID:             machineRoomID,
+		ExtraCredentials:          extraCredentials,
+		ExtraEnvironmentVariables: extraEnvironmentVariables,
 	})
 	if err != nil {
 		return cli.Internal("create service: %w", err)

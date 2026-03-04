@@ -228,3 +228,24 @@ func parseDurationDefault(s string) (time.Duration, error) {
 	}
 	return time.ParseDuration(s)
 }
+
+// ParseKeyValuePairs parses a slice of "KEY=VALUE" strings into a map.
+// Returns nil if pairs is empty. Returns an error if any pair is missing
+// the "=" separator or has an empty key.
+func ParseKeyValuePairs(pairs []string) (map[string]string, error) {
+	if len(pairs) == 0 {
+		return nil, nil
+	}
+	result := make(map[string]string, len(pairs))
+	for _, pair := range pairs {
+		key, value, found := strings.Cut(pair, "=")
+		if !found {
+			return nil, fmt.Errorf("expected KEY=VALUE, got %q", pair)
+		}
+		if key == "" {
+			return nil, fmt.Errorf("empty key in %q", pair)
+		}
+		result[key] = value
+	}
+	return result, nil
+}

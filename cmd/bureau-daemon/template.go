@@ -35,6 +35,7 @@ func resolveInstanceConfig(template *schema.TemplateContent, assignment *schema.
 		CreateDirs:       template.CreateDirs,
 		RequiredServices: template.RequiredServices,
 		ProxyServices:    template.ProxyServices,
+		Secrets:          template.Secrets,
 	}
 
 	// Copy environment variables so overrides don't mutate the template.
@@ -66,6 +67,11 @@ func resolveInstanceConfig(template *schema.TemplateContent, assignment *schema.
 	// Override required services if the assignment specifies them.
 	if len(assignment.RequiredServicesOverride) > 0 {
 		spec.RequiredServices = assignment.RequiredServicesOverride
+	}
+
+	// Override secrets if the assignment specifies them.
+	if assignment.SecretsOverride != nil {
+		spec.Secrets = assignment.SecretsOverride
 	}
 
 	// Merge payload: template DefaultPayload as base, assignment Payload wins.

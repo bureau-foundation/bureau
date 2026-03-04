@@ -20,7 +20,7 @@
 //   - Maps (EnvironmentVariables, Roles, DefaultPayload): merged,
 //     child wins on key conflict
 //   - Slices (Filesystem, CreateDirs, RequiredCredentials,
-//     RequiredServices): child appended, deduplicated
+//     RequiredServices, Secrets): child appended, deduplicated
 //   - Pointers (Namespaces, Resources, Security): child replaces
 //   - Inherits is cleared after resolution
 //

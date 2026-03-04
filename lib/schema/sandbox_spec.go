@@ -113,4 +113,16 @@ type SandboxSpec struct {
 	// that structurallyChanged() (which uses JSON serialization)
 	// detects proxy service changes and triggers sandbox restarts.
 	ProxyServices map[string]TemplateProxyService `json:"proxy_services,omitempty"`
+
+	// Secrets declares how specific credentials from the encrypted
+	// credential bundle are exposed inside the sandbox. The launcher
+	// resolves these after decrypting the credential bundle: Env
+	// bindings become bwrap --setenv arguments, File bindings become
+	// files under /run/bureau/secrets/ (bind-mounted read-only).
+	//
+	// This field is resolved from TemplateContent.Secrets (or
+	// PrincipalAssignment.SecretsOverride) and carried through to the
+	// launcher so it can wire credentials into the sandbox without the
+	// daemon needing to see decrypted values.
+	Secrets []SecretBinding `json:"secrets,omitempty"`
 }

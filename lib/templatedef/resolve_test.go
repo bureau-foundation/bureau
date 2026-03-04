@@ -412,6 +412,58 @@ func TestMergeStringSlicesDeduplication(t *testing.T) {
 	}
 }
 
+func TestMergeSecretBindings(t *testing.T) {
+	t.Parallel()
+
+	parent := []schema.SecretBinding{
+		{Key: "API_KEY", Env: "API_KEY"},
+		{Key: "DB_PASSWORD", File: "db-password"},
+	}
+	child := []schema.SecretBinding{
+		// Override parent's API_KEY binding (change from env to file).
+		{Key: "API_KEY", File: "api-key.txt"},
+		// Add a new binding.
+		{Key: "TUNNEL_TOKEN", Env: "TUNNEL_TOKEN"},
+	}
+
+	result := mergeSecretBindings(parent, child)
+
+	// Expect 3 bindings: DB_PASSWORD (from parent), API_KEY (child override),
+	// TUNNEL_TOKEN (from child).
+	if len(result) != 3 {
+		t.Fatalf("result count = %d, want 3, got %v", len(result), result)
+	}
+
+	// DB_PASSWORD should come first (parent, not overridden).
+	if result[0].Key != "DB_PASSWORD" || result[0].File != "db-password" {
+		t.Errorf("result[0] = %+v, want DB_PASSWORD file binding from parent", result[0])
+	}
+	// API_KEY should be the child's version (file, not env).
+	if result[1].Key != "API_KEY" || result[1].File != "api-key.txt" || result[1].Env != "" {
+		t.Errorf("result[1] = %+v, want API_KEY file binding from child (overriding parent)", result[1])
+	}
+	// TUNNEL_TOKEN from child.
+	if result[2].Key != "TUNNEL_TOKEN" || result[2].Env != "TUNNEL_TOKEN" {
+		t.Errorf("result[2] = %+v, want TUNNEL_TOKEN env binding from child", result[2])
+	}
+}
+
+func TestMergeSecretBindingsNilInputs(t *testing.T) {
+	t.Parallel()
+
+	bindings := []schema.SecretBinding{{Key: "TOKEN", Env: "TOKEN"}}
+
+	if result := mergeSecretBindings(nil, nil); result != nil {
+		t.Errorf("mergeSecretBindings(nil, nil) = %v, want nil", result)
+	}
+	if result := mergeSecretBindings(nil, bindings); len(result) != 1 || result[0].Key != "TOKEN" {
+		t.Errorf("mergeSecretBindings(nil, child) should return child")
+	}
+	if result := mergeSecretBindings(bindings, nil); len(result) != 1 || result[0].Key != "TOKEN" {
+		t.Errorf("mergeSecretBindings(parent, nil) should return parent")
+	}
+}
+
 func TestMergeAnyMaps(t *testing.T) {
 	t.Parallel()
 

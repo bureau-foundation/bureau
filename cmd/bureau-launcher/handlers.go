@@ -298,12 +298,37 @@ func (l *Launcher) handleCreateSandbox(ctx context.Context, request *IPCRequest)
 		return IPCResponse{OK: false, Error: err.Error()}
 	}
 
+	// Resolve secret bindings: extract credential values for env var
+	// injection and file writing. Env bindings are merged into the
+	// SandboxSpec's EnvironmentVariables (so buildSandboxCommand picks
+	// them up via the normal env var path). File bindings are collected
+	// into a map that buildSandboxCommand writes to the secrets dir.
+	var secretFiles map[string]string
+	if request.SandboxSpec != nil && len(request.SandboxSpec.Secrets) > 0 {
+		secretFiles = make(map[string]string)
+		for _, binding := range request.SandboxSpec.Secrets {
+			value, exists := credentials[binding.Key]
+			if !exists {
+				return IPCResponse{OK: false, Error: fmt.Sprintf("credential bundle missing secret %q declared by template", binding.Key)}
+			}
+			if binding.Env != "" {
+				if request.SandboxSpec.EnvironmentVariables == nil {
+					request.SandboxSpec.EnvironmentVariables = make(map[string]string)
+				}
+				request.SandboxSpec.EnvironmentVariables[binding.Env] = value
+			}
+			if binding.File != "" {
+				secretFiles[binding.File] = value
+			}
+		}
+	}
+
 	// Build the sandbox command if a SandboxSpec was provided. When no
 	// spec is present, the tmux session gets a bare shell (interactive
 	// principal without a bwrap sandbox).
 	var sandboxCommand []string
 	if request.SandboxSpec != nil {
-		sandboxCmd, setupErr := l.buildSandboxCommand(request.Principal, request.SandboxSpec, request.TriggerContent, request.ServiceMounts, request.TokenDirectory, request.TelemetrySocketPath, request.TelemetryTokenPath, request.LogSessionID)
+		sandboxCmd, setupErr := l.buildSandboxCommand(request.Principal, request.SandboxSpec, request.TriggerContent, request.ServiceMounts, request.TokenDirectory, request.TelemetrySocketPath, request.TelemetryTokenPath, request.LogSessionID, secretFiles)
 		if setupErr != nil {
 			l.logger.Error("sandbox setup failed, rolling back proxy",
 				"principal", request.Principal, "error", setupErr)

@@ -122,9 +122,9 @@ func Fetch(ctx context.Context, session messaging.Session, templateRef schema.Te
 // Merge rules:
 //   - Scalars (Description, Command, Environment): child replaces parent if non-zero
 //   - Maps (EnvironmentVariables, Roles, DefaultPayload, ProxyServices): merged, child values win on conflict
-//   - Slices (Filesystem, CreateDirs, RequiredCredentials, RequiredServices):
-//     child appended after parent, deduplicated where applicable
-//     (Filesystem by Dest, strings by value)
+//   - Slices (Filesystem, CreateDirs, RequiredCredentials, RequiredServices,
+//     Secrets): child appended after parent, deduplicated where applicable
+//     (Filesystem by Dest, strings by value, Secrets by Key)
 //   - Pointers (Namespaces, Resources, Security, HealthCheck): child replaces parent if non-nil
 //   - Inherits is always cleared (consumed during resolution)
 func Merge(parent, child *schema.TemplateContent) schema.TemplateContent {
@@ -160,6 +160,7 @@ func Merge(parent, child *schema.TemplateContent) schema.TemplateContent {
 	result.CreateDirs = mergeStringSlices(parent.CreateDirs, child.CreateDirs)
 	result.RequiredCredentials = mergeStringSlices(parent.RequiredCredentials, child.RequiredCredentials)
 	result.RequiredServices = mergeStringSlices(parent.RequiredServices, child.RequiredServices)
+	result.Secrets = mergeSecretBindings(parent.Secrets, child.Secrets)
 
 	// Pointers: child wins if non-nil.
 	if child.Namespaces != nil {
@@ -271,6 +272,34 @@ func mergeProxyServices(parent, child map[string]schema.TemplateProxyService) ma
 	for key, value := range child {
 		result[key] = value
 	}
+	return result
+}
+
+// mergeSecretBindings appends child bindings after parent bindings. When
+// both parent and child declare a binding for the same Key, the child's
+// binding replaces the parent's (a child can override how a credential is
+// exposed without duplicating the entry).
+func mergeSecretBindings(parent, child []schema.SecretBinding) []schema.SecretBinding {
+	if len(parent) == 0 {
+		return child
+	}
+	if len(child) == 0 {
+		return parent
+	}
+	// Build a set of child keys so we can skip overridden parent entries.
+	childKeys := make(map[string]bool, len(child))
+	for _, binding := range child {
+		childKeys[binding.Key] = true
+	}
+	// Parent entries first (excluding those overridden by child), then
+	// all child entries.
+	result := make([]schema.SecretBinding, 0, len(parent)+len(child))
+	for _, binding := range parent {
+		if !childKeys[binding.Key] {
+			result = append(result, binding)
+		}
+	}
+	result = append(result, child...)
 	return result
 }
 

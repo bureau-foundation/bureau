@@ -49,9 +49,11 @@ type LayoutChanged struct {
 // All other notifications (%output, %session-changed, %pane-mode-changed, etc.)
 // are ignored.
 //
-// Control mode clients do not participate in tmux window size negotiation,
-// so attaching a ControlClient does not constrain the terminal dimensions
-// of real clients.
+// The control mode client attaches with the "ignore-size" client flag so
+// it does not participate in tmux window size negotiation. Without this
+// flag, the control client's default dimensions would constrain real
+// clients to a smaller viewport (visible as pane contents fixed in the
+// top-left corner while the status bar spans the full terminal width).
 type ControlClient struct {
 	server           *tmux.Server
 	sessionName      string
@@ -179,7 +181,7 @@ func (client *ControlClient) WaitForNotifications(n uint64) bool {
 // start launches the tmux control mode subprocess and the reader
 // goroutine. Called once from NewControlClient.
 func (client *ControlClient) start(ctx context.Context) error {
-	cmd := client.server.CommandContext(ctx, "-C", "attach-session", "-t", client.sessionName)
+	cmd := client.server.CommandContext(ctx, "-C", "attach-session", "-t", client.sessionName, "-f", "ignore-size")
 
 	stdout, err := cmd.StdoutPipe()
 	if err != nil {

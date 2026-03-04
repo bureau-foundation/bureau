@@ -38,6 +38,7 @@ All commands that access Matrix require an operator session. Run
 			showCommand(),
 			pushCommand(),
 			publishCommand(),
+			updateCommand(),
 			validateCommand(),
 			diffCommand(),
 			impactCommand(),
@@ -66,6 +67,10 @@ All commands that access Matrix require an operator session. Run
 			{
 				Description: "Diff a Matrix template against a local file",
 				Command:     "bureau template diff bureau/template:my-agent my-agent.json",
+			},
+			{
+				Description: "Check all templates in a room for updates from their source",
+				Command:     "bureau template update bureau/template",
 			},
 			{
 				Description: "Show which principals would be affected by a template change",

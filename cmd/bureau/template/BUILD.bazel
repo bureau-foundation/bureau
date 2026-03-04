@@ -14,6 +14,7 @@ go_library(
         "publish.go",
         "push.go",
         "show.go",
+        "update.go",
         "validate.go",
     ],
     importpath = "github.com/bureau-foundation/bureau/cmd/bureau/template",

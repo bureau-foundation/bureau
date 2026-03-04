@@ -1997,6 +1997,34 @@ func proxyWhoami(t *testing.T, client *http.Client) string {
 	return result.UserID
 }
 
+// logoutToken invalidates a single access token on the homeserver by
+// calling POST /_matrix/client/v3/logout. This only logs out the device
+// associated with the given token — other devices for the same user
+// remain valid. Used in credential rotation tests to prove the proxy
+// is using a new token (if the proxy still holds the old token, its
+// next Matrix API call will fail with M_UNKNOWN_TOKEN).
+func logoutToken(t *testing.T, token string) {
+	t.Helper()
+	request, err := http.NewRequestWithContext(t.Context(), http.MethodPost,
+		testHomeserverURL+"/_matrix/client/v3/logout",
+		strings.NewReader("{}"))
+	if err != nil {
+		t.Fatalf("create logout request: %v", err)
+	}
+	request.Header.Set("Authorization", "Bearer "+token)
+	request.Header.Set("Content-Type", "application/json")
+
+	response, err := http.DefaultClient.Do(request)
+	if err != nil {
+		t.Fatalf("logout request: %v", err)
+	}
+	defer response.Body.Close()
+	if response.StatusCode != http.StatusOK {
+		body, _ := io.ReadAll(response.Body)
+		t.Fatalf("logout status = %d: %s", response.StatusCode, body)
+	}
+}
+
 // proxyJoinRoom joins a room through a proxy by posting to the structured
 // join endpoint. The proxy injects the principal's access token and checks
 // authorization grants (a matrix/join grant must be present).

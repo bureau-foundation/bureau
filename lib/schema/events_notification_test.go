@@ -326,6 +326,38 @@ func TestCredentialsRotatedMessageRestartingOmitsError(t *testing.T) {
 	}
 }
 
+func TestCredentialsRotatedMessageLiveUpdated(t *testing.T) {
+	t.Parallel()
+	original := NewCredentialsRotatedMessage("agent/cred-test", CredRotationLiveUpdated, "")
+
+	data, err := json.Marshal(original)
+	if err != nil {
+		t.Fatalf("Marshal: %v", err)
+	}
+
+	var raw map[string]any
+	if err := json.Unmarshal(data, &raw); err != nil {
+		t.Fatalf("Unmarshal to map: %v", err)
+	}
+	assertField(t, raw, "msgtype", MsgTypeCredentialsRotated)
+	assertField(t, raw, "status", string(CredRotationLiveUpdated))
+
+	if _, exists := raw["error"]; exists {
+		t.Error("error field should be omitted for live_updated")
+	}
+
+	var decoded CredentialsRotatedMessage
+	if err := json.Unmarshal(data, &decoded); err != nil {
+		t.Fatalf("Unmarshal: %v", err)
+	}
+	if decoded.Status != CredRotationLiveUpdated {
+		t.Errorf("Status = %q, want %q", decoded.Status, CredRotationLiveUpdated)
+	}
+	if decoded.Body == "" {
+		t.Error("Body should not be empty")
+	}
+}
+
 func TestProxyCrashMessageRoundTrip(t *testing.T) {
 	t.Parallel()
 	original := NewProxyCrashMessage("agent/proxy-test", ProxyCrashDetected, 137, "")
@@ -535,6 +567,7 @@ func TestCredRotationStatusIsKnown(t *testing.T) {
 		CredRotationFailed,
 		CredRotationRolledBack,
 		CredRotationRollbackFailed,
+		CredRotationLiveUpdated,
 	}
 	for _, status := range known {
 		if !status.IsKnown() {

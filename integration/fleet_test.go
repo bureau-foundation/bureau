@@ -446,26 +446,35 @@ func TestCredentialRotation(t *testing.T) {
 	// Push new credentials. The ciphertext will differ because:
 	//   (a) the token payload is different, and
 	//   (b) age encryption uses a fresh ephemeral key per Encrypt call.
-	// The daemon compares ciphertext on each reconcile cycle and triggers
-	// a destroy+create when it changes.
+	// The daemon compares ciphertext on each reconcile cycle and updates
+	// the proxy's credentials in-place via the admin socket.
 	watch := watchRoom(t, admin, machine.ConfigRoomID)
 	pushCredentials(t, admin, machine, rotated)
 
-	// Wait for the daemon to complete the rotation. The daemon posts a
-	// credentials_rotated notification with status "completed" after
-	// destroying the old sandbox and creating the new one.
+	// Wait for the daemon to update credentials in-place. The daemon
+	// pushes decrypted credentials to the proxy admin socket and posts
+	// a credentials_rotated notification with status "live_updated".
 	waitForNotification[schema.CredentialsRotatedMessage](
 		t, &watch, schema.MsgTypeCredentialsRotated, machine.UserID,
 		func(m schema.CredentialsRotatedMessage) bool {
-			return m.Principal == agent.Localpart && m.Status == schema.CredRotationCompleted
-		}, "credentials rotation completed for "+agent.Localpart)
+			return m.Principal == agent.Localpart && m.Status == schema.CredRotationLiveUpdated
+		}, "credentials live-updated for "+agent.Localpart)
 
-	// Verify the restarted proxy serves the correct identity. The new proxy
-	// process holds the rotated token, so whoami still returns the same
-	// user_id (the account didn't change, only its access token).
-	newProxyClient := proxyHTTPClient(proxySocket)
-	if whoami := proxyWhoami(t, newProxyClient); whoami != agent.UserID.String() {
+	// Verify the proxy serves the correct identity after in-place update.
+	// The proxy process is the same (no sandbox restart), but its credential
+	// map has been swapped to hold the rotated token.
+	if whoami := proxyWhoami(t, proxyClient); whoami != agent.UserID.String() {
 		t.Fatalf("post-rotation whoami = %q, want %q", whoami, agent.UserID)
+	}
+
+	// Prove the proxy is using the NEW token, not the old one. Log out the
+	// original device (invalidates the old token on the homeserver), then
+	// verify the proxy's whoami still works — which can only succeed if the
+	// proxy's credential injection is using the rotated token.
+	logoutToken(t, agent.Token)
+
+	if whoami := proxyWhoami(t, proxyClient); whoami != agent.UserID.String() {
+		t.Fatalf("whoami after old-token logout = %q, want %q (proxy should be using new token)", whoami, agent.UserID)
 	}
 }
 

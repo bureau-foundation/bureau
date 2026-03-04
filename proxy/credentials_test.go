@@ -415,3 +415,163 @@ func TestPipeCredentialSource_Grants(t *testing.T) {
 		}
 	})
 }
+
+// newTestPipeSource builds a PipeCredentialSource from a CBOR payload.
+// Calls t.Cleanup to close it.
+func newTestPipeSource(t *testing.T, token, homeserver, userID string) *PipeCredentialSource {
+	t.Helper()
+	payload := ipc.ProxyCredentialPayload{
+		MatrixHomeserverURL: homeserver,
+		MatrixToken:         token,
+		MatrixUserID:        userID,
+	}
+	data, err := codec.Marshal(payload)
+	if err != nil {
+		t.Fatalf("codec.Marshal: %v", err)
+	}
+	source, err := ReadPipeCredentials(bytes.NewReader(data))
+	if err != nil {
+		t.Fatalf("ReadPipeCredentials: %v", err)
+	}
+	t.Cleanup(func() { source.Close() })
+	return source
+}
+
+func TestUpdateCredentials(t *testing.T) {
+	source := newTestPipeSource(t, "original-token", "http://old:6167", "@alice:bureau.local")
+
+	// Verify initial state.
+	assertSecretBuffer(t, "before", "MATRIX_TOKEN", source.Get("MATRIX_TOKEN"), "original-token")
+	assertSecretBuffer(t, "before", "MATRIX_BEARER", source.Get("MATRIX_BEARER"), "Bearer original-token")
+	assertSecretBuffer(t, "before", "MATRIX_HOMESERVER_URL", source.Get("MATRIX_HOMESERVER_URL"), "http://old:6167")
+	assertSecretBuffer(t, "before", "MATRIX_USER_ID", source.Get("MATRIX_USER_ID"), "@alice:bureau.local")
+
+	// Update credentials.
+	err := source.UpdateCredentials(map[string]string{
+		"MATRIX_TOKEN":          "rotated-token",
+		"MATRIX_HOMESERVER_URL": "http://new:6167",
+		"MATRIX_USER_ID":        "@alice:bureau.local",
+		"GITHUB_TOKEN":          "ghp_new",
+	})
+	if err != nil {
+		t.Fatalf("UpdateCredentials: %v", err)
+	}
+
+	// Verify all keys reflect the update.
+	assertSecretBuffer(t, "after", "MATRIX_TOKEN", source.Get("MATRIX_TOKEN"), "rotated-token")
+	assertSecretBuffer(t, "after", "MATRIX_BEARER", source.Get("MATRIX_BEARER"), "Bearer rotated-token")
+	assertSecretBuffer(t, "after", "MATRIX_HOMESERVER_URL", source.Get("MATRIX_HOMESERVER_URL"), "http://new:6167")
+	assertSecretBuffer(t, "after", "MATRIX_USER_ID", source.Get("MATRIX_USER_ID"), "@alice:bureau.local")
+	assertSecretBuffer(t, "after", "GITHUB_TOKEN", source.Get("GITHUB_TOKEN"), "ghp_new")
+
+	// Keys that existed before but not in the update should be gone.
+	// The original source had no extra keys, but verify NONEXISTENT is still nil.
+	assertSecretBuffer(t, "after", "NONEXISTENT", source.Get("NONEXISTENT"), "")
+}
+
+func TestUpdateCredentials_BearerCannotBeOverridden(t *testing.T) {
+	source := newTestPipeSource(t, "tok", "http://h:1", "@a:b")
+
+	// Attempt to inject a custom MATRIX_BEARER — the derived value must win.
+	err := source.UpdateCredentials(map[string]string{
+		"MATRIX_TOKEN":          "new-token",
+		"MATRIX_HOMESERVER_URL": "http://h:1",
+		"MATRIX_USER_ID":        "@a:b",
+		"MATRIX_BEARER":         "Bearer attacker-token",
+	})
+	if err != nil {
+		t.Fatalf("UpdateCredentials: %v", err)
+	}
+
+	assertSecretBuffer(t, "override", "MATRIX_BEARER", source.Get("MATRIX_BEARER"), "Bearer new-token")
+}
+
+func TestUpdateCredentials_MissingRequiredKeys(t *testing.T) {
+	source := newTestPipeSource(t, "tok", "http://h:1", "@a:b")
+
+	tests := []struct {
+		name    string
+		values  map[string]string
+		wantErr string
+	}{
+		{
+			name: "missing MATRIX_TOKEN",
+			values: map[string]string{
+				"MATRIX_HOMESERVER_URL": "http://h:1",
+				"MATRIX_USER_ID":        "@a:b",
+			},
+			wantErr: "missing required key: MATRIX_TOKEN",
+		},
+		{
+			name: "missing MATRIX_HOMESERVER_URL",
+			values: map[string]string{
+				"MATRIX_TOKEN":   "tok",
+				"MATRIX_USER_ID": "@a:b",
+			},
+			wantErr: "missing required key: MATRIX_HOMESERVER_URL",
+		},
+		{
+			name: "missing MATRIX_USER_ID",
+			values: map[string]string{
+				"MATRIX_TOKEN":          "tok",
+				"MATRIX_HOMESERVER_URL": "http://h:1",
+			},
+			wantErr: "missing required key: MATRIX_USER_ID",
+		},
+		{
+			name:    "empty map",
+			values:  map[string]string{},
+			wantErr: "missing required key: MATRIX_TOKEN",
+		},
+	}
+
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			err := source.UpdateCredentials(test.values)
+			if err == nil {
+				t.Fatalf("UpdateCredentials() = nil error, want error containing %q", test.wantErr)
+			}
+			if !strings.Contains(err.Error(), test.wantErr) {
+				t.Errorf("UpdateCredentials() error = %v, want error containing %q", err, test.wantErr)
+			}
+		})
+	}
+
+	// After failed updates, original credentials must be untouched.
+	assertSecretBuffer(t, "unchanged", "MATRIX_TOKEN", source.Get("MATRIX_TOKEN"), "tok")
+	assertSecretBuffer(t, "unchanged", "MATRIX_BEARER", source.Get("MATRIX_BEARER"), "Bearer tok")
+}
+
+func TestUpdateCredentials_ConcurrentReads(t *testing.T) {
+	source := newTestPipeSource(t, "tok-v1", "http://h:1", "@a:b")
+
+	// Start concurrent readers that exercise Get() while we update.
+	done := make(chan struct{})
+	go func() {
+		defer close(done)
+		for i := 0; i < 1000; i++ {
+			buffer := source.Get("MATRIX_TOKEN")
+			if buffer == nil {
+				t.Error("Get(MATRIX_TOKEN) returned nil during concurrent update")
+				return
+			}
+			value := buffer.String()
+			if value != "tok-v1" && value != "tok-v2" {
+				t.Errorf("Get(MATRIX_TOKEN) = %q, want tok-v1 or tok-v2", value)
+				return
+			}
+		}
+	}()
+
+	// Update while reads are in flight.
+	if err := source.UpdateCredentials(map[string]string{
+		"MATRIX_TOKEN":          "tok-v2",
+		"MATRIX_HOMESERVER_URL": "http://h:1",
+		"MATRIX_USER_ID":        "@a:b",
+	}); err != nil {
+		t.Fatalf("UpdateCredentials: %v", err)
+	}
+
+	<-done
+	assertSecretBuffer(t, "final", "MATRIX_TOKEN", source.Get("MATRIX_TOKEN"), "tok-v2")
+}

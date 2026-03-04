@@ -99,13 +99,19 @@ const (
 	// were unavailable (daemon restarted during rollback window) or
 	// also failed health checks. The operator must re-provision.
 	CredRotationRollbackFailed CredRotationStatus = "rollback_failed"
+
+	// CredRotationLiveUpdated means the proxy's credentials were
+	// updated in-place without restarting the sandbox. The sandboxed
+	// process was not interrupted.
+	CredRotationLiveUpdated CredRotationStatus = "live_updated"
 )
 
 // IsKnown reports whether s is one of the defined CredRotationStatus values.
 func (s CredRotationStatus) IsKnown() bool {
 	switch s {
 	case CredRotationRestarting, CredRotationCompleted, CredRotationFailed,
-		CredRotationRolledBack, CredRotationRollbackFailed:
+		CredRotationRolledBack, CredRotationRollbackFailed,
+		CredRotationLiveUpdated:
 		return true
 	}
 	return false
@@ -384,6 +390,8 @@ func NewCredentialsRotatedMessage(principal string, status CredRotationStatus, e
 		body = fmt.Sprintf("Rolled back %s to previous credentials after health check failure", principal)
 	case CredRotationRollbackFailed:
 		body = fmt.Sprintf("CRITICAL: %s credential rollback failed: %s. Re-provisioning required.", principal, errorMessage)
+	case CredRotationLiveUpdated:
+		body = fmt.Sprintf("Updated credentials for %s in-place (no restart)", principal)
 	default:
 		body = fmt.Sprintf("Credential rotation for %s: %s", principal, status)
 	}

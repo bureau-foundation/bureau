@@ -312,6 +312,7 @@ func (s *ChainCredentialSource) Close() error {
 // Get and Grants are safe for concurrent use. Close must not be
 // called concurrently with Get.
 type PipeCredentialSource struct {
+	mu          sync.RWMutex
 	credentials map[string]*secret.Buffer
 	grants      []schema.Grant
 
@@ -404,11 +405,15 @@ func ReadPipeCredentials(reader io.Reader) (*PipeCredentialSource, error) {
 // the key must match exactly as it appeared in the credential payload (or
 // "MATRIX_TOKEN" / "MATRIX_USER_ID" for the top-level fields).
 func (s *PipeCredentialSource) Get(name string) *secret.Buffer {
+	s.mu.RLock()
+	defer s.mu.RUnlock()
 	return s.credentials[name]
 }
 
 // Close releases all credential buffers.
 func (s *PipeCredentialSource) Close() error {
+	s.mu.Lock()
+	defer s.mu.Unlock()
 	for key, buffer := range s.credentials {
 		buffer.Close()
 		delete(s.credentials, key)
@@ -416,9 +421,70 @@ func (s *PipeCredentialSource) Close() error {
 	return nil
 }
 
+// UpdateCredentials atomically replaces the credential map with new values.
+// The new map must contain MATRIX_TOKEN, MATRIX_HOMESERVER_URL, and
+// MATRIX_USER_ID. MATRIX_BEARER is derived automatically from MATRIX_TOKEN.
+//
+// New buffers are allocated outside the lock, the swap is performed under the
+// write lock, and old buffers are released after the lock is released. On
+// error (missing required keys, buffer allocation failure), the existing
+// credentials are unchanged.
+func (s *PipeCredentialSource) UpdateCredentials(values map[string]string) error {
+	if values["MATRIX_TOKEN"] == "" {
+		return fmt.Errorf("credential update missing required key: MATRIX_TOKEN")
+	}
+	if values["MATRIX_HOMESERVER_URL"] == "" {
+		return fmt.Errorf("credential update missing required key: MATRIX_HOMESERVER_URL")
+	}
+	if values["MATRIX_USER_ID"] == "" {
+		return fmt.Errorf("credential update missing required key: MATRIX_USER_ID")
+	}
+
+	// Build new credential map outside the lock.
+	newCredentials := make(map[string]*secret.Buffer, len(values)+1)
+	wrapValue := func(key, value string) error {
+		buffer, err := secret.NewFromBytes([]byte(value))
+		if err != nil {
+			for _, existing := range newCredentials {
+				existing.Close()
+			}
+			return fmt.Errorf("creating credential buffer for %q: %w", key, err)
+		}
+		newCredentials[key] = buffer
+		return nil
+	}
+
+	for key, value := range values {
+		if err := wrapValue(key, value); err != nil {
+			return err
+		}
+	}
+	// Derive MATRIX_BEARER after all explicit keys so it cannot be
+	// overridden by a key collision in the values map (same precedence
+	// rule as ReadPipeCredentials).
+	if err := wrapValue("MATRIX_BEARER", "Bearer "+values["MATRIX_TOKEN"]); err != nil {
+		return err
+	}
+
+	// Swap under write lock.
+	s.mu.Lock()
+	oldCredentials := s.credentials
+	s.credentials = newCredentials
+	s.mu.Unlock()
+
+	// Release old buffers outside the lock.
+	for _, buffer := range oldCredentials {
+		buffer.Close()
+	}
+
+	return nil
+}
+
 // Grants returns the pre-resolved authorization grants from the credential
 // payload. Returns nil if no grants were specified (default-deny).
 func (s *PipeCredentialSource) Grants() []schema.Grant {
+	s.mu.RLock()
+	defer s.mu.RUnlock()
 	return s.grants
 }
 

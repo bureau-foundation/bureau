@@ -53,6 +53,12 @@ type Handler struct {
 	// from the principal's credential bundle into outbound requests.
 	credential CredentialSource
 
+	// pipeCredential is the PipeCredentialSource reference for live
+	// credential updates via the admin API. Nil when the proxy was not
+	// started with pipe credentials (dev/test modes). The admin endpoint
+	// returns 501 when this is nil.
+	pipeCredential *PipeCredentialSource
+
 	// serviceDirectory is the cached service directory pushed by the
 	// daemon. Agents query this via GET /v1/services to discover what
 	// services are available. The daemon pushes updates via the admin
@@ -126,6 +132,15 @@ func (h *Handler) SetCredential(credential CredentialSource) {
 	h.mu.Lock()
 	defer h.mu.Unlock()
 	h.credential = credential
+}
+
+// SetPipeCredential stores a reference to the PipeCredentialSource for
+// live credential updates via the admin API. Must be called before the
+// admin socket starts accepting connections.
+func (h *Handler) SetPipeCredential(source *PipeCredentialSource) {
+	h.mu.Lock()
+	defer h.mu.Unlock()
+	h.pipeCredential = source
 }
 
 // SetTelemetry configures telemetry instrumentation for the handler and
@@ -856,6 +871,42 @@ func (h *Handler) HandleAdminSetRepoRooms(w http.ResponseWriter, r *http.Request
 	h.writeJSON(w, map[string]any{
 		"status": "ok",
 		"repos":  len(mapping),
+	})
+}
+
+// HandleAdminSetCredentials replaces the proxy's credentials in-place.
+// The daemon pushes decrypted credentials via PUT /v1/admin/credentials
+// during live credential rotation (no sandbox restart). The request body
+// is a JSON map[string]string of credential key-value pairs, which must
+// include MATRIX_TOKEN, MATRIX_HOMESERVER_URL, and MATRIX_USER_ID.
+func (h *Handler) HandleAdminSetCredentials(w http.ResponseWriter, r *http.Request) {
+	h.mu.RLock()
+	pipe := h.pipeCredential
+	h.mu.RUnlock()
+
+	if pipe == nil {
+		h.sendError(w, http.StatusNotImplemented, "credential update not supported (no pipe credential source)")
+		return
+	}
+
+	var credentials map[string]string
+	if err := json.NewDecoder(r.Body).Decode(&credentials); err != nil {
+		h.sendError(w, http.StatusBadRequest, "invalid credentials payload: %v", err)
+		return
+	}
+
+	if err := pipe.UpdateCredentials(credentials); err != nil {
+		h.sendError(w, http.StatusBadRequest, "credential update failed: %v", err)
+		return
+	}
+
+	h.logger.Info("credentials updated via admin API",
+		"credential_count", len(credentials),
+	)
+
+	h.writeJSON(w, map[string]any{
+		"status":      "ok",
+		"credentials": len(credentials),
 	})
 }
 

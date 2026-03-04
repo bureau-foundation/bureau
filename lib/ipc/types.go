@@ -52,6 +52,13 @@ const (
 	// encrypted credential bundle and returns the re-encrypted ciphertext.
 	ActionProvisionCredential LauncherAction = "provision-credential"
 
+	// ActionDecryptCredentials decrypts an age ciphertext bundle and
+	// returns the plaintext credential map. Used by the daemon during
+	// live credential rotation: the daemon sends the new ciphertext,
+	// the launcher decrypts it, and the daemon pushes the plaintext
+	// to the proxy's admin socket. No sandbox is created or destroyed.
+	ActionDecryptCredentials LauncherAction = "decrypt-credentials"
+
 	// ActionExecUpdate replaces the launcher process image with a new
 	// binary. The response is sent before exec() so the daemon knows the
 	// request was accepted.
@@ -72,8 +79,8 @@ func (a LauncherAction) IsKnown() bool {
 	case ActionStatus, ActionListSandboxes, ActionCreateSandbox,
 		ActionDestroySandbox, ActionSignalSandbox, ActionUpdatePayload,
 		ActionUpdateProxyBinary, ActionUpdateLogRelayBinary,
-		ActionProvisionCredential, ActionExecUpdate,
-		ActionWaitSandbox, ActionWaitProxy:
+		ActionProvisionCredential, ActionDecryptCredentials,
+		ActionExecUpdate, ActionWaitSandbox, ActionWaitProxy:
 		return true
 	}
 	return false
@@ -287,6 +294,13 @@ type Response struct {
 	// the Keys field on the m.bureau.credentials state event, allowing
 	// credential auditing without decryption.
 	UpdatedKeys []string `cbor:"updated_keys,omitempty"`
+
+	// DecryptedCredentials is the plaintext credential map returned by
+	// "decrypt-credentials". The daemon pushes this to the proxy's admin
+	// credential endpoint for live rotation. Only populated for the
+	// decrypt-credentials action. Safe over local IPC — same trust
+	// boundary as DirectCredentials in create-sandbox.
+	DecryptedCredentials map[string]string `cbor:"decrypted_credentials,omitempty"`
 }
 
 // SandboxListEntry describes a running sandbox returned by "list-sandboxes".

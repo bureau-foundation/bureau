@@ -203,6 +203,9 @@ func (l *Launcher) handleConnection(ctx context.Context, conn net.Conn) {
 	case ipc.ActionProvisionCredential:
 		response = l.handleProvisionCredential(&request)
 
+	case ipc.ActionDecryptCredentials:
+		response = l.handleDecryptCredentials(&request)
+
 	case ipc.ActionExecUpdate:
 		response = l.handleExecUpdate(ctx, &request)
 		// Send the response before a potential exec() — the daemon
@@ -881,6 +884,33 @@ func (l *Launcher) handleProvisionCredential(request *IPCRequest) IPCResponse {
 		UpdatedCiphertext: updatedCiphertext,
 		UpdatedKeys:       updatedKeys,
 	}
+}
+
+// handleDecryptCredentials decrypts an age ciphertext bundle and returns
+// the plaintext credential map. Used by the daemon for live credential
+// rotation: instead of destroying and recreating the sandbox, the daemon
+// decrypts here and pushes the plaintext to the proxy's admin socket.
+func (l *Launcher) handleDecryptCredentials(request *IPCRequest) IPCResponse {
+	if request.EncryptedCredentials == "" {
+		return IPCResponse{OK: false, Error: "encrypted_credentials is required for decrypt-credentials"}
+	}
+
+	decrypted, err := sealed.Decrypt(request.EncryptedCredentials, l.keypair.PrivateKey)
+	if err != nil {
+		return IPCResponse{OK: false, Error: fmt.Sprintf("decrypting credentials: %v", err)}
+	}
+	defer decrypted.Close()
+
+	var credentials map[string]string
+	if err := json.Unmarshal(decrypted.Bytes(), &credentials); err != nil {
+		return IPCResponse{OK: false, Error: fmt.Sprintf("parsing decrypted credentials: %v", err)}
+	}
+
+	l.logger.Info("decrypted credentials for live rotation",
+		"credential_keys", credentialKeys(credentials),
+	)
+
+	return IPCResponse{OK: true, DecryptedCredentials: credentials}
 }
 
 // finishSandbox sets the exit code, error, and captured output on a sandbox

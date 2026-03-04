@@ -121,6 +121,15 @@ func run() error {
 	// templates) can inject credentials from the principal's bundle.
 	server.SetCredential(credentialSource)
 
+	// Expose the PipeCredentialSource for live credential updates via
+	// the admin API. When the daemon rotates credentials, it pushes
+	// decrypted values to PUT /v1/admin/credentials which updates the
+	// pipe source in-place — all HTTP services see the new values
+	// through the chain without re-registration.
+	if pipeSource != nil {
+		server.SetPipeCredential(pipeSource)
+	}
+
 	// Register services from config.
 	for name, serviceConfig := range config.Services {
 		if name == "matrix" {

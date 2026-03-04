@@ -109,6 +109,7 @@ func NewServer(config ServerConfig) (*Server, error) {
 		adminMux.HandleFunc("PUT /v1/admin/directory", handler.HandleAdminSetDirectory)
 		adminMux.HandleFunc("PUT /v1/admin/authorization", handler.HandleAdminSetAuthorization)
 		adminMux.HandleFunc("PUT /v1/admin/repo-rooms", handler.HandleAdminSetRepoRooms)
+		adminMux.HandleFunc("PUT /v1/admin/credentials", handler.HandleAdminSetCredentials)
 		// Fall through to agent endpoints for all other paths.
 		adminMux.Handle("/", agentMux)
 
@@ -127,6 +128,12 @@ func NewServer(config ServerConfig) (*Server, error) {
 // Must be called before the admin socket starts accepting connections.
 func (s *Server) SetCredential(credential CredentialSource) {
 	s.handler.SetCredential(credential)
+}
+
+// SetPipeCredential stores a reference to the PipeCredentialSource for
+// live credential updates via the admin API.
+func (s *Server) SetPipeCredential(source *PipeCredentialSource) {
+	s.handler.SetPipeCredential(source)
 }
 
 // RegisterService registers a CLI service that can be proxied.

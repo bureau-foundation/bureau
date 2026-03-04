@@ -120,9 +120,10 @@ func (d *Daemon) reconcile(ctx context.Context) error {
 
 	// Check for credential rotation on running principals. When the
 	// ciphertext in the m.bureau.credentials state event changes,
-	// destroy the sandbox so the "create missing" pass below recreates
-	// it with the new credentials. This handles API key rotation, token
-	// refresh, and any other credential update without manual intervention.
+	// push the new credentials to the proxy in-place via the admin
+	// socket. This avoids sandbox restart and agent interruption.
+	// If the in-place push fails (launcher decrypt error, proxy admin
+	// unreachable), fall back to destroying and recreating the sandbox.
 	var rotatedPrincipals []ref.Entity
 	for principal, lc := range d.lifecycle {
 		if !lc.isAlive() {
@@ -151,38 +152,60 @@ func (d *Daemon) reconcile(ctx context.Context) error {
 			continue
 		}
 
-		d.logger.Info("credentials changed, restarting principal",
+		d.logger.Info("credentials changed, attempting in-place update",
 			"principal", principal)
 
-		// Save rollback state before destroy. destroyPrincipal clears all
-		// tracking maps, so the previous working credentials, spec, and
-		// template must be captured first. On health check failure, the
-		// daemon uses these to recreate the sandbox with the previous
-		// credentials rather than reading the new (possibly broken) ones
-		// from Matrix.
+		// Save rollback state before attempting the update. If the
+		// in-place update fails, we fall back to destroy+recreate.
+		// If a health check later detects a problem, the health
+		// monitor rolls back using these saved values.
 		savedCiphertext := d.lastCredentials[principal]
 		savedSpec := d.lastSpecs[principal]
 		savedTemplate := d.lastTemplates[principal]
 
-		if err := d.destroyPrincipal(ctx, principal, false); err != nil {
-			d.logger.Error("failed to destroy sandbox during credential rotation",
-				"principal", principal, "error", err)
+		// Ask the launcher to decrypt the new ciphertext.
+		decryptResponse, decryptErr := d.launcherRequest(ctx, launcherIPCRequest{
+			Action:               ipc.ActionDecryptCredentials,
+			EncryptedCredentials: credentials.Ciphertext,
+		})
+		if decryptErr != nil || !decryptResponse.OK {
+			errorDetail := ""
+			if decryptErr != nil {
+				errorDetail = decryptErr.Error()
+			} else {
+				errorDetail = decryptResponse.Error
+			}
+			d.logger.Error("decrypt-credentials IPC failed, falling back to restart",
+				"principal", principal, "error", errorDetail)
+			d.fallbackCredentialRotation(ctx, principal, savedCiphertext, savedSpec, savedTemplate)
+			rotatedPrincipals = append(rotatedPrincipals, principal)
 			continue
 		}
 
-		// Restore rollback state after destroy clears the maps. This
-		// parallels the structural restart path which saves previousSpecs.
+		// Push decrypted credentials to the proxy admin socket.
+		pushErr := d.putProxyAdmin(ctx, principal, "/v1/admin/credentials", decryptResponse.DecryptedCredentials)
+		if pushErr != nil {
+			d.logger.Error("push credentials to proxy failed, falling back to restart",
+				"principal", principal, "error", pushErr)
+			d.fallbackCredentialRotation(ctx, principal, savedCiphertext, savedSpec, savedTemplate)
+			rotatedPrincipals = append(rotatedPrincipals, principal)
+			continue
+		}
+
+		// In-place update succeeded. Save rollback state and update
+		// tracking. previousCredentials and previousSpecs are set so
+		// the health monitor can still roll back via destroy+recreate
+		// if a later health check fails.
 		d.previousCredentials[principal] = savedCiphertext
 		d.previousSpecs[principal] = savedSpec
-		d.lastTemplates[principal] = savedTemplate
+		d.lastCredentials[principal] = credentials.Ciphertext
 
-		d.logger.Info("principal stopped for credential rotation (will recreate)",
+		d.logger.Info("credentials updated in-place",
 			"principal", principal)
-		rotatedPrincipals = append(rotatedPrincipals, principal)
 
 		if _, err := d.sendEventRetry(ctx, d.configRoomID, schema.MatrixEventTypeMessage,
-			schema.NewCredentialsRotatedMessage(principal.AccountLocalpart(), schema.CredRotationRestarting, "")); err != nil {
-			d.logger.Error("failed to post credential rotation message",
+			schema.NewCredentialsRotatedMessage(principal.AccountLocalpart(), schema.CredRotationLiveUpdated, "")); err != nil {
+			d.logger.Error("failed to post credential live-update notification",
 				"principal", principal, "error", err)
 		}
 	}
@@ -2146,6 +2169,33 @@ func (d *Daemon) cancelExitWatcher(principal ref.Entity) {
 func (d *Daemon) cancelProxyExitWatcher(principal ref.Entity) {
 	if cancel, ok := d.proxyExitWatchers[principal]; ok {
 		cancel()
+	}
+}
+
+// fallbackCredentialRotation performs the legacy credential rotation path:
+// destroy the sandbox and let the "create missing" pass recreate it with
+// the new credentials read from Matrix. Called when in-place credential
+// push fails (launcher decrypt error, proxy admin unreachable, etc.).
+// Must be called with reconcileMu held.
+func (d *Daemon) fallbackCredentialRotation(ctx context.Context, principal ref.Entity, savedCiphertext string, savedSpec *schema.SandboxSpec, savedTemplate *schema.TemplateContent) {
+	if err := d.destroyPrincipal(ctx, principal, false); err != nil {
+		d.logger.Error("failed to destroy sandbox during credential rotation fallback",
+			"principal", principal, "error", err)
+		return
+	}
+
+	// Restore rollback state after destroy clears the maps.
+	d.previousCredentials[principal] = savedCiphertext
+	d.previousSpecs[principal] = savedSpec
+	d.lastTemplates[principal] = savedTemplate
+
+	d.logger.Info("principal stopped for credential rotation fallback (will recreate)",
+		"principal", principal)
+
+	if _, err := d.sendEventRetry(ctx, d.configRoomID, schema.MatrixEventTypeMessage,
+		schema.NewCredentialsRotatedMessage(principal.AccountLocalpart(), schema.CredRotationRestarting, "")); err != nil {
+		d.logger.Error("failed to post credential rotation fallback message",
+			"principal", principal, "error", err)
 	}
 }
 

@@ -163,9 +163,9 @@
           # Sysadmin tools. Developer + remote access + network debugging +
           # containers + Nix tooling + system inspection + encryption.
           # The Nix CLI itself is NOT included — it lives on the host at
-          # /nix/var/nix/profiles/default/bin/nix. The sysadmin template
-          # bind-mounts /nix/store (ro) and the nix profile so the sandbox
-          # uses the host's exact version. Same pattern for the Docker socket.
+          # /nix/var/nix/profiles/default/bin/nix. The nix-daemon template
+          # layer provides the daemon socket, /nix/store, and nix profile
+          # mounts so the sandbox uses the host's exact nix version.
           sysadmin =
             pkgs: self.lib.presets.developer pkgs ++ self.lib.applyModules self.lib.modules.sysadmin pkgs;
         };

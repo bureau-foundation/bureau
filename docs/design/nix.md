@@ -302,6 +302,48 @@ path from the binary cache via `nix-store --realise`. A fast-path
 reconcile cycles — Nix store paths are content-addressed and immutable,
 so presence guarantees closure integrity.
 
+### Nix Daemon Access
+
+The `EnvironmentPath` mechanism gives a sandbox *tools from* a Nix
+environment, but cannot run Nix itself — the Nix CLI, daemon socket,
+and store are not available. The `nix-daemon` template layer provides
+this capability for principals that need to build, compose, or query
+Nix store paths from inside a sandbox.
+
+The layer inherits from `base-networked` and adds three mounts:
+
+- `/nix/store` (read-only) — the host's Nix store. New store paths
+  from builds appear automatically since bind mounts track the
+  underlying filesystem.
+- `/nix/var/nix/daemon-socket/socket` (read-write) — the Nix daemon
+  IPC socket. The `nix` CLI talks to the daemon over this socket for
+  all store operations (builds, substitution, queries).
+- `/nix/var/nix/profiles/default` (read-only) — the host's default
+  Nix profile, containing the `nix` CLI binary. The sandbox uses the
+  host's exact Nix version, avoiding version skew between the CLI
+  and daemon.
+
+The Nix CLI is deliberately excluded from Nix environment closures.
+Including it would create a second copy of Nix in the store that could
+diverge from the daemon's version — and since the CLI communicates with
+the daemon over a versioned protocol, version skew causes silent
+failures. Mounting the host's profile ensures the CLI and daemon always
+match.
+
+**Security**: daemon socket access lets the sandbox build arbitrary Nix
+derivations and consume unbounded host resources (CPU, disk, network
+within Nix's own build sandbox). This is appropriate for trusted
+principals — sysadmin agents, environment compose pipelines, CI build
+agents — but not for untrusted agents. Templates that inherit
+`nix-daemon` should be assigned only to principals with corresponding
+trust.
+
+**Consumers**: the environment compose pipeline (builds merged
+`buildEnv` closures and pushes to the fleet binary cache), the
+sysadmin agent (manages environments, inspects store paths, runs
+cache operations), and any future CI or build agent that needs
+Nix directly.
+
 ---
 
 ## Bureau Version Management
@@ -493,7 +535,8 @@ simultaneously — the scheduler controls parallelism, not the agents.
 
 The Nix environment mounted into the sandbox is role-specific. A coding
 agent gets git, a Bazel client, and language runtimes. A sysadmin agent
-gets remote access tools, network debugging, and Nix tooling. A
+gets remote access tools, network debugging, and Nix tooling (its
+template inherits `nix-daemon` for direct Nix CLI and daemon access). A
 monitoring agent gets curl and jq. Environments are shared via hard
 links in the Nix store — fifty agents with the same environment consume
 no additional disk space beyond one copy.

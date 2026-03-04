@@ -1,0 +1,37 @@
+// Provides Nix daemon access inside a sandbox: the host's Nix store
+// (read-only), the daemon IPC socket (for nix build, nix-store, etc.),
+// and the host's default nix profile (for the nix CLI binary).
+//
+// The Nix CLI itself is NOT included in Nix environment closures — it
+// lives on the host at /nix/var/nix/profiles/default/bin/nix. This
+// template mounts the host's exact version to avoid version skew between
+// the daemon and CLI.
+//
+// Security: daemon socket access lets the sandbox build arbitrary Nix
+// derivations and consume unbounded resources (CPU, disk, network within
+// Nix's own sandbox). Appropriate for trusted principals (sysadmin,
+// compose pipelines, CI agents), not for untrusted agents.
+{
+    "description": "Nix daemon access: host store, daemon socket, nix CLI",
+    "inherits": ["${TEMPLATE_ROOM}:base-networked"],
+    "filesystem": [
+        // Full Nix store for closures and build results. Read-only bind
+        // mount reflects host writes (new store paths from builds appear
+        // automatically since bind mounts track the underlying filesystem).
+        {"source": "/nix/store", "dest": "/nix/store", "mode": "ro"},
+        // Nix daemon IPC socket. The nix CLI talks to the daemon over this
+        // socket for all store operations (builds, substitution, queries).
+        // Must be read-write for Unix socket communication.
+        {"source": "/nix/var/nix/daemon-socket/socket", "dest": "/nix/var/nix/daemon-socket/socket", "mode": "rw"},
+        // Host's default Nix profile. Contains the nix CLI binary and its
+        // symlink chain into /nix/store. Mounted read-only — the sandbox
+        // uses the host's exact nix version.
+        {"source": "/nix/var/nix/profiles/default", "dest": "/nix/var/nix/profiles/default", "mode": "ro"}
+    ],
+    "create_dirs": [
+        "/nix/var/nix/daemon-socket"
+    ],
+    "environment_variables": {
+        "PATH": "/nix/var/nix/profiles/default/bin"
+    }
+}

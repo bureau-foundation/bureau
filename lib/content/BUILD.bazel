@@ -25,6 +25,7 @@ go_library(
         "template/fleet-controller.jsonc",
         "template/github-service.jsonc",
         "template/model-service.jsonc",
+        "template/nix-daemon.jsonc",
         "template/service-base.jsonc",
         "template/telemetry-service.jsonc",
         "template/ticket-service.jsonc",
@@ -43,5 +44,4 @@ go_test(
     name = "content_test",
     srcs = ["content_test.go"],
     embed = [":content"],
-    deps = ["//lib/schema"],
 )

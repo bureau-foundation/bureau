@@ -148,11 +148,8 @@ func TestFleetRoomPowerLevels(t *testing.T) {
 		t.Fatal("power levels missing 'events' map")
 	}
 
-	// Members must be able to write fleet operational events.
+	// Members must be able to write runtime operational events.
 	for _, eventType := range []ref.EventType{
-		EventTypeFleetService,
-		EventTypeMachineDefinition,
-		EventTypeFleetConfig,
 		EventTypeHALease,
 		EventTypeServiceStatus,
 		EventTypeFleetAlert,
@@ -162,12 +159,20 @@ func TestFleetRoomPowerLevels(t *testing.T) {
 		}
 	}
 
-	// Infrastructure configuration events are admin-only (PL 100) because
-	// they control binary provenance for every machine in the fleet. A
-	// malicious rewrite is a supply chain compromise — categorically
-	// different from the operational events above.
-	if events[EventTypeFleetCache] != 100 {
-		t.Errorf("%s power level = %v, want 100 (admin-only: controls binary provenance)", EventTypeFleetCache, events[EventTypeFleetCache])
+	// Administrative configuration events are admin-only (PL 100).
+	// These are written by operators through the CLI, not by runtime
+	// components. A compromised member could inject phantom services
+	// (FleetService), manipulate controller behavior (FleetConfig),
+	// or compromise binary provenance (FleetCache).
+	for _, eventType := range []ref.EventType{
+		EventTypeFleetService,
+		EventTypeMachineDefinition,
+		EventTypeFleetConfig,
+		EventTypeFleetCache,
+	} {
+		if events[eventType] != 100 {
+			t.Errorf("%s power level = %v, want 100 (admin-only)", eventType, events[eventType])
+		}
 	}
 
 	// Dev team metadata is admin-only — explicit regardless of state_default.

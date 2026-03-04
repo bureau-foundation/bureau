@@ -10,11 +10,24 @@ import (
 // Fleet management event type constants. These events live in the
 // #bureau/fleet room and are consumed by the fleet controller service
 // and (for HA leases) by every daemon.
+//
+// Power level policy: runtime operational events (HA leases, service
+// status, fleet alerts) are PL 0 — machines and fleet controllers
+// write these during normal operation. Administrative configuration
+// events (service definitions, machine definitions, fleet controller
+// config, binary cache) are PL 100 — only operators write these
+// through the CLI, and a compromised member rewriting them could
+// disrupt placement, controller behavior, or binary provenance.
 const (
 	// EventTypeFleetService declares a service that the fleet controller
 	// manages. The fleet controller reads these, evaluates placement
 	// constraints against available machines, and writes PrincipalAssignment
 	// events to the chosen machine config rooms.
+	//
+	// Admin-only (PL 100): a compromised member injecting phantom service
+	// definitions could cause the fleet controller to attempt placements
+	// for nonexistent services, wasting resources and potentially
+	// displacing real services.
 	//
 	// State key: service localpart (e.g., "service/stt/whisper")
 	// Room: #bureau/fleet:<server>
@@ -26,6 +39,9 @@ const (
 	// Machines that are always on do not need definitions — they register
 	// at boot and the fleet controller discovers them via heartbeat.
 	//
+	// Admin-only (PL 100): a compromised member injecting phantom machine
+	// definitions could pollute the fleet controller's capacity model.
+	//
 	// State key: pool name or machine localpart (e.g., "gpu-cloud-pool"
 	// or "machine/spare-workstation")
 	// Room: #bureau/fleet:<server>
@@ -33,6 +49,11 @@ const (
 
 	// EventTypeFleetConfig defines global settings for a fleet controller.
 	// Each fleet controller has its own config keyed by its localpart.
+	//
+	// Admin-only (PL 100): controls rebalance policy, pressure thresholds,
+	// heartbeat interval, and preemption rules. A compromised member
+	// rewriting these could trigger failover storms, constant rebalancing,
+	// or unauthorized preemption.
 	//
 	// State key: fleet controller localpart (e.g., "service/fleet/prod")
 	// Room: #bureau/fleet:<server>
@@ -69,10 +90,9 @@ const (
 	// trust this cache's signing keys and pull from its URL. Compose
 	// pipelines push built closures to this cache by name.
 	//
-	// Unlike the operational fleet events above (PL 0), this event is
-	// admin-only (PL 100) because it controls binary provenance for every
-	// machine in the fleet. A malicious rewrite — replacing the substituter
-	// URL and signing keys — is a supply chain compromise affecting all
+	// Admin-only (PL 100): controls binary provenance for every machine
+	// in the fleet. A malicious rewrite — replacing the substituter URL
+	// and signing keys — is a supply chain compromise affecting all
 	// machines, services, and sandboxes.
 	//
 	// State key: "" (singleton per fleet)
@@ -139,24 +159,22 @@ func ServiceRoomPowerLevels(adminUserID ref.UserID) map[string]any {
 }
 
 // FleetRoomPowerLevels returns the power level content for fleet rooms.
-// Fleet rooms are admin-controlled but allow all members (machines, fleet
-// controllers) to write fleet-specific operational state events: fleet
-// services, machine definitions, HA leases, fleet config, service status,
-// and fleet alerts.
-//
-// Infrastructure configuration events that control binary provenance
-// (EventTypeFleetCache) are admin-only (PL 100) — a malicious rewrite
-// is a supply chain compromise. Administrative room events (name, join
-// rules, power levels) are also locked to admin (PL 100).
+// Fleet rooms are admin-controlled. Members (machines, fleet controllers)
+// can write runtime operational events: HA leases, service status, and
+// fleet alerts. Administrative configuration — service definitions,
+// machine definitions, fleet controller config, and binary cache
+// config — is restricted to admin (PL 100) because these events are
+// only written by operators through the CLI and a compromised member
+// rewriting them could disrupt placement, failover, or binary provenance.
 func FleetRoomPowerLevels(adminUserID ref.UserID) map[string]any {
 	events := AdminProtectedEvents()
 
 	// Operational state: machines and fleet controllers write these
-	// during normal fleet operation.
+	// during normal fleet operation. HA leases are written by daemons
+	// competing for service ownership, service status is published by
+	// running services, and fleet alerts are emitted by the fleet
+	// controller.
 	for _, eventType := range []ref.EventType{
-		EventTypeFleetService,
-		EventTypeMachineDefinition,
-		EventTypeFleetConfig,
 		EventTypeHALease,
 		EventTypeServiceStatus,
 		EventTypeFleetAlert,
@@ -164,9 +182,21 @@ func FleetRoomPowerLevels(adminUserID ref.UserID) map[string]any {
 		events[eventType] = 0
 	}
 
-	// Infrastructure configuration: admin-only because it controls
-	// binary provenance for every machine in the fleet.
-	events[EventTypeFleetCache] = 100
+	// Administrative configuration: admin-only (PL 100). These events
+	// are written by operators through the CLI, not by runtime
+	// components. A compromised member rewriting them could inject
+	// phantom services or machines into the fleet controller's model
+	// (FleetService, MachineDefinition), manipulate controller behavior
+	// parameters like rebalance policy and heartbeat thresholds
+	// (FleetConfig), or compromise binary provenance (FleetCache).
+	for _, eventType := range []ref.EventType{
+		EventTypeFleetService,
+		EventTypeMachineDefinition,
+		EventTypeFleetConfig,
+		EventTypeFleetCache,
+	} {
+		events[eventType] = 100
+	}
 
 	return map[string]any{
 		"users": map[string]any{

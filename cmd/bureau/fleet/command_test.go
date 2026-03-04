@@ -24,6 +24,7 @@ func TestFleetCommandHasSubcommands(t *testing.T) {
 		"enable": false,
 		"config": false,
 		"cache":  false,
+		"doctor": false,
 		"status": false,
 	}
 

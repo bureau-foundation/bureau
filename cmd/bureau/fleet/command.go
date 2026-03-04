@@ -34,6 +34,9 @@ use direct Matrix access via --credential-file.`,
 			configCommand(),
 			cacheCommand(),
 
+			// Diagnostics.
+			doctorCommand(),
+
 			// Query commands.
 			statusCommand(),
 		},

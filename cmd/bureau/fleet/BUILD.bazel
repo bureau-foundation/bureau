@@ -12,6 +12,7 @@ go_library(
         "connection.go",
         "create.go",
         "doc.go",
+        "doctor.go",
         "enable.go",
         "response.go",
         "setup.go",
@@ -21,6 +22,7 @@ go_library(
     visibility = ["//visibility:public"],
     deps = [
         "//cmd/bureau/cli",
+        "//cmd/bureau/cli/doctor",
         "//lib/credential",
         "//lib/principal",
         "//lib/ref",
@@ -39,7 +41,12 @@ go_test(
     srcs = [
         "cache_test.go",
         "command_test.go",
+        "doctor_test.go",
     ],
     embed = [":fleet"],
-    deps = ["@com_github_spf13_pflag//:pflag"],
+    deps = [
+        "//lib/ref",
+        "//lib/schema",
+        "@com_github_spf13_pflag//:pflag",
+    ],
 )

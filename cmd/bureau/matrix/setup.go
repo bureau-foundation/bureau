@@ -452,9 +452,10 @@ type namedTemplate struct {
 // "agent-base" inherits from base-networked and adds proxy socket,
 // machine name, and server name environment variables for agent processes.
 //
-// Individual agent templates (bureau-agent, bureau-agent-claude) inherit
-// from agent-base, set their Command, and declare RequiredServices for
-// the services they need (agent service, artifact service, etc.).
+// Individual agent templates (bureau-agent) inherit from agent-base, set
+// their Command, and declare RequiredServices for the services they need
+// (agent service, artifact service, etc.). LLM-specific agent templates
+// (bureau-agent-claude) are published from external flake repositories.
 //
 // "service-base" inherits from base-networked and adds the environment
 // variables needed by service.BootstrapViaProxy. The launcher injects
@@ -544,37 +545,6 @@ func baseTemplates(templatePrefix string) []namedTemplate {
 				Inherits:         []string{templatePrefix + ":agent-base"},
 				Command:          []string{"bureau-agent"},
 				RequiredServices: []string{"agent", "artifact"},
-			},
-		},
-		{
-			name: "bureau-agent-claude",
-			content: schema.TemplateContent{
-				Description: "Claude Code agent with MCP tool integration and hook handler",
-				Inherits:    []string{templatePrefix + ":agent-base"},
-				Command: []string{
-					"bureau-bridge",
-					"--listen", "127.0.0.1:8642",
-					"--socket", "/run/bureau/proxy.sock",
-					"--", "bureau-agent-claude",
-				},
-				RequiredServices: []string{"agent"},
-				EnvironmentVariables: map[string]string{
-					"ANTHROPIC_BASE_URL": "http://127.0.0.1:8642/http/anthropic",
-				},
-				ProxyServices: map[string]schema.TemplateProxyService{
-					"anthropic": {
-						Upstream:      "https://api.anthropic.com",
-						InjectHeaders: map[string]string{"x-api-key": "ANTHROPIC_API_KEY"},
-						StripHeaders:  []string{"x-api-key", "authorization"},
-					},
-				},
-				Filesystem: []schema.TemplateMount{
-					{Source: "${CACHE_ROOT}/bin", Dest: "/usr/local/bin", Mode: schema.MountModeRO, Optional: true},
-					{Source: "/lib64", Dest: "/lib64", Mode: schema.MountModeRO},
-					{Source: "/lib", Dest: "/lib", Mode: schema.MountModeRO},
-					{Dest: "/workspace", Type: "tmpfs"},
-					{Source: "${CACHE_ROOT}/claude-credentials.json", Dest: "/workspace/.claude/.credentials.json", Mode: schema.MountModeRO, Optional: true},
-				},
 			},
 		},
 		{

@@ -270,39 +270,30 @@ assignments from the machine config. No sudo needed.
 
 ## Deploying a Claude Code Agent
 
-Deploy the `bureau-agent-claude` template, which wraps Claude Code with the
-Bureau agent driver (Matrix message pump, session tracking, metrics).
+The `bureau-agent-claude` template is published from an external Nix flake
+repository ([bureau-foundation/claude-code-agent](https://github.com/bureau-foundation/claude-code-agent)).
+It wraps Claude Code with the Bureau agent driver (Matrix message pump,
+session tracking, metrics), MCP tools, and hook-based write authorization.
 
-### Install Claude Code
-
-Claude Code must be available at `/var/bureau/cache/bin/claude`. The template
-mounts this directory into the sandbox at `/usr/local/bin`.
+### Publish the Template
 
 ```bash
-# If claude is installed at ~/.local/bin/claude:
-sudo ln -s /home/$USER/.local/bin/claude /var/bureau/cache/bin/claude
+bureau template publish \
+    --flake github:bureau-foundation/claude-code-agent \
+    bureau/template:bureau-agent-claude
 ```
+
+This evaluates the flake's `bureauTemplate` output and publishes it as a
+Matrix state event. Command and environment paths resolve to full
+`/nix/store/...` paths. The daemon prefetches missing store paths from the
+binary cache before creating the sandbox.
 
 ### Provide Authentication
 
-The agent needs Anthropic authentication. Two options:
-
-**Subscription account (Claude Pro/Team/Enterprise):** Authenticate with
-`claude login` on the host, then copy the credential file to Bureau's
-cache directory. The template mounts `${CACHE_ROOT}/claude-credentials.json`
-read-only into the sandbox.
-
-```bash
-script/update-claude-credentials
-```
-
-Re-run after `claude login` or when switching accounts. The credential
-file contains an OAuth token pair; the refresh token allows the sandbox
-to renew the access token automatically.
-
-**API key:** Deploy with `--extra-credential ANTHROPIC_API_KEY=sk-ant-...`.
-The proxy injects the key on outbound Anthropic API requests. No credential
-file mount needed.
+Deploy with `--extra-credential ANTHROPIC_API_KEY=sk-ant-...`. The proxy
+injects the key as an `x-api-key` header on outbound Anthropic API
+requests. The plaintext key never appears in Matrix state events and is
+never visible to the agent process.
 
 ```bash
 bureau agent create bureau/template:bureau-agent-claude \

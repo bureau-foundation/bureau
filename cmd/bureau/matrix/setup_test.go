@@ -145,7 +145,6 @@ func TestBaseTemplates(t *testing.T) {
 		requiredServices []string
 	}{
 		{"bureau-agent", "bureau-agent", []string{"agent", "artifact"}},
-		{"bureau-agent-claude", "bureau-agent-claude", []string{"agent"}},
 	}
 
 	for _, agentTemplate := range agentTemplates {

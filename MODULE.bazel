@@ -13,6 +13,9 @@ bazel_dep(name = "platforms", version = "1.0.0")
 bazel_dep(name = "rules_go", version = "0.60.0")
 bazel_dep(name = "gazelle", version = "0.47.0")
 
+# Shell rules (sh_test for non-Go verification scripts).
+bazel_dep(name = "rules_shell", version = "0.6.1")
+
 # Go SDK: version read from go.mod.
 go_sdk = use_extension("@rules_go//go:extensions.bzl", "go_sdk")
 go_sdk.from_file(go_mod = "//:go.mod")
@@ -54,3 +57,17 @@ nix_env.build(
     attr = "integration-test-env",
 )
 use_repo(nix_env, "integration_test_env")
+
+# Lean 4 toolchain for formal verification specs (verify/).
+# Downloaded from GitHub releases on first use. Tagged "manual" in BUILD
+# files so `bazel test //...` never triggers the ~500 MB download — only
+# explicit `bazel test //verify/reconciliation:lean_verify` does.
+lean_toolchain = use_extension("//build:lean_toolchain.bzl", "lean_toolchain")
+lean_toolchain.release(
+    name = "lean4",
+    sha256 = {
+        "linux-x86_64": "ceb3a3f844f7aebf63245e2b51c28d5b0ed38942c19f93cf3febd520302160bd",
+    },
+    version = "4.28.0",
+)
+use_repo(lean_toolchain, "lean4")

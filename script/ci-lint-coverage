@@ -21,6 +21,7 @@ gofmt               ci-lint
 buildifier          ci-lint
 license-go          ci-lint
 license-bazel       ci-lint
+license-lean        ci-lint
 license-shell       ci-lint
 license-nix         ci-lint
 trailing-whitespace ci-lint
@@ -42,6 +43,9 @@ check-raw-output    local-only
 check-bare-tmux     local-only
 check-banned-imports local-only
 check-ci-coverage   local-only
+
+# Tier 2.5: Formal verification
+lean-verify          not-in-ci
 
 # Tier 3: Build and test
 gazelle             ci-build

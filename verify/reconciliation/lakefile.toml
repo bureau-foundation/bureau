@@ -1,0 +1,10 @@
+name = "BureauReconcile"
+version = "0.1.0"
+defaultTargets = ["bureaureconcile"]
+
+[[lean_lib]]
+name = "BureauReconcile"
+
+[[lean_exe]]
+name = "bureaureconcile"
+root = "Main"

@@ -45,6 +45,11 @@ pre-commit:
       glob: "*.{bazel,bzl}"
       priority: 1
 
+    license-lean:
+      run: script/format-staged script/insert-license --comment-style "--" -- {staged_files}
+      glob: "*.lean"
+      priority: 1
+
     license-shell:
       run: script/format-staged script/insert-license --comment-style "#" -- {staged_files}
       glob: "script/*"
@@ -149,6 +154,15 @@ pre-commit:
 
     check-ci-coverage:
       run: script/check-ci-coverage
+      priority: 2
+
+    # ===================================================================
+    # Tier 2.5: Formal verification (Lean, only when specs change)
+    # ===================================================================
+
+    lean-verify:
+      run: bazel test //verify/reconciliation:lean_verify
+      glob: "*.lean"
       priority: 2
 
     # ===================================================================

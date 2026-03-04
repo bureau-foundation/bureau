@@ -1,0 +1,36 @@
+# Copyright 2026 The Bureau Authors
+# SPDX-License-Identifier: Apache-2.0
+
+load("@rules_shell//shell:sh_test.bzl", "sh_test")
+
+# Lean 4 formal verification of Bureau's reconciliation loop.
+#
+# Proves safety properties (no-regression, cleanup guarantee, dynamic
+# exemption, backoff bounds) and convergence (from absent, n failures +
+# eventual success always reaches running) of the daemon's principal
+# lifecycle state machine.
+#
+# Tagged "manual" so `bazel test //...` never triggers the ~500 MB Lean
+# toolchain download. Run explicitly:
+#
+#   bazel test //verify/reconciliation:lean_verify
+#
+# See BureauReconcile/Basic.lean for the spec and proofs.
+
+sh_test(
+    name = "lean_verify",
+    srcs = ["verify.sh"],
+    data = [
+        "lake-manifest.json",
+        "lakefile.toml",
+        "lean-toolchain",
+        "@lean4//:toolchain_root",
+    ] + glob(
+        ["**/*.lean"],
+        exclude = [".lake/**"],
+    ),
+    env = {
+        "LEAN_TOOLCHAIN_ROOT": "$(rlocationpath @lean4//:toolchain_root)",
+    },
+    tags = ["manual"],
+)

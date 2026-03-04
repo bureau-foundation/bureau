@@ -210,6 +210,24 @@
   },
   "selectedYankedVersions": {},
   "moduleExtensions": {
+    "//build:lean_toolchain.bzl%lean_toolchain": {
+      "general": {
+        "bzlTransitiveDigest": "OTFvV1d6aLEpYcua8bpG370POCGlj6K2ugfJDDgzIr0=",
+        "usagesDigest": "MTaicwDN9gIEgISCOskY5s3eAswCQ6F/KZJxZBmcBuY=",
+        "recordedInputs": [],
+        "generatedRepoSpecs": {
+          "lean4": {
+            "repoRuleId": "@@//build:lean_toolchain.bzl%_lean_toolchain_repo",
+            "attributes": {
+              "version": "4.28.0",
+              "sha256": {
+                "linux-x86_64": "ceb3a3f844f7aebf63245e2b51c28d5b0ed38942c19f93cf3febd520302160bd"
+              }
+            }
+          }
+        }
+      }
+    },
     "//build:nix_env.bzl%nix_env": {
       "general": {
         "bzlTransitiveDigest": "cpC8dcgqRrGGWbcfg5nRnq8ImbbH+KIOgSAw44PsmBw=",

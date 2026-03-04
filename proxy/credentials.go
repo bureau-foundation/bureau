@@ -322,6 +322,11 @@ type PipeCredentialSource struct {
 	machine             ref.Machine
 	telemetrySocketPath string
 	telemetryTokenPath  string
+
+	// workspaceRoomID is the Matrix room ID of the workspace this
+	// proxy's principal operates in. Zero when the principal has
+	// no workspace context.
+	workspaceRoomID ref.RoomID
 }
 
 // ReadPipeCredentials reads a CBOR-encoded [ipc.ProxyCredentialPayload]
@@ -398,6 +403,7 @@ func ReadPipeCredentials(reader io.Reader) (*PipeCredentialSource, error) {
 		machine:             payload.Machine,
 		telemetrySocketPath: payload.TelemetrySocketPath,
 		telemetryTokenPath:  payload.TelemetryTokenPath,
+		workspaceRoomID:     payload.WorkspaceRoomID,
 	}, nil
 }
 
@@ -510,6 +516,13 @@ func (s *PipeCredentialSource) TelemetrySocketPath() string {
 // service token. Empty when telemetry is not configured.
 func (s *PipeCredentialSource) TelemetryTokenPath() string {
 	return s.telemetryTokenPath
+}
+
+// WorkspaceRoomID returns the Matrix room ID of the workspace this
+// proxy's principal operates in. Zero when the principal has no
+// workspace context.
+func (s *PipeCredentialSource) WorkspaceRoomID() ref.RoomID {
+	return s.workspaceRoomID
 }
 
 // Verify credential sources implement CredentialSource interface.

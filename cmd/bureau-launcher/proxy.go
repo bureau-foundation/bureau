@@ -42,7 +42,7 @@ type proxyTelemetryConfig struct {
 	tokenPath  string
 }
 
-func (l *Launcher) spawnProxy(principalLocalpart string, credentials map[string]string, grants []schema.Grant, telemetryConfig proxyTelemetryConfig) (int, error) {
+func (l *Launcher) spawnProxy(principalLocalpart string, credentials map[string]string, grants []schema.Grant, telemetryConfig proxyTelemetryConfig, workspaceRoomID ref.RoomID) (int, error) {
 	if l.proxyBinaryPath == "" {
 		return 0, fmt.Errorf("proxy binary path not configured (set --proxy-binary or install bureau-proxy on PATH)")
 	}
@@ -126,7 +126,7 @@ func (l *Launcher) spawnProxy(principalLocalpart string, credentials map[string]
 
 	// Write credential payload to the proxy's stdin and close.
 	if credentials != nil {
-		payload, err := l.buildCredentialPayload(principalRef, credentials, grants, telemetryConfig)
+		payload, err := l.buildCredentialPayload(principalRef, credentials, grants, telemetryConfig, workspaceRoomID)
 		if err != nil {
 			cmd.Process.Kill()
 			cmd.Wait()
@@ -219,7 +219,7 @@ func (l *Launcher) spawnProxy(principalLocalpart string, credentials map[string]
 // structure expected by the proxy's PipeCredentialSource. The Matrix-specific
 // keys (MATRIX_HOMESERVER_URL, MATRIX_TOKEN, MATRIX_USER_ID) are extracted
 // into top-level fields; everything else goes under "credentials".
-func (l *Launcher) buildCredentialPayload(principalEntity ref.Entity, credentials map[string]string, grants []schema.Grant, telemetryConfig proxyTelemetryConfig) (*ipc.ProxyCredentialPayload, error) {
+func (l *Launcher) buildCredentialPayload(principalEntity ref.Entity, credentials map[string]string, grants []schema.Grant, telemetryConfig proxyTelemetryConfig, workspaceRoomID ref.RoomID) (*ipc.ProxyCredentialPayload, error) {
 	homeserverURL := credentials["MATRIX_HOMESERVER_URL"]
 	if homeserverURL == "" {
 		// Fall back to the launcher's homeserver URL (the principal is
@@ -258,6 +258,7 @@ func (l *Launcher) buildCredentialPayload(principalEntity ref.Entity, credential
 		Machine:             l.machine,
 		TelemetrySocketPath: telemetryConfig.socketPath,
 		TelemetryTokenPath:  telemetryConfig.tokenPath,
+		WorkspaceRoomID:     workspaceRoomID,
 	}, nil
 }
 

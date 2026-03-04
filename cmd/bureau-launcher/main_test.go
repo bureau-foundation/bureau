@@ -622,7 +622,7 @@ func TestBuildCredentialPayload(t *testing.T) {
 			"GITHUB_PAT":            "ghp_test",
 		}
 
-		payload, err := launcher.buildCredentialPayload(principalEntity, credentials, nil, proxyTelemetryConfig{})
+		payload, err := launcher.buildCredentialPayload(principalEntity, credentials, nil, proxyTelemetryConfig{}, ref.RoomID{})
 		if err != nil {
 			t.Fatalf("buildCredentialPayload() error: %v", err)
 		}
@@ -654,7 +654,7 @@ func TestBuildCredentialPayload(t *testing.T) {
 			"OPENAI_API_KEY": "sk-test",
 		}
 
-		_, err := launcher.buildCredentialPayload(principalEntity, credentials, nil, proxyTelemetryConfig{})
+		_, err := launcher.buildCredentialPayload(principalEntity, credentials, nil, proxyTelemetryConfig{}, ref.RoomID{})
 		if err == nil {
 			t.Error("expected error for missing MATRIX_TOKEN")
 		}
@@ -668,7 +668,7 @@ func TestBuildCredentialPayload(t *testing.T) {
 			"MATRIX_TOKEN": "syt_test",
 		}
 
-		payload, err := launcher.buildCredentialPayload(principalEntity, credentials, nil, proxyTelemetryConfig{})
+		payload, err := launcher.buildCredentialPayload(principalEntity, credentials, nil, proxyTelemetryConfig{}, ref.RoomID{})
 		if err != nil {
 			t.Fatalf("buildCredentialPayload() error: %v", err)
 		}
@@ -684,7 +684,7 @@ func TestBuildCredentialPayload(t *testing.T) {
 			"MATRIX_TOKEN": "syt_test",
 		}
 
-		payload, err := launcher.buildCredentialPayload(principalEntity, credentials, nil, proxyTelemetryConfig{})
+		payload, err := launcher.buildCredentialPayload(principalEntity, credentials, nil, proxyTelemetryConfig{}, ref.RoomID{})
 		if err != nil {
 			t.Fatalf("buildCredentialPayload() error: %v", err)
 		}
@@ -705,7 +705,7 @@ func TestBuildCredentialPayload(t *testing.T) {
 			tokenPath:  "/var/bureau/tokens/agent-echo/telemetry.token",
 		}
 
-		payload, err := launcher.buildCredentialPayload(principalEntity, credentials, nil, telemetry)
+		payload, err := launcher.buildCredentialPayload(principalEntity, credentials, nil, telemetry, ref.RoomID{})
 		if err != nil {
 			t.Fatalf("buildCredentialPayload() error: %v", err)
 		}
@@ -729,7 +729,7 @@ func TestBuildCredentialPayload(t *testing.T) {
 			"MATRIX_TOKEN": "syt_test",
 		}
 
-		payload, err := launcher.buildCredentialPayload(principalEntity, credentials, nil, proxyTelemetryConfig{})
+		payload, err := launcher.buildCredentialPayload(principalEntity, credentials, nil, proxyTelemetryConfig{}, ref.RoomID{})
 		if err != nil {
 			t.Fatalf("buildCredentialPayload() error: %v", err)
 		}

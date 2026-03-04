@@ -775,6 +775,7 @@ func (d *Daemon) reconcile(ctx context.Context) error {
 			TelemetrySocketPath:  telemetrySocketPath,
 			TelemetryTokenPath:   telemetryTokenPath,
 			LogSessionID:         logSessionID,
+			WorkspaceRoomID:      workspaceRoomID,
 		})
 		if err != nil {
 			d.logger.Error("create-sandbox IPC failed", "principal", principal, "error", err)

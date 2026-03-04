@@ -176,6 +176,13 @@ type Request struct {
 	// deployed.
 	TelemetryTokenPath string `cbor:"telemetry_token_path,omitempty"`
 
+	// WorkspaceRoomID is the Matrix room ID of the workspace this
+	// principal operates in. Passed through to the proxy's credential
+	// payload so the proxy can publish activity events (e.g., forge
+	// attribution) to the workspace room. Zero when the principal
+	// has no workspace context.
+	WorkspaceRoomID ref.RoomID `cbor:"workspace_room_id,omitempty"`
+
 	// LogSessionID is the session identifier for output capture log
 	// correlation. Assigned by the daemon so it can track which
 	// session belongs to each principal — enabling targeted
@@ -356,4 +363,10 @@ type ProxyCredentialPayload struct {
 	// for authenticating with the telemetry relay. Empty when
 	// telemetry is not configured.
 	TelemetryTokenPath string `cbor:"telemetry_token_path,omitempty"`
+
+	// WorkspaceRoomID is the Matrix room ID of the workspace this
+	// proxy's principal operates in. Used by the proxy to publish
+	// activity events (e.g., forge attribution) to the workspace
+	// room. Zero when the principal has no workspace context.
+	WorkspaceRoomID ref.RoomID `cbor:"workspace_room_id,omitempty"`
 }

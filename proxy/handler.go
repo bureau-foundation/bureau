@@ -71,11 +71,11 @@ type Handler struct {
 	// and it propagates to subsequently registered services).
 	telemetry *ProxyTelemetry
 
-	// repoRooms maps "owner/repo" to Matrix room IDs for attribution
-	// event publishing. Pushed by the daemon via PUT /v1/admin/repo-rooms.
-	// Used by the GitHub HTTP service's response interceptor to know
-	// which room to publish attribution events to.
-	repoRooms map[string]string
+	// workspaceRoomID is the Matrix room ID where activity events
+	// (e.g., forge attribution) are published. Set from the credential
+	// payload at proxy startup. Zero when the principal has no
+	// workspace context.
+	workspaceRoomID ref.RoomID
 
 	mu     sync.RWMutex
 	logger *slog.Logger
@@ -723,6 +723,17 @@ func (h *Handler) HandleAdminRegisterService(w http.ResponseWriter, r *http.Requ
 
 	h.RegisterHTTPService(name, service)
 
+	// Auto-enable attribution when a workspace room is configured.
+	// The response hook checks for entity-creating API patterns
+	// (e.g., GitHub PR/issue creation) and publishes attribution
+	// events to the workspace room.
+	h.mu.RLock()
+	hasWorkspace := !h.workspaceRoomID.IsZero()
+	h.mu.RUnlock()
+	if hasWorkspace {
+		h.EnableAttribution(name)
+	}
+
 	w.Header().Set("Content-Type", "application/json")
 	w.WriteHeader(http.StatusCreated)
 	if err := json.NewEncoder(w).Encode(AdminServiceInfo{
@@ -856,24 +867,6 @@ func (h *Handler) HandleAdminSetAuthorization(w http.ResponseWriter, r *http.Req
 	})
 }
 
-// HandleAdminSetRepoRooms replaces the repo-to-room mapping used for
-// attribution event publishing. The daemon pushes this when repository
-// bindings change.
-func (h *Handler) HandleAdminSetRepoRooms(w http.ResponseWriter, r *http.Request) {
-	var mapping map[string]string
-	if err := json.NewDecoder(r.Body).Decode(&mapping); err != nil {
-		h.sendError(w, http.StatusBadRequest, "invalid repo-rooms payload: %v", err)
-		return
-	}
-
-	h.SetRepoRooms(mapping)
-
-	h.writeJSON(w, map[string]any{
-		"status": "ok",
-		"repos":  len(mapping),
-	})
-}
-
 // HandleAdminSetCredentials replaces the proxy's credentials in-place.
 // The daemon pushes decrypted credentials via PUT /v1/admin/credentials
 // during live credential rotation (no sandbox restart). The request body
@@ -910,24 +903,22 @@ func (h *Handler) HandleAdminSetCredentials(w http.ResponseWriter, r *http.Reque
 	})
 }
 
-// SetRepoRooms replaces the repo-to-room mapping.
-func (h *Handler) SetRepoRooms(mapping map[string]string) {
+// SetWorkspaceRoomID configures the workspace room ID for activity
+// event publishing (e.g., forge attribution). Set from the credential
+// payload at proxy startup.
+func (h *Handler) SetWorkspaceRoomID(roomID ref.RoomID) {
 	h.mu.Lock()
 	defer h.mu.Unlock()
-	h.repoRooms = mapping
-	h.logger.Info("repo-room mappings updated", "count", len(mapping))
+	h.workspaceRoomID = roomID
+	h.logger.Info("workspace room ID configured", "room_id", roomID)
 }
 
-// RepoRooms returns a snapshot of the current repo-to-room mapping.
-func (h *Handler) RepoRooms() map[string]string {
+// WorkspaceRoomID returns the configured workspace room ID, or zero
+// if no workspace context is configured.
+func (h *Handler) WorkspaceRoomID() ref.RoomID {
 	h.mu.RLock()
 	defer h.mu.RUnlock()
-	// Return a copy to avoid races.
-	result := make(map[string]string, len(h.repoRooms))
-	for repo, room := range h.repoRooms {
-		result[repo] = room
-	}
-	return result
+	return h.workspaceRoomID
 }
 
 // EnableAttribution configures response interception for a named HTTP
@@ -973,8 +964,8 @@ func (h *Handler) EnableAttribution(serviceName string) {
 		if !matched {
 			return
 		}
-		repoRooms := h.RepoRooms()
-		publishAttribution(matrixService, agentUserID, match, repoRooms, h.logger)
+		workspaceRoom := h.WorkspaceRoomID()
+		publishAttribution(matrixService, agentUserID, match, workspaceRoom, h.logger)
 	}
 
 	h.logger.Info("attribution enabled for service",

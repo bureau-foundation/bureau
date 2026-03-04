@@ -14,6 +14,7 @@ import (
 	"sync/atomic"
 	"time"
 
+	"github.com/bureau-foundation/bureau/lib/ref"
 	"github.com/bureau-foundation/bureau/lib/schema/forge"
 )
 
@@ -130,32 +131,30 @@ func matchEntityCreation(method, path string, statusCode int, responseBody []byt
 }
 
 // publishAttribution sends an m.bureau.forge_attribution event to
-// the repo's Matrix room. Uses the proxy's existing Matrix HTTP
-// service to forward the PUT request to the homeserver with the
-// agent's credentials.
+// the workspace room. Uses the proxy's existing Matrix HTTP service
+// to forward the PUT request to the homeserver with the agent's
+// credentials.
 //
-// This is a best-effort operation: if publishing fails (room not
-// found, agent not in room, homeserver down), the API response to
-// the agent is not affected. The attribution record is simply not
-// created, and on_author won't fire for this entity.
+// This is a best-effort operation: if publishing fails (agent not
+// in room, homeserver down), the API response to the agent is not
+// affected. The attribution record is simply not created, and
+// on_author won't fire for this entity.
 func publishAttribution(
 	matrixService *HTTPService,
 	agentUserID string,
 	match entityCreationMatch,
-	repoRooms map[string]string,
+	workspaceRoom ref.RoomID,
 	logger interface {
 		Info(string, ...any)
 		Warn(string, ...any)
 	},
 ) {
-	fullRepo := match.Owner + "/" + match.Repo
-	roomID, found := repoRooms[fullRepo]
-	if !found {
-		logger.Warn("attribution: no room mapping for repo",
-			"repo", fullRepo,
-		)
+	if workspaceRoom.IsZero() {
+		logger.Warn("attribution: no workspace room configured")
 		return
 	}
+	roomID := workspaceRoom.String()
+	fullRepo := match.Owner + "/" + match.Repo
 
 	// Build the agent's display name from the localpart.
 	agentDisplay := agentUserID

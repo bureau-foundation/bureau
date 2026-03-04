@@ -12,6 +12,7 @@ import (
 	"os"
 	"time"
 
+	"github.com/bureau-foundation/bureau/lib/ref"
 	"github.com/bureau-foundation/bureau/lib/schema"
 )
 
@@ -108,7 +109,6 @@ func NewServer(config ServerConfig) (*Server, error) {
 		adminMux.HandleFunc("DELETE /v1/admin/services/{name}", handler.HandleAdminUnregisterService)
 		adminMux.HandleFunc("PUT /v1/admin/directory", handler.HandleAdminSetDirectory)
 		adminMux.HandleFunc("PUT /v1/admin/authorization", handler.HandleAdminSetAuthorization)
-		adminMux.HandleFunc("PUT /v1/admin/repo-rooms", handler.HandleAdminSetRepoRooms)
 		adminMux.HandleFunc("PUT /v1/admin/credentials", handler.HandleAdminSetCredentials)
 		// Fall through to agent endpoints for all other paths.
 		adminMux.Handle("/", agentMux)
@@ -180,6 +180,19 @@ func (s *Server) SetServiceDirectory(entries []ServiceDirectoryEntry) {
 // disable telemetry (the default).
 func (s *Server) SetTelemetry(telemetry *ProxyTelemetry) {
 	s.handler.SetTelemetry(telemetry)
+}
+
+// SetWorkspaceRoomID configures the workspace room ID for activity
+// event publishing (e.g., forge attribution). See
+// Handler.SetWorkspaceRoomID for details.
+func (s *Server) SetWorkspaceRoomID(roomID ref.RoomID) {
+	s.handler.SetWorkspaceRoomID(roomID)
+}
+
+// EnableAttribution enables response interception for forge attribution
+// on the named HTTP service. See Handler.EnableAttribution for details.
+func (s *Server) EnableAttribution(serviceName string) {
+	s.handler.EnableAttribution(serviceName)
 }
 
 // SetObserveConfig configures the observation proxy. When called before

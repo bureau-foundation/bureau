@@ -218,6 +218,15 @@ func run() error {
 		server.SetGrants(pipeSource.Grants())
 	}
 
+	// Set workspace room ID from the credential payload. When present,
+	// the proxy publishes activity events (e.g., forge attribution) to
+	// the workspace room.
+	if credentialStdin && pipeSource != nil {
+		if workspaceRoomID := pipeSource.WorkspaceRoomID(); !workspaceRoomID.IsZero() {
+			server.SetWorkspaceRoomID(workspaceRoomID)
+		}
+	}
+
 	// Set up telemetry if the credential payload includes relay config.
 	// The emitter runs a background flush goroutine that periodically
 	// submits buffered spans and metrics to the relay socket.
@@ -236,6 +245,15 @@ func run() error {
 	// Start server
 	if err := server.Start(); err != nil {
 		return fmt.Errorf("failed to start server: %w", err)
+	}
+
+	// Enable attribution on config-file HTTP services when a workspace
+	// room is available. Services registered later via the admin API
+	// auto-enable attribution in HandleAdminRegisterService.
+	if credentialStdin && pipeSource != nil && !pipeSource.WorkspaceRoomID().IsZero() {
+		for _, serviceName := range server.ListHTTPServices() {
+			server.EnableAttribution(serviceName)
+		}
 	}
 
 	// Wait for shutdown signal

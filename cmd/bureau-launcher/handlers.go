@@ -293,7 +293,7 @@ func (l *Launcher) handleCreateSandbox(ctx context.Context, request *IPCRequest)
 	pid, err := l.spawnProxy(request.Principal, credentials, request.Grants, proxyTelemetryConfig{
 		socketPath: request.TelemetrySocketPath,
 		tokenPath:  request.TelemetryTokenPath,
-	})
+	}, request.WorkspaceRoomID)
 	if err != nil {
 		return IPCResponse{OK: false, Error: err.Error()}
 	}

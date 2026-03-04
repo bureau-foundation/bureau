@@ -7,6 +7,7 @@ go_library(
     name = "template",
     srcs = [
         "command.go",
+        "create.go",
         "diff.go",
         "doc.go",
         "impact.go",
@@ -32,6 +33,7 @@ go_library(
 go_test(
     name = "template_test",
     srcs = [
+        "create_test.go",
         "diff_test.go",
         "impact_test.go",
         "validate_test.go",

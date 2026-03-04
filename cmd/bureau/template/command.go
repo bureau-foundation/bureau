@@ -36,6 +36,7 @@ All commands that access Matrix require an operator session. Run
 		Subcommands: []*cli.Command{
 			listCommand(),
 			showCommand(),
+			createCommand(),
 			pushCommand(),
 			publishCommand(),
 			updateCommand(),
@@ -44,6 +45,10 @@ All commands that access Matrix require an operator session. Run
 			impactCommand(),
 		},
 		Examples: []cli.Example{
+			{
+				Description: "Create a per-project template via inheritance",
+				Command:     "bureau template create --inherits bureau/template:claude-code --description 'Claude Code for IREE' iree/template:claude-dev",
+			},
 			{
 				Description: "List templates in the built-in templates room",
 				Command:     "bureau template list bureau/template",

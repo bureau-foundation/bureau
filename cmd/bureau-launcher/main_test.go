@@ -1201,7 +1201,7 @@ func TestTmuxSessionConfiguration(t *testing.T) {
 		option string
 		want   string
 	}{
-		{"prefix", "C-a"},
+		{"prefix", "C-b"},
 		{"mouse", "on"},
 		{"history-limit", "50000"},
 		{"remain-on-exit", "on"},

@@ -48,13 +48,14 @@ const paneDeadCaptureRetryDelay = 50 * time.Millisecond
 // Options set here:
 //   - remain-on-exit: keeps the pane alive after the command exits so the
 //     session watcher can capture terminal output via capture-pane.
-//   - prefix: Ctrl-a (distinct from the user's Ctrl-b default).
+//   - prefix: Ctrl-b (B for Bureau; avoids conflict with operators who
+//     use Ctrl-a, the most common non-default tmux/screen prefix).
 //   - mouse: on for relay pass-through.
 //   - history-limit: generous scrollback for observation history.
 func writeTmuxConfig(runDir string) string {
 	configPath := filepath.Join(runDir, "tmux.conf")
 	config := "set-option -g remain-on-exit on\n" +
-		"set-option -g prefix C-a\n" +
+		"set-option -g prefix C-b\n" +
 		"set-option -g mouse on\n" +
 		"set-option -g history-limit 50000\n" +
 		"set-option -g default-shell /bin/sh\n"
@@ -78,8 +79,8 @@ func tmuxSessionName(localpart string) string {
 
 // createTmuxSession creates a detached tmux session for a principal on
 // Bureau's dedicated tmux server. The session is configured with Bureau
-// defaults: Ctrl-a prefix (distinct from the user's Ctrl-b), mouse support
-// for relay pass-through, and generous scrollback for observation history.
+// defaults: Ctrl-b prefix (B for Bureau), mouse support for relay
+// pass-through, and generous scrollback for observation history.
 //
 // When command is provided, the tmux session runs that command instead of a
 // bare shell. This is used for bwrap sandbox scripts — the command is the

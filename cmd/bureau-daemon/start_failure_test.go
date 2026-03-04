@@ -62,17 +62,18 @@ func TestRecordStartFailure_BackoffCap(t *testing.T) {
 	daemon, fakeClock := newTestDaemon(t)
 	principal := testEntity(t, daemon.fleet, "agent/beta")
 
-	// Drive through enough failures to hit the cap.
+	// Drive through enough failures to hit the cap. Uses a transient
+	// category (launcher_ipc) because configuration errors skip backoff.
 	// Backoffs: 1s, 2s, 4s, 8s, 16s, 30s (cap), 30s ...
 	for range 9 {
-		daemon.recordStartFailure(principal, failureCategoryTemplate, "template not found")
+		daemon.recordStartFailure(principal, failureCategoryLauncherIPC, "connection refused")
 		fakeClock.Advance(1 * time.Minute) // advance past any backoff
 	}
 
 	// 10th failure: capture the time before recording so we can
 	// compute the expected nextRetryAt.
 	timeAtFailure := fakeClock.Now()
-	daemon.recordStartFailure(principal, failureCategoryTemplate, "template not found")
+	daemon.recordStartFailure(principal, failureCategoryLauncherIPC, "connection refused")
 
 	failure := daemon.startFailureFor(principal)
 	if failure.attempts != 10 {
@@ -313,6 +314,101 @@ func TestProxyCrashBackoff(t *testing.T) {
 	daemon.recordStartFailure(principal, failureCategoryProxyCrash, "proxy exited with code 1")
 	if daemon.startFailureFor(principal).attempts != 2 {
 		t.Errorf("attempts = %d, want 2", daemon.startFailureFor(principal).attempts)
+	}
+}
+
+func TestConfigurationError_NoBackoff(t *testing.T) {
+	t.Parallel()
+
+	daemon, fakeClock := newTestDaemon(t)
+	principal := testEntity(t, daemon.fleet, "agent/misconfigured")
+
+	// Configuration errors should record the failure (for notification
+	// tracking) but set nextRetryAt to now, so the backoff check never
+	// blocks the principal.
+	for _, category := range []startFailureCategory{
+		failureCategoryCredentials,
+		failureCategoryTemplate,
+		failureCategoryNixPrefetch,
+		failureCategoryCommandBinary,
+	} {
+		daemon.recordStartFailure(principal, category, "bad config")
+		failure := daemon.startFailureFor(principal)
+		if failure == nil {
+			t.Fatalf("category %q: expected failure to be recorded", category)
+		}
+
+		// nextRetryAt should equal failedAt (no backoff added).
+		if !failure.nextRetryAt.Equal(failure.failedAt) {
+			t.Errorf("category %q: nextRetryAt = %v, want %v (no backoff)",
+				category, failure.nextRetryAt, failure.failedAt)
+		}
+
+		// The backoff check that reconcile uses should NOT skip this
+		// principal: clock.Now().Before(nextRetryAt) must be false.
+		if fakeClock.Now().Before(failure.nextRetryAt) {
+			t.Errorf("category %q: backoff check would skip this principal", category)
+		}
+
+		daemon.clearStartFailure(principal)
+		fakeClock.Advance(1 * time.Second)
+	}
+}
+
+func TestConfigurationError_NoBackoffEscalation(t *testing.T) {
+	t.Parallel()
+
+	daemon, fakeClock := newTestDaemon(t)
+	principal := testEntity(t, daemon.fleet, "agent/broken-binary")
+
+	// Even after many repeated configuration errors, nextRetryAt should
+	// never be in the future. The attempt counter increments (useful for
+	// logging) but backoff stays at zero.
+	for i := range 10 {
+		daemon.recordStartFailure(principal, failureCategoryCommandBinary, "not found")
+		failure := daemon.startFailureFor(principal)
+
+		if failure.attempts != i+1 {
+			t.Fatalf("attempt %d: attempts = %d, want %d", i, failure.attempts, i+1)
+		}
+		if !failure.nextRetryAt.Equal(failure.failedAt) {
+			t.Errorf("attempt %d: nextRetryAt = %v, want %v (no backoff)",
+				i, failure.nextRetryAt, failure.failedAt)
+		}
+		if fakeClock.Now().Before(failure.nextRetryAt) {
+			t.Errorf("attempt %d: backoff check would skip this principal", i)
+		}
+
+		fakeClock.Advance(1 * time.Second)
+	}
+}
+
+func TestIsConfigurationError(t *testing.T) {
+	t.Parallel()
+
+	configErrors := []startFailureCategory{
+		failureCategoryCredentials,
+		failureCategoryTemplate,
+		failureCategoryNixPrefetch,
+		failureCategoryCommandBinary,
+	}
+	transientErrors := []startFailureCategory{
+		failureCategoryServiceResolution,
+		failureCategoryTokenMinting,
+		failureCategoryLauncherIPC,
+		failureCategorySandboxCrash,
+		failureCategoryProxyCrash,
+	}
+
+	for _, c := range configErrors {
+		if !c.isConfigurationError() {
+			t.Errorf("%q should be a configuration error", c)
+		}
+	}
+	for _, c := range transientErrors {
+		if c.isConfigurationError() {
+			t.Errorf("%q should NOT be a configuration error", c)
+		}
 	}
 }
 

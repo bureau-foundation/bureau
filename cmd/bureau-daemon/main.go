@@ -1137,23 +1137,54 @@ func (d *Daemon) cacheRoomAlias(ctx context.Context, roomID ref.RoomID) {
 	d.workspaceAliasesMu.Unlock()
 }
 
-// startFailureCategory classifies why a principal failed to start, so
-// event-driven clearing can target the right subset of failures. For
-// example, a service directory sync only clears "service_resolution"
-// failures, not credential or template failures.
+// startFailureCategory classifies why a principal failed to start. The
+// classification drives two behaviors:
+//
+// Event-driven clearing targets specific subsets: a service directory
+// sync clears only "service_resolution" failures, not credential or
+// template failures.
+//
+// Configuration errors (credentials, template, nix_prefetch,
+// command_binary) require operator intervention — the daemon cannot
+// resolve them by retrying. These are recorded for notification
+// tracking but never backed off: the principal is retried on every
+// reconciliation cycle so operator fixes take effect immediately.
+//
+// Transient errors (sandbox_crash, proxy_crash, launcher_ipc,
+// token_minting, service_resolution) may resolve on retry and use
+// exponential backoff to prevent retry storms.
 type startFailureCategory string
 
 const (
-	failureCategoryCredentials       startFailureCategory = "credentials"
-	failureCategoryTemplate          startFailureCategory = "template"
-	failureCategoryNixPrefetch       startFailureCategory = "nix_prefetch"
-	failureCategoryCommandBinary     startFailureCategory = "command_binary"
+	// Configuration errors — no backoff, retry every reconcile cycle.
+	failureCategoryCredentials   startFailureCategory = "credentials"
+	failureCategoryTemplate      startFailureCategory = "template"
+	failureCategoryNixPrefetch   startFailureCategory = "nix_prefetch"
+	failureCategoryCommandBinary startFailureCategory = "command_binary"
+
+	// Transient errors — exponential backoff.
 	failureCategoryServiceResolution startFailureCategory = "service_resolution"
 	failureCategoryTokenMinting      startFailureCategory = "token_minting"
 	failureCategoryLauncherIPC       startFailureCategory = "launcher_ipc"
 	failureCategorySandboxCrash      startFailureCategory = "sandbox_crash"
 	failureCategoryProxyCrash        startFailureCategory = "proxy_crash"
 )
+
+// isConfigurationError returns true when the failure requires operator
+// intervention (fix the template, provision credentials, push a Nix
+// store path) rather than being a transient condition that may resolve
+// on retry. Configuration errors are recorded for notification tracking
+// but never cause backoff — the principal is retried on the next
+// reconciliation cycle so operator fixes take effect immediately.
+func (c startFailureCategory) isConfigurationError() bool {
+	switch c {
+	case failureCategoryCredentials, failureCategoryTemplate,
+		failureCategoryNixPrefetch, failureCategoryCommandBinary:
+		return true
+	default:
+		return false
+	}
+}
 
 // startFailure records a failed sandbox creation attempt for exponential
 // backoff. The daemon skips principals whose nextRetryAt is in the future
@@ -1176,9 +1207,14 @@ const startFailureBackoffBase = 1 * time.Second
 const startFailureBackoffCap = 30 * time.Second
 
 // recordStartFailure records or updates a start failure for the given
-// principal with exponential backoff. On the first failure for a principal,
-// the backoff is startFailureBackoffBase (1s). Each subsequent failure
-// doubles the backoff up to startFailureBackoffCap (30s).
+// principal. For transient failures, exponential backoff is applied:
+// the first failure backs off startFailureBackoffBase (1s), each
+// subsequent failure doubles up to startFailureBackoffCap (30s).
+//
+// Configuration errors (credentials, template, nix_prefetch,
+// command_binary) are recorded with no backoff — they are retried on
+// the next reconciliation cycle so operator fixes take effect
+// immediately.
 //
 // Caller must hold reconcileMu.
 func (d *Daemon) recordStartFailure(principal ref.Entity, category startFailureCategory, message string) {
@@ -1189,12 +1225,20 @@ func (d *Daemon) recordStartFailure(principal ref.Entity, category startFailureC
 		attempts = existing.attempts + 1
 	}
 
-	backoff := startFailureBackoffBase
-	for range attempts - 1 {
-		backoff *= 2
-		if backoff > startFailureBackoffCap {
-			backoff = startFailureBackoffCap
-			break
+	var backoff time.Duration
+	if category.isConfigurationError() {
+		// Configuration errors require operator intervention. Setting
+		// nextRetryAt to now means the backoff check (clock.Now().Before)
+		// is immediately false, so the principal is retried on the next
+		// reconciliation cycle without artificial delay.
+	} else {
+		backoff = startFailureBackoffBase
+		for range attempts - 1 {
+			backoff *= 2
+			if backoff > startFailureBackoffCap {
+				backoff = startFailureBackoffCap
+				break
+			}
 		}
 	}
 
@@ -1209,14 +1253,24 @@ func (d *Daemon) recordStartFailure(principal ref.Entity, category startFailureC
 			nextRetryAt: nextRetryAt,
 		},
 	}
-	d.logger.Info("start failure recorded",
-		"principal", principal,
-		"category", category,
-		"attempts", attempts,
-		"backoff", backoff.String(),
-		"next_retry_at", nextRetryAt.Format(time.RFC3339Nano),
-		"message", message,
-	)
+
+	if category.isConfigurationError() {
+		d.logger.Warn("configuration error, will retry on next reconcile (no backoff)",
+			"principal", principal,
+			"category", category,
+			"attempts", attempts,
+			"message", message,
+		)
+	} else {
+		d.logger.Info("transient start failure recorded",
+			"principal", principal,
+			"category", category,
+			"attempts", attempts,
+			"backoff", backoff.String(),
+			"next_retry_at", nextRetryAt.Format(time.RFC3339Nano),
+			"message", message,
+		)
+	}
 }
 
 // clearStartFailures removes all start failure entries from the lifecycle

@@ -295,13 +295,16 @@ func (d *Daemon) reconcile(ctx context.Context) error {
 			continue
 		}
 
-		// Skip principals in backoff from a previous start failure.
+		// Skip principals in backoff from a previous transient failure.
+		// Configuration errors (credentials, template, nix_prefetch,
+		// command_binary) never block here — their nextRetryAt is set
+		// to the failure time, so clock.Now().Before() is always false.
 		// Event-driven clearing (config change, service sync, sandbox
-		// exit) resets the backoff so retries happen immediately when
-		// the root cause may have been resolved.
+		// exit) resets transient backoff so retries happen immediately
+		// when the root cause may have been resolved.
 		if failure := d.startFailureFor(principal); failure != nil {
 			if d.clock.Now().Before(failure.nextRetryAt) {
-				d.logger.Info("principal in start backoff, skipping",
+				d.logger.Info("principal in transient start backoff, skipping",
 					"principal", principal,
 					"category", failure.category,
 					"attempts", failure.attempts,
@@ -309,7 +312,7 @@ func (d *Daemon) reconcile(ctx context.Context) error {
 				)
 				continue
 			}
-			d.logger.Info("start failure backoff expired, retrying",
+			d.logger.Info("retrying principal after start failure",
 				"principal", principal,
 				"category", failure.category,
 				"attempts", failure.attempts,

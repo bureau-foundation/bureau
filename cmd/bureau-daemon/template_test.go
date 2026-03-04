@@ -519,7 +519,8 @@ func TestResolveInstanceConfigAllOverrides(t *testing.T) {
 		Roles: map[string][]string{
 			"agent": {"/usr/local/bin/claude", "--agent"},
 		},
-		CreateDirs: []string{"/tmp"},
+		CreateDirs:       []string{"/tmp"},
+		RequiredServices: []string{"ticket", "rag"},
 		DefaultPayload: map[string]any{
 			"model":      "claude-sonnet-4-5-20250929",
 			"max_tokens": float64(4096),
@@ -537,6 +538,7 @@ func TestResolveInstanceConfigAllOverrides(t *testing.T) {
 			"MODEL_NAME": "claude-opus-4-6",
 			"PATH":       "/custom/bin:/usr/local/bin:/usr/bin:/bin", // Overrides template PATH
 		},
+		RequiredServicesOverride: []string{"forge/github:http", "model"},
 		Payload: map[string]any{
 			"project":    "iree/amdgpu",
 			"max_tokens": float64(8192), // Overrides template default
@@ -575,6 +577,11 @@ func TestResolveInstanceConfigAllOverrides(t *testing.T) {
 	}
 	if spec.Payload["model"] != "claude-sonnet-4-5-20250929" {
 		t.Errorf("Payload[model] = %v, want claude-sonnet-4-5-20250929 (from template default)", spec.Payload["model"])
+	}
+
+	// RequiredServicesOverride should replace template's RequiredServices.
+	if len(spec.RequiredServices) != 2 || spec.RequiredServices[0] != "forge/github:http" || spec.RequiredServices[1] != "model" {
+		t.Errorf("RequiredServices = %v, want [forge/github:http model]", spec.RequiredServices)
 	}
 
 	// Other fields passed through.
@@ -705,4 +712,44 @@ func TestResolveInstanceConfigDoesNotMutateTemplate(t *testing.T) {
 	if _, exists := template.EnvironmentVariables["NEW_VAR"]; exists {
 		t.Error("resolveInstanceConfig should not mutate the template's EnvironmentVariables")
 	}
+}
+
+func TestResolveInstanceConfigRequiredServicesOverride(t *testing.T) {
+	t.Parallel()
+
+	template := &schema.TemplateContent{
+		Command:          []string{"cloudflared", "tunnel", "run"},
+		RequiredServices: []string{"ticket", "rag"},
+	}
+
+	_, fleet := testMachineSetup(t, "test", "test.local")
+
+	t.Run("override replaces template services", func(t *testing.T) {
+		t.Parallel()
+		assignment := &schema.PrincipalAssignment{
+			Principal:                testEntity(t, fleet, "test/tunnel"),
+			Template:                 "bureau/template:cloudflare-tunnel",
+			RequiredServicesOverride: []string{"forge/github:http"},
+		}
+
+		spec := resolveInstanceConfig(template, assignment)
+
+		if len(spec.RequiredServices) != 1 || spec.RequiredServices[0] != "forge/github:http" {
+			t.Errorf("RequiredServices = %v, want [forge/github:http]", spec.RequiredServices)
+		}
+	})
+
+	t.Run("nil override preserves template services", func(t *testing.T) {
+		t.Parallel()
+		assignment := &schema.PrincipalAssignment{
+			Principal: testEntity(t, fleet, "test/tunnel"),
+			Template:  "bureau/template:cloudflare-tunnel",
+		}
+
+		spec := resolveInstanceConfig(template, assignment)
+
+		if len(spec.RequiredServices) != 2 || spec.RequiredServices[0] != "ticket" || spec.RequiredServices[1] != "rag" {
+			t.Errorf("RequiredServices = %v, want [ticket rag]", spec.RequiredServices)
+		}
+	})
 }

@@ -63,6 +63,11 @@ func resolveInstanceConfig(template *schema.TemplateContent, assignment *schema.
 		}
 	}
 
+	// Override required services if the assignment specifies them.
+	if len(assignment.RequiredServicesOverride) > 0 {
+		spec.RequiredServices = assignment.RequiredServicesOverride
+	}
+
 	// Merge payload: template DefaultPayload as base, assignment Payload wins.
 	spec.Payload = libtmpl.MergeAnyMaps(template.DefaultPayload, assignment.Payload)
 

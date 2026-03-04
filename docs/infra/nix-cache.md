@@ -26,7 +26,7 @@ Nix checks substituters in order. The flake declares the R2 cache via
 nixConfig = {
   extra-substituters = [ "https://cache.infra.bureau.foundation" ];
   extra-trusted-public-keys = [
-    "cache.infra.bureau.foundation-1:3hpghLePqloLp0qMpkgPy/i0gKiL/Sxl2dY8EHZgOeY="
+    "cache.infra.bureau.foundation-1:3hpghLePqloLp0qMpkgPy/i0gKiL/Sxl2dY8EHZgOeY= cache.infra.bureau.foundation-2:e1rDOXBK+uLDTT+YU2UzIzkNHpLEaG2jCHZumlH1UmY="
   ];
 };
 ```
@@ -68,15 +68,17 @@ upstream Nix 2.33.2, shipped in Determinate Nix 3.16.0+.
 Store paths are signed with an Ed25519 key before upload. Nix verifies the
 signature against the public key when downloading.
 
-- **Key name**: `cache.infra.bureau.foundation-1`
-- **Public key**: `cache.infra.bureau.foundation-1:3hpghLePqloLp0qMpkgPy/i0gKiL/Sxl2dY8EHZgOeY=`
-- **Secret key**: stored in GitHub secret `NIX_CACHE_SIGNING_KEY`
+- **Active key name**: `cache.infra.bureau.foundation-2`
+- **Active public key**: `cache.infra.bureau.foundation-2:e1rDOXBK+uLDTT+YU2UzIzkNHpLEaG2jCHZumlH1UmY=`
+- **Previous key name**: `cache.infra.bureau.foundation-1` (trusted during transition)
+- **Previous public key**: `cache.infra.bureau.foundation-1:3hpghLePqloLp0qMpkgPy/i0gKiL/Sxl2dY8EHZgOeY=`
+- **Secret key**: stored in GitHub org-level secret `NIX_CACHE_SIGNING_KEY`
 
-The `-1` suffix is a rotation counter. When rotating: generate a new key with
-suffix `-2`, add the new public key to `flake.nix` and CI config alongside
-the old one (so both are trusted during transition), update the GitHub secret,
-then remove the old public key after all cached paths signed with `-1` have
-expired or been re-signed.
+The numeric suffix is a rotation counter. When rotating: generate a new key
+with an incremented suffix, add the new public key to `flake.nix` and CI
+config alongside the old one (so both are trusted during transition), update
+the GitHub secret, then remove the old public key after all cached paths
+signed with the previous key have expired or been re-signed.
 
 ## Storage
 
@@ -92,6 +94,10 @@ Nix writes standard binary cache layout: `nix-cache-info` at the root,
 archives.
 
 ## GitHub secrets
+
+All cache secrets are org-level (`bureau-foundation` organization) so that
+out-of-tree service repos (e.g., `cloudflare-tunnel`) can push to the same
+cache.
 
 | Secret | Purpose |
 |--------|---------|

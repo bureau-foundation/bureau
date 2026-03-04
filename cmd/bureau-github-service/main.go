@@ -121,7 +121,7 @@ func run() error {
 
 	// Start the HTTP server for webhook ingestion on a Unix socket.
 	// The daemon resolves this as the "http" endpoint and mounts it
-	// into consuming sandboxes (e.g., the webhook-tunnel principal).
+	// into consuming sandboxes (e.g., an inbound tunnel principal).
 	httpServer := service.NewHTTPServer(service.HTTPServerConfig{
 		SocketPath: webhookSocketPath,
 		Handler:    webhookHandler,

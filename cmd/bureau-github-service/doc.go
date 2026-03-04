@@ -9,8 +9,8 @@
 //   - CBOR Unix socket (service.sock): agent operations (subscribe,
 //     create-issue, etc.)
 //   - HTTP Unix socket (http.sock): webhook ingestion from GitHub
-//     (HMAC-SHA256 verified). Consuming services (e.g., webhook-tunnel)
-//     mount this endpoint via RequiredServices with the "github:http" spec.
+//     (HMAC-SHA256 verified). Consuming principals (e.g., an inbound
+//     tunnel) mount this endpoint via RequiredServices as "github:http".
 //   - Matrix /sync: watches m.bureau.repository, m.bureau.forge_config,
 //     m.bureau.forge_identity, and room membership changes
 //

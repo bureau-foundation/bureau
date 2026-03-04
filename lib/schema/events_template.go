@@ -162,6 +162,17 @@ type PrincipalAssignment struct {
 	// template (e.g., MODEL_NAME, BATCH_SIZE).
 	ExtraEnvironmentVariables map[string]string `json:"extra_environment_variables,omitempty"`
 
+	// RequiredServicesOverride replaces the template's RequiredServices
+	// for this principal instance. Use this when a generic template
+	// (e.g., an inbound tunnel) needs different service socket mounts
+	// per deployment. The operator configures which services to mount
+	// without modifying the template itself.
+	//
+	// When nil, the template's RequiredServices are used unchanged.
+	// When set (even to an empty slice), it fully replaces the
+	// template's RequiredServices — there is no merging.
+	RequiredServicesOverride []string `json:"required_services_override,omitempty"`
+
 	// Payload is instance-specific data passed to the agent at startup
 	// and available for hot-reload via SIGHUP. The daemon merges this
 	// over the template's DefaultPayload (Payload values win on

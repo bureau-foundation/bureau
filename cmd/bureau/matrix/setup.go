@@ -665,27 +665,6 @@ func baseTemplates(templatePrefix string) []namedTemplate {
 			},
 		},
 
-		// --- Infrastructure ---
-		//
-		// Templates for infrastructure principals that bridge external
-		// traffic into the Bureau service mesh. These inherit from
-		// base-networked (shared host network for outbound access)
-		// and use RequiredServices + bridge for TCP-to-socket forwarding.
-
-		{
-			name: "webhook-tunnel",
-			content: schema.TemplateContent{
-				Description: "Cloudflare Tunnel for routing external webhook traffic to forge connector services",
-				Inherits:    []string{templatePrefix + ":base-networked"},
-				Command: []string{
-					"bureau-bridge",
-					"--listen", "127.0.0.1:8642",
-					"--socket", "/run/bureau/service/github-http.sock",
-					"--", "cloudflared", "tunnel", "run",
-				},
-				RequiredServices: []string{"github:http"},
-			},
-		},
 	}
 }
 

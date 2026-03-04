@@ -7,7 +7,7 @@
   nixConfig = {
     extra-substituters = [ "https://cache.infra.bureau.foundation" ];
     extra-trusted-public-keys = [
-      "cache.infra.bureau.foundation-1:3hpghLePqloLp0qMpkgPy/i0gKiL/Sxl2dY8EHZgOeY="
+      "cache.infra.bureau.foundation-1:3hpghLePqloLp0qMpkgPy/i0gKiL/Sxl2dY8EHZgOeY= cache.infra.bureau.foundation-2:e1rDOXBK+uLDTT+YU2UzIzkNHpLEaG2jCHZumlH1UmY="
     ];
   };
 

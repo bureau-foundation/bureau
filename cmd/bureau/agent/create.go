@@ -23,12 +23,11 @@ import (
 // it needs the registration token for Matrix account creation.
 type agentCreateParams struct {
 	cli.SessionConfig
-	Machine         string   `json:"machine"          flag:"machine"           desc:"target machine localpart (required)"`
-	Name            string   `json:"name"             flag:"name"              desc:"agent principal localpart (required)"`
-	ServerName      string   `json:"server_name"      flag:"server-name"       desc:"Matrix server name (auto-detected from machine.conf)"`
-	AutoStart       bool     `json:"auto_start"       flag:"auto-start"        desc:"start sandbox automatically" default:"true"`
-	ExtraCredential []string `json:"extra_credential" flag:"extra-credential"  desc:"extra credential KEY=VALUE for the agent's encrypted bundle (repeatable)"`
-	ExtraEnv        []string `json:"extra_env"        flag:"extra-env"         desc:"extra environment variable KEY=VALUE for the sandbox (repeatable)"`
+	cli.PrincipalOverrides
+	Machine    string `json:"machine"     flag:"machine"     desc:"target machine localpart (required)"`
+	Name       string `json:"name"        flag:"name"        desc:"agent principal localpart (required)"`
+	ServerName string `json:"server_name" flag:"server-name" desc:"Matrix server name (auto-detected from machine.conf)"`
+	AutoStart  bool   `json:"auto_start"  flag:"auto-start"  desc:"start sandbox automatically" default:"true"`
 
 	cli.JSONOutput
 }
@@ -187,13 +186,9 @@ func runCreate(ctx context.Context, logger *slog.Logger, templateRef schema.Temp
 			WithHint("Run 'bureau machine list' to see machines, or 'bureau machine provision' to register one.")
 	}
 
-	extraCredentials, err := cli.ParseKeyValuePairs(params.ExtraCredential)
+	overrides, err := params.PrincipalOverrides.Parse()
 	if err != nil {
-		return cli.Validation("invalid --extra-credential: %w", err)
-	}
-	extraEnvironmentVariables, err := cli.ParseKeyValuePairs(params.ExtraEnv)
-	if err != nil {
-		return cli.Validation("invalid --extra-env: %w", err)
+		return err
 	}
 
 	logger.Info("creating agent", "name", params.Name, "machine", params.Machine, "template", templateRef.String())
@@ -203,7 +198,7 @@ func runCreate(ctx context.Context, logger *slog.Logger, templateRef schema.Temp
 		return cli.Validation("invalid agent name: %v", err)
 	}
 
-	result, err := principal.Create(ctx, client, adminSession, registrationTokenBuffer, credential.AsProvisionFunc(), principal.CreateParams{
+	createParams := principal.CreateParams{
 		Machine:     machine,
 		Principal:   principalEntity,
 		TemplateRef: templateRef,
@@ -211,12 +206,13 @@ func runCreate(ctx context.Context, logger *slog.Logger, templateRef schema.Temp
 			_, err := templatedef.Fetch(ctx, adminSession, templateRef, serverName)
 			return err
 		},
-		HomeserverURL:             homeserverURL,
-		AutoStart:                 params.AutoStart,
-		MachineRoomID:             machineRoomID,
-		ExtraCredentials:          extraCredentials,
-		ExtraEnvironmentVariables: extraEnvironmentVariables,
-	})
+		HomeserverURL: homeserverURL,
+		AutoStart:     params.AutoStart,
+		MachineRoomID: machineRoomID,
+	}
+	overrides.ApplyTo(&createParams)
+
+	result, err := principal.Create(ctx, client, adminSession, registrationTokenBuffer, credential.AsProvisionFunc(), createParams)
 	if err != nil {
 		return cli.Internal("create agent: %w", err)
 	}

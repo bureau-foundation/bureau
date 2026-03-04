@@ -17,6 +17,7 @@ go_library(
         "login.go",
         "machine_context.go",
         "operator_session.go",
+        "overrides.go",
         "params.go",
         "plugin.go",
         "schema.go",
@@ -35,6 +36,7 @@ go_library(
         "//lib/principal",
         "//lib/proxyclient",
         "//lib/ref",
+        "//lib/schema",
         "//lib/secret",
         "//lib/toolsearch",
         "//messaging",
@@ -62,5 +64,8 @@ go_test(
         "toolerror_test.go",
     ],
     embed = [":cli"],
-    deps = ["@com_github_spf13_pflag//:pflag"],
+    deps = [
+        "//lib/schema",
+        "@com_github_spf13_pflag//:pflag",
+    ],
 )

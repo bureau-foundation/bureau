@@ -10,6 +10,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/bureau-foundation/bureau/lib/schema"
 	"github.com/spf13/pflag"
 )
 
@@ -248,4 +249,79 @@ func ParseKeyValuePairs(pairs []string) (map[string]string, error) {
 		result[key] = value
 	}
 	return result, nil
+}
+
+// ParseSecretBindings builds a slice of schema.SecretBinding from two
+// repeatable KEY=VALUE flag slices: --secret-env KEY=ENV_VAR maps a
+// credential bundle key to an environment variable, and --secret-file
+// KEY=FILE_PATH maps it to a file at /run/bureau/secrets/FILE_PATH.
+//
+// When the same KEY appears in both slices, the entries are merged into
+// a single SecretBinding with both Env and File set. Returns nil if
+// both slices are empty. Returns an error on missing "=", empty key,
+// or empty value.
+func ParseSecretBindings(envPairs, filePairs []string) ([]schema.SecretBinding, error) {
+	if len(envPairs) == 0 && len(filePairs) == 0 {
+		return nil, nil
+	}
+
+	// Accumulate bindings keyed by credential name so that a key
+	// appearing in both --secret-env and --secret-file merges into
+	// one SecretBinding.
+	type entry struct {
+		env  string
+		file string
+	}
+	byKey := make(map[string]*entry)
+	// Track insertion order so the result is deterministic.
+	var keyOrder []string
+
+	for _, pair := range envPairs {
+		key, value, found := strings.Cut(pair, "=")
+		if !found {
+			return nil, fmt.Errorf("--secret-env: expected KEY=ENV_VAR, got %q", pair)
+		}
+		if key == "" {
+			return nil, fmt.Errorf("--secret-env: empty key in %q", pair)
+		}
+		if value == "" {
+			return nil, fmt.Errorf("--secret-env: empty environment variable name in %q", pair)
+		}
+		if existing, ok := byKey[key]; ok {
+			existing.env = value
+		} else {
+			byKey[key] = &entry{env: value}
+			keyOrder = append(keyOrder, key)
+		}
+	}
+
+	for _, pair := range filePairs {
+		key, value, found := strings.Cut(pair, "=")
+		if !found {
+			return nil, fmt.Errorf("--secret-file: expected KEY=FILE_PATH, got %q", pair)
+		}
+		if key == "" {
+			return nil, fmt.Errorf("--secret-file: empty key in %q", pair)
+		}
+		if value == "" {
+			return nil, fmt.Errorf("--secret-file: empty file path in %q", pair)
+		}
+		if existing, ok := byKey[key]; ok {
+			existing.file = value
+		} else {
+			byKey[key] = &entry{file: value}
+			keyOrder = append(keyOrder, key)
+		}
+	}
+
+	bindings := make([]schema.SecretBinding, 0, len(byKey))
+	for _, key := range keyOrder {
+		entry := byKey[key]
+		bindings = append(bindings, schema.SecretBinding{
+			Key:  key,
+			Env:  entry.env,
+			File: entry.file,
+		})
+	}
+	return bindings, nil
 }

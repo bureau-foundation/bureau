@@ -8,6 +8,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/bureau-foundation/bureau/lib/schema"
 	"github.com/spf13/pflag"
 )
 
@@ -420,5 +421,150 @@ func TestBindFlags_PositionalArgsRemain(t *testing.T) {
 	}
 	if p.Format != "json" {
 		t.Errorf("Format = %q, want %q", p.Format, "json")
+	}
+}
+
+func TestParseSecretBindings_Empty(t *testing.T) {
+	bindings, err := ParseSecretBindings(nil, nil)
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if bindings != nil {
+		t.Errorf("expected nil, got %v", bindings)
+	}
+}
+
+func TestParseSecretBindings_EnvOnly(t *testing.T) {
+	bindings, err := ParseSecretBindings(
+		[]string{"API_KEY=ANTHROPIC_API_KEY", "SLACK_TOKEN=SLACK_BOT_TOKEN"},
+		nil,
+	)
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if len(bindings) != 2 {
+		t.Fatalf("expected 2 bindings, got %d", len(bindings))
+	}
+	want := []schema.SecretBinding{
+		{Key: "API_KEY", Env: "ANTHROPIC_API_KEY"},
+		{Key: "SLACK_TOKEN", Env: "SLACK_BOT_TOKEN"},
+	}
+	for i, binding := range bindings {
+		if binding != want[i] {
+			t.Errorf("binding[%d] = %+v, want %+v", i, binding, want[i])
+		}
+	}
+}
+
+func TestParseSecretBindings_FileOnly(t *testing.T) {
+	bindings, err := ParseSecretBindings(
+		nil,
+		[]string{"TLS_CERT=server.crt", "TLS_KEY=server.key"},
+	)
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if len(bindings) != 2 {
+		t.Fatalf("expected 2 bindings, got %d", len(bindings))
+	}
+	want := []schema.SecretBinding{
+		{Key: "TLS_CERT", File: "server.crt"},
+		{Key: "TLS_KEY", File: "server.key"},
+	}
+	for i, binding := range bindings {
+		if binding != want[i] {
+			t.Errorf("binding[%d] = %+v, want %+v", i, binding, want[i])
+		}
+	}
+}
+
+func TestParseSecretBindings_MergedKey(t *testing.T) {
+	bindings, err := ParseSecretBindings(
+		[]string{"API_KEY=MY_API_KEY"},
+		[]string{"API_KEY=api-key.txt"},
+	)
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if len(bindings) != 1 {
+		t.Fatalf("expected 1 binding, got %d", len(bindings))
+	}
+	want := schema.SecretBinding{Key: "API_KEY", Env: "MY_API_KEY", File: "api-key.txt"}
+	if bindings[0] != want {
+		t.Errorf("binding = %+v, want %+v", bindings[0], want)
+	}
+}
+
+func TestParseSecretBindings_MixedKeys(t *testing.T) {
+	bindings, err := ParseSecretBindings(
+		[]string{"API_KEY=ANTHROPIC_KEY", "DB_PASS=DATABASE_PASSWORD"},
+		[]string{"API_KEY=api-key.txt", "TLS_CERT=server.crt"},
+	)
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if len(bindings) != 3 {
+		t.Fatalf("expected 3 bindings, got %d", len(bindings))
+	}
+	// Order: API_KEY first (seen first in envPairs), then DB_PASS, then TLS_CERT.
+	want := []schema.SecretBinding{
+		{Key: "API_KEY", Env: "ANTHROPIC_KEY", File: "api-key.txt"},
+		{Key: "DB_PASS", Env: "DATABASE_PASSWORD"},
+		{Key: "TLS_CERT", File: "server.crt"},
+	}
+	for i, binding := range bindings {
+		if binding != want[i] {
+			t.Errorf("binding[%d] = %+v, want %+v", i, binding, want[i])
+		}
+	}
+}
+
+func TestParseSecretBindings_ErrorMissingEquals(t *testing.T) {
+	_, err := ParseSecretBindings([]string{"BADFORMAT"}, nil)
+	if err == nil {
+		t.Fatal("expected error for missing =")
+	}
+	if !strings.Contains(err.Error(), "expected KEY=ENV_VAR") {
+		t.Errorf("unexpected error message: %v", err)
+	}
+}
+
+func TestParseSecretBindings_ErrorEmptyKey(t *testing.T) {
+	_, err := ParseSecretBindings([]string{"=VALUE"}, nil)
+	if err == nil {
+		t.Fatal("expected error for empty key")
+	}
+	if !strings.Contains(err.Error(), "empty key") {
+		t.Errorf("unexpected error message: %v", err)
+	}
+}
+
+func TestParseSecretBindings_ErrorEmptyEnvValue(t *testing.T) {
+	_, err := ParseSecretBindings([]string{"KEY="}, nil)
+	if err == nil {
+		t.Fatal("expected error for empty env var name")
+	}
+	if !strings.Contains(err.Error(), "empty environment variable name") {
+		t.Errorf("unexpected error message: %v", err)
+	}
+}
+
+func TestParseSecretBindings_ErrorEmptyFileValue(t *testing.T) {
+	_, err := ParseSecretBindings(nil, []string{"KEY="})
+	if err == nil {
+		t.Fatal("expected error for empty file path")
+	}
+	if !strings.Contains(err.Error(), "empty file path") {
+		t.Errorf("unexpected error message: %v", err)
+	}
+}
+
+func TestParseSecretBindings_ErrorFileMissingEquals(t *testing.T) {
+	_, err := ParseSecretBindings(nil, []string{"NOEQUALS"})
+	if err == nil {
+		t.Fatal("expected error for missing =")
+	}
+	if !strings.Contains(err.Error(), "expected KEY=FILE_PATH") {
+		t.Errorf("unexpected error message: %v", err)
 	}
 }

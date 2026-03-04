@@ -29,6 +29,7 @@ import (
 // JSON/MCP mode.
 type createParams struct {
 	cli.SessionConfig
+	cli.PrincipalOverrides
 	cli.JSONOutput
 	Alias      string   `json:"alias"       desc:"workspace alias (e.g. iree/amdgpu/inference)" required:"true"`
 	Machine    string   `json:"machine"     flag:"machine"     desc:"fleet-scoped machine localpart (e.g., bureau/fleet/prod/machine/workstation; use 'local' to auto-detect)"`
@@ -87,6 +88,31 @@ type CreateParams struct {
 	// agent principal's encrypted credential bundle (e.g., API keys).
 	// Setup and teardown principals do not receive extra credentials.
 	ExtraCredentials map[string]string
+
+	// ExtraEnvironmentVariables are merged into the template's environment
+	// variables for each agent principal instance. Setup and teardown
+	// principals do not receive these.
+	ExtraEnvironmentVariables map[string]string
+
+	// CommandOverride replaces the template's Command for each agent
+	// principal. When nil, the template's Command is used. Setup and
+	// teardown principals are not affected.
+	CommandOverride []string
+
+	// EnvironmentOverride replaces the template's Environment (Nix store
+	// path) for each agent principal. When empty, the template's
+	// Environment is used. Setup and teardown principals are not affected.
+	EnvironmentOverride string
+
+	// RequiredServicesOverride replaces the template's RequiredServices
+	// for each agent principal. When nil, the template's RequiredServices
+	// are used. Setup and teardown principals are not affected.
+	RequiredServicesOverride []string
+
+	// SecretsOverride replaces the template's Secrets for each agent
+	// principal. When nil, the template's Secrets are used. Setup and
+	// teardown principals are not affected.
+	SecretsOverride []schema.SecretBinding
 }
 
 // CreateResult holds the result of workspace creation.
@@ -175,18 +201,20 @@ All worktrees in a project share a single bare git object store at
 
 			params.ServerName = cli.ResolveServerName(params.ServerName)
 
-			return runCreate(ctx, logger, params.Alias, &params.SessionConfig, params.Machine, params.Template, params.Param, params.ServerName, params.AgentCount, params.DevTeam, &params.JSONOutput)
+			return runCreate(ctx, logger, params)
 		},
 	}
 }
 
 // runCreate is the CLI wrapper: resolves "local" machine, parses raw
 // params, connects a session, calls Create, and formats the output.
-func runCreate(ctx context.Context, logger *slog.Logger, alias string, sessionConfig *cli.SessionConfig, machineName, templateRef string, rawParams []string, serverNameString string, agentCount int, devTeam string, jsonOutput *cli.JSONOutput) error {
-	serverName, err := ref.ParseServerName(serverNameString)
+func runCreate(ctx context.Context, logger *slog.Logger, params createParams) error {
+	serverName, err := ref.ParseServerName(params.ServerName)
 	if err != nil {
-		return cli.Validation("invalid --server-name %q: %w", serverNameString, err)
+		return cli.Validation("invalid --server-name %q: %w", params.ServerName, err)
 	}
+
+	machineName := params.Machine
 
 	// Resolve "local" to the actual machine localpart from the launcher's
 	// session file.
@@ -206,7 +234,13 @@ func runCreate(ctx context.Context, logger *slog.Logger, alias string, sessionCo
 	}
 
 	// Parse key=value parameters.
-	paramMap, err := parseParams(rawParams)
+	paramMap, err := parseParams(params.Param)
+	if err != nil {
+		return err
+	}
+
+	// Parse agent override flags.
+	overrides, err := params.PrincipalOverrides.Parse()
 	if err != nil {
 		return err
 	}
@@ -214,10 +248,10 @@ func runCreate(ctx context.Context, logger *slog.Logger, alias string, sessionCo
 	// Read the credential file for the registration token. Workspace
 	// creation registers Matrix accounts for each principal (setup,
 	// agents, teardown) and provisions encrypted credentials.
-	if sessionConfig.CredentialFile == "" {
+	if params.SessionConfig.CredentialFile == "" {
 		return cli.Validation("--credential-file is required")
 	}
-	credentials, err := cli.ReadCredentialFile(sessionConfig.CredentialFile)
+	credentials, err := cli.ReadCredentialFile(params.SessionConfig.CredentialFile)
 	if err != nil {
 		return cli.Internal("read credential file: %w", err)
 	}
@@ -233,7 +267,7 @@ func runCreate(ctx context.Context, logger *slog.Logger, alias string, sessionCo
 	}
 	defer registrationTokenBuffer.Close()
 
-	homeserverURL, err := sessionConfig.ResolveHomeserverURL()
+	homeserverURL, err := params.SessionConfig.ResolveHomeserverURL()
 	if err != nil {
 		return err
 	}
@@ -248,7 +282,7 @@ func runCreate(ctx context.Context, logger *slog.Logger, alias string, sessionCo
 	ctx, cancel := context.WithTimeout(ctx, 60*time.Second)
 	defer cancel()
 
-	session, err := sessionConfig.Connect(ctx)
+	session, err := params.SessionConfig.Connect(ctx)
 	if err != nil {
 		return err
 	}
@@ -264,22 +298,28 @@ func runCreate(ctx context.Context, logger *slog.Logger, alias string, sessionCo
 	}
 
 	result, err := Create(ctx, session, CreateParams{
-		Alias:             alias,
-		Machine:           machineRef,
-		Template:          templateRef,
-		Params:            paramMap,
-		AgentCount:        agentCount,
-		DevTeam:           devTeam,
-		Client:            matrixClient,
-		RegistrationToken: registrationTokenBuffer,
-		HomeserverURL:     homeserverURL,
-		MachineRoomID:     machineRoomID,
+		Alias:                     params.Alias,
+		Machine:                   machineRef,
+		Template:                  params.Template,
+		Params:                    paramMap,
+		AgentCount:                params.AgentCount,
+		DevTeam:                   params.DevTeam,
+		Client:                    matrixClient,
+		RegistrationToken:         registrationTokenBuffer,
+		HomeserverURL:             homeserverURL,
+		MachineRoomID:             machineRoomID,
+		ExtraCredentials:          overrides.ExtraCredentials,
+		ExtraEnvironmentVariables: overrides.ExtraEnvironmentVariables,
+		CommandOverride:           overrides.CommandOverride,
+		EnvironmentOverride:       overrides.EnvironmentOverride,
+		RequiredServicesOverride:  overrides.RequiredServicesOverride,
+		SecretsOverride:           overrides.SecretsOverride,
 	}, logger)
 	if err != nil {
 		return err
 	}
 
-	if done, emitError := jsonOutput.EmitJSON(result); done {
+	if done, emitError := params.JSONOutput.EmitJSON(result); done {
 		return emitError
 	}
 
@@ -467,28 +507,47 @@ func Create(ctx context.Context, session messaging.Session, params CreateParams,
 			return nil, cli.Internal("parsing template ref %q: %w", assignment.Template, parseError)
 		}
 
-		// Agent principals receive extra credentials (API keys);
-		// setup and teardown principals are pipeline executors that
-		// only need their Matrix token.
-		var extraCredentials map[string]string
-		if assignment.Labels["role"] == "agent" {
-			extraCredentials = params.ExtraCredentials
+		// Agent principals receive extra credentials, environment
+		// overrides, and instance customization; setup and teardown
+		// principals are pipeline executors that only need their
+		// Matrix token and the template defaults.
+		cp := principal.CreateParams{
+			Machine:          machineRef,
+			Principal:        assignment.Principal,
+			TemplateRef:      templateRef,
+			ValidateTemplate: validateTemplate,
+			HomeserverURL:    params.HomeserverURL,
+			AutoStart:        assignment.AutoStart,
+			MachineRoomID:    params.MachineRoomID,
+			StartCondition:   assignment.StartCondition,
+			Labels:           assignment.Labels,
+			Payload:          assignment.Payload,
+			// Start with the assignment's own extra env vars (e.g.,
+			// WORKSPACE_ALIAS set by buildPrincipalAssignments).
+			ExtraEnvironmentVariables: assignment.ExtraEnvironmentVariables,
 		}
 
-		createParamsList = append(createParamsList, principal.CreateParams{
-			Machine:                   machineRef,
-			Principal:                 assignment.Principal,
-			TemplateRef:               templateRef,
-			ValidateTemplate:          validateTemplate,
-			HomeserverURL:             params.HomeserverURL,
-			AutoStart:                 assignment.AutoStart,
-			MachineRoomID:             params.MachineRoomID,
-			StartCondition:            assignment.StartCondition,
-			Labels:                    assignment.Labels,
-			Payload:                   assignment.Payload,
-			ExtraEnvironmentVariables: assignment.ExtraEnvironmentVariables,
-			ExtraCredentials:          extraCredentials,
-		})
+		if assignment.Labels["role"] == "agent" {
+			cp.ExtraCredentials = params.ExtraCredentials
+			cp.CommandOverride = params.CommandOverride
+			cp.EnvironmentOverride = params.EnvironmentOverride
+			cp.RequiredServicesOverride = params.RequiredServicesOverride
+			cp.SecretsOverride = params.SecretsOverride
+
+			// Merge CLI-provided extra env vars into the
+			// assignment's built-in env vars. CLI values win on
+			// conflict.
+			if len(params.ExtraEnvironmentVariables) > 0 {
+				if cp.ExtraEnvironmentVariables == nil {
+					cp.ExtraEnvironmentVariables = make(map[string]string, len(params.ExtraEnvironmentVariables))
+				}
+				for key, value := range params.ExtraEnvironmentVariables {
+					cp.ExtraEnvironmentVariables[key] = value
+				}
+			}
+		}
+
+		createParamsList = append(createParamsList, cp)
 	}
 
 	// Register accounts, provision encrypted credentials, and publish

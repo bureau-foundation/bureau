@@ -108,6 +108,30 @@ type CreateParams struct {
 	// RestartPolicy controls what happens when a sandbox exits.
 	// Empty defaults to RestartPolicyAlways at runtime.
 	RestartPolicy schema.RestartPolicy
+
+	// CommandOverride replaces the template's Command for this principal
+	// instance. Each element is one argv argument. When nil, the
+	// template's Command is used unchanged.
+	CommandOverride []string
+
+	// EnvironmentOverride replaces the template's Environment (Nix store
+	// path) for this principal. When empty, the template's Environment
+	// is used. Useful for canary deployments or per-principal version
+	// pinning.
+	EnvironmentOverride string
+
+	// RequiredServicesOverride replaces the template's RequiredServices
+	// for this principal instance. When nil, the template's
+	// RequiredServices are used unchanged. When set (even to an empty
+	// slice), it fully replaces — there is no merging.
+	RequiredServicesOverride []string
+
+	// SecretsOverride replaces the template's Secrets for this principal
+	// instance. Each SecretBinding maps a credential bundle key to an
+	// environment variable and/or a file path inside the sandbox. When
+	// nil, the template's Secrets are used unchanged. When set (even to
+	// an empty slice), it fully replaces — there is no merging.
+	SecretsOverride []schema.SecretBinding
 }
 
 // CreateResult holds the result of a successful principal creation.
@@ -404,6 +428,10 @@ func AssignPrincipals(ctx context.Context, session messaging.Session, configRoom
 			Authorization:             p.Authorization,
 			ExtraEnvironmentVariables: p.ExtraEnvironmentVariables,
 			Payload:                   p.Payload,
+			CommandOverride:           p.CommandOverride,
+			EnvironmentOverride:       p.EnvironmentOverride,
+			RequiredServicesOverride:  p.RequiredServicesOverride,
+			SecretsOverride:           p.SecretsOverride,
 		}
 
 		// Check if the principal is already assigned; update in place if so.

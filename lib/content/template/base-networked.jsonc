@@ -1,0 +1,24 @@
+// Inherits from base, disables network namespace isolation.
+//
+// Use for sandboxes that need direct host network access: services
+// binding to host ports, agents that need raw TCP rather than going
+// through the proxy/bridge.
+{
+    "description": "Base sandbox with host network access (no network namespace isolation)",
+    "inherits": ["${TEMPLATE_ROOM}:base"],
+    "namespaces": {
+        "pid": true,
+        "net": false,
+        "ipc": true,
+        "uts": true
+    },
+    "filesystem": [
+        // DNS resolution requires the host's resolver config. Without
+        // this, any process needing hostname resolution (cloudflared,
+        // curl, git, etc.) fails with NXDOMAIN or connection refused.
+        {"source": "/etc/resolv.conf", "dest": "/etc/resolv.conf", "mode": "ro"},
+        // NSS and SSL need these for hostname resolution and TLS.
+        {"source": "/etc/ssl", "dest": "/etc/ssl", "mode": "ro"},
+        {"source": "/etc/nsswitch.conf", "dest": "/etc/nsswitch.conf", "mode": "ro"}
+    ]
+}

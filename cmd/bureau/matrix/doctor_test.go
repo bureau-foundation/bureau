@@ -234,9 +234,10 @@ func (m *mockDoctorServer) handle(t *testing.T) http.HandlerFunc {
 				if idx >= 0 {
 					stateKey := rawPath[idx+len("/state/m.bureau.template/"):]
 					stateKey, _ = url.PathUnescape(stateKey)
-					for _, template := range baseTemplates("bureau/template") {
-						if template.name == stateKey {
-							json.NewEncoder(writer).Encode(template.content)
+					templates, _ := content.Templates("bureau/template")
+					for _, template := range templates {
+						if template.Name == stateKey {
+							json.NewEncoder(writer).Encode(template.Content)
 							return
 						}
 					}
@@ -511,8 +512,12 @@ func TestRunDoctor_AllHealthy(t *testing.T) {
 		"dev team room dev team",
 	}
 	// Add expected template and pipeline checks dynamically from embedded content.
-	for _, template := range baseTemplates("bureau/template") {
-		expectedChecks = append(expectedChecks, fmt.Sprintf("template %q", template.name))
+	templates, err := content.Templates("bureau/template")
+	if err != nil {
+		t.Fatalf("content.Templates(): %v", err)
+	}
+	for _, template := range templates {
+		expectedChecks = append(expectedChecks, fmt.Sprintf("template %q", template.Name))
 	}
 	pipelines, err := content.Pipelines()
 	if err != nil {

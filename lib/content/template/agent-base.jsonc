@@ -1,0 +1,11 @@
+// Inherits from base-networked, adds proxy socket, machine name, and
+// server name environment variables for agent processes.
+{
+    "description": "Base agent template with proxy socket, payload, and session log support",
+    "inherits": ["${TEMPLATE_ROOM}:base-networked"],
+    "environment_variables": {
+        "BUREAU_PROXY_SOCKET": "${PROXY_SOCKET}",
+        "BUREAU_MACHINE_NAME": "${MACHINE_NAME}",
+        "BUREAU_SERVER_NAME": "${SERVER_NAME}"
+    }
+}

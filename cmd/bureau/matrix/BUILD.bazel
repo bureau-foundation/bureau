@@ -43,7 +43,6 @@ go_test(
         "messages_test.go",
         "room_test.go",
         "send_test.go",
-        "setup_test.go",
         "space_test.go",
         "state_test.go",
         "user_test.go",

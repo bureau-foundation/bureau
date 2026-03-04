@@ -16,12 +16,26 @@ go_library(
         "pipeline/dev-worktree-init.jsonc",
         "systemd/bureau-daemon.service",
         "systemd/bureau-launcher.service",
+        "template/agent-base.jsonc",
+        "template/agent-service.jsonc",
+        "template/artifact-service.jsonc",
+        "template/base-networked.jsonc",
+        "template/base.jsonc",
+        "template/bureau-agent.jsonc",
+        "template/fleet-controller.jsonc",
+        "template/github-service.jsonc",
+        "template/model-service.jsonc",
+        "template/service-base.jsonc",
+        "template/telemetry-service.jsonc",
+        "template/ticket-service.jsonc",
     ],
     importpath = "github.com/bureau-foundation/bureau/lib/content",
     visibility = ["//visibility:public"],
     deps = [
         "//lib/pipelinedef",
+        "//lib/schema",
         "//lib/schema/pipeline",
+        "@com_github_tidwall_jsonc//:jsonc",
     ],
 )
 
@@ -29,4 +43,5 @@ go_test(
     name = "content_test",
     srcs = ["content_test.go"],
     embed = [":content"],
+    deps = ["//lib/schema"],
 )

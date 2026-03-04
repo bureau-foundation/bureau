@@ -1,0 +1,9 @@
+// Bureau agent service for agent session management, context tracking,
+// and metrics. Inherits from service-base. Requires the artifact
+// service for session artifact storage.
+{
+    "description": "Bureau agent service for agent session management, context tracking, and metrics",
+    "inherits": ["${TEMPLATE_ROOM}:service-base"],
+    "command": ["bureau-agent-service"],
+    "required_services": ["artifact"]
+}

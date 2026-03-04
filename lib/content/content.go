@@ -1,26 +1,30 @@
 // Copyright 2026 The Bureau Authors
 // SPDX-License-Identifier: Apache-2.0
 
-// Package content provides embedded Bureau content definitions (pipelines,
-// and eventually templates). Content files are JSONC (JSON with comments
-// and trailing commas) — the same wire format as Matrix state events plus
-// comments for human documentation.
+// Package content provides embedded Bureau content definitions (pipelines
+// and templates). Content files are JSONC (JSON with comments and trailing
+// commas) — the same wire format as Matrix state events plus comments for
+// human documentation.
 //
-// Files are embedded at compile time via go:embed. The primary consumers
-// are "bureau matrix setup" (publishes content to Matrix rooms during
-// homeserver bootstrap) and the pipeline executor (Nix fallback when
-// Matrix is unreachable).
+// Files are embedded at compile time via go:embed. The primary consumer is
+// "bureau matrix setup" (publishes content to Matrix rooms during homeserver
+// bootstrap). The pipeline executor also reads embedded pipelines as a Nix
+// fallback when Matrix is unreachable.
 package content
 
 import (
 	"crypto/sha256"
 	"embed"
 	"encoding/hex"
+	"encoding/json"
 	"fmt"
 	"path/filepath"
 	"strings"
 
+	"github.com/tidwall/jsonc"
+
 	"github.com/bureau-foundation/bureau/lib/pipelinedef"
+	"github.com/bureau-foundation/bureau/lib/schema"
 	"github.com/bureau-foundation/bureau/lib/schema/pipeline"
 )
 
@@ -91,4 +95,84 @@ func Pipelines() ([]Pipeline, error) {
 	}
 
 	return pipelines, nil
+}
+
+//go:embed template/*.jsonc
+var templateFiles embed.FS
+
+// Template is an embedded sandbox template definition with its name
+// (derived from the filename) and parsed content.
+type Template struct {
+	// Name is the template name, used as the Matrix state key when
+	// publishing. Derived from the filename without extension (e.g.,
+	// "base-networked" from "base-networked.jsonc").
+	Name string
+
+	// Content is the parsed template definition with variable
+	// substitution applied (${TEMPLATE_ROOM} replaced with the
+	// actual template room localpart).
+	Content schema.TemplateContent
+
+	// SourceHash is the SHA-256 hex digest of the raw JSONC source
+	// file before variable substitution. Computed on the original
+	// embedded bytes for reproducibility — the hash is independent
+	// of the template room localpart used at publish time.
+	SourceHash string
+}
+
+// Templates returns all embedded template definitions, parsed and
+// validated. The templateRoomLocalpart parameter is substituted for
+// ${TEMPLATE_ROOM} in inherits references (e.g., "bureau/template"
+// produces inherits values like "bureau/template:base").
+//
+// Returns an error if any embedded file fails to parse — this
+// indicates a bug in the embedded content, not a runtime condition.
+func Templates(templateRoomLocalpart string) ([]Template, error) {
+	entries, err := templateFiles.ReadDir("template")
+	if err != nil {
+		return nil, fmt.Errorf("reading embedded template directory: %w", err)
+	}
+
+	var templates []Template
+	for _, entry := range entries {
+		if entry.IsDir() {
+			continue
+		}
+		if filepath.Ext(entry.Name()) != ".jsonc" {
+			continue
+		}
+
+		path := "template/" + entry.Name()
+		data, err := templateFiles.ReadFile(path)
+		if err != nil {
+			return nil, fmt.Errorf("reading embedded template %s: %w", path, err)
+		}
+
+		// Hash the raw source before any substitution for reproducibility.
+		hash := sha256.Sum256(data)
+
+		// Strip JSONC comments and trailing commas, then substitute the
+		// template room localpart into inherits references.
+		stripped := jsonc.ToJSON(data)
+		substituted := strings.ReplaceAll(string(stripped), "${TEMPLATE_ROOM}", templateRoomLocalpart)
+
+		var content schema.TemplateContent
+		if err := json.Unmarshal([]byte(substituted), &content); err != nil {
+			return nil, fmt.Errorf("parsing embedded template %s: %w", path, err)
+		}
+
+		if content.Description == "" {
+			return nil, fmt.Errorf("embedded template %s: description is required", path)
+		}
+
+		name := strings.TrimSuffix(entry.Name(), ".jsonc")
+
+		templates = append(templates, Template{
+			Name:       name,
+			Content:    content,
+			SourceHash: hex.EncodeToString(hash[:]),
+		})
+	}
+
+	return templates, nil
 }

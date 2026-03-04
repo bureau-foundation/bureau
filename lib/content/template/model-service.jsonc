@@ -1,0 +1,32 @@
+// Bureau model service for inference routing, provider management, and
+// quota tracking. Inherits from service-base.
+//
+// Sets BUREAU_MODEL_HTTP_SOCKET to enable the HTTP compatibility proxy
+// alongside the native CBOR socket.
+{
+    "description": "Bureau model service for inference routing, provider management, and quota tracking",
+    "inherits": ["${TEMPLATE_ROOM}:service-base"],
+    "command": ["bureau-model-service"],
+    "environment_variables": {
+        "BUREAU_MODEL_HTTP_SOCKET": "/run/bureau/listen/http.sock"
+    },
+    "proxy_services": {
+        "anthropic": {
+            "upstream": "https://api.anthropic.com",
+            "inject_headers": {"x-api-key": "ANTHROPIC_API_KEY"},
+            "strip_headers": ["x-api-key", "authorization"]
+        },
+        "openrouter": {
+            "upstream": "https://openrouter.ai/api",
+            "inject_headers": {"Authorization": "OPENROUTER_API_KEY"},
+            "strip_headers": ["authorization"],
+            "auth_scheme": "Bearer"
+        },
+        "openai": {
+            "upstream": "https://api.openai.com",
+            "inject_headers": {"Authorization": "OPENAI_API_KEY"},
+            "strip_headers": ["authorization"],
+            "auth_scheme": "Bearer"
+        }
+    }
+}

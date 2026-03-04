@@ -1,0 +1,11 @@
+// Bureau-native agent with in-process LLM loop and CLI tools.
+// Inherits from agent-base.
+//
+// LLM-specific agent templates (bureau-agent-claude) are published
+// from external flake repositories, not embedded here.
+{
+    "description": "Bureau-native agent with in-process LLM loop and CLI tools",
+    "inherits": ["${TEMPLATE_ROOM}:agent-base"],
+    "command": ["bureau-agent"],
+    "required_services": ["agent", "artifact"]
+}

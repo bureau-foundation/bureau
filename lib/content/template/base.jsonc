@@ -1,0 +1,32 @@
+// Minimal sandbox skeleton: full namespace isolation, strict security
+// defaults, and only the bare minimum mounts (/proc, /dev, tmpfs /tmp).
+//
+// Intentionally has no opinions about OS libraries — those come from
+// the Nix EnvironmentPath or from template-level mounts that inherit
+// from base.
+{
+    "description": "Minimal sandbox: full namespace isolation, strict security, bare mounts",
+    "namespaces": {
+        "pid": true,
+        "net": true,
+        "ipc": true,
+        "uts": true
+    },
+    "security": {
+        "new_session": true,
+        "die_with_parent": true,
+        "no_new_privs": true
+    },
+    "filesystem": [
+        {"dest": "/tmp", "type": "tmpfs"}
+    ],
+    "create_dirs": [
+        "/tmp",
+        "/var/tmp",
+        "/run/bureau"
+    ],
+    "environment_variables": {
+        "HOME": "/workspace",
+        "TERM": "xterm-256color"
+    }
+}

@@ -1,0 +1,10 @@
+// GitHub forge connector for webhook ingestion, forge event streaming,
+// and issue-ticket sync. Inherits from service-base.
+{
+    "description": "GitHub forge connector for webhook ingestion, forge event streaming, and issue-ticket sync",
+    "inherits": ["${TEMPLATE_ROOM}:service-base"],
+    "command": ["bureau-github-service"],
+    "environment_variables": {
+        "BUREAU_GITHUB_WEBHOOK_SOCKET": "/run/bureau/listen/http.sock"
+    }
+}

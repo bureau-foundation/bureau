@@ -1,0 +1,7 @@
+// Bureau telemetry service for span, metric, and log aggregation and
+// query. Inherits from service-base.
+{
+    "description": "Bureau telemetry service for span, metric, and log aggregation and query",
+    "inherits": ["${TEMPLATE_ROOM}:service-base"],
+    "command": ["bureau-telemetry-service"]
+}

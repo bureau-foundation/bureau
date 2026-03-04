@@ -1,0 +1,7 @@
+// Bureau ticket service for work item tracking, dependencies, and gates.
+// Inherits from service-base.
+{
+    "description": "Bureau ticket service for work item tracking, dependencies, and gates",
+    "inherits": ["${TEMPLATE_ROOM}:service-base"],
+    "command": ["bureau-ticket-service"]
+}

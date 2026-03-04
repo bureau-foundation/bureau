@@ -914,13 +914,17 @@ func jsonContentMatches(expected any, stored json.RawMessage) (bool, error) {
 // "base-networked") are published as m.bureau.template state events in the
 // template room. Missing templates are fixable by re-publishing them.
 func checkBaseTemplates(ctx context.Context, session messaging.Session, templateRoomID ref.RoomID, templatePrefix string) []doctor.Result {
+	templates, err := content.Templates(templatePrefix)
+	if err != nil {
+		return []doctor.Result{doctor.Fail("templates", "loading embedded templates: "+err.Error())}
+	}
 	var items []stateEventItem
-	for _, template := range baseTemplates(templatePrefix) {
+	for _, template := range templates {
 		items = append(items, stateEventItem{
 			label:     "template",
-			name:      template.name,
+			name:      template.Name,
 			eventType: schema.EventTypeTemplate,
-			content:   template.content,
+			content:   template.Content,
 		})
 	}
 	return checkPublishedStateEvents(ctx, session, templateRoomID, items)

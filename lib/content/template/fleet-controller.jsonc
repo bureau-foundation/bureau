@@ -1,0 +1,7 @@
+// Bureau fleet controller for service placement, scaling, and machine lifecycle.
+// Inherits from service-base.
+{
+    "description": "Bureau fleet controller for service placement, scaling, and machine lifecycle",
+    "inherits": ["${TEMPLATE_ROOM}:service-base"],
+    "command": ["bureau-fleet-controller"]
+}

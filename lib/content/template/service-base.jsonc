@@ -1,0 +1,17 @@
+// Inherits from base-networked, adds the environment variables needed
+// by service.BootstrapViaProxy.
+//
+// The launcher injects additional service-specific variables
+// (BUREAU_SERVICE_SOCKET, BUREAU_PRINCIPAL_NAME, BUREAU_FLEET)
+// directly into the sandbox environment, so the template only needs
+// the three variables that flow through the sandbox variable expansion
+// system.
+{
+    "description": "Base service template with proxy bootstrap environment variables",
+    "inherits": ["${TEMPLATE_ROOM}:base-networked"],
+    "environment_variables": {
+        "BUREAU_PROXY_SOCKET": "${PROXY_SOCKET}",
+        "BUREAU_MACHINE_NAME": "${MACHINE_NAME}",
+        "BUREAU_SERVER_NAME": "${SERVER_NAME}"
+    }
+}

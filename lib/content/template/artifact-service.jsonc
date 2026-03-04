@@ -1,0 +1,7 @@
+// Bureau artifact service for content-addressable storage, caching,
+// and distribution. Inherits from service-base.
+{
+    "description": "Bureau artifact service for content-addressable storage, caching, and distribution",
+    "inherits": ["${TEMPLATE_ROOM}:service-base"],
+    "command": ["bureau-artifact-service"]
+}

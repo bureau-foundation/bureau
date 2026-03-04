@@ -591,17 +591,18 @@ type Daemon struct {
 	// error message.
 	machinePublicKey string
 
-	machine        ref.Machine
-	fleet          ref.Fleet
-	adminUser      string // admin account localpart (for fleet controller PL grants)
-	systemRoomID   ref.RoomID
-	configRoomID   ref.RoomID
-	machineRoomID  ref.RoomID
-	serviceRoomID  ref.RoomID
-	fleetRoomID    ref.RoomID // fleet room for HA leases, service definitions, and alerts
-	templateRoomID ref.RoomID // included in /sync; filtered for m.bureau.template events only
-	pipelineRoomID ref.RoomID // excluded from /sync via not_rooms; matched as defense-in-depth
-	syncFilter     string     // inline Matrix /sync filter JSON (room- and type-scoped)
+	machine          ref.Machine
+	fleet            ref.Fleet
+	adminUser        string // admin account localpart (for fleet controller PL grants)
+	systemRoomID     ref.RoomID
+	configRoomID     ref.RoomID
+	machineRoomID    ref.RoomID
+	serviceRoomID    ref.RoomID
+	fleetRoomID      ref.RoomID                // fleet room for HA leases, service definitions, and alerts
+	fleetCacheConfig *schema.FleetCacheContent // fleet cache config from m.bureau.fleet_cache; nil if not published
+	templateRoomID   ref.RoomID                // included in /sync; filtered for m.bureau.template events only
+	pipelineRoomID   ref.RoomID                // excluded from /sync via not_rooms; matched as defense-in-depth
+	syncFilter       string                    // inline Matrix /sync filter JSON (room- and type-scoped)
 
 	// workspaceAliases maps room IDs to their canonical aliases for
 	// rooms discovered via /sync invites (workspace rooms). Populated
@@ -1613,6 +1614,23 @@ func int64Abs(x int64) int64 {
 	return x
 }
 
+// syncFleetCache reads the fleet cache state event from the fleet room
+// and stores it on the daemon struct. Called during initial sync and when
+// fleet room state changes are detected. The fleet cache config is
+// written to the daemon status file so the doctor can verify machine
+// nix.conf against the fleet's declared substituter and signing keys.
+func (d *Daemon) syncFleetCache(ctx context.Context) {
+	cacheConfig, err := messaging.GetState[schema.FleetCacheContent](ctx, d.session, d.fleetRoomID, schema.EventTypeFleetCache, "")
+	if err != nil {
+		if !messaging.IsMatrixError(err, messaging.ErrCodeNotFound) {
+			d.logger.Error("reading fleet cache config", "error", err)
+		}
+		d.fleetCacheConfig = nil
+		return
+	}
+	d.fleetCacheConfig = &cacheConfig
+}
+
 // writeDaemonStatus writes the daemon status file to the run directory.
 // Operators can read this file to determine what the daemon is running
 // without needing access to /proc/PID/exe or session.json. The file
@@ -1630,6 +1648,7 @@ func (d *Daemon) writeDaemonStatus() {
 		MachineUserID:       d.session.UserID().String(),
 		HostEnvironmentPath: d.hostEnvironmentPath,
 		StartedAt:           d.clock.Now().UTC().Format(time.RFC3339),
+		FleetCache:          d.fleetCacheConfig,
 	}
 
 	data, err := json.MarshalIndent(status, "", "  ")

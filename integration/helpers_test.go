@@ -1623,6 +1623,19 @@ func waitForFileGone(t *testing.T, path string) {
 	}
 }
 
+// waitForFileContent blocks until the file at path contains content that
+// satisfies the check predicate. Uses inotify for event-driven detection —
+// no polling, no sleep. Bounded by t.Context().
+func waitForFileContent(t *testing.T, path string, check func([]byte) bool) {
+	t.Helper()
+	if path == "" {
+		t.Fatal("path is required")
+	}
+	if err := inotifyWaitFileContent(t.Context(), path, check); err != nil {
+		t.Fatalf("waiting for file content at %s: %v", path, err)
+	}
+}
+
 // --- Command Result Classification Helpers ---
 
 // findAcceptedEvent searches command result events for the "accepted"

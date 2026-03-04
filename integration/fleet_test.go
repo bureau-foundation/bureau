@@ -21,6 +21,181 @@ import (
 	"github.com/bureau-foundation/bureau/observe"
 )
 
+// TestFleetCacheConfig exercises the bureau fleet cache CLI command
+// end-to-end against a real homeserver: empty read, write with
+// validation, populated read, and Matrix API verification.
+func TestFleetCacheConfig(t *testing.T) {
+	t.Parallel()
+
+	ns := setupTestNamespace(t)
+	admin := ns.Admin
+	fleet := createTestFleet(t, admin, ns)
+	ctx := t.Context()
+
+	credentialFile := writeTestCredentialFile(t,
+		testHomeserverURL, admin.UserID().String(), admin.AccessToken())
+
+	// Step 1: Read mode with no cache configured.
+	readEmptyOutput := runBureauOrFail(t, "fleet", "cache", fleet.Prefix,
+		"--credential-file", credentialFile, "--json")
+
+	var readEmptyResult struct {
+		Cache schema.FleetCacheContent `json:"cache"`
+	}
+	if err := json.Unmarshal([]byte(readEmptyOutput), &readEmptyResult); err != nil {
+		t.Fatalf("unmarshal empty read: %v\noutput: %s", err, readEmptyOutput)
+	}
+	if readEmptyResult.Cache.URL != "" {
+		t.Errorf("expected empty URL before configuration, got %q", readEmptyResult.Cache.URL)
+	}
+
+	// Step 2: Write mode — configure the fleet cache.
+	cacheURL := "http://test-cache.local:5580/main"
+	cacheName := "main"
+	publicKey := "test-key:abc123def456"
+
+	writeOutput := runBureauOrFail(t, "fleet", "cache", fleet.Prefix,
+		"--url", cacheURL,
+		"--name", cacheName,
+		"--public-key", publicKey,
+		"--credential-file", credentialFile, "--json")
+
+	var writeResult struct {
+		Cache schema.FleetCacheContent `json:"cache"`
+	}
+	if err := json.Unmarshal([]byte(writeOutput), &writeResult); err != nil {
+		t.Fatalf("unmarshal write: %v\noutput: %s", err, writeOutput)
+	}
+	if writeResult.Cache.URL != cacheURL {
+		t.Errorf("write result URL = %q, want %q", writeResult.Cache.URL, cacheURL)
+	}
+	if writeResult.Cache.Name != cacheName {
+		t.Errorf("write result Name = %q, want %q", writeResult.Cache.Name, cacheName)
+	}
+	if len(writeResult.Cache.PublicKeys) != 1 || writeResult.Cache.PublicKeys[0] != publicKey {
+		t.Errorf("write result PublicKeys = %v, want [%q]", writeResult.Cache.PublicKeys, publicKey)
+	}
+
+	// Step 3: Read mode — verify persisted values.
+	readOutput := runBureauOrFail(t, "fleet", "cache", fleet.Prefix,
+		"--credential-file", credentialFile, "--json")
+
+	var readResult struct {
+		Cache schema.FleetCacheContent `json:"cache"`
+	}
+	if err := json.Unmarshal([]byte(readOutput), &readResult); err != nil {
+		t.Fatalf("unmarshal read: %v\noutput: %s", err, readOutput)
+	}
+	if readResult.Cache.URL != cacheURL {
+		t.Errorf("read result URL = %q, want %q", readResult.Cache.URL, cacheURL)
+	}
+	if readResult.Cache.Name != cacheName {
+		t.Errorf("read result Name = %q, want %q", readResult.Cache.Name, cacheName)
+	}
+	if len(readResult.Cache.PublicKeys) != 1 || readResult.Cache.PublicKeys[0] != publicKey {
+		t.Errorf("read result PublicKeys = %v, want [%q]", readResult.Cache.PublicKeys, publicKey)
+	}
+
+	// Step 4: Verify via Matrix API directly.
+	cacheContent, err := messaging.GetState[schema.FleetCacheContent](
+		ctx, admin, fleet.FleetRoomID, schema.EventTypeFleetCache, "")
+	if err != nil {
+		t.Fatalf("GetState fleet cache: %v", err)
+	}
+	if cacheContent.URL != cacheURL {
+		t.Errorf("Matrix state URL = %q, want %q", cacheContent.URL, cacheURL)
+	}
+	if cacheContent.Name != cacheName {
+		t.Errorf("Matrix state Name = %q, want %q", cacheContent.Name, cacheName)
+	}
+	if len(cacheContent.PublicKeys) != 1 || cacheContent.PublicKeys[0] != publicKey {
+		t.Errorf("Matrix state PublicKeys = %v, want [%q]", cacheContent.PublicKeys, publicKey)
+	}
+}
+
+// TestDaemonSyncsFleetCache verifies the daemon→doctor data flow:
+// when a fleet cache event is published to the fleet room, the daemon
+// picks it up via /sync and writes it to daemon-status.json.
+func TestDaemonSyncsFleetCache(t *testing.T) {
+	t.Parallel()
+
+	ns := setupTestNamespace(t)
+	admin := ns.Admin
+	fleet := createTestFleet(t, admin, ns)
+
+	machine := newTestMachine(t, fleet, "cache")
+	startMachine(t, admin, machine, machineOptions{
+		LauncherBinary: resolvedBinary(t, "LAUNCHER_BINARY"),
+		DaemonBinary:   resolvedBinary(t, "DAEMON_BINARY"),
+		Fleet:          fleet,
+	})
+
+	statusPath := filepath.Join(machine.RunDir, schema.DaemonStatusFilename)
+
+	// Step 1: Verify daemon-status.json exists with no fleet cache.
+	statusData, err := os.ReadFile(statusPath)
+	if err != nil {
+		t.Fatalf("read daemon status: %v", err)
+	}
+	var initialStatus schema.DaemonStatus
+	if err := json.Unmarshal(statusData, &initialStatus); err != nil {
+		t.Fatalf("unmarshal initial status: %v", err)
+	}
+	if initialStatus.FleetCache != nil {
+		t.Fatalf("expected nil FleetCache before publishing, got %+v", initialStatus.FleetCache)
+	}
+
+	// Step 2: Publish fleet cache event to the fleet room.
+	cacheURL := "http://test-daemon-cache.local:5580/main"
+	publicKey := "daemon-test-key:xyz789"
+	cacheContent := schema.FleetCacheContent{
+		URL:        cacheURL,
+		Name:       "main",
+		PublicKeys: []string{publicKey},
+	}
+	_, err = admin.SendStateEvent(t.Context(), fleet.FleetRoomID,
+		schema.EventTypeFleetCache, "", cacheContent)
+	if err != nil {
+		t.Fatalf("publish fleet cache event: %v", err)
+	}
+
+	// Step 3: Wait for daemon to sync the fleet cache to daemon-status.json.
+	// The daemon's incremental /sync picks up the fleet room state change,
+	// calls syncFleetCache(), and rewrites daemon-status.json.
+	waitForFileContent(t, statusPath, func(data []byte) bool {
+		var status schema.DaemonStatus
+		if err := json.Unmarshal(data, &status); err != nil {
+			return false
+		}
+		return status.FleetCache != nil && status.FleetCache.URL == cacheURL
+	})
+
+	// Step 4: Full verification of the synced content.
+	finalData, err := os.ReadFile(statusPath)
+	if err != nil {
+		t.Fatalf("read final daemon status: %v", err)
+	}
+	var finalStatus schema.DaemonStatus
+	if err := json.Unmarshal(finalData, &finalStatus); err != nil {
+		t.Fatalf("unmarshal final status: %v", err)
+	}
+	if finalStatus.FleetCache == nil {
+		t.Fatal("FleetCache still nil after sync")
+	}
+	if finalStatus.FleetCache.URL != cacheURL {
+		t.Errorf("synced URL = %q, want %q", finalStatus.FleetCache.URL, cacheURL)
+	}
+	if finalStatus.FleetCache.Name != "main" {
+		t.Errorf("synced Name = %q, want %q", finalStatus.FleetCache.Name, "main")
+	}
+	if len(finalStatus.FleetCache.PublicKeys) != 1 || finalStatus.FleetCache.PublicKeys[0] != publicKey {
+		t.Errorf("synced PublicKeys = %v, want [%q]", finalStatus.FleetCache.PublicKeys, publicKey)
+	}
+
+	t.Logf("daemon synced fleet cache: url=%s keys=%d",
+		finalStatus.FleetCache.URL, len(finalStatus.FleetCache.PublicKeys))
+}
+
 // TestMachineJoinsFleet verifies the complete machine bootstrap path:
 // launcher registers with the homeserver and publishes its key, daemon
 // starts, performs initial sync, creates the config room, and publishes

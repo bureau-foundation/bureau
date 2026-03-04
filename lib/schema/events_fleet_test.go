@@ -162,6 +162,14 @@ func TestFleetRoomPowerLevels(t *testing.T) {
 		}
 	}
 
+	// Infrastructure configuration events are admin-only (PL 100) because
+	// they control binary provenance for every machine in the fleet. A
+	// malicious rewrite is a supply chain compromise — categorically
+	// different from the operational events above.
+	if events[EventTypeFleetCache] != 100 {
+		t.Errorf("%s power level = %v, want 100 (admin-only: controls binary provenance)", EventTypeFleetCache, events[EventTypeFleetCache])
+	}
+
 	// Dev team metadata is admin-only — explicit regardless of state_default.
 	if events[EventTypeDevTeam] != 100 {
 		t.Errorf("%s power level = %v, want 100", EventTypeDevTeam, events[EventTypeDevTeam])

@@ -9,9 +9,11 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"io"
 	"io/fs"
 	"log/slog"
 	"net"
+	"net/http"
 	"os"
 	"os/exec"
 	"os/user"
@@ -348,6 +350,11 @@ func checkMachine(ctx context.Context, params machineDoctorParams, logger *slog.
 		results = append(results, doctor.Skip("machine session", "skipped: no homeserver URL configured"))
 		results = append(results, doctor.Skip("session valid", "skipped: no homeserver URL configured"))
 	}
+
+	// Section 8: Nix cache configuration. Reads the fleet cache config
+	// from daemon-status.json and verifies the machine's nix.conf has
+	// the correct substituter URL and signing keys.
+	results = append(results, checkNixCacheConfig(ctx)...)
 
 	return results
 }
@@ -1185,6 +1192,272 @@ func checkMatrixConnectivity(ctx context.Context, config *machineConfig, _ *slog
 	}
 
 	return results
+}
+
+// --- Section 8: Nix cache configuration ---
+
+// nixConfPaths lists the Nix configuration files to check, in the order
+// Nix evaluates them. The Determinate Nix installer's nix.conf includes
+// nix.custom.conf via `!include`, so settings in nix.custom.conf take
+// effect alongside the main config.
+var nixConfPaths = []string{
+	"/etc/nix/nix.conf",
+	"/etc/nix/nix.custom.conf",
+}
+
+// checkNixCacheConfig reads the fleet cache configuration from the
+// daemon status file and verifies the machine's nix.conf is configured
+// to use the fleet's substituter URL and trust its signing keys.
+//
+// The fleet cache config flows: operator publishes m.bureau.fleet_cache
+// state event → daemon reads it during sync → daemon writes it to
+// daemon-status.json → doctor reads it here.
+//
+// Four checks:
+//   - fleet cache configured: fleet cache event exists in daemon status
+//   - nix substituter: fleet cache URL appears in nix.conf substituters
+//   - nix trusted keys: fleet cache public keys appear in nix.conf
+//   - cache reachable: HTTP GET to <url>/nix-cache-info returns valid response
+func checkNixCacheConfig(ctx context.Context) []doctor.Result {
+	var results []doctor.Result
+
+	status := readDaemonStatus()
+	if status == nil {
+		results = append(results, doctor.Skip("fleet cache configured",
+			"skipped: daemon not running (no daemon status file)"))
+		results = append(results, doctor.Skip("nix substituter",
+			"skipped: no fleet cache config available"))
+		results = append(results, doctor.Skip("nix trusted keys",
+			"skipped: no fleet cache config available"))
+		results = append(results, doctor.Skip("cache reachable",
+			"skipped: no fleet cache config available"))
+		return results
+	}
+
+	if status.FleetCache == nil {
+		results = append(results, doctor.Warn("fleet cache configured",
+			"no fleet cache event published (run 'bureau fleet cache' to configure)"))
+		results = append(results, doctor.Skip("nix substituter",
+			"skipped: no fleet cache configured"))
+		results = append(results, doctor.Skip("nix trusted keys",
+			"skipped: no fleet cache configured"))
+		results = append(results, doctor.Skip("cache reachable",
+			"skipped: no fleet cache configured"))
+		return results
+	}
+
+	fleetCache := status.FleetCache
+	results = append(results, doctor.Pass("fleet cache configured",
+		fmt.Sprintf("url=%s keys=%d", fleetCache.URL, len(fleetCache.PublicKeys))))
+
+	// Parse nix.conf to check for substituters and trusted keys.
+	nixConfig := parseNixConfFiles(nixConfPaths)
+
+	// Check substituter URL.
+	substituters := nixConfig.allValues("substituters", "extra-substituters")
+	if containsNixValue(substituters, fleetCache.URL) {
+		results = append(results, doctor.Pass("nix substituter",
+			fmt.Sprintf("%s found in nix.conf", fleetCache.URL)))
+	} else {
+		results = append(results, doctor.FailElevated("nix substituter",
+			fmt.Sprintf("%s not found in nix.conf substituters", fleetCache.URL),
+			fmt.Sprintf("add to /etc/nix/nix.custom.conf: extra-substituters = %s", fleetCache.URL),
+			func(ctx context.Context) error {
+				return appendNixCustomConf("extra-substituters", fleetCache.URL)
+			}))
+	}
+
+	// Check trusted public keys.
+	trustedKeys := nixConfig.allValues("trusted-public-keys", "extra-trusted-public-keys")
+	var missingKeys []string
+	for _, key := range fleetCache.PublicKeys {
+		if !containsNixValue(trustedKeys, key) {
+			missingKeys = append(missingKeys, key)
+		}
+	}
+	if len(missingKeys) == 0 {
+		results = append(results, doctor.Pass("nix trusted keys",
+			fmt.Sprintf("all %d fleet signing keys trusted", len(fleetCache.PublicKeys))))
+	} else {
+		results = append(results, doctor.FailElevated("nix trusted keys",
+			fmt.Sprintf("%d of %d fleet signing keys missing from nix.conf",
+				len(missingKeys), len(fleetCache.PublicKeys)),
+			fmt.Sprintf("add to /etc/nix/nix.custom.conf: extra-trusted-public-keys = %s",
+				strings.Join(missingKeys, " ")),
+			func(ctx context.Context) error {
+				return appendNixCustomConf("extra-trusted-public-keys",
+					strings.Join(fleetCache.PublicKeys, " "))
+			}))
+	}
+
+	// Check cache reachability via nix-cache-info endpoint.
+	results = append(results, checkCacheReachable(ctx, fleetCache.URL))
+
+	return results
+}
+
+// checkCacheReachable does an HTTP GET to <url>/nix-cache-info and verifies
+// the response contains the expected "StoreDir: /nix/store" line that all
+// Nix binary caches serve.
+func checkCacheReachable(ctx context.Context, cacheURL string) doctor.Result {
+	checkName := "cache reachable"
+	infoURL := strings.TrimRight(cacheURL, "/") + "/nix-cache-info"
+
+	request, err := http.NewRequestWithContext(ctx, http.MethodGet, infoURL, nil)
+	if err != nil {
+		return doctor.Fail(checkName, fmt.Sprintf("cannot construct request for %s: %v", infoURL, err))
+	}
+
+	client := &http.Client{Timeout: 10 * time.Second}
+	response, err := client.Do(request)
+	if err != nil {
+		return doctor.Fail(checkName, fmt.Sprintf("GET %s failed: %v", infoURL, err))
+	}
+	defer response.Body.Close()
+
+	if response.StatusCode != http.StatusOK {
+		return doctor.Fail(checkName,
+			fmt.Sprintf("GET %s returned %d (expected 200)", infoURL, response.StatusCode))
+	}
+
+	// Read the response body (bounded to prevent abuse from a misbehaving server).
+	body, err := io.ReadAll(io.LimitReader(response.Body, 4096))
+	if err != nil {
+		return doctor.Fail(checkName, fmt.Sprintf("reading %s: %v", infoURL, err))
+	}
+
+	if !strings.Contains(string(body), "StoreDir:") {
+		return doctor.Fail(checkName,
+			fmt.Sprintf("GET %s returned 200 but response does not contain StoreDir (not a Nix binary cache?)", infoURL))
+	}
+
+	return doctor.Pass(checkName, fmt.Sprintf("GET %s returned valid nix-cache-info", infoURL))
+}
+
+// nixConfigValues is a parsed representation of Nix configuration files.
+// Each key maps to a list of values (space-separated in the file). Multiple
+// files and repeated keys accumulate values.
+type nixConfigValues map[string][]string
+
+// allValues returns all values for the given keys, merged. This handles
+// the Nix convention where "extra-substituters" supplements "substituters".
+func (n nixConfigValues) allValues(keys ...string) []string {
+	var all []string
+	for _, key := range keys {
+		all = append(all, n[key]...)
+	}
+	return all
+}
+
+// parseNixConfFiles reads and parses multiple Nix config files. Missing
+// files are silently skipped (not all files exist on all installations).
+func parseNixConfFiles(paths []string) nixConfigValues {
+	result := make(nixConfigValues)
+	for _, path := range paths {
+		parseNixConfFile(path, result)
+	}
+	return result
+}
+
+// parseNixConfFile parses a single Nix configuration file. Format is:
+//
+//	key = value1 value2 value3
+//
+// Lines starting with # are comments. Blank lines are ignored. The
+// `!include` directive is not followed (we read the files directly).
+func parseNixConfFile(path string, result nixConfigValues) {
+	file, err := os.Open(path)
+	if err != nil {
+		return // File doesn't exist — common for nix.custom.conf
+	}
+	defer file.Close()
+
+	scanner := bufio.NewScanner(file)
+	for scanner.Scan() {
+		line := strings.TrimSpace(scanner.Text())
+		if line == "" || strings.HasPrefix(line, "#") || strings.HasPrefix(line, "!") {
+			continue
+		}
+
+		key, value, found := strings.Cut(line, "=")
+		if !found {
+			continue
+		}
+
+		key = strings.TrimSpace(key)
+		value = strings.TrimSpace(value)
+
+		// Nix config values are space-separated.
+		for _, token := range strings.Fields(value) {
+			result[key] = append(result[key], token)
+		}
+	}
+}
+
+// containsNixValue checks whether a target appears in a list of
+// space-separated nix.conf values. Comparison is exact string match.
+func containsNixValue(values []string, target string) bool {
+	for _, value := range values {
+		if value == target {
+			return true
+		}
+	}
+	return false
+}
+
+// nixCustomConfPath is the path for machine-specific Nix configuration.
+// Determinate Nix's nix.conf includes this file via `!include`. Variable
+// rather than constant to allow test overrides.
+var nixCustomConfPath = "/etc/nix/nix.custom.conf"
+
+// appendNixCustomConf adds or updates a key in /etc/nix/nix.custom.conf.
+// If the key already exists, the new value is appended (space-separated)
+// to the existing line. If the key does not exist, a new line is added.
+// After writing, restarts nix-daemon so the configuration takes effect.
+func appendNixCustomConf(key, value string) error {
+	// Read existing content (file may not exist yet).
+	existingData, err := os.ReadFile(nixCustomConfPath)
+	if err != nil && !errors.Is(err, fs.ErrNotExist) {
+		return fmt.Errorf("reading %s: %w", nixCustomConfPath, err)
+	}
+
+	lines := strings.Split(string(existingData), "\n")
+	found := false
+	keyPrefix := key + " ="
+
+	for index, line := range lines {
+		trimmed := strings.TrimSpace(line)
+		if strings.HasPrefix(trimmed, keyPrefix) || strings.HasPrefix(trimmed, key+"=") {
+			// Key exists — replace the entire line with the new value.
+			// We replace rather than append because for keys like
+			// extra-trusted-public-keys, the fix provides the complete
+			// set of fleet keys (not incremental).
+			lines[index] = key + " = " + value
+			found = true
+			break
+		}
+	}
+
+	if !found {
+		// Remove trailing empty lines, add the new key, and restore
+		// the trailing newline.
+		for len(lines) > 0 && strings.TrimSpace(lines[len(lines)-1]) == "" {
+			lines = lines[:len(lines)-1]
+		}
+		lines = append(lines, key+" = "+value)
+	}
+
+	content := strings.Join(lines, "\n") + "\n"
+	if err := os.WriteFile(nixCustomConfPath, []byte(content), 0644); err != nil {
+		return fmt.Errorf("writing %s: %w", nixCustomConfPath, err)
+	}
+
+	// Restart nix-daemon so it picks up the new configuration.
+	if err := runCommand("systemctl", "restart", "nix-daemon"); err != nil {
+		return fmt.Errorf("restarting nix-daemon: %w", err)
+	}
+
+	return nil
 }
 
 // --- Helpers ---

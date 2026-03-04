@@ -54,5 +54,6 @@ go_test(
         "//cmd/bureau/cli/doctor",
         "//lib/principal",
         "//lib/ref",
+        "//lib/schema",
     ],
 )

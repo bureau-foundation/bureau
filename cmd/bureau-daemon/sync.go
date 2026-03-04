@@ -232,6 +232,10 @@ func (d *Daemon) initialSync(ctx context.Context) (string, error) {
 		d.haWatchdog.evaluate(ctx)
 	}
 
+	// Read fleet cache configuration so the daemon status file includes
+	// it for the doctor's nix.conf verification checks.
+	d.syncFleetCache(ctx)
+
 	return response.NextBatch, nil
 }
 
@@ -553,6 +557,11 @@ func (d *Daemon) processSyncResponse(ctx context.Context, response *messaging.Sy
 			d.haWatchdog.syncFleetState(ctx)
 			d.haWatchdog.evaluate(ctx)
 		}
+		// Re-read fleet cache config so daemon status stays current for
+		// the doctor's nix.conf verification. Fleet cache changes are
+		// admin-only (PL 100) and rare — no performance concern.
+		d.syncFleetCache(ctx)
+		d.writeDaemonStatus()
 	}
 
 	// Process command messages from all rooms. Commands can arrive in

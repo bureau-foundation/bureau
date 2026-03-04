@@ -23,6 +23,7 @@ func TestFleetCommandHasSubcommands(t *testing.T) {
 		"create": false,
 		"enable": false,
 		"config": false,
+		"cache":  false,
 		"status": false,
 	}
 

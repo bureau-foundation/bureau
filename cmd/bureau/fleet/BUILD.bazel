@@ -6,6 +6,7 @@ load("@rules_go//go:def.bzl", "go_library", "go_test")
 go_library(
     name = "fleet",
     srcs = [
+        "cache.go",
         "command.go",
         "config.go",
         "connection.go",
@@ -35,7 +36,10 @@ go_library(
 
 go_test(
     name = "fleet_test",
-    srcs = ["command_test.go"],
+    srcs = [
+        "cache_test.go",
+        "command_test.go",
+    ],
     embed = [":fleet"],
     deps = ["@com_github_spf13_pflag//:pflag"],
 )

@@ -172,6 +172,7 @@ bureau machine doctor --fix \
 #   - Installs systemd units
 #   - Starts bureau-launcher (generates keypair, registers on Matrix)
 #   - Starts bureau-daemon (connects to Matrix, begins sync)
+#   - Verifies fleet cache config, writes nix.conf if needed
 ```
 
 After bootstrap, the machine is live. An admin publishes a
@@ -329,6 +330,8 @@ The doctor checks (non-exhaustive):
 - **Configuration**: machine.conf present and valid
 - **Matrix**: homeserver reachable, machine registered, config room
   exists, session valid
+- **Nix cache**: fleet cache event exists, substituter URL and signing
+  keys are in nix.conf, cache is HTTP-reachable
 - **Services**: expected services running, sockets responsive
 - **Versions**: running binary version matches expected version
 

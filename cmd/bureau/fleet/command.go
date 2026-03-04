@@ -32,6 +32,7 @@ use direct Matrix access via --credential-file.`,
 			createCommand(),
 			enableCommand(),
 			configCommand(),
+			cacheCommand(),
 
 			// Query commands.
 			statusCommand(),

@@ -63,6 +63,21 @@ const (
 	// State key: alert ID (unique per alert)
 	// Room: #bureau/fleet:<server>
 	EventTypeFleetAlert ref.EventType = "m.bureau.fleet_alert"
+
+	// EventTypeFleetCache declares the Nix binary cache that a fleet uses
+	// for store path distribution. Machines configure their nix.conf to
+	// trust this cache's signing keys and pull from its URL. Compose
+	// pipelines push built closures to this cache by name.
+	//
+	// Unlike the operational fleet events above (PL 0), this event is
+	// admin-only (PL 100) because it controls binary provenance for every
+	// machine in the fleet. A malicious rewrite — replacing the substituter
+	// URL and signing keys — is a supply chain compromise affecting all
+	// machines, services, and sandboxes.
+	//
+	// State key: "" (singleton per fleet)
+	// Room: #<ns>/fleet/<name>:<server>
+	EventTypeFleetCache ref.EventType = "m.bureau.fleet_cache"
 )
 
 // MachineRoomPowerLevels returns the power level content for machine
@@ -125,12 +140,19 @@ func ServiceRoomPowerLevels(adminUserID ref.UserID) map[string]any {
 
 // FleetRoomPowerLevels returns the power level content for fleet rooms.
 // Fleet rooms are admin-controlled but allow all members (machines, fleet
-// controllers) to write fleet-specific state events: fleet services,
-// machine definitions, HA leases, fleet config, service status, and
-// fleet alerts. Administrative room events (name, join rules, power
-// levels) remain locked to admin (PL 100).
+// controllers) to write fleet-specific operational state events: fleet
+// services, machine definitions, HA leases, fleet config, service status,
+// and fleet alerts.
+//
+// Infrastructure configuration events that control binary provenance
+// (EventTypeFleetCache) are admin-only (PL 100) — a malicious rewrite
+// is a supply chain compromise. Administrative room events (name, join
+// rules, power levels) are also locked to admin (PL 100).
 func FleetRoomPowerLevels(adminUserID ref.UserID) map[string]any {
 	events := AdminProtectedEvents()
+
+	// Operational state: machines and fleet controllers write these
+	// during normal fleet operation.
 	for _, eventType := range []ref.EventType{
 		EventTypeFleetService,
 		EventTypeMachineDefinition,
@@ -141,6 +163,10 @@ func FleetRoomPowerLevels(adminUserID ref.UserID) map[string]any {
 	} {
 		events[eventType] = 0
 	}
+
+	// Infrastructure configuration: admin-only because it controls
+	// binary provenance for every machine in the fleet.
+	events[EventTypeFleetCache] = 100
 
 	return map[string]any{
 		"users": map[string]any{
@@ -156,4 +182,39 @@ func FleetRoomPowerLevels(adminUserID ref.UserID) map[string]any {
 		"redact":         50,
 		"notifications":  map[string]any{"room": 50},
 	}
+}
+
+// FleetCacheContent declares the Nix binary cache that a fleet uses for
+// store path distribution. Machines configure their nix.conf to trust this
+// cache's signing keys and pull from its URL. Compose pipelines push built
+// closures to this cache by name.
+//
+// This is admin-only (PL 100 in FleetRoomPowerLevels) because it controls
+// binary provenance for every machine in the fleet. A malicious rewrite —
+// replacing the substituter URL and signing keys — is a supply chain
+// compromise affecting all machines, services, and sandboxes.
+//
+// This type lives in the root schema package (rather than lib/schema/fleet)
+// because DaemonStatus references it, and lib/schema/fleet imports
+// lib/schema — placing it there would create a circular dependency.
+type FleetCacheContent struct {
+	// URL is the substituter URL that machines use to pull closures.
+	// This is the URL that appears in nix.conf substituters or
+	// extra-substituters. Examples:
+	//   "https://cache.infra.bureau.foundation"
+	//   "http://attic.internal:5580/main"
+	URL string `json:"url"`
+
+	// Name is the Attic cache name used for push operations
+	// (`attic push <name> <store-path>`). Empty if the cache backend
+	// does not support named push (e.g., a static S3 bucket populated
+	// by CI with `nix copy`).
+	Name string `json:"name,omitempty"`
+
+	// PublicKeys lists the Nix signing public keys for this cache.
+	// Each key uses the standard Nix format: "name:base64-ed25519-key".
+	// Machines add these to trusted-public-keys in nix.conf. Multiple
+	// keys support rotation: publish the new key, wait for propagation
+	// via `bureau machine doctor --fix`, then retire the old key.
+	PublicKeys []string `json:"public_keys"`
 }

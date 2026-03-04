@@ -920,3 +920,8 @@ type ProposedAction struct {
 	// and "move").
 	Score int `json:"score,omitempty"`
 }
+
+// FleetCacheContent is defined in lib/schema/events_fleet.go (as
+// schema.FleetCacheContent) rather than here to avoid a circular import:
+// this package imports lib/schema, and lib/schema/daemon_status.go
+// references FleetCacheContent.

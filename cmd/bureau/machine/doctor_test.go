@@ -4,8 +4,11 @@
 package machine
 
 import (
+	"encoding/json"
 	"errors"
 	"fmt"
+	"net/http"
+	"net/http/httptest"
 	"os"
 	"os/user"
 	"path/filepath"
@@ -16,6 +19,7 @@ import (
 
 	"github.com/bureau-foundation/bureau/cmd/bureau/cli/doctor"
 	"github.com/bureau-foundation/bureau/lib/principal"
+	"github.com/bureau-foundation/bureau/lib/schema"
 )
 
 func TestCheckSystemUser_BureauUserExists(t *testing.T) {
@@ -1118,5 +1122,421 @@ func TestCheckSystemdUnits_ContentMismatch_HasElevatedFix(t *testing.T) {
 	}
 	if !found {
 		t.Fatal("did not find 'test-unit.service installed' result")
+	}
+}
+
+// --- Nix cache configuration tests ---
+
+func TestParseNixConfFile(t *testing.T) {
+	dir := t.TempDir()
+	confPath := filepath.Join(dir, "nix.conf")
+	content := `# This is a comment
+substituters = https://cache.nixos.org https://attic.internal:5580/main
+trusted-public-keys = cache.nixos.org-1:abc123 bureau-prod:def456
+
+extra-substituters = https://extra.example.com
+`
+	if err := os.WriteFile(confPath, []byte(content), 0644); err != nil {
+		t.Fatalf("write: %v", err)
+	}
+
+	result := make(nixConfigValues)
+	parseNixConfFile(confPath, result)
+
+	// substituters should have two values.
+	if got := result["substituters"]; len(got) != 2 {
+		t.Fatalf("expected 2 substituters, got %d: %v", len(got), got)
+	}
+	if result["substituters"][0] != "https://cache.nixos.org" {
+		t.Errorf("substituters[0] = %q, want cache.nixos.org", result["substituters"][0])
+	}
+	if result["substituters"][1] != "https://attic.internal:5580/main" {
+		t.Errorf("substituters[1] = %q, want attic.internal", result["substituters"][1])
+	}
+
+	// trusted-public-keys should have two values.
+	if got := result["trusted-public-keys"]; len(got) != 2 {
+		t.Fatalf("expected 2 trusted-public-keys, got %d: %v", len(got), got)
+	}
+
+	// extra-substituters should have one value.
+	if got := result["extra-substituters"]; len(got) != 1 {
+		t.Fatalf("expected 1 extra-substituter, got %d: %v", len(got), got)
+	}
+}
+
+func TestParseNixConfFile_MissingFile(t *testing.T) {
+	result := make(nixConfigValues)
+	parseNixConfFile("/nonexistent/nix.conf", result)
+
+	// Should be empty — missing file is silently skipped.
+	if len(result) != 0 {
+		t.Errorf("expected empty result for missing file, got %d keys", len(result))
+	}
+}
+
+func TestParseNixConfFile_IncludeDirectivesSkipped(t *testing.T) {
+	dir := t.TempDir()
+	confPath := filepath.Join(dir, "nix.conf")
+	content := `!include /etc/nix/nix.custom.conf
+substituters = https://cache.nixos.org
+`
+	if err := os.WriteFile(confPath, []byte(content), 0644); err != nil {
+		t.Fatalf("write: %v", err)
+	}
+
+	result := make(nixConfigValues)
+	parseNixConfFile(confPath, result)
+
+	// The !include line should be skipped. Only substituters should be present.
+	if len(result) != 1 {
+		t.Errorf("expected 1 key, got %d: %v", len(result), result)
+	}
+	if _, ok := result["!include /etc/nix/nix.custom.conf"]; ok {
+		t.Error("!include line was parsed as a key-value pair")
+	}
+}
+
+func TestNixConfigValues_AllValues(t *testing.T) {
+	config := nixConfigValues{
+		"substituters":       {"https://cache.nixos.org"},
+		"extra-substituters": {"https://attic.internal:5580/main"},
+	}
+
+	all := config.allValues("substituters", "extra-substituters")
+	if len(all) != 2 {
+		t.Fatalf("expected 2 values, got %d: %v", len(all), all)
+	}
+	if all[0] != "https://cache.nixos.org" {
+		t.Errorf("all[0] = %q", all[0])
+	}
+	if all[1] != "https://attic.internal:5580/main" {
+		t.Errorf("all[1] = %q", all[1])
+	}
+}
+
+func TestContainsNixValue(t *testing.T) {
+	values := []string{"https://cache.nixos.org", "https://attic.internal:5580/main"}
+
+	if !containsNixValue(values, "https://cache.nixos.org") {
+		t.Error("expected to find cache.nixos.org")
+	}
+	if !containsNixValue(values, "https://attic.internal:5580/main") {
+		t.Error("expected to find attic.internal")
+	}
+	if containsNixValue(values, "https://not-here.example.com") {
+		t.Error("found unexpected value")
+	}
+	if containsNixValue(nil, "anything") {
+		t.Error("nil slice should not contain anything")
+	}
+}
+
+func TestCheckNixCacheConfig_NoDaemonStatus(t *testing.T) {
+	// Point daemonStatusPath at a nonexistent file so readDaemonStatus returns nil.
+	savedPath := daemonStatusPath
+	defer func() { daemonStatusPath = savedPath }()
+	daemonStatusPath = filepath.Join(t.TempDir(), "nonexistent.json")
+
+	results := checkNixCacheConfig(t.Context())
+
+	if len(results) != 4 {
+		t.Fatalf("expected 4 results, got %d", len(results))
+	}
+	for _, result := range results {
+		if result.Status != doctor.StatusSkip {
+			t.Errorf("result %q: expected SKIP, got %s", result.Name, result.Status)
+		}
+	}
+}
+
+func TestCheckNixCacheConfig_NoFleetCache(t *testing.T) {
+	// Write a daemon status file with no fleet cache.
+	statusDir := t.TempDir()
+	statusPath := filepath.Join(statusDir, "daemon-status.json")
+	status := schema.DaemonStatus{
+		StartedAt: "2026-03-04T00:00:00Z",
+	}
+	data, err := json.Marshal(status)
+	if err != nil {
+		t.Fatalf("marshal: %v", err)
+	}
+	if err := os.WriteFile(statusPath, data, 0644); err != nil {
+		t.Fatalf("write: %v", err)
+	}
+
+	savedPath := daemonStatusPath
+	defer func() { daemonStatusPath = savedPath }()
+	daemonStatusPath = statusPath
+
+	results := checkNixCacheConfig(t.Context())
+
+	if len(results) != 4 {
+		t.Fatalf("expected 4 results, got %d", len(results))
+	}
+	// First result should be WARN (no fleet cache configured).
+	if results[0].Status != doctor.StatusWarn {
+		t.Errorf("result[0] %q: expected WARN, got %s", results[0].Name, results[0].Status)
+	}
+	// Remaining results should be SKIP.
+	for _, result := range results[1:] {
+		if result.Status != doctor.StatusSkip {
+			t.Errorf("result %q: expected SKIP, got %s", result.Name, result.Status)
+		}
+	}
+}
+
+func TestCheckNixCacheConfig_SubstituterConfigured(t *testing.T) {
+	// Write a daemon status file with fleet cache config.
+	statusDir := t.TempDir()
+	statusPath := filepath.Join(statusDir, "daemon-status.json")
+
+	// Start a test HTTP server that responds like a Nix binary cache.
+	server := httptest.NewServer(http.HandlerFunc(func(writer http.ResponseWriter, request *http.Request) {
+		if request.URL.Path == "/nix-cache-info" {
+			fmt.Fprintf(writer, "StoreDir: /nix/store\nWantMassQuery: 1\nPriority: 30\n")
+			return
+		}
+		http.NotFound(writer, request)
+	}))
+	defer server.Close()
+
+	status := schema.DaemonStatus{
+		StartedAt: "2026-03-04T00:00:00Z",
+		FleetCache: &schema.FleetCacheContent{
+			URL:        server.URL,
+			Name:       "main",
+			PublicKeys: []string{"bureau-prod:abc123"},
+		},
+	}
+	data, err := json.Marshal(status)
+	if err != nil {
+		t.Fatalf("marshal: %v", err)
+	}
+	if err := os.WriteFile(statusPath, data, 0644); err != nil {
+		t.Fatalf("write: %v", err)
+	}
+
+	// Write a nix.conf that has the substituter and key.
+	nixDir := t.TempDir()
+	confPath := filepath.Join(nixDir, "nix.conf")
+	confContent := fmt.Sprintf("substituters = https://cache.nixos.org %s\ntrusted-public-keys = cache.nixos.org-1:xyz bureau-prod:abc123\n", server.URL)
+	if err := os.WriteFile(confPath, []byte(confContent), 0644); err != nil {
+		t.Fatalf("write nix.conf: %v", err)
+	}
+
+	savedStatusPath := daemonStatusPath
+	savedNixPaths := nixConfPaths
+	defer func() {
+		daemonStatusPath = savedStatusPath
+		nixConfPaths = savedNixPaths
+	}()
+	daemonStatusPath = statusPath
+	nixConfPaths = []string{confPath}
+
+	results := checkNixCacheConfig(t.Context())
+
+	if len(results) != 4 {
+		t.Fatalf("expected 4 results, got %d", len(results))
+	}
+	// All four should pass.
+	for _, result := range results {
+		if result.Status != doctor.StatusPass {
+			t.Errorf("result %q: expected PASS, got %s: %s", result.Name, result.Status, result.Message)
+		}
+	}
+}
+
+func TestCheckNixCacheConfig_MissingSubstituter(t *testing.T) {
+	// Write a daemon status file with fleet cache config.
+	statusDir := t.TempDir()
+	statusPath := filepath.Join(statusDir, "daemon-status.json")
+
+	// Start a test HTTP server.
+	server := httptest.NewServer(http.HandlerFunc(func(writer http.ResponseWriter, request *http.Request) {
+		if request.URL.Path == "/nix-cache-info" {
+			fmt.Fprintf(writer, "StoreDir: /nix/store\n")
+			return
+		}
+		http.NotFound(writer, request)
+	}))
+	defer server.Close()
+
+	status := schema.DaemonStatus{
+		StartedAt: "2026-03-04T00:00:00Z",
+		FleetCache: &schema.FleetCacheContent{
+			URL:        server.URL,
+			Name:       "main",
+			PublicKeys: []string{"bureau-prod:abc123"},
+		},
+	}
+	data, err := json.Marshal(status)
+	if err != nil {
+		t.Fatalf("marshal: %v", err)
+	}
+	if err := os.WriteFile(statusPath, data, 0644); err != nil {
+		t.Fatalf("write: %v", err)
+	}
+
+	// Write a nix.conf that does NOT have the fleet substituter or key.
+	nixDir := t.TempDir()
+	confPath := filepath.Join(nixDir, "nix.conf")
+	confContent := "substituters = https://cache.nixos.org\ntrusted-public-keys = cache.nixos.org-1:xyz\n"
+	if err := os.WriteFile(confPath, []byte(confContent), 0644); err != nil {
+		t.Fatalf("write nix.conf: %v", err)
+	}
+
+	savedStatusPath := daemonStatusPath
+	savedNixPaths := nixConfPaths
+	defer func() {
+		daemonStatusPath = savedStatusPath
+		nixConfPaths = savedNixPaths
+	}()
+	daemonStatusPath = statusPath
+	nixConfPaths = []string{confPath}
+
+	results := checkNixCacheConfig(t.Context())
+
+	if len(results) != 4 {
+		t.Fatalf("expected 4 results, got %d", len(results))
+	}
+
+	// Fleet cache configured: PASS.
+	if results[0].Status != doctor.StatusPass {
+		t.Errorf("result[0] %q: expected PASS, got %s", results[0].Name, results[0].Status)
+	}
+	// Substituter: FAIL with fix.
+	if results[1].Status != doctor.StatusFail {
+		t.Errorf("result[1] %q: expected FAIL, got %s", results[1].Name, results[1].Status)
+	}
+	if !results[1].HasFix() {
+		t.Error("missing substituter should have a fix")
+	}
+	if !results[1].Elevated {
+		t.Error("substituter fix should be elevated")
+	}
+	// Keys: FAIL with fix.
+	if results[2].Status != doctor.StatusFail {
+		t.Errorf("result[2] %q: expected FAIL, got %s", results[2].Name, results[2].Status)
+	}
+	if !results[2].HasFix() {
+		t.Error("missing keys should have a fix")
+	}
+	// Cache reachable: PASS (server is up).
+	if results[3].Status != doctor.StatusPass {
+		t.Errorf("result[3] %q: expected PASS, got %s: %s", results[3].Name, results[3].Status, results[3].Message)
+	}
+}
+
+func TestCheckCacheReachable_ValidResponse(t *testing.T) {
+	server := httptest.NewServer(http.HandlerFunc(func(writer http.ResponseWriter, request *http.Request) {
+		fmt.Fprintf(writer, "StoreDir: /nix/store\nWantMassQuery: 1\nPriority: 30\n")
+	}))
+	defer server.Close()
+
+	result := checkCacheReachable(t.Context(), server.URL)
+	if result.Status != doctor.StatusPass {
+		t.Errorf("expected PASS, got %s: %s", result.Status, result.Message)
+	}
+}
+
+func TestCheckCacheReachable_NotNixCache(t *testing.T) {
+	server := httptest.NewServer(http.HandlerFunc(func(writer http.ResponseWriter, request *http.Request) {
+		fmt.Fprintf(writer, "<html>Not a Nix cache</html>")
+	}))
+	defer server.Close()
+
+	result := checkCacheReachable(t.Context(), server.URL)
+	if result.Status != doctor.StatusFail {
+		t.Errorf("expected FAIL for non-Nix response, got %s", result.Status)
+	}
+	if !strings.Contains(result.Message, "StoreDir") {
+		t.Errorf("expected message to mention StoreDir, got %q", result.Message)
+	}
+}
+
+func TestCheckCacheReachable_ServerError(t *testing.T) {
+	server := httptest.NewServer(http.HandlerFunc(func(writer http.ResponseWriter, request *http.Request) {
+		writer.WriteHeader(http.StatusInternalServerError)
+	}))
+	defer server.Close()
+
+	result := checkCacheReachable(t.Context(), server.URL)
+	if result.Status != doctor.StatusFail {
+		t.Errorf("expected FAIL for 500, got %s", result.Status)
+	}
+}
+
+func TestCheckCacheReachable_Unreachable(t *testing.T) {
+	// Use a URL that will fail to connect.
+	result := checkCacheReachable(t.Context(), "http://127.0.0.1:1")
+	if result.Status != doctor.StatusFail {
+		t.Errorf("expected FAIL for unreachable, got %s", result.Status)
+	}
+}
+
+func TestAppendNixCustomConf_NewFile(t *testing.T) {
+	dir := t.TempDir()
+	confPath := filepath.Join(dir, "nix.custom.conf")
+
+	savedPath := nixCustomConfPath
+	defer func() { nixCustomConfPath = savedPath }()
+	nixCustomConfPath = confPath
+
+	// appendNixCustomConf also calls runCommand("systemctl", "restart", "nix-daemon")
+	// which will fail in test, so we test the file-writing logic by calling
+	// the function and accepting the systemctl error.
+	err := appendNixCustomConf("extra-substituters", "https://attic.internal:5580/main")
+
+	// We expect an error from systemctl, but the file should have been written.
+	data, readErr := os.ReadFile(confPath)
+	if readErr != nil {
+		t.Fatalf("file not written: %v", readErr)
+	}
+
+	content := string(data)
+	if !strings.Contains(content, "extra-substituters = https://attic.internal:5580/main") {
+		t.Errorf("expected key in file, got:\n%s", content)
+	}
+
+	// The error should be from systemctl.
+	if err == nil {
+		t.Error("expected error from systemctl restart, got nil")
+	} else if !strings.Contains(err.Error(), "nix-daemon") {
+		t.Errorf("expected systemctl error, got: %v", err)
+	}
+}
+
+func TestAppendNixCustomConf_ReplaceExisting(t *testing.T) {
+	dir := t.TempDir()
+	confPath := filepath.Join(dir, "nix.custom.conf")
+
+	existing := "extra-substituters = https://old-cache.example.com\nextra-trusted-public-keys = old-key:abc\n"
+	if err := os.WriteFile(confPath, []byte(existing), 0644); err != nil {
+		t.Fatalf("write: %v", err)
+	}
+
+	savedPath := nixCustomConfPath
+	defer func() { nixCustomConfPath = savedPath }()
+	nixCustomConfPath = confPath
+
+	// Replace the substituters key. Ignore systemctl error.
+	_ = appendNixCustomConf("extra-substituters", "https://new-cache.example.com")
+
+	data, err := os.ReadFile(confPath)
+	if err != nil {
+		t.Fatalf("read: %v", err)
+	}
+
+	content := string(data)
+	if !strings.Contains(content, "extra-substituters = https://new-cache.example.com") {
+		t.Errorf("expected new substituter value, got:\n%s", content)
+	}
+	if strings.Contains(content, "https://old-cache.example.com") {
+		t.Errorf("old substituter value should be replaced, got:\n%s", content)
+	}
+	// The other key should be preserved.
+	if !strings.Contains(content, "extra-trusted-public-keys = old-key:abc") {
+		t.Errorf("expected other key to be preserved, got:\n%s", content)
 	}
 }

@@ -106,7 +106,77 @@ cache.
 | `R2_SECRET_ACCESS_KEY` | S3-compatible secret key for R2 writes |
 | `R2_ENDPOINT` | Cloudflare S3 API endpoint, hostname only (no `https://` scheme) |
 
+## Fleet binary cache
+
+Fleets declare their Nix binary cache configuration as a Matrix state event
+(`m.bureau.fleet_cache`) in the fleet room. This is separate from the R2
+public cache above — the R2 cache serves open-source Bureau artifacts for
+CI and dev, while fleet caches serve fleet-specific composed environments
+(sandbox closures, service derivations, host environment packages).
+
+### Recording fleet cache config
+
+```bash
+bureau fleet cache bureau/fleet/prod \
+  --url https://attic.internal:5580/main \
+  --name main \
+  --public-key 'bureau-prod:base64key...' \
+  --credential-file ./creds
+```
+
+This publishes the substituter URL, Attic cache name, and signing public
+keys to the fleet room as `m.bureau.fleet_cache`. The event is admin-only
+(PL 100) because a malicious rewrite is a supply chain compromise — every
+subsequent `nix-store --realise` on every fleet machine would pull
+attacker-controlled binaries that pass signature verification.
+
+Without flags, the command displays the current configuration:
+
+```bash
+bureau fleet cache bureau/fleet/prod --credential-file ./creds
+```
+
+### Machine configuration via doctor
+
+`bureau machine doctor` reads the fleet cache config from the daemon status
+file (the daemon syncs it from Matrix) and verifies the machine's nix.conf:
+
+- **fleet cache configured**: fleet cache event exists in daemon status
+- **nix substituter**: fleet cache URL in `substituters` or `extra-substituters`
+- **nix trusted keys**: fleet signing keys in `trusted-public-keys` or `extra-trusted-public-keys`
+- **cache reachable**: HTTP GET to `<url>/nix-cache-info` returns valid response
+
+`bureau machine doctor --fix` writes missing configuration to
+`/etc/nix/nix.custom.conf` (the file that Determinate Nix includes via
+`!include`) and restarts `nix-daemon`.
+
+### Key rotation
+
+Fleet signing key rotation uses the multi-key support in the fleet cache event:
+
+1. Generate a new signing keypair
+2. Publish both old and new public keys to the fleet cache event:
+   ```bash
+   bureau fleet cache bureau/fleet/prod \
+     --public-key 'bureau-prod-v1:oldkey' \
+     --public-key 'bureau-prod-v2:newkey'
+   ```
+3. Run `bureau machine doctor --fix` on each fleet machine to propagate
+   the new trusted keys to nix.conf
+4. Switch Attic to sign with the new key
+5. Once all store paths signed with the old key have been consumed or
+   re-signed, remove the old key from the fleet cache event
+
+### Push credentials
+
+Push credentials (`ATTIC_PUSH_TOKEN` or equivalent) flow through the
+existing `m.bureau.credentials` system. The fleet cache event carries only
+public metadata — never secrets.
+
 ## Relevant files
 
 - `flake.nix` — `nixConfig` block declares cache as a substituter
 - `.github/workflows/ci.yaml` — cache configuration, push step
+- `lib/schema/events_fleet.go` — `EventTypeFleetCache`, `FleetCacheContent`
+- `cmd/bureau/fleet/cache.go` — `bureau fleet cache` command
+- `cmd/bureau/machine/doctor.go` — nix cache configuration checks

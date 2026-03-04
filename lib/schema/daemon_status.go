@@ -48,4 +48,11 @@ type DaemonStatus struct {
 	// StartedAt is the ISO 8601 timestamp of when the daemon started
 	// (or when the status was last refreshed after version reconciliation).
 	StartedAt string `json:"started_at"`
+
+	// FleetCache is the fleet's Nix binary cache configuration, read from
+	// the m.bureau.fleet_cache state event in the fleet room. Nil if no
+	// fleet cache event has been published. The doctor uses this to verify
+	// the machine's nix.conf matches the fleet's declared substituter URL
+	// and signing keys.
+	FleetCache *FleetCacheContent `json:"fleet_cache,omitempty"`
 }

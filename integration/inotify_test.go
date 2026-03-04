@@ -264,3 +264,79 @@ func nullTerminatedString(data []byte) string {
 	}
 	return string(data)
 }
+
+// inotifyWaitFileContent blocks until the file at targetPath contains
+// content that satisfies the check predicate. Uses inotify for event-driven
+// detection: watches the parent directory for IN_CLOSE_WRITE and IN_MOVED_TO
+// events on the target filename, reads the file after each event, and calls
+// check. Returns nil when check returns true. Bounded by ctx.
+//
+// The file is checked immediately before starting the watch (it may
+// already satisfy the predicate). This avoids a race where the file is
+// written between the caller's setup and the inotify watch establishment.
+func inotifyWaitFileContent(ctx context.Context, targetPath string, check func([]byte) bool) error {
+	// Check immediately — the file may already have the desired content.
+	if data, err := os.ReadFile(targetPath); err == nil && check(data) {
+		return nil
+	}
+
+	directory := filepath.Dir(targetPath)
+	targetName := filepath.Base(targetPath)
+
+	fd, err := unix.InotifyInit1(unix.IN_CLOEXEC | unix.IN_NONBLOCK)
+	if err != nil {
+		return fmt.Errorf("inotify_init1: %w", err)
+	}
+	defer unix.Close(fd)
+
+	// IN_CLOSE_WRITE fires when a file opened for writing is closed
+	// (covers os.WriteFile). IN_MOVED_TO covers atomic-rename patterns
+	// (write to .tmp then rename).
+	_, err = unix.InotifyAddWatch(fd, directory, unix.IN_CLOSE_WRITE|unix.IN_MOVED_TO)
+	if err != nil {
+		return fmt.Errorf("inotify_add_watch %s: %w", directory, err)
+	}
+
+	// Re-check after establishing the watch (race window closed).
+	if data, err := os.ReadFile(targetPath); err == nil && check(data) {
+		return nil
+	}
+
+	buffer := make([]byte, 4096)
+	pollFds := []unix.PollFd{{Fd: int32(fd), Events: unix.POLLIN}}
+
+	for {
+		if err := ctx.Err(); err != nil {
+			return err
+		}
+
+		readyCount, err := unix.Poll(pollFds, 100)
+		if err != nil {
+			if err == unix.EINTR {
+				continue
+			}
+			return fmt.Errorf("poll: %w", err)
+		}
+		if readyCount == 0 {
+			continue
+		}
+
+		bytesRead, err := unix.Read(fd, buffer)
+		if err != nil {
+			if err == unix.EAGAIN {
+				continue
+			}
+			return fmt.Errorf("read: %w", err)
+		}
+
+		// Only re-read the file if the event is for our target filename.
+		// Other files in the directory may be written concurrently.
+		if !inotifyBufferContainsName(buffer[:bytesRead], targetName) {
+			continue
+		}
+
+		if data, readErr := os.ReadFile(targetPath); readErr == nil && check(data) {
+			return nil
+		}
+	}
+}

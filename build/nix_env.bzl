@@ -36,8 +36,13 @@ def _nix_env_repo_impl(repository_ctx):
     nix = repository_ctx.attr.nix_binary
     flake_ref = ".#" + repository_ctx.attr.attr
 
+    # Use --out-link to create a GC root inside the Bazel repository
+    # directory. Without this, `nix store gc` can remove the store path
+    # while Bazel still has it cached, causing runtime failures.
+    gc_root = str(repository_ctx.path("gc-root"))
+
     result = repository_ctx.execute(
-        [nix, "build", flake_ref, "--print-out-paths", "--no-link"],
+        [nix, "build", flake_ref, "--print-out-paths", "--out-link", gc_root],
         working_directory = workspace_root,
         timeout = 300,
     )

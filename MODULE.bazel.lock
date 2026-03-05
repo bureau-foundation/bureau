@@ -230,7 +230,7 @@
     },
     "//build:nix_env.bzl%nix_env": {
       "general": {
-        "bzlTransitiveDigest": "cpC8dcgqRrGGWbcfg5nRnq8ImbbH+KIOgSAw44PsmBw=",
+        "bzlTransitiveDigest": "GcIveY9KowWV8MWWH0WoeSkTz2N63KYEUaDvI1dl/pU=",
         "usagesDigest": "zGUZaJKCKJkMGVuzRfPiL7yAEZfoXHXlpuXIQHtOa6c=",
         "recordedInputs": [],
         "generatedRepoSpecs": {

@@ -31,6 +31,7 @@ type PrincipalOverrides struct {
 	RequiredServicesOverride []string `json:"required_services_override" flag:"required-services-override" desc:"override template required services (repeatable, replaces all)"`
 	SecretEnv                []string `json:"secret_env"                 flag:"secret-env"                 desc:"map credential to env var: KEY=ENV_VAR (repeatable)"`
 	SecretFile               []string `json:"secret_file"                flag:"secret-file"                desc:"map credential to file: KEY=FILE_PATH (repeatable)"`
+	ExtraInherit             []string `json:"extra_inherit"              flag:"extra-inherit"              desc:"additional template ref to merge at deployment time (repeatable)"`
 }
 
 // ParsedOverrides holds the validated, typed values produced by
@@ -43,6 +44,7 @@ type ParsedOverrides struct {
 	EnvironmentOverride       string
 	RequiredServicesOverride  []string
 	SecretsOverride           []schema.SecretBinding
+	ExtraInherits             []string
 }
 
 // Parse validates the raw flag values and returns typed overrides.
@@ -67,6 +69,7 @@ func (o *PrincipalOverrides) Parse() (*ParsedOverrides, error) {
 		EnvironmentOverride:       o.EnvironmentOverride,
 		RequiredServicesOverride:  o.RequiredServicesOverride,
 		SecretsOverride:           secretsOverride,
+		ExtraInherits:             o.ExtraInherit,
 	}, nil
 }
 
@@ -80,4 +83,5 @@ func (p *ParsedOverrides) ApplyTo(params *principal.CreateParams) {
 	params.EnvironmentOverride = p.EnvironmentOverride
 	params.RequiredServicesOverride = p.RequiredServicesOverride
 	params.SecretsOverride = p.SecretsOverride
+	params.ExtraInherits = p.ExtraInherits
 }

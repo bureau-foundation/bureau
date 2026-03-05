@@ -5,6 +5,7 @@ package main
 
 import (
 	"context"
+	"fmt"
 
 	"github.com/bureau-foundation/bureau/lib/ref"
 	"github.com/bureau-foundation/bureau/lib/schema"
@@ -17,6 +18,26 @@ import (
 // lib/template.Resolve.
 func resolveTemplate(ctx context.Context, session *messaging.DirectSession, templateRef string, serverName ref.ServerName) (*schema.TemplateContent, error) {
 	return libtmpl.Resolve(ctx, session, templateRef, serverName)
+}
+
+// resolveExtraInherits resolves additional template references and merges
+// them on top of the base template. Each extra template is resolved through
+// the same inheritance-walking path as the main template, then merged
+// left-to-right using templatedef.Merge (maps merge by key, slices append,
+// extras win on conflict). This provides deployment-time mix-in composition:
+// an operator can add capabilities (e.g., GitHub API proxy with forge
+// attribution interceptors) to any principal without modifying the template.
+func resolveExtraInherits(ctx context.Context, session *messaging.DirectSession, base *schema.TemplateContent, extraInherits []string, serverName ref.ServerName) (*schema.TemplateContent, error) {
+	result := base
+	for _, extraRef := range extraInherits {
+		extra, err := resolveTemplate(ctx, session, extraRef, serverName)
+		if err != nil {
+			return nil, fmt.Errorf("resolving extra inherit %q: %w", extraRef, err)
+		}
+		merged := libtmpl.Merge(result, extra)
+		result = &merged
+	}
+	return result, nil
 }
 
 // resolveInstanceConfig converts a fully-resolved TemplateContent into a

@@ -1,0 +1,78 @@
+// GitHub API proxy with forge attribution interceptors. This is a pure
+// capability mix-in: it declares only proxy_services with no command,
+// environment, or filesystem. Add it to any principal via extra_inherits
+// to enable GitHub API access with automatic attribution tracking.
+//
+// Interceptors fire on entity-creating GitHub API responses and publish
+// m.bureau.forge_attribution events to the agent's workspace room. The
+// github-service reads these events to correlate shared-account webhook
+// activity with the real agent that triggered it.
+//
+// Three entity types are tracked:
+//   - Pull requests:  POST /repos/{owner}/{repo}/pulls
+//   - Issues:         POST /repos/{owner}/{repo}/issues
+//   - Commits:        POST /repos/{owner}/{repo}/git/commits
+{
+    "description": "GitHub API proxy with forge attribution interceptors",
+    "proxy_services": {
+        "github": {
+            "upstream": "https://api.github.com",
+            "inject_headers": {"Authorization": "GITHUB_TOKEN"},
+            "strip_headers": ["authorization"],
+            "auth_scheme": "Bearer",
+            "response_interceptors": [
+                {
+                    // Pull request creation.
+                    "method": "POST",
+                    "path_pattern": "^/repos/([^/]+)/([^/]+)/pulls$",
+                    "event_type": "m.bureau.forge_attribution",
+                    "event_content": {
+                        "agent": "${agent}",
+                        "provider": "github",
+                        "repo": "${path.1}/${path.2}",
+                        "entity_type": "pull_request",
+                        "entity_number": "${response.number}",
+                        "entity_url": "${response.html_url}",
+                        "title": "${response.title}",
+                        "body": "${agent_display} opened PR #${response.number}: ${response.title}",
+                        "formatted_body": "<a href='${response.html_url}'>${agent_display} opened PR #${response.number}: ${response.title}</a>"
+                    }
+                },
+                {
+                    // Issue creation.
+                    "method": "POST",
+                    "path_pattern": "^/repos/([^/]+)/([^/]+)/issues$",
+                    "event_type": "m.bureau.forge_attribution",
+                    "event_content": {
+                        "agent": "${agent}",
+                        "provider": "github",
+                        "repo": "${path.1}/${path.2}",
+                        "entity_type": "issue",
+                        "entity_number": "${response.number}",
+                        "entity_url": "${response.html_url}",
+                        "title": "${response.title}",
+                        "body": "${agent_display} opened issue #${response.number}: ${response.title}",
+                        "formatted_body": "<a href='${response.html_url}'>${agent_display} opened issue #${response.number}: ${response.title}</a>"
+                    }
+                },
+                {
+                    // Commit creation via the Git Data API.
+                    "method": "POST",
+                    "path_pattern": "^/repos/([^/]+)/([^/]+)/git/commits$",
+                    "event_type": "m.bureau.forge_attribution",
+                    "event_content": {
+                        "agent": "${agent}",
+                        "provider": "github",
+                        "repo": "${path.1}/${path.2}",
+                        "entity_type": "commit",
+                        "entity_sha": "${response.sha}",
+                        "entity_url": "${response.html_url}",
+                        "title": "${response.message}",
+                        "body": "${agent_display} created commit ${response.sha}",
+                        "formatted_body": "<a href='${response.html_url}'>${agent_display} created commit ${response.sha}</a>"
+                    }
+                }
+            ]
+        }
+    }
+}

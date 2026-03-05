@@ -23,6 +23,7 @@ go_library(
         "template/base.jsonc",
         "template/bureau-agent.jsonc",
         "template/fleet-controller.jsonc",
+        "template/github-api.jsonc",
         "template/github-service.jsonc",
         "template/model-service.jsonc",
         "template/nix-daemon.jsonc",

@@ -132,6 +132,12 @@ type CreateParams struct {
 	// nil, the template's Secrets are used unchanged. When set (even to
 	// an empty slice), it fully replaces — there is no merging.
 	SecretsOverride []schema.SecretBinding
+
+	// ExtraInherits lists additional template references to resolve and
+	// merge on top of this principal's main template at deployment time.
+	// Use this for capability mix-ins (e.g., adding GitHub API proxy
+	// with forge attribution interceptors to an existing agent).
+	ExtraInherits []string
 }
 
 // CreateResult holds the result of a successful principal creation.
@@ -432,6 +438,7 @@ func AssignPrincipals(ctx context.Context, session messaging.Session, configRoom
 			EnvironmentOverride:       p.EnvironmentOverride,
 			RequiredServicesOverride:  p.RequiredServicesOverride,
 			SecretsOverride:           p.SecretsOverride,
+			ExtraInherits:             p.ExtraInherits,
 		}
 
 		// Check if the principal is already assigned; update in place if so.

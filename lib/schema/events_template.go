@@ -162,6 +162,19 @@ type PrincipalAssignment struct {
 	// template (e.g., MODEL_NAME, BATCH_SIZE).
 	ExtraEnvironmentVariables map[string]string `json:"extra_environment_variables,omitempty"`
 
+	// ExtraInherits lists additional template references to resolve and
+	// merge on top of this principal's main template. These are applied
+	// after the main template's full inheritance chain is resolved, using
+	// the same merge rules (maps merge by key, slices append, extras win
+	// on conflict). Use this to compose capabilities at deployment time
+	// without modifying the template itself — e.g., adding GitHub API
+	// access with forge attribution interceptors to an existing agent.
+	//
+	// Each entry is a template reference string (e.g.,
+	// "bureau/template:github-api"). Resolved left-to-right: later
+	// entries override earlier ones on conflict.
+	ExtraInherits []string `json:"extra_inherits,omitempty"`
+
 	// RequiredServicesOverride replaces the template's RequiredServices
 	// for this principal instance. Use this when a generic template
 	// (e.g., an inbound tunnel) needs different service socket mounts

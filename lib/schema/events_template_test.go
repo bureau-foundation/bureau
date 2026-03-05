@@ -538,6 +538,10 @@ func TestPrincipalAssignmentOverrides(t *testing.T) {
 			"MODEL_NAME": "claude-opus-4-6",
 			"BATCH_SIZE": "32",
 		},
+		ExtraInherits: []string{
+			"bureau/template:github-api",
+			"bureau/template:model-service",
+		},
 		Payload: map[string]any{
 			"project":    "iree/amdgpu",
 			"max_tokens": float64(8192),
@@ -572,6 +576,14 @@ func TestPrincipalAssignmentOverrides(t *testing.T) {
 	assertField(t, extraEnvVars, "MODEL_NAME", "claude-opus-4-6")
 	assertField(t, extraEnvVars, "BATCH_SIZE", "32")
 
+	extraInherits, ok := raw["extra_inherits"].([]any)
+	if !ok {
+		t.Fatal("extra_inherits field missing or wrong type")
+	}
+	if len(extraInherits) != 2 || extraInherits[0] != "bureau/template:github-api" || extraInherits[1] != "bureau/template:model-service" {
+		t.Errorf("extra_inherits = %v, want [bureau/template:github-api bureau/template:model-service]", extraInherits)
+	}
+
 	payload, ok := raw["payload"].(map[string]any)
 	if !ok {
 		t.Fatal("payload field missing or wrong type")
@@ -597,6 +609,9 @@ func TestPrincipalAssignmentOverrides(t *testing.T) {
 		t.Errorf("ExtraEnvironmentVariables[MODEL_NAME]: got %q, want %q",
 			decoded.ExtraEnvironmentVariables["MODEL_NAME"], "claude-opus-4-6")
 	}
+	if len(decoded.ExtraInherits) != 2 || decoded.ExtraInherits[0] != "bureau/template:github-api" {
+		t.Errorf("ExtraInherits: got %v, want [bureau/template:github-api bureau/template:model-service]", decoded.ExtraInherits)
+	}
 }
 
 func TestPrincipalAssignmentOmitsEmptyOverrides(t *testing.T) {
@@ -620,7 +635,7 @@ func TestPrincipalAssignmentOmitsEmptyOverrides(t *testing.T) {
 
 	overrideFields := []string{
 		"command_override", "environment_override",
-		"extra_environment_variables", "payload",
+		"extra_environment_variables", "extra_inherits", "payload",
 	}
 	for _, field := range overrideFields {
 		if _, exists := raw[field]; exists {

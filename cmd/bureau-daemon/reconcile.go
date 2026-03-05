@@ -370,6 +370,21 @@ func (d *Daemon) reconcile(ctx context.Context) error {
 				d.recordStartFailure(principal, failureCategoryTemplate, err.Error())
 				continue
 			}
+			// Merge extra inherited templates (deployment-time mix-ins).
+			if len(assignment.ExtraInherits) > 0 {
+				template, err = resolveExtraInherits(ctx, d.session, template,
+					assignment.ExtraInherits, d.machine.Server())
+				if err != nil {
+					d.logger.Error("resolving extra inherits",
+						"principal", principal,
+						"template", assignment.Template,
+						"extra_inherits", assignment.ExtraInherits,
+						"error", err,
+					)
+					d.recordStartFailure(principal, failureCategoryTemplate, err.Error())
+					continue
+				}
+			}
 			resolvedTemplate = template
 
 			if template.HealthCheck != nil {
@@ -968,6 +983,22 @@ func (d *Daemon) reconcileRunningPrincipal(ctx context.Context, principal ref.En
 			"principal", principal, "template", assignment.Template, "error", err)
 		return
 	}
+
+	// Merge extra inherited templates (deployment-time mix-ins).
+	if len(assignment.ExtraInherits) > 0 {
+		template, err = resolveExtraInherits(ctx, d.session, template,
+			assignment.ExtraInherits, d.machine.Server())
+		if err != nil {
+			d.logger.Error("resolving extra inherits for running principal",
+				"principal", principal,
+				"template", assignment.Template,
+				"extra_inherits", assignment.ExtraInherits,
+				"error", err,
+			)
+			return
+		}
+	}
+
 	if template.HealthCheck != nil {
 		if err := validateHealthCheck(template.HealthCheck); err != nil {
 			d.logger.Error("invalid health check in re-resolved template",

@@ -908,6 +908,12 @@ type agentOptions struct {
 	// sandbox creation, enabling credential injection and response
 	// interceptors without exposing API keys to the sandboxed agent.
 	ProxyServices map[string]schema.TemplateProxyService
+
+	// ExtraInherits lists additional template references to resolve and
+	// merge on top of this principal's main template at deployment time.
+	// Use this for capability mix-ins (e.g., adding GitHub API proxy
+	// with forge attribution interceptors to an existing agent).
+	ExtraInherits []string
 }
 
 // agentDeployment holds the result of deployAgent: account details, socket
@@ -1075,6 +1081,7 @@ func deployAgent(t *testing.T, admin *messaging.DirectSession, machine *testMach
 		MachineRoomID:  machine.MachineRoomID,
 		Payload:        options.Payload,
 		Authorization:  options.Authorization,
+		ExtraInherits:  options.ExtraInherits,
 	})
 	if err != nil {
 		t.Fatalf("create agent %q: %v", options.Localpart, err)

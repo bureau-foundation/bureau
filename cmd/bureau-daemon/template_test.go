@@ -836,3 +836,173 @@ func TestResolveInstanceConfigSecrets(t *testing.T) {
 		}
 	})
 }
+
+func TestResolveExtraInherits(t *testing.T) {
+	t.Parallel()
+
+	state := newTemplateTestState()
+	state.setRoomAlias(testTemplateNamespace.TemplateRoomAlias(), "!template:test")
+
+	// Main template: has proxy service "anthropic" and env var "FOO".
+	state.setTemplate("!template:test", "main", schema.TemplateContent{
+		Description: "Main template",
+		Command:     []string{"/usr/local/bin/claude"},
+		ProxyServices: map[string]schema.TemplateProxyService{
+			"anthropic": {
+				Upstream:      "https://api.anthropic.com",
+				InjectHeaders: map[string]string{"x-api-key": "ANTHROPIC_API_KEY"},
+			},
+		},
+		EnvironmentVariables: map[string]string{
+			"FOO": "bar",
+		},
+	})
+
+	// Extra template: has proxy service "github" with interceptors, and
+	// env var "BAZ". No command — pure capability mix-in.
+	state.setTemplate("!template:test", "github-api", schema.TemplateContent{
+		Description: "GitHub API proxy with forge attribution",
+		ProxyServices: map[string]schema.TemplateProxyService{
+			"github": {
+				Upstream: "https://api.github.com",
+				ResponseInterceptors: []schema.ResponseInterceptor{
+					{
+						Method:      "POST",
+						PathPattern: `^/repos/([^/]+)/([^/]+)/pulls$`,
+						EventType:   "m.bureau.forge_attribution",
+						EventContent: map[string]any{
+							"agent":    "${agent}",
+							"provider": "github",
+							"repo":     "${path.1}/${path.2}",
+						},
+					},
+				},
+			},
+		},
+		EnvironmentVariables: map[string]string{
+			"BAZ": "qux",
+		},
+	})
+
+	// Second extra template: overrides "anthropic" proxy service to test
+	// conflict resolution (extras win).
+	state.setTemplate("!template:test", "anthropic-override", schema.TemplateContent{
+		Description: "Overridden Anthropic proxy",
+		ProxyServices: map[string]schema.TemplateProxyService{
+			"anthropic": {
+				Upstream:      "https://custom-anthropic.example.com",
+				InjectHeaders: map[string]string{"x-api-key": "CUSTOM_KEY"},
+			},
+		},
+	})
+
+	session := newTemplateTestSession(t, state)
+	ctx := context.Background()
+
+	// Resolve the main template first (simulates what the daemon does).
+	mainTemplate, err := resolveTemplate(ctx, session, "bureau/template:main", testServerName)
+	if err != nil {
+		t.Fatalf("resolveTemplate(main): %v", err)
+	}
+
+	t.Run("additive merge", func(t *testing.T) {
+		t.Parallel()
+
+		result, err := resolveExtraInherits(ctx, session, mainTemplate,
+			[]string{"bureau/template:github-api"}, testServerName)
+		if err != nil {
+			t.Fatalf("resolveExtraInherits: %v", err)
+		}
+
+		// Both proxy services should be present.
+		if len(result.ProxyServices) != 2 {
+			t.Fatalf("ProxyServices count = %d, want 2", len(result.ProxyServices))
+		}
+		if _, ok := result.ProxyServices["anthropic"]; !ok {
+			t.Error("ProxyServices missing 'anthropic' from main template")
+		}
+		github, ok := result.ProxyServices["github"]
+		if !ok {
+			t.Fatal("ProxyServices missing 'github' from extra template")
+		}
+		if github.Upstream != "https://api.github.com" {
+			t.Errorf("github.Upstream = %q, want https://api.github.com", github.Upstream)
+		}
+		if len(github.ResponseInterceptors) != 1 {
+			t.Fatalf("github.ResponseInterceptors count = %d, want 1", len(github.ResponseInterceptors))
+		}
+		if github.ResponseInterceptors[0].EventType != "m.bureau.forge_attribution" {
+			t.Errorf("interceptor EventType = %q, want m.bureau.forge_attribution",
+				github.ResponseInterceptors[0].EventType)
+		}
+
+		// Both env vars should be present.
+		if result.EnvironmentVariables["FOO"] != "bar" {
+			t.Errorf("FOO = %q, want bar", result.EnvironmentVariables["FOO"])
+		}
+		if result.EnvironmentVariables["BAZ"] != "qux" {
+			t.Errorf("BAZ = %q, want qux", result.EnvironmentVariables["BAZ"])
+		}
+
+		// Command should be preserved from main template (extra had none).
+		if len(result.Command) != 1 || result.Command[0] != "/usr/local/bin/claude" {
+			t.Errorf("Command = %v, want [/usr/local/bin/claude]", result.Command)
+		}
+	})
+
+	t.Run("conflict resolution extras win", func(t *testing.T) {
+		t.Parallel()
+
+		result, err := resolveExtraInherits(ctx, session, mainTemplate,
+			[]string{"bureau/template:anthropic-override"}, testServerName)
+		if err != nil {
+			t.Fatalf("resolveExtraInherits: %v", err)
+		}
+
+		// The "anthropic" proxy service should be from the extra template.
+		anthropic, ok := result.ProxyServices["anthropic"]
+		if !ok {
+			t.Fatal("ProxyServices missing 'anthropic'")
+		}
+		if anthropic.Upstream != "https://custom-anthropic.example.com" {
+			t.Errorf("anthropic.Upstream = %q, want https://custom-anthropic.example.com", anthropic.Upstream)
+		}
+	})
+
+	t.Run("multiple extras left to right", func(t *testing.T) {
+		t.Parallel()
+
+		// Apply github-api first, then anthropic-override. The anthropic
+		// proxy should come from anthropic-override (last wins).
+		result, err := resolveExtraInherits(ctx, session, mainTemplate,
+			[]string{"bureau/template:github-api", "bureau/template:anthropic-override"}, testServerName)
+		if err != nil {
+			t.Fatalf("resolveExtraInherits: %v", err)
+		}
+
+		if len(result.ProxyServices) != 2 {
+			t.Fatalf("ProxyServices count = %d, want 2 (github + anthropic)", len(result.ProxyServices))
+		}
+		if _, ok := result.ProxyServices["github"]; !ok {
+			t.Error("ProxyServices missing 'github'")
+		}
+		anthropic := result.ProxyServices["anthropic"]
+		if anthropic.Upstream != "https://custom-anthropic.example.com" {
+			t.Errorf("anthropic.Upstream = %q, want https://custom-anthropic.example.com (last extra wins)",
+				anthropic.Upstream)
+		}
+	})
+
+	t.Run("missing extra template fails", func(t *testing.T) {
+		t.Parallel()
+
+		_, err := resolveExtraInherits(ctx, session, mainTemplate,
+			[]string{"bureau/template:nonexistent"}, testServerName)
+		if err == nil {
+			t.Fatal("expected error for missing extra template")
+		}
+		if !strings.Contains(err.Error(), "nonexistent") {
+			t.Errorf("error should mention the missing template, got: %v", err)
+		}
+	})
+}

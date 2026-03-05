@@ -27,7 +27,7 @@ import (
 // handleWorkspaceWorktreeAdd validates parameters, publishes transitional
 // "creating" state, creates a pip- ticket for the dev-worktree-init
 // pipeline, and starts the executor immediately.
-func handleWorkspaceWorktreeAdd(ctx context.Context, d *Daemon, roomID ref.RoomID, eventID ref.EventID, command schema.CommandMessage) (any, error) {
+func handleWorkspaceWorktreeAdd(ctx context.Context, d *Daemon, roomID ref.RoomID, eventID ref.EventID, _ ref.UserID, command schema.CommandMessage) (any, error) {
 	if d.pipelineExecutorBinary == "" {
 		return nil, fmt.Errorf("daemon not configured for pipeline execution (--pipeline-executor-binary not set)")
 	}
@@ -90,7 +90,7 @@ func handleWorkspaceWorktreeAdd(ctx context.Context, d *Daemon, roomID ref.RoomI
 
 	ticketID, triggerBytes, err := d.createPipelineTicket(
 		ctx, ticketSocketPath, pipelineEntity, roomID,
-		pipelineRef, pipelineVariables)
+		pipelineRef, pipelineVariables, "" /* no template */)
 	if err != nil {
 		return nil, fmt.Errorf("creating pipeline ticket: %w", err)
 	}
@@ -101,7 +101,7 @@ func handleWorkspaceWorktreeAdd(ctx context.Context, d *Daemon, roomID ref.RoomI
 		return nil, fmt.Errorf("unmarshaling ticket content for executor: %w", err)
 	}
 	d.reconcileMu.Lock()
-	d.startPipelineExecutor(ctx, roomID, ticketID, &ticketContent)
+	d.startPipelineExecutor(ctx, roomID, ticketID, &ticketContent, nil)
 	d.reconcileMu.Unlock()
 
 	d.logger.Info("workspace.worktree.add accepted",
@@ -122,7 +122,7 @@ func handleWorkspaceWorktreeAdd(ctx context.Context, d *Daemon, roomID ref.RoomI
 // handleWorkspaceWorktreeRemove validates parameters, publishes
 // transitional "removing" state, creates a pip- ticket for the
 // dev-worktree-deinit pipeline, and starts the executor immediately.
-func handleWorkspaceWorktreeRemove(ctx context.Context, d *Daemon, roomID ref.RoomID, eventID ref.EventID, command schema.CommandMessage) (any, error) {
+func handleWorkspaceWorktreeRemove(ctx context.Context, d *Daemon, roomID ref.RoomID, eventID ref.EventID, _ ref.UserID, command schema.CommandMessage) (any, error) {
 	if d.pipelineExecutorBinary == "" {
 		return nil, fmt.Errorf("daemon not configured for pipeline execution (--pipeline-executor-binary not set)")
 	}
@@ -184,7 +184,7 @@ func handleWorkspaceWorktreeRemove(ctx context.Context, d *Daemon, roomID ref.Ro
 
 	ticketID, triggerBytes, err := d.createPipelineTicket(
 		ctx, ticketSocketPath, pipelineEntity, roomID,
-		pipelineRef, pipelineVariables)
+		pipelineRef, pipelineVariables, "" /* no template */)
 	if err != nil {
 		return nil, fmt.Errorf("creating pipeline ticket: %w", err)
 	}
@@ -195,7 +195,7 @@ func handleWorkspaceWorktreeRemove(ctx context.Context, d *Daemon, roomID ref.Ro
 		return nil, fmt.Errorf("unmarshaling ticket content for executor: %w", err)
 	}
 	d.reconcileMu.Lock()
-	d.startPipelineExecutor(ctx, roomID, ticketID, &ticketContent)
+	d.startPipelineExecutor(ctx, roomID, ticketID, &ticketContent, nil)
 	d.reconcileMu.Unlock()
 
 	d.logger.Info("workspace.worktree.remove accepted",

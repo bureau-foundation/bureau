@@ -1143,6 +1143,15 @@ type PipelineExecutionContent struct {
 	// the pipeline is still running. Mirrors the conclusion in the
 	// companion m.bureau.pipeline_result event.
 	Conclusion pipeline.PipelineConclusion `json:"conclusion,omitempty"`
+
+	// TemplateRef identifies the template used for this pipeline
+	// execution (e.g., "bureau/template:nix-builder"). Empty when
+	// the pipeline was executed without a template. Persisted in
+	// the ticket so the daemon can re-resolve the template on
+	// recovery after a crash — the template provides infrastructure
+	// bindings (filesystem mounts, credential secrets) that the
+	// launcher needs to create the sandbox.
+	TemplateRef string `json:"template_ref,omitempty"`
 }
 
 // Validate checks that all required fields are present and well-formed.

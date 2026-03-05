@@ -98,6 +98,20 @@ const (
 	// State key: "" (singleton per fleet)
 	// Room: #<ns>/fleet/<name>:<server>
 	EventTypeFleetCache ref.EventType = "m.bureau.fleet_cache"
+
+	// EventTypeEnvironmentBuild records provenance for a composed
+	// environment. Published by the composition pipeline's "publish"
+	// step after building and pushing a Nix environment profile.
+	// Establishes the chain from source (flake ref) to artifact
+	// (store path) with machine and timestamp.
+	//
+	// Admin-only (PL 100): controls which store paths machines trust
+	// as environment profiles. A malicious write could redirect
+	// sandboxes to a compromised environment.
+	//
+	// State key: profile name (e.g., "sysadmin-runner-env")
+	// Room: #<ns>/fleet/<name>:<server>
+	EventTypeEnvironmentBuild ref.EventType = "m.bureau.environment_build"
 )
 
 // MachineRoomPowerLevels returns the power level content for machine
@@ -194,6 +208,7 @@ func FleetRoomPowerLevels(adminUserID ref.UserID) map[string]any {
 		EventTypeMachineDefinition,
 		EventTypeFleetConfig,
 		EventTypeFleetCache,
+		EventTypeEnvironmentBuild,
 	} {
 		events[eventType] = 100
 	}
@@ -247,4 +262,50 @@ type FleetCacheContent struct {
 	// keys support rotation: publish the new key, wait for propagation
 	// via `bureau machine doctor --fix`, then retire the old key.
 	PublicKeys []string `json:"public_keys"`
+
+	// ComposeTemplate is the template reference for the environment
+	// composition pipeline sandbox. Read by `bureau environment compose`
+	// as the default --template value. Set during fleet bootstrap.
+	// Example: "bureau/template:nix-builder".
+	ComposeTemplate string `json:"compose_template,omitempty"`
+
+	// DefaultSystem is the default Nix system architecture for
+	// environment composition (e.g., "x86_64-linux", "aarch64-linux").
+	// Read by `bureau environment compose` as the default --system
+	// value. When absent, --system is required on every compose
+	// invocation. The code never assumes a default — it reads this
+	// field or requires the CLI flag.
+	DefaultSystem string `json:"default_system,omitempty"`
+}
+
+// EnvironmentBuildContent is the content of an EventTypeEnvironmentBuild
+// state event. It records provenance for a composed Nix environment
+// profile: which flake produced it, which system it targets, which
+// store path resulted, which machine built it, and when.
+//
+// The state key is the profile name (e.g., "sysadmin-runner-env").
+// Publishing a new build for the same profile overwrites the previous
+// record — the latest build wins.
+type EnvironmentBuildContent struct {
+	// Profile is the Nix package name (e.g., "sysadmin-runner-env").
+	// Matches the state key.
+	Profile string `json:"profile"`
+
+	// FlakeRef is the flake reference that was built (e.g.,
+	// "github:bureau-foundation/bureau/abc123").
+	FlakeRef string `json:"flake_ref"`
+
+	// System is the Nix system triple (e.g., "x86_64-linux").
+	System string `json:"system"`
+
+	// StorePath is the resulting Nix store path (e.g.,
+	// "/nix/store/...-bureau-sysadmin-runner-env").
+	StorePath string `json:"store_path"`
+
+	// Machine is the fleet-scoped machine localpart that performed
+	// the build (e.g., "bureau/fleet/prod/machine/workstation").
+	Machine string `json:"machine"`
+
+	// Timestamp is the RFC 3339 build completion time.
+	Timestamp string `json:"timestamp"`
 }

@@ -60,18 +60,12 @@ func ParsePipelineRef(reference string) (PipelineRef, error) {
 // String returns the canonical wire-format representation of the pipeline
 // reference. Round-trips through ParsePipelineRef: for any valid ref,
 // ParsePipelineRef(ref.String()) returns an equivalent PipelineRef.
-func (ref PipelineRef) String() string {
-	if ref.Server != "" {
-		return ref.Room + "@" + ref.Server + ":" + ref.Pipeline
-	}
-	return ref.Room + ":" + ref.Pipeline
+func (pipelineRef PipelineRef) String() string {
+	return formatRef(pipelineRef.Room, pipelineRef.Pipeline, pipelineRef.Server)
 }
 
 // RoomAlias returns the full Matrix room alias for this pipeline reference,
 // using defaultServer when the reference doesn't specify a server.
 func (pipelineRef PipelineRef) RoomAlias(defaultServer ref.ServerName) ref.RoomAlias {
-	if pipelineRef.Server != "" {
-		return ref.MustParseRoomAlias("#" + pipelineRef.Room + ":" + pipelineRef.Server)
-	}
-	return ref.MustParseRoomAlias("#" + pipelineRef.Room + ":" + defaultServer.String())
+	return refRoomAlias(pipelineRef.Room, pipelineRef.Server, defaultServer)
 }

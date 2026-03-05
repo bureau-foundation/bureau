@@ -19,17 +19,31 @@ import (
 )
 
 // templateTestState holds state for a mock Matrix server used by template
-// resolution tests. It supports room alias resolution and state event
-// fetching — the two operations needed for template resolution.
+// resolution tests. It supports room alias resolution, individual state
+// event fetching, and full room state fetching (with sender metadata).
 type templateTestState struct {
 	roomAliases map[string]string
 	stateEvents map[string]json.RawMessage
+
+	// roomStateEvents stores full room state (event arrays with sender
+	// metadata) for GetRoomState responses. Key: roomID.
+	roomStateEvents map[string][]templateTestEvent
+}
+
+// templateTestEvent represents a state event with sender metadata for
+// GetRoomState mock responses.
+type templateTestEvent struct {
+	Type     string         `json:"type"`
+	StateKey string         `json:"state_key"`
+	Sender   string         `json:"sender"`
+	Content  map[string]any `json:"content"`
 }
 
 func newTemplateTestState() *templateTestState {
 	return &templateTestState{
-		roomAliases: make(map[string]string),
-		stateEvents: make(map[string]json.RawMessage),
+		roomAliases:     make(map[string]string),
+		stateEvents:     make(map[string]json.RawMessage),
+		roomStateEvents: make(map[string][]templateTestEvent),
 	}
 }
 
@@ -46,6 +60,32 @@ func (state *templateTestState) setTemplate(roomID, templateName string, content
 	state.stateEvents[key] = data
 }
 
+// setTemplateWithSender stores a template and also registers it in the
+// roomStateEvents for GetRoomState responses (which include the sender).
+// This is needed for tests that use ResolveWithAuthor / FetchWithSender.
+func (state *templateTestState) setTemplateWithSender(roomID, templateName string, content schema.TemplateContent, sender string) {
+	// Also set it for individual state event lookups.
+	state.setTemplate(roomID, templateName, content)
+
+	// Build the map[string]any content representation for the room state
+	// response (which uses map[string]any for Content, not typed structs).
+	contentBytes, err := json.Marshal(content)
+	if err != nil {
+		panic(fmt.Sprintf("marshaling template content: %v", err))
+	}
+	var contentMap map[string]any
+	if err := json.Unmarshal(contentBytes, &contentMap); err != nil {
+		panic(fmt.Sprintf("unmarshaling template content to map: %v", err))
+	}
+
+	state.roomStateEvents[roomID] = append(state.roomStateEvents[roomID], templateTestEvent{
+		Type:     string(schema.EventTypeTemplate),
+		StateKey: templateName,
+		Sender:   sender,
+		Content:  contentMap,
+	})
+}
+
 func (state *templateTestState) handler() http.Handler {
 	return http.HandlerFunc(func(writer http.ResponseWriter, request *http.Request) {
 		path := request.URL.RawPath
@@ -56,12 +96,53 @@ func (state *templateTestState) handler() http.Handler {
 		switch {
 		case strings.HasPrefix(path, "/_matrix/client/v3/directory/room/"):
 			state.handleResolveAlias(writer, path)
+		case state.isGetRoomStatePath(path):
+			state.handleGetRoomState(writer, path)
 		case strings.Contains(path, "/state/"):
 			state.handleGetStateEvent(writer, path)
 		default:
 			http.Error(writer, fmt.Sprintf(`{"errcode":"M_UNRECOGNIZED","error":"unknown path: %s"}`, path), http.StatusNotFound)
 		}
 	})
+}
+
+// isGetRoomStatePath returns true if path is /rooms/{id}/state (without a
+// trailing event type), distinguishing it from /rooms/{id}/state/{type}/{key}.
+func (state *templateTestState) isGetRoomStatePath(path string) bool {
+	const prefix = "/_matrix/client/v3/rooms/"
+	if !strings.HasPrefix(path, prefix) {
+		return false
+	}
+	rest := path[len(prefix):]
+	// Split on first "/" after room ID to get the sub-path.
+	parts := strings.SplitN(rest, "/", 2)
+	if len(parts) < 2 {
+		return false
+	}
+	// Must be exactly "state" with no further segments.
+	return parts[1] == "state"
+}
+
+// handleGetRoomState returns all state events for a room as a JSON array,
+// including sender metadata. Used by GetStateWithSender.
+func (state *templateTestState) handleGetRoomState(writer http.ResponseWriter, path string) {
+	trimmed := strings.TrimPrefix(path, "/_matrix/client/v3/rooms/")
+	parts := strings.SplitN(trimmed, "/", 2)
+	roomID, err := url.PathUnescape(parts[0])
+	if err != nil {
+		http.Error(writer, `{"errcode":"M_INVALID_PARAM","error":"bad roomId encoding"}`, http.StatusBadRequest)
+		return
+	}
+
+	events, exists := state.roomStateEvents[roomID]
+	if !exists || len(events) == 0 {
+		writer.Header().Set("Content-Type", "application/json")
+		writer.Write([]byte("[]"))
+		return
+	}
+
+	writer.Header().Set("Content-Type", "application/json")
+	json.NewEncoder(writer).Encode(events)
 }
 
 func (state *templateTestState) handleResolveAlias(writer http.ResponseWriter, path string) {
@@ -1030,5 +1111,277 @@ func TestResolveSelfInheritance(t *testing.T) {
 	}
 	if !strings.Contains(err.Error(), "cycle") {
 		t.Errorf("error should mention cycle, got: %v", err)
+	}
+}
+
+func TestMergeCredentialRef(t *testing.T) {
+	t.Parallel()
+
+	parent := &schema.TemplateContent{
+		CredentialRef: "${FLEET_ROOM}:parent-creds",
+	}
+	child := &schema.TemplateContent{}
+
+	// Child doesn't set CredentialRef — parent's value should survive.
+	result := Merge(parent, child)
+	if result.CredentialRef != "${FLEET_ROOM}:parent-creds" {
+		t.Errorf("CredentialRef = %q, want parent value", result.CredentialRef)
+	}
+
+	// Child overrides CredentialRef.
+	child.CredentialRef = "${CONFIG_ROOM}:child-creds"
+	result = Merge(parent, child)
+	if result.CredentialRef != "${CONFIG_ROOM}:child-creds" {
+		t.Errorf("CredentialRef = %q, want child override", result.CredentialRef)
+	}
+}
+
+func TestMergeAllowedPipelinesIntersection(t *testing.T) {
+	t.Parallel()
+
+	parentPipelines := []string{"env-compose", "deploy-prod", "deploy-staging"}
+	childPipelines := []string{"env-compose", "deploy-prod"}
+
+	parent := &schema.TemplateContent{
+		AllowedPipelines: &parentPipelines,
+	}
+	child := &schema.TemplateContent{
+		AllowedPipelines: &childPipelines,
+	}
+
+	// Both set: result is intersection.
+	result := Merge(parent, child)
+	if result.AllowedPipelines == nil {
+		t.Fatal("AllowedPipelines is nil, want intersection")
+	}
+	got := *result.AllowedPipelines
+	if len(got) != 2 {
+		t.Fatalf("AllowedPipelines length = %d, want 2", len(got))
+	}
+	// Intersection should contain env-compose and deploy-prod.
+	found := map[string]bool{}
+	for _, pipeline := range got {
+		found[pipeline] = true
+	}
+	if !found["env-compose"] || !found["deploy-prod"] {
+		t.Errorf("AllowedPipelines = %v, want intersection [env-compose, deploy-prod]", got)
+	}
+}
+
+func TestMergeAllowedPipelinesNilSemantics(t *testing.T) {
+	t.Parallel()
+
+	pipelines := []string{"env-compose"}
+
+	// nil parent, non-nil child: child sets restriction.
+	result := Merge(
+		&schema.TemplateContent{},
+		&schema.TemplateContent{AllowedPipelines: &pipelines},
+	)
+	if result.AllowedPipelines == nil {
+		t.Fatal("AllowedPipelines should be non-nil when child sets it")
+	}
+	if len(*result.AllowedPipelines) != 1 {
+		t.Errorf("AllowedPipelines = %v, want [env-compose]", *result.AllowedPipelines)
+	}
+
+	// Non-nil parent, nil child: parent restriction preserved.
+	result = Merge(
+		&schema.TemplateContent{AllowedPipelines: &pipelines},
+		&schema.TemplateContent{},
+	)
+	if result.AllowedPipelines == nil {
+		t.Fatal("AllowedPipelines should be preserved from parent")
+	}
+	if len(*result.AllowedPipelines) != 1 {
+		t.Errorf("AllowedPipelines = %v, want [env-compose]", *result.AllowedPipelines)
+	}
+
+	// Both nil: result is nil (permissive).
+	result = Merge(
+		&schema.TemplateContent{},
+		&schema.TemplateContent{},
+	)
+	if result.AllowedPipelines != nil {
+		t.Errorf("AllowedPipelines should be nil when both are nil, got %v", *result.AllowedPipelines)
+	}
+
+	// Parent has restriction, child narrows to empty (deny-all).
+	empty := []string{}
+	result = Merge(
+		&schema.TemplateContent{AllowedPipelines: &pipelines},
+		&schema.TemplateContent{AllowedPipelines: &empty},
+	)
+	if result.AllowedPipelines == nil {
+		t.Fatal("AllowedPipelines should be non-nil (deny-all)")
+	}
+	if len(*result.AllowedPipelines) != 0 {
+		t.Errorf("AllowedPipelines = %v, want empty (deny-all)", *result.AllowedPipelines)
+	}
+}
+
+// --- ResolveWithAuthor tests ---
+
+func TestFetchWithSender(t *testing.T) {
+	t.Parallel()
+
+	state := newTemplateTestState()
+	state.setRoomAlias("#bureau/template:test.local", "!template:test")
+	state.setTemplateWithSender("!template:test", "base", schema.TemplateContent{
+		Description:   "Base template",
+		Command:       []string{"/bin/bash"},
+		CredentialRef: "bureau/creds:nix-builder",
+	}, "@operator:test.local")
+
+	session := newTestSession(t, state)
+	ctx := context.Background()
+
+	templateRef, err := schema.ParseTemplateRef("bureau/template:base")
+	if err != nil {
+		t.Fatalf("ParseTemplateRef: %v", err)
+	}
+
+	result, err := FetchWithSender(ctx, session, templateRef, testServerName)
+	if err != nil {
+		t.Fatalf("FetchWithSender: %v", err)
+	}
+
+	if result.Content.Description != "Base template" {
+		t.Errorf("Description = %q, want %q", result.Content.Description, "Base template")
+	}
+	if result.Sender.String() != "@operator:test.local" {
+		t.Errorf("Sender = %q, want %q", result.Sender, "@operator:test.local")
+	}
+}
+
+func TestResolveWithAuthor_NoCredentialRef(t *testing.T) {
+	t.Parallel()
+
+	state := newTemplateTestState()
+	state.setRoomAlias("#bureau/template:test.local", "!template:test")
+	state.setTemplateWithSender("!template:test", "base", schema.TemplateContent{
+		Description: "Base template",
+		Command:     []string{"/bin/bash"},
+	}, "@operator:test.local")
+
+	session := newTestSession(t, state)
+	ctx := context.Background()
+
+	result, err := ResolveWithAuthor(ctx, session, "bureau/template:base", testServerName)
+	if err != nil {
+		t.Fatalf("ResolveWithAuthor: %v", err)
+	}
+
+	if result.Template.Description != "Base template" {
+		t.Errorf("Description = %q, want %q", result.Template.Description, "Base template")
+	}
+	// No CredentialRef → CredentialRefAuthor should be zero.
+	if !result.CredentialRefAuthor.IsZero() {
+		t.Errorf("CredentialRefAuthor should be zero, got %s", result.CredentialRefAuthor)
+	}
+}
+
+func TestResolveWithAuthor_ChildCredentialRef(t *testing.T) {
+	t.Parallel()
+
+	state := newTemplateTestState()
+	state.setRoomAlias("#bureau/template:test.local", "!template:test")
+
+	// Parent has no CredentialRef.
+	state.setTemplateWithSender("!template:test", "parent", schema.TemplateContent{
+		Description: "Parent",
+		Command:     []string{"/bin/bash"},
+	}, "@parent-author:test.local")
+
+	// Child sets CredentialRef.
+	state.setTemplateWithSender("!template:test", "child", schema.TemplateContent{
+		Inherits:      []string{"bureau/template:parent"},
+		CredentialRef: "bureau/creds:nix-builder",
+	}, "@child-author:test.local")
+
+	session := newTestSession(t, state)
+	ctx := context.Background()
+
+	result, err := ResolveWithAuthor(ctx, session, "bureau/template:child", testServerName)
+	if err != nil {
+		t.Fatalf("ResolveWithAuthor: %v", err)
+	}
+
+	if result.Template.CredentialRef != "bureau/creds:nix-builder" {
+		t.Errorf("CredentialRef = %q, want %q", result.Template.CredentialRef, "bureau/creds:nix-builder")
+	}
+	// Child set the CredentialRef, so child's author is the credential ref author.
+	if result.CredentialRefAuthor.String() != "@child-author:test.local" {
+		t.Errorf("CredentialRefAuthor = %q, want @child-author:test.local", result.CredentialRefAuthor)
+	}
+}
+
+func TestResolveWithAuthor_ParentCredentialRefInherited(t *testing.T) {
+	t.Parallel()
+
+	state := newTemplateTestState()
+	state.setRoomAlias("#bureau/template:test.local", "!template:test")
+
+	// Parent sets CredentialRef.
+	state.setTemplateWithSender("!template:test", "parent", schema.TemplateContent{
+		Description:   "Parent",
+		CredentialRef: "bureau/creds:parent-creds",
+	}, "@parent-author:test.local")
+
+	// Child does NOT set CredentialRef → inherits from parent.
+	state.setTemplateWithSender("!template:test", "child", schema.TemplateContent{
+		Inherits: []string{"bureau/template:parent"},
+		Command:  []string{"/bin/bash"},
+	}, "@child-author:test.local")
+
+	session := newTestSession(t, state)
+	ctx := context.Background()
+
+	result, err := ResolveWithAuthor(ctx, session, "bureau/template:child", testServerName)
+	if err != nil {
+		t.Fatalf("ResolveWithAuthor: %v", err)
+	}
+
+	if result.Template.CredentialRef != "bureau/creds:parent-creds" {
+		t.Errorf("CredentialRef = %q, want %q", result.Template.CredentialRef, "bureau/creds:parent-creds")
+	}
+	// Parent set the CredentialRef, so parent's author is the credential ref author.
+	if result.CredentialRefAuthor.String() != "@parent-author:test.local" {
+		t.Errorf("CredentialRefAuthor = %q, want @parent-author:test.local", result.CredentialRefAuthor)
+	}
+}
+
+func TestResolveWithAuthor_ChildOverridesParentCredentialRef(t *testing.T) {
+	t.Parallel()
+
+	state := newTemplateTestState()
+	state.setRoomAlias("#bureau/template:test.local", "!template:test")
+
+	// Parent sets CredentialRef.
+	state.setTemplateWithSender("!template:test", "parent", schema.TemplateContent{
+		Description:   "Parent",
+		CredentialRef: "bureau/creds:parent-creds",
+	}, "@parent-author:test.local")
+
+	// Child overrides with a different CredentialRef.
+	state.setTemplateWithSender("!template:test", "child", schema.TemplateContent{
+		Inherits:      []string{"bureau/template:parent"},
+		CredentialRef: "bureau/creds:child-creds",
+	}, "@child-author:test.local")
+
+	session := newTestSession(t, state)
+	ctx := context.Background()
+
+	result, err := ResolveWithAuthor(ctx, session, "bureau/template:child", testServerName)
+	if err != nil {
+		t.Fatalf("ResolveWithAuthor: %v", err)
+	}
+
+	if result.Template.CredentialRef != "bureau/creds:child-creds" {
+		t.Errorf("CredentialRef = %q, want %q", result.Template.CredentialRef, "bureau/creds:child-creds")
+	}
+	// Child overrides CredentialRef → child's author wins.
+	if result.CredentialRefAuthor.String() != "@child-author:test.local" {
+		t.Errorf("CredentialRefAuthor = %q, want @child-author:test.local", result.CredentialRefAuthor)
 	}
 }

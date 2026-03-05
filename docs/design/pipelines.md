@@ -536,6 +536,46 @@ a Matrix-native conversation context (operators can reply to ask
 questions about specific steps), while ticket notes provide structured
 progress that the ticket service indexes for queries.
 
+## Template Credentials
+
+Pipeline executors run inside sandboxes and normally have no access to
+credentials beyond the daemon's own Matrix token (used for proxy
+operations). Templates extend this by binding external credentials
+into the sandbox.
+
+When a template declares `credential_ref`, the daemon reads the
+referenced `m.bureau.credentials` state event, sends the encrypted
+ciphertext to the launcher via IPC, and the launcher decrypts and
+injects the specified keys as environment variables or files in the
+sandbox. The pipeline executor receives credentials the same way any
+Bureau sandbox does — it never handles encryption directly.
+
+The `secrets` field (a `SecretBinding` array) controls exactly which
+keys from the credential bundle are injected and how:
+
+```jsonc
+{
+    "credential_ref": "${FLEET_ROOM}:nix-builder",
+    "secrets": [
+        {"key": "ATTIC_PUSH_TOKEN", "env": "ATTIC_TOKEN"},
+        {"key": "SIGNING_KEY", "file": "/run/bureau/secrets/signing.key"}
+    ]
+}
+```
+
+Each binding names a key from the encrypted bundle and specifies an
+injection method: `env` for environment variables, `file` for
+filesystem paths, or both. Keys not listed in `secrets` are not
+injected.
+
+Credential access requires authorization: at least one principal in
+the execution chain (the requester or the template author) must have
+access to the referenced credentials. Templates may also declare
+`allowed_pipelines` to restrict which pipeline definitions can run
+with their credentials. See [credentials.md](credentials.md)
+(Template Credential Authorization, Allowed Pipelines) for the full
+security model.
+
 ## Relationship to Other Design Documents
 
 - [fundamentals.md](fundamentals.md) defines pipelines as a higher-order
@@ -553,5 +593,9 @@ progress that the ticket service indexes for queries.
   `m.bureau.pipeline_result` events. Pipeline tickets are type
   `"pipeline"` tickets with `pip-` prefixed IDs. See "Pipeline
   Execution" in tickets.md for the full unified lifecycle.
+- [credentials.md](credentials.md) describes the sealed credential
+  model, template credential references (`credential_ref`, `secrets`,
+  `allowed_pipelines`), and the two-actor authorization model for
+  credential access in pipeline execution.
 - [observation.md](observation.md) describes the live terminal access
   that operators use to watch and interact with running pipeline steps.

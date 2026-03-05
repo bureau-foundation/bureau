@@ -30,6 +30,8 @@ go_library(
         "template/service-base.jsonc",
         "template/telemetry-service.jsonc",
         "template/ticket-service.jsonc",
+        "pipeline/environment-compose.jsonc",
+        "template/nix-builder.jsonc",
     ],
     importpath = "github.com/bureau-foundation/bureau/lib/content",
     visibility = ["//visibility:public"],

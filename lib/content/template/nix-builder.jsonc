@@ -1,0 +1,25 @@
+// Nix build environment with binary cache push capabilities. Inherits
+// nix-daemon for store and daemon access, then adds credential bindings
+// for Attic cache push tokens. Used by the environment-compose pipeline
+// and any other pipeline that builds and publishes Nix closures.
+//
+// Credentials are sourced from a fleet-scoped m.bureau.credentials
+// event via credential_ref. The ${FLEET_ROOM} variable is substituted
+// by the daemon at template resolution time. The state key "nix-builder"
+// identifies the credential bundle (provisioned via FleetProvision).
+//
+// allowed_pipelines restricts which pipelines may use these credentials.
+// A template credential_ref without allowed_pipelines would let any
+// pipeline reference push to the binary cache — a supply chain risk.
+{
+    "description": "Nix builder with fleet cache push credentials",
+    "inherits": ["${TEMPLATE_ROOM}:nix-daemon"],
+    "credential_ref": "${FLEET_ROOM}:nix-builder",
+    "allowed_pipelines": ["environment-compose"],
+    "secrets": [
+        // Attic push token: used by `attic push <cache> <store-path>`.
+        // Exposed as env var because attic reads ATTIC_TOKEN from the
+        // environment by default.
+        {"key": "ATTIC_PUSH_TOKEN", "env": "ATTIC_TOKEN"}
+    ]
+}

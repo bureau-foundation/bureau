@@ -15,9 +15,18 @@ import (
 
 // resolveTemplate fetches a template from Matrix and walks its inheritance
 // chain to produce a fully-merged TemplateContent. Delegates to
-// lib/template.Resolve.
+// lib/templatedef.Resolve.
 func resolveTemplate(ctx context.Context, session *messaging.DirectSession, templateRef string, serverName ref.ServerName) (*schema.TemplateContent, error) {
 	return libtmpl.Resolve(ctx, session, templateRef, serverName)
+}
+
+// resolveTemplateWithAuthor fetches a template from Matrix and walks its
+// inheritance chain, additionally tracking the sender of the template state
+// event that introduced the CredentialRef (if any). This is the template
+// resolution path used when credential-bound templates need authorization
+// checks against the template author.
+func resolveTemplateWithAuthor(ctx context.Context, session *messaging.DirectSession, templateRef string, serverName ref.ServerName) (libtmpl.ResolveResult, error) {
+	return libtmpl.ResolveWithAuthor(ctx, session, templateRef, serverName)
 }
 
 // resolveExtraInherits resolves additional template references and merges
@@ -36,6 +45,35 @@ func resolveExtraInherits(ctx context.Context, session *messaging.DirectSession,
 		}
 		merged := libtmpl.Merge(result, extra)
 		result = &merged
+	}
+	return result, nil
+}
+
+// resolveExtraInheritsWithAuthor resolves additional template references
+// and merges them on top of the base template, tracking CredentialRefAuthor
+// through the merge chain. If an extra inherit overrides the base template's
+// CredentialRef, the extra inherit's author becomes the credential ref author.
+func resolveExtraInheritsWithAuthor(
+	ctx context.Context,
+	session *messaging.DirectSession,
+	base libtmpl.ResolveResult,
+	extraInherits []string,
+	serverName ref.ServerName,
+) (libtmpl.ResolveResult, error) {
+	result := base
+	for _, extraRef := range extraInherits {
+		extra, err := resolveTemplateWithAuthor(ctx, session, extraRef, serverName)
+		if err != nil {
+			return libtmpl.ResolveResult{}, fmt.Errorf("resolving extra inherit %q: %w", extraRef, err)
+		}
+		merged := libtmpl.Merge(result.Template, extra.Template)
+		// If the extra inherit has a CredentialRef, its author wins
+		// (scalar override: the extra is applied after the base).
+		author := result.CredentialRefAuthor
+		if extra.Template.CredentialRef != "" {
+			author = extra.CredentialRefAuthor
+		}
+		result = libtmpl.ResolveResult{Template: &merged, CredentialRefAuthor: author}
 	}
 	return result, nil
 }

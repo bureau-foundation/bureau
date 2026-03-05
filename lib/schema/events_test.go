@@ -41,6 +41,7 @@ func TestEventTypeConstants(t *testing.T) {
 		{"dev_team", EventTypeDevTeam, "m.bureau.dev_team"},
 		{"artifact_scope", artifact.EventTypeArtifactScope, "m.bureau.artifact_scope"},
 		{"log", log.EventTypeLog, "m.bureau.log"},
+		{"environment_build", EventTypeEnvironmentBuild, "m.bureau.environment_build"},
 	}
 	for _, test := range tests {
 		t.Run(test.name, func(t *testing.T) {

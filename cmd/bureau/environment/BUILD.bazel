@@ -8,6 +8,7 @@ go_library(
     srcs = [
         "build.go",
         "command.go",
+        "compose.go",
         "doc.go",
         "list.go",
         "nix.go",
@@ -18,7 +19,11 @@ go_library(
     visibility = ["//visibility:public"],
     deps = [
         "//cmd/bureau/cli",
+        "//lib/command",
         "//lib/nix",
+        "//lib/ref",
+        "//lib/schema",
+        "//messaging",
     ],
 )
 

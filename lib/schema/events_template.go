@@ -4,6 +4,8 @@
 package schema
 
 import (
+	"fmt"
+	"strings"
 	"time"
 
 	"github.com/bureau-foundation/bureau/lib/ref"
@@ -434,6 +436,40 @@ type TemplateContent struct {
 	// the same Key, the child's binding replaces the parent's.
 	Secrets []SecretBinding `json:"secrets,omitempty"`
 
+	// CredentialRef points to an m.bureau.credentials state event
+	// containing the encrypted credential bundle for this template's
+	// secrets. Format: "<room-ref>:<state-key>" where room-ref is a
+	// room alias, room ID, or variable (e.g., "${FLEET_ROOM}"), and
+	// state-key identifies the credential event in that room.
+	//
+	// The daemon resolves this reference at sandbox creation time,
+	// fetches the encrypted credential blob, and sends it to the
+	// launcher as EncryptedCredentials. Room membership is the trust
+	// boundary: the daemon must be a member of the referenced room.
+	//
+	// During template inheritance, child CredentialRef replaces parent
+	// CredentialRef (same as Command, Environment — scalar override).
+	// The authorization check uses the author of whichever template in
+	// the inheritance chain introduced the CredentialRef.
+	CredentialRef string `json:"credential_ref,omitempty"`
+
+	// AllowedPipelines restricts which pipeline definitions may run
+	// with this template's credentials. When non-nil and non-empty,
+	// the daemon rejects execution of pipelines not in the list.
+	// When nil (absent from JSON), any pipeline may use the template.
+	// When non-nil but empty (present as []), no pipeline may use it
+	// (deny-all).
+	//
+	// This is defense-in-depth for high-value credentials: an operator
+	// deploying fleet infrastructure sets AllowedPipelines to restrict
+	// an Attic push token to the composition pipeline. An operator
+	// doing ad-hoc work omits it.
+	//
+	// During template inheritance, child AllowedPipelines narrows
+	// parent AllowedPipelines (intersection). A child cannot widen
+	// the parent's restriction.
+	AllowedPipelines *[]string `json:"allowed_pipelines,omitempty"`
+
 	// RequiredServices lists service roles (e.g., "ticket", "rag")
 	// that must be available when a sandbox is created from this
 	// template. The daemon resolves each role to a concrete service
@@ -609,6 +645,43 @@ type SecretBinding struct {
 	// directory is bind-mounted read-only; the launcher writes the
 	// file on the host side before creating the sandbox.
 	File string `json:"file,omitempty"`
+}
+
+// ValidateSecretBinding checks a SecretBinding for correctness:
+//   - Key must be non-empty.
+//   - At least one of Env or File must be set.
+//   - File must be a bare filename — no path separators, no ".." segments.
+//     This prevents path traversal when the launcher writes the secret to
+//     the host filesystem (configDir/secrets/<File>) before bind-mounting.
+func ValidateSecretBinding(binding SecretBinding) error {
+	if binding.Key == "" {
+		return fmt.Errorf("secret binding has empty key")
+	}
+	if binding.Env == "" && binding.File == "" {
+		return fmt.Errorf("secret binding %q: at least one of env or file must be set", binding.Key)
+	}
+	if binding.File != "" {
+		if strings.Contains(binding.File, "/") || strings.Contains(binding.File, "\\") {
+			return fmt.Errorf("secret binding %q: file %q contains path separator", binding.Key, binding.File)
+		}
+		if binding.File == ".." || strings.HasPrefix(binding.File, "..") {
+			return fmt.Errorf("secret binding %q: file %q contains path traversal", binding.Key, binding.File)
+		}
+		if binding.File == "." {
+			return fmt.Errorf("secret binding %q: file %q is not a valid filename", binding.Key, binding.File)
+		}
+	}
+	return nil
+}
+
+// ValidateSecretBindings validates a slice of SecretBinding values.
+func ValidateSecretBindings(bindings []SecretBinding) error {
+	for _, binding := range bindings {
+		if err := ValidateSecretBinding(binding); err != nil {
+			return err
+		}
+	}
+	return nil
 }
 
 // OutputCapture configures raw output capture for a principal's

@@ -19,6 +19,7 @@ func TestIsSensitiveAction(t *testing.T) {
 
 	sensitive := []string{
 		schema.ActionCredentialProvisionKeyPrefix + "FORGEJO_TOKEN",
+		schema.ActionCredentialUsePrefix + "bureau/creds:nix-builder",
 		schema.ActionInterrupt,
 		schema.ActionInterruptTerminate,
 		fleet.ActionAssign,

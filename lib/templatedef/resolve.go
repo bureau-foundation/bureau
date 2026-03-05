@@ -117,6 +117,147 @@ func Fetch(ctx context.Context, session messaging.Session, templateRef schema.Te
 	return &template, nil
 }
 
+// ResolveResult holds the outcome of template resolution with metadata
+// about which principal authored the credential reference (if any).
+type ResolveResult struct {
+	// Template is the fully-merged template content.
+	Template *schema.TemplateContent
+
+	// CredentialRefAuthor is the Matrix user ID of the sender who
+	// published the template state event that introduced the final
+	// CredentialRef value. Zero if no CredentialRef is present in
+	// the resolved template.
+	//
+	// During inheritance, CredentialRef uses scalar override (child
+	// wins). The author tracked here is the sender of whichever
+	// template in the chain provided the winning CredentialRef value.
+	CredentialRefAuthor ref.UserID
+}
+
+// ResolveWithAuthor fetches a template from Matrix and recursively resolves
+// its inheritance tree, tracking the sender of the template that introduced
+// the CredentialRef. This is the template resolution path for credential-
+// bound templates where the daemon needs the author for authorization checks.
+//
+// Uses GetStateWithSender internally (which fetches full room state per
+// template) rather than GetState (which fetches a single event). This is
+// more expensive per-fetch but necessary to capture the event envelope's
+// Sender field. Template rooms are small, so the overhead is bounded.
+func ResolveWithAuthor(ctx context.Context, session messaging.Session, templateRef string, serverName ref.ServerName) (ResolveResult, error) {
+	parsedRef, err := schema.ParseTemplateRef(templateRef)
+	if err != nil {
+		return ResolveResult{}, fmt.Errorf("parsing template reference %q: %w", templateRef, err)
+	}
+
+	cache := make(map[string]ResolveResult)
+	stack := make(map[string]bool)
+	return resolveWithAuthor(ctx, session, parsedRef, serverName, cache, stack)
+}
+
+// resolveWithAuthor is the recursive implementation of ResolveWithAuthor.
+// It parallels resolve() but fetches templates with sender metadata and
+// tracks the CredentialRefAuthor through the merge chain.
+func resolveWithAuthor(ctx context.Context, session messaging.Session, templateRef schema.TemplateRef, serverName ref.ServerName, cache map[string]ResolveResult, stack map[string]bool) (ResolveResult, error) {
+	refString := templateRef.String()
+
+	if cached, ok := cache[refString]; ok {
+		return cached, nil
+	}
+
+	if stack[refString] {
+		return ResolveResult{}, fmt.Errorf("template inheritance cycle: %q appears twice in resolution stack", refString)
+	}
+	stack[refString] = true
+	defer delete(stack, refString)
+
+	fetched, err := FetchWithSender(ctx, session, templateRef, serverName)
+	if err != nil {
+		return ResolveResult{}, err
+	}
+
+	// Track this template's contribution to CredentialRefAuthor.
+	// If this template sets CredentialRef, its sender is the author
+	// (subject to being overridden by child templates during merge).
+	thisAuthor := ref.UserID{}
+	if fetched.Content.CredentialRef != "" {
+		thisAuthor = fetched.Sender
+	}
+
+	// If no parents, this template is self-contained.
+	if len(fetched.Content.Inherits) == 0 {
+		result := fetched.Content
+		result.Inherits = nil
+		entry := ResolveResult{Template: &result, CredentialRefAuthor: thisAuthor}
+		cache[refString] = entry
+		return entry, nil
+	}
+
+	// Resolve each parent independently.
+	type parentResult struct {
+		template *schema.TemplateContent
+		author   ref.UserID
+	}
+	resolvedParents := make([]parentResult, 0, len(fetched.Content.Inherits))
+	for index, parentRefString := range fetched.Content.Inherits {
+		parentRef, err := schema.ParseTemplateRef(parentRefString)
+		if err != nil {
+			return ResolveResult{}, fmt.Errorf("parsing inherits[%d] reference %q in template %q: %w", index, parentRefString, refString, err)
+		}
+
+		parentResolved, err := resolveWithAuthor(ctx, session, parentRef, serverName, cache, stack)
+		if err != nil {
+			return ResolveResult{}, fmt.Errorf("resolving parent %q of template %q: %w", parentRefString, refString, err)
+		}
+		resolvedParents = append(resolvedParents, parentResult{
+			template: parentResolved.Template,
+			author:   parentResolved.CredentialRefAuthor,
+		})
+	}
+
+	// Merge resolved parents left-to-right. Track CredentialRefAuthor:
+	// when a later parent's CredentialRef overrides an earlier one, the
+	// later parent's author wins.
+	merged := *resolvedParents[0].template
+	mergedAuthor := resolvedParents[0].author
+	for i := 1; i < len(resolvedParents); i++ {
+		parent := resolvedParents[i]
+		if parent.template.CredentialRef != "" {
+			mergedAuthor = parent.author
+		}
+		merged = Merge(&merged, parent.template)
+	}
+
+	// Merge child template on top. If the child sets CredentialRef,
+	// the child's sender becomes the author.
+	if fetched.Content.CredentialRef != "" {
+		mergedAuthor = thisAuthor
+	}
+	childContent := fetched.Content
+	result := Merge(&merged, &childContent)
+
+	entry := ResolveResult{Template: &result, CredentialRefAuthor: mergedAuthor}
+	cache[refString] = entry
+	return entry, nil
+}
+
+// FetchWithSender resolves a single template reference to its content and
+// the Matrix user ID that published it. Uses GetStateWithSender (which
+// fetches the full room state) to capture the event envelope's Sender field.
+func FetchWithSender(ctx context.Context, session messaging.Session, templateRef schema.TemplateRef, serverName ref.ServerName) (messaging.StateWithSender[schema.TemplateContent], error) {
+	roomAlias := templateRef.RoomAlias(serverName)
+	roomID, err := session.ResolveAlias(ctx, roomAlias)
+	if err != nil {
+		return messaging.StateWithSender[schema.TemplateContent]{}, fmt.Errorf("resolving room alias %q for template %q: %w", roomAlias, templateRef.String(), err)
+	}
+
+	result, err := messaging.GetStateWithSender[schema.TemplateContent](ctx, session, roomID, schema.EventTypeTemplate, templateRef.Template)
+	if err != nil {
+		return messaging.StateWithSender[schema.TemplateContent]{}, fmt.Errorf("fetching template %q from room %q (%s): %w", templateRef.Template, roomAlias, roomID, err)
+	}
+
+	return result, nil
+}
+
 // Merge merges a child template over a parent template.
 //
 // Merge rules:
@@ -145,6 +286,9 @@ func Merge(parent, child *schema.TemplateContent) schema.TemplateContent {
 	}
 	if child.Environment != "" {
 		result.Environment = child.Environment
+	}
+	if child.CredentialRef != "" {
+		result.CredentialRef = child.CredentialRef
 	}
 
 	// Maps: merge with child winning on conflict.
@@ -182,7 +326,50 @@ func Merge(parent, child *schema.TemplateContent) schema.TemplateContent {
 		result.Origin = child.Origin
 	}
 
+	// AllowedPipelines: intersection semantics. A child cannot widen
+	// a parent's restriction. If both are set, result is the
+	// intersection. If only one is set, that one applies. If neither
+	// is set, result is nil (permissive).
+	result.AllowedPipelines = intersectAllowedPipelines(parent.AllowedPipelines, child.AllowedPipelines)
+
 	return result
+}
+
+// intersectAllowedPipelines computes the effective allowed pipelines
+// from parent and child template values. A nil pointer means "no
+// restriction" (permissive). A non-nil pointer to an empty slice
+// means "deny all." When both are set, the result is the intersection
+// (only pipelines in both lists are allowed), ensuring a child cannot
+// widen a parent's restriction.
+func intersectAllowedPipelines(parent, child *[]string) *[]string {
+	if parent == nil && child == nil {
+		return nil
+	}
+	if parent == nil {
+		// Parent is permissive, child sets the restriction.
+		return child
+	}
+	if child == nil {
+		// Child doesn't override, parent restriction preserved.
+		copied := make([]string, len(*parent))
+		copy(copied, *parent)
+		return &copied
+	}
+	// Both set: intersection. Only pipelines in both lists survive.
+	parentSet := make(map[string]bool, len(*parent))
+	for _, pipeline := range *parent {
+		parentSet[pipeline] = true
+	}
+	var intersection []string
+	for _, pipeline := range *child {
+		if parentSet[pipeline] {
+			intersection = append(intersection, pipeline)
+		}
+	}
+	if intersection == nil {
+		intersection = []string{}
+	}
+	return &intersection
 }
 
 // mergeStringMaps merges two string→string maps. Child values win on conflict.

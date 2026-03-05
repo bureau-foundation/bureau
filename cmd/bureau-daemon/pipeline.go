@@ -53,7 +53,7 @@ const maxUnixSocketPathLength = 107
 // than waiting for /sync to deliver the ticket event back to
 // processPipelineTickets) eliminates a round-trip through the homeserver's
 // sync endpoint — a trip that can silently fail under concurrent load.
-func handlePipelineExecute(ctx context.Context, d *Daemon, roomID ref.RoomID, eventID ref.EventID, command schema.CommandMessage) (any, error) {
+func handlePipelineExecute(ctx context.Context, d *Daemon, roomID ref.RoomID, eventID ref.EventID, sender ref.UserID, command schema.CommandMessage) (any, error) {
 	if d.pipelineExecutorBinary == "" {
 		return nil, fmt.Errorf("daemon not configured for pipeline execution (--pipeline-executor-binary not set)")
 	}
@@ -92,6 +92,22 @@ func handlePipelineExecute(ctx context.Context, d *Daemon, roomID ref.RoomID, ev
 		return nil, fmt.Errorf("checking pipeline config in room %s: %w", d.displayRoom(ticketRoomID), err)
 	}
 
+	// Resolve template-bound credentials when a template is specified.
+	// The template provides infrastructure bindings (filesystem mounts,
+	// credential secrets, environment variables) that are merged onto
+	// the pipeline executor's sandbox spec. The credential_ref on the
+	// template identifies an encrypted credential bundle that the
+	// launcher decrypts with the machine's age key.
+	var templateInfo *pipelineTemplateInfo
+	templateRef, _ := command.Parameters["template"].(string)
+	if templateRef != "" {
+		var templateErr error
+		templateInfo, templateErr = d.resolvePipelineTemplate(ctx, templateRef, pipelineRef, sender)
+		if templateErr != nil {
+			return nil, templateErr
+		}
+	}
+
 	// Discover the ticket service.
 	ticketSocketPath := d.findLocalTicketSocket()
 	if ticketSocketPath == "" {
@@ -114,7 +130,7 @@ func handlePipelineExecute(ctx context.Context, d *Daemon, roomID ref.RoomID, ev
 	// to be recovered after a crash.
 	pipelineVariables := make(map[string]string)
 	for key, value := range command.Parameters {
-		if key == "pipeline" || key == "room" {
+		if key == "pipeline" || key == "room" || key == "template" {
 			continue
 		}
 		if stringValue, ok := value.(string); ok {
@@ -125,7 +141,7 @@ func handlePipelineExecute(ctx context.Context, d *Daemon, roomID ref.RoomID, ev
 
 	ticketID, triggerBytes, err := d.createPipelineTicket(
 		ctx, ticketSocketPath, pipelineEntity, ticketRoomID,
-		pipelineRef, pipelineVariables)
+		pipelineRef, pipelineVariables, templateRef)
 	if err != nil {
 		return nil, fmt.Errorf("creating pipeline ticket: %w", err)
 	}
@@ -145,7 +161,7 @@ func handlePipelineExecute(ctx context.Context, d *Daemon, roomID ref.RoomID, ev
 	// d.pipelineTickets, so processPipelineTickets skips it if /sync
 	// eventually delivers the event.
 	d.reconcileMu.Lock()
-	d.startPipelineExecutor(ctx, ticketRoomID, ticketID, &ticketContent)
+	d.startPipelineExecutor(ctx, ticketRoomID, ticketID, &ticketContent, templateInfo)
 	d.reconcileMu.Unlock()
 
 	d.logger.Info("pipeline.execute accepted",
@@ -268,7 +284,26 @@ func (d *Daemon) processPipelineTickets(ctx context.Context, response *messaging
 				continue
 			}
 
-			d.startPipelineExecutor(ctx, roomID, stateKey, &ticketContent)
+			// Recover template info if the ticket was created with a
+			// template. The TemplateRef was persisted in the ticket
+			// content at creation time so we can re-resolve the
+			// template and read its credentials on recovery — the
+			// ticket's existence proves authorization already passed.
+			var templateInfo *pipelineTemplateInfo
+			if ticketContent.Pipeline.TemplateRef != "" {
+				recovered, recoverErr := d.recoverPipelineTemplateInfo(ctx, ticketContent.Pipeline.TemplateRef)
+				if recoverErr != nil {
+					d.logger.Error("failed to recover pipeline template info",
+						"room_id", roomID, "room", d.displayRoom(roomID),
+						"state_key", stateKey,
+						"template_ref", ticketContent.Pipeline.TemplateRef,
+						"error", recoverErr)
+					continue
+				}
+				templateInfo = recovered
+			}
+
+			d.startPipelineExecutor(ctx, roomID, stateKey, &ticketContent, templateInfo)
 		}
 	}
 }
@@ -284,6 +319,7 @@ func (d *Daemon) startPipelineExecutor(
 	roomID ref.RoomID,
 	ticketStateKey string,
 	ticketContent *ticket.TicketContent,
+	templateInfo *pipelineTemplateInfo,
 ) {
 	localpart := d.pipelineLocalpart()
 
@@ -413,6 +449,14 @@ func (d *Daemon) startPipelineExecutor(
 		artifactSocketPath, artifactTokenPath,
 		ticketStateKey, roomID, ticketSocketPath, ticketTokenPath)
 
+	// Merge template properties onto the base pipeline executor spec.
+	// The template provides infrastructure bindings (Nix daemon mounts,
+	// credential secret declarations, additional environment variables)
+	// that augment the executor's base configuration.
+	if templateInfo != nil && templateInfo.Template != nil {
+		mergeTemplateOntoSpec(spec, templateInfo.Template)
+	}
+
 	// Build trigger content from the ticket for the executor to read
 	// as trigger.json. The executor extracts Pipeline.PipelineRef and
 	// Pipeline.Variables from this.
@@ -446,16 +490,23 @@ func (d *Daemon) startPipelineExecutor(
 	}
 	spec.EnvironmentVariables["BUREAU_LOG_REF"] = logTagName
 
+	// Extract template encrypted credentials for the launcher to decrypt.
+	var templateEncryptedCredentials string
+	if templateInfo != nil {
+		templateEncryptedCredentials = templateInfo.EncryptedCredentials
+	}
+
 	response, err := d.launcherRequest(ctx, launcherIPCRequest{
-		Action:              ipc.ActionCreateSandbox,
-		Principal:           localpart,
-		DirectCredentials:   credentials,
-		SandboxSpec:         spec,
-		TriggerContent:      triggerContent,
-		TokenDirectory:      tokenDirectory,
-		TelemetrySocketPath: telemetrySocketPath,
-		TelemetryTokenPath:  telemetryTokenPath,
-		LogSessionID:        logSessionID,
+		Action:                       ipc.ActionCreateSandbox,
+		Principal:                    localpart,
+		DirectCredentials:            credentials,
+		TemplateEncryptedCredentials: templateEncryptedCredentials,
+		SandboxSpec:                  spec,
+		TriggerContent:               triggerContent,
+		TokenDirectory:               tokenDirectory,
+		TelemetrySocketPath:          telemetrySocketPath,
+		TelemetryTokenPath:           telemetryTokenPath,
+		LogSessionID:                 logSessionID,
 	})
 	if err != nil {
 		d.logger.Error("create-sandbox IPC failed for pipeline executor",
@@ -620,6 +671,7 @@ func (d *Daemon) createPipelineTicket(
 	roomID ref.RoomID,
 	pipelineRef string,
 	variables map[string]string,
+	templateRef string,
 ) (string, []byte, error) {
 	// Mint a short-lived token for the create call only. The
 	// sandbox gets a separate, longer-lived token for ongoing
@@ -642,6 +694,7 @@ func (d *Daemon) createPipelineTicket(
 	pipelineContent := &ticket.PipelineExecutionContent{
 		PipelineRef: pipelineRef,
 		Variables:   variables,
+		TemplateRef: templateRef,
 	}
 
 	fields := map[string]any{
@@ -797,4 +850,221 @@ func (d *Daemon) destroyPipelineSandbox(ctx context.Context, principal ref.Entit
 		return
 	}
 	d.logger.Info("pipeline executor sandbox destroyed", "principal", principal)
+}
+
+// pipelineTemplateInfo holds the resolved template and encrypted credential
+// ciphertext for a template-bound pipeline execution. Passed from
+// handlePipelineExecute to startPipelineExecutor. nil when no template
+// is specified.
+type pipelineTemplateInfo struct {
+	// Template is the fully-resolved TemplateContent (inheritance walked,
+	// merged). Used to overlay infrastructure bindings (filesystem mounts,
+	// secrets, environment variables) onto the pipeline executor's base
+	// SandboxSpec.
+	Template *schema.TemplateContent
+
+	// EncryptedCredentials is the base64-encoded age ciphertext from the
+	// template's credential_ref. Empty when the template has no credential
+	// binding. The launcher decrypts this with the machine's age key and
+	// injects the resulting secrets (mapped via template.Secrets) into the
+	// sandbox.
+	EncryptedCredentials string
+}
+
+// resolvePipelineTemplate resolves a template reference for a command-driven
+// pipeline execution. This performs the same credential resolution sequence
+// as the reconcile-driven path:
+//
+//  1. Resolve the template with author tracking
+//  2. If the template declares a credential_ref:
+//     a. Substitute variables (${FLEET_ROOM})
+//     b. Parse the credential reference
+//     c. Read the encrypted credentials from the referenced room
+//     d. Authorize: sender or template author must have credential access
+//     e. Check allowed_pipelines restriction
+//  3. Return the resolved template and encrypted credentials
+//
+// Returns an error suitable for command result posting if any step fails.
+func (d *Daemon) resolvePipelineTemplate(
+	ctx context.Context,
+	templateRef string,
+	pipelineRef string,
+	sender ref.UserID,
+) (*pipelineTemplateInfo, error) {
+	resolveResult, err := resolveTemplateWithAuthor(ctx, d.session, templateRef, d.machine.Server())
+	if err != nil {
+		return nil, fmt.Errorf("resolving template %q: %w", templateRef, err)
+	}
+	template := resolveResult.Template
+
+	info := &pipelineTemplateInfo{
+		Template: template,
+	}
+
+	// If the template declares a credential_ref, resolve and authorize
+	// the credential binding.
+	if template.CredentialRef == "" {
+		return info, nil
+	}
+
+	// Substitute variables in the credential ref before parsing.
+	substitutedCredRef := d.substituteCredentialRefVariables(template.CredentialRef)
+
+	parsedCredRef, parseErr := schema.ParseCredentialRef(substitutedCredRef)
+	if parseErr != nil {
+		return nil, fmt.Errorf("invalid credential_ref %q in template %q: %w",
+			template.CredentialRef, templateRef, parseErr)
+	}
+
+	// Read the encrypted credentials from the referenced room.
+	templateCreds, credRoomID, readErr := d.readCredentialsByRef(ctx, parsedCredRef)
+	if readErr != nil {
+		return nil, fmt.Errorf("reading template-bound credentials for %q: %w",
+			template.CredentialRef, readErr)
+	}
+
+	// Authorize: the command sender or the template author must have
+	// credential access. This matches the reconcile path's authorization
+	// model, where the daemon's machine identity or the template author
+	// provides the access grant.
+	accessResult := d.checkCredentialAccess(
+		ctx, parsedCredRef, credRoomID,
+		sender, resolveResult.CredentialRefAuthor,
+	)
+	if !accessResult.Allowed {
+		return nil, fmt.Errorf("credential access denied for template %q (credential_ref %q): %s",
+			templateRef, template.CredentialRef, accessResult.Reason)
+	}
+
+	d.logger.Info("pipeline template credential access granted",
+		"template", templateRef,
+		"credential_ref", template.CredentialRef,
+		"reason", accessResult.Reason,
+		"sender", sender,
+	)
+
+	// Check allowed_pipelines: the template may restrict which pipeline
+	// definitions can use its bound credentials.
+	if err := checkAllowedPipelines(template.AllowedPipelines, pipelineRef); err != nil {
+		return nil, fmt.Errorf("template %q: %w", templateRef, err)
+	}
+
+	info.EncryptedCredentials = templateCreds.Ciphertext
+	return info, nil
+}
+
+// recoverPipelineTemplateInfo re-resolves a template for a recovered
+// pipeline ticket. Unlike resolvePipelineTemplate, this skips the
+// authorization check and allowed_pipelines validation — the ticket's
+// existence proves these checks already passed when the ticket was
+// created. The daemon only needs the resolved template (for
+// mergeTemplateOntoSpec) and the encrypted credential ciphertext (for
+// the launcher to decrypt).
+//
+// Returns nil without error when templateRef is empty (no template).
+// Returns an error if template resolution or credential reading fails.
+func (d *Daemon) recoverPipelineTemplateInfo(ctx context.Context, templateRef string) (*pipelineTemplateInfo, error) {
+	if templateRef == "" {
+		return nil, nil
+	}
+
+	resolveResult, err := resolveTemplateWithAuthor(ctx, d.session, templateRef, d.machine.Server())
+	if err != nil {
+		return nil, fmt.Errorf("resolving template %q: %w", templateRef, err)
+	}
+	template := resolveResult.Template
+
+	info := &pipelineTemplateInfo{
+		Template: template,
+	}
+
+	if template.CredentialRef == "" {
+		return info, nil
+	}
+
+	substitutedCredRef := d.substituteCredentialRefVariables(template.CredentialRef)
+
+	parsedCredRef, parseErr := schema.ParseCredentialRef(substitutedCredRef)
+	if parseErr != nil {
+		return nil, fmt.Errorf("invalid credential_ref %q in template %q: %w",
+			template.CredentialRef, templateRef, parseErr)
+	}
+
+	templateCreds, _, readErr := d.readCredentialsByRef(ctx, parsedCredRef)
+	if readErr != nil {
+		return nil, fmt.Errorf("reading template-bound credentials for %q: %w",
+			template.CredentialRef, readErr)
+	}
+
+	info.EncryptedCredentials = templateCreds.Ciphertext
+
+	d.logger.Info("recovered pipeline template credentials",
+		"template", templateRef,
+		"credential_ref", template.CredentialRef,
+	)
+	return info, nil
+}
+
+// mergeTemplateOntoSpec overlays a resolved template's infrastructure
+// properties onto a pipeline executor's base SandboxSpec. The base spec
+// provides pipeline-specific configuration (executor binary, workspace
+// mount, ticket context, output capture). The template provides
+// infrastructure bindings (Nix daemon mounts, credential secrets,
+// environment variables, required services).
+//
+// Merge rules:
+//   - Filesystem: template mounts are appended (after base mounts)
+//   - Secrets: set from template (pipeline base spec has no secrets)
+//   - EnvironmentVariables: template values are set as defaults; base
+//     spec values take priority (preserving BUREAU_* pipeline vars)
+//   - EnvironmentPath: template value used only when base spec has none
+//   - RequiredServices: appended
+//   - CreateDirs: appended
+//   - ProxyServices, Roles: set from template when non-nil
+func mergeTemplateOntoSpec(spec *schema.SandboxSpec, template *schema.TemplateContent) {
+	// Append template filesystem mounts after the base spec's mounts.
+	// The base spec provides the executor binary and workspace; the
+	// template provides infrastructure like Nix daemon socket, store.
+	spec.Filesystem = append(spec.Filesystem, template.Filesystem...)
+
+	// Set credential secret bindings from the template. The launcher
+	// uses these to map decrypted credential keys to environment
+	// variables and files inside the sandbox.
+	spec.Secrets = template.Secrets
+
+	// Merge environment variables: template values serve as defaults,
+	// base spec values (BUREAU_SANDBOX, BUREAU_TICKET_ID, etc.) win
+	// on conflict.
+	if len(template.EnvironmentVariables) > 0 {
+		if spec.EnvironmentVariables == nil {
+			spec.EnvironmentVariables = make(map[string]string, len(template.EnvironmentVariables))
+		}
+		for key, value := range template.EnvironmentVariables {
+			if _, exists := spec.EnvironmentVariables[key]; !exists {
+				spec.EnvironmentVariables[key] = value
+			}
+		}
+	}
+
+	// Use the template's environment path only when the base spec
+	// doesn't have one. The base spec's EnvironmentPath (from
+	// d.pipelineEnvironment) takes priority because it provides the
+	// pipeline executor's own toolchain.
+	if template.Environment != "" && spec.EnvironmentPath == "" {
+		spec.EnvironmentPath = template.Environment
+	}
+
+	// Append required services declared by the template.
+	spec.RequiredServices = append(spec.RequiredServices, template.RequiredServices...)
+
+	// Append create-dirs from the template.
+	spec.CreateDirs = append(spec.CreateDirs, template.CreateDirs...)
+
+	// Set proxy services and roles from the template when present.
+	if template.ProxyServices != nil {
+		spec.ProxyServices = template.ProxyServices
+	}
+	if template.Roles != nil {
+		spec.Roles = template.Roles
+	}
 }

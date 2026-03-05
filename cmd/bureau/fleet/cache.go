@@ -23,9 +23,11 @@ import (
 type cacheParams struct {
 	cli.SessionConfig
 	cli.JSONOutput
-	URL       string   `json:"url"        flag:"url"        desc:"substituter URL for pulling closures (e.g., https://cache.infra.bureau.foundation)"`
-	Name      string   `json:"name"       flag:"name"       desc:"Attic cache name for push operations (e.g., main)"`
-	PublicKey []string `json:"public_key" flag:"public-key" desc:"Nix signing public key in name:base64 format (repeatable; replaces all keys)"`
+	URL             string   `json:"url"              flag:"url"              desc:"substituter URL for pulling closures (e.g., https://cache.infra.bureau.foundation)"`
+	Name            string   `json:"name"             flag:"name"             desc:"Attic cache name for push operations (e.g., main)"`
+	PublicKey       []string `json:"public_key"       flag:"public-key"       desc:"Nix signing public key in name:base64 format (repeatable; replaces all keys)"`
+	ComposeTemplate string   `json:"compose_template" flag:"compose-template" desc:"template reference for environment composition (e.g., bureau/template:nix-builder)"`
+	DefaultSystem   string   `json:"default_system"   flag:"default-system"   desc:"default Nix system for environment composition (e.g., x86_64-linux)"`
 }
 
 // cacheResult is the JSON output of the cache command.
@@ -47,8 +49,8 @@ The argument is a fleet localpart in the form "namespace/fleet/name"
 connected session's identity.
 
 Without config flags, displays the current cache configuration. With
-flags (--url, --name, --public-key), performs a read-modify-write to
-update the configuration.
+flags (--url, --name, --public-key, --compose-template, --default-system),
+performs a read-modify-write to update the configuration.
 
 The fleet cache event (m.bureau.fleet_cache) records the substituter URL,
 Attic cache name, and signing public keys that machines and compose
@@ -78,6 +80,10 @@ machine doctor --fix" on each machine, then remove the old key.`,
 				Description: "Rotate signing keys (publish both during transition)",
 				Command:     "bureau fleet cache bureau/fleet/prod --public-key 'bureau-prod-v1:oldkey' --public-key 'bureau-prod-v2:newkey' --credential-file ./creds",
 			},
+			{
+				Description: "Configure environment composition defaults",
+				Command:     "bureau fleet cache bureau/fleet/prod --compose-template bureau/template:nix-builder --default-system x86_64-linux --credential-file ./creds",
+			},
 		},
 		Params:         func() any { return &params },
 		Output:         func() any { return &cacheResult{} },
@@ -97,7 +103,8 @@ machine doctor --fix" on each machine, then remove the old key.`,
 
 // hasCacheUpdates returns true if any cache flag was explicitly set.
 func hasCacheUpdates(params *cacheParams) bool {
-	return params.URL != "" || params.Name != "" || len(params.PublicKey) > 0
+	return params.URL != "" || params.Name != "" || len(params.PublicKey) > 0 ||
+		params.ComposeTemplate != "" || params.DefaultSystem != ""
 }
 
 // validateCacheURL checks that the URL is parseable and has an http or
@@ -208,6 +215,8 @@ func runCache(ctx context.Context, logger *slog.Logger, fleetLocalpart string, p
 		for _, key := range cacheConfig.PublicKeys {
 			fmt.Fprintf(writer, "    %s\n", key)
 		}
+		fmt.Fprintf(writer, "  Compose Template:\t%s\n", defaultString(cacheConfig.ComposeTemplate, "(none)"))
+		fmt.Fprintf(writer, "  Default System:\t%s\n", defaultString(cacheConfig.DefaultSystem, "(none)"))
 		writer.Flush()
 		return nil
 	}
@@ -229,6 +238,12 @@ func runCache(ctx context.Context, logger *slog.Logger, fleetLocalpart string, p
 			}
 		}
 		cacheConfig.PublicKeys = params.PublicKey
+	}
+	if params.ComposeTemplate != "" {
+		cacheConfig.ComposeTemplate = params.ComposeTemplate
+	}
+	if params.DefaultSystem != "" {
+		cacheConfig.DefaultSystem = params.DefaultSystem
 	}
 
 	// Final validation: a cache config must have both URL and at least
@@ -265,6 +280,8 @@ func runCache(ctx context.Context, logger *slog.Logger, fleetLocalpart string, p
 		"url", cacheConfig.URL,
 		"name", cacheConfig.Name,
 		"public_keys", len(cacheConfig.PublicKeys),
+		"compose_template", cacheConfig.ComposeTemplate,
+		"default_system", cacheConfig.DefaultSystem,
 	)
 	return nil
 }

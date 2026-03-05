@@ -60,6 +60,15 @@ const (
 // action — all decisions are audit-logged.
 const ActionCredentialProvisionKeyPrefix = "credential/provision/key/"
 
+// Credential usage. Enforced by the daemon when launching a pipeline
+// with template-bound credentials. The full action is
+// ActionCredentialUsePrefix + credential_ref (e.g.,
+// "credential/use/${FLEET_ROOM}:nix-builder"). Grants with this
+// action allow the grantee to launch pipelines that use the
+// referenced credentials without requiring admin power level in the
+// credential room. Sensitive action — all decisions are audit-logged.
+const ActionCredentialUsePrefix = "credential/use/"
+
 // Grant approval. Enforced by the daemon when a principal approves a
 // temporal grant for another principal. The full action is
 // ActionGrantApprovePrefix + the action being approved (e.g.,

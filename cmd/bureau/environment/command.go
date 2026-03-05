@@ -27,6 +27,7 @@ Requires nix to be installed and on PATH.`,
 		Subcommands: []*cli.Command{
 			listCommand(),
 			buildCommand(),
+			composeCommand(),
 			statusCommand(),
 		},
 		Examples: []cli.Example{
@@ -41,6 +42,10 @@ Requires nix to be installed and on PATH.`,
 			{
 				Description: "Build from a custom flake",
 				Command:     "bureau environment build workstation --flake github:myorg/environment",
+			},
+			{
+				Description: "Compose and distribute a profile via pipeline",
+				Command:     "bureau environment compose workstation --machine bureau/fleet/prod/machine/builder",
 			},
 			{
 				Description: "Show what's currently deployed",

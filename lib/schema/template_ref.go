@@ -62,10 +62,31 @@ func ParseTemplateRef(reference string) (TemplateRef, error) {
 	}, nil
 }
 
+// formatRef produces the canonical wire-format string for a room state
+// reference: "<room>[@<server>]:<name>". All ref types (TemplateRef,
+// PipelineRef, CredentialRef) delegate their String() method here.
+func formatRef(room, name, server string) string {
+	if server != "" {
+		return room + "@" + server + ":" + name
+	}
+	return room + ":" + name
+}
+
+// refRoomAlias constructs the full Matrix room alias for a room state
+// reference. Uses defaultServer when the ref doesn't specify one.
+// All ref types delegate their RoomAlias() method here.
+func refRoomAlias(room, server string, defaultServer ref.ServerName) ref.RoomAlias {
+	if server != "" {
+		return ref.MustParseRoomAlias("#" + room + ":" + server)
+	}
+	return ref.MustParseRoomAlias("#" + room + ":" + defaultServer.String())
+}
+
 // parseRef extracts room, name, and server from a state event reference
-// string. The format is "<room-alias-localpart>[@<server>]:<name>". Both
-// TemplateRef and PipelineRef use this same parsing logic — the entityKind
-// parameter (e.g., "template", "pipeline") controls error messages.
+// string. The format is "<room-alias-localpart>[@<server>]:<name>". All
+// ref types (TemplateRef, PipelineRef, CredentialRef) use this same
+// parsing logic — the entityKind parameter (e.g., "template", "pipeline")
+// controls error messages.
 func parseRef(reference, entityKind string) (room, name, server string, err error) {
 	if reference == "" {
 		return "", "", "", fmt.Errorf("empty %s reference", entityKind)
@@ -108,18 +129,12 @@ func parseRef(reference, entityKind string) (room, name, server string, err erro
 // String returns the canonical wire-format representation of the template
 // reference. Round-trips through ParseTemplateRef: for any valid ref,
 // ParseTemplateRef(ref.String()) returns an equivalent TemplateRef.
-func (ref TemplateRef) String() string {
-	if ref.Server != "" {
-		return ref.Room + "@" + ref.Server + ":" + ref.Template
-	}
-	return ref.Room + ":" + ref.Template
+func (templateRef TemplateRef) String() string {
+	return formatRef(templateRef.Room, templateRef.Template, templateRef.Server)
 }
 
 // RoomAlias returns the full Matrix room alias for this template reference,
 // using defaultServer when the reference doesn't specify a server.
 func (templateRef TemplateRef) RoomAlias(defaultServer ref.ServerName) ref.RoomAlias {
-	if templateRef.Server != "" {
-		return ref.MustParseRoomAlias("#" + templateRef.Room + ":" + templateRef.Server)
-	}
-	return ref.MustParseRoomAlias("#" + templateRef.Room + ":" + defaultServer.String())
+	return refRoomAlias(templateRef.Room, templateRef.Server, defaultServer)
 }

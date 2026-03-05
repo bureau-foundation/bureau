@@ -20,6 +20,7 @@ import (
 // counts as "sensitive" is a security decision, not an operational knob.
 var sensitiveActionPrefixes = []string{
 	"credential/provision/",
+	schema.ActionCredentialUsePrefix,
 	schema.ActionInterrupt,
 	"fleet/",
 	observation.ActionReadWrite,

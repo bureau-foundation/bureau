@@ -1,0 +1,109 @@
+{
+  // Build a Nix environment profile, push the closure to the fleet
+  // binary cache, and publish provenance as a Matrix state event.
+  //
+  // Triggered by "bureau environment compose". Runs inside a sandbox
+  // with the nix-builder template, which provides Nix daemon access
+  // and cache push credentials (ATTIC_TOKEN).
+  //
+  // Execution order:
+  //   - Build the profile from the environment flake
+  //   - Push the closure to the fleet binary cache via attic
+  //   - Publish m.bureau.environment_build with provenance metadata
+  //
+  // The pipeline is idempotent: re-running with the same inputs
+  // produces the same store path and overwrites the state event with
+  // identical content. Attic push is also idempotent (skips already-
+  // cached paths).
+
+  "description": "Build environment profile and push to fleet binary cache",
+
+  "variables": {
+    "FLAKE_REF": {
+      "description": "Flake reference for the environment repo (e.g., github:bureau-foundation/environment)",
+      "required": true
+    },
+    "PROFILE": {
+      "description": "Profile name to build (e.g., workstation, sysadmin-runner-env)",
+      "required": true
+    },
+    "SYSTEM": {
+      "description": "Nix system triple (e.g., x86_64-linux, aarch64-linux)",
+      "required": true
+    },
+    "CACHE_NAME": {
+      "description": "Attic cache name for push operations (from fleet cache config)",
+      "required": true
+    },
+    "FLEET_ROOM_ID": {
+      "description": "Fleet room ID for publishing the environment build event",
+      "required": true
+    },
+    "MACHINE": {
+      "description": "Machine localpart identifying the builder (set by the daemon)",
+      "required": true
+    }
+  },
+
+  "steps": [
+    {
+      "name": "build-profile",
+      "run": "nix build ${FLAKE_REF}#packages.${SYSTEM}.${PROFILE} --no-link --print-out-paths > /tmp/outputs/store_path",
+      "timeout": "30m",
+      "outputs": {
+        "store_path": "/tmp/outputs/store_path"
+      }
+    },
+    {
+      "name": "push-to-cache",
+      "run": "STORE_PATH=$(cat /tmp/outputs/store_path)\nattic push ${CACHE_NAME} ${STORE_PATH}",
+      "timeout": "30m"
+    },
+    {
+      "name": "publish-provenance",
+      "publish": {
+        "event_type": "m.bureau.environment_build",
+        "room": "${FLEET_ROOM_ID}",
+        "state_key": "${PROFILE}",
+        "content": {
+          "profile": "${PROFILE}",
+          "flake_ref": "${FLAKE_REF}",
+          "system": "${SYSTEM}",
+          "store_path": "${OUTPUT_build_profile_store_path}",
+          "machine": "${MACHINE}",
+          "timestamp": "${BUREAU_TIMESTAMP}"
+        }
+      }
+    }
+  ],
+
+  "outputs": {
+    "store_path": {
+      "description": "Nix store path of the built environment profile",
+      "value": "${OUTPUT_build_profile_store_path}"
+    }
+  },
+
+  "on_failure": [
+    {
+      "name": "publish-failed",
+      "publish": {
+        "event_type": "m.bureau.environment_build",
+        "room": "${FLEET_ROOM_ID}",
+        "state_key": "${PROFILE}",
+        "content": {
+          "profile": "${PROFILE}",
+          "flake_ref": "${FLAKE_REF}",
+          "system": "${SYSTEM}",
+          "store_path": "",
+          "machine": "${MACHINE}",
+          "timestamp": "${BUREAU_TIMESTAMP}"
+        }
+      }
+    }
+  ],
+
+  "log": {
+    "room": "${FLEET_ROOM_ID}"
+  }
+}

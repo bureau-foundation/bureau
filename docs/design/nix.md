@@ -344,6 +344,208 @@ sysadmin agent (manages environments, inspects store paths, runs
 cache operations), and any future CI or build agent that needs
 Nix directly.
 
+### Environment Composition
+
+Environment composition is the process of building a `pkgs.buildEnv`
+derivation from a flake profile, pushing the resulting closure to the
+fleet binary cache (Attic), and publishing a provenance record to
+Matrix. This is how sandbox environments get from a Nix flake
+definition into the fleet's binary distribution infrastructure where
+machines can pull them on demand.
+
+Composition is a pipeline execution. The `bureau environment compose`
+command is a domain-specific wrapper around `bureau pipeline run` — it
+resolves fleet cache configuration, constructs the right pipeline
+variables, and sends a `pipeline.execute` command to the daemon. The
+daemon creates a `pip-` ticket, spawns a sandboxed pipeline executor,
+and the ticket carries all state (progress, completion, provenance).
+The operator watches progress via `--wait` or checks the ticket later.
+
+#### Composition Pipeline
+
+The pipeline runs inside a sandbox with the `nix-daemon` template
+layer providing Nix store, daemon socket, and CLI access. Three steps:
+
+- **build** — `nix build --no-link --print-out-paths` for the target
+  profile. This evaluates the flake, builds the `pkgs.buildEnv`
+  derivation, and produces a store path. The Nix daemon handles
+  substitution from upstream caches for any dependencies that are
+  already built.
+- **push** — `attic push` sends the store path's closure to the
+  fleet binary cache. The Attic push token is injected as an
+  environment variable by the launcher via the template's secret
+  bindings (see "Credential Flow" below).
+- **publish** — publishes an `m.bureau.environment_build` state event
+  to the fleet room with the profile name as the state key. This
+  provenance record contains the store path, flake reference, build
+  machine, and timestamp. The daemon reads these records when
+  resolving `EnvironmentPath` for templates, and
+  `bureau environment status` displays them.
+
+#### The nix-builder Template
+
+The composition pipeline needs three capabilities beyond a basic
+sandbox: Nix daemon access (for `nix build`), host network access
+(for `attic push` to reach the cache), and the Attic push credential.
+A template provides all three:
+
+```jsonc
+{
+    "inherits": ["${TEMPLATE_ROOM}:nix-daemon"],
+    "credential_ref": "${FLEET_ROOM}:nix-builder",
+    "secrets": [
+        {"key": "ATTIC_PUSH_TOKEN", "env": "ATTIC_TOKEN"}
+    ]
+}
+```
+
+The `credential_ref` field is a room reference plus state key,
+pointing to an `m.bureau.credentials` event. See "Credential Flow"
+for the full resolution and security model.
+
+#### Credential Flow
+
+Composition requires credentials beyond the daemon's own Matrix
+token — specifically, the Attic push token for writing to the fleet
+binary cache. The credential system for pipeline execution extends
+Bureau's existing sealed credential model with two additions: room-
+referenced credentials on templates, and fleet-level credential
+sealing.
+
+**Credential references are room references.** The template's
+`credential_ref` field uses the same `<room-ref>:<state-key>` format
+as template inheritance. The room reference can be a variable
+(`${FLEET_ROOM}`), a literal room alias (`#bureau/fleet/prod:server`),
+or a literal room ID. The state key identifies the
+`m.bureau.credentials` event in that room. This is an explicit pointer
+— the daemon does not search, fall back, or resolve by convention.
+
+The daemon must be a member of the referenced room to read the
+credential event. **Room membership is the trust boundary**: a machine
+can only access credentials in rooms it belongs to. Adding a machine
+to the fleet room grants it access to fleet credentials. Removing it
+revokes access on the next credential reseal. No separate ACL system
+is needed — Matrix's room membership model provides the access
+control.
+
+**Fleet-level credentials are sealed to all machine keys.** age
+natively supports multiple recipients — a single ciphertext can be
+decrypted by any listed key. Fleet credentials (like the Attic push
+token) are one `m.bureau.credentials` event in the fleet room, sealed
+to every machine key in the fleet. Any machine's launcher can decrypt
+it. When a new machine joins the fleet, `bureau machine provision`
+automatically reseals fleet credentials to include the new machine's
+key.
+
+This contrasts with per-principal credentials in machine config rooms,
+which are sealed to a single machine's key. Both models coexist: the
+`credential_ref` on a template points at a specific room, and the
+room determines the scope (fleet room = fleet-scoped, machine config
+room = machine-scoped).
+
+**At pipeline launch time**, the daemon:
+
+1. Resolves the template (inheritance chain, variable substitution).
+2. Reads `credential_ref` from the resolved template.
+3. Fetches the `m.bureau.credentials` event from the referenced room.
+4. Sends `EncryptedCredentials` (the age ciphertext) to the launcher
+   via IPC, along with the `SandboxSpec` containing `Secrets` bindings.
+5. The launcher decrypts the ciphertext with the machine's private
+   key, extracts the keys named in the `Secrets` bindings, and
+   injects them as environment variables or files in the sandbox.
+
+The daemon never sees decrypted credential values. The launcher
+decrypts and injects. The pipeline executor receives credentials as
+environment variables in its sandbox — the same privilege separation
+as any other Bureau sandbox.
+
+#### Authorization Model
+
+The two-actor credential authorization model — where at least one
+principal in the execution chain (requester or template author) must
+have access to the referenced credentials — is described in
+[credentials.md](credentials.md) (Template Credential Authorization).
+The `allowed_pipelines` restriction and the condition matrix for
+credential access decisions are also documented there.
+
+See [credentials.md](credentials.md) for the sealed storage model
+and authorization rules, [authorization.md](authorization.md) for
+the grant framework, and [pipelines.md](pipelines.md) for the
+pipeline execution model.
+
+#### CLI
+
+```
+bureau environment compose [flags] <profile>
+    --system <system>       Target system (e.g., x86_64-linux). Required
+                            unless a fleet default is configured.
+    --machine <machine>     Fleet-scoped machine localpart (required).
+    --room <room>           Room for the pipeline ticket (required).
+    --flake-ref <ref>       Flake reference (default: fleet-configured).
+    --template <template>   Template reference (default: from fleet
+                            cache config compose_template field).
+    --wait                  Wait for completion (default: true).
+```
+
+The command reads fleet cache configuration from `m.bureau.fleet_cache`
+to resolve defaults: the cache URL, cache name, compose template
+reference, and default system architecture. All of these can be
+overridden with flags.
+
+`--system` is explicit. There is no automatic detection from fleet
+machine architectures. A fleet may contain machines with different
+architectures (x86_64 workstations, aarch64 Raspberry Pis, aarch64
+cloud instances), and the operator must choose which to target. The
+fleet cache config may carry a `default_system` for ergonomics, but
+the code never assumes a value.
+
+Multi-architecture composition (building the same profile for both
+x86_64-linux and aarch64-linux) is N separate pipeline executions
+with different `SYSTEM` values. Each produces its own ticket, each
+is independently watchable, each publishes its own provenance record.
+
+#### Provenance Record
+
+The pipeline's publish step writes an `m.bureau.environment_build`
+state event to the fleet room. The state key is the profile name.
+This record establishes the chain from source to store path:
+
+```json
+{
+  "profile": "sysadmin-runner-env",
+  "flake_ref": "github:bureau-foundation/bureau/abc123",
+  "system": "x86_64-linux",
+  "store_path": "/nix/store/...-bureau-sysadmin-runner-env",
+  "machine": "bureau/fleet/prod/machine/workstation",
+  "timestamp": "2026-03-04T10:30:00Z"
+}
+```
+
+`bureau environment status` reads these records to show what
+environments are deployed. The daemon reads them when resolving
+environment paths for templates that reference composed environments.
+The provenance record is immutable once published — updating an
+environment means running compose again, which overwrites the state
+event with a new record.
+
+#### Fleet Cache Configuration Extensions
+
+The `m.bureau.fleet_cache` state event gains two fields to support
+composition:
+
+- **`compose_template`** — template reference for the composition
+  pipeline sandbox (e.g., `bureau/template:nix-builder`). Read by
+  `bureau environment compose` as the default `--template` value.
+- **`default_system`** — default Nix system architecture (e.g.,
+  `x86_64-linux`). Read by `bureau environment compose` as the
+  default `--system` value. Optional — when absent, `--system` is
+  required.
+
+Both are set during fleet bootstrap alongside the cache URL, name,
+and public keys. The code never assumes default values for these
+fields — it reads them from the fleet cache config or requires the
+corresponding CLI flag.
+
 ---
 
 ## Bureau Version Management

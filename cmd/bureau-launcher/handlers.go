@@ -20,6 +20,7 @@ import (
 	"github.com/bureau-foundation/bureau/lib/ipc"
 	"github.com/bureau-foundation/bureau/lib/principal"
 	"github.com/bureau-foundation/bureau/lib/ref"
+	"github.com/bureau-foundation/bureau/lib/schema"
 	"github.com/bureau-foundation/bureau/lib/sealed"
 	"github.com/bureau-foundation/bureau/lib/secret"
 	"github.com/bureau-foundation/bureau/lib/tmux"
@@ -284,6 +285,35 @@ func (l *Launcher) handleCreateSandbox(ctx context.Context, request *IPCRequest)
 		credentials = request.DirectCredentials
 	}
 
+	// Merge template-bound credentials if present. Template credentials
+	// come from a CredentialRef on the template and are encrypted
+	// separately from the principal's own credentials. Key collision
+	// between the two sources is a hard error: ambiguous credential
+	// values are never silently resolved.
+	if request.TemplateEncryptedCredentials != "" {
+		templateDecrypted, templateErr := sealed.Decrypt(request.TemplateEncryptedCredentials, l.keypair.PrivateKey)
+		if templateErr != nil {
+			return IPCResponse{OK: false, Error: fmt.Sprintf("decrypting template credentials: %v", templateErr)}
+		}
+		defer templateDecrypted.Close()
+
+		var templateCredentials map[string]string
+		if unmarshalErr := json.Unmarshal(templateDecrypted.Bytes(), &templateCredentials); unmarshalErr != nil {
+			return IPCResponse{OK: false, Error: fmt.Sprintf("parsing decrypted template credentials: %v", unmarshalErr)}
+		}
+
+		if credentials == nil {
+			credentials = templateCredentials
+		} else {
+			for key, value := range templateCredentials {
+				if _, exists := credentials[key]; exists {
+					return IPCResponse{OK: false, Error: fmt.Sprintf("credential key %q exists in both principal and template credential bundles (key collision)", key)}
+				}
+				credentials[key] = value
+			}
+		}
+	}
+
 	l.logger.Info("spawning proxy for principal",
 		"principal", request.Principal,
 		"credential_keys", credentialKeys(credentials),
@@ -305,6 +335,9 @@ func (l *Launcher) handleCreateSandbox(ctx context.Context, request *IPCRequest)
 	// into a map that buildSandboxCommand writes to the secrets dir.
 	var secretFiles map[string]string
 	if request.SandboxSpec != nil && len(request.SandboxSpec.Secrets) > 0 {
+		if err := schema.ValidateSecretBindings(request.SandboxSpec.Secrets); err != nil {
+			return IPCResponse{OK: false, Error: fmt.Sprintf("invalid secret binding: %v", err)}
+		}
 		secretFiles = make(map[string]string)
 		for _, binding := range request.SandboxSpec.Secrets {
 			value, exists := credentials[binding.Key]

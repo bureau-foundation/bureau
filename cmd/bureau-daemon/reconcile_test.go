@@ -900,6 +900,132 @@ func TestReconcileStructuralChangeOnly(t *testing.T) {
 	}
 }
 
+// TestReconcileCredentialRefChangeTriggersRestart verifies that changing a
+// template's CredentialRef triggers a sandbox restart even though the
+// SandboxSpec itself hasn't changed structurally. The CredentialRef lives on
+// the TemplateContent (not the SandboxSpec), so the daemon needs a separate
+// check comparing old vs new template CredentialRef.
+func TestReconcileCredentialRefChangeTriggersRestart(t *testing.T) {
+	t.Parallel()
+
+	const (
+		configRoomID   = "!config:test.local"
+		templateRoomID = "!template:test.local"
+	)
+
+	daemon, _ := newTestDaemon(t)
+	daemon.machine, daemon.fleet = testMachineSetup(t, "test", "test.local")
+	machineName := daemon.machine.Localpart()
+	fleetPrefix := daemon.fleet.Localpart() + "/"
+
+	// Template with a command and a CredentialRef (changed from the stored version).
+	state := newMockMatrixState()
+	state.setRoomAlias(daemon.fleet.Namespace().TemplateRoomAlias(), templateRoomID)
+	state.setStateEvent(templateRoomID, schema.EventTypeTemplate, "test-template", schema.TemplateContent{
+		Command:       []string{"/bin/agent"},
+		CredentialRef: "bureau/new-creds:builder",
+	})
+	state.setStateEvent(configRoomID, schema.EventTypeMachineConfig, machineName, schema.MachineConfig{
+		Principals: []schema.PrincipalAssignment{
+			{
+				Principal: testEntity(t, daemon.fleet, "agent/test"),
+				Template:  "bureau/template:test-template",
+				AutoStart: true,
+			},
+		},
+	})
+	state.setStateEvent(configRoomID, schema.EventTypeCredentials, fleetPrefix+"agent/test", schema.Credentials{
+		Ciphertext: "encrypted-test-credentials",
+	})
+
+	matrixServer := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.Method == "PUT" && strings.Contains(r.URL.Path, "/send/"+string(schema.MatrixEventTypeMessage)+"/") {
+			w.Header().Set("Content-Type", "application/json")
+			json.NewEncoder(w).Encode(map[string]string{"event_id": "$msg1"})
+			return
+		}
+		state.handler().ServeHTTP(w, r)
+	}))
+	t.Cleanup(matrixServer.Close)
+
+	client, err := messaging.NewClient(messaging.ClientConfig{HomeserverURL: matrixServer.URL})
+	if err != nil {
+		t.Fatalf("creating client: %v", err)
+	}
+	session, err := client.SessionFromToken(daemon.machine.UserID(), "test-token")
+	if err != nil {
+		t.Fatalf("creating session: %v", err)
+	}
+	t.Cleanup(func() { session.Close() })
+
+	socketDir := testutil.SocketDir(t)
+	launcherSocket := filepath.Join(socketDir, "launcher.sock")
+
+	var (
+		launcherMu    sync.Mutex
+		ipcActions    []string
+		ipcPrincipals []string
+	)
+	listener := startMockLauncher(t, launcherSocket, func(request launcherIPCRequest) launcherIPCResponse {
+		launcherMu.Lock()
+		ipcActions = append(ipcActions, string(request.Action))
+		ipcPrincipals = append(ipcPrincipals, request.Principal)
+		launcherMu.Unlock()
+		return launcherIPCResponse{OK: true, ProxyPID: 99999}
+	})
+	t.Cleanup(func() { listener.Close() })
+
+	agentTestEntity := testEntity(t, daemon.fleet, "agent/test")
+	daemon.runDir = principal.DefaultRunDir
+	daemon.session = session
+	daemon.configRoomID = mustRoomID(configRoomID)
+	daemon.launcherSocket = launcherSocket
+	daemon.setRunning(agentTestEntity)
+	// Old spec matches what the new template would produce (same command),
+	// so structurallyChanged returns false. Only the CredentialRef differs.
+	daemon.lastSpecs[agentTestEntity] = &schema.SandboxSpec{
+		Command: []string{"/bin/agent"},
+	}
+	// Store the old template with a different CredentialRef.
+	daemon.lastTemplates[agentTestEntity] = &schema.TemplateContent{
+		Command:       []string{"/bin/agent"},
+		CredentialRef: "bureau/old-creds:builder",
+	}
+	daemon.adminSocketPathFunc = func(principal ref.Entity) string {
+		return filepath.Join(socketDir, principal.AccountLocalpart()+".admin.sock")
+	}
+	daemon.logger = slog.New(slog.NewJSONHandler(os.Stderr, nil))
+	t.Cleanup(daemon.stopAllLayoutWatchers)
+	t.Cleanup(daemon.stopAllHealthMonitors)
+
+	if err := daemon.reconcile(context.Background()); err != nil {
+		t.Fatalf("reconcile() error: %v", err)
+	}
+
+	launcherMu.Lock()
+	defer launcherMu.Unlock()
+
+	// The CredentialRef changed from "bureau/old-creds:builder" to
+	// "bureau/new-creds:builder". Even though the SandboxSpec is
+	// structurally identical, the daemon should detect the CredentialRef
+	// change and restart the sandbox (destroy + create).
+	foundDestroy := false
+	for index, action := range ipcActions {
+		if action == "destroy-sandbox" && ipcPrincipals[index] == "agent/test" {
+			foundDestroy = true
+			break
+		}
+	}
+	if !foundDestroy {
+		t.Errorf("expected destroy-sandbox for credential_ref change, got actions: %v", ipcActions)
+	}
+
+	// The previous spec should be saved as a rollback target.
+	if daemon.previousSpecs[agentTestEntity] == nil {
+		t.Error("expected previousSpecs populated after credential_ref restart")
+	}
+}
+
 func TestReconcilePayloadOnlyChangeHotReloads(t *testing.T) {
 	t.Parallel()
 

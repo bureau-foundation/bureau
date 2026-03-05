@@ -451,6 +451,16 @@ func (l *Launcher) buildSandboxCommand(principalLocalpart string, spec *schema.S
 		}
 		for filename, value := range secretFiles {
 			secretPath := filepath.Join(secretsDir, filename)
+			// Defense-in-depth: verify the resolved path is still inside
+			// secretsDir after filepath.Join resolves any relative components.
+			// The daemon validates SecretBinding.File values upstream, but
+			// the launcher must independently enforce containment because it
+			// writes to the host filesystem.
+			cleanPath := filepath.Clean(secretPath)
+			cleanDir := filepath.Clean(secretsDir) + string(filepath.Separator)
+			if !strings.HasPrefix(cleanPath, cleanDir) {
+				return nil, fmt.Errorf("secret file %q resolves outside secrets directory (path traversal rejected)", filename)
+			}
 			if err := os.WriteFile(secretPath, []byte(value), 0600); err != nil {
 				return nil, fmt.Errorf("writing secret file %q: %w", filename, err)
 			}

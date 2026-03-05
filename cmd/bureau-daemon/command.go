@@ -38,7 +38,7 @@ type commandDefinition struct {
 	requiredPowerLevel int
 	needsWorkspace     bool
 	handler            func(ctx context.Context, d *Daemon, roomID ref.RoomID, eventID ref.EventID,
-		command schema.CommandMessage) (any, error)
+		sender ref.UserID, command schema.CommandMessage) (any, error)
 }
 
 // builtinCommands maps command names to their definitions. Commands not
@@ -143,7 +143,7 @@ func (d *Daemon) handleCommand(ctx context.Context, roomID ref.RoomID, eventID r
 	}
 
 	// Execute the handler.
-	result, err := definition.handler(ctx, d, roomID, eventID, command)
+	result, err := definition.handler(ctx, d, roomID, eventID, sender, command)
 	if err != nil {
 		d.postCommandError(ctx, roomID, eventID, command, start, err.Error())
 		return
@@ -344,7 +344,7 @@ func (d *Daemon) postCommandError(ctx context.Context, roomID ref.RoomID, comman
 
 // handleWorkspaceList lists local workspace directories under the
 // daemon's workspaceRoot (e.g., /var/bureau/workspace/).
-func handleWorkspaceList(ctx context.Context, d *Daemon, roomID ref.RoomID, _ ref.EventID, command schema.CommandMessage) (any, error) {
+func handleWorkspaceList(ctx context.Context, d *Daemon, roomID ref.RoomID, _ ref.EventID, _ ref.UserID, command schema.CommandMessage) (any, error) {
 	entries, err := os.ReadDir(d.workspaceRoot)
 	if err != nil {
 		if os.IsNotExist(err) {
@@ -374,7 +374,7 @@ func handleWorkspaceList(ctx context.Context, d *Daemon, roomID ref.RoomID, _ re
 
 // handleWorkspaceStatus reports the existence and basic metadata of a
 // workspace directory.
-func handleWorkspaceStatus(ctx context.Context, d *Daemon, roomID ref.RoomID, _ ref.EventID, command schema.CommandMessage) (any, error) {
+func handleWorkspaceStatus(ctx context.Context, d *Daemon, roomID ref.RoomID, _ ref.EventID, _ ref.UserID, command schema.CommandMessage) (any, error) {
 	path := d.workspacePath(command.Workspace)
 
 	info, err := os.Stat(path)
@@ -407,7 +407,7 @@ func handleWorkspaceStatus(ctx context.Context, d *Daemon, roomID ref.RoomID, _ 
 
 // handleWorkspaceDu runs du -sh on the workspace directory and returns
 // the output.
-func handleWorkspaceDu(ctx context.Context, d *Daemon, roomID ref.RoomID, _ ref.EventID, command schema.CommandMessage) (any, error) {
+func handleWorkspaceDu(ctx context.Context, d *Daemon, roomID ref.RoomID, _ ref.EventID, _ ref.UserID, command schema.CommandMessage) (any, error) {
 	path := d.workspacePath(command.Workspace)
 
 	if _, err := os.Stat(path); os.IsNotExist(err) {
@@ -441,7 +441,7 @@ func handleWorkspaceDu(ctx context.Context, d *Daemon, roomID ref.RoomID, _ ref.
 
 // handleWorkspaceWorktreeList runs git worktree list on the workspace's
 // project-level .bare directory and returns the output.
-func handleWorkspaceWorktreeList(ctx context.Context, d *Daemon, roomID ref.RoomID, _ ref.EventID, command schema.CommandMessage) (any, error) {
+func handleWorkspaceWorktreeList(ctx context.Context, d *Daemon, roomID ref.RoomID, _ ref.EventID, _ ref.UserID, command schema.CommandMessage) (any, error) {
 	bareDir := d.workspaceProjectBareDir(command.Workspace)
 
 	if _, err := os.Stat(bareDir); os.IsNotExist(err) {
@@ -475,7 +475,7 @@ func handleWorkspaceWorktreeList(ctx context.Context, d *Daemon, roomID ref.Room
 // handleWorkspaceFetch runs git fetch --all in the workspace's
 // project-level .bare directory, using flock to serialize concurrent
 // fetches.
-func handleWorkspaceFetch(ctx context.Context, d *Daemon, roomID ref.RoomID, _ ref.EventID, command schema.CommandMessage) (any, error) {
+func handleWorkspaceFetch(ctx context.Context, d *Daemon, roomID ref.RoomID, _ ref.EventID, _ ref.UserID, command schema.CommandMessage) (any, error) {
 	bareDir := d.workspaceProjectBareDir(command.Workspace)
 
 	if _, err := os.Stat(bareDir); os.IsNotExist(err) {

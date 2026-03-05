@@ -8,6 +8,7 @@ go_library(
     srcs = [
         "action.go",
         "authorization.go",
+        "credential_ref.go",
         "daemon_status.go",
         "doc.go",
         "events.go",

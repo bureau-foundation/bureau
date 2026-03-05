@@ -4,6 +4,7 @@
 package schema
 
 import (
+	"encoding/json"
 	"testing"
 
 	"github.com/bureau-foundation/bureau/lib/ref"
@@ -169,6 +170,7 @@ func TestFleetRoomPowerLevels(t *testing.T) {
 		EventTypeMachineDefinition,
 		EventTypeFleetConfig,
 		EventTypeFleetCache,
+		EventTypeEnvironmentBuild,
 	} {
 		if events[eventType] != 100 {
 			t.Errorf("%s power level = %v, want 100 (admin-only)", eventType, events[eventType])
@@ -190,5 +192,87 @@ func TestFleetRoomPowerLevels(t *testing.T) {
 	// Fleet rooms are admin-invite-only.
 	if levels["invite"] != 100 {
 		t.Errorf("invite = %v, want 100", levels["invite"])
+	}
+}
+
+func TestFleetCacheContentComposeFields(t *testing.T) {
+	original := FleetCacheContent{
+		URL:             "https://cache.infra.bureau.foundation",
+		Name:            "main",
+		PublicKeys:      []string{"cache-1:key1"},
+		ComposeTemplate: "bureau/template:nix-builder",
+		DefaultSystem:   "x86_64-linux",
+	}
+
+	data, err := json.Marshal(original)
+	if err != nil {
+		t.Fatalf("Marshal: %v", err)
+	}
+
+	var decoded FleetCacheContent
+	if err := json.Unmarshal(data, &decoded); err != nil {
+		t.Fatalf("Unmarshal: %v", err)
+	}
+
+	if decoded.ComposeTemplate != original.ComposeTemplate {
+		t.Errorf("ComposeTemplate = %q, want %q", decoded.ComposeTemplate, original.ComposeTemplate)
+	}
+	if decoded.DefaultSystem != original.DefaultSystem {
+		t.Errorf("DefaultSystem = %q, want %q", decoded.DefaultSystem, original.DefaultSystem)
+	}
+
+	// Omitempty: absent compose fields should not appear in JSON.
+	minimal := FleetCacheContent{
+		URL:        "https://example.com",
+		PublicKeys: []string{"key"},
+	}
+	minData, _ := json.Marshal(minimal)
+	var raw map[string]any
+	json.Unmarshal(minData, &raw)
+	if _, exists := raw["compose_template"]; exists {
+		t.Error("compose_template should be omitted when empty")
+	}
+	if _, exists := raw["default_system"]; exists {
+		t.Error("default_system should be omitted when empty")
+	}
+}
+
+func TestEnvironmentBuildContentRoundTrip(t *testing.T) {
+	original := EnvironmentBuildContent{
+		Profile:   "sysadmin-runner-env",
+		FlakeRef:  "github:bureau-foundation/bureau/abc123",
+		System:    "x86_64-linux",
+		StorePath: "/nix/store/xyz-bureau-sysadmin-runner-env",
+		Machine:   "bureau/fleet/prod/machine/workstation",
+		Timestamp: "2026-03-04T10:30:00Z",
+	}
+
+	data, err := json.Marshal(original)
+	if err != nil {
+		t.Fatalf("Marshal: %v", err)
+	}
+
+	var decoded EnvironmentBuildContent
+	if err := json.Unmarshal(data, &decoded); err != nil {
+		t.Fatalf("Unmarshal: %v", err)
+	}
+
+	if decoded.Profile != original.Profile {
+		t.Errorf("Profile = %q, want %q", decoded.Profile, original.Profile)
+	}
+	if decoded.FlakeRef != original.FlakeRef {
+		t.Errorf("FlakeRef = %q, want %q", decoded.FlakeRef, original.FlakeRef)
+	}
+	if decoded.System != original.System {
+		t.Errorf("System = %q, want %q", decoded.System, original.System)
+	}
+	if decoded.StorePath != original.StorePath {
+		t.Errorf("StorePath = %q, want %q", decoded.StorePath, original.StorePath)
+	}
+	if decoded.Machine != original.Machine {
+		t.Errorf("Machine = %q, want %q", decoded.Machine, original.Machine)
+	}
+	if decoded.Timestamp != original.Timestamp {
+		t.Errorf("Timestamp = %q, want %q", decoded.Timestamp, original.Timestamp)
 	}
 }

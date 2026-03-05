@@ -362,6 +362,8 @@ func (d *Daemon) reconcile(ctx context.Context) error {
 		// launcher creates only a proxy process (no bwrap sandbox).
 		var sandboxSpec *schema.SandboxSpec
 		var resolvedTemplate *schema.TemplateContent
+		var credentialRefAuthor ref.UserID
+		var templateEncryptedCredentials string
 		var pipelineTicketTokenDir string // set when pipeline executor overlay creates a ticket token
 		if assignment.Template != "" {
 			template, err := resolveTemplate(ctx, d.session, assignment.Template, d.machine.Server())
@@ -385,6 +387,97 @@ func (d *Daemon) reconcile(ctx context.Context) error {
 					continue
 				}
 			}
+
+			// If the resolved template declares a CredentialRef, resolve
+			// the template chain again with author tracking to get the
+			// sender of the template that introduced the CredentialRef.
+			// This second resolution is only performed when CredentialRef
+			// is present — the common case (no credential ref) uses the
+			// cheaper single-event fetch path.
+			if template.CredentialRef != "" {
+				resolveResult, resolveErr := resolveTemplateWithAuthor(ctx, d.session, assignment.Template, d.machine.Server())
+				if resolveErr != nil {
+					d.logger.Error("resolving template author for credential ref",
+						"principal", principal,
+						"template", assignment.Template,
+						"credential_ref", template.CredentialRef,
+						"error", resolveErr,
+					)
+					d.recordStartFailure(principal, failureCategoryTemplate, resolveErr.Error())
+					continue
+				}
+				// Apply extra inherits with author tracking.
+				if len(assignment.ExtraInherits) > 0 {
+					resolveResult, resolveErr = resolveExtraInheritsWithAuthor(ctx, d.session,
+						resolveResult, assignment.ExtraInherits, d.machine.Server())
+					if resolveErr != nil {
+						d.logger.Error("resolving extra inherits for credential ref author",
+							"principal", principal,
+							"error", resolveErr,
+						)
+						d.recordStartFailure(principal, failureCategoryTemplate, resolveErr.Error())
+						continue
+					}
+				}
+				credentialRefAuthor = resolveResult.CredentialRefAuthor
+
+				// Substitute variables in the credential ref before parsing.
+				// Template credential refs may contain ${FLEET_ROOM} which
+				// must be resolved to the fleet's room alias localpart.
+				substitutedCredRef := d.substituteCredentialRefVariables(template.CredentialRef)
+
+				// Authorize and read the template-bound credentials.
+				parsedCredRef, parseErr := schema.ParseCredentialRef(substitutedCredRef)
+				if parseErr != nil {
+					d.logger.Error("parsing credential ref from template",
+						"principal", principal,
+						"credential_ref", template.CredentialRef,
+						"error", parseErr,
+					)
+					d.recordStartFailure(principal, failureCategoryCredentials, parseErr.Error())
+					continue
+				}
+
+				// Read the credentials (which also resolves the room alias).
+				// This must happen AFTER the authorization check to avoid
+				// leaking credential existence via timing — but the auth
+				// check needs the room ID. readCredentialsByRef resolves
+				// the alias first, then reads the credentials.
+				templateCreds, credRoomID, readErr := d.readCredentialsByRef(ctx, parsedCredRef)
+				if readErr != nil {
+					d.logger.Error("reading template-bound credentials",
+						"principal", principal,
+						"credential_ref", template.CredentialRef,
+						"error", readErr,
+					)
+					d.recordStartFailure(principal, failureCategoryCredentials, "cannot read template-bound credentials")
+					continue
+				}
+
+				// Authorize: the machine (daemon's identity) or the
+				// template author must have credential access.
+				accessResult := d.checkCredentialAccess(
+					ctx, parsedCredRef, credRoomID,
+					d.machine.UserID(), credentialRefAuthor,
+				)
+				if !accessResult.Allowed {
+					d.logger.Warn("template credential access denied",
+						"principal", principal,
+						"credential_ref", template.CredentialRef,
+						"reason", accessResult.Reason,
+					)
+					d.recordStartFailure(principal, failureCategoryCredentials, "template credential access denied")
+					continue
+				}
+				d.logger.Info("template credential access granted",
+					"principal", principal,
+					"credential_ref", template.CredentialRef,
+					"reason", accessResult.Reason,
+				)
+
+				templateEncryptedCredentials = templateCreds.Ciphertext
+			}
+
 			resolvedTemplate = template
 
 			if template.HealthCheck != nil {
@@ -413,6 +506,25 @@ func (d *Daemon) reconcile(ctx context.Context) error {
 					"template", assignment.Template,
 					"command", sandboxSpec.Command,
 				)
+
+				// When the template provides credentials via CredentialRef,
+				// check AllowedPipelines before proceeding. This restricts
+				// which pipeline definitions may run with the template's
+				// bound credentials — defense-in-depth for high-value
+				// credentials like signing keys or cache tokens.
+				if templateEncryptedCredentials != "" && resolvedTemplate != nil {
+					pipelineRef, _ := sandboxSpec.Payload["pipeline_ref"].(string)
+					if err := checkAllowedPipelines(resolvedTemplate.AllowedPipelines, pipelineRef); err != nil {
+						d.logger.Error("pipeline not allowed by template credential restrictions",
+							"principal", principal,
+							"pipeline_ref", pipelineRef,
+							"credential_ref", resolvedTemplate.CredentialRef,
+							"error", err,
+						)
+						d.recordStartFailure(principal, failureCategoryCredentials, err.Error())
+						continue
+					}
+				}
 
 				// The pipeline executor requires a pip- ticket. Create
 				// it now and inject ticket context into the sandbox spec
@@ -460,7 +572,7 @@ func (d *Daemon) reconcile(ctx context.Context) error {
 
 				ticketID, ticketTriggerContent, ticketErr := d.createPipelineTicket(
 					ctx, ticketSocketPath, principal,
-					ticketRoomID, pipelineRef, pipelineVariables)
+					ticketRoomID, pipelineRef, pipelineVariables, assignment.Template)
 				if ticketErr != nil {
 					d.logger.Error("creating pipeline ticket for executor",
 						"principal", principal,
@@ -779,18 +891,19 @@ func (d *Daemon) reconcile(ctx context.Context) error {
 
 		// Send create-sandbox to the launcher.
 		response, err := d.launcherRequest(ctx, launcherIPCRequest{
-			Action:               ipc.ActionCreateSandbox,
-			Principal:            principal.AccountLocalpart(),
-			EncryptedCredentials: credentials.Ciphertext,
-			Grants:               grants,
-			SandboxSpec:          sandboxSpec,
-			TriggerContent:       triggerContents[principal],
-			ServiceMounts:        serviceMounts,
-			TokenDirectory:       tokenDirectory,
-			TelemetrySocketPath:  telemetrySocketPath,
-			TelemetryTokenPath:   telemetryTokenPath,
-			LogSessionID:         logSessionID,
-			WorkspaceRoomID:      workspaceRoomID,
+			Action:                       ipc.ActionCreateSandbox,
+			Principal:                    principal.AccountLocalpart(),
+			EncryptedCredentials:         credentials.Ciphertext,
+			TemplateEncryptedCredentials: templateEncryptedCredentials,
+			Grants:                       grants,
+			SandboxSpec:                  sandboxSpec,
+			TriggerContent:               triggerContents[principal],
+			ServiceMounts:                serviceMounts,
+			TokenDirectory:               tokenDirectory,
+			TelemetrySocketPath:          telemetrySocketPath,
+			TelemetryTokenPath:           telemetryTokenPath,
+			LogSessionID:                 logSessionID,
+			WorkspaceRoomID:              workspaceRoomID,
 		})
 		if err != nil {
 			d.logger.Error("create-sandbox IPC failed", "principal", principal, "error", err)
@@ -1032,15 +1145,31 @@ func (d *Daemon) reconcileRunningPrincipal(ctx context.Context, principal ref.En
 		return
 	}
 
+	// Check for CredentialRef changes separately from the spec comparison.
+	// CredentialRef is on the TemplateContent, not the SandboxSpec, so
+	// structurallyChanged doesn't catch it. A CredentialRef change means
+	// the sandbox was created with different (or no) template credentials
+	// and needs a full restart so the create loop can re-resolve and
+	// re-authorize the new credential reference.
+	oldTemplate := d.lastTemplates[principal]
+	credentialRefChanged := oldTemplate != nil && template.CredentialRef != oldTemplate.CredentialRef
+
 	// Structural changes take precedence: destroy the sandbox and let the
 	// "create missing" pass in reconcile() rebuild it with the new spec.
 	// This handles changes to command, mounts, namespaces, resources,
 	// security, environment variables, etc. — anything that requires a
-	// new bwrap invocation.
-	if structurallyChanged(oldSpec, newSpec) {
-		d.logger.Info("structural change detected, restarting sandbox",
+	// new bwrap invocation. CredentialRef changes also trigger a restart
+	// because the sandbox's injected credentials are stale.
+	if structurallyChanged(oldSpec, newSpec) || credentialRefChanged {
+		restartReason := "structural change"
+		if credentialRefChanged {
+			restartReason = fmt.Sprintf("credential_ref changed (%q → %q)",
+				oldTemplate.CredentialRef, template.CredentialRef)
+		}
+		d.logger.Info("change detected, restarting sandbox",
 			"principal", principal,
 			"template", assignment.Template,
+			"reason", restartReason,
 		)
 
 		// Save the current spec as the rollback target before destroying.

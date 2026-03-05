@@ -647,3 +647,144 @@ func buildPipelineCommandEvent(eventID ref.EventID, sender ref.UserID, pipelineR
 		Content: content,
 	}
 }
+
+// --- mergeTemplateOntoSpec tests ---
+
+func TestMergeTemplateOntoSpec_FilesystemAppended(t *testing.T) {
+	t.Parallel()
+
+	spec := &schema.SandboxSpec{
+		Filesystem: []schema.TemplateMount{
+			{Source: "/usr/bin/executor", Dest: "/usr/bin/executor", Mode: schema.MountModeRO},
+		},
+	}
+	template := &schema.TemplateContent{
+		Filesystem: []schema.TemplateMount{
+			{Source: "/nix/store", Dest: "/nix/store", Mode: schema.MountModeRO},
+			{Source: "/nix/var/nix/daemon-socket/socket", Dest: "/nix/var/nix/daemon-socket/socket", Mode: schema.MountModeRW},
+		},
+	}
+
+	mergeTemplateOntoSpec(spec, template)
+
+	if length := len(spec.Filesystem); length != 3 {
+		t.Fatalf("expected 3 filesystem mounts, got %d", length)
+	}
+	// Base spec mount should be first.
+	if spec.Filesystem[0].Source != "/usr/bin/executor" {
+		t.Errorf("first mount should be base spec's, got %s", spec.Filesystem[0].Source)
+	}
+	// Template mounts should follow.
+	if spec.Filesystem[1].Source != "/nix/store" {
+		t.Errorf("second mount should be template's /nix/store, got %s", spec.Filesystem[1].Source)
+	}
+}
+
+func TestMergeTemplateOntoSpec_SecretsSet(t *testing.T) {
+	t.Parallel()
+
+	spec := &schema.SandboxSpec{}
+	template := &schema.TemplateContent{
+		Secrets: []schema.SecretBinding{
+			{Key: "ATTIC_PUSH_TOKEN", Env: "ATTIC_TOKEN"},
+		},
+	}
+
+	mergeTemplateOntoSpec(spec, template)
+
+	if length := len(spec.Secrets); length != 1 {
+		t.Fatalf("expected 1 secret binding, got %d", length)
+	}
+	if spec.Secrets[0].Key != "ATTIC_PUSH_TOKEN" {
+		t.Errorf("secret key = %q, want ATTIC_PUSH_TOKEN", spec.Secrets[0].Key)
+	}
+	if spec.Secrets[0].Env != "ATTIC_TOKEN" {
+		t.Errorf("secret env = %q, want ATTIC_TOKEN", spec.Secrets[0].Env)
+	}
+}
+
+func TestMergeTemplateOntoSpec_EnvVarsBaseWins(t *testing.T) {
+	t.Parallel()
+
+	spec := &schema.SandboxSpec{
+		EnvironmentVariables: map[string]string{
+			"BUREAU_SANDBOX": "1",
+			"PATH":           "/usr/bin",
+		},
+	}
+	template := &schema.TemplateContent{
+		EnvironmentVariables: map[string]string{
+			"PATH":         "/nix/var/nix/profiles/default/bin",
+			"NIX_CONF_DIR": "/etc/nix",
+		},
+	}
+
+	mergeTemplateOntoSpec(spec, template)
+
+	// Base spec's PATH should win.
+	if spec.EnvironmentVariables["PATH"] != "/usr/bin" {
+		t.Errorf("PATH should be base spec's value, got %q", spec.EnvironmentVariables["PATH"])
+	}
+	// Template's NIX_CONF_DIR should be added (no conflict).
+	if spec.EnvironmentVariables["NIX_CONF_DIR"] != "/etc/nix" {
+		t.Errorf("NIX_CONF_DIR should be set from template, got %q", spec.EnvironmentVariables["NIX_CONF_DIR"])
+	}
+	// Base spec's BUREAU_SANDBOX should remain.
+	if spec.EnvironmentVariables["BUREAU_SANDBOX"] != "1" {
+		t.Errorf("BUREAU_SANDBOX should be preserved, got %q", spec.EnvironmentVariables["BUREAU_SANDBOX"])
+	}
+}
+
+func TestMergeTemplateOntoSpec_EnvPathBaseWins(t *testing.T) {
+	t.Parallel()
+
+	spec := &schema.SandboxSpec{
+		EnvironmentPath: "/nix/store/abc-pipeline-env",
+	}
+	template := &schema.TemplateContent{
+		Environment: "/nix/store/xyz-template-env",
+	}
+
+	mergeTemplateOntoSpec(spec, template)
+
+	// Base spec's EnvironmentPath should take priority.
+	if spec.EnvironmentPath != "/nix/store/abc-pipeline-env" {
+		t.Errorf("EnvironmentPath should be base spec's, got %q", spec.EnvironmentPath)
+	}
+}
+
+func TestMergeTemplateOntoSpec_EnvPathFromTemplate(t *testing.T) {
+	t.Parallel()
+
+	spec := &schema.SandboxSpec{
+		EnvironmentPath: "", // no base env path
+	}
+	template := &schema.TemplateContent{
+		Environment: "/nix/store/xyz-template-env",
+	}
+
+	mergeTemplateOntoSpec(spec, template)
+
+	// Template's environment should be used when base has none.
+	if spec.EnvironmentPath != "/nix/store/xyz-template-env" {
+		t.Errorf("EnvironmentPath should be template's, got %q", spec.EnvironmentPath)
+	}
+}
+
+func TestMergeTemplateOntoSpec_CreateDirsAppended(t *testing.T) {
+	t.Parallel()
+
+	spec := &schema.SandboxSpec{}
+	template := &schema.TemplateContent{
+		CreateDirs: []string{"/nix/var/nix/daemon-socket"},
+	}
+
+	mergeTemplateOntoSpec(spec, template)
+
+	if length := len(spec.CreateDirs); length != 1 {
+		t.Fatalf("expected 1 create dir, got %d", length)
+	}
+	if spec.CreateDirs[0] != "/nix/var/nix/daemon-socket" {
+		t.Errorf("create dir = %q, want /nix/var/nix/daemon-socket", spec.CreateDirs[0])
+	}
+}

@@ -155,12 +155,28 @@ and the in-memory copy is zeroed. The machine's public key is
 published to Matrix so that operators and connectors can encrypt
 credentials to it.
 
-At the bottom are **per-principal credential bundles**, encrypted to
-one or more machine keys plus the operator's escrow key. A credential
-bundle for a principal running on three machines is encrypted to all
-three machine keys — any of the three launchers can decrypt it, but
-no other machine can. Adding or removing a machine from the
-recipient list requires re-encryption of the bundle.
+At the bottom are **credential bundles**, encrypted to one or more
+machine keys plus the operator's escrow key. Credential bundles exist
+at two scopes:
+
+- **Per-principal bundles** live in a machine's config room, encrypted
+  to that machine's key. A principal running on three machines has
+  three separate bundles, each encrypted to the respective machine's
+  key. These are the credentials for a specific principal on a
+  specific machine — Matrix tokens, API keys, service credentials.
+
+- **Fleet-level bundles** live in the fleet room, encrypted to all
+  machine keys in the fleet. A single ciphertext is decryptable by
+  any fleet machine's launcher. These are shared credentials that
+  multiple pipelines or principals on any machine may need — cache
+  push tokens, deploy keys, shared service credentials. age natively
+  supports multiple recipients (each recipient has a separately-
+  encrypted copy of the symmetric file key in the age header).
+
+Adding or removing a machine from a credential bundle's recipient
+list requires re-encryption. For fleet-level bundles, `bureau machine
+provision` automatically reseals all fleet credentials to include the
+new machine's key.
 
 This hierarchy means:
 
@@ -276,9 +292,59 @@ replaces the specified credential, re-encrypts, and publishes the
 updated bundle. The target machine's daemon detects the state event
 change through its sync loop and cycles the affected proxy.
 
+### Fleet-Level Credentials
+
+Some credentials are not per-principal but per-fleet: shared secrets
+used by multiple principals or pipelines across any machine in the
+fleet. The Attic binary cache push token is the canonical example —
+any machine in the fleet may need to push composed environments to
+the cache.
+
+Fleet-level credentials are `m.bureau.credentials` state events in
+the fleet room (not a machine config room). The ciphertext is sealed
+to every machine key in the fleet, so any machine's launcher can
+decrypt it. The state key is an operator-chosen name (e.g.,
+`nix-builder`), not a principal localpart.
+
+**Provisioning** reads all machine public keys from the fleet's
+machine room, seals to all of them plus the escrow key, and publishes
+to the fleet room:
+
+```bash
+bureau credentials provision \
+    --fleet bureau/fleet/prod \
+    --state-key nix-builder \
+    --secret ATTIC_PUSH_TOKEN
+```
+
+**Auto-reseal on machine join.** When `bureau machine provision` adds
+a new machine to the fleet, it reads all fleet-level credential
+events from the fleet room, decrypts each (using the operator's
+escrow key or a machine that already has access), re-encrypts with
+the new machine's key added to the recipient list, and publishes the
+updated events. The new machine can access fleet credentials
+immediately after provisioning.
+
+**Revocation on machine removal.** When a machine is removed from the
+fleet, fleet credentials should be resealed without the removed
+machine's key. `bureau machine revoke` handles this as part of its
+cleanup pass. Until resealing completes, the removed machine's
+launcher could still decrypt fleet credentials if it retained a copy
+— but the machine's Matrix account is deactivated, preventing it
+from fetching the ciphertext from Matrix.
+
+**Room membership is the trust boundary.** The daemon must be a member
+of the fleet room to read fleet credential events. Machines not in
+the fleet room cannot access fleet credentials regardless of key
+sealing. This provides two independent access controls: cryptographic
+(age encryption to specific keys) and authorization (Matrix room
+membership).
+
 ### What Gets Published to Matrix
 
-A credential state event in the machine's config room contains:
+Credential state events live in either a machine's config room
+(per-principal credentials) or the fleet room (fleet-level
+credentials). The structure is the same in both cases:
 
 - **Version number** for schema evolution.
 - **Principal identity** — which Matrix user ID owns these credentials.
@@ -353,6 +419,124 @@ If the proxy crashes, the launcher restarts it and re-delivers
 credentials via the same stdin pipe mechanism. The sandbox sees a
 brief interruption in socket availability, then service resumes.
 Credentials are never cached on disk.
+
+### Template Credential References
+
+Templates can reference credentials from any room via the
+`credential_ref` field, using the same `<room-ref>:<state-key>`
+format as template inheritance references. The room reference can be
+a variable (`${FLEET_ROOM}`, `${CONFIG_ROOM}`), a literal room alias,
+or a literal room ID. The state key identifies the
+`m.bureau.credentials` event in that room.
+
+```jsonc
+{
+    "credential_ref": "${FLEET_ROOM}:nix-builder",
+    "secrets": [
+        {"key": "ATTIC_PUSH_TOKEN", "env": "ATTIC_TOKEN"}
+    ]
+}
+```
+
+This is an explicit pointer — the daemon does not search or fall
+back. It reads the specified event from the specified room. If the
+daemon is not a member of the referenced room, credential resolution
+fails with a clear error.
+
+The `secrets` field (a `SecretBinding` array) maps credential names
+from the encrypted bundle to sandbox injection points: environment
+variables via `env`, files via `file`, or both. The launcher extracts
+the named keys from the decrypted bundle and injects them into the
+sandbox. Keys not listed in `secrets` are not injected — the
+template controls exactly which credentials the sandbox receives.
+
+### Template Credential Authorization
+
+Templates are published as state events in rooms. Room power levels
+control who can publish templates. The template author — the Matrix
+user who published the template state event — determines what
+credentials a pipeline execution can access.
+
+The authorization rule: **at least one principal in the execution
+chain — the requester (who sent `pipeline.execute`) or the template
+author (who published the template) — must have access to the
+referenced credentials.** The daemon checks this at launch time, not
+at template publication time, so credential revocation takes effect
+on the next execution attempt.
+
+"Has credential access" means one of:
+
+- The actor has admin power level (PL 100) in the room containing the
+  credentials.
+- The actor has a specific `credential/use` grant for the referenced
+  credential (see [authorization.md](authorization.md)).
+- The actor is the credential identity itself (they own the
+  credentials).
+
+The condition matrix:
+
+- **Operator runs operator-defined template with fleet credentials**:
+  template author has credential access. Allowed.
+- **User triggers operator-defined template with fleet credentials**:
+  template author has credential access. Allowed (the operator
+  pre-authorized this binding).
+- **Operator creates inline template with credentials**: requester
+  has credential access (admin). Allowed.
+- **User creates template referencing fleet credentials**: neither
+  has credential access. Rejected.
+- **User creates template with own credentials**: user is the
+  credential identity. Allowed.
+- **Credential revoked since template publication**: launch-time
+  check fails. Rejected.
+
+This two-actor model allows operators to publish templates that bind
+high-value credentials, and non-privileged users to trigger those
+templates without directly accessing the credentials. The credentials
+flow through the template — the user never sees them, and the
+template author's power level serves as the authorization anchor.
+
+### Allowed Pipelines
+
+Templates may optionally declare `allowed_pipelines` — a list of
+pipeline references that can run with the template's credentials.
+When present, the daemon rejects execution of pipelines not in the
+list. When absent, any pipeline can use the template.
+
+```jsonc
+{
+    "credential_ref": "${FLEET_ROOM}:nix-builder",
+    "secrets": [
+        {"key": "ATTIC_PUSH_TOKEN", "env": "ATTIC_TOKEN"}
+    ],
+    "allowed_pipelines": [
+        "bureau/pipeline:nix-compose"
+    ]
+}
+```
+
+This is defense-in-depth for high-value credentials: an operator
+deploying fleet infrastructure sets `allowed_pipelines` to restrict
+the Attic push token to the composition pipeline. An operator doing
+ad-hoc work omits it.
+
+Pipeline definitions are state events in rooms. If a template
+restricts execution to specific pipeline references, those pipeline
+definitions should be in rooms with operator-level power requirements
+for state event publication. A user who could modify an approved
+pipeline definition could substitute malicious code — room power
+levels prevent this.
+
+### Recovery
+
+When the daemon crashes and restarts, it re-discovers orphaned
+pipeline tickets through /sync. Recovery must re-resolve template
+credentials to provide them to the restarted executor's sandbox.
+The ticket's `PipelineExecutionContent` stores a `template_ref`
+field at creation time. On recovery, the daemon resolves the template
+and reads the credentials without re-checking authorization — the
+ticket's existence proves authorization already passed at creation
+time, and re-checking would be fragile against transient power level
+changes during the pipeline's execution.
 
 ---
 
@@ -867,6 +1051,11 @@ co-sign) could mitigate this but adds operational friction.
 - [fleet.md](fleet.md) describes machine provisioning and
   deprovisioning, which interacts with credential lifecycle (new
   machines need credentials, terminated machines need cleanup).
+- [pipelines.md](pipelines.md) describes pipeline execution and how
+  template-bound credentials are delivered to pipeline sandboxes.
+- [nix.md](nix.md) describes environment composition, the primary
+  consumer of fleet-level template credentials (`credential_ref` for
+  the Attic push token).
 - [information-architecture.md](information-architecture.md) defines
   the Matrix room structure where credential state events are stored.
 - [stewardship.md](stewardship.md) — credential rotation stewardship

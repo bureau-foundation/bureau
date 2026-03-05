@@ -113,7 +113,21 @@ type Request struct {
 	// credentials.
 	//
 	// Mutually exclusive with EncryptedCredentials — set one or neither.
+	// Can coexist with TemplateEncryptedCredentials (key overlap is
+	// a hard error).
 	DirectCredentials map[string]string `cbor:"direct_credentials,omitempty"`
+
+	// TemplateEncryptedCredentials is the base64-encoded age ciphertext
+	// from a template-bound m.bureau.credentials state event (referenced
+	// by CredentialRef on the template). The launcher decrypts this
+	// separately from EncryptedCredentials and merges the resulting
+	// credential maps. Key collision between the two sources is a hard
+	// error — the sandbox is not created.
+	//
+	// Can coexist with either EncryptedCredentials or DirectCredentials.
+	// The daemon sets this when the resolved template declares a
+	// CredentialRef and the authorization check passes.
+	TemplateEncryptedCredentials string `cbor:"template_encrypted_credentials,omitempty"`
 
 	// Grants are the pre-resolved authorization grants for this principal's
 	// proxy. The daemon resolves these from the authorization index (when

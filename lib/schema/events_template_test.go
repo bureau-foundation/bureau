@@ -5,6 +5,7 @@ package schema
 
 import (
 	"encoding/json"
+	"strings"
 	"testing"
 
 	"github.com/bureau-foundation/bureau/lib/ref"
@@ -938,4 +939,190 @@ func TestHealthCheckTypeOnTemplateRoundTrip(t *testing.T) {
 			t.Error("type should be omitted when empty (defaults to http at runtime)")
 		}
 	})
+}
+
+func TestValidateSecretBinding(t *testing.T) {
+	tests := []struct {
+		name    string
+		binding SecretBinding
+		wantErr bool
+		errMsg  string
+	}{
+		{
+			name:    "valid env binding",
+			binding: SecretBinding{Key: "ATTIC_PUSH_TOKEN", Env: "ATTIC_TOKEN"},
+		},
+		{
+			name:    "valid file binding",
+			binding: SecretBinding{Key: "TLS_CERT", File: "cert.pem"},
+		},
+		{
+			name:    "valid both env and file",
+			binding: SecretBinding{Key: "API_KEY", Env: "API_KEY", File: "api-key.txt"},
+		},
+		{
+			name:    "empty key",
+			binding: SecretBinding{Key: "", Env: "FOO"},
+			wantErr: true,
+			errMsg:  "empty key",
+		},
+		{
+			name:    "neither env nor file set",
+			binding: SecretBinding{Key: "ORPHAN"},
+			wantErr: true,
+			errMsg:  "at least one of env or file",
+		},
+		{
+			name:    "file with forward slash",
+			binding: SecretBinding{Key: "EVIL", File: "../../../etc/shadow"},
+			wantErr: true,
+			errMsg:  "path separator",
+		},
+		{
+			name:    "file with backslash",
+			binding: SecretBinding{Key: "EVIL", File: "..\\..\\etc\\shadow"},
+			wantErr: true,
+			errMsg:  "path separator",
+		},
+		{
+			name:    "file with embedded slash",
+			binding: SecretBinding{Key: "EVIL", File: "subdir/secret.txt"},
+			wantErr: true,
+			errMsg:  "path separator",
+		},
+		{
+			name:    "file is dot-dot",
+			binding: SecretBinding{Key: "EVIL", File: ".."},
+			wantErr: true,
+			errMsg:  "path traversal",
+		},
+		{
+			name:    "file is dot",
+			binding: SecretBinding{Key: "EVIL", File: "."},
+			wantErr: true,
+			errMsg:  "not a valid filename",
+		},
+		{
+			name:    "file starting with dot-dot",
+			binding: SecretBinding{Key: "EVIL", File: "..hidden"},
+			wantErr: true,
+			errMsg:  "path traversal",
+		},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			err := ValidateSecretBinding(tt.binding)
+			if tt.wantErr {
+				if err == nil {
+					t.Fatalf("expected error containing %q, got nil", tt.errMsg)
+				}
+				if tt.errMsg != "" && !strings.Contains(err.Error(), tt.errMsg) {
+					t.Errorf("error = %q, want substring %q", err.Error(), tt.errMsg)
+				}
+			} else if err != nil {
+				t.Fatalf("unexpected error: %v", err)
+			}
+		})
+	}
+}
+
+func TestValidateSecretBindings(t *testing.T) {
+	// All valid — should pass.
+	err := ValidateSecretBindings([]SecretBinding{
+		{Key: "A", Env: "A_VAR"},
+		{Key: "B", File: "b.pem"},
+	})
+	if err != nil {
+		t.Fatalf("unexpected error for valid bindings: %v", err)
+	}
+
+	// Second binding invalid — should fail on it.
+	err = ValidateSecretBindings([]SecretBinding{
+		{Key: "A", Env: "A_VAR"},
+		{Key: "B", File: "../../escape"},
+	})
+	if err == nil {
+		t.Fatal("expected error for path traversal binding, got nil")
+	}
+}
+
+func TestTemplateContentCredentialRefRoundTrip(t *testing.T) {
+	allowed := []string{"environment-compose", "deploy-prod"}
+	original := TemplateContent{
+		Description:      "nix-builder with fleet credentials",
+		Inherits:         []string{"bureau/template:nix-daemon"},
+		Command:          []string{"bureau-pipeline-executor"},
+		CredentialRef:    "${FLEET_ROOM}:nix-builder",
+		AllowedPipelines: &allowed,
+		Secrets: []SecretBinding{
+			{Key: "ATTIC_PUSH_TOKEN", Env: "ATTIC_TOKEN"},
+		},
+	}
+
+	data, err := json.Marshal(original)
+	if err != nil {
+		t.Fatalf("Marshal: %v", err)
+	}
+
+	var decoded TemplateContent
+	if err := json.Unmarshal(data, &decoded); err != nil {
+		t.Fatalf("Unmarshal: %v", err)
+	}
+
+	if decoded.CredentialRef != original.CredentialRef {
+		t.Errorf("CredentialRef = %q, want %q", decoded.CredentialRef, original.CredentialRef)
+	}
+	if decoded.AllowedPipelines == nil {
+		t.Fatal("AllowedPipelines is nil after round-trip, want non-nil")
+	}
+	if len(*decoded.AllowedPipelines) != 2 {
+		t.Fatalf("AllowedPipelines length = %d, want 2", len(*decoded.AllowedPipelines))
+	}
+	if (*decoded.AllowedPipelines)[0] != "environment-compose" {
+		t.Errorf("AllowedPipelines[0] = %q, want %q", (*decoded.AllowedPipelines)[0], "environment-compose")
+	}
+}
+
+func TestTemplateContentAllowedPipelinesNilVsEmpty(t *testing.T) {
+	// nil AllowedPipelines (absent) = permissive.
+	permissive := TemplateContent{Description: "no restriction"}
+	data, _ := json.Marshal(permissive)
+	var raw map[string]any
+	json.Unmarshal(data, &raw)
+	if _, exists := raw["allowed_pipelines"]; exists {
+		t.Error("allowed_pipelines should be omitted when nil (permissive)")
+	}
+
+	// Empty AllowedPipelines (present as []) = deny-all.
+	empty := []string{}
+	denyAll := TemplateContent{
+		Description:      "deny all pipelines",
+		AllowedPipelines: &empty,
+	}
+	data, _ = json.Marshal(denyAll)
+	json.Unmarshal(data, &raw)
+	if _, exists := raw["allowed_pipelines"]; !exists {
+		t.Error("allowed_pipelines should be present when non-nil empty (deny-all)")
+	}
+
+	// Verify round-trip preserves empty-list distinction.
+	var decoded TemplateContent
+	json.Unmarshal(data, &decoded)
+	if decoded.AllowedPipelines == nil {
+		t.Fatal("AllowedPipelines is nil after round-trip of empty list, want non-nil")
+	}
+	if len(*decoded.AllowedPipelines) != 0 {
+		t.Errorf("AllowedPipelines length = %d after round-trip of empty list, want 0", len(*decoded.AllowedPipelines))
+	}
+}
+
+func TestTemplateContentCredentialRefOmitEmpty(t *testing.T) {
+	// CredentialRef should be omitted when empty.
+	noRef := TemplateContent{Description: "no credential ref"}
+	data, _ := json.Marshal(noRef)
+	var raw map[string]any
+	json.Unmarshal(data, &raw)
+	if _, exists := raw["credential_ref"]; exists {
+		t.Error("credential_ref should be omitted when empty")
+	}
 }

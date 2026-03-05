@@ -15,19 +15,19 @@ import (
 )
 
 // ConnectOperator loads the operator session from "bureau login" and
-// creates an authenticated Matrix session. Returns the session and a
-// context with a 30-second timeout derived from the provided parent.
-// The caller must defer cancel().
+// creates an authenticated Matrix session.
+//
+// The caller owns the returned session and must defer session.Close().
+// No timeout is imposed — callers set their own context deadlines
+// appropriate for their operations (quick queries vs long-running waits).
 //
 // Used by CLI commands that perform operator-level Matrix operations
 // (listing templates, fetching pipelines, pushing state events, etc.).
-func ConnectOperator(parent context.Context) (context.Context, context.CancelFunc, messaging.Session, error) {
+func ConnectOperator() (messaging.Session, error) {
 	operatorSession, err := LoadSession()
 	if err != nil {
-		return nil, nil, nil, err
+		return nil, err
 	}
-
-	ctx, cancel := context.WithTimeout(parent, 30*time.Second)
 
 	logger := NewClientLogger(slog.LevelWarn)
 
@@ -36,23 +36,20 @@ func ConnectOperator(parent context.Context) (context.Context, context.CancelFun
 		Logger:        logger,
 	})
 	if err != nil {
-		cancel()
-		return nil, nil, nil, Internal("create matrix client: %w", err)
+		return nil, Internal("create matrix client: %w", err)
 	}
 
 	userID, err := ref.ParseUserID(operatorSession.UserID)
 	if err != nil {
-		cancel()
-		return nil, nil, nil, Internal("parse operator user ID: %w", err)
+		return nil, Internal("parse operator user ID: %w", err)
 	}
 
 	session, err := client.SessionFromToken(userID, operatorSession.AccessToken)
 	if err != nil {
-		cancel()
-		return nil, nil, nil, Internal("create session: %w", err)
+		return nil, Internal("create session: %w", err)
 	}
 
-	return ctx, cancel, session, nil
+	return session, nil
 }
 
 // ResolveRoom resolves a room string that may be a room ID (!...),

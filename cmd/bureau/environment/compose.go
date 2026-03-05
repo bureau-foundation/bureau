@@ -10,6 +10,7 @@ import (
 	"time"
 
 	"github.com/bureau-foundation/bureau/cmd/bureau/cli"
+	"github.com/bureau-foundation/bureau/lib/clock"
 	"github.com/bureau-foundation/bureau/lib/command"
 	"github.com/bureau-foundation/bureau/lib/ref"
 	"github.com/bureau-foundation/bureau/lib/schema"
@@ -22,11 +23,16 @@ import (
 type composeParams struct {
 	cli.FleetScope
 	cli.JSONOutput
-	Profile  string `json:"profile"  desc:"Nix profile name to build and distribute" required:"true"`
-	FlakeRef string `json:"flake_ref" flag:"flake"    desc:"flake reference for the environment repo" default:"github:bureau-foundation/environment"`
-	System   string `json:"system"   flag:"system"   desc:"Nix system triple (e.g., x86_64-linux) — defaults from fleet cache config"`
-	Template string `json:"template" flag:"template" desc:"template reference for the compose sandbox — defaults from fleet cache config"`
-	Wait     bool   `json:"wait"     flag:"wait"     desc:"wait for the pipeline to complete after acceptance"`
+	Profile  string        `json:"profile"  desc:"Nix profile name to build and distribute" required:"true"`
+	FlakeRef string        `json:"flake_ref" flag:"flake"    desc:"flake reference for the environment repo" default:"github:bureau-foundation/environment"`
+	System   string        `json:"system"   flag:"system"   desc:"Nix system triple (e.g., x86_64-linux) — defaults from fleet cache config"`
+	Template string        `json:"template" flag:"template" desc:"template reference for the compose sandbox — defaults from fleet cache config"`
+	Wait     bool          `json:"wait"     flag:"wait"     desc:"wait for the pipeline to complete after acceptance"`
+	Timeout  time.Duration `json:"timeout"  flag:"timeout"  desc:"maximum time to wait when --wait is set (0 means no limit)" default:"0"`
+
+	// clock is injected by tests for deterministic timeout control.
+	// Nil in production; defaults to clock.Real().
+	clock clock.Clock
 }
 
 // composeResult is the JSON output for environment compose.
@@ -107,11 +113,11 @@ immediately after the daemon accepts the pipeline.`,
 			}
 
 			// Connect to Matrix.
-			ctx, cancel, session, err := cli.ConnectOperator(ctx)
+			session, err := cli.ConnectOperator()
 			if err != nil {
 				return err
 			}
-			defer cancel()
+			defer session.Close()
 
 			// Resolve the fleet room to read cache config.
 			fleetRoomAlias := scope.Fleet.RoomAlias()
@@ -232,11 +238,20 @@ immediately after the daemon accepts the pipeline.`,
 				return nil
 			}
 
-			// Watch the ticket until the pipeline finishes. Environment
-			// builds can be slow (Nix evaluation + build + cache push),
-			// so use a generous timeout.
-			watchCtx, watchCancel := context.WithTimeout(ctx, 45*time.Minute)
-			defer watchCancel()
+			// Environment builds can be slow (Nix evaluation + build +
+			// cache push).
+			watchCtx := ctx
+			if params.Timeout > 0 {
+				clk := params.clock
+				if clk == nil {
+					clk = clock.Real()
+				}
+				var watchCancel context.CancelFunc
+				watchCtx, watchCancel = context.WithCancel(ctx)
+				defer watchCancel()
+				timer := clk.AfterFunc(params.Timeout, watchCancel)
+				defer timer.Stop()
+			}
 
 			final, watchErr := command.WatchTicket(watchCtx, command.WatchTicketParams{
 				Session:    session,

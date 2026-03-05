@@ -7,8 +7,10 @@ import (
 	"context"
 	"log/slog"
 	"os"
+	"time"
 
 	"github.com/bureau-foundation/bureau/cmd/bureau/cli"
+	"github.com/bureau-foundation/bureau/lib/clock"
 	"github.com/bureau-foundation/bureau/lib/command"
 	"github.com/bureau-foundation/bureau/lib/ref"
 	"github.com/bureau-foundation/bureau/lib/schema/ticket"
@@ -17,9 +19,14 @@ import (
 // pipelineWaitParams holds the parameters for the pipeline wait command.
 type pipelineWaitParams struct {
 	cli.JSONOutput
-	TicketID   string `json:"ticket_id"    desc:"pipeline ticket ID (e.g. pip-a3f9)" required:"true"`
-	Room       string `json:"room"         flag:"room"        desc:"room ID where the ticket lives (required)" required:"true"`
-	ServerName string `json:"server_name"  flag:"server-name" desc:"Matrix server name (auto-detected from machine.conf)"`
+	TicketID   string        `json:"ticket_id"    desc:"pipeline ticket ID (e.g. pip-a3f9)" required:"true"`
+	Room       string        `json:"room"         flag:"room"        desc:"room ID where the ticket lives (required)" required:"true"`
+	Timeout    time.Duration `json:"timeout"      flag:"timeout"     desc:"maximum time to wait (0 means no limit, Ctrl-C to cancel)" default:"0"`
+	ServerName string        `json:"server_name"  flag:"server-name" desc:"Matrix server name (auto-detected from machine.conf)"`
+
+	// clock is injected by tests for deterministic timeout control.
+	// Nil in production; defaults to clock.Real().
+	clock clock.Clock
 }
 
 // waitResult is the JSON output for pipeline wait.
@@ -48,12 +55,19 @@ closed.
 The --room flag specifies the room where the ticket lives. This is
 printed by "bureau pipeline run" when the pipeline is accepted.
 
+By default, waits indefinitely (Ctrl-C to cancel). Use --timeout to
+set a ceiling for automation (e.g., --timeout 8h for training jobs).
+
 Exit code 0 for conclusion "success", 1 otherwise.`,
 		Usage: "bureau pipeline wait [flags] <ticket-id> --room <room>",
 		Examples: []cli.Example{
 			{
 				Description: "Wait for a pipeline to finish",
 				Command:     "bureau pipeline wait pip-a3f9 --room '!project:bureau.local'",
+			},
+			{
+				Description: "Wait up to 8 hours for a training pipeline",
+				Command:     "bureau pipeline wait pip-a3f9 --room '!project:bureau.local' --timeout 8h",
 			},
 		},
 		Params: func() any { return &params },
@@ -82,13 +96,26 @@ Exit code 0 for conclusion "success", 1 otherwise.`,
 			}
 
 			// Connect to Matrix.
-			ctx, cancel, session, err := cli.ConnectOperator(ctx)
+			session, err := cli.ConnectOperator()
 			if err != nil {
 				return err
 			}
-			defer cancel()
+			defer session.Close()
 
-			final, err := command.WatchTicket(ctx, command.WatchTicketParams{
+			watchCtx := ctx
+			if params.Timeout > 0 {
+				clk := params.clock
+				if clk == nil {
+					clk = clock.Real()
+				}
+				var watchCancel context.CancelFunc
+				watchCtx, watchCancel = context.WithCancel(ctx)
+				defer watchCancel()
+				timer := clk.AfterFunc(params.Timeout, watchCancel)
+				defer timer.Stop()
+			}
+
+			final, err := command.WatchTicket(watchCtx, command.WatchTicketParams{
 				Session:    session,
 				RoomID:     roomID,
 				TicketID:   ticketID,

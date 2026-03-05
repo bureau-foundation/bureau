@@ -117,11 +117,11 @@ without actually publishing.`,
 			}
 
 			// Connect to Matrix for room verification and publishing.
-			ctx, cancel, session, err := cli.ConnectOperator(ctx)
+			session, err := cli.ConnectOperator()
 			if err != nil {
 				return err
 			}
-			defer cancel()
+			defer session.Close()
 
 			if params.DryRun {
 				// Dry-run: verify target room exists without publishing.

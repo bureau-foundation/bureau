@@ -33,7 +33,7 @@ func testLogger() *slog.Logger {
 // pipelineTestState provides a mock Matrix server for pipeline CLI tests.
 // It supports alias resolution, room state listing, individual state event
 // fetches, state event writes, room message sends, and /sync responses
-// that deliver command results.
+// that deliver command results and state events.
 type pipelineTestState struct {
 	mu sync.Mutex
 
@@ -54,9 +54,17 @@ type pipelineTestState struct {
 	sentEvents []sentEvent
 
 	// pendingSyncEvents accumulates events to deliver in the next /sync
-	// response (keyed by room ID). handleSendEvent populates this when
+	// response's timeline section (keyed by room ID). Each entry is wrapped
+	// as an m.room.message event. handleSendEvent populates this when
 	// autoCommandResult is set; handleSync drains it.
 	pendingSyncEvents map[string][]map[string]any
+
+	// pendingSyncStateEvents accumulates state events to deliver in the
+	// next /sync response's state section (keyed by room ID). Unlike
+	// pendingSyncEvents (which wraps content as m.room.message), these
+	// are delivered as complete Event objects with their actual type and
+	// state_key. Used for testing WatchTicket and other state event watchers.
+	pendingSyncStateEvents map[string][]map[string]any
 
 	// autoCommandResult, when non-nil, is called after a command message
 	// is sent to generate a command_result that will be delivered via the
@@ -83,11 +91,27 @@ type sentEvent struct {
 
 func newPipelineTestState() *pipelineTestState {
 	return &pipelineTestState{
-		roomAliases:       make(map[string]string),
-		roomEvents:        make(map[string][]messaging.Event),
-		stateEvents:       make(map[string]json.RawMessage),
-		pendingSyncEvents: make(map[string][]map[string]any),
+		roomAliases:            make(map[string]string),
+		roomEvents:             make(map[string][]messaging.Event),
+		stateEvents:            make(map[string]json.RawMessage),
+		pendingSyncEvents:      make(map[string][]map[string]any),
+		pendingSyncStateEvents: make(map[string][]map[string]any),
 	}
+}
+
+// queueSyncStateEvent queues a state event for delivery in the next /sync
+// response's state section. The event is delivered with the specified type
+// and state_key, allowing tests to simulate state event delivery (e.g.,
+// m.bureau.ticket updates that WatchTicket monitors).
+func (s *pipelineTestState) queueSyncStateEvent(roomID, eventType, stateKey string, content map[string]any) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	event := map[string]any{
+		"type":      eventType,
+		"state_key": stateKey,
+		"content":   content,
+	}
+	s.pendingSyncStateEvents[roomID] = append(s.pendingSyncStateEvents[roomID], event)
 }
 
 // addPipelineRoom sets up a room with pipeline state events for list tests.
@@ -344,29 +368,49 @@ func (s *pipelineTestState) handleSync(writer http.ResponseWriter, request *http
 	batchToken := fmt.Sprintf("mock_batch_%d", s.syncBatchCounter)
 
 	since := request.URL.Query().Get("since")
-	if since == "" || len(s.pendingSyncEvents) == 0 {
+	hasPendingTimeline := len(s.pendingSyncEvents) > 0
+	hasPendingState := len(s.pendingSyncStateEvents) > 0
+	if since == "" || (!hasPendingTimeline && !hasPendingState) {
 		// Initial sync or no pending events — return empty rooms.
 		writer.Header().Set("Content-Type", "application/json")
 		fmt.Fprintf(writer, `{"next_batch":%q,"rooms":{"join":{}}}`, batchToken)
 		return
 	}
 
-	// Build /sync response with pending events in each room's timeline.
+	// Collect all room IDs that have pending events (timeline or state).
+	roomIDs := make(map[string]bool)
+	for roomID := range s.pendingSyncEvents {
+		roomIDs[roomID] = true
+	}
+	for roomID := range s.pendingSyncStateEvents {
+		roomIDs[roomID] = true
+	}
+
+	// Build /sync response with pending events in each room.
 	joinedRooms := make(map[string]any)
-	for roomID, events := range s.pendingSyncEvents {
-		timelineEvents := make([]map[string]any, len(events))
-		for i, event := range events {
-			timelineEvents[i] = map[string]any{
+	for roomID := range roomIDs {
+		// Timeline events: wrap content as m.room.message.
+		var timelineEvents []map[string]any
+		for _, event := range s.pendingSyncEvents[roomID] {
+			timelineEvents = append(timelineEvents, map[string]any{
 				"type":    "m.room.message",
 				"content": event,
-			}
+			})
 		}
+
+		// State events: delivered as-is with their actual type and state_key.
+		var stateEvents []any
+		for _, event := range s.pendingSyncStateEvents[roomID] {
+			stateEvents = append(stateEvents, event)
+		}
+
 		joinedRooms[roomID] = map[string]any{
 			"timeline": map[string]any{"events": timelineEvents},
-			"state":    map[string]any{"events": []any{}},
+			"state":    map[string]any{"events": stateEvents},
 		}
 	}
 	s.pendingSyncEvents = make(map[string][]map[string]any)
+	s.pendingSyncStateEvents = make(map[string][]map[string]any)
 
 	response := map[string]any{
 		"next_batch": batchToken,
@@ -378,7 +422,7 @@ func (s *pipelineTestState) handleSync(writer http.ResponseWriter, request *http
 
 // newPipelineTestSession creates a mock Matrix session connected to the
 // test server. Returns the session and sets BUREAU_SESSION_FILE so that
-// cli.ConnectOperator(ctx) finds it.
+// cli.ConnectOperator() finds it.
 func newPipelineTestSession(t *testing.T, state *pipelineTestState) *messaging.DirectSession {
 	t.Helper()
 	server := httptest.NewServer(state.handler())
@@ -402,7 +446,7 @@ func newPipelineTestSession(t *testing.T, state *pipelineTestState) *messaging.D
 
 // setupTestOperatorSession writes a temporary operator session file
 // pointing at the mock server and sets BUREAU_SESSION_FILE so that
-// cli.ConnectOperator(ctx) finds it. Returns a cleanup function.
+// cli.ConnectOperator() finds it.
 func setupTestOperatorSession(t *testing.T, serverURL string) {
 	t.Helper()
 

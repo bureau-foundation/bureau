@@ -71,11 +71,11 @@ see is what the executor runs.`,
 				return cli.Validation("invalid --server-name %q: %w", params.ServerName, err)
 			}
 
-			ctx, cancel, session, err := cli.ConnectOperator(ctx)
+			session, err := cli.ConnectOperator()
 			if err != nil {
 				return err
 			}
-			defer cancel()
+			defer session.Close()
 
 			roomAlias := pipelineRef.RoomAlias(serverName)
 			roomID, err := session.ResolveAlias(ctx, roomAlias)

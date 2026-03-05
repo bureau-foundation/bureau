@@ -83,11 +83,11 @@ With a file argument, also classifies each change:
 				}
 			}
 
-			ctx, cancel, session, err := cli.ConnectOperator(ctx)
+			session, err := cli.ConnectOperator()
 			if err != nil {
 				return err
 			}
-			defer cancel()
+			defer session.Close()
 
 			params.ServerName = cli.ResolveServerName(params.ServerName)
 

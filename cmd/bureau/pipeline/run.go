@@ -11,6 +11,7 @@ import (
 	"time"
 
 	"github.com/bureau-foundation/bureau/cmd/bureau/cli"
+	"github.com/bureau-foundation/bureau/lib/clock"
 	"github.com/bureau-foundation/bureau/lib/command"
 	"github.com/bureau-foundation/bureau/lib/ref"
 	"github.com/bureau-foundation/bureau/lib/schema"
@@ -21,12 +22,17 @@ import (
 // in JSON/MCP mode.
 type pipelineRunParams struct {
 	cli.JSONOutput
-	PipelineRef string   `json:"pipeline_ref" desc:"pipeline reference (e.g. bureau/pipeline:dev-workspace-init)" required:"true"`
-	Machine     string   `json:"machine"      flag:"machine"     desc:"fleet-scoped machine localpart (required)" required:"true"`
-	Room        string   `json:"room"         flag:"room"        desc:"room ID where the pipeline ticket is created (required)" required:"true"`
-	Param       []string `json:"param"        flag:"param"       desc:"key=value parameter passed to the pipeline (repeatable)"`
-	Wait        bool     `json:"wait"         flag:"wait"        desc:"wait for the pipeline to complete after acceptance"`
-	ServerName  string   `json:"server_name"  flag:"server-name" desc:"Matrix server name for resolving room aliases (auto-detected from machine.conf)"`
+	PipelineRef string        `json:"pipeline_ref" desc:"pipeline reference (e.g. bureau/pipeline:dev-workspace-init)" required:"true"`
+	Machine     string        `json:"machine"      flag:"machine"     desc:"fleet-scoped machine localpart (required)" required:"true"`
+	Room        string        `json:"room"         flag:"room"        desc:"room ID where the pipeline ticket is created (required)" required:"true"`
+	Param       []string      `json:"param"        flag:"param"       desc:"key=value parameter passed to the pipeline (repeatable)"`
+	Wait        bool          `json:"wait"         flag:"wait"        desc:"wait for the pipeline to complete after acceptance"`
+	Timeout     time.Duration `json:"timeout"      flag:"timeout"     desc:"maximum time to wait when --wait is set (0 means no limit)" default:"0"`
+	ServerName  string        `json:"server_name"  flag:"server-name" desc:"Matrix server name for resolving room aliases (auto-detected from machine.conf)"`
+
+	// clock is injected by tests for deterministic timeout control.
+	// Nil in production; defaults to clock.Real().
+	clock clock.Clock
 }
 
 // runResult is the JSON output for pipeline run.
@@ -142,11 +148,11 @@ variables, accessible in pipeline steps via ${NAME} substitution.`,
 			}
 
 			// Connect to Matrix.
-			ctx, cancel, session, err := cli.ConnectOperator(ctx)
+			session, err := cli.ConnectOperator()
 			if err != nil {
 				return err
 			}
-			defer cancel()
+			defer session.Close()
 
 			// Resolve the config room for the target machine. The daemon
 			// monitors this room for m.bureau.command messages.
@@ -192,10 +198,18 @@ variables, accessible in pipeline steps via ${NAME} substitution.`,
 				return nil
 			}
 
-			// Watch the ticket until the pipeline finishes. Use a 10-minute
-			// context — pipelines can run long (build steps, large git clones).
-			watchCtx, watchCancel := context.WithTimeout(ctx, 10*time.Minute)
-			defer watchCancel()
+			watchCtx := ctx
+			if params.Timeout > 0 {
+				clk := params.clock
+				if clk == nil {
+					clk = clock.Real()
+				}
+				var watchCancel context.CancelFunc
+				watchCtx, watchCancel = context.WithCancel(ctx)
+				defer watchCancel()
+				timer := clk.AfterFunc(params.Timeout, watchCancel)
+				defer timer.Stop()
+			}
 
 			final, err := command.WatchTicket(watchCtx, command.WatchTicketParams{
 				Session:    session,

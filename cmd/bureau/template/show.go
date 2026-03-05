@@ -64,11 +64,11 @@ template overrides versus what it inherits.`,
 
 			templateRefString := params.TemplateRef
 
-			ctx, cancel, session, err := cli.ConnectOperator(ctx)
+			session, err := cli.ConnectOperator()
 			if err != nil {
 				return err
 			}
-			defer cancel()
+			defer session.Close()
 
 			params.ServerName = cli.ResolveServerName(params.ServerName)
 

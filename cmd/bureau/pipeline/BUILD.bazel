@@ -24,6 +24,7 @@ go_library(
     deps = [
         "//cmd/bureau/cli",
         "//cmd/bureau/ticket",
+        "//lib/clock",
         "//lib/command",
         "//lib/pipelinedef",
         "//lib/ref",
@@ -44,14 +45,17 @@ go_test(
         "run_test.go",
         "show_test.go",
         "validate_test.go",
+        "wait_test.go",
     ],
     embed = [":pipeline"],
     deps = [
         "//cmd/bureau/cli",
+        "//lib/clock",
         "//lib/pipelinedef",
         "//lib/ref",
         "//lib/schema",
         "//lib/schema/pipeline",
+        "//lib/schema/ticket",
         "//messaging",
     ],
 )

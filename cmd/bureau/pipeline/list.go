@@ -80,11 +80,11 @@ It is resolved to a full Matrix alias using the --server-name flag.`,
 
 			roomAlias := ref.MustParseRoomAlias(schema.FullRoomAlias(params.Room, serverName))
 
-			ctx, cancel, session, err := cli.ConnectOperator(ctx)
+			session, err := cli.ConnectOperator()
 			if err != nil {
 				return err
 			}
-			defer cancel()
+			defer session.Close()
 
 			roomID, err := session.ResolveAlias(ctx, roomAlias)
 			if err != nil {

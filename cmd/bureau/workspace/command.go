@@ -261,17 +261,16 @@ type workspaceInfo struct {
 }
 
 func runList(ctx context.Context, args []string, logger *slog.Logger, jsonOutput *cli.JSONOutput) error {
-	// Use a 60-second timeout — this scans all joined rooms, issuing
-	// one GetRoomState call per room. For a fleet with many rooms this
-	// can take a while.
+	// Scanning all joined rooms issues one GetRoomState per room.
+	// For a fleet with many rooms this can take a while, so use a
+	// 60-second ceiling.
 	ctx, cancel := context.WithTimeout(ctx, 60*time.Second)
 	defer cancel()
 
-	_, operatorCancel, session, err := cli.ConnectOperator(ctx)
+	session, err := cli.ConnectOperator()
 	if err != nil {
 		return err
 	}
-	defer operatorCancel()
 	defer session.Close()
 
 	roomIDs, err := session.JoinedRooms(ctx)
@@ -441,11 +440,10 @@ it and replies via Matrix.`,
 }
 
 func runStatus(ctx context.Context, logger *slog.Logger, alias string, serverName ref.ServerName, jsonOutput *cli.JSONOutput) error {
-	ctx, cancel, session, err := cli.ConnectOperator(ctx)
+	session, err := cli.ConnectOperator()
 	if err != nil {
 		return err
 	}
-	defer cancel()
 	defer session.Close()
 
 	roomID, err := resolveWorkspaceRoom(ctx, session, alias, serverName)
@@ -503,11 +501,10 @@ each worktree, .shared/ (virtualenvs, build caches), and .cache/
 }
 
 func runDu(ctx context.Context, logger *slog.Logger, alias string, serverName ref.ServerName, jsonOutput *cli.JSONOutput) error {
-	ctx, cancel, session, err := cli.ConnectOperator(ctx)
+	session, err := cli.ConnectOperator()
 	if err != nil {
 		return err
 	}
-	defer cancel()
 	defer session.Close()
 
 	roomID, err := resolveWorkspaceRoom(ctx, session, alias, serverName)
@@ -637,11 +634,10 @@ func runWorktreeAdd(ctx context.Context, logger *slog.Logger, alias, branch stri
 		return cli.Validation("invalid worktree alias: %w", err)
 	}
 
-	ctx, cancel, session, err := cli.ConnectOperator(ctx)
+	session, err := cli.ConnectOperator()
 	if err != nil {
 		return err
 	}
-	defer cancel()
 	defer session.Close()
 
 	// Worktree operations route through the parent workspace room.
@@ -688,10 +684,9 @@ func runWorktreeAdd(ctx context.Context, logger *slog.Logger, alias, branch stri
 		return err
 	}
 
-	// When --wait is set and the daemon returned a ticket, watch
-	// the pipeline until it completes. Use a 5-minute context —
-	// worktree setup pipelines run git clone + submodule init which
-	// can take a while for large repos.
+	// When --wait is set and the daemon returned a ticket, watch the
+	// pipeline until it completes. Worktree setup runs git clone +
+	// submodule init which can take a while for large repos.
 	conclusion := ""
 	if wait && !result.TicketID.IsZero() {
 		logger.Info("worktree add accepted, waiting for pipeline", "alias", alias)
@@ -803,11 +798,10 @@ func runWorktreeRemove(ctx context.Context, logger *slog.Logger, alias, mode str
 		return cli.Validation("invalid worktree alias: %w", err)
 	}
 
-	ctx, cancel, session, err := cli.ConnectOperator(ctx)
+	session, err := cli.ConnectOperator()
 	if err != nil {
 		return err
 	}
-	defer cancel()
 	defer session.Close()
 
 	workspaceRoomID, workspaceState, workspaceAlias, err := findParentWorkspace(ctx, session, alias, serverName)
@@ -913,11 +907,16 @@ timeout is extended to 5 minutes.`,
 }
 
 func runFetch(ctx context.Context, logger *slog.Logger, alias string, serverName ref.ServerName, jsonOutput *cli.JSONOutput) error {
-	ctx, cancel, session, err := cli.ConnectOperator(ctx)
+	// Fetch can take minutes for large repos. The /sync long-poll
+	// uses 30s server-side holds, so a 5-minute ceiling makes at
+	// most ~10 HTTP round-trips.
+	ctx, cancel := context.WithTimeout(ctx, 5*time.Minute)
+	defer cancel()
+
+	session, err := cli.ConnectOperator()
 	if err != nil {
 		return err
 	}
-	defer cancel()
 	defer session.Close()
 
 	roomID, err := resolveWorkspaceRoom(ctx, session, alias, serverName)
@@ -927,15 +926,7 @@ func runFetch(ctx context.Context, logger *slog.Logger, alias string, serverName
 
 	logger.Info("fetching workspace", "alias", alias)
 
-	// Fetch can take minutes for large repos. ConnectOperator gives
-	// a 30s context which is too short for waiting on the result, so
-	// create a longer context for the command execution. The /sync
-	// long-poll uses 30s server-side holds internally, so even a
-	// 5-minute wait makes at most ~10 HTTP round-trips.
-	fetchCtx, fetchCancel := context.WithTimeout(ctx, 5*time.Minute)
-	defer fetchCancel()
-
-	result, err := command.Execute(fetchCtx, command.SendParams{
+	result, err := command.Execute(ctx, command.SendParams{
 		Session:   session,
 		RoomID:    roomID,
 		Command:   "workspace.fetch",
@@ -977,11 +968,10 @@ raw git worktree list output including paths and branch information.`,
 }
 
 func runWorktreeList(ctx context.Context, logger *slog.Logger, alias string, serverName ref.ServerName, jsonOutput *cli.JSONOutput) error {
-	ctx, cancel, session, err := cli.ConnectOperator(ctx)
+	session, err := cli.ConnectOperator()
 	if err != nil {
 		return err
 	}
-	defer cancel()
 	defer session.Close()
 
 	roomID, err := resolveWorkspaceRoom(ctx, session, alias, serverName)

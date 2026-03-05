@@ -153,7 +153,7 @@ func TestCLIMachineList(t *testing.T) {
 }
 
 // TestCLITemplateList exercises bureau template list with operator session
-// auth (ConnectOperator reads BUREAU_SESSION_FILE) and server-name
+// auth (ConnectOperator() reads BUREAU_SESSION_FILE) and server-name
 // auto-detected from machine.conf. The global template room is populated
 // during TestMain setup with "base" and "base-networked" templates.
 func TestCLITemplateList(t *testing.T) {

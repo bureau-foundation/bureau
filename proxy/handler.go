@@ -662,6 +662,12 @@ type AdminServiceRequest struct {
 	// AuthScheme is prepended to credential values injected into the
 	// Authorization header (e.g., "Bearer"). Other headers receive raw values.
 	AuthScheme string `json:"auth_scheme,omitempty"`
+
+	// ResponseInterceptors are pattern-based response interceptors.
+	// When a proxied response matches a pattern, the proxy publishes
+	// a Matrix event to the workspace room with fields extracted from
+	// the response body and request path.
+	ResponseInterceptors []schema.ResponseInterceptor `json:"response_interceptors,omitempty"`
 }
 
 // AdminServiceInfo is returned by GET /v1/admin/services and
@@ -723,15 +729,30 @@ func (h *Handler) HandleAdminRegisterService(w http.ResponseWriter, r *http.Requ
 
 	h.RegisterHTTPService(name, service)
 
-	// Auto-enable attribution when a workspace room is configured.
-	// The response hook checks for entity-creating API patterns
-	// (e.g., GitHub PR/issue creation) and publishes attribution
-	// events to the workspace room.
-	h.mu.RLock()
-	hasWorkspace := !h.workspaceRoomID.IsZero()
-	h.mu.RUnlock()
-	if hasWorkspace {
-		h.EnableAttribution(name)
+	// Compile and attach response interceptors when the template
+	// declares them and a workspace room is configured.
+	if len(req.ResponseInterceptors) > 0 {
+		compiled, compileError := compileInterceptors(req.ResponseInterceptors)
+		if compileError != nil {
+			h.sendError(w, http.StatusBadRequest, "invalid response interceptor: %v", compileError)
+			return
+		}
+		h.mu.RLock()
+		hasWorkspace := !h.workspaceRoomID.IsZero()
+		h.mu.RUnlock()
+		if hasWorkspace {
+			service.interceptors = compiled
+			service.interceptCallback = h.makeInterceptCallback()
+			h.logger.Info("response interceptors configured",
+				"service", name,
+				"count", len(compiled),
+			)
+		} else {
+			h.logger.Warn("response interceptors ignored: no workspace room configured",
+				"service", name,
+				"count", len(compiled),
+			)
+		}
 	}
 
 	w.Header().Set("Content-Type", "application/json")
@@ -921,55 +942,29 @@ func (h *Handler) WorkspaceRoomID() ref.RoomID {
 	return h.workspaceRoomID
 }
 
-// EnableAttribution configures response interception for a named HTTP
-// service. After successful responses, the interceptor checks for
-// entity-creating API patterns and publishes m.bureau.forge_attribution
-// events to the appropriate Matrix room.
-//
-// Requires the "matrix" HTTP service to be registered (for publishing
-// events to the homeserver) and the agent identity to be set.
-func (h *Handler) EnableAttribution(serviceName string) {
-	h.mu.Lock()
-	defer h.mu.Unlock()
+// makeInterceptCallback returns a callback function that interceptor
+// goroutines invoke with matched interceptors and response data. The
+// callback captures the handler reference to read workspace room,
+// matrix service, and agent identity under the read lock.
+func (h *Handler) makeInterceptCallback() func([]compiledInterceptor, string, string, int, []byte) {
+	return func(interceptors []compiledInterceptor, method, path string, statusCode int, body []byte) {
+		h.mu.RLock()
+		matrixService, hasMatrix := h.httpServices["matrix"]
+		agentUserID := ""
+		if h.identity != nil {
+			agentUserID = h.identity.UserID
+		}
+		workspaceRoom := h.workspaceRoomID
+		h.mu.RUnlock()
 
-	service, exists := h.httpServices[serviceName]
-	if !exists {
-		h.logger.Warn("cannot enable attribution: service not found",
-			"service", serviceName,
-		)
-		return
-	}
-
-	matrixService, hasMatrix := h.httpServices["matrix"]
-	if !hasMatrix {
-		h.logger.Warn("cannot enable attribution: matrix service not registered",
-			"service", serviceName,
-		)
-		return
-	}
-
-	agentUserID := ""
-	if h.identity != nil {
-		agentUserID = h.identity.UserID
-	}
-	if agentUserID == "" {
-		h.logger.Warn("cannot enable attribution: agent identity not set",
-			"service", serviceName,
-		)
-		return
-	}
-
-	service.onResponse = func(method, path string, statusCode int, body []byte) {
-		match, matched := matchEntityCreation(method, path, statusCode, body)
-		if !matched {
+		if !hasMatrix || agentUserID == "" || workspaceRoom.IsZero() {
 			return
 		}
-		workspaceRoom := h.WorkspaceRoomID()
-		publishAttribution(matrixService, agentUserID, match, workspaceRoom, h.logger)
-	}
 
-	h.logger.Info("attribution enabled for service",
-		"service", serviceName,
-		"agent", agentUserID,
-	)
+		runInterceptors(interceptors, interceptorContext{
+			matrixService: matrixService,
+			agentUserID:   agentUserID,
+			workspaceRoom: workspaceRoom,
+		}, method, path, statusCode, body, h.logger)
+	}
 }

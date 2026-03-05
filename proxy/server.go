@@ -189,12 +189,6 @@ func (s *Server) SetWorkspaceRoomID(roomID ref.RoomID) {
 	s.handler.SetWorkspaceRoomID(roomID)
 }
 
-// EnableAttribution enables response interception for forge attribution
-// on the named HTTP service. See Handler.EnableAttribution for details.
-func (s *Server) EnableAttribution(serviceName string) {
-	s.handler.EnableAttribution(serviceName)
-}
-
 // SetObserveConfig configures the observation proxy. When called before
 // Start(), the server will listen on the observation socket and forward
 // observation requests to the daemon with injected credentials. The

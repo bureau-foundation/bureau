@@ -1480,15 +1480,27 @@ func TestAppendNixCustomConf_NewFile(t *testing.T) {
 	confPath := filepath.Join(dir, "nix.custom.conf")
 
 	savedPath := nixCustomConfPath
-	defer func() { nixCustomConfPath = savedPath }()
+	savedRunCommand := runCommand
+	defer func() {
+		nixCustomConfPath = savedPath
+		runCommand = savedRunCommand
+	}()
 	nixCustomConfPath = confPath
 
-	// appendNixCustomConf also calls runCommand("systemctl", "restart", "nix-daemon")
-	// which will fail in test, so we test the file-writing logic by calling
-	// the function and accepting the systemctl error.
-	err := appendNixCustomConf("extra-substituters", "https://attic.internal:5580/main")
+	var restartCalled bool
+	runCommand = func(name string, args ...string) error {
+		if name == "systemctl" && len(args) == 2 && args[0] == "restart" && args[1] == "nix-daemon" {
+			restartCalled = true
+			return nil
+		}
+		return fmt.Errorf("unexpected command: %s %v", name, args)
+	}
 
-	// We expect an error from systemctl, but the file should have been written.
+	err := appendNixCustomConf("extra-substituters", "https://attic.internal:5580/main")
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+
 	data, readErr := os.ReadFile(confPath)
 	if readErr != nil {
 		t.Fatalf("file not written: %v", readErr)
@@ -1499,11 +1511,8 @@ func TestAppendNixCustomConf_NewFile(t *testing.T) {
 		t.Errorf("expected key in file, got:\n%s", content)
 	}
 
-	// The error should be from systemctl.
-	if err == nil {
-		t.Error("expected error from systemctl restart, got nil")
-	} else if !strings.Contains(err.Error(), "nix-daemon") {
-		t.Errorf("expected systemctl error, got: %v", err)
+	if !restartCalled {
+		t.Error("expected nix-daemon restart to be requested")
 	}
 }
 
@@ -1517,11 +1526,17 @@ func TestAppendNixCustomConf_ReplaceExisting(t *testing.T) {
 	}
 
 	savedPath := nixCustomConfPath
-	defer func() { nixCustomConfPath = savedPath }()
+	savedRunCommand := runCommand
+	defer func() {
+		nixCustomConfPath = savedPath
+		runCommand = savedRunCommand
+	}()
 	nixCustomConfPath = confPath
+	runCommand = func(name string, args ...string) error { return nil }
 
-	// Replace the substituters key. Ignore systemctl error.
-	_ = appendNixCustomConf("extra-substituters", "https://new-cache.example.com")
+	if err := appendNixCustomConf("extra-substituters", "https://new-cache.example.com"); err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
 
 	data, err := os.ReadFile(confPath)
 	if err != nil {
@@ -1535,7 +1550,6 @@ func TestAppendNixCustomConf_ReplaceExisting(t *testing.T) {
 	if strings.Contains(content, "https://old-cache.example.com") {
 		t.Errorf("old substituter value should be replaced, got:\n%s", content)
 	}
-	// The other key should be preserved.
 	if !strings.Contains(content, "extra-trusted-public-keys = old-key:abc") {
 		t.Errorf("expected other key to be preserved, got:\n%s", content)
 	}

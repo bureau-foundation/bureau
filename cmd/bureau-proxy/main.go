@@ -247,15 +247,6 @@ func run() error {
 		return fmt.Errorf("failed to start server: %w", err)
 	}
 
-	// Enable attribution on config-file HTTP services when a workspace
-	// room is available. Services registered later via the admin API
-	// auto-enable attribution in HandleAdminRegisterService.
-	if credentialStdin && pipeSource != nil && !pipeSource.WorkspaceRoomID().IsZero() {
-		for _, serviceName := range server.ListHTTPServices() {
-			server.EnableAttribution(serviceName)
-		}
-	}
-
 	// Wait for shutdown signal
 	ctx, stop := signal.NotifyContext(context.Background(), syscall.SIGINT, syscall.SIGTERM)
 	defer stop()

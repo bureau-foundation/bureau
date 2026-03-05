@@ -393,12 +393,25 @@ func (d *Daemon) registerExternalProxyService(ctx context.Context, consumer ref.
 	adminSocket := d.adminSocketPathFunc(consumer)
 	client := proxyAdminClient(adminSocket)
 
-	body, err := json.Marshal(adminServiceRegistration{
+	registration := adminServiceRegistration{
 		UpstreamURL:   service.Upstream,
 		InjectHeaders: service.InjectHeaders,
 		StripHeaders:  service.StripHeaders,
 		AuthScheme:    service.AuthScheme,
-	})
+	}
+
+	for _, interceptor := range service.ResponseInterceptors {
+		registration.ResponseInterceptors = append(registration.ResponseInterceptors, adminResponseInterceptor{
+			Method:       interceptor.Method,
+			PathPattern:  interceptor.PathPattern,
+			StatusMin:    interceptor.StatusMin,
+			StatusMax:    interceptor.StatusMax,
+			EventType:    interceptor.EventType,
+			EventContent: interceptor.EventContent,
+		})
+	}
+
+	body, err := json.Marshal(registration)
 	if err != nil {
 		return fmt.Errorf("marshaling registration request: %w", err)
 	}
@@ -471,6 +484,23 @@ type adminServiceRegistration struct {
 	// Authorization header (e.g., "Bearer"). Only affects the Authorization
 	// header; other injected headers receive raw credential values.
 	AuthScheme string `json:"auth_scheme,omitempty"`
+
+	// ResponseInterceptors are pattern-based response interceptors that
+	// fire asynchronously after matching responses. The proxy compiles
+	// these into regex matchers and template evaluators.
+	ResponseInterceptors []adminResponseInterceptor `json:"response_interceptors,omitempty"`
+}
+
+// adminResponseInterceptor is the daemon's local copy of the response
+// interceptor wire type. Matches the JSON format of
+// proxy.AdminServiceRequest's ResponseInterceptors field.
+type adminResponseInterceptor struct {
+	Method       string         `json:"method,omitempty"`
+	PathPattern  string         `json:"path_pattern"`
+	StatusMin    int            `json:"status_min,omitempty"`
+	StatusMax    int            `json:"status_max,omitempty"`
+	EventType    string         `json:"event_type"`
+	EventContent map[string]any `json:"event_content"`
 }
 
 // registerProxyRoute registers a single service on a single consumer's proxy

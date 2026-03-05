@@ -1477,7 +1477,11 @@ func statOwnership(path string) (*syscall.Stat_t, error) {
 }
 
 // runCommand executes a command and returns an error if it fails.
-func runCommand(name string, args ...string) error {
+// It is a variable so tests can replace it to avoid executing
+// privileged system commands (systemctl, useradd, etc.).
+var runCommand = runCommandExec
+
+func runCommandExec(name string, args ...string) error {
 	command := exec.Command(name, args...)
 	output, err := command.CombinedOutput()
 	if err != nil {

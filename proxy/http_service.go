@@ -33,13 +33,19 @@ type HTTPService struct {
 	client        *http.Client
 	telemetry     *ProxyTelemetry // nil when telemetry is not configured
 
-	// onResponse is an optional callback invoked after a successful
-	// non-SSE response with the method, path, status, and response
-	// body. Used by the attribution interceptor to detect entity
-	// creation and publish Matrix events. The body has already been
-	// buffered; the callback must not modify it. Nil when no
-	// interception is configured.
-	onResponse func(method, path string, statusCode int, body []byte)
+	// interceptors are compiled response interceptors that fire
+	// asynchronously when a response matches their pattern. Set at
+	// service registration time. The interceptor goroutine receives
+	// a copy of the buffered response body and publishes Matrix
+	// events via interceptCallback. Nil when no interception is
+	// configured.
+	interceptors []compiledInterceptor
+
+	// interceptCallback is called by the interceptor goroutine with
+	// the matched interceptors, response data, and buffered body.
+	// Set by the handler when interceptors are configured. Nil when
+	// no interception is configured.
+	interceptCallback func(interceptors []compiledInterceptor, method, path string, statusCode int, body []byte)
 }
 
 // HTTPServiceConfig holds configuration for creating an HTTPService.
@@ -306,25 +312,34 @@ func (s *HTTPService) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		s.streamSSE(w, resp, startTime, traceID, spanID, credentialCount)
 	} else {
 		// For regular responses, buffer or stream depending on whether
-		// the onResponse callback needs the body.
+		// response interceptors need the body.
 		var bodyBytes []byte
 		var bytesCopied int64
 		var copyError error
 
-		if s.onResponse != nil && resp.StatusCode >= 200 && resp.StatusCode < 300 {
-			// Buffer the response body for the callback. Entity
+		if s.interceptCallback != nil && len(s.interceptors) > 0 && resp.StatusCode >= 200 && resp.StatusCode < 300 {
+			// Buffer the response body for interceptors. Entity
 			// creation responses are small (a few KB), so this is
-			// bounded. The callback runs before the response is
-			// written to the agent.
+			// bounded. The response is written to the client
+			// immediately; interceptors fire asynchronously.
 			bodyBytes, copyError = io.ReadAll(resp.Body)
 			bytesCopied = int64(len(bodyBytes))
-
-			s.onResponse(r.Method, r.URL.Path, resp.StatusCode, bodyBytes)
 
 			w.WriteHeader(resp.StatusCode)
 			if copyError == nil {
 				w.Write(bodyBytes)
 			}
+
+			// Fire interceptors asynchronously — copies of method,
+			// path, status, and body are captured by the goroutine.
+			callback := s.interceptCallback
+			interceptors := s.interceptors
+			method := r.Method
+			path := r.URL.Path
+			statusCode := resp.StatusCode
+			bodyCopy := make([]byte, len(bodyBytes))
+			copy(bodyCopy, bodyBytes)
+			go callback(interceptors, method, path, statusCode, bodyCopy)
 		} else {
 			w.WriteHeader(resp.StatusCode)
 			bytesCopied, copyError = io.Copy(w, resp.Body)

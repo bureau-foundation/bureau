@@ -520,6 +520,50 @@ type TemplateProxyService struct {
 	// other headers receive the raw credential value regardless of
 	// this setting. Empty means no scheme prefix (raw value).
 	AuthScheme string `json:"auth_scheme,omitempty"`
+
+	// ResponseInterceptors are pattern-based response interceptors.
+	// When a proxied response matches a pattern, the proxy publishes
+	// a Matrix event to the workspace room with fields extracted from
+	// the response body and request path.
+	ResponseInterceptors []ResponseInterceptor `json:"response_interceptors,omitempty"`
+}
+
+// ResponseInterceptor defines a pattern-based response interceptor that
+// publishes a Matrix event when an HTTP response matches. Registered by
+// services at creation time through the template system or admin API.
+//
+// Interceptors fire asynchronously after the response is written to the
+// client. Matrix event publishing is best-effort and does not affect
+// the API response.
+type ResponseInterceptor struct {
+	// Method to match (exact, e.g., "POST"). Empty matches any method.
+	Method string `json:"method,omitempty"`
+
+	// PathPattern is a regex matching the request path. Positional
+	// capture groups are available in EventContent as ${path.1},
+	// ${path.2}, etc. (1-indexed).
+	PathPattern string `json:"path_pattern"`
+
+	// StatusMin and StatusMax define the inclusive status code range
+	// for matching. Default: 200-299.
+	StatusMin int `json:"status_min,omitempty"`
+	StatusMax int `json:"status_max,omitempty"`
+
+	// EventType is the Matrix event type to publish (e.g.,
+	// "m.bureau.forge_attribution").
+	EventType string `json:"event_type"`
+
+	// EventContent is a template for the Matrix event content.
+	// String values may contain ${...} placeholders:
+	//   ${agent}           — the agent's Matrix user ID
+	//   ${agent_display}   — last segment of the agent's localpart
+	//   ${path.N}          — Nth capture group from PathPattern (1-indexed)
+	//   ${response.field}  — top-level JSON field from response body
+	// Type preservation: a string value that is exactly one
+	// ${response.field} placeholder preserves the JSON type (number
+	// stays number). Mixed strings always produce string output.
+	// Non-string values (numbers, bools) pass through unchanged.
+	EventContent map[string]any `json:"event_content"`
 }
 
 // SecretBinding declares how a credential from the encrypted credential

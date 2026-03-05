@@ -48,7 +48,7 @@
   "steps": [
     {
       "name": "build-profile",
-      "run": "nix build ${FLAKE_REF}#packages.${SYSTEM}.${PROFILE} --no-link --print-out-paths > /tmp/outputs/store_path",
+      "run": "nix build ${{FLAKE_REF}}#packages.${{SYSTEM}}.${{PROFILE}} --no-link --print-out-paths > /tmp/outputs/store_path",
       "timeout": "30m",
       "outputs": {
         "store_path": "/tmp/outputs/store_path"
@@ -56,22 +56,22 @@
     },
     {
       "name": "push-to-cache",
-      "run": "STORE_PATH=$(cat /tmp/outputs/store_path)\nattic push ${CACHE_NAME} ${STORE_PATH}",
+      "run": "STORE_PATH=$(cat /tmp/outputs/store_path)\nattic push ${{CACHE_NAME}} ${{STORE_PATH}}",
       "timeout": "30m"
     },
     {
       "name": "publish-provenance",
       "publish": {
         "event_type": "m.bureau.environment_build",
-        "room": "${FLEET_ROOM_ID}",
-        "state_key": "${PROFILE}",
+        "room": "${{FLEET_ROOM_ID}}",
+        "state_key": "${{PROFILE}}",
         "content": {
-          "profile": "${PROFILE}",
-          "flake_ref": "${FLAKE_REF}",
-          "system": "${SYSTEM}",
-          "store_path": "${OUTPUT_build_profile_store_path}",
-          "machine": "${MACHINE}",
-          "timestamp": "${BUREAU_TIMESTAMP}"
+          "profile": "${{PROFILE}}",
+          "flake_ref": "${{FLAKE_REF}}",
+          "system": "${{SYSTEM}}",
+          "store_path": "${{OUTPUT_build_profile_store_path}}",
+          "machine": "${{MACHINE}}",
+          "timestamp": "${{BUREAU_TIMESTAMP}}"
         }
       }
     }
@@ -80,7 +80,7 @@
   "outputs": {
     "store_path": {
       "description": "Nix store path of the built environment profile",
-      "value": "${OUTPUT_build_profile_store_path}"
+      "value": "${{OUTPUT_build_profile_store_path}}"
     }
   },
 
@@ -89,21 +89,21 @@
       "name": "publish-failed",
       "publish": {
         "event_type": "m.bureau.environment_build",
-        "room": "${FLEET_ROOM_ID}",
-        "state_key": "${PROFILE}",
+        "room": "${{FLEET_ROOM_ID}}",
+        "state_key": "${{PROFILE}}",
         "content": {
-          "profile": "${PROFILE}",
-          "flake_ref": "${FLAKE_REF}",
-          "system": "${SYSTEM}",
+          "profile": "${{PROFILE}}",
+          "flake_ref": "${{FLAKE_REF}}",
+          "system": "${{SYSTEM}}",
           "store_path": "",
-          "machine": "${MACHINE}",
-          "timestamp": "${BUREAU_TIMESTAMP}"
+          "machine": "${{MACHINE}}",
+          "timestamp": "${{BUREAU_TIMESTAMP}}"
         }
       }
     }
   ],
 
   "log": {
-    "room": "${FLEET_ROOM_ID}"
+    "room": "${{FLEET_ROOM_ID}}"
   }
 }

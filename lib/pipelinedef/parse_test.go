@@ -52,22 +52,22 @@ func TestParse(t *testing.T) {
   "steps": [
     {
       "name": "clone",
-      "run": "git clone ${REPOSITORY}",
-      "when": "test -n '${REPOSITORY}'",
+      "run": "git clone ${{REPOSITORY}}",
+      "when": "test -n '${{REPOSITORY}}'",
       "timeout": "5m"
     },
     {
       "name": "publish-ready",
       "publish": {
         "event_type": "m.bureau.workspace",
-        "room": "${WORKSPACE_ROOM_ID}",
+        "room": "${{WORKSPACE_ROOM_ID}}",
         "state_key": "",
         "content": {"status": "ready"}
       }
     }
   ],
   "log": {
-    "room": "${WORKSPACE_ROOM_ID}"
+    "room": "${{WORKSPACE_ROOM_ID}}"
   }
 }`))
 		if err != nil {
@@ -100,7 +100,7 @@ func TestParse(t *testing.T) {
 		if content.Log == nil {
 			t.Fatal("Log is nil")
 		}
-		if content.Log.Room != "${WORKSPACE_ROOM_ID}" {
+		if content.Log.Room != "${{WORKSPACE_ROOM_ID}}" {
 			t.Errorf("Log.Room = %q", content.Log.Room)
 		}
 	})
@@ -114,7 +114,7 @@ func TestParse(t *testing.T) {
   "steps": [
     {
       "name": "clone",
-      "run": "git clone ${REPO}",
+      "run": "git clone ${{REPO}}",
       /* This step is optional because the repo
          might already be cloned */
       "optional": true,

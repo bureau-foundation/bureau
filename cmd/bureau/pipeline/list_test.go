@@ -18,7 +18,7 @@ func TestListPipelines(t *testing.T) {
 		"dev-workspace-init": {
 			Description: "Initialize a development workspace",
 			Steps: []pipelineschema.PipelineStep{
-				{Name: "clone", Run: "git clone ${REPO}"},
+				{Name: "clone", Run: "git clone ${{REPO}}"},
 				{Name: "setup", Run: "make setup"},
 			},
 		},

@@ -674,7 +674,7 @@ func resolvePipelineRef(ctx context.Context, pipelineRefString string, proxy *pr
 // loadTriggerVariables reads the trigger JSON file and converts its
 // top-level values to a string map with keys prefixed by "EVENT_".
 // This enables pipelines to reference trigger event fields via
-// ${EVENT_status}, ${EVENT_title}, ${EVENT_type}, etc.
+// ${{EVENT_status}}, ${{EVENT_title}}, ${{EVENT_type}}, etc.
 //
 // Value conversion:
 //   - string → pass through

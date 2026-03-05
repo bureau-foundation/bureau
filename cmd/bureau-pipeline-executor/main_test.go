@@ -627,7 +627,7 @@ func TestVariableExpansion(t *testing.T) {
 			"PROJECT":    {Required: true},
 		},
 		Steps: []pipeline.PipelineStep{
-			{Name: "use-vars", Run: `echo "repo=${REPOSITORY} project=${PROJECT}"`},
+			{Name: "use-vars", Run: `echo "repo=${{REPOSITORY}} project=${{PROJECT}}"`},
 		},
 	})
 
@@ -688,7 +688,7 @@ func TestThreadLoggingWithAliasResolution(t *testing.T) {
 		Variables: map[string]pipeline.PipelineVariable{
 			"WORKSPACE_ROOM": {Default: "#iree/workspace:bureau.local"},
 		},
-		Log: &pipeline.PipelineLog{Room: "${WORKSPACE_ROOM}"},
+		Log: &pipeline.PipelineLog{Room: "${{WORKSPACE_ROOM}}"},
 		Steps: []pipeline.PipelineStep{
 			{Name: "step-one", Run: "true"},
 		},
@@ -1289,7 +1289,7 @@ func TestOnFailureVariables(t *testing.T) {
 		OnFailure: []pipeline.PipelineStep{
 			{
 				Name: "record-failure",
-				Run:  fmt.Sprintf("echo \"step=${FAILED_STEP} error=${FAILED_ERROR}\" > %s", markerFile),
+				Run:  fmt.Sprintf("echo \"step=${{FAILED_STEP}} error=${{FAILED_ERROR}}\" > %s", markerFile),
 			},
 		},
 	})

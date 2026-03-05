@@ -15,7 +15,7 @@
 //  1. ReadFile or Parse: JSONC bytes → pipeline.PipelineContent
 //  2. Validate: structural checks (Run XOR Publish, required fields, etc.)
 //  3. ResolveVariables: merge declarations + payload + environment → variable map
-//  4. ExpandStep: substitute ${NAME} references in each step before execution
+//  4. ExpandStep: substitute ${{NAME}} references in each step before execution
 package pipelinedef
 
 import (

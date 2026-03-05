@@ -46,18 +46,18 @@ func TestPipelineContentRoundTrip(t *testing.T) {
 		Steps: []PipelineStep{
 			{
 				Name: "create-project-directory",
-				Run:  "mkdir -p /workspace/${PROJECT}",
+				Run:  "mkdir -p /workspace/${{PROJECT}}",
 			},
 			{
 				Name:    "clone-repository",
-				Run:     "git clone --bare ${REPOSITORY} /workspace/${PROJECT}/.bare",
-				Check:   "test -d /workspace/${PROJECT}/.bare/objects",
-				When:    "test -n '${REPOSITORY}'",
+				Run:     "git clone --bare ${{REPOSITORY}} /workspace/${{PROJECT}}/.bare",
+				Check:   "test -d /workspace/${{PROJECT}}/.bare/objects",
+				When:    "test -n '${{REPOSITORY}}'",
 				Timeout: "10m",
 			},
 			{
 				Name:     "run-project-init",
-				Run:      "/workspace/${PROJECT}/.bureau/pipeline/init",
+				Run:      "/workspace/${{PROJECT}}/.bureau/pipeline/init",
 				Optional: true,
 				Env:      map[string]string{"INIT_MODE": "full"},
 			},
@@ -65,18 +65,18 @@ func TestPipelineContentRoundTrip(t *testing.T) {
 				Name: "publish-active",
 				Publish: &PipelinePublish{
 					EventType: "m.bureau.workspace",
-					Room:      "${WORKSPACE_ROOM_ID}",
+					Room:      "${{WORKSPACE_ROOM_ID}}",
 					Content: map[string]any{
 						"status":     "active",
-						"project":    "${PROJECT}",
-						"machine":    "${MACHINE}",
+						"project":    "${{PROJECT}}",
+						"machine":    "${{MACHINE}}",
 						"updated_at": "2026-02-10T12:00:00Z",
 					},
 				},
 			},
 		},
 		Log: &PipelineLog{
-			Room: "${WORKSPACE_ROOM_ID}",
+			Room: "${{WORKSPACE_ROOM_ID}}",
 		},
 	}
 
@@ -125,13 +125,13 @@ func TestPipelineContentRoundTrip(t *testing.T) {
 	// First step: simple run.
 	firstStep := steps[0].(map[string]any)
 	assertField(t, firstStep, "name", "create-project-directory")
-	assertField(t, firstStep, "run", "mkdir -p /workspace/${PROJECT}")
+	assertField(t, firstStep, "run", "mkdir -p /workspace/${{PROJECT}}")
 
 	// Second step: run with check, when, timeout.
 	secondStep := steps[1].(map[string]any)
 	assertField(t, secondStep, "name", "clone-repository")
-	assertField(t, secondStep, "check", "test -d /workspace/${PROJECT}/.bare/objects")
-	assertField(t, secondStep, "when", "test -n '${REPOSITORY}'")
+	assertField(t, secondStep, "check", "test -d /workspace/${{PROJECT}}/.bare/objects")
+	assertField(t, secondStep, "when", "test -n '${{REPOSITORY}}'")
 	assertField(t, secondStep, "timeout", "10m")
 
 	// Third step: optional with env.
@@ -151,21 +151,21 @@ func TestPipelineContentRoundTrip(t *testing.T) {
 		t.Fatal("publish field missing or wrong type")
 	}
 	assertField(t, publish, "event_type", "m.bureau.workspace")
-	assertField(t, publish, "room", "${WORKSPACE_ROOM_ID}")
+	assertField(t, publish, "room", "${{WORKSPACE_ROOM_ID}}")
 	publishContent, ok := publish["content"].(map[string]any)
 	if !ok {
 		t.Fatal("publish content field missing or wrong type")
 	}
 	assertField(t, publishContent, "status", "active")
-	assertField(t, publishContent, "project", "${PROJECT}")
-	assertField(t, publishContent, "machine", "${MACHINE}")
+	assertField(t, publishContent, "project", "${{PROJECT}}")
+	assertField(t, publishContent, "machine", "${{MACHINE}}")
 
 	// Verify log.
 	logField, ok := raw["log"].(map[string]any)
 	if !ok {
 		t.Fatal("log field missing or wrong type")
 	}
-	assertField(t, logField, "room", "${WORKSPACE_ROOM_ID}")
+	assertField(t, logField, "room", "${{WORKSPACE_ROOM_ID}}")
 
 	// Round-trip back to struct.
 	var decoded PipelineContent
@@ -187,11 +187,11 @@ func TestPipelineContentRoundTrip(t *testing.T) {
 	if len(decoded.Steps) != 4 {
 		t.Fatalf("Steps count = %d, want 4", len(decoded.Steps))
 	}
-	if decoded.Steps[0].Run != "mkdir -p /workspace/${PROJECT}" {
-		t.Errorf("Steps[0].Run: got %q, want %q", decoded.Steps[0].Run, "mkdir -p /workspace/${PROJECT}")
+	if decoded.Steps[0].Run != "mkdir -p /workspace/${{PROJECT}}" {
+		t.Errorf("Steps[0].Run: got %q, want %q", decoded.Steps[0].Run, "mkdir -p /workspace/${{PROJECT}}")
 	}
-	if decoded.Steps[1].Check != "test -d /workspace/${PROJECT}/.bare/objects" {
-		t.Errorf("Steps[1].Check: got %q, want %q", decoded.Steps[1].Check, "test -d /workspace/${PROJECT}/.bare/objects")
+	if decoded.Steps[1].Check != "test -d /workspace/${{PROJECT}}/.bare/objects" {
+		t.Errorf("Steps[1].Check: got %q, want %q", decoded.Steps[1].Check, "test -d /workspace/${{PROJECT}}/.bare/objects")
 	}
 	if decoded.Steps[2].Optional != true {
 		t.Error("Steps[2].Optional should be true")
@@ -206,8 +206,8 @@ func TestPipelineContentRoundTrip(t *testing.T) {
 	if decoded.Log == nil {
 		t.Fatal("Log should not be nil after round-trip")
 	}
-	if decoded.Log.Room != "${WORKSPACE_ROOM_ID}" {
-		t.Errorf("Log.Room: got %q, want %q", decoded.Log.Room, "${WORKSPACE_ROOM_ID}")
+	if decoded.Log.Room != "${{WORKSPACE_ROOM_ID}}" {
+		t.Errorf("Log.Room: got %q, want %q", decoded.Log.Room, "${{WORKSPACE_ROOM_ID}}")
 	}
 }
 
@@ -253,7 +253,7 @@ func TestPipelineStepRunOnly(t *testing.T) {
 		Name:     "full-run-step",
 		Run:      "some-command --flag",
 		Check:    "test -f /expected/file",
-		When:     "test -n '${CONDITION}'",
+		When:     "test -n '${{CONDITION}}'",
 		Optional: true,
 		Timeout:  "30s",
 		Env:      map[string]string{"KEY": "value"},
@@ -273,7 +273,7 @@ func TestPipelineStepRunOnly(t *testing.T) {
 	assertField(t, raw, "name", "full-run-step")
 	assertField(t, raw, "run", "some-command --flag")
 	assertField(t, raw, "check", "test -f /expected/file")
-	assertField(t, raw, "when", "test -n '${CONDITION}'")
+	assertField(t, raw, "when", "test -n '${{CONDITION}}'")
 	assertField(t, raw, "optional", true)
 	assertField(t, raw, "timeout", "30s")
 
@@ -427,7 +427,7 @@ func TestPipelineStepGracePeriod(t *testing.T) {
 func TestPipelinePublishOmitsEmptyStateKey(t *testing.T) {
 	publish := PipelinePublish{
 		EventType: "m.bureau.workspace",
-		Room:      "${WORKSPACE_ROOM_ID}",
+		Room:      "${{WORKSPACE_ROOM_ID}}",
 		Content:   map[string]any{"status": "ready"},
 	}
 
@@ -441,7 +441,7 @@ func TestPipelinePublishOmitsEmptyStateKey(t *testing.T) {
 		t.Fatalf("Unmarshal to map: %v", err)
 	}
 	assertField(t, raw, "event_type", "m.bureau.workspace")
-	assertField(t, raw, "room", "${WORKSPACE_ROOM_ID}")
+	assertField(t, raw, "room", "${{WORKSPACE_ROOM_ID}}")
 	if _, exists := raw["state_key"]; exists {
 		t.Error("state_key should be omitted when empty")
 	}

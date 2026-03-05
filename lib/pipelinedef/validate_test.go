@@ -55,8 +55,8 @@ func TestValidate(t *testing.T) {
 				Steps: []pipeline.PipelineStep{
 					{
 						Name:    "clone",
-						Run:     "git clone ${REPO}",
-						When:    "test -n '${REPO}'",
+						Run:     "git clone ${{REPO}}",
+						When:    "test -n '${{REPO}}'",
 						Check:   "test -d .git",
 						Timeout: "5m",
 						Env:     map[string]string{"GIT_SSH_COMMAND": "ssh -o StrictHostKeyChecking=no"},
@@ -151,7 +151,7 @@ func TestValidate(t *testing.T) {
 				Steps: []pipeline.PipelineStep{
 					{
 						Name: "conditional-publish",
-						When: "test \"${MODE}\" = archive",
+						When: "test \"${{MODE}}\" = archive",
 						Publish: &pipeline.PipelinePublish{
 							EventType: "m.bureau.workspace",
 							Room:      "!room:bureau.local",
@@ -520,7 +520,7 @@ func TestValidate(t *testing.T) {
 				Steps: []pipeline.PipelineStep{
 					{
 						Name: "conditional-assert",
-						When: "test \"${MODE}\" = archive",
+						When: "test \"${{MODE}}\" = archive",
 						AssertState: &pipeline.PipelineAssertState{
 							Room:      "!room:bureau.local",
 							EventType: "m.bureau.workspace",

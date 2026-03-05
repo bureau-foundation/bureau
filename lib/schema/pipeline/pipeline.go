@@ -46,7 +46,7 @@ const PipelineResultContentVersion = 1
 // any structured task that benefits from observability, idempotency,
 // and Matrix-native logging.
 //
-// Variable substitution (${NAME}) is applied to all string fields in
+// Variable substitution (${{NAME}}) is applied to all string fields in
 // steps before execution. Variables are resolved from step-level env,
 // pipeline payload, Bureau runtime variables, and process environment.
 type PipelineContent struct {
@@ -88,7 +88,7 @@ type PipelineContent struct {
 	// Outputs declares the pipeline's return values — which step outputs
 	// are promoted to the pipeline result. Each entry maps an output name
 	// to a PipelineOutput with a description and a value expression that
-	// references step outputs via ${OUTPUT_<step>_<name>} variables.
+	// references step outputs via ${{OUTPUT_<step>_<name>}} variables.
 	//
 	// Pipeline outputs are resolved after all steps succeed. On failure
 	// or abort, no pipeline-level outputs are produced.
@@ -128,7 +128,7 @@ type PipelineVariable struct {
 // observers can consume structured results.
 //
 // The Value field is a variable expression (e.g.,
-// "${OUTPUT_clone_repository_head_sha}") that references a step output.
+// "${{OUTPUT_clone_repository_head_sha}}") that references a step output.
 // It is expanded after all steps succeed, using the same variable
 // substitution as step fields.
 type PipelineOutput struct {
@@ -139,7 +139,7 @@ type PipelineOutput struct {
 	Description string `json:"description,omitempty"`
 
 	// Value is a variable expression that resolves to the output value.
-	// Typically references a step output: "${OUTPUT_clone_repo_head_sha}".
+	// Typically references a step output: "${{OUTPUT_clone_repo_head_sha}}".
 	// Expanded after all steps succeed.
 	Value string `json:"value"`
 }
@@ -156,7 +156,7 @@ type PipelineStep struct {
 	Name string `json:"name"`
 
 	// Run is a shell command executed via /bin/sh -c. Multi-line
-	// strings are supported. Variable substitution (${NAME}) is
+	// strings are supported. Variable substitution (${{NAME}}) is
 	// applied before execution. Mutually exclusive with Publish.
 	Run string `json:"run,omitempty"`
 
@@ -168,7 +168,7 @@ type PipelineStep struct {
 
 	// When is a guard condition command. Runs before Run; if it
 	// exits non-zero, the step is skipped (not failed). Use for
-	// conditional steps: when: "test -n '${REPOSITORY}'" skips
+	// conditional steps: when: "test -n '${{REPOSITORY}}'" skips
 	// clone for non-git workspaces.
 	When string `json:"when,omitempty"`
 
@@ -249,7 +249,7 @@ type PipelineStep struct {
 // from a file produced by a run step.
 type PipelineStepOutput struct {
 	// Path is the filesystem path to read after the step succeeds.
-	// Supports ${VARIABLE} substitution (expanded before execution,
+	// Supports ${{VARIABLE}} substitution (expanded before execution,
 	// same as all other step string fields).
 	Path string `json:"path"`
 
@@ -318,14 +318,14 @@ func parseOneStepOutput(name string, raw json.RawMessage) (PipelineStepOutput, e
 // PipelinePublish describes a Matrix state event to publish as a
 // pipeline step. The executor connects to the proxy Unix socket
 // and PUTs the event directly (same mechanism as bureau-proxy-call).
-// All string fields support variable substitution (${NAME}).
+// All string fields support variable substitution (${{NAME}}).
 type PipelinePublish struct {
 	// EventType is the Matrix state event type (e.g.,
 	// "m.bureau.workspace").
 	EventType ref.EventType `json:"event_type"`
 
 	// Room is the target room alias or ID. Supports variable
-	// substitution (e.g., "${WORKSPACE_ROOM_ID}").
+	// substitution (e.g., "${{WORKSPACE_ROOM_ID}}").
 	Room string `json:"room"`
 
 	// StateKey is the state key for the event. Empty string is
@@ -369,7 +369,7 @@ func (m AssertMismatch) IsKnown() bool {
 //
 // Exactly one condition field must be set: Equals, NotEquals, In, or NotIn.
 //
-// All string fields support variable substitution (${NAME}).
+// All string fields support variable substitution (${{NAME}}).
 type PipelineAssertState struct {
 	// Room is the Matrix room alias or ID containing the state event.
 	Room string `json:"room"`
@@ -418,7 +418,7 @@ type PipelineAssertState struct {
 type PipelineLog struct {
 	// Room is the Matrix room alias or ID where execution threads
 	// are created. Supports variable substitution (e.g.,
-	// "${WORKSPACE_ROOM_ID}"). The executor resolves aliases via
+	// "${{WORKSPACE_ROOM_ID}}"). The executor resolves aliases via
 	// the proxy.
 	Room string `json:"room"`
 }

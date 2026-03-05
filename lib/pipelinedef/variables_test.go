@@ -203,7 +203,7 @@ func TestExpand(t *testing.T) {
 	t.Run("simple substitution", func(t *testing.T) {
 		t.Parallel()
 
-		result, err := Expand("git clone ${REPO}", map[string]string{"REPO": "https://github.com/org/repo"})
+		result, err := Expand("git clone ${{REPO}}", map[string]string{"REPO": "https://github.com/org/repo"})
 		if err != nil {
 			t.Fatalf("Expand: %v", err)
 		}
@@ -216,7 +216,7 @@ func TestExpand(t *testing.T) {
 		t.Parallel()
 
 		variables := map[string]string{"USER": "alice", "HOST": "example.com"}
-		result, err := Expand("ssh ${USER}@${HOST}", variables)
+		result, err := Expand("ssh ${{USER}}@${{HOST}}", variables)
 		if err != nil {
 			t.Fatalf("Expand: %v", err)
 		}
@@ -228,7 +228,7 @@ func TestExpand(t *testing.T) {
 	t.Run("repeated reference", func(t *testing.T) {
 		t.Parallel()
 
-		result, err := Expand("${X} and ${X}", map[string]string{"X": "value"})
+		result, err := Expand("${{X}} and ${{X}}", map[string]string{"X": "value"})
 		if err != nil {
 			t.Fatalf("Expand: %v", err)
 		}
@@ -273,10 +273,24 @@ func TestExpand(t *testing.T) {
 		}
 	})
 
+	t.Run("shell braced syntax left for shell", func(t *testing.T) {
+		t.Parallel()
+
+		// Shell's ${NAME} syntax is distinct from pipeline's ${{NAME}}.
+		// Both bare $NAME and braced ${NAME} pass through untouched.
+		result, err := Expand(`test "${MY_SECRET}" = "expected"`, nil)
+		if err != nil {
+			t.Fatalf("Expand: %v", err)
+		}
+		if result != `test "${MY_SECRET}" = "expected"` {
+			t.Errorf("result = %q (shell braced syntax should be unchanged)", result)
+		}
+	})
+
 	t.Run("unresolved variable", func(t *testing.T) {
 		t.Parallel()
 
-		_, err := Expand("git clone ${REPO}", map[string]string{})
+		_, err := Expand("git clone ${{REPO}}", map[string]string{})
 		if err == nil {
 			t.Fatal("expected error for unresolved variable")
 		}
@@ -288,7 +302,7 @@ func TestExpand(t *testing.T) {
 	t.Run("multiple unresolved variables", func(t *testing.T) {
 		t.Parallel()
 
-		_, err := Expand("${ALPHA} and ${BRAVO}", map[string]string{})
+		_, err := Expand("${{ALPHA}} and ${{BRAVO}}", map[string]string{})
 		if err == nil {
 			t.Fatal("expected error for unresolved variables")
 		}
@@ -300,7 +314,7 @@ func TestExpand(t *testing.T) {
 	t.Run("variable with underscore and digits", func(t *testing.T) {
 		t.Parallel()
 
-		result, err := Expand("${MY_VAR_2}", map[string]string{"MY_VAR_2": "value"})
+		result, err := Expand("${{MY_VAR_2}}", map[string]string{"MY_VAR_2": "value"})
 		if err != nil {
 			t.Fatalf("Expand: %v", err)
 		}
@@ -312,7 +326,7 @@ func TestExpand(t *testing.T) {
 	t.Run("adjacent to braces", func(t *testing.T) {
 		t.Parallel()
 
-		result, err := Expand("{${NAME}}", map[string]string{"NAME": "test"})
+		result, err := Expand("{${{NAME}}}", map[string]string{"NAME": "test"})
 		if err != nil {
 			t.Fatalf("Expand: %v", err)
 		}
@@ -324,7 +338,7 @@ func TestExpand(t *testing.T) {
 	t.Run("empty value is valid", func(t *testing.T) {
 		t.Parallel()
 
-		result, err := Expand("prefix-${EMPTY}-suffix", map[string]string{"EMPTY": ""})
+		result, err := Expand("prefix-${{EMPTY}}-suffix", map[string]string{"EMPTY": ""})
 		if err != nil {
 			t.Fatalf("Expand: %v", err)
 		}
@@ -342,9 +356,9 @@ func TestExpandStep(t *testing.T) {
 
 		step := pipeline.PipelineStep{
 			Name:  "clone",
-			Run:   "git clone ${REPO} ${WORKSPACE}/src",
-			When:  "test -n '${REPO}'",
-			Check: "test -d ${WORKSPACE}/src/.git",
+			Run:   "git clone ${{REPO}} ${{WORKSPACE}}/src",
+			When:  "test -n '${{REPO}}'",
+			Check: "test -d ${{WORKSPACE}}/src/.git",
 		}
 		variables := map[string]string{
 			"REPO":      "https://github.com/org/repo",
@@ -371,7 +385,7 @@ func TestExpandStep(t *testing.T) {
 
 		step := pipeline.PipelineStep{
 			Name: "build",
-			Run:  "CC=${CC} make",
+			Run:  "CC=${{CC}} make",
 			Env:  map[string]string{"CC": "clang"},
 		}
 		variables := map[string]string{"CC": "gcc"}
@@ -390,8 +404,8 @@ func TestExpandStep(t *testing.T) {
 
 		step := pipeline.PipelineStep{
 			Name: "setup",
-			Run:  "cat ${CONFIG}",
-			Env:  map[string]string{"CONFIG": "${WORKSPACE}/config.json"},
+			Run:  "cat ${{CONFIG}}",
+			Env:  map[string]string{"CONFIG": "${{WORKSPACE}}/config.json"},
 		}
 		variables := map[string]string{"WORKSPACE": "/var/bureau/workspace/test"}
 
@@ -417,11 +431,11 @@ func TestExpandStep(t *testing.T) {
 			Name: "publish-ready",
 			Publish: &pipeline.PipelinePublish{
 				EventType: "m.bureau.workspace",
-				Room:      "${WORKSPACE_ROOM}",
-				StateKey:  "${MACHINE}",
+				Room:      "${{WORKSPACE_ROOM}}",
+				StateKey:  "${{MACHINE}}",
 				Content: map[string]any{
 					"status":    "ready",
-					"workspace": "${WORKSPACE}",
+					"workspace": "${{WORKSPACE}}",
 				},
 			},
 		}
@@ -456,7 +470,7 @@ func TestExpandStep(t *testing.T) {
 				Room:      "!room:test",
 				Content: map[string]any{
 					"nested": map[string]any{
-						"path": "${WORKSPACE}/data",
+						"path": "${{WORKSPACE}}/data",
 					},
 					"count": 42,
 				},
@@ -483,7 +497,7 @@ func TestExpandStep(t *testing.T) {
 
 		step := pipeline.PipelineStep{
 			Name: "broken",
-			Run:  "echo ${MISSING}",
+			Run:  "echo ${{MISSING}}",
 		}
 
 		_, err := ExpandStep(step, map[string]string{})
@@ -504,7 +518,7 @@ func TestExpandStep(t *testing.T) {
 		variables := map[string]string{"X": "original"}
 		step := pipeline.PipelineStep{
 			Name: "test",
-			Run:  "echo ${X}",
+			Run:  "echo ${{X}}",
 			Env:  map[string]string{"X": "overridden"},
 		}
 
@@ -540,12 +554,12 @@ func TestExpandStep(t *testing.T) {
 		step := pipeline.PipelineStep{
 			Name: "check-status",
 			AssertState: &pipeline.PipelineAssertState{
-				Room:      "${WORKSPACE_ROOM_ID}",
+				Room:      "${{WORKSPACE_ROOM_ID}}",
 				EventType: "m.bureau.worktree",
-				StateKey:  "${WORKTREE_PATH}",
+				StateKey:  "${{WORKTREE_PATH}}",
 				Field:     "status",
-				Equals:    "${EXPECTED_STATUS}",
-				Message:   "expected ${EXPECTED_STATUS} but got something else",
+				Equals:    "${{EXPECTED_STATUS}}",
+				Message:   "expected ${{EXPECTED_STATUS}} but got something else",
 			},
 		}
 		variables := map[string]string{
@@ -581,7 +595,7 @@ func TestExpandStep(t *testing.T) {
 				Room:      "!room:bureau.local",
 				EventType: "m.bureau.workspace",
 				Field:     "status",
-				In:        []string{"${STATUS_A}", "${STATUS_B}"},
+				In:        []string{"${{STATUS_A}}", "${{STATUS_B}}"},
 			},
 		}
 		variables := map[string]string{
@@ -613,7 +627,7 @@ func TestExpandStep(t *testing.T) {
 				Room:      "!room:bureau.local",
 				EventType: "m.bureau.workspace",
 				Field:     "status",
-				NotIn:     []string{"${TERMINAL_A}", "${TERMINAL_B}"},
+				NotIn:     []string{"${{TERMINAL_A}}", "${{TERMINAL_B}}"},
 			},
 		}
 		variables := map[string]string{
@@ -644,9 +658,9 @@ func TestExpandStep(t *testing.T) {
 			AssertState: &pipeline.PipelineAssertState{
 				Room:      "!room:bureau.local",
 				EventType: "m.bureau.worktree",
-				StateKey:  "${WORKTREE_PATH}",
+				StateKey:  "${{WORKTREE_PATH}}",
 				Field:     "status",
-				NotEquals: "${FORBIDDEN_STATUS}",
+				NotEquals: "${{FORBIDDEN_STATUS}}",
 			},
 		}
 		variables := map[string]string{
@@ -686,7 +700,7 @@ func TestExpandStep(t *testing.T) {
 		step := pipeline.PipelineStep{
 			Name: "broken-assert",
 			AssertState: &pipeline.PipelineAssertState{
-				Room:      "${MISSING_ROOM}",
+				Room:      "${{MISSING_ROOM}}",
 				EventType: "m.bureau.workspace",
 				Field:     "status",
 				Equals:    "active",
@@ -709,11 +723,11 @@ func TestExpandStep(t *testing.T) {
 		t.Parallel()
 
 		original := &pipeline.PipelineAssertState{
-			Room:      "${ROOM}",
+			Room:      "${{ROOM}}",
 			EventType: "m.bureau.worktree",
 			Field:     "status",
 			Equals:    "active",
-			In:        []string{"${A}", "${B}"},
+			In:        []string{"${{A}}", "${{B}}"},
 		}
 		step := pipeline.PipelineStep{
 			Name:        "check",
@@ -734,10 +748,10 @@ func TestExpandStep(t *testing.T) {
 			t.Errorf("expanded Room = %q", expanded.AssertState.Room)
 		}
 		// Original should be untouched.
-		if original.Room != "${ROOM}" {
+		if original.Room != "${{ROOM}}" {
 			t.Errorf("original Room was modified to %q", original.Room)
 		}
-		if original.In[0] != "${A}" {
+		if original.In[0] != "${{A}}" {
 			t.Errorf("original In[0] was modified to %q", original.In[0])
 		}
 	})
@@ -749,7 +763,7 @@ func TestExpandStep(t *testing.T) {
 			Name: "build",
 			Run:  "make build",
 			Outputs: map[string]json.RawMessage{
-				"binary": json.RawMessage(`"/tmp/outputs/${PROJECT}_bin"`),
+				"binary": json.RawMessage(`"/tmp/outputs/${{PROJECT}}_bin"`),
 			},
 		}
 		variables := map[string]string{"PROJECT": "myapp"}

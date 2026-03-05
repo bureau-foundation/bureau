@@ -50,7 +50,7 @@ func TestValidateJSONCWithComments(t *testing.T) {
   },
 
   "steps": [
-    {"name": "clone", "run": "git clone ${PROJECT}"},
+    {"name": "clone", "run": "git clone ${{PROJECT}}"},
     {"name": "setup", "run": "make setup", "timeout": "5m"},
   ]
 }`), 0o644)
@@ -362,7 +362,7 @@ func TestValidatePipelineContent(t *testing.T) {
 			name: "valid with when guard",
 			content: &pipeline.PipelineContent{
 				Steps: []pipeline.PipelineStep{
-					{Name: "optional", Run: "echo done", When: "${DEPLOY}"},
+					{Name: "optional", Run: "echo done", When: "${{DEPLOY}}"},
 				},
 			},
 			expectedIssues: 0,
@@ -424,7 +424,7 @@ func TestReadPipelineFile(t *testing.T) {
   },
   "steps": [
     {"name": "build", "run": "make build"},
-    {"name": "deploy", "run": "make deploy TARGET=${TARGET}", "timeout": "10m"}
+    {"name": "deploy", "run": "make deploy TARGET=${{TARGET}}", "timeout": "10m"}
   ]
 }`), 0o644)
 		if err != nil {
@@ -495,7 +495,7 @@ func TestReadPipelineFile(t *testing.T) {
 		err := os.WriteFile(path, []byte(`{
   "description": "Workspace setup",
   "steps": [
-    {"name": "clone", "run": "git clone ${REPO}"},
+    {"name": "clone", "run": "git clone ${{REPO}}"},
     {
       "name": "announce",
       "publish": {

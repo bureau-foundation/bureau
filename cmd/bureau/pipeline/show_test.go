@@ -21,7 +21,7 @@ func TestShowPipeline(t *testing.T) {
 				"PROJECT": {Description: "project name", Required: true},
 			},
 			Steps: []pipelineschema.PipelineStep{
-				{Name: "clone", Run: "git clone ${REPO}"},
+				{Name: "clone", Run: "git clone ${{REPO}}"},
 				{Name: "setup", Run: "make setup", Timeout: "10m"},
 			},
 			Log: &pipelineschema.PipelineLog{Room: "#iree/general:bureau.local"},

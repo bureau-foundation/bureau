@@ -61,7 +61,7 @@ A pipeline definition has four top-level sections:
   ],
 
   "log": {
-    "room": "${WORKSPACE_ROOM_ID}"
+    "room": "${{WORKSPACE_ROOM_ID}}"
   }
 }
 ```
@@ -122,11 +122,11 @@ stuck in a transitional state:
     "name": "publish-failed",
     "publish": {
       "event_type": "m.bureau.workspace",
-      "room": "${WORKSPACE_ROOM_ID}",
+      "room": "${{WORKSPACE_ROOM_ID}}",
       "content": {
         "status": "failed",
-        "project": "${PROJECT}",
-        "machine": "${MACHINE}"
+        "project": "${{PROJECT}}",
+        "machine": "${{MACHINE}}"
       }
     }
   }
@@ -160,8 +160,8 @@ environment's `bin/` directory is on `PATH` but `/bin` may not exist.
 ```jsonc
 {
   "name": "clone-repository",
-  "run": "git clone --bare ${REPOSITORY} /workspace/${PROJECT}/.bare",
-  "check": "test -d /workspace/${PROJECT}/.bare/objects",
+  "run": "git clone --bare ${{REPOSITORY}} /workspace/${{PROJECT}}/.bare",
+  "check": "test -d /workspace/${{PROJECT}}/.bare/objects",
   "timeout": "10m"
 }
 ```
@@ -200,12 +200,12 @@ URLs directly.
   "name": "publish-active",
   "publish": {
     "event_type": "m.bureau.workspace",
-    "room": "${WORKSPACE_ROOM_ID}",
-    "state_key": "${WORKTREE_PATH}",
+    "room": "${{WORKSPACE_ROOM_ID}}",
+    "state_key": "${{WORKTREE_PATH}}",
     "content": {
       "status": "active",
-      "project": "${PROJECT}",
-      "machine": "${MACHINE}"
+      "project": "${{PROJECT}}",
+      "machine": "${{MACHINE}}"
     }
   }
 }
@@ -229,9 +229,9 @@ Used for precondition checks and advisory compare-and-swap patterns.
 {
   "name": "assert-still-removing",
   "assert_state": {
-    "room": "${WORKSPACE_ROOM_ID}",
+    "room": "${{WORKSPACE_ROOM_ID}}",
     "event_type": "m.bureau.worktree",
-    "state_key": "${WORKTREE_PATH}",
+    "state_key": "${{WORKTREE_PATH}}",
     "field": "status",
     "equals": "removing",
     "on_mismatch": "abort",
@@ -267,9 +267,11 @@ Mismatch behavior:
 
 ## Variable Resolution
 
-Variable substitution uses the `${NAME}` form exclusively — braces are
-required. Bare `$NAME` is left for shell interpretation. Variable names
-must match `[A-Za-z_][A-Za-z0-9_]*`.
+Variable substitution uses the `${{NAME}}` form — double braces, modeled
+after GitHub Actions. The syntax is deliberately disjoint from shell
+variable expansion (`$NAME`, `${NAME}`), so pipeline variables never
+collide with shell syntax in `run` commands. Variable names must match
+`[A-Za-z_][A-Za-z0-9_]*`.
 
 ### Resolution Priority
 
@@ -303,10 +305,10 @@ Variable expansion is applied to all string fields in steps before
 execution. Step-level `env` values are expanded first (against
 pipeline-level variables only), then merged into the variable map for
 expanding other step fields. This means a `run` command can reference
-step-level env variables with `${NAME}`, and those values already have
-their own `${REFERENCES}` resolved.
+step-level env variables with `${{NAME}}`, and those values already have
+their own `${{REFERENCES}}` resolved.
 
-Expansion is strict: any `${NAME}` reference that cannot be resolved
+Expansion is strict: any `${{NAME}}` reference that cannot be resolved
 produces an error, and the pipeline fails. Pipelines do not silently
 produce broken commands from unresolvable references.
 

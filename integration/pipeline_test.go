@@ -279,7 +279,7 @@ func TestPipelineParameterPropagation(t *testing.T) {
 			// test(1) returns 0 (success) if the string comparison
 			// is true. If PROJECT was not propagated or resolved,
 			// this fails.
-			{Name: "verify-project", Run: `test "${PROJECT}" = "iree"`},
+			{Name: "verify-project", Run: `test "${{PROJECT}}" = "iree"`},
 		},
 	})
 
@@ -293,7 +293,7 @@ func TestPipelineParameterPropagation(t *testing.T) {
 			"room":     projectRoomID.String(),
 			// This top-level parameter becomes a ticket variable.
 			// The executor reads it from TicketContent.Pipeline.Variables,
-			// and ResolveVariables makes it available as ${PROJECT}.
+			// and ResolveVariables makes it available as ${{PROJECT}}.
 			"PROJECT": "iree",
 		},
 	})
@@ -644,10 +644,10 @@ func TestPipelineTemplateCredentials(t *testing.T) {
 			// test(1) returns 0 if the comparison is true. If the
 			// credential was not decrypted, mapped, or injected, this
 			// step fails and the pipeline closes with "failure".
-			// Use bare $MY_SECRET (no braces): the pipeline executor
-			// expands ${NAME} as pipeline variables before shell
-			// execution; $NAME is left for shell interpretation.
-			{Name: "verify-secret", Run: `test "$MY_SECRET" = "integration-test-secret-42"`},
+			// Shell's ${NAME} syntax is safe here: pipeline variables
+			// use ${{NAME}} (double braces), so ${MY_SECRET} passes
+			// through to the shell as a normal environment variable.
+			{Name: "verify-secret", Run: `test "${MY_SECRET}" = "integration-test-secret-42"`},
 		},
 	})
 

@@ -69,7 +69,7 @@ The --room flag specifies where the pip- ticket is created. The room
 must have ticket management enabled with pipeline type allowed.
 
 Parameters are passed through to the pipeline executor as ticket
-variables, accessible in pipeline steps via ${NAME} substitution.`,
+variables, accessible in pipeline steps via ${{NAME}} substitution.`,
 		Usage: "bureau pipeline run [flags] <pipeline-ref> --machine <machine> --room <room>",
 		Examples: []cli.Example{
 			{

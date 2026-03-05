@@ -14,11 +14,12 @@ import (
 	"github.com/bureau-foundation/bureau/lib/schema/pipeline"
 )
 
-// variablePattern matches ${NAME} references in strings. Only the
-// braced form is recognized — bare $NAME is left for shell
-// interpretation. Variable names must start with a letter or
-// underscore and contain only letters, digits, and underscores.
-var variablePattern = regexp.MustCompile(`\$\{([A-Za-z_][A-Za-z0-9_]*)\}`)
+// variablePattern matches ${{NAME}} references in strings. The
+// double-brace syntax is deliberately disjoint from shell variable
+// expansion ($NAME, ${NAME}) so pipeline variables never collide with
+// shell syntax. Variable names must start with a letter or underscore
+// and contain only letters, digits, and underscores.
+var variablePattern = regexp.MustCompile(`\$\{\{([A-Za-z_][A-Za-z0-9_]*)\}\}`)
 
 // ResolveVariables merges variable sources according to pipeline
 // resolution order (lowest to highest priority):
@@ -77,9 +78,10 @@ func ResolveVariables(declarations map[string]pipeline.PipelineVariable, payload
 	return resolved, nil
 }
 
-// Expand replaces ${NAME} references in input with values from the
-// variables map. Only the ${NAME} form is recognized (braces required);
-// bare $NAME is left for shell interpretation.
+// Expand replaces ${{NAME}} references in input with values from the
+// variables map. The double-brace syntax (${{NAME}}) is used for
+// pipeline variables; shell syntax ($NAME, ${NAME}) passes through
+// untouched.
 //
 // Returns an error listing all referenced variables that have no value
 // in the map. This ensures pipeline definitions fail fast on
@@ -88,8 +90,8 @@ func Expand(input string, variables map[string]string) (string, error) {
 	var unresolved []string
 
 	result := variablePattern.ReplaceAllStringFunc(input, func(match string) string {
-		// Extract the variable name from ${NAME}.
-		name := match[2 : len(match)-1]
+		// Extract the variable name from ${{NAME}}.
+		name := match[3 : len(match)-2]
 		if value, exists := variables[name]; exists {
 			return value
 		}
@@ -108,8 +110,8 @@ func Expand(input string, variables map[string]string) (string, error) {
 // using Expand. Step-level Env values are expanded first (against
 // pipeline variables only), then merged into the variable map for
 // expanding other fields. This means a run command can reference
-// step env variables with ${NAME}, and those values will already
-// have their own ${REFERENCES} resolved.
+// step env variables with ${{NAME}}, and those values will already
+// have their own ${{REFERENCES}} resolved.
 //
 // The original step and variables map are not modified.
 func ExpandStep(step pipeline.PipelineStep, variables map[string]string) (pipeline.PipelineStep, error) {
@@ -220,7 +222,7 @@ func ExpandStep(step pipeline.PipelineStep, variables map[string]string) (pipeli
 
 	// Expand output path fields. Parse each raw declaration, expand
 	// the Path, and re-serialize. This ensures output file paths can
-	// reference pipeline variables (e.g., "/tmp/outputs/${PROJECT}_sha").
+	// reference pipeline variables (e.g., "/tmp/outputs/${{PROJECT}}_sha").
 	if len(step.Outputs) > 0 {
 		expandedOutputs := make(map[string]json.RawMessage, len(step.Outputs))
 		for name, raw := range step.Outputs {
@@ -245,7 +247,7 @@ func ExpandStep(step pipeline.PipelineStep, variables map[string]string) (pipeli
 	return step, nil
 }
 
-// expandMap recursively expands ${NAME} references in string values
+// expandMap recursively expands ${{NAME}} references in string values
 // within a map[string]any. Non-string values are passed through
 // unchanged. Nested maps are expanded recursively.
 func expandMap(input map[string]any, variables map[string]string) (map[string]any, error) {

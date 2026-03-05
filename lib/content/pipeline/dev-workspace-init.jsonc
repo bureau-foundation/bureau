@@ -45,12 +45,12 @@
   "steps": [
     {
       "name": "create-project-directory",
-      "run": "mkdir -p /workspace/${PROJECT} /workspace/${PROJECT}/.scratch"
+      "run": "mkdir -p /workspace/${{PROJECT}} /workspace/${{PROJECT}}/.scratch"
     },
     {
       "name": "clone-repository",
-      "run": "if [ ! -d /workspace/${PROJECT}/.bare ]; then\n  git clone --bare ${REPOSITORY} /workspace/${PROJECT}/.bare\nfi\nmkdir -p /tmp/outputs\ngit -C /workspace/${PROJECT}/.bare rev-parse HEAD > /tmp/outputs/head_sha\ngit -C /workspace/${PROJECT}/.bare symbolic-ref --short HEAD > /tmp/outputs/default_branch",
-      "check": "test -d /workspace/${PROJECT}/.bare/objects",
+      "run": "if [ ! -d /workspace/${{PROJECT}}/.bare ]; then\n  git clone --bare ${{REPOSITORY}} /workspace/${{PROJECT}}/.bare\nfi\nmkdir -p /tmp/outputs\ngit -C /workspace/${{PROJECT}}/.bare rev-parse HEAD > /tmp/outputs/head_sha\ngit -C /workspace/${{PROJECT}}/.bare symbolic-ref --short HEAD > /tmp/outputs/default_branch",
+      "check": "test -d /workspace/${{PROJECT}}/.bare/objects",
       "timeout": "10m",
       "outputs": {
         "head_sha": "/tmp/outputs/head_sha",
@@ -63,8 +63,8 @@
       // running it. The guard uses git-cat-file to check existence without
       // extracting.
       "name": "run-project-init",
-      "when": "git -C /workspace/${PROJECT}/.bare cat-file -e HEAD:.bureau/pipeline/init 2>/dev/null",
-      "run": "git -C /workspace/${PROJECT}/.bare show HEAD:.bureau/pipeline/init > /tmp/bureau-project-init && chmod +x /tmp/bureau-project-init && /tmp/bureau-project-init",
+      "when": "git -C /workspace/${{PROJECT}}/.bare cat-file -e HEAD:.bureau/pipeline/init 2>/dev/null",
+      "run": "git -C /workspace/${{PROJECT}}/.bare show HEAD:.bureau/pipeline/init > /tmp/bureau-project-init && chmod +x /tmp/bureau-project-init && /tmp/bureau-project-init",
       "optional": true,
       "timeout": "10m"
     },
@@ -72,12 +72,12 @@
       "name": "publish-active",
       "publish": {
         "event_type": "m.bureau.workspace",
-        "room": "${WORKSPACE_ROOM_ID}",
+        "room": "${{WORKSPACE_ROOM_ID}}",
         "content": {
           "status": "active",
-          "project": "${PROJECT}",
-          "machine": "${MACHINE}",
-          "workspace_path": "${WORKSPACE_PATH}"
+          "project": "${{PROJECT}}",
+          "machine": "${{MACHINE}}",
+          "workspace_path": "${{WORKSPACE_PATH}}"
         }
       }
     }
@@ -86,11 +86,11 @@
   "outputs": {
     "head_sha": {
       "description": "HEAD commit SHA of the cloned repository",
-      "value": "${OUTPUT_clone_repository_head_sha}"
+      "value": "${{OUTPUT_clone_repository_head_sha}}"
     },
     "default_branch": {
       "description": "Default branch name of the cloned repository",
-      "value": "${OUTPUT_clone_repository_default_branch}"
+      "value": "${{OUTPUT_clone_repository_default_branch}}"
     }
   },
 
@@ -99,17 +99,17 @@
       "name": "publish-failed",
       "publish": {
         "event_type": "m.bureau.workspace",
-        "room": "${WORKSPACE_ROOM_ID}",
+        "room": "${{WORKSPACE_ROOM_ID}}",
         "content": {
           "status": "failed",
-          "project": "${PROJECT}",
-          "machine": "${MACHINE}"
+          "project": "${{PROJECT}}",
+          "machine": "${{MACHINE}}"
         }
       }
     }
   ],
 
   "log": {
-    "room": "${WORKSPACE_ROOM_ID}"
+    "room": "${{WORKSPACE_ROOM_ID}}"
   }
 }

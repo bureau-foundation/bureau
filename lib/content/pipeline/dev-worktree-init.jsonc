@@ -4,7 +4,7 @@
   // pipeline executor sandbox.
   //
   // Assumes the project's bare repository already exists at
-  // /workspace/${PROJECT}/.bare/ (created by dev-workspace-init).
+  // /workspace/${{PROJECT}}/.bare/ (created by dev-workspace-init).
   //
   // Execution order:
   //   - Verify the bare repository exists
@@ -45,12 +45,12 @@
   "steps": [
     {
       "name": "verify-bare-repo",
-      "run": "test -d /workspace/${PROJECT}/.bare/objects",
-      "check": "test -d /workspace/${PROJECT}/.bare/objects"
+      "run": "test -d /workspace/${{PROJECT}}/.bare/objects",
+      "check": "test -d /workspace/${{PROJECT}}/.bare/objects"
     },
     {
       "name": "create-parent-directories",
-      "run": "mkdir -p $(dirname /workspace/${PROJECT}/${WORKTREE_PATH})"
+      "run": "mkdir -p $(dirname /workspace/${{PROJECT}}/${{WORKTREE_PATH}})"
     },
     {
       // Create the worktree. When BRANCH is empty, git worktree add
@@ -63,17 +63,17 @@
       // making this step idempotent for pipeline retries after partial
       // completion.
       "name": "create-worktree",
-      "when": "! test -d /workspace/${PROJECT}/${WORKTREE_PATH}/.git && ! test -f /workspace/${PROJECT}/${WORKTREE_PATH}/.git",
-      "run": "if [ -n \"${BRANCH}\" ]; then\n  git -C /workspace/${PROJECT}/.bare worktree add /workspace/${PROJECT}/${WORKTREE_PATH} \"${BRANCH}\"\nelse\n  git -C /workspace/${PROJECT}/.bare worktree add --detach /workspace/${PROJECT}/${WORKTREE_PATH}\nfi",
-      "check": "test -d /workspace/${PROJECT}/${WORKTREE_PATH}/.git || test -f /workspace/${PROJECT}/${WORKTREE_PATH}/.git",
+      "when": "! test -d /workspace/${{PROJECT}}/${{WORKTREE_PATH}}/.git && ! test -f /workspace/${{PROJECT}}/${{WORKTREE_PATH}}/.git",
+      "run": "if [ -n \"${{BRANCH}}\" ]; then\n  git -C /workspace/${{PROJECT}}/.bare worktree add /workspace/${{PROJECT}}/${{WORKTREE_PATH}} \"${{BRANCH}}\"\nelse\n  git -C /workspace/${{PROJECT}}/.bare worktree add --detach /workspace/${{PROJECT}}/${{WORKTREE_PATH}}\nfi",
+      "check": "test -d /workspace/${{PROJECT}}/${{WORKTREE_PATH}}/.git || test -f /workspace/${{PROJECT}}/${{WORKTREE_PATH}}/.git",
       "timeout": "5m"
     },
     {
       // Update submodules if the repository uses them. The --init flag
       // handles first-time checkout. Skipped if no .gitmodules exists.
       "name": "submodule-update",
-      "when": "test -f /workspace/${PROJECT}/${WORKTREE_PATH}/.gitmodules",
-      "run": "git -C /workspace/${PROJECT}/${WORKTREE_PATH} submodule update --init --recursive",
+      "when": "test -f /workspace/${{PROJECT}}/${{WORKTREE_PATH}}/.gitmodules",
+      "run": "git -C /workspace/${{PROJECT}}/${{WORKTREE_PATH}} submodule update --init --recursive",
       "optional": true,
       "timeout": "30m"
     },
@@ -83,8 +83,8 @@
       // (not via git show HEAD:...) so the script matches the branch
       // that was actually checked out.
       "name": "run-worktree-init",
-      "when": "test -x /workspace/${PROJECT}/${WORKTREE_PATH}/.bureau/pipeline/worktree-init",
-      "run": "cd /workspace/${PROJECT}/${WORKTREE_PATH} && PROJECT=${PROJECT} WORKTREE_PATH=${WORKTREE_PATH} BRANCH=${BRANCH} .bureau/pipeline/worktree-init",
+      "when": "test -x /workspace/${{PROJECT}}/${{WORKTREE_PATH}}/.bureau/pipeline/worktree-init",
+      "run": "cd /workspace/${{PROJECT}}/${{WORKTREE_PATH}} && PROJECT=${{PROJECT}} WORKTREE_PATH=${{WORKTREE_PATH}} BRANCH=${{BRANCH}} .bureau/pipeline/worktree-init",
       "optional": true,
       "timeout": "10m"
     },
@@ -92,14 +92,14 @@
       "name": "publish-active",
       "publish": {
         "event_type": "m.bureau.worktree",
-        "room": "${WORKSPACE_ROOM_ID}",
-        "state_key": "${WORKTREE_PATH}",
+        "room": "${{WORKSPACE_ROOM_ID}}",
+        "state_key": "${{WORKTREE_PATH}}",
         "content": {
           "status": "active",
-          "project": "${PROJECT}",
-          "worktree_path": "${WORKTREE_PATH}",
-          "branch": "${BRANCH}",
-          "machine": "${MACHINE}"
+          "project": "${{PROJECT}}",
+          "worktree_path": "${{WORKTREE_PATH}}",
+          "branch": "${{BRANCH}}",
+          "machine": "${{MACHINE}}"
         }
       }
     }
@@ -110,19 +110,19 @@
       "name": "publish-failed",
       "publish": {
         "event_type": "m.bureau.worktree",
-        "room": "${WORKSPACE_ROOM_ID}",
-        "state_key": "${WORKTREE_PATH}",
+        "room": "${{WORKSPACE_ROOM_ID}}",
+        "state_key": "${{WORKTREE_PATH}}",
         "content": {
           "status": "failed",
-          "project": "${PROJECT}",
-          "worktree_path": "${WORKTREE_PATH}",
-          "machine": "${MACHINE}"
+          "project": "${{PROJECT}}",
+          "worktree_path": "${{WORKTREE_PATH}}",
+          "machine": "${{MACHINE}}"
         }
       }
     }
   ],
 
   "log": {
-    "room": "${WORKSPACE_ROOM_ID}"
+    "room": "${{WORKSPACE_ROOM_ID}}"
   }
 }

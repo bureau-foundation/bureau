@@ -39,6 +39,7 @@ func buildSyncFilter() string {
 		schema.EventTypeTicketConfig,
 		pipeline.EventTypePipelineResult,
 		schema.EventTypeStewardship,
+		schema.EventTypeReservation,
 		schema.MatrixEventTypeTombstone,
 		schema.MatrixEventTypeRoomMember,
 		schema.MatrixEventTypeCanonicalAlias,
@@ -557,6 +558,29 @@ func (ts *TicketService) processRoomSync(ctx context.Context, roomID ref.RoomID,
 	// the same sync cycle if their target has already passed).
 	if len(closedTicketIDs) > 0 {
 		ts.resolveUnblockedTimerTargets(ctx, roomID, state, closedTicketIDs)
+	}
+
+	// Phase 1.75: Check closed tickets for relay ticket closure.
+	// If a relay ticket in an ops room was closed (e.g., denied by
+	// the resource owner), trigger denial cascade to close all
+	// other relay tickets and the workspace ticket.
+	for _, closedID := range closedTicketIDs {
+		if closedContent, exists := state.index.Get(closedID); exists {
+			ts.handleRelayTicketClosed(ctx, roomID, closedID, closedContent)
+		}
+	}
+
+	// Phase 1.8: Mirror relay ticket status changes to workspace
+	// claims. When a relay ticket in an ops room changes status
+	// (e.g., in_progress), update the corresponding claim in the
+	// workspace ticket. Runs after closure handling so that denial
+	// cascades take precedence over individual claim updates.
+	for _, event := range stateEvents {
+		if event.Type == schema.EventTypeTicket && event.StateKey != nil {
+			if content, exists := state.index.Get(*event.StateKey); exists {
+				ts.mirrorRelayTicketStatus(ctx, roomID, *event.StateKey, content)
+			}
+		}
 	}
 
 	// Phase 2: Evaluate gates against ALL state events in the batch.

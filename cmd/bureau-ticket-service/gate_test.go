@@ -1541,13 +1541,14 @@ func TestCrossRoomGateSatisfiedByWatchedRoomEvent(t *testing.T) {
 		},
 	}
 	ts := &TicketService{
-		writer:     writer,
-		resolver:   resolver,
-		clock:      clock.Fake(time.Date(2026, 1, 15, 12, 0, 0, 0, time.UTC)),
-		startedAt:  time.Date(2026, 1, 1, 12, 0, 0, 0, time.UTC),
-		rooms:      make(map[ref.RoomID]*roomState),
-		aliasCache: make(map[ref.RoomAlias]ref.RoomID),
-		logger:     slog.New(slog.NewTextHandler(io.Discard, nil)),
+		writer:           writer,
+		resolver:         resolver,
+		clock:            clock.Fake(time.Date(2026, 1, 15, 12, 0, 0, 0, time.UTC)),
+		startedAt:        time.Date(2026, 1, 1, 12, 0, 0, 0, time.UTC),
+		rooms:            make(map[ref.RoomID]*roomState),
+		aliasCache:       make(map[ref.RoomAlias]ref.RoomID),
+		crossRoomWatches: make(map[crossRoomWatchKey][]crossRoomWatch),
+		logger:           slog.New(slog.NewTextHandler(io.Discard, nil)),
 	}
 
 	// Ticket room has a cross-room gate watching CI results.
@@ -1592,6 +1593,7 @@ func TestCrossRoomGateSatisfiedByWatchedRoomEvent(t *testing.T) {
 		},
 	}
 
+	populateCrossRoomWatches(ts)
 	ts.evaluateCrossRoomGates(context.Background(), joinedRooms)
 
 	content, _ := ts.rooms[ticketRoomID].index.Get("tkt-1")
@@ -1618,13 +1620,14 @@ func TestCrossRoomGateNoEventsFromWatchedRoom(t *testing.T) {
 		},
 	}
 	ts := &TicketService{
-		writer:     writer,
-		resolver:   resolver,
-		clock:      clock.Fake(time.Date(2026, 1, 15, 12, 0, 0, 0, time.UTC)),
-		startedAt:  time.Date(2026, 1, 1, 12, 0, 0, 0, time.UTC),
-		rooms:      make(map[ref.RoomID]*roomState),
-		aliasCache: make(map[ref.RoomAlias]ref.RoomID),
-		logger:     slog.New(slog.NewTextHandler(io.Discard, nil)),
+		writer:           writer,
+		resolver:         resolver,
+		clock:            clock.Fake(time.Date(2026, 1, 15, 12, 0, 0, 0, time.UTC)),
+		startedAt:        time.Date(2026, 1, 1, 12, 0, 0, 0, time.UTC),
+		rooms:            make(map[ref.RoomID]*roomState),
+		aliasCache:       make(map[ref.RoomAlias]ref.RoomID),
+		crossRoomWatches: make(map[crossRoomWatchKey][]crossRoomWatch),
+		logger:           slog.New(slog.NewTextHandler(io.Discard, nil)),
 	}
 
 	ticketRoomID := testRoomID("!tickets:local")
@@ -1664,6 +1667,7 @@ func TestCrossRoomGateNoEventsFromWatchedRoom(t *testing.T) {
 		},
 	}
 
+	populateCrossRoomWatches(ts)
 	ts.evaluateCrossRoomGates(context.Background(), joinedRooms)
 
 	content, _ := ts.rooms[ticketRoomID].index.Get("tkt-1")
@@ -1681,13 +1685,14 @@ func TestCrossRoomGateUnresolvableAlias(t *testing.T) {
 		aliases: map[string]string{}, // empty — alias not found
 	}
 	ts := &TicketService{
-		writer:     writer,
-		resolver:   resolver,
-		clock:      clock.Fake(time.Date(2026, 1, 15, 12, 0, 0, 0, time.UTC)),
-		startedAt:  time.Date(2026, 1, 1, 12, 0, 0, 0, time.UTC),
-		rooms:      make(map[ref.RoomID]*roomState),
-		aliasCache: make(map[ref.RoomAlias]ref.RoomID),
-		logger:     slog.New(slog.NewTextHandler(io.Discard, nil)),
+		writer:           writer,
+		resolver:         resolver,
+		clock:            clock.Fake(time.Date(2026, 1, 15, 12, 0, 0, 0, time.UTC)),
+		startedAt:        time.Date(2026, 1, 1, 12, 0, 0, 0, time.UTC),
+		rooms:            make(map[ref.RoomID]*roomState),
+		aliasCache:       make(map[ref.RoomAlias]ref.RoomID),
+		crossRoomWatches: make(map[crossRoomWatchKey][]crossRoomWatch),
+		logger:           slog.New(slog.NewTextHandler(io.Discard, nil)),
 	}
 
 	ticketRoomID := testRoomID("!tickets:local")
@@ -1713,6 +1718,9 @@ func TestCrossRoomGateUnresolvableAlias(t *testing.T) {
 
 	joinedRooms := map[ref.RoomID]messaging.JoinedRoom{}
 
+	// populateCrossRoomWatches will silently skip the gate because
+	// the alias can't be resolved. No watches registered.
+	populateCrossRoomWatches(ts)
 	ts.evaluateCrossRoomGates(context.Background(), joinedRooms)
 
 	content, _ := ts.rooms[ticketRoomID].index.Get("tkt-1")
@@ -1767,13 +1775,14 @@ func TestCrossRoomGateSkipsSameRoomGates(t *testing.T) {
 	writer := &fakeWriterForGates{}
 	resolver := &fakeAliasResolver{aliases: map[string]string{}}
 	ts := &TicketService{
-		writer:     writer,
-		resolver:   resolver,
-		clock:      clock.Fake(time.Date(2026, 1, 15, 12, 0, 0, 0, time.UTC)),
-		startedAt:  time.Date(2026, 1, 1, 12, 0, 0, 0, time.UTC),
-		rooms:      make(map[ref.RoomID]*roomState),
-		aliasCache: make(map[ref.RoomAlias]ref.RoomID),
-		logger:     slog.New(slog.NewTextHandler(io.Discard, nil)),
+		writer:           writer,
+		resolver:         resolver,
+		clock:            clock.Fake(time.Date(2026, 1, 15, 12, 0, 0, 0, time.UTC)),
+		startedAt:        time.Date(2026, 1, 1, 12, 0, 0, 0, time.UTC),
+		rooms:            make(map[ref.RoomID]*roomState),
+		aliasCache:       make(map[ref.RoomAlias]ref.RoomID),
+		crossRoomWatches: make(map[crossRoomWatchKey][]crossRoomWatch),
+		logger:           slog.New(slog.NewTextHandler(io.Discard, nil)),
 	}
 
 	ticketRoomID := testRoomID("!tickets:local")
@@ -1812,6 +1821,8 @@ func TestCrossRoomGateSkipsSameRoomGates(t *testing.T) {
 		},
 	}
 
+	// populateCrossRoomWatches skips same-room gates (no RoomAlias).
+	populateCrossRoomWatches(ts)
 	ts.evaluateCrossRoomGates(context.Background(), joinedRooms)
 
 	// Same-room gate should NOT be touched by cross-room evaluation.
@@ -1835,13 +1846,14 @@ func TestCrossRoomGateSkipsNonStateEventTypes(t *testing.T) {
 		},
 	}
 	ts := &TicketService{
-		writer:     writer,
-		resolver:   resolver,
-		clock:      clock.Fake(time.Date(2026, 1, 15, 12, 0, 0, 0, time.UTC)),
-		startedAt:  time.Date(2026, 1, 1, 12, 0, 0, 0, time.UTC),
-		rooms:      make(map[ref.RoomID]*roomState),
-		aliasCache: make(map[ref.RoomAlias]ref.RoomID),
-		logger:     slog.New(slog.NewTextHandler(io.Discard, nil)),
+		writer:           writer,
+		resolver:         resolver,
+		clock:            clock.Fake(time.Date(2026, 1, 15, 12, 0, 0, 0, time.UTC)),
+		startedAt:        time.Date(2026, 1, 1, 12, 0, 0, 0, time.UTC),
+		rooms:            make(map[ref.RoomID]*roomState),
+		aliasCache:       make(map[ref.RoomAlias]ref.RoomID),
+		crossRoomWatches: make(map[crossRoomWatchKey][]crossRoomWatch),
+		logger:           slog.New(slog.NewTextHandler(io.Discard, nil)),
 	}
 
 	ticketRoomID := testRoomID("!tickets:local")
@@ -1882,6 +1894,8 @@ func TestCrossRoomGateSkipsNonStateEventTypes(t *testing.T) {
 		},
 	}
 
+	// populateCrossRoomWatches skips non-state_event gates.
+	populateCrossRoomWatches(ts)
 	ts.evaluateCrossRoomGates(context.Background(), joinedRooms)
 
 	content, _ := ts.rooms[ticketRoomID].index.Get("tkt-1")
@@ -1898,13 +1912,14 @@ func TestCrossRoomGateContentMatch(t *testing.T) {
 		},
 	}
 	ts := &TicketService{
-		writer:     writer,
-		resolver:   resolver,
-		clock:      clock.Fake(time.Date(2026, 1, 15, 12, 0, 0, 0, time.UTC)),
-		startedAt:  time.Date(2026, 1, 1, 12, 0, 0, 0, time.UTC),
-		rooms:      make(map[ref.RoomID]*roomState),
-		aliasCache: make(map[ref.RoomAlias]ref.RoomID),
-		logger:     slog.New(slog.NewTextHandler(io.Discard, nil)),
+		writer:           writer,
+		resolver:         resolver,
+		clock:            clock.Fake(time.Date(2026, 1, 15, 12, 0, 0, 0, time.UTC)),
+		startedAt:        time.Date(2026, 1, 1, 12, 0, 0, 0, time.UTC),
+		rooms:            make(map[ref.RoomID]*roomState),
+		aliasCache:       make(map[ref.RoomAlias]ref.RoomID),
+		crossRoomWatches: make(map[crossRoomWatchKey][]crossRoomWatch),
+		logger:           slog.New(slog.NewTextHandler(io.Discard, nil)),
 	}
 
 	ticketRoomID := testRoomID("!tickets:local")
@@ -1947,6 +1962,7 @@ func TestCrossRoomGateContentMatch(t *testing.T) {
 		},
 	}
 
+	populateCrossRoomWatches(ts)
 	ts.evaluateCrossRoomGates(context.Background(), joinedRooms)
 
 	content, _ := ts.rooms[ticketRoomID].index.Get("tkt-1")
@@ -1954,7 +1970,8 @@ func TestCrossRoomGateContentMatch(t *testing.T) {
 		t.Fatalf("gate should remain pending when content doesn't match, got %q", content.Gates[0].Status)
 	}
 
-	// Now send an event that matches content.
+	// Now send an event that matches content. The watch is still
+	// registered (gate was not satisfied by the first batch).
 	joinedRooms[testRoomID("!deploy-room:local")] = messaging.JoinedRoom{
 		State: messaging.StateSection{
 			Events: []messaging.Event{
@@ -1989,13 +2006,14 @@ func TestCrossRoomGateTimelineEvents(t *testing.T) {
 		},
 	}
 	ts := &TicketService{
-		writer:     writer,
-		resolver:   resolver,
-		clock:      clock.Fake(time.Date(2026, 1, 15, 12, 0, 0, 0, time.UTC)),
-		startedAt:  time.Date(2026, 1, 1, 12, 0, 0, 0, time.UTC),
-		rooms:      make(map[ref.RoomID]*roomState),
-		aliasCache: make(map[ref.RoomAlias]ref.RoomID),
-		logger:     slog.New(slog.NewTextHandler(io.Discard, nil)),
+		writer:           writer,
+		resolver:         resolver,
+		clock:            clock.Fake(time.Date(2026, 1, 15, 12, 0, 0, 0, time.UTC)),
+		startedAt:        time.Date(2026, 1, 1, 12, 0, 0, 0, time.UTC),
+		rooms:            make(map[ref.RoomID]*roomState),
+		aliasCache:       make(map[ref.RoomAlias]ref.RoomID),
+		crossRoomWatches: make(map[crossRoomWatchKey][]crossRoomWatch),
+		logger:           slog.New(slog.NewTextHandler(io.Discard, nil)),
 	}
 
 	ticketRoomID := testRoomID("!tickets:local")
@@ -2039,6 +2057,7 @@ func TestCrossRoomGateTimelineEvents(t *testing.T) {
 		},
 	}
 
+	populateCrossRoomWatches(ts)
 	ts.evaluateCrossRoomGates(context.Background(), joinedRooms)
 
 	content, _ := ts.rooms[ticketRoomID].index.Get("tkt-1")
@@ -2049,16 +2068,18 @@ func TestCrossRoomGateTimelineEvents(t *testing.T) {
 
 func TestCrossRoomGateNilResolverIsNoOp(t *testing.T) {
 	// When no resolver is configured (tests, or session not available),
-	// cross-room evaluation should be a no-op.
+	// cross-room evaluation should be a no-op because no watches can
+	// be populated without alias resolution.
 	writer := &fakeWriterForGates{}
 	ts := &TicketService{
-		writer:     writer,
-		resolver:   nil, // no resolver
-		clock:      clock.Fake(time.Date(2026, 1, 15, 12, 0, 0, 0, time.UTC)),
-		startedAt:  time.Date(2026, 1, 1, 12, 0, 0, 0, time.UTC),
-		rooms:      make(map[ref.RoomID]*roomState),
-		aliasCache: make(map[ref.RoomAlias]ref.RoomID),
-		logger:     slog.New(slog.NewTextHandler(io.Discard, nil)),
+		writer:           writer,
+		resolver:         nil, // no resolver
+		clock:            clock.Fake(time.Date(2026, 1, 15, 12, 0, 0, 0, time.UTC)),
+		startedAt:        time.Date(2026, 1, 1, 12, 0, 0, 0, time.UTC),
+		rooms:            make(map[ref.RoomID]*roomState),
+		aliasCache:       make(map[ref.RoomAlias]ref.RoomID),
+		crossRoomWatches: make(map[crossRoomWatchKey][]crossRoomWatch),
+		logger:           slog.New(slog.NewTextHandler(io.Discard, nil)),
 	}
 
 	ticketRoomID := testRoomID("!tickets:local")
@@ -2148,13 +2169,14 @@ func TestHandleSyncCrossRoomGateEvaluation(t *testing.T) {
 		},
 	}
 	ts := &TicketService{
-		writer:     writer,
-		resolver:   resolver,
-		clock:      clock.Fake(time.Date(2026, 1, 15, 12, 0, 0, 0, time.UTC)),
-		startedAt:  time.Date(2026, 1, 1, 12, 0, 0, 0, time.UTC),
-		rooms:      make(map[ref.RoomID]*roomState),
-		aliasCache: make(map[ref.RoomAlias]ref.RoomID),
-		logger:     slog.New(slog.NewTextHandler(io.Discard, nil)),
+		writer:           writer,
+		resolver:         resolver,
+		clock:            clock.Fake(time.Date(2026, 1, 15, 12, 0, 0, 0, time.UTC)),
+		startedAt:        time.Date(2026, 1, 1, 12, 0, 0, 0, time.UTC),
+		rooms:            make(map[ref.RoomID]*roomState),
+		aliasCache:       make(map[ref.RoomAlias]ref.RoomID),
+		crossRoomWatches: make(map[crossRoomWatchKey][]crossRoomWatch),
+		logger:           slog.New(slog.NewTextHandler(io.Discard, nil)),
 	}
 
 	ticketRoomID := testRoomID("!tickets:local")
@@ -2204,6 +2226,7 @@ func TestHandleSyncCrossRoomGateEvaluation(t *testing.T) {
 		},
 	}
 
+	populateCrossRoomWatches(ts)
 	ts.handleSync(context.Background(), response)
 
 	content, _ := ts.rooms[ticketRoomID].index.Get("tkt-1")
@@ -2736,6 +2759,35 @@ func newTestIndex(tickets map[string]ticket.TicketContent) *ticketindex.Index {
 
 // fakeAliasResolver implements aliasResolver for tests. Returns the
 // room ID from the aliases map, or an error if not found.
+// populateCrossRoomWatches scans all tracked rooms for pending
+// cross-room state_event gates and registers watches in
+// ts.crossRoomWatches. This mirrors what production code does in
+// initiateRelay and rebuildRelayEntries, but works for test
+// fixtures that construct gates directly.
+func populateCrossRoomWatches(ts *TicketService) {
+	if ts.resolver == nil {
+		return
+	}
+	for ticketRoomID, state := range ts.rooms {
+		for _, entry := range state.index.PendingGates() {
+			for gateIndex := range entry.Content.Gates {
+				gate := &entry.Content.Gates[gateIndex]
+				if gate.Type != ticket.GateStateEvent || gate.RoomAlias.IsZero() {
+					continue
+				}
+				if gate.Status != ticket.GatePending {
+					continue
+				}
+				roomID, err := ts.resolveAliasWithCache(context.Background(), gate.RoomAlias)
+				if err != nil {
+					continue
+				}
+				ts.addCrossRoomWatch(roomID, gate.EventType, gate.StateKey, ticketRoomID, entry.ID, gateIndex, gate.ID)
+			}
+		}
+	}
+}
+
 type fakeAliasResolver struct {
 	aliases   map[string]string
 	callCount int

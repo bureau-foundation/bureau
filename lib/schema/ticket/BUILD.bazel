@@ -9,6 +9,7 @@ go_library(
         "action.go",
         "beads.go",
         "doc.go",
+        "reservation.go",
         "response.go",
         "score.go",
         "ticket.go",
@@ -27,6 +28,7 @@ go_test(
     name = "ticket_test",
     srcs = [
         "beads_test.go",
+        "reservation_test.go",
         "ticket_test.go",
     ],
     embed = [":ticket"],

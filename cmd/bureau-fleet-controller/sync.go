@@ -39,6 +39,12 @@ func buildSyncFilter() string {
 		schema.EventTypeServiceStatus,
 		schema.EventTypeMachineConfig,
 		schema.EventTypeFleetAlert,
+		schema.EventTypeTicket,
+		schema.EventTypeTicketConfig,
+		schema.EventTypeRelayLink,
+		schema.EventTypeReservation,
+		schema.EventTypeMachineDrain,
+		schema.EventTypeRelayPolicy,
 	}
 
 	// Timeline includes the same state event types (state events can
@@ -178,11 +184,27 @@ func (fc *FleetController) initialSync(ctx context.Context) (string, error) {
 	// ensures consistency after all rooms are processed.
 	fc.rebuildServiceInstances()
 
+	// Second pass: process ticket events that need context for network
+	// calls. Done after the first pass so relay links are indexed
+	// before ticket events reference them for holder resolution.
+	for roomID, room := range response.Rooms.Join {
+		fc.processRoomStateWithContext(ctx, roomID, room.State.Events, room.Timeline.Events)
+	}
+	for _, roomID := range acceptedRooms {
+		events, err := fc.session.GetRoomState(ctx, roomID)
+		if err != nil {
+			continue
+		}
+		fc.processRoomStateWithContext(ctx, roomID, events, nil)
+	}
+
 	fc.logger.Info("fleet model built",
 		"machines", len(fc.machines),
 		"services", len(fc.services),
 		"definitions", len(fc.definitions),
 		"config_rooms", len(fc.configRooms),
+		"ops_rooms", len(fc.opsRooms),
+		"reservations", len(fc.reservations),
 	)
 
 	// Process presence state from the initial sync. The homeserver
@@ -206,8 +228,8 @@ func (fc *FleetController) initialSync(ctx context.Context) (string, error) {
 }
 
 // processRoomState examines state and timeline events from a room to
-// determine what kind of room it is (fleet, machine, or config) and
-// populates the in-memory model accordingly.
+// determine what kind of room it is (fleet, machine, config, or ops)
+// and populates the in-memory model accordingly.
 //
 // Room classification is based on event types present:
 //   - Fleet room events (FleetServiceContent, MachineDefinitionContent,
@@ -216,6 +238,8 @@ func (fc *FleetController) initialSync(ctx context.Context) (string, error) {
 //     #bureau/machine.
 //   - Config room events (MachineConfig) indicate a per-machine
 //     config room.
+//   - Ops room events (Ticket with resource_request, RelayLink,
+//     RelayPolicy) indicate a machine ops room.
 func (fc *FleetController) processRoomState(roomID ref.RoomID, stateEvents, timelineEvents []messaging.Event) {
 	for _, event := range stateEvents {
 		if event.StateKey != nil {
@@ -225,6 +249,26 @@ func (fc *FleetController) processRoomState(roomID ref.RoomID, stateEvents, time
 	for _, event := range timelineEvents {
 		if event.StateKey != nil {
 			fc.processStateEvent(roomID, event)
+		}
+	}
+}
+
+// processRoomStateWithContext is the second pass over room state
+// events, handling event types that need a context for network calls
+// (ticket processing may grant reservations). Must be called after
+// processRoomState so that relay links are indexed before ticket
+// events reference them.
+//
+// Caller must hold fc.mu.
+func (fc *FleetController) processRoomStateWithContext(ctx context.Context, roomID ref.RoomID, stateEvents, timelineEvents []messaging.Event) {
+	for _, event := range stateEvents {
+		if event.StateKey != nil {
+			fc.processStateEventWithContext(ctx, roomID, event)
+		}
+	}
+	for _, event := range timelineEvents {
+		if event.StateKey != nil {
+			fc.processStateEventWithContext(ctx, roomID, event)
 		}
 	}
 }
@@ -247,6 +291,20 @@ func (fc *FleetController) processStateEvent(roomID ref.RoomID, event messaging.
 		fc.processMachineStatusEvent(event)
 	case schema.EventTypeMachineConfig:
 		fc.processMachineConfigEvent(roomID, event)
+	case schema.EventTypeRelayLink:
+		fc.processRelayLinkEvent(roomID, event)
+	}
+}
+
+// processStateEventWithContext routes state events that need a
+// context for network calls. Called separately from processStateEvent
+// because ticket processing may write Matrix events (grant, close).
+//
+// Caller must hold fc.mu.
+func (fc *FleetController) processStateEventWithContext(ctx context.Context, roomID ref.RoomID, event messaging.Event) {
+	switch event.Type {
+	case schema.EventTypeTicket:
+		fc.processOpsRoomTicketEvent(ctx, roomID, event)
 	}
 }
 
@@ -623,7 +681,7 @@ func (fc *FleetController) handleSync(ctx context.Context, response *messaging.S
 		fc.processLeave(roomID)
 	}
 
-	// Process state changes in joined rooms.
+	// Process state changes in joined rooms (first pass: model updates).
 	for roomID, room := range response.Rooms.Join {
 		fc.processRoomSync(roomID, room)
 	}
@@ -631,6 +689,24 @@ func (fc *FleetController) handleSync(ctx context.Context, response *messaging.S
 	// Process state for rooms accepted in this sync cycle.
 	for index := range acceptedRoomStates {
 		fc.processRoomState(acceptedRoomStates[index].roomID, acceptedRoomStates[index].events, nil)
+	}
+
+	// Second pass: process ticket events that need context for
+	// network calls (reservation grants, relay ticket status updates).
+	// Done after the first pass so relay links are indexed before
+	// ticket events reference them for holder resolution.
+	for roomID, room := range response.Rooms.Join {
+		stateEvents := collectStateEvents(room)
+		for _, event := range stateEvents {
+			fc.processStateEventWithContext(ctx, roomID, event)
+		}
+	}
+	for index := range acceptedRoomStates {
+		for _, event := range acceptedRoomStates[index].events {
+			if event.StateKey != nil {
+				fc.processStateEventWithContext(ctx, acceptedRoomStates[index].roomID, event)
+			}
+		}
 	}
 
 	// Update machine presence state from m.presence events. Presence
@@ -653,12 +729,36 @@ func (fc *FleetController) handleSync(ctx context.Context, response *messaging.S
 	// Evaluate machine health after reconciliation so that newly
 	// stale machines trigger failover in the same sync cycle.
 	fc.checkMachineHealth(ctx)
+
+	// Advance reservation queues (grant next pending, check
+	// preemption) and enforce duration limits on active reservations.
+	fc.advanceReservationQueues(ctx)
+	fc.checkReservationExpiry(ctx)
 }
 
 // processLeave handles a room leave event. If the room was a known
-// config room, the associated machine state is cleaned up. If it was
-// the fleet or machine room, the event is logged as a warning.
+// config room or ops room, the associated state is cleaned up. If it
+// was the fleet or machine room, the event is logged as a warning.
 func (fc *FleetController) processLeave(roomID ref.RoomID) {
+	// Check if this is an ops room and clean up reservation state.
+	if machineLocalpart, isOpsRoom := fc.opsRoomMachines[roomID]; isOpsRoom {
+		fc.logger.Info("ops room left, clearing reservation state",
+			"room_id", roomID,
+			"machine", machineLocalpart,
+		)
+		delete(fc.opsRooms, machineLocalpart)
+		delete(fc.opsRoomMachines, roomID)
+		delete(fc.reservations, machineLocalpart)
+
+		// Clean up relay links for this room.
+		for key := range fc.relayLinks {
+			if key.roomID == roomID {
+				delete(fc.relayLinks, key)
+			}
+		}
+		return
+	}
+
 	// Check if this is a config room and clean up the associated
 	// machine state.
 	for machineLocalpart, configRoom := range fc.configRooms {

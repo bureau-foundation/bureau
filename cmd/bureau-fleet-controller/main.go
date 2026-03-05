@@ -16,6 +16,7 @@ import (
 	"github.com/bureau-foundation/bureau/lib/clock"
 	"github.com/bureau-foundation/bureau/lib/process"
 	"github.com/bureau-foundation/bureau/lib/ref"
+	"github.com/bureau-foundation/bureau/lib/schema"
 	"github.com/bureau-foundation/bureau/lib/schema/fleet"
 	"github.com/bureau-foundation/bureau/lib/service"
 	"github.com/bureau-foundation/bureau/lib/version"
@@ -86,25 +87,29 @@ func run() error {
 	)
 
 	fleetController := &FleetController{
-		session:       boot.Session,
-		configStore:   boot.Session,
-		clock:         boot.Clock,
-		principalName: boot.PrincipalName,
-		machineName:   boot.MachineName,
-		serverName:    boot.ServerName,
-		fleet:         boot.Fleet,
-		serviceEntity: serviceEntity,
-		serviceRoomID: boot.ServiceRoomID,
-		startedAt:     boot.Clock.Now(),
-		machines:      make(map[string]*machineState),
-		services:      make(map[string]*fleetServiceState),
-		definitions:   make(map[string]*fleet.MachineDefinitionContent),
-		config:        make(map[string]*fleet.FleetConfigContent),
-		leases:        make(map[string]*fleet.HALeaseContent),
-		configRooms:   make(map[string]ref.RoomID),
-		fleetRoomID:   fleetRoomID,
-		machineRoomID: machineRoomID,
-		logger:        boot.Logger,
+		session:         boot.Session,
+		configStore:     boot.Session,
+		clock:           boot.Clock,
+		principalName:   boot.PrincipalName,
+		machineName:     boot.MachineName,
+		serverName:      boot.ServerName,
+		fleet:           boot.Fleet,
+		serviceEntity:   serviceEntity,
+		serviceRoomID:   boot.ServiceRoomID,
+		startedAt:       boot.Clock.Now(),
+		machines:        make(map[string]*machineState),
+		services:        make(map[string]*fleetServiceState),
+		definitions:     make(map[string]*fleet.MachineDefinitionContent),
+		config:          make(map[string]*fleet.FleetConfigContent),
+		leases:          make(map[string]*fleet.HALeaseContent),
+		configRooms:     make(map[string]ref.RoomID),
+		opsRooms:        make(map[string]ref.RoomID),
+		opsRoomMachines: make(map[ref.RoomID]string),
+		relayLinks:      make(map[opsTicketKey]schema.RelayLink),
+		reservations:    make(map[string]*machineReservation),
+		fleetRoomID:     fleetRoomID,
+		machineRoomID:   machineRoomID,
+		logger:          boot.Logger,
 	}
 
 	// Perform initial /sync to build the fleet model.
@@ -173,6 +178,26 @@ type FleetController struct {
 	// configRooms maps machine localparts to their config room IDs.
 	// Populated from room aliases during initial sync.
 	configRooms map[string]ref.RoomID
+
+	// opsRooms maps machine localparts to their ops room IDs.
+	// Ops rooms are classified lazily from ticket events: when a
+	// resource_request ticket appears in a room, the fleet controller
+	// extracts the machine target and registers the room.
+	opsRooms map[string]ref.RoomID
+
+	// opsRoomMachines is the reverse of opsRooms: maps room IDs to
+	// machine localparts. Used to route ticket and relay events to
+	// the correct machine's reservation queue.
+	opsRoomMachines map[ref.RoomID]string
+
+	// relayLinks maps ops room ticket keys to their relay link
+	// content. Populated from m.bureau.relay_link events. The fleet
+	// controller uses the requester field as the reservation holder.
+	relayLinks map[opsTicketKey]schema.RelayLink
+
+	// reservations tracks per-machine reservation state: the active
+	// reservation (if any) and the queue of pending requests.
+	reservations map[string]*machineReservation
 
 	// fleetRoomID is the fleet config room, resolved from the fleet prefix.
 	fleetRoomID ref.RoomID

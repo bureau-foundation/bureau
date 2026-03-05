@@ -281,26 +281,29 @@ func TestMachineConstruction(t *testing.T) {
 	fleet, _ := ref.NewFleet(ns, "prod")
 
 	tests := []struct {
-		name    string
-		machine string
-		wantLp  string
-		wantUID string
-		wantRA  string
-		wantErr bool
+		name      string
+		machine   string
+		wantLp    string
+		wantUID   string
+		wantRA    string
+		wantOpsRA string
+		wantErr   bool
 	}{
 		{
-			name:    "simple",
-			machine: "gpu-box",
-			wantLp:  "my_bureau/fleet/prod/machine/gpu-box",
-			wantUID: "@my_bureau/fleet/prod/machine/gpu-box:" + testServer,
-			wantRA:  "#my_bureau/fleet/prod/machine/gpu-box:" + testServer,
+			name:      "simple",
+			machine:   "gpu-box",
+			wantLp:    "my_bureau/fleet/prod/machine/gpu-box",
+			wantUID:   "@my_bureau/fleet/prod/machine/gpu-box:" + testServer,
+			wantRA:    "#my_bureau/fleet/prod/machine/gpu-box:" + testServer,
+			wantOpsRA: "#my_bureau/fleet/prod/machine/gpu-box/ops:" + testServer,
 		},
 		{
-			name:    "workstation",
-			machine: "workstation",
-			wantLp:  "my_bureau/fleet/prod/machine/workstation",
-			wantUID: "@my_bureau/fleet/prod/machine/workstation:" + testServer,
-			wantRA:  "#my_bureau/fleet/prod/machine/workstation:" + testServer,
+			name:      "workstation",
+			machine:   "workstation",
+			wantLp:    "my_bureau/fleet/prod/machine/workstation",
+			wantUID:   "@my_bureau/fleet/prod/machine/workstation:" + testServer,
+			wantRA:    "#my_bureau/fleet/prod/machine/workstation:" + testServer,
+			wantOpsRA: "#my_bureau/fleet/prod/machine/workstation/ops:" + testServer,
 		},
 		{name: "empty", machine: "", wantErr: true},
 		{name: "uppercase", machine: "GPU-Box", wantErr: true},
@@ -327,6 +330,9 @@ func TestMachineConstruction(t *testing.T) {
 			}
 			if m.RoomAlias().String() != tt.wantRA {
 				t.Errorf("RoomAlias() = %q, want %q", m.RoomAlias(), tt.wantRA)
+			}
+			if m.OpsRoomAlias().String() != tt.wantOpsRA {
+				t.Errorf("OpsRoomAlias() = %q, want %q", m.OpsRoomAlias(), tt.wantOpsRA)
 			}
 			if m.Name() != tt.machine {
 				t.Errorf("Name() = %q, want %q", m.Name(), tt.machine)

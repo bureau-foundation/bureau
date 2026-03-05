@@ -10,6 +10,7 @@ go_library(
         "gate.go",
         "main.go",
         "notification.go",
+        "relay.go",
         "socket.go",
         "socket_mutate.go",
         "socket_query.go",
@@ -27,6 +28,7 @@ go_library(
         "//lib/principal",
         "//lib/process",
         "//lib/ref",
+        "//lib/relayauth",
         "//lib/schema",
         "//lib/schema/pipeline",
         "//lib/schema/stewardship",
@@ -51,6 +53,7 @@ go_test(
     srcs = [
         "gate_test.go",
         "notification_test.go",
+        "relay_test.go",
         "socket_mutate_test.go",
         "socket_query_test.go",
         "socket_test.go",

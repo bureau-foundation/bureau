@@ -67,6 +67,8 @@ func run() error {
 		aliasCache:       make(map[ref.RoomAlias]ref.RoomID),
 		subscribers:      make(map[ref.RoomID][]*subscriber),
 		timerNotify:      make(chan struct{}, 1),
+		crossRoomWatches: make(map[crossRoomWatchKey][]crossRoomWatch),
+		relayEntries:     make(map[string]*relayEntry),
 		digestTimers:     make(map[digestKey]*digestEntry),
 		digestNotify:     make(chan struct{}, 1),
 		serviceType:      "ticket",
@@ -87,6 +89,11 @@ func run() error {
 	// starting the timer loop. No lock needed — no concurrent
 	// access yet (socket and sync goroutines haven't started).
 	ticketService.rebuildTimerHeap()
+
+	// Rebuild relay entries from ticket state. This reconstructs
+	// the workspace→relay ticket associations for lifecycle
+	// management (closure cascade, denial cascade).
+	ticketService.rebuildRelayEntries()
 
 	// Start the socket server in a goroutine.
 	socketServer := boot.NewSocketServer()
@@ -223,6 +230,21 @@ type TicketService struct {
 	// timerNotify). The AfterFunc callback sends to this channel
 	// without holding ts.mu.
 	digestNotify chan struct{}
+
+	// crossRoomWatches maps (roomID, eventType, stateKey) to the
+	// list of cross-room gates watching for that event. This is the
+	// cross-room analog of ticketindex.gateWatch: same event-driven
+	// O(1) lookup, but spanning rooms. Lives on TicketService
+	// because cross-room gates reference rooms outside their
+	// ticket's own room, so the per-room index cannot track them.
+	// Protected by mu.
+	crossRoomWatches map[crossRoomWatchKey][]crossRoomWatch
+
+	// relayEntries tracks the association between workspace tickets
+	// and their relay tickets in ops rooms. Keyed by workspace
+	// ticket ID. Rebuilt from ticket state on startup and maintained
+	// as relay tickets are created and closed. Protected by mu.
+	relayEntries map[string]*relayEntry
 
 	// presence caches the latest m.presence event content for each
 	// user, populated from the /sync presence section. Used by

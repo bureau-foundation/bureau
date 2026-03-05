@@ -44,6 +44,18 @@ func ParseMachine(localpart string, server ServerName) (Machine, error) {
 	return Machine{entity: ent}, nil
 }
 
+// OpsRoomAlias returns the machine's ops room alias for operational
+// coordination (reservations, drain, deployments). The ops room is
+// separate from the config room: config rooms carry credentials with
+// restrictive power levels; ops rooms allow services to coordinate
+// without credential access.
+//
+// Alias convention: config room localpart + "/ops".
+// Example: #my_bureau/fleet/prod/machine/gpu-box/ops:bureau.local
+func (m Machine) OpsRoomAlias() RoomAlias {
+	return newRoomAlias(m.Localpart()+"/ops", m.Server())
+}
+
 // Entity converts this Machine to a generic Entity reference. This is a
 // zero-cost type conversion — Machine, Service, and Entity all embed the
 // same unexported entity struct.

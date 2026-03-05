@@ -20,7 +20,7 @@ const (
 	// TicketContentVersion is the current schema version for
 	// TicketContent events. Increment when adding fields that
 	// existing code must not silently drop during read-modify-write.
-	TicketContentVersion = 4
+	TicketContentVersion = 5
 
 	// TicketConfigVersion is the current schema version for
 	// TicketConfigContent events.
@@ -385,6 +385,12 @@ type TicketContent struct {
 	// Type is "pipeline" and must be nil for all other types.
 	Pipeline *PipelineExecutionContent `json:"pipeline,omitempty"`
 
+	// Reservation carries type-specific content for resource
+	// request tickets (Type == "resource_request"). Must be set
+	// when Type is "resource_request" and must be nil for all
+	// other types. Added in version 5.
+	Reservation *ReservationContent `json:"reservation,omitempty"`
+
 	// Extra is a documented extension namespace for experimental or
 	// preview fields before promotion to top-level schema fields in
 	// a version bump. Keys are field names; values are arbitrary
@@ -435,6 +441,16 @@ func (t *TicketContent) Validate() error {
 		}
 	} else if t.Pipeline != nil {
 		return fmt.Errorf("ticket content: pipeline content must be nil when type is %q", string(t.Type))
+	}
+	if t.Type == TypeResourceRequest {
+		if t.Reservation == nil {
+			return errors.New("ticket content: reservation content is required when type is \"resource_request\"")
+		}
+		if err := t.Reservation.Validate(); err != nil {
+			return fmt.Errorf("ticket content: reservation: %w", err)
+		}
+	} else if t.Reservation != nil {
+		return fmt.Errorf("ticket content: reservation content must be nil when type is %q", string(t.Type))
 	}
 	for i, resource := range t.Affects {
 		if resource == "" {
@@ -1182,6 +1198,8 @@ func PrefixForType(ticketType TicketType) string {
 	switch ticketType {
 	case TypePipeline:
 		return "pip"
+	case TypeResourceRequest:
+		return "rsv"
 	default:
 		return ""
 	}

@@ -444,6 +444,71 @@ func Provision(ctx context.Context, client *messaging.Client, adminSession *mess
 		return nil, cli.Transient("publish fleet binding to config room: %w", err)
 	}
 
+	// Create the per-machine ops room for operational coordination
+	// (reservations, drain, deployments). The ops room is separate from
+	// the config room: config rooms carry credentials with restrictive
+	// power levels; ops rooms allow the ticket service and fleet
+	// controller to coordinate without accessing credentials.
+	opsAlias := machine.OpsRoomAlias()
+	opsLocalpart := machine.Localpart() + "/ops"
+
+	logger.Info("creating ops room", "alias", opsAlias)
+	var opsRoomID ref.RoomID
+	opsRoom, opsCreateError := adminSession.CreateRoom(ctx, messaging.CreateRoomRequest{
+		Name:       "Ops: " + machineUsername,
+		Topic:      "Operational coordination for " + machineUsername,
+		Alias:      opsLocalpart,
+		Preset:     "private_chat",
+		Invite:     []string{machineUserID.String()},
+		Visibility: "private",
+	})
+	if opsCreateError != nil {
+		if messaging.IsMatrixError(opsCreateError, messaging.ErrCodeRoomInUse) {
+			logger.Info("ops room already exists, re-inviting machine")
+			opsRoomID, err = adminSession.ResolveAlias(ctx, opsAlias)
+			if err != nil {
+				return nil, cli.Transient("resolve existing ops room %q: %w", opsAlias, err)
+			}
+			if err := adminSession.InviteUser(ctx, opsRoomID, machineUserID); err != nil {
+				if !messaging.IsMatrixError(err, messaging.ErrCodeForbidden) {
+					return nil, cli.Transient("re-invite machine to ops room: %w", err)
+				}
+				logger.Info("already invited to ops room")
+			} else {
+				logger.Info("re-invited to ops room")
+			}
+		} else {
+			return nil, cli.Transient("create ops room: %w", opsCreateError)
+		}
+	} else {
+		opsRoomID = opsRoom.RoomID
+		_, err = adminSession.SendStateEvent(ctx, opsRoomID, "m.room.power_levels", "",
+			schema.OpsRoomPowerLevels(adminUserID))
+		if err != nil {
+			return nil, cli.Transient("set ops room power levels: %w", err)
+		}
+		logger.Info("ops room created", "room_id", opsRoomID.String())
+	}
+
+	// Grant the machine PL 50 in the ops room. The machine daemon
+	// needs PL 50 to write m.bureau.machine_drain progress and machine
+	// state events during reservation lifecycle. This is idempotent
+	// on re-provision (GrantPowerLevels merges, doesn't overwrite).
+	if err := schema.GrantPowerLevels(ctx, adminSession, opsRoomID, schema.PowerLevelGrants{
+		Users: map[ref.UserID]int{machineUserID: 50},
+	}); err != nil {
+		return nil, cli.Transient("grant machine power level in ops room: %w", err)
+	}
+	logger.Info("granted PL 50 in ops room", "machine", machineUserID)
+
+	if _, err := adminSession.SendStateEvent(ctx, opsRoomID, schema.EventTypeDevTeam, "", schema.DevTeamContent{Room: devTeamAlias}); err != nil {
+		return nil, cli.Transient("publish dev team metadata on ops room: %w", err)
+	}
+
+	if err := fleetcmd.PublishFleetBindingToRoom(ctx, adminSession, opsRoomID, fleet, logger); err != nil {
+		return nil, cli.Transient("publish fleet binding to ops room: %w", err)
+	}
+
 	// Build the bootstrap config. The MachineName and FleetPrefix fields
 	// use the fleet-scoped localpart format consumed by the launcher.
 	config := &bootstrap.Config{

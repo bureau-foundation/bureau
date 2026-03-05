@@ -74,19 +74,23 @@ func newTestFleetController(t *testing.T) *FleetController {
 	}
 	testFleetRef := testFleet(t)
 	return &FleetController{
-		clock:         clock.Real(),
-		startedAt:     time.Date(2026, 1, 1, 12, 0, 0, 0, time.UTC),
-		fleet:         testFleetRef,
-		serverName:    testFleetRef.Server(),
-		machines:      make(map[string]*machineState),
-		services:      make(map[string]*fleetServiceState),
-		definitions:   make(map[string]*fleet.MachineDefinitionContent),
-		config:        make(map[string]*fleet.FleetConfigContent),
-		leases:        make(map[string]*fleet.HALeaseContent),
-		configRooms:   make(map[string]ref.RoomID),
-		fleetRoomID:   fleetRoomID,
-		machineRoomID: machineRoomID,
-		logger:        slog.New(slog.NewTextHandler(io.Discard, nil)),
+		clock:           clock.Real(),
+		startedAt:       time.Date(2026, 1, 1, 12, 0, 0, 0, time.UTC),
+		fleet:           testFleetRef,
+		serverName:      testFleetRef.Server(),
+		machines:        make(map[string]*machineState),
+		services:        make(map[string]*fleetServiceState),
+		definitions:     make(map[string]*fleet.MachineDefinitionContent),
+		config:          make(map[string]*fleet.FleetConfigContent),
+		leases:          make(map[string]*fleet.HALeaseContent),
+		configRooms:     make(map[string]ref.RoomID),
+		opsRooms:        make(map[string]ref.RoomID),
+		opsRoomMachines: make(map[ref.RoomID]string),
+		relayLinks:      make(map[opsTicketKey]schema.RelayLink),
+		reservations:    make(map[string]*machineReservation),
+		fleetRoomID:     fleetRoomID,
+		machineRoomID:   machineRoomID,
+		logger:          slog.New(slog.NewTextHandler(io.Discard, nil)),
 	}
 }
 
@@ -122,6 +126,12 @@ func TestBuildSyncFilterIncludesFleetTypes(t *testing.T) {
 		schema.EventTypeServiceStatus,
 		schema.EventTypeMachineConfig,
 		schema.EventTypeFleetAlert,
+		schema.EventTypeTicket,
+		schema.EventTypeTicketConfig,
+		schema.EventTypeRelayLink,
+		schema.EventTypeReservation,
+		schema.EventTypeMachineDrain,
+		schema.EventTypeRelayPolicy,
 	}
 
 	for _, eventType := range expectedTypes {

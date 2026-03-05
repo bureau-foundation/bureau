@@ -202,6 +202,40 @@ func Decommission(ctx context.Context, session *messaging.DirectSession, params 
 		}
 	}
 
+	// Clean up the per-machine ops room: clear state events and kick.
+	opsAlias := machine.OpsRoomAlias()
+	opsRoomID, err := session.ResolveAlias(ctx, opsAlias)
+	if err != nil {
+		if messaging.IsMatrixError(err, messaging.ErrCodeNotFound) {
+			logger.Info("ops room does not exist, skipping", "alias", opsAlias)
+		} else {
+			return cli.Transient("resolve ops room %q: %w", opsAlias, err).
+				WithHint("Check that the homeserver is running. Run 'bureau matrix doctor' to diagnose.")
+		}
+	} else {
+		// Clear reservation and drain state events.
+		_, err = session.SendStateEvent(ctx, opsRoomID, schema.EventTypeReservation, machineUsername, map[string]any{})
+		if err != nil {
+			logger.Warn("could not clear reservation", "error", err)
+		} else {
+			logger.Info("cleared reservation from ops room")
+		}
+
+		_, err = session.SendStateEvent(ctx, opsRoomID, schema.EventTypeMachineDrain, "", map[string]any{})
+		if err != nil {
+			logger.Warn("could not clear machine_drain", "error", err)
+		} else {
+			logger.Info("cleared machine_drain from ops room")
+		}
+
+		err = session.KickUser(ctx, opsRoomID, machineUserID, "machine decommissioned")
+		if err != nil {
+			logger.Warn("could not kick from ops room", "error", err)
+		} else {
+			logger.Info("kicked from ops room")
+		}
+	}
+
 	for _, room := range globalRooms {
 		err = session.KickUser(ctx, room.roomID, machineUserID, "machine decommissioned")
 		if err != nil {

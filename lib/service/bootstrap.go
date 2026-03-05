@@ -11,6 +11,7 @@ import (
 	"time"
 
 	"github.com/bureau-foundation/bureau/lib/clock"
+	"github.com/bureau-foundation/bureau/lib/codec"
 	"github.com/bureau-foundation/bureau/lib/proxyclient"
 	"github.com/bureau-foundation/bureau/lib/ref"
 	"github.com/bureau-foundation/bureau/lib/servicetoken"
@@ -51,9 +52,16 @@ type BootstrapResult struct {
 	// key fetched from the system room.
 	AuthConfig *AuthConfig
 
-	// Clock is the real clock used for token verification and
-	// service timestamps.
+	// Clock is the clock used for token verification and service
+	// timestamps. Real in production, fake when BUREAU_TEST_CLOCK
+	// is set.
 	Clock clock.Clock
+
+	// TestClock is non-nil only when the BUREAU_TEST_CLOCK
+	// environment variable is set. Integration tests use this to
+	// advance time deterministically via the "advance-clock" socket
+	// action (registered automatically by NewSocketServer).
+	TestClock *clock.FakeClock
 
 	// Logger is the structured logger for service output. Same
 	// instance as ProxyBootstrapConfig.Logger if one was provided,
@@ -87,14 +95,54 @@ type BootstrapResult struct {
 // NewSocketServer creates a SocketServer from the bootstrap result,
 // pre-configured with the service's socket path, logger, and auth
 // config. If a telemetry emitter is available, it is automatically
-// attached. This replaces the manual NewSocketServer(boot.SocketPath,
-// boot.Logger, boot.AuthConfig) + SetTelemetry pattern.
+// attached. When BUREAU_TEST_CLOCK is set, registers an
+// "advance-clock" action for deterministic time control in
+// integration tests.
 func (b *BootstrapResult) NewSocketServer() *SocketServer {
 	server := NewSocketServer(b.SocketPath, b.Logger, b.AuthConfig)
 	if b.Telemetry != nil {
 		server.SetTelemetry(b.Telemetry)
 	}
+	if b.TestClock != nil {
+		registerTestClockAction(server, b.TestClock, b.Logger)
+	}
 	return server
+}
+
+// AdvanceClockRequest is the request body for the "advance-clock"
+// socket action. Only available when BUREAU_TEST_CLOCK is set.
+type AdvanceClockRequest struct {
+	DurationMS int64 `cbor:"duration_ms"`
+}
+
+// AdvanceClockResponse is the response from the "advance-clock"
+// socket action.
+type AdvanceClockResponse struct {
+	NowUnix int64 `cbor:"now_unix"`
+}
+
+// registerTestClockAction registers an unauthenticated
+// "advance-clock" action that advances a fake clock by the
+// requested duration. This action only exists when BUREAU_TEST_CLOCK
+// is set — production services never register it.
+func registerTestClockAction(server *SocketServer, fakeClock *clock.FakeClock, logger *slog.Logger) {
+	server.Handle("advance-clock", func(_ context.Context, raw []byte) (any, error) {
+		var request AdvanceClockRequest
+		if err := codec.Unmarshal(raw, &request); err != nil {
+			return nil, fmt.Errorf("decoding advance-clock request: %w", err)
+		}
+		if request.DurationMS <= 0 {
+			return nil, fmt.Errorf("duration_ms must be positive, got %d", request.DurationMS)
+		}
+		duration := time.Duration(request.DurationMS) * time.Millisecond
+		fakeClock.Advance(duration)
+		now := fakeClock.Now()
+		logger.Info("test clock advanced",
+			"duration", duration,
+			"now", now.Format(time.RFC3339),
+		)
+		return AdvanceClockResponse{NowUnix: now.Unix()}, nil
+	})
 }
 
 // ProxyBootstrapConfig controls the [BootstrapViaProxy] process.
@@ -251,7 +299,15 @@ func BootstrapViaProxy(ctx context.Context, config ProxyBootstrapConfig) (*Boots
 	}
 	logger.Info("token signing key loaded", "machine", machineRef.Localpart())
 
-	clk := clock.Real()
+	var clk clock.Clock
+	var testClock *clock.FakeClock
+	if os.Getenv("BUREAU_TEST_CLOCK") != "" {
+		testClock = clock.Fake(time.Now())
+		clk = testClock
+		logger.Info("test clock enabled", "initial_time", testClock.Now().Format(time.RFC3339))
+	} else {
+		clk = clock.Real()
+	}
 
 	authConfig := &AuthConfig{
 		PublicKey: signingKey,
@@ -336,6 +392,7 @@ func BootstrapViaProxy(ctx context.Context, config ProxyBootstrapConfig) (*Boots
 		ServiceRoomID: serviceRoomID,
 		AuthConfig:    authConfig,
 		Clock:         clk,
+		TestClock:     testClock,
 		Logger:        logger,
 		SocketPath:    serviceSocket,
 		PrincipalName: principalName,

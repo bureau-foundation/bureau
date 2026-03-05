@@ -305,6 +305,12 @@ type createRequest struct {
 	// by tools running inside agent sandboxes via the wrapper
 	// context socket.
 	ContextID string `cbor:"context_id,omitempty"`
+
+	// Reservation holds resource reservation claims for
+	// resource_request tickets. When present, the ticket service
+	// creates relay tickets in target ops rooms after all
+	// non-reservation gates are satisfied.
+	Reservation *ticket.ReservationContent `cbor:"reservation,omitempty"`
 }
 
 // updateRequest is the input for the "update" action. Pointer fields
@@ -513,24 +519,25 @@ func (ts *TicketService) handleCreate(ctx context.Context, token *servicetoken.T
 
 	now := ts.clock.Now().UTC().Format(time.RFC3339)
 	content := ticket.TicketContent{
-		Version:   ticket.TicketContentVersion,
-		Title:     request.Title,
-		Body:      request.Body,
-		Status:    ticket.StatusOpen,
-		Priority:  request.Priority,
-		Type:      requestType,
-		Labels:    request.Labels,
-		Affects:   request.Affects,
-		Parent:    request.Parent,
-		BlockedBy: request.BlockedBy,
-		Gates:     request.Gates,
-		Origin:    request.Origin,
-		Pipeline:  request.Pipeline,
-		Deadline:  request.Deadline,
-		ContextID: request.ContextID,
-		CreatedBy: token.Subject,
-		CreatedAt: now,
-		UpdatedAt: now,
+		Version:     ticket.TicketContentVersion,
+		Title:       request.Title,
+		Body:        request.Body,
+		Status:      ticket.StatusOpen,
+		Priority:    request.Priority,
+		Type:        requestType,
+		Labels:      request.Labels,
+		Affects:     request.Affects,
+		Parent:      request.Parent,
+		BlockedBy:   request.BlockedBy,
+		Gates:       request.Gates,
+		Origin:      request.Origin,
+		Pipeline:    request.Pipeline,
+		Reservation: request.Reservation,
+		Deadline:    request.Deadline,
+		ContextID:   request.ContextID,
+		CreatedBy:   token.Subject,
+		CreatedAt:   now,
+		UpdatedAt:   now,
 	}
 
 	// Auto-configure stewardship review gates from matching
@@ -606,6 +613,10 @@ func (ts *TicketService) handleCreate(ctx context.Context, token *servicetoken.T
 			ts.queueStewardshipNotifications(ctx, roomID, ticketID, content, notifyDeclarations)
 		}
 	}
+
+	// Check if a resource_request ticket is immediately ready for
+	// relay (no gates to satisfy first).
+	ts.checkAndInitiateRelay(ctx, roomID, state, ticketID, content)
 
 	return ticket.CreateResponse{
 		ID:   ticketID,
@@ -886,10 +897,14 @@ func (ts *TicketService) handleUpdate(ctx context.Context, token *servicetoken.T
 	}
 
 	// If this update closed the ticket, resolve timer targets for
-	// dependents that may have become unblocked. Idempotent with the
-	// sync loop's echo processing.
+	// dependents that may have become unblocked and close any relay
+	// tickets associated with this workspace ticket. Both are
+	// idempotent with handleClose — a ticket closed via "update"
+	// must trigger the same lifecycle cascades as one closed via
+	// the dedicated "close" action.
 	if content.Status == ticket.StatusClosed {
 		ts.resolveUnblockedTimerTargets(ctx, roomID, state, []string{ticketID})
+		ts.closeRelayTicketsForWorkspace(ctx, ticketID)
 	}
 
 	// Push a deadline monitoring entry if the deadline was changed.
@@ -1033,6 +1048,10 @@ func (ts *TicketService) handleClose(ctx context.Context, token *servicetoken.To
 	// resolveUnblockedTimerTargets is idempotent (skips gates that
 	// already have a Target).
 	ts.resolveUnblockedTimerTargets(ctx, roomID, state, []string{ticketID})
+
+	// Close relay tickets if this workspace ticket had active
+	// reservations. This cascades the closure to ops rooms.
+	ts.closeRelayTicketsForWorkspace(ctx, ticketID)
 
 	return ticket.MutationResponse{
 		ID:      ticketID,

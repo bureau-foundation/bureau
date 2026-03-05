@@ -135,14 +135,20 @@ type fleetController struct {
 // controller runs as a machine-level service (outside the sandbox) and
 // needs access to fleet-scoped rooms plus elevated power in the config
 // room for MachineConfig writes.
-func startFleetController(t *testing.T, admin *messaging.DirectSession, machine *testMachine, controllerName string, fleet *testFleet) *fleetController {
+func startFleetController(t *testing.T, admin *messaging.DirectSession, machine *testMachine, controllerName string, fleet *testFleet, extraEnv ...map[string]string) *fleetController {
 	t.Helper()
 
+	var environmentVariables map[string]string
+	if len(extraEnv) > 0 {
+		environmentVariables = extraEnv[0]
+	}
+
 	svc := deployService(t, admin, fleet, machine, serviceDeployOptions{
-		Binary:     resolvedBinary(t, "FLEET_CONTROLLER_BINARY"),
-		Name:       "fleet-controller",
-		Localpart:  controllerName,
-		ExtraRooms: []ref.RoomID{fleet.FleetRoomID, fleet.MachineRoomID},
+		Binary:                    resolvedBinary(t, "FLEET_CONTROLLER_BINARY"),
+		Name:                      "fleet-controller",
+		Localpart:                 controllerName,
+		ExtraRooms:                []ref.RoomID{fleet.FleetRoomID, fleet.MachineRoomID},
+		ExtraEnvironmentVariables: environmentVariables,
 		MatrixPolicy: &schema.MatrixPolicy{
 			AllowJoin: true,
 		},

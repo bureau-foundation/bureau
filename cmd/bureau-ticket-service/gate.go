@@ -114,6 +114,12 @@ func (ts *TicketService) evaluateGatesForEvent(ctx context.Context, roomID ref.R
 				"satisfied_by", satisfiedBy,
 				"room_id", roomID,
 			)
+
+			// Check if a resource_request ticket is now ready
+			// for relay after this gate was satisfied.
+			if updated, ok := state.index.Get(watch.TicketID); ok {
+				ts.checkAndInitiateRelay(ctx, roomID, state, watch.TicketID, updated)
+			}
 		}
 	}
 }
@@ -337,109 +343,204 @@ type aliasResolver interface {
 	ResolveAlias(ctx context.Context, alias ref.RoomAlias) (ref.RoomID, error)
 }
 
-// evaluateCrossRoomGates checks events from non-ticket rooms against
+// crossRoomWatchKey identifies a specific state event in a specific
+// room that one or more cross-room gates are watching for.
+type crossRoomWatchKey struct {
+	roomID    ref.RoomID
+	eventType ref.EventType
+	stateKey  string
+}
+
+// crossRoomWatch identifies a gate in a ticket room that watches for
+// events in another room.
+type crossRoomWatch struct {
+	ticketRoomID ref.RoomID
+	ticketID     string
+	gateIndex    int
+	gateID       string
+}
+
+// addCrossRoomWatch registers a watch for a cross-room gate. When an
+// event matching (roomID, eventType, stateKey) arrives via /sync, the
+// gate identified by (ticketRoomID, ticketID, gateIndex, gateID) will
+// be evaluated. Must be called with ts.mu held.
+func (ts *TicketService) addCrossRoomWatch(roomID ref.RoomID, eventType ref.EventType, stateKey string, ticketRoomID ref.RoomID, ticketID string, gateIndex int, gateID string) {
+	key := crossRoomWatchKey{roomID: roomID, eventType: eventType, stateKey: stateKey}
+	watch := crossRoomWatch{
+		ticketRoomID: ticketRoomID,
+		ticketID:     ticketID,
+		gateIndex:    gateIndex,
+		gateID:       gateID,
+	}
+	ts.crossRoomWatches[key] = append(ts.crossRoomWatches[key], watch)
+}
+
+// removeCrossRoomWatch removes a specific watch entry. Matches on
+// ticketID and gateID (gateIndex may have shifted if gates were
+// added/removed). Must be called with ts.mu held.
+func (ts *TicketService) removeCrossRoomWatch(roomID ref.RoomID, eventType ref.EventType, stateKey string, ticketID string, gateID string) {
+	key := crossRoomWatchKey{roomID: roomID, eventType: eventType, stateKey: stateKey}
+	watches := ts.crossRoomWatches[key]
+	for i, watch := range watches {
+		if watch.ticketID == ticketID && watch.gateID == gateID {
+			ts.crossRoomWatches[key] = append(watches[:i], watches[i+1:]...)
+			if len(ts.crossRoomWatches[key]) == 0 {
+				delete(ts.crossRoomWatches, key)
+			}
+			return
+		}
+	}
+}
+
+// evaluateCrossRoomGates checks events from all joined rooms against
 // pending cross-room state_event gates. A cross-room gate has
 // RoomAlias set, indicating it watches a different room than the
 // ticket's own room.
 //
-// This scans all ticket rooms' pending gates for state_event gates
-// with RoomAlias, resolves each alias to a room ID, and checks if
-// the sync response delivered matching events from that room.
-//
-// The alias resolution result is cached on the TicketService so
-// subsequent sync batches don't re-resolve the same aliases.
+// This is event-driven: for each state event from any joined room,
+// look up matching watches in ts.crossRoomWatches and try to satisfy
+// the corresponding gates. This mirrors the same-room pattern in
+// evaluateGatesForEvent — O(1) per event via the watch map.
 //
 // Cross-room gates can only auto-evaluate for event types included
 // in the /sync filter. If a gate references an event type the filter
 // doesn't include, the homeserver won't deliver those events and the
 // gate must be resolved manually via the resolve-gate API.
 func (ts *TicketService) evaluateCrossRoomGates(ctx context.Context, joinedRooms map[ref.RoomID]messaging.JoinedRoom) {
-	if ts.resolver == nil {
+	if len(ts.crossRoomWatches) == 0 {
 		return
 	}
 
-	// Collect cross-room gates across all ticket rooms. For each,
-	// resolve the alias and check if events arrived from that room.
-	for ticketRoomID, state := range ts.rooms {
-		candidates := state.index.PendingGates()
-		for _, entry := range candidates {
-			for gateIndex := range entry.Content.Gates {
-				gate := &entry.Content.Gates[gateIndex]
-				if gate.Status != ticket.GatePending || gate.Type != ticket.GateStateEvent || gate.RoomAlias.IsZero() {
-					continue
+	for roomID, joinedRoom := range joinedRooms {
+		events := collectStateEvents(joinedRoom)
+		for _, event := range events {
+			if event.StateKey == nil {
+				continue
+			}
+
+			// Exact match: watches for this specific
+			// (roomID, eventType, stateKey).
+			exactKey := crossRoomWatchKey{
+				roomID:    roomID,
+				eventType: event.Type,
+				stateKey:  *event.StateKey,
+			}
+			ts.evaluateCrossRoomWatches(ctx, exactKey, roomID, event)
+
+			// Wildcard match: watches for any state key of
+			// this event type in this room.
+			if *event.StateKey != "" {
+				wildcardKey := crossRoomWatchKey{
+					roomID:    roomID,
+					eventType: event.Type,
 				}
-
-				watchedRoomID, err := ts.resolveAliasWithCache(ctx, gate.RoomAlias)
-				if err != nil {
-					ts.logger.Warn("failed to resolve cross-room gate alias",
-						"ticket_id", entry.ID,
-						"gate_id", gate.ID,
-						"room_alias", gate.RoomAlias,
-						"error", err,
-					)
-					continue
-				}
-
-				// Check if the sync batch included events from
-				// the watched room.
-				watchedRoom, hasEvents := joinedRooms[watchedRoomID]
-				if !hasEvents {
-					continue
-				}
-
-				// Collect state events from the watched room.
-				events := collectStateEvents(watchedRoom)
-				for _, event := range events {
-					if !matchStateEventCondition(gate, event) {
-						continue
-					}
-
-					// Re-read the ticket for the current version.
-					current, exists := state.index.Get(entry.ID)
-					if !exists {
-						break
-					}
-					if gateIndex >= len(current.Gates) {
-						break
-					}
-					currentGate := &current.Gates[gateIndex]
-					if currentGate.ID != gate.ID || currentGate.Status != ticket.GatePending {
-						break
-					}
-
-					satisfiedBy := event.EventID.String()
-					if satisfiedBy == "" {
-						satisfiedBy = string(event.Type)
-						if event.StateKey != nil {
-							satisfiedBy += "/" + *event.StateKey
-						}
-					}
-
-					if err := ts.satisfyGate(ctx, ticketRoomID, state, entry.ID, current, gateIndex, satisfiedBy); err != nil {
-						ts.logger.Error("failed to satisfy cross-room gate",
-							"ticket_id", entry.ID,
-							"gate_id", gate.ID,
-							"room_alias", gate.RoomAlias,
-							"watched_room", watchedRoomID,
-							"error", err,
-						)
-					} else {
-						ts.logger.Info("cross-room gate satisfied",
-							"ticket_id", entry.ID,
-							"gate_id", gate.ID,
-							"room_alias", gate.RoomAlias,
-							"watched_room", watchedRoomID,
-							"satisfied_by", satisfiedBy,
-							"ticket_room", ticketRoomID,
-						)
-					}
-					// Gate satisfied — stop checking events for
-					// this gate.
-					break
-				}
+				ts.evaluateCrossRoomWatches(ctx, wildcardKey, roomID, event)
 			}
 		}
 	}
+}
+
+// evaluateCrossRoomWatches processes all watches for a given key
+// against a single event. Takes a snapshot of the watch slice to
+// allow modification during iteration (trySatisfyCrossRoomGate may
+// remove satisfied watches).
+func (ts *TicketService) evaluateCrossRoomWatches(ctx context.Context, key crossRoomWatchKey, watchedRoomID ref.RoomID, event messaging.Event) {
+	watches := ts.crossRoomWatches[key]
+	if len(watches) == 0 {
+		return
+	}
+
+	// Snapshot: trySatisfyCrossRoomGate may call
+	// removeCrossRoomWatch which modifies the slice.
+	snapshot := make([]crossRoomWatch, len(watches))
+	copy(snapshot, watches)
+
+	for _, watch := range snapshot {
+		ts.trySatisfyCrossRoomGate(ctx, watch, watchedRoomID, event)
+	}
+}
+
+// trySatisfyCrossRoomGate attempts to satisfy a cross-room gate with
+// the given event. Returns true if the gate was satisfied. Re-reads
+// the current ticket from the index to validate the gate is still
+// pending, calls matchStateEventCondition for content-level matching,
+// and handles reservation grant mirroring.
+//
+// On success, removes the watch from crossRoomWatches since the gate
+// is no longer pending.
+//
+// Must be called with ts.mu held.
+func (ts *TicketService) trySatisfyCrossRoomGate(
+	ctx context.Context,
+	watch crossRoomWatch,
+	watchedRoomID ref.RoomID,
+	event messaging.Event,
+) bool {
+	state, exists := ts.rooms[watch.ticketRoomID]
+	if !exists {
+		return false
+	}
+
+	// Re-read the ticket for the current version.
+	current, exists := state.index.Get(watch.ticketID)
+	if !exists {
+		return false
+	}
+	if watch.gateIndex >= len(current.Gates) {
+		return false
+	}
+	currentGate := &current.Gates[watch.gateIndex]
+	if currentGate.ID != watch.gateID || currentGate.Status != ticket.GatePending {
+		return false
+	}
+
+	// The watch map narrows candidates by (roomID, eventType,
+	// stateKey); content-level criteria (content_match) still
+	// need full match verification.
+	if !matchStateEventCondition(currentGate, event) {
+		return false
+	}
+
+	satisfiedBy := event.EventID.String()
+	if satisfiedBy == "" {
+		satisfiedBy = string(event.Type)
+		if event.StateKey != nil {
+			satisfiedBy += "/" + *event.StateKey
+		}
+	}
+
+	if err := ts.satisfyGate(ctx, watch.ticketRoomID, state, watch.ticketID, current, watch.gateIndex, satisfiedBy); err != nil {
+		ts.logger.Error("failed to satisfy cross-room gate",
+			"ticket_id", watch.ticketID,
+			"gate_id", watch.gateID,
+			"watched_room", watchedRoomID,
+			"error", err,
+		)
+		return false
+	}
+
+	ts.logger.Info("cross-room gate satisfied",
+		"ticket_id", watch.ticketID,
+		"gate_id", watch.gateID,
+		"watched_room", watchedRoomID,
+		"satisfied_by", satisfiedBy,
+		"ticket_room", watch.ticketRoomID,
+	)
+
+	// Remove the watch — the gate is satisfied.
+	ts.removeCrossRoomWatch(watchedRoomID, event.Type, currentGate.StateKey, watch.ticketID, watch.gateID)
+
+	// When a reservation gate fires, mirror the grant to the
+	// workspace claim.
+	if currentGate.EventType == schema.EventTypeReservation {
+		if relEntry, ok := ts.relayEntries[watch.ticketID]; ok {
+			if relRef, ok := relEntry.relayTickets[watchedRoomID]; ok {
+				ts.mirrorReservationGrant(ctx, watchedRoomID, relRef.ticketID)
+			}
+		}
+	}
+
+	return true
 }
 
 // collectStateEvents extracts state events from a joined room's sync

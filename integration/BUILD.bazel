@@ -29,6 +29,7 @@ go_test(
         "health_test.go",
         "helpers_test.go",
         "inotify_test.go",
+        "interceptor_test.go",
         "lifecycle_test.go",
         "machine_test.go",
         "mcp_resource_test.go",

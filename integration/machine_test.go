@@ -902,6 +902,12 @@ type agentOptions struct {
 	// instead of Go binaries (e.g., output capture tests that need
 	// dd, base64, etc. from the Nix environment).
 	Command []string
+
+	// ProxyServices declares external HTTP API upstreams for the template.
+	// When set, the daemon registers these on the principal's proxy after
+	// sandbox creation, enabling credential injection and response
+	// interceptors without exposing API keys to the sandboxed agent.
+	ProxyServices map[string]schema.TemplateProxyService
 }
 
 // agentDeployment holds the result of deployAgent: account details, socket
@@ -974,6 +980,9 @@ func agentTemplateContent(binary string, options agentOptions) schema.TemplateCo
 	}
 	if options.EnvironmentPath != "" {
 		content.Environment = options.EnvironmentPath
+	}
+	if len(options.ProxyServices) > 0 {
+		content.ProxyServices = options.ProxyServices
 	}
 
 	return content

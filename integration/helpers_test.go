@@ -2218,3 +2218,66 @@ func proxyServiceDiscovery(t *testing.T, client *http.Client, queryParams string
 	}
 	return entries
 }
+
+// waitForProxyService polls the proxy's admin socket until the named HTTP
+// service is registered. This bridges the gap between proxy socket creation
+// (which the test waits for via inotify) and the daemon's asynchronous
+// proxy configuration (external services, authorization, directory push).
+//
+// The daemon configures external proxy services via admin API calls AFTER
+// the launcher responds to create-sandbox IPC, which is after the proxy
+// socket already exists. There is no Matrix notification for this step,
+// so we query the admin API directly.
+//
+// The loop makes HTTP requests without sleeping between attempts — the
+// Unix socket round-trip (~100µs) provides natural pacing. Bounded by
+// t.Context() (test timeout).
+func waitForProxyService(t *testing.T, adminSocketPath, serviceName string) {
+	t.Helper()
+
+	client := proxyHTTPClient(adminSocketPath)
+
+	for {
+		request, err := http.NewRequestWithContext(t.Context(), http.MethodGet,
+			"http://admin/v1/admin/services", nil)
+		if err != nil {
+			t.Fatalf("create admin services request: %v", err)
+		}
+
+		response, err := client.Do(request)
+		if err != nil {
+			// Admin socket may not be accepting connections yet, or
+			// context canceled (test timeout).
+			if t.Context().Err() != nil {
+				t.Fatalf("timed out waiting for proxy service %q on %s", serviceName, adminSocketPath)
+			}
+			runtime.Gosched()
+			continue
+		}
+
+		var services []struct {
+			Name string `json:"name"`
+		}
+		decodeErr := json.NewDecoder(response.Body).Decode(&services)
+		response.Body.Close()
+		if decodeErr != nil {
+			if t.Context().Err() != nil {
+				t.Fatalf("timed out waiting for proxy service %q on %s", serviceName, adminSocketPath)
+			}
+			runtime.Gosched()
+			continue
+		}
+
+		for _, service := range services {
+			if service.Name == serviceName {
+				return
+			}
+		}
+
+		if t.Context().Err() != nil {
+			t.Fatalf("timed out waiting for proxy service %q on %s (have %d services, none named %q)",
+				serviceName, adminSocketPath, len(services), serviceName)
+		}
+		runtime.Gosched()
+	}
+}

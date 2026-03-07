@@ -839,11 +839,17 @@ func TestProcessSyncResponse_MachinesRoom(t *testing.T) {
 	const serviceRoomID = "!service:test"
 
 	// Set up the machine room with one peer's status.
-	peerKey := "machine/peer"
+	// State key uses localpart:server format (UserID without '@').
+	peerKey := "machine/peer:bureau.local"
+	peerSender, err := ref.ParseUserID("@machine/peer:bureau.local")
+	if err != nil {
+		t.Fatalf("parse peer sender: %v", err)
+	}
 	matrixState.setRoomState(machineRoomID, []mockRoomStateEvent{
 		{
 			Type:     schema.EventTypeMachineStatus,
 			StateKey: &peerKey,
+			Sender:   peerSender,
 			Content: map[string]any{
 				"principal":         "@machine/peer:bureau.local",
 				"transport_address": "192.168.1.100:9090",
@@ -885,6 +891,7 @@ func TestProcessSyncResponse_MachinesRoom(t *testing.T) {
 						Events: []messaging.Event{
 							{
 								Type:     schema.EventTypeMachineStatus,
+								Sender:   peerSender,
 								StateKey: &peerKey,
 								Content: map[string]any{
 									"principal":         "@machine/peer:bureau.local",
@@ -922,11 +929,16 @@ func TestSyncPeerAddresses_RemovesStalePeers(t *testing.T) {
 	const machineRoomID = "!machine:test"
 
 	// State events: only peerA is present. peerB will be stale.
-	peerAKey := "machine/peer-a"
+	peerAKey := "machine/peer-a:bureau.local"
+	peerASender, err := ref.ParseUserID("@machine/peer-a:bureau.local")
+	if err != nil {
+		t.Fatalf("parse peer-a sender: %v", err)
+	}
 	matrixState.setRoomState(machineRoomID, []mockRoomStateEvent{
 		{
 			Type:     schema.EventTypeMachineStatus,
 			StateKey: &peerAKey,
+			Sender:   peerASender,
 			Content: map[string]any{
 				"principal":         "@machine/peer-a:bureau.local",
 				"transport_address": "10.0.0.1:9090",
@@ -1003,11 +1015,16 @@ func TestSyncPeerAddresses_UpdatesChangedAddress(t *testing.T) {
 	const machineRoomID = "!machine:test"
 
 	// State events: peerA has a new address.
-	peerAKey := "machine/peer-a"
+	peerAKey := "machine/peer-a:bureau.local"
+	peerASender, err := ref.ParseUserID("@machine/peer-a:bureau.local")
+	if err != nil {
+		t.Fatalf("parse peer-a sender: %v", err)
+	}
 	matrixState.setRoomState(machineRoomID, []mockRoomStateEvent{
 		{
 			Type:     schema.EventTypeMachineStatus,
 			StateKey: &peerAKey,
+			Sender:   peerASender,
 			Content: map[string]any{
 				"principal":         "@machine/peer-a:bureau.local",
 				"transport_address": "10.0.0.99:9090",
@@ -1074,11 +1091,16 @@ func TestSyncPeerAddresses_SharedAddressNotRemovedPrematurely(t *testing.T) {
 	const machineRoomID = "!machine:test"
 
 	// Only peerA remains. peerB (same address) is gone.
-	peerAKey := "machine/peer-a"
+	peerAKey := "machine/peer-a:bureau.local"
+	peerASender, err := ref.ParseUserID("@machine/peer-a:bureau.local")
+	if err != nil {
+		t.Fatalf("parse peer-a sender: %v", err)
+	}
 	matrixState.setRoomState(machineRoomID, []mockRoomStateEvent{
 		{
 			Type:     schema.EventTypeMachineStatus,
 			StateKey: &peerAKey,
+			Sender:   peerASender,
 			Content: map[string]any{
 				"principal":         "@machine/peer-a:bureau.local",
 				"transport_address": "10.0.0.1:9090",
@@ -1207,11 +1229,16 @@ func TestInitialSync(t *testing.T) {
 	})
 
 	// Set up machine room state for GetRoomState (used by syncPeerAddresses).
-	peerKey := "machine/peer"
+	peerKey := "machine/peer:bureau.local"
+	peerSender, err := ref.ParseUserID("@machine/peer:bureau.local")
+	if err != nil {
+		t.Fatalf("parse peer sender: %v", err)
+	}
 	matrixState.setRoomState(machineRoomID, []mockRoomStateEvent{
 		{
 			Type:     schema.EventTypeMachineStatus,
 			StateKey: &peerKey,
+			Sender:   peerSender,
 			Content: map[string]any{
 				"principal":         "@machine/peer:bureau.local",
 				"transport_address": "10.0.0.1:9090",

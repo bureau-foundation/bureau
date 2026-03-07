@@ -40,7 +40,7 @@ type Result struct {
 	MatchedSource *schema.RelaySource
 
 	// OutboundFilter specifies which fields cross the relay boundary
-	// when mirroring ops room state back to the workspace ticket.
+	// when mirroring ops room state back to the origin ticket.
 	// Nil means the caller should use default filtering (status and
 	// close_reason only). Copied from the policy.
 	OutboundFilter *schema.RelayFilter

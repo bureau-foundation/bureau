@@ -18,15 +18,15 @@ import (
 	"github.com/bureau-foundation/bureau/messaging"
 )
 
-// relayEntry tracks the association between a workspace ticket and its
+// relayEntry tracks the association between an origin ticket and its
 // relay tickets in ops rooms. Created when the ticket service initiates
-// relay for a resource_request ticket.
+// relay for a ticket with a Reservation.
 type relayEntry struct {
-	// workspaceRoom is the room containing the workspace ticket.
-	workspaceRoom ref.RoomID
+	// originRoom is the room containing the origin ticket.
+	originRoom ref.RoomID
 
-	// workspaceTicket is the ID of the workspace ticket.
-	workspaceTicket string
+	// originTicket is the ID of the origin ticket.
+	originTicket string
 
 	// relayTickets maps ops room ID → relay ticket reference for
 	// each claim that was successfully relayed.
@@ -34,14 +34,20 @@ type relayEntry struct {
 }
 
 // relayTicketRef identifies a relay ticket in an ops room and its
-// corresponding claim in the workspace ticket.
+// corresponding claim in the origin ticket.
 type relayTicketRef struct {
 	// ticketID is the relay ticket's ID in the ops room.
 	ticketID string
 
-	// claimIndex is the index into the workspace ticket's
+	// claimIndex is the index into the origin ticket's
 	// Reservation.Claims slice that this relay ticket represents.
 	claimIndex int
+
+	// outboundFilter controls what information from the ops room
+	// crosses back to the origin ticket. Nil means default
+	// filtering (status + close_reason only). Derived from the
+	// relay policy at relay time and re-derived on startup.
+	outboundFilter *schema.RelayFilter
 }
 
 // isRelayReady reports whether a ticket with a Reservation is ready
@@ -125,31 +131,31 @@ func (ts *TicketService) checkAndInitiateRelay(ctx context.Context, roomID ref.R
 }
 
 // initiateRelay creates relay tickets in ops rooms for each claim in
-// the reservation and adds state_event gates to the workspace ticket.
+// the reservation and adds state_event gates to the origin ticket.
 // Must be called with ts.mu held.
 func (ts *TicketService) initiateRelay(
 	ctx context.Context,
-	workspaceRoomID ref.RoomID,
-	workspaceState *roomState,
-	workspaceTicketID string,
+	originRoomID ref.RoomID,
+	originState *roomState,
+	originTicketID string,
 	content *ticket.TicketContent,
 ) error {
-	// Extract the fleet from the workspace room's alias.
-	fleet, err := fleetFromRoomAlias(workspaceState.alias)
+	// Extract the fleet from the origin room's alias.
+	fleet, err := fleetFromRoomAlias(originState.alias)
 	if err != nil {
-		return fmt.Errorf("cannot determine fleet from workspace room: %w", err)
+		return fmt.Errorf("cannot determine fleet from origin room: %w", err)
 	}
 
 	// Build the source room identity for relay policy evaluation.
 	var sourceAlias ref.RoomAlias
-	if workspaceState.alias != "" {
-		sourceAlias, err = ref.ParseRoomAlias(workspaceState.alias)
+	if originState.alias != "" {
+		sourceAlias, err = ref.ParseRoomAlias(originState.alias)
 		if err != nil {
-			return fmt.Errorf("invalid workspace room alias %q: %w", workspaceState.alias, err)
+			return fmt.Errorf("invalid origin room alias %q: %w", originState.alias, err)
 		}
 	}
 	source := relayauth.SourceRoom{
-		RoomID: workspaceRoomID,
+		RoomID: originRoomID,
 		Alias:  sourceAlias,
 	}
 
@@ -158,9 +164,9 @@ func (ts *TicketService) initiateRelay(
 
 	// Track relay tickets for lifecycle management.
 	entry := &relayEntry{
-		workspaceRoom:   workspaceRoomID,
-		workspaceTicket: workspaceTicketID,
-		relayTickets:    make(map[ref.RoomID]relayTicketRef),
+		originRoom:   originRoomID,
+		originTicket: originTicketID,
+		relayTickets: make(map[ref.RoomID]relayTicketRef),
 	}
 
 	for claimIndex := range reservation.Claims {
@@ -208,13 +214,13 @@ func (ts *TicketService) initiateRelay(
 
 		// Mark the claim as pending before building the relay ticket.
 		// The relay ticket copies the claim, so the status must be set
-		// before the copy happens. The workspace ticket is written with
+		// before the copy happens. The origin ticket is written with
 		// the updated claims after all relay tickets are created.
 		claim.Status = schema.ClaimPending
 		claim.StatusAt = now
 
 		// Prepare the relay ticket content and ID without publishing.
-		relayTicketID, relayContent, err := ts.prepareRelayTicket(opsState, opsRoomID, workspaceRoomID, workspaceTicketID, content, claim, now)
+		relayTicketID, relayContent, err := ts.prepareRelayTicket(opsState, opsRoomID, originRoomID, originTicketID, content, claim, now)
 		if err != nil {
 			return fmt.Errorf("claim %d: prepare relay ticket for %s: %w", claimIndex, opsAlias, err)
 		}
@@ -229,8 +235,8 @@ func (ts *TicketService) initiateRelay(
 		// link first ensures the FC always has it indexed when it sees
 		// the ticket.
 		relayLink := schema.RelayLink{
-			OriginRoom:   workspaceRoomID,
-			OriginTicket: workspaceTicketID,
+			OriginRoom:   originRoomID,
+			OriginTicket: originTicketID,
 			Requester:    requester,
 		}
 		if _, err := ts.writer.SendStateEvent(ctx, opsRoomID, schema.EventTypeRelayLink, relayTicketID, relayLink); err != nil {
@@ -243,13 +249,14 @@ func (ts *TicketService) initiateRelay(
 		}
 
 		entry.relayTickets[opsRoomID] = relayTicketRef{
-			ticketID:   relayTicketID,
-			claimIndex: claimIndex,
+			ticketID:       relayTicketID,
+			claimIndex:     claimIndex,
+			outboundFilter: result.OutboundFilter,
 		}
 
-		// Add a state_event gate to the workspace ticket that
+		// Add a state_event gate to the origin ticket that
 		// watches the ops room for an m.bureau.reservation event
-		// with the holder matching the workspace ticket's creator.
+		// with the holder matching the origin ticket's creator.
 		//
 		// The gate's state key is the creator's localpart (the
 		// convention for reservation state events). The
@@ -274,10 +281,10 @@ func (ts *TicketService) initiateRelay(
 		// event arrives from the ops room, the gate is evaluated
 		// event-driven rather than requiring a gate-scan.
 		gateIndex := len(content.Gates) - 1
-		ts.addCrossRoomWatch(opsRoomID, gate.EventType, gate.StateKey, workspaceRoomID, workspaceTicketID, gateIndex, gateID)
+		ts.addCrossRoomWatch(opsRoomID, gate.EventType, gate.StateKey, originRoomID, originTicketID, gateIndex, gateID)
 
 		ts.logger.Info("relay ticket created",
-			"workspace_ticket", workspaceTicketID,
+			"origin_ticket", originTicketID,
 			"relay_ticket", relayTicketID,
 			"ops_room", opsAlias,
 			"claim_index", claimIndex,
@@ -286,18 +293,18 @@ func (ts *TicketService) initiateRelay(
 		)
 	}
 
-	// Write the updated workspace ticket with the new reservation
+	// Write the updated origin ticket with the new reservation
 	// gates back to Matrix.
 	content.UpdatedAt = now
-	if err := ts.putWithEcho(ctx, workspaceRoomID, workspaceState, workspaceTicketID, *content); err != nil {
-		return fmt.Errorf("update workspace ticket with reservation gates: %w", err)
+	if err := ts.putWithEcho(ctx, originRoomID, originState, originTicketID, *content); err != nil {
+		return fmt.Errorf("update origin ticket with reservation gates: %w", err)
 	}
 
 	// Store the relay entry for lifecycle management.
-	ts.relayEntries[workspaceTicketID] = entry
+	ts.relayEntries[originTicketID] = entry
 
 	ts.logger.Info("relay initiated",
-		"workspace_ticket", workspaceTicketID,
+		"origin_ticket", originTicketID,
 		"claims", len(reservation.Claims),
 		"relay_tickets", len(entry.relayTickets),
 	)
@@ -315,9 +322,9 @@ func (ts *TicketService) initiateRelay(
 func (ts *TicketService) prepareRelayTicket(
 	opsState *roomState,
 	opsRoomID ref.RoomID,
-	workspaceRoomID ref.RoomID,
-	workspaceTicketID string,
-	workspaceContent *ticket.TicketContent,
+	originRoomID ref.RoomID,
+	originTicketID string,
+	originContent *ticket.TicketContent,
 	claim *ticket.ResourceClaim,
 	now string,
 ) (string, ticket.TicketContent, error) {
@@ -327,9 +334,9 @@ func (ts *TicketService) prepareRelayTicket(
 	relayContent := ticket.TicketContent{
 		Version:  ticket.TicketContentVersion,
 		Title:    fmt.Sprintf("Resource request: %s/%s", claim.Resource.Type, claim.Resource.Target),
-		Body:     fmt.Sprintf("Relay from workspace ticket %s in room %s.\nMode: %s", workspaceTicketID, workspaceRoomID, claim.Mode),
+		Body:     fmt.Sprintf("Relay for %s/%s (%s)", claim.Resource.Type, claim.Resource.Target, claim.Mode),
 		Status:   ticket.StatusOpen,
-		Priority: workspaceContent.Priority,
+		Priority: originContent.Priority,
 		Type:     ticket.TypeResourceRequest,
 		Reservation: &ticket.ReservationContent{
 			Claims: []ticket.ResourceClaim{*claim},
@@ -339,9 +346,9 @@ func (ts *TicketService) prepareRelayTicket(
 		UpdatedAt: now,
 	}
 
-	// Copy MaxDuration from the workspace reservation if set.
-	if workspaceContent.Reservation.MaxDuration != "" {
-		relayContent.Reservation.MaxDuration = workspaceContent.Reservation.MaxDuration
+	// Copy MaxDuration from the origin reservation if set.
+	if originContent.Reservation.MaxDuration != "" {
+		relayContent.Reservation.MaxDuration = originContent.Reservation.MaxDuration
 	}
 
 	if err := relayContent.Validate(); err != nil {
@@ -379,7 +386,7 @@ func isNotFoundError(err error) bool {
 	return messaging.IsMatrixError(err, messaging.ErrCodeNotFound)
 }
 
-// addRelayFailureNote adds a note to the workspace ticket explaining
+// addRelayFailureNote adds a note to the origin ticket explaining
 // why relay failed. This provides visibility to the ticket creator.
 func (ts *TicketService) addRelayFailureNote(
 	ctx context.Context,
@@ -414,39 +421,39 @@ func (ts *TicketService) addRelayFailureNote(
 // for a relay ticket in a given ops room. Returns nil if no relay
 // entry tracks a ticket with the given ID in the given room.
 func (ts *TicketService) findRelayEntryByOpsRoom(opsRoomID ref.RoomID, relayTicketID string) (*relayEntry, string, int) {
-	for workspaceTicketID, entry := range ts.relayEntries {
+	for originTicketID, entry := range ts.relayEntries {
 		for entryOpsRoom, relayRef := range entry.relayTickets {
 			if entryOpsRoom == opsRoomID && relayRef.ticketID == relayTicketID {
-				return entry, workspaceTicketID, relayRef.claimIndex
+				return entry, originTicketID, relayRef.claimIndex
 			}
 		}
 	}
 	return nil, "", -1
 }
 
-// updateClaimStatus updates a specific claim's status on the workspace
+// updateClaimStatus updates a specific claim's status on the origin
 // ticket and writes the update to Matrix. Must be called with ts.mu
 // held.
 func (ts *TicketService) updateClaimStatus(
 	ctx context.Context,
 	entry *relayEntry,
-	workspaceTicketID string,
+	originTicketID string,
 	claimIndex int,
 	status schema.ClaimStatus,
 	statusReason string,
 ) {
-	workspaceState, tracked := ts.rooms[entry.workspaceRoom]
+	originState, tracked := ts.rooms[entry.originRoom]
 	if !tracked {
 		return
 	}
 
-	content, exists := workspaceState.index.Get(workspaceTicketID)
+	content, exists := originState.index.Get(originTicketID)
 	if !exists || content.Reservation == nil {
 		return
 	}
 	if claimIndex >= len(content.Reservation.Claims) {
 		ts.logger.Error("claim index out of range",
-			"workspace_ticket", workspaceTicketID,
+			"origin_ticket", originTicketID,
 			"claim_index", claimIndex,
 			"claim_count", len(content.Reservation.Claims),
 		)
@@ -467,6 +474,14 @@ func (ts *TicketService) updateClaimStatus(
 		return
 	}
 
+	// Apply outbound filter. The status transition itself always
+	// crosses the boundary, but the reason detail is controlled by
+	// the relay policy's outbound filter.
+	filter := ts.outboundFilterForClaim(entry, claimIndex)
+	if statusReason != "" && !filter.Allows("status_reason") {
+		statusReason = ""
+	}
+
 	now := ts.clock.Now().UTC().Format(time.RFC3339)
 	claim.Status = status
 	claim.StatusAt = now
@@ -475,72 +490,91 @@ func (ts *TicketService) updateClaimStatus(
 	}
 	content.UpdatedAt = now
 
-	if err := ts.putWithEcho(ctx, entry.workspaceRoom, workspaceState, workspaceTicketID, content); err != nil {
+	if err := ts.putWithEcho(ctx, entry.originRoom, originState, originTicketID, content); err != nil {
 		ts.logger.Error("failed to update claim status",
-			"workspace_ticket", workspaceTicketID,
+			"origin_ticket", originTicketID,
 			"claim_index", claimIndex,
 			"status", status,
 			"error", err,
 		)
 	} else {
 		ts.logger.Info("claim status updated",
-			"workspace_ticket", workspaceTicketID,
+			"origin_ticket", originTicketID,
 			"claim_index", claimIndex,
 			"status", status,
 		)
 	}
 }
 
+// outboundFilterForClaim returns the outbound filter for a specific
+// claim in a relay entry. Returns nil (default filtering) if the
+// claim has no filter configured.
+func (ts *TicketService) outboundFilterForClaim(entry *relayEntry, claimIndex int) *schema.RelayFilter {
+	for _, relayRef := range entry.relayTickets {
+		if relayRef.claimIndex == claimIndex {
+			return relayRef.outboundFilter
+		}
+	}
+	return nil
+}
+
 // mirrorRelayTicketStatus checks whether a relay ticket status change
 // in an ops room should be mirrored to the corresponding claim in the
-// workspace ticket. Called from the sync loop for ticket events in
+// origin ticket. Called from the sync loop for ticket events in
 // tracked rooms.
 //
 // Status mapping:
 //   - relay in_progress → claim approved
 //   - relay closed (no prior grant) → claim denied (handled by denial cascade)
 //   - relay closed (after grant) → claim preempted
-//   - relay closed (origin closed) → no claim update (workspace initiated)
+//   - relay closed (origin closed) → no claim update (origin initiated)
 //
 // Must be called with ts.mu held.
 func (ts *TicketService) mirrorRelayTicketStatus(ctx context.Context, opsRoomID ref.RoomID, relayTicketID string, relayContent ticket.TicketContent) {
-	entry, workspaceTicketID, claimIndex := ts.findRelayEntryByOpsRoom(opsRoomID, relayTicketID)
+	entry, originTicketID, claimIndex := ts.findRelayEntryByOpsRoom(opsRoomID, relayTicketID)
 	if entry == nil {
 		return
 	}
 
 	switch relayContent.Status {
 	case ticket.StatusInProgress:
-		ts.updateClaimStatus(ctx, entry, workspaceTicketID, claimIndex, schema.ClaimApproved, "")
+		ts.updateClaimStatus(ctx, entry, originTicketID, claimIndex, schema.ClaimApproved, "")
 
 	case ticket.StatusClosed:
 		// Closure is handled by handleRelayTicketClosed for the
-		// denial cascade and workspace closure. Here we only need
+		// denial cascade and origin ticket closure. Here we only need
 		// to update the claim status for closures that don't
 		// trigger a denial cascade (origin-closed is a no-op).
 		//
 		// If the claim was previously granted, ops-side closure
 		// means preemption. If it was never granted, it's denial
-		// (handled by cascadeDenial which closes the workspace
+		// (handled by cascadeDenial which closes the origin
 		// ticket entirely).
 		if relayContent.CloseReason == "origin closed" {
 			return
 		}
 
 		// Check if the claim was previously granted.
-		workspaceState, tracked := ts.rooms[entry.workspaceRoom]
+		originState, tracked := ts.rooms[entry.originRoom]
 		if !tracked {
 			return
 		}
-		wsContent, exists := workspaceState.index.Get(workspaceTicketID)
-		if !exists || wsContent.Reservation == nil || claimIndex >= len(wsContent.Reservation.Claims) {
+		originContent, exists := originState.index.Get(originTicketID)
+		if !exists || originContent.Reservation == nil || claimIndex >= len(originContent.Reservation.Claims) {
 			return
 		}
-		if wsContent.Reservation.Claims[claimIndex].Status == schema.ClaimGranted {
-			ts.updateClaimStatus(ctx, entry, workspaceTicketID, claimIndex, schema.ClaimPreempted, relayContent.CloseReason)
-			ts.closeTicketOnPreemption(ctx, entry.workspaceRoom, workspaceTicketID, relayContent.CloseReason)
-			ts.closeRelayTicketsForWorkspace(ctx, workspaceTicketID)
-			delete(ts.relayEntries, workspaceTicketID)
+		if originContent.Reservation.Claims[claimIndex].Status == schema.ClaimGranted {
+			// Apply outbound filter to the ops room close reason
+			// before writing it back to the origin ticket.
+			filter := ts.outboundFilterForClaim(entry, claimIndex)
+			filteredReason := relayContent.CloseReason
+			if !filter.Allows("close_reason") {
+				filteredReason = ""
+			}
+			ts.updateClaimStatus(ctx, entry, originTicketID, claimIndex, schema.ClaimPreempted, filteredReason)
+			ts.closeTicketOnPreemption(ctx, entry.originRoom, originTicketID, filteredReason)
+			ts.closeRelayTicketsForOrigin(ctx, originTicketID)
+			delete(ts.relayEntries, originTicketID)
 		}
 		// Non-granted closure → denial cascade handles it.
 	}
@@ -552,12 +586,12 @@ func (ts *TicketService) mirrorRelayTicketStatus(ctx context.Context, opsRoomID 
 //
 // Must be called with ts.mu held.
 func (ts *TicketService) mirrorReservationGrant(ctx context.Context, opsRoomID ref.RoomID, relayTicketID string) {
-	entry, workspaceTicketID, claimIndex := ts.findRelayEntryByOpsRoom(opsRoomID, relayTicketID)
+	entry, originTicketID, claimIndex := ts.findRelayEntryByOpsRoom(opsRoomID, relayTicketID)
 	if entry == nil {
 		return
 	}
 
-	ts.updateClaimStatus(ctx, entry, workspaceTicketID, claimIndex, schema.ClaimGranted, "")
+	ts.updateClaimStatus(ctx, entry, originTicketID, claimIndex, schema.ClaimGranted, "")
 }
 
 // --- Lifecycle mirroring ---
@@ -565,17 +599,17 @@ func (ts *TicketService) mirrorReservationGrant(ctx context.Context, opsRoomID r
 // handleRelayTicketClosed processes the closure of a relay ticket in
 // an ops room. Three cases:
 //
-//   - "origin closed": workspace side initiated the closure, no action
+//   - "origin closed": origin side initiated the closure, no action
 //   - Claim was previously granted (preemption): the resource was
 //     revoked after being granted. mirrorRelayTicketStatus handles the
 //     claim status update to ClaimPreempted; no cascade here because
-//     the workspace ticket stays open (the resource was taken, not denied)
+//     the origin ticket stays open (the resource was taken, not denied)
 //   - Claim was not granted (denial): triggers denial cascade — closes
-//     all other relay tickets and the workspace ticket
+//     all other relay tickets and the origin ticket
 //
 // Must be called with ts.mu held.
 func (ts *TicketService) handleRelayTicketClosed(ctx context.Context, opsRoomID ref.RoomID, relayTicketID string, relayContent ticket.TicketContent) {
-	entry, workspaceTicketID, claimIndex := ts.findRelayEntryByOpsRoom(opsRoomID, relayTicketID)
+	entry, originTicketID, claimIndex := ts.findRelayEntryByOpsRoom(opsRoomID, relayTicketID)
 	if entry == nil {
 		return
 	}
@@ -583,23 +617,23 @@ func (ts *TicketService) handleRelayTicketClosed(ctx context.Context, opsRoomID 
 	closeReason := relayContent.CloseReason
 
 	// If the relay ticket was closed with reason "origin closed",
-	// the workspace side initiated the closure — no cascade needed.
+	// the origin side initiated the closure — no cascade needed.
 	if closeReason == "origin closed" {
 		return
 	}
 
-	// Check whether the corresponding workspace claim was already
+	// Check whether the corresponding origin claim was already
 	// granted. A granted claim that gets closed is preemption, not
-	// denial — the workspace ticket stays open and the claim status
+	// denial — the origin ticket stays open and the claim status
 	// is updated to ClaimPreempted by mirrorRelayTicketStatus.
-	workspaceState, tracked := ts.rooms[entry.workspaceRoom]
+	originState, tracked := ts.rooms[entry.originRoom]
 	if tracked {
-		wsContent, exists := workspaceState.index.Get(workspaceTicketID)
-		if exists && wsContent.Reservation != nil &&
-			claimIndex < len(wsContent.Reservation.Claims) &&
-			wsContent.Reservation.Claims[claimIndex].Status == schema.ClaimGranted {
+		originContent, exists := originState.index.Get(originTicketID)
+		if exists && originContent.Reservation != nil &&
+			claimIndex < len(originContent.Reservation.Claims) &&
+			originContent.Reservation.Claims[claimIndex].Status == schema.ClaimGranted {
 			ts.logger.Info("relay ticket closed after grant (preemption), skipping denial cascade",
-				"workspace_ticket", workspaceTicketID,
+				"origin_ticket", originTicketID,
 				"relay_ticket", relayTicketID,
 				"ops_room", opsRoomID,
 				"reason", closeReason,
@@ -610,24 +644,31 @@ func (ts *TicketService) handleRelayTicketClosed(ctx context.Context, opsRoomID 
 
 	// The relay ticket was closed by the ops side without a prior
 	// grant — this is a denial. Cascade to all other relay tickets
-	// and close the workspace ticket.
+	// and close the origin ticket. Apply the outbound filter to the
+	// close reason before writing it back to the origin ticket.
+	filter := ts.outboundFilterForClaim(entry, claimIndex)
+	filteredReason := closeReason
+	if !filter.Allows("close_reason") {
+		filteredReason = ""
+	}
+
 	ts.logger.Warn("relay ticket denied, cascading closure",
-		"workspace_ticket", workspaceTicketID,
+		"origin_ticket", originTicketID,
 		"relay_ticket", relayTicketID,
 		"ops_room", opsRoomID,
 		"reason", closeReason,
 	)
 
-	ts.cascadeDenial(ctx, entry, workspaceTicketID, relayTicketID, opsRoomID, closeReason)
+	ts.cascadeDenial(ctx, entry, originTicketID, relayTicketID, opsRoomID, filteredReason)
 }
 
 // cascadeDenial closes all relay tickets for a reservation (except
-// the one that triggered the cascade) and closes the workspace ticket.
+// the one that triggered the cascade) and closes the origin ticket.
 // Must be called with ts.mu held.
 func (ts *TicketService) cascadeDenial(
 	ctx context.Context,
 	entry *relayEntry,
-	workspaceTicketID string,
+	originTicketID string,
 	triggerRelayTicketID string,
 	triggerOpsRoom ref.RoomID,
 	reason string,
@@ -669,36 +710,40 @@ func (ts *TicketService) cascadeDenial(
 		}
 	}
 
-	// Close the workspace ticket with the denial reason.
-	workspaceState, tracked := ts.rooms[entry.workspaceRoom]
+	// Close the origin ticket with the denial reason.
+	originState, tracked := ts.rooms[entry.originRoom]
 	if !tracked {
 		return
 	}
 
-	workspaceContent, exists := workspaceState.index.Get(workspaceTicketID)
-	if !exists || workspaceContent.Status == ticket.StatusClosed {
+	originContent, exists := originState.index.Get(originTicketID)
+	if !exists || originContent.Status == ticket.StatusClosed {
 		return
 	}
 
-	workspaceContent.Status = ticket.StatusClosed
-	workspaceContent.ClosedAt = now
-	workspaceContent.CloseReason = fmt.Sprintf("reservation denied: %s", reason)
-	workspaceContent.UpdatedAt = now
+	originContent.Status = ticket.StatusClosed
+	originContent.ClosedAt = now
+	if reason != "" {
+		originContent.CloseReason = fmt.Sprintf("reservation denied: %s", reason)
+	} else {
+		originContent.CloseReason = "reservation denied"
+	}
+	originContent.UpdatedAt = now
 
-	if err := ts.putWithEcho(ctx, entry.workspaceRoom, workspaceState, workspaceTicketID, workspaceContent); err != nil {
-		ts.logger.Error("failed to close workspace ticket after denial",
-			"workspace_ticket", workspaceTicketID,
+	if err := ts.putWithEcho(ctx, entry.originRoom, originState, originTicketID, originContent); err != nil {
+		ts.logger.Error("failed to close origin ticket after denial",
+			"origin_ticket", originTicketID,
 			"error", err,
 		)
 	} else {
-		ts.logger.Info("closed workspace ticket after denial cascade",
-			"workspace_ticket", workspaceTicketID,
+		ts.logger.Info("closed origin ticket after denial cascade",
+			"origin_ticket", originTicketID,
 			"reason", reason,
 		)
 	}
 
 	// Clean up the relay entry.
-	delete(ts.relayEntries, workspaceTicketID)
+	delete(ts.relayEntries, originTicketID)
 }
 
 // closeTicketOnPreemption closes a ticket whose reservation was
@@ -706,7 +751,7 @@ func (ts *TicketService) cascadeDenial(
 // the ops room, so the reservation is being forcibly reclaimed. Closing
 // the ticket cascades: for pipeline tickets, the executor detects
 // closure via its cancellation poll; for relay tickets,
-// closeRelayTicketsForWorkspace (called by the caller after this)
+// closeRelayTicketsForOrigin (called by the caller after this)
 // releases remaining relay tickets.
 //
 // Must be called with ts.mu held.
@@ -723,7 +768,11 @@ func (ts *TicketService) closeTicketOnPreemption(ctx context.Context, roomID ref
 	now := ts.clock.Now().UTC().Format(time.RFC3339)
 	content.Status = ticket.StatusClosed
 	content.ClosedAt = now
-	content.CloseReason = fmt.Sprintf("preempted: %s", reason)
+	if reason != "" {
+		content.CloseReason = fmt.Sprintf("preempted: %s", reason)
+	} else {
+		content.CloseReason = "preempted"
+	}
 	content.UpdatedAt = now
 
 	if err := ts.putWithEcho(ctx, roomID, state, ticketID, content); err != nil {
@@ -741,12 +790,12 @@ func (ts *TicketService) closeTicketOnPreemption(ctx context.Context, roomID ref
 	}
 }
 
-// closeRelayTicketsForWorkspace closes all relay tickets associated
-// with a workspace ticket that is being closed. Called when the
-// workspace ticket is closed by the user or by the system.
+// closeRelayTicketsForOrigin closes all relay tickets associated
+// with a origin ticket that is being closed. Called when the
+// origin ticket is closed by the user or by the system.
 // Must be called with ts.mu held.
-func (ts *TicketService) closeRelayTicketsForWorkspace(ctx context.Context, workspaceTicketID string) {
-	entry, exists := ts.relayEntries[workspaceTicketID]
+func (ts *TicketService) closeRelayTicketsForOrigin(ctx context.Context, originTicketID string) {
+	entry, exists := ts.relayEntries[originTicketID]
 	if !exists {
 		return
 	}
@@ -770,20 +819,20 @@ func (ts *TicketService) closeRelayTicketsForWorkspace(ctx context.Context, work
 		relayContent.UpdatedAt = now
 
 		if err := ts.putWithEcho(ctx, opsRoomID, opsState, relayRef.ticketID, relayContent); err != nil {
-			ts.logger.Error("failed to close relay ticket on workspace close",
+			ts.logger.Error("failed to close relay ticket on origin close",
 				"relay_ticket", relayRef.ticketID,
 				"ops_room", opsRoomID,
 				"error", err,
 			)
 		} else {
-			ts.logger.Info("closed relay ticket (workspace closed)",
+			ts.logger.Info("closed relay ticket (origin closed)",
 				"relay_ticket", relayRef.ticketID,
 				"ops_room", opsRoomID,
 			)
 		}
 	}
 
-	delete(ts.relayEntries, workspaceTicketID)
+	delete(ts.relayEntries, originTicketID)
 }
 
 // --- Fleet extraction ---
@@ -837,16 +886,16 @@ func fleetFromRoomAlias(aliasString string) (ref.Fleet, error) {
 
 // --- Relay reconstruction on startup ---
 
-// rebuildRelayEntries scans all tracked rooms for resource_request
-// tickets that have been relayed (have state_event gates watching
-// for EventTypeReservation) and reconstructs the relay entry map.
-// Called after initial sync to restore lifecycle management state.
-// Must be called before concurrent access begins.
+// rebuildRelayEntries scans all tracked rooms for tickets with
+// reservations that have been relayed (have state_event gates
+// watching for EventTypeReservation) and reconstructs the relay
+// entry map. Called after initial sync to restore lifecycle
+// management state. Must be called before concurrent access begins.
 func (ts *TicketService) rebuildRelayEntries() {
-	for workspaceRoomID, state := range ts.rooms {
+	for originRoomID, state := range ts.rooms {
 		for _, indexEntry := range state.index.List(ticketindex.Filter{}) {
 			content := indexEntry.Content
-			if content.Type != ticket.TypeResourceRequest || content.Reservation == nil {
+			if content.Reservation == nil {
 				continue
 			}
 			if !isRelayed(&content) {
@@ -855,9 +904,9 @@ func (ts *TicketService) rebuildRelayEntries() {
 
 			// Reconstruct the relay entry from the gates.
 			entry := &relayEntry{
-				workspaceRoom:   workspaceRoomID,
-				workspaceTicket: indexEntry.ID,
-				relayTickets:    make(map[ref.RoomID]relayTicketRef),
+				originRoom:   originRoomID,
+				originTicket: indexEntry.ID,
+				relayTickets: make(map[ref.RoomID]relayTicketRef),
 			}
 
 			// Each reservation gate watches an ops room. Resolve
@@ -878,7 +927,7 @@ func (ts *TicketService) rebuildRelayEntries() {
 				claimIndex := -1
 				if _, err := fmt.Sscanf(gate.ID, "rsv-%d", &claimIndex); err != nil || claimIndex < 0 {
 					ts.logger.Warn("unexpected reservation gate ID format",
-						"workspace_ticket", indexEntry.ID,
+						"origin_ticket", indexEntry.ID,
 						"gate_id", gate.ID,
 					)
 					continue
@@ -887,7 +936,7 @@ func (ts *TicketService) rebuildRelayEntries() {
 				opsRoomID, err := ts.resolveAliasWithCache(context.Background(), gate.RoomAlias)
 				if err != nil {
 					ts.logger.Warn("failed to resolve ops room alias during relay rebuild",
-						"workspace_ticket", indexEntry.ID,
+						"origin_ticket", indexEntry.ID,
 						"alias", gate.RoomAlias,
 						"error", err,
 					)
@@ -898,7 +947,17 @@ func (ts *TicketService) rebuildRelayEntries() {
 				// so events from the ops room are evaluated
 				// against the gate when they arrive.
 				if gate.Status == ticket.GatePending {
-					ts.addCrossRoomWatch(opsRoomID, gate.EventType, gate.StateKey, workspaceRoomID, indexEntry.ID, gateIndex, gate.ID)
+					ts.addCrossRoomWatch(opsRoomID, gate.EventType, gate.StateKey, originRoomID, indexEntry.ID, gateIndex, gate.ID)
+				}
+
+				// Re-evaluate relay policy to recover the outbound
+				// filter. The filter is policy state, not persisted
+				// on the relay ticket — it must be re-derived on
+				// startup.
+				var outboundFilter *schema.RelayFilter
+				policy, policyErr := ts.fetchRelayPolicy(context.Background(), opsRoomID)
+				if policyErr == nil && policy != nil {
+					outboundFilter = policy.OutboundFilter
 				}
 
 				// Find the relay ticket in the ops room. It's
@@ -913,8 +972,9 @@ func (ts *TicketService) rebuildRelayEntries() {
 						opsEntry.Content.CreatedBy == ts.service.UserID() &&
 						opsEntry.Content.Status != ticket.StatusClosed {
 						entry.relayTickets[opsRoomID] = relayTicketRef{
-							ticketID:   opsEntry.ID,
-							claimIndex: claimIndex,
+							ticketID:       opsEntry.ID,
+							claimIndex:     claimIndex,
+							outboundFilter: outboundFilter,
 						}
 						break
 					}
@@ -924,7 +984,7 @@ func (ts *TicketService) rebuildRelayEntries() {
 			if len(entry.relayTickets) > 0 {
 				ts.relayEntries[indexEntry.ID] = entry
 				ts.logger.Info("rebuilt relay entry",
-					"workspace_ticket", indexEntry.ID,
+					"origin_ticket", indexEntry.ID,
 					"relay_tickets", len(entry.relayTickets),
 				)
 			}

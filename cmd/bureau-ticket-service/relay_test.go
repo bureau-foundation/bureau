@@ -362,7 +362,7 @@ func (f *fakeSessionForRelay) setPolicy(roomID ref.RoomID, policy schema.RelayPo
 
 // --- Workspace closure cascade tests ---
 
-func TestCloseRelayTicketsForWorkspace(t *testing.T) {
+func TestCloseRelayTicketsForOrigin(t *testing.T) {
 	ts, writer, _ := relayTestService(t)
 
 	opsRoomA := testRoomID("!ops-a:bureau.local")
@@ -403,15 +403,15 @@ func TestCloseRelayTicketsForWorkspace(t *testing.T) {
 	})
 
 	ts.relayEntries["ws-tkt-1"] = &relayEntry{
-		workspaceRoom:   testRoomID("!workspace:bureau.local"),
-		workspaceTicket: "ws-tkt-1",
+		originRoom:   testRoomID("!workspace:bureau.local"),
+		originTicket: "ws-tkt-1",
 		relayTickets: map[ref.RoomID]relayTicketRef{
 			opsRoomA: {ticketID: "relay-a", claimIndex: 0},
 			opsRoomB: {ticketID: "relay-b", claimIndex: 1},
 		},
 	}
 
-	ts.closeRelayTicketsForWorkspace(context.Background(), "ws-tkt-1")
+	ts.closeRelayTicketsForOrigin(context.Background(), "ws-tkt-1")
 
 	// Both relay tickets should be closed with "origin closed".
 	if len(writer.events) != 2 {
@@ -432,7 +432,7 @@ func TestCloseRelayTicketsForWorkspace(t *testing.T) {
 
 	// Relay entry should be removed.
 	if _, exists := ts.relayEntries["ws-tkt-1"]; exists {
-		t.Error("relay entry should be removed after workspace closure")
+		t.Error("relay entry should be removed after origin closure")
 	}
 }
 
@@ -460,14 +460,14 @@ func TestCloseRelayTicketsSkipsAlreadyClosed(t *testing.T) {
 	})
 
 	ts.relayEntries["ws-tkt-1"] = &relayEntry{
-		workspaceRoom:   testRoomID("!workspace:bureau.local"),
-		workspaceTicket: "ws-tkt-1",
+		originRoom:   testRoomID("!workspace:bureau.local"),
+		originTicket: "ws-tkt-1",
 		relayTickets: map[ref.RoomID]relayTicketRef{
 			opsRoom: {ticketID: "relay-1", claimIndex: 0},
 		},
 	}
 
-	ts.closeRelayTicketsForWorkspace(context.Background(), "ws-tkt-1")
+	ts.closeRelayTicketsForOrigin(context.Background(), "ws-tkt-1")
 
 	// No writes should happen — ticket was already closed.
 	if len(writer.events) != 0 {
@@ -478,7 +478,7 @@ func TestCloseRelayTicketsSkipsAlreadyClosed(t *testing.T) {
 func TestCloseRelayTicketsNoOpWhenNoEntry(t *testing.T) {
 	ts, writer, _ := relayTestService(t)
 
-	ts.closeRelayTicketsForWorkspace(context.Background(), "nonexistent-ticket")
+	ts.closeRelayTicketsForOrigin(context.Background(), "nonexistent-ticket")
 
 	if len(writer.events) != 0 {
 		t.Fatalf("expected 0 writes for nonexistent entry, got %d", len(writer.events))
@@ -490,12 +490,12 @@ func TestCloseRelayTicketsNoOpWhenNoEntry(t *testing.T) {
 func TestHandleRelayTicketClosedCascadesDenial(t *testing.T) {
 	ts, writer, _ := relayTestService(t)
 
-	workspaceRoom := testRoomID("!workspace:bureau.local")
+	originRoom := testRoomID("!workspace:bureau.local")
 	opsRoomA := testRoomID("!ops-a:bureau.local")
 	opsRoomB := testRoomID("!ops-b:bureau.local")
 
-	// Set up workspace room with the source ticket.
-	ts.rooms[workspaceRoom] = newTrackedRoom(map[string]ticket.TicketContent{
+	// Set up origin room with the source ticket.
+	ts.rooms[originRoom] = newTrackedRoom(map[string]ticket.TicketContent{
 		"ws-tkt-1": {
 			Version:   1,
 			Title:     "Need GPU cluster",
@@ -553,8 +553,8 @@ func TestHandleRelayTicketClosedCascadesDenial(t *testing.T) {
 
 	// Register the relay entry.
 	ts.relayEntries["ws-tkt-1"] = &relayEntry{
-		workspaceRoom:   workspaceRoom,
-		workspaceTicket: "ws-tkt-1",
+		originRoom:   originRoom,
+		originTicket: "ws-tkt-1",
 		relayTickets: map[ref.RoomID]relayTicketRef{
 			opsRoomA: {ticketID: "relay-a", claimIndex: 0},
 			opsRoomB: {ticketID: "relay-b", claimIndex: 1},
@@ -565,9 +565,9 @@ func TestHandleRelayTicketClosedCascadesDenial(t *testing.T) {
 	relayContent, _ := ts.rooms[opsRoomA].index.Get("relay-a")
 	ts.handleRelayTicketClosed(context.Background(), opsRoomA, "relay-a", relayContent)
 
-	// Expect: relay-b closed (denial cascade) + workspace ticket closed.
+	// Expect: relay-b closed (denial cascade) + origin ticket closed.
 	if len(writer.events) < 2 {
-		t.Fatalf("expected at least 2 writes (cascade relay-b + close workspace), got %d", len(writer.events))
+		t.Fatalf("expected at least 2 writes (cascade relay-b + close origin), got %d", len(writer.events))
 	}
 
 	// Check that relay-b was closed with cascade reason.
@@ -582,16 +582,16 @@ func TestHandleRelayTicketClosedCascadesDenial(t *testing.T) {
 		t.Errorf("relay-b close reason = %q, want %q", relayBContent.CloseReason, "denial cascade: resource unavailable")
 	}
 
-	// Check that the workspace ticket was closed.
-	wsContent, exists := ts.rooms[workspaceRoom].index.Get("ws-tkt-1")
+	// Check that the origin ticket was closed.
+	originContent, exists := ts.rooms[originRoom].index.Get("ws-tkt-1")
 	if !exists {
-		t.Fatal("workspace ticket should still exist in index")
+		t.Fatal("origin ticket should still exist in index")
 	}
-	if wsContent.Status != ticket.StatusClosed {
-		t.Errorf("workspace ticket status = %q, want closed", wsContent.Status)
+	if originContent.Status != ticket.StatusClosed {
+		t.Errorf("origin ticket status = %q, want closed", originContent.Status)
 	}
-	if wsContent.CloseReason != "reservation denied: resource unavailable" {
-		t.Errorf("workspace close reason = %q, want %q", wsContent.CloseReason, "reservation denied: resource unavailable")
+	if originContent.CloseReason != "reservation denied: resource unavailable" {
+		t.Errorf("origin ticket close reason = %q, want %q", originContent.CloseReason, "reservation denied: resource unavailable")
 	}
 
 	// Relay entry should be cleaned up.
@@ -604,7 +604,7 @@ func TestHandleRelayTicketClosedIgnoresOriginClosed(t *testing.T) {
 	ts, writer, _ := relayTestService(t)
 
 	opsRoom := testRoomID("!ops:bureau.local")
-	workspaceRoom := testRoomID("!workspace:bureau.local")
+	originRoom := testRoomID("!workspace:bureau.local")
 
 	ts.rooms[opsRoom] = newTrackedRoom(map[string]ticket.TicketContent{
 		"relay-1": {
@@ -626,8 +626,8 @@ func TestHandleRelayTicketClosedIgnoresOriginClosed(t *testing.T) {
 	})
 
 	ts.relayEntries["ws-tkt-1"] = &relayEntry{
-		workspaceRoom:   workspaceRoom,
-		workspaceTicket: "ws-tkt-1",
+		originRoom:   originRoom,
+		originTicket: "ws-tkt-1",
 		relayTickets: map[ref.RoomID]relayTicketRef{
 			opsRoom: {ticketID: "relay-1", claimIndex: 0},
 		},
@@ -636,14 +636,14 @@ func TestHandleRelayTicketClosedIgnoresOriginClosed(t *testing.T) {
 	relayContent, _ := ts.rooms[opsRoom].index.Get("relay-1")
 	ts.handleRelayTicketClosed(context.Background(), opsRoom, "relay-1", relayContent)
 
-	// No cascade should happen — the closure was initiated from workspace side.
+	// No cascade should happen — the closure was initiated from origin side.
 	if len(writer.events) != 0 {
 		t.Fatalf("expected 0 writes for origin-closed relay ticket, got %d", len(writer.events))
 	}
 
-	// Relay entry should still exist (workspace closure path handles cleanup).
+	// Relay entry should still exist (origin closure path handles cleanup).
 	if _, exists := ts.relayEntries["ws-tkt-1"]; !exists {
-		t.Error("relay entry should still exist after origin-closed (cleanup happens in workspace path)")
+		t.Error("relay entry should still exist after origin-closed (cleanup happens in origin closure path)")
 	}
 }
 
@@ -677,7 +677,7 @@ func TestHandleRelayTicketClosedIgnoresUntracked(t *testing.T) {
 func TestRebuildRelayEntries(t *testing.T) {
 	ts, _, _ := relayTestService(t)
 
-	workspaceRoom := testRoomID("!workspace:bureau.local")
+	originRoom := testRoomID("!workspace:bureau.local")
 	opsRoom := testRoomID("!ops:bureau.local")
 
 	opsAlias := ref.MustParseRoomAlias("#bureau/fleet/prod/machine/gpu-box/ops:bureau.local")
@@ -686,7 +686,7 @@ func TestRebuildRelayEntries(t *testing.T) {
 	ts.aliasCache[opsAlias] = opsRoom
 
 	// Workspace room with a relayed resource_request ticket.
-	ts.rooms[workspaceRoom] = newTrackedRoom(map[string]ticket.TicketContent{
+	ts.rooms[originRoom] = newTrackedRoom(map[string]ticket.TicketContent{
 		"ws-tkt-1": {
 			Version:   1,
 			Title:     "Need GPU",
@@ -752,11 +752,11 @@ func TestRebuildRelayEntries(t *testing.T) {
 	if !exists {
 		t.Fatal("expected relay entry for ws-tkt-1")
 	}
-	if entry.workspaceRoom != workspaceRoom {
-		t.Errorf("workspace room = %q, want %q", entry.workspaceRoom, workspaceRoom)
+	if entry.originRoom != originRoom {
+		t.Errorf("origin room = %q, want %q", entry.originRoom, originRoom)
 	}
-	if entry.workspaceTicket != "ws-tkt-1" {
-		t.Errorf("workspace ticket = %q, want %q", entry.workspaceTicket, "ws-tkt-1")
+	if entry.originTicket != "ws-tkt-1" {
+		t.Errorf("origin ticket = %q, want %q", entry.originTicket, "ws-tkt-1")
 	}
 	relayRef, exists := entry.relayTickets[opsRoom]
 	if !exists {
@@ -773,13 +773,13 @@ func TestRebuildRelayEntries(t *testing.T) {
 func TestRebuildRelayEntriesSkipsClosedRelay(t *testing.T) {
 	ts, _, _ := relayTestService(t)
 
-	workspaceRoom := testRoomID("!workspace:bureau.local")
+	originRoom := testRoomID("!workspace:bureau.local")
 	opsRoom := testRoomID("!ops:bureau.local")
 
 	opsAlias := ref.MustParseRoomAlias("#bureau/fleet/prod/machine/gpu-box/ops:bureau.local")
 	ts.aliasCache[opsAlias] = opsRoom
 
-	ts.rooms[workspaceRoom] = newTrackedRoom(map[string]ticket.TicketContent{
+	ts.rooms[originRoom] = newTrackedRoom(map[string]ticket.TicketContent{
 		"ws-tkt-1": {
 			Version:   1,
 			Title:     "Need GPU",
@@ -838,10 +838,10 @@ func TestRebuildRelayEntriesSkipsClosedRelay(t *testing.T) {
 func TestRebuildRelayEntriesSkipsNonRelayed(t *testing.T) {
 	ts, _, _ := relayTestService(t)
 
-	workspaceRoom := testRoomID("!workspace:bureau.local")
+	originRoom := testRoomID("!workspace:bureau.local")
 
 	// Resource request without reservation gates (not yet relayed).
-	ts.rooms[workspaceRoom] = newTrackedRoom(map[string]ticket.TicketContent{
+	ts.rooms[originRoom] = newTrackedRoom(map[string]ticket.TicketContent{
 		"ws-tkt-1": {
 			Version:   1,
 			Title:     "Need GPU",
@@ -873,7 +873,7 @@ func TestRebuildRelayEntriesSkipsNonRelayed(t *testing.T) {
 func TestCheckAndInitiateRelayCreatesRelayTickets(t *testing.T) {
 	ts, writer, session := relayTestService(t)
 
-	workspaceRoom := testRoomID("!workspace:bureau.local")
+	originRoom := testRoomID("!workspace:bureau.local")
 	opsRoom := testRoomID("!ops-gpu:bureau.local")
 
 	opsAlias := ref.MustParseRoomAlias("#bureau/fleet/prod/machine/gpu-box/ops:bureau.local")
@@ -886,9 +886,9 @@ func TestCheckAndInitiateRelayCreatesRelayTickets(t *testing.T) {
 	}
 
 	// Workspace room needs a fleet-parseable alias.
-	wsState := newTrackedRoom(nil)
-	wsState.alias = "#bureau/fleet/prod/workspace/my-project:bureau.local"
-	ts.rooms[workspaceRoom] = wsState
+	originState := newTrackedRoom(nil)
+	originState.alias = "#bureau/fleet/prod/workspace/my-project:bureau.local"
+	ts.rooms[originRoom] = originState
 
 	// Ops room with ticket config (must be tracked).
 	ts.rooms[opsRoom] = newTrackedRoom(nil)
@@ -921,10 +921,10 @@ func TestCheckAndInitiateRelayCreatesRelayTickets(t *testing.T) {
 		},
 	}
 
-	ts.checkAndInitiateRelay(context.Background(), workspaceRoom, wsState, "ws-tkt-1", content)
+	ts.checkAndInitiateRelay(context.Background(), originRoom, originState, "ws-tkt-1", content)
 
 	// Expect: relay ticket created (1 write) + relay link published
-	// (1 write) + workspace ticket updated with gate (1 write) = 3
+	// (1 write) + origin ticket updated with gate (1 write) = 3
 	// writes.
 	if len(writer.events) < 3 {
 		t.Fatalf("expected at least 3 writes, got %d: %+v", len(writer.events), writer.events)
@@ -966,21 +966,21 @@ func TestCheckAndInitiateRelayCreatesRelayTickets(t *testing.T) {
 		t.Fatal("no relay link write found")
 	}
 
-	// Verify the workspace ticket was updated with a reservation gate.
-	var workspaceWrite *writtenEventForGates
+	// Verify the origin ticket was updated with a reservation gate.
+	var originWrite *writtenEventForGates
 	for index := range writer.events {
 		event := &writer.events[index]
-		if event.RoomID == workspaceRoom.String() && event.EventType == schema.EventTypeTicket {
-			workspaceWrite = event
+		if event.RoomID == originRoom.String() && event.EventType == schema.EventTypeTicket {
+			originWrite = event
 			break
 		}
 	}
-	if workspaceWrite == nil {
-		t.Fatal("no workspace ticket update found")
+	if originWrite == nil {
+		t.Fatal("no origin ticket update found")
 	}
-	updatedContent, ok := workspaceWrite.Content.(ticket.TicketContent)
+	updatedContent, ok := originWrite.Content.(ticket.TicketContent)
 	if !ok {
-		t.Fatalf("workspace ticket content is %T, want TicketContent", workspaceWrite.Content)
+		t.Fatalf("origin ticket content is %T, want TicketContent", originWrite.Content)
 	}
 
 	// Find the reservation gate.
@@ -993,7 +993,7 @@ func TestCheckAndInitiateRelayCreatesRelayTickets(t *testing.T) {
 		}
 	}
 	if reservationGate == nil {
-		t.Fatal("workspace ticket should have a reservation state_event gate")
+		t.Fatal("origin ticket should have a reservation state_event gate")
 	}
 	if reservationGate.RoomAlias != opsAlias {
 		t.Errorf("gate room alias = %q, want %q", reservationGate.RoomAlias, opsAlias)
@@ -1015,7 +1015,7 @@ func TestCheckAndInitiateRelayCreatesRelayTickets(t *testing.T) {
 func TestCheckAndInitiateRelayDeniedByPolicy(t *testing.T) {
 	ts, writer, session := relayTestService(t)
 
-	workspaceRoom := testRoomID("!workspace:bureau.local")
+	originRoom := testRoomID("!workspace:bureau.local")
 	opsRoom := testRoomID("!ops-gpu:bureau.local")
 
 	opsAlias := ref.MustParseRoomAlias("#bureau/fleet/prod/machine/gpu-box/ops:bureau.local")
@@ -1026,9 +1026,9 @@ func TestCheckAndInitiateRelayDeniedByPolicy(t *testing.T) {
 		},
 	}
 
-	wsState := newTrackedRoom(nil)
-	wsState.alias = "#bureau/fleet/prod/workspace/my-project:bureau.local"
-	ts.rooms[workspaceRoom] = wsState
+	originState := newTrackedRoom(nil)
+	originState.alias = "#bureau/fleet/prod/workspace/my-project:bureau.local"
+	ts.rooms[originRoom] = originState
 
 	ts.rooms[opsRoom] = newTrackedRoom(nil)
 
@@ -1056,12 +1056,12 @@ func TestCheckAndInitiateRelayDeniedByPolicy(t *testing.T) {
 		},
 	}
 
-	ts.checkAndInitiateRelay(context.Background(), workspaceRoom, wsState, "ws-tkt-1", content)
+	ts.checkAndInitiateRelay(context.Background(), originRoom, originState, "ws-tkt-1", content)
 
-	// Should write a failure note to the workspace ticket.
+	// Should write a failure note to the origin ticket.
 	foundFailureNote := false
 	for _, event := range writer.events {
-		if event.RoomID == workspaceRoom.String() && event.EventType == schema.EventTypeTicket {
+		if event.RoomID == originRoom.String() && event.EventType == schema.EventTypeTicket {
 			if content, ok := event.Content.(ticket.TicketContent); ok {
 				for _, note := range content.Notes {
 					if note.Body != "" {
@@ -1072,7 +1072,7 @@ func TestCheckAndInitiateRelayDeniedByPolicy(t *testing.T) {
 		}
 	}
 	if !foundFailureNote {
-		t.Error("expected a failure note on the workspace ticket after policy denial")
+		t.Error("expected a failure note on the origin ticket after policy denial")
 	}
 
 	// No relay entries should be created.
@@ -1140,7 +1140,7 @@ func TestCheckAndInitiateRelaySkipsAlreadyRelayed(t *testing.T) {
 func TestCheckAndInitiateRelayMultiClaim(t *testing.T) {
 	ts, writer, session := relayTestService(t)
 
-	workspaceRoom := testRoomID("!workspace:bureau.local")
+	originRoom := testRoomID("!workspace:bureau.local")
 	opsRoomA := testRoomID("!ops-gpu1:bureau.local")
 	opsRoomB := testRoomID("!ops-gpu2:bureau.local")
 
@@ -1154,9 +1154,9 @@ func TestCheckAndInitiateRelayMultiClaim(t *testing.T) {
 		},
 	}
 
-	wsState := newTrackedRoom(nil)
-	wsState.alias = "#bureau/fleet/prod/workspace/multi-gpu:bureau.local"
-	ts.rooms[workspaceRoom] = wsState
+	originState := newTrackedRoom(nil)
+	originState.alias = "#bureau/fleet/prod/workspace/multi-gpu:bureau.local"
+	ts.rooms[originRoom] = originState
 	ts.rooms[opsRoomA] = newTrackedRoom(nil)
 	ts.rooms[opsRoomB] = newTrackedRoom(nil)
 
@@ -1187,9 +1187,9 @@ func TestCheckAndInitiateRelayMultiClaim(t *testing.T) {
 		},
 	}
 
-	ts.checkAndInitiateRelay(context.Background(), workspaceRoom, wsState, "ws-multi", content)
+	ts.checkAndInitiateRelay(context.Background(), originRoom, originState, "ws-multi", content)
 
-	// Expect writes for 2 relay tickets + 2 relay links + 1 workspace update = 5.
+	// Expect writes for 2 relay tickets + 2 relay links + 1 origin ticket update = 5.
 	if len(writer.events) < 5 {
 		t.Fatalf("expected at least 5 writes for multi-claim relay, got %d", len(writer.events))
 	}
@@ -1210,19 +1210,19 @@ func TestCheckAndInitiateRelayMultiClaim(t *testing.T) {
 	}
 
 	// Workspace ticket should have 2 reservation gates.
-	var wsUpdate *writtenEventForGates
+	var originUpdate *writtenEventForGates
 	for index := range writer.events {
 		event := &writer.events[index]
-		if event.RoomID == workspaceRoom.String() && event.EventType == schema.EventTypeTicket {
-			wsUpdate = event
+		if event.RoomID == originRoom.String() && event.EventType == schema.EventTypeTicket {
+			originUpdate = event
 		}
 	}
-	if wsUpdate == nil {
-		t.Fatal("no workspace ticket update found")
+	if originUpdate == nil {
+		t.Fatal("no origin ticket update found")
 	}
-	updatedContent, ok := wsUpdate.Content.(ticket.TicketContent)
+	updatedContent, ok := originUpdate.Content.(ticket.TicketContent)
 	if !ok {
-		t.Fatalf("workspace content is %T, want TicketContent", wsUpdate.Content)
+		t.Fatalf("origin ticket content is %T, want TicketContent", originUpdate.Content)
 	}
 
 	reservationGateCount := 0
@@ -1239,7 +1239,7 @@ func TestCheckAndInitiateRelayMultiClaim(t *testing.T) {
 func TestCheckAndInitiateRelayNoPolicy(t *testing.T) {
 	ts, writer, _ := relayTestService(t)
 
-	workspaceRoom := testRoomID("!workspace:bureau.local")
+	originRoom := testRoomID("!workspace:bureau.local")
 	opsRoom := testRoomID("!ops-gpu:bureau.local")
 
 	opsAlias := ref.MustParseRoomAlias("#bureau/fleet/prod/machine/gpu-box/ops:bureau.local")
@@ -1250,9 +1250,9 @@ func TestCheckAndInitiateRelayNoPolicy(t *testing.T) {
 		},
 	}
 
-	wsState := newTrackedRoom(nil)
-	wsState.alias = "#bureau/fleet/prod/workspace/my-project:bureau.local"
-	ts.rooms[workspaceRoom] = wsState
+	originState := newTrackedRoom(nil)
+	originState.alias = "#bureau/fleet/prod/workspace/my-project:bureau.local"
+	ts.rooms[originRoom] = originState
 	ts.rooms[opsRoom] = newTrackedRoom(nil)
 
 	// No policy configured — session returns M_NOT_FOUND.
@@ -1275,12 +1275,12 @@ func TestCheckAndInitiateRelayNoPolicy(t *testing.T) {
 		},
 	}
 
-	ts.checkAndInitiateRelay(context.Background(), workspaceRoom, wsState, "ws-tkt-1", content)
+	ts.checkAndInitiateRelay(context.Background(), originRoom, originState, "ws-tkt-1", content)
 
-	// Nil policy → deny → failure note on workspace ticket.
+	// Nil policy → deny → failure note on origin ticket.
 	foundFailureNote := false
 	for _, event := range writer.events {
-		if event.RoomID == workspaceRoom.String() && event.EventType == schema.EventTypeTicket {
+		if event.RoomID == originRoom.String() && event.EventType == schema.EventTypeTicket {
 			if ticketContent, ok := event.Content.(ticket.TicketContent); ok {
 				for _, note := range ticketContent.Notes {
 					if note.Body != "" {
@@ -1385,8 +1385,8 @@ func TestFindRelayEntryByOpsRoom(t *testing.T) {
 	opsRoomB := testRoomID("!ops-b:bureau.local")
 
 	ts.relayEntries["ws-tkt-1"] = &relayEntry{
-		workspaceRoom:   testRoomID("!workspace:bureau.local"),
-		workspaceTicket: "ws-tkt-1",
+		originRoom:   testRoomID("!workspace:bureau.local"),
+		originTicket: "ws-tkt-1",
 		relayTickets: map[ref.RoomID]relayTicketRef{
 			opsRoomA: {ticketID: "relay-a", claimIndex: 0},
 			opsRoomB: {ticketID: "relay-b", claimIndex: 1},
@@ -1394,12 +1394,12 @@ func TestFindRelayEntryByOpsRoom(t *testing.T) {
 	}
 
 	t.Run("found", func(t *testing.T) {
-		entry, workspaceTicketID, claimIndex := ts.findRelayEntryByOpsRoom(opsRoomA, "relay-a")
+		entry, originTicketID, claimIndex := ts.findRelayEntryByOpsRoom(opsRoomA, "relay-a")
 		if entry == nil {
 			t.Fatal("expected non-nil entry")
 		}
-		if workspaceTicketID != "ws-tkt-1" {
-			t.Errorf("workspace ticket = %q, want ws-tkt-1", workspaceTicketID)
+		if originTicketID != "ws-tkt-1" {
+			t.Errorf("origin ticket = %q, want ws-tkt-1", originTicketID)
 		}
 		if claimIndex != 0 {
 			t.Errorf("claim index = %d, want 0", claimIndex)
@@ -1407,12 +1407,12 @@ func TestFindRelayEntryByOpsRoom(t *testing.T) {
 	})
 
 	t.Run("found second claim", func(t *testing.T) {
-		entry, workspaceTicketID, claimIndex := ts.findRelayEntryByOpsRoom(opsRoomB, "relay-b")
+		entry, originTicketID, claimIndex := ts.findRelayEntryByOpsRoom(opsRoomB, "relay-b")
 		if entry == nil {
 			t.Fatal("expected non-nil entry")
 		}
-		if workspaceTicketID != "ws-tkt-1" {
-			t.Errorf("workspace ticket = %q, want ws-tkt-1", workspaceTicketID)
+		if originTicketID != "ws-tkt-1" {
+			t.Errorf("origin ticket = %q, want ws-tkt-1", originTicketID)
 		}
 		if claimIndex != 1 {
 			t.Errorf("claim index = %d, want 1", claimIndex)
@@ -1438,8 +1438,8 @@ func TestUpdateClaimStatus(t *testing.T) {
 	t.Run("normal update", func(t *testing.T) {
 		ts, writer, _ := relayTestService(t)
 
-		workspaceRoom := testRoomID("!workspace:bureau.local")
-		ts.rooms[workspaceRoom] = newTrackedRoom(map[string]ticket.TicketContent{
+		originRoom := testRoomID("!workspace:bureau.local")
+		ts.rooms[originRoom] = newTrackedRoom(map[string]ticket.TicketContent{
 			"ws-tkt-1": {
 				Version:   ticket.TicketContentVersion,
 				Title:     "Need GPU",
@@ -1464,14 +1464,14 @@ func TestUpdateClaimStatus(t *testing.T) {
 		})
 
 		entry := &relayEntry{
-			workspaceRoom:   workspaceRoom,
-			workspaceTicket: "ws-tkt-1",
-			relayTickets:    map[ref.RoomID]relayTicketRef{},
+			originRoom:   originRoom,
+			originTicket: "ws-tkt-1",
+			relayTickets: map[ref.RoomID]relayTicketRef{},
 		}
 
 		ts.updateClaimStatus(context.Background(), entry, "ws-tkt-1", 0, schema.ClaimApproved, "")
 
-		// Verify the workspace ticket was updated.
+		// Verify the origin ticket was updated.
 		if len(writer.events) != 1 {
 			t.Fatalf("expected 1 write, got %d", len(writer.events))
 		}
@@ -1490,8 +1490,8 @@ func TestUpdateClaimStatus(t *testing.T) {
 	t.Run("skips terminal state", func(t *testing.T) {
 		ts, writer, _ := relayTestService(t)
 
-		workspaceRoom := testRoomID("!workspace:bureau.local")
-		ts.rooms[workspaceRoom] = newTrackedRoom(map[string]ticket.TicketContent{
+		originRoom := testRoomID("!workspace:bureau.local")
+		ts.rooms[originRoom] = newTrackedRoom(map[string]ticket.TicketContent{
 			"ws-tkt-1": {
 				Version:   ticket.TicketContentVersion,
 				Title:     "Need GPU",
@@ -1516,9 +1516,9 @@ func TestUpdateClaimStatus(t *testing.T) {
 		})
 
 		entry := &relayEntry{
-			workspaceRoom:   workspaceRoom,
-			workspaceTicket: "ws-tkt-1",
-			relayTickets:    map[ref.RoomID]relayTicketRef{},
+			originRoom:   originRoom,
+			originTicket: "ws-tkt-1",
+			relayTickets: map[ref.RoomID]relayTicketRef{},
 		}
 
 		// Trying to update a denied claim to approved should be a no-op.
@@ -1532,8 +1532,8 @@ func TestUpdateClaimStatus(t *testing.T) {
 	t.Run("skips same status", func(t *testing.T) {
 		ts, writer, _ := relayTestService(t)
 
-		workspaceRoom := testRoomID("!workspace:bureau.local")
-		ts.rooms[workspaceRoom] = newTrackedRoom(map[string]ticket.TicketContent{
+		originRoom := testRoomID("!workspace:bureau.local")
+		ts.rooms[originRoom] = newTrackedRoom(map[string]ticket.TicketContent{
 			"ws-tkt-1": {
 				Version:   ticket.TicketContentVersion,
 				Title:     "Need GPU",
@@ -1558,9 +1558,9 @@ func TestUpdateClaimStatus(t *testing.T) {
 		})
 
 		entry := &relayEntry{
-			workspaceRoom:   workspaceRoom,
-			workspaceTicket: "ws-tkt-1",
-			relayTickets:    map[ref.RoomID]relayTicketRef{},
+			originRoom:   originRoom,
+			originTicket: "ws-tkt-1",
+			relayTickets: map[ref.RoomID]relayTicketRef{},
 		}
 
 		ts.updateClaimStatus(context.Background(), entry, "ws-tkt-1", 0, schema.ClaimApproved, "")
@@ -1573,8 +1573,8 @@ func TestUpdateClaimStatus(t *testing.T) {
 	t.Run("updates with reason", func(t *testing.T) {
 		ts, writer, _ := relayTestService(t)
 
-		workspaceRoom := testRoomID("!workspace:bureau.local")
-		ts.rooms[workspaceRoom] = newTrackedRoom(map[string]ticket.TicketContent{
+		originRoom := testRoomID("!workspace:bureau.local")
+		ts.rooms[originRoom] = newTrackedRoom(map[string]ticket.TicketContent{
 			"ws-tkt-1": {
 				Version:   ticket.TicketContentVersion,
 				Title:     "Need GPU",
@@ -1599,9 +1599,9 @@ func TestUpdateClaimStatus(t *testing.T) {
 		})
 
 		entry := &relayEntry{
-			workspaceRoom:   workspaceRoom,
-			workspaceTicket: "ws-tkt-1",
-			relayTickets:    map[ref.RoomID]relayTicketRef{},
+			originRoom:   originRoom,
+			originTicket: "ws-tkt-1",
+			relayTickets: map[ref.RoomID]relayTicketRef{},
 		}
 
 		ts.updateClaimStatus(context.Background(), entry, "ws-tkt-1", 0, schema.ClaimPreempted, "duration exceeded")
@@ -1622,8 +1622,8 @@ func TestUpdateClaimStatus(t *testing.T) {
 	t.Run("out of range claim index", func(t *testing.T) {
 		ts, writer, _ := relayTestService(t)
 
-		workspaceRoom := testRoomID("!workspace:bureau.local")
-		ts.rooms[workspaceRoom] = newTrackedRoom(map[string]ticket.TicketContent{
+		originRoom := testRoomID("!workspace:bureau.local")
+		ts.rooms[originRoom] = newTrackedRoom(map[string]ticket.TicketContent{
 			"ws-tkt-1": {
 				Version:   ticket.TicketContentVersion,
 				Title:     "Need GPU",
@@ -1648,9 +1648,9 @@ func TestUpdateClaimStatus(t *testing.T) {
 		})
 
 		entry := &relayEntry{
-			workspaceRoom:   workspaceRoom,
-			workspaceTicket: "ws-tkt-1",
-			relayTickets:    map[ref.RoomID]relayTicketRef{},
+			originRoom:   originRoom,
+			originTicket: "ws-tkt-1",
+			relayTickets: map[ref.RoomID]relayTicketRef{},
 		}
 
 		// Claim index 5 doesn't exist — should be a no-op.
@@ -1666,10 +1666,10 @@ func TestMirrorRelayTicketStatus(t *testing.T) {
 	t.Run("in_progress maps to approved", func(t *testing.T) {
 		ts, writer, _ := relayTestService(t)
 
-		workspaceRoom := testRoomID("!workspace:bureau.local")
+		originRoom := testRoomID("!workspace:bureau.local")
 		opsRoom := testRoomID("!ops:bureau.local")
 
-		ts.rooms[workspaceRoom] = newTrackedRoom(map[string]ticket.TicketContent{
+		ts.rooms[originRoom] = newTrackedRoom(map[string]ticket.TicketContent{
 			"ws-tkt-1": {
 				Version:   ticket.TicketContentVersion,
 				Title:     "Need GPU",
@@ -1694,8 +1694,8 @@ func TestMirrorRelayTicketStatus(t *testing.T) {
 		})
 
 		ts.relayEntries["ws-tkt-1"] = &relayEntry{
-			workspaceRoom:   workspaceRoom,
-			workspaceTicket: "ws-tkt-1",
+			originRoom:   originRoom,
+			originTicket: "ws-tkt-1",
 			relayTickets: map[ref.RoomID]relayTicketRef{
 				opsRoom: {ticketID: "relay-1", claimIndex: 0},
 			},
@@ -1719,10 +1719,10 @@ func TestMirrorRelayTicketStatus(t *testing.T) {
 	t.Run("closed after grant maps to preempted", func(t *testing.T) {
 		ts, writer, _ := relayTestService(t)
 
-		workspaceRoom := testRoomID("!workspace:bureau.local")
+		originRoom := testRoomID("!workspace:bureau.local")
 		opsRoom := testRoomID("!ops:bureau.local")
 
-		ts.rooms[workspaceRoom] = newTrackedRoom(map[string]ticket.TicketContent{
+		ts.rooms[originRoom] = newTrackedRoom(map[string]ticket.TicketContent{
 			"ws-tkt-1": {
 				Version:   ticket.TicketContentVersion,
 				Title:     "Need GPU",
@@ -1747,8 +1747,8 @@ func TestMirrorRelayTicketStatus(t *testing.T) {
 		})
 
 		ts.relayEntries["ws-tkt-1"] = &relayEntry{
-			workspaceRoom:   workspaceRoom,
-			workspaceTicket: "ws-tkt-1",
+			originRoom:   originRoom,
+			originTicket: "ws-tkt-1",
 			relayTickets: map[ref.RoomID]relayTicketRef{
 				opsRoom: {ticketID: "relay-1", claimIndex: 0},
 			},
@@ -1765,7 +1765,7 @@ func TestMirrorRelayTicketStatus(t *testing.T) {
 		// 1. Claim status update (preempted)
 		// 2. Ticket closure (preempted: reason)
 		// (Relay ticket closure would be a third write, but the ops
-		// room is not tracked in ts.rooms so closeRelayTicketsForWorkspace
+		// room is not tracked in ts.rooms so closeRelayTicketsForOrigin
 		// skips it. The full cascade is exercised in integration tests.)
 		if len(writer.events) != 2 {
 			t.Fatalf("expected 2 writes, got %d", len(writer.events))
@@ -1801,10 +1801,10 @@ func TestMirrorRelayTicketStatus(t *testing.T) {
 	t.Run("origin closed is no-op", func(t *testing.T) {
 		ts, writer, _ := relayTestService(t)
 
-		workspaceRoom := testRoomID("!workspace:bureau.local")
+		originRoom := testRoomID("!workspace:bureau.local")
 		opsRoom := testRoomID("!ops:bureau.local")
 
-		ts.rooms[workspaceRoom] = newTrackedRoom(map[string]ticket.TicketContent{
+		ts.rooms[originRoom] = newTrackedRoom(map[string]ticket.TicketContent{
 			"ws-tkt-1": {
 				Version:   ticket.TicketContentVersion,
 				Title:     "Need GPU",
@@ -1829,8 +1829,8 @@ func TestMirrorRelayTicketStatus(t *testing.T) {
 		})
 
 		ts.relayEntries["ws-tkt-1"] = &relayEntry{
-			workspaceRoom:   workspaceRoom,
-			workspaceTicket: "ws-tkt-1",
+			originRoom:   originRoom,
+			originTicket: "ws-tkt-1",
 			relayTickets: map[ref.RoomID]relayTicketRef{
 				opsRoom: {ticketID: "relay-1", claimIndex: 0},
 			},
@@ -1867,10 +1867,10 @@ func TestMirrorRelayTicketStatus(t *testing.T) {
 	t.Run("closed without grant defers to denial cascade", func(t *testing.T) {
 		ts, writer, _ := relayTestService(t)
 
-		workspaceRoom := testRoomID("!workspace:bureau.local")
+		originRoom := testRoomID("!workspace:bureau.local")
 		opsRoom := testRoomID("!ops:bureau.local")
 
-		ts.rooms[workspaceRoom] = newTrackedRoom(map[string]ticket.TicketContent{
+		ts.rooms[originRoom] = newTrackedRoom(map[string]ticket.TicketContent{
 			"ws-tkt-1": {
 				Version:   ticket.TicketContentVersion,
 				Title:     "Need GPU",
@@ -1895,8 +1895,8 @@ func TestMirrorRelayTicketStatus(t *testing.T) {
 		})
 
 		ts.relayEntries["ws-tkt-1"] = &relayEntry{
-			workspaceRoom:   workspaceRoom,
-			workspaceTicket: "ws-tkt-1",
+			originRoom:   originRoom,
+			originTicket: "ws-tkt-1",
 			relayTickets: map[ref.RoomID]relayTicketRef{
 				opsRoom: {ticketID: "relay-1", claimIndex: 0},
 			},
@@ -1922,10 +1922,10 @@ func TestMirrorReservationGrant(t *testing.T) {
 	t.Run("mirrors grant to claim", func(t *testing.T) {
 		ts, writer, _ := relayTestService(t)
 
-		workspaceRoom := testRoomID("!workspace:bureau.local")
+		originRoom := testRoomID("!workspace:bureau.local")
 		opsRoom := testRoomID("!ops:bureau.local")
 
-		ts.rooms[workspaceRoom] = newTrackedRoom(map[string]ticket.TicketContent{
+		ts.rooms[originRoom] = newTrackedRoom(map[string]ticket.TicketContent{
 			"ws-tkt-1": {
 				Version:   ticket.TicketContentVersion,
 				Title:     "Need GPU",
@@ -1950,8 +1950,8 @@ func TestMirrorReservationGrant(t *testing.T) {
 		})
 
 		ts.relayEntries["ws-tkt-1"] = &relayEntry{
-			workspaceRoom:   workspaceRoom,
-			workspaceTicket: "ws-tkt-1",
+			originRoom:   originRoom,
+			originTicket: "ws-tkt-1",
 			relayTickets: map[ref.RoomID]relayTicketRef{
 				opsRoom: {ticketID: "relay-1", claimIndex: 0},
 			},
@@ -1981,11 +1981,11 @@ func TestMirrorReservationGrant(t *testing.T) {
 	t.Run("multi-claim grant updates correct claim", func(t *testing.T) {
 		ts, writer, _ := relayTestService(t)
 
-		workspaceRoom := testRoomID("!workspace:bureau.local")
+		originRoom := testRoomID("!workspace:bureau.local")
 		opsRoomA := testRoomID("!ops-a:bureau.local")
 		opsRoomB := testRoomID("!ops-b:bureau.local")
 
-		ts.rooms[workspaceRoom] = newTrackedRoom(map[string]ticket.TicketContent{
+		ts.rooms[originRoom] = newTrackedRoom(map[string]ticket.TicketContent{
 			"ws-tkt-1": {
 				Version:   ticket.TicketContentVersion,
 				Title:     "Need two GPUs",
@@ -2016,8 +2016,8 @@ func TestMirrorReservationGrant(t *testing.T) {
 		})
 
 		ts.relayEntries["ws-tkt-1"] = &relayEntry{
-			workspaceRoom:   workspaceRoom,
-			workspaceTicket: "ws-tkt-1",
+			originRoom:   originRoom,
+			originTicket: "ws-tkt-1",
 			relayTickets: map[ref.RoomID]relayTicketRef{
 				opsRoomA: {ticketID: "relay-a", claimIndex: 0},
 				opsRoomB: {ticketID: "relay-b", claimIndex: 1},

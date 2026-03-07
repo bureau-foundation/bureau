@@ -91,7 +91,7 @@ func run() error {
 	ticketService.rebuildTimerHeap()
 
 	// Rebuild relay entries from ticket state. This reconstructs
-	// the workspace→relay ticket associations for lifecycle
+	// the origin→relay ticket associations for lifecycle
 	// management (closure cascade, denial cascade).
 	ticketService.rebuildRelayEntries()
 
@@ -240,9 +240,9 @@ type TicketService struct {
 	// Protected by mu.
 	crossRoomWatches map[crossRoomWatchKey][]crossRoomWatch
 
-	// relayEntries tracks the association between workspace tickets
-	// and their relay tickets in ops rooms. Keyed by workspace
-	// ticket ID. Rebuilt from ticket state on startup and maintained
+	// relayEntries tracks the association between origin tickets
+	// and their relay tickets in ops rooms. Keyed by origin ticket
+	// ID. Rebuilt from ticket state on startup and maintained
 	// as relay tickets are created and closed. Protected by mu.
 	relayEntries map[string]*relayEntry
 

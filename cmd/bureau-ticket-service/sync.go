@@ -563,17 +563,17 @@ func (ts *TicketService) processRoomSync(ctx context.Context, roomID ref.RoomID,
 	// Phase 1.75: Check closed tickets for relay ticket closure.
 	// If a relay ticket in an ops room was closed (e.g., denied by
 	// the resource owner), trigger denial cascade to close all
-	// other relay tickets and the workspace ticket.
+	// other relay tickets and the origin ticket.
 	for _, closedID := range closedTicketIDs {
 		if closedContent, exists := state.index.Get(closedID); exists {
 			ts.handleRelayTicketClosed(ctx, roomID, closedID, closedContent)
 		}
 	}
 
-	// Phase 1.8: Mirror relay ticket status changes to workspace
+	// Phase 1.8: Mirror relay ticket status changes to origin
 	// claims. When a relay ticket in an ops room changes status
 	// (e.g., in_progress), update the corresponding claim in the
-	// workspace ticket. Runs after closure handling so that denial
+	// origin ticket. Runs after closure handling so that denial
 	// cascades take precedence over individual claim updates.
 	for _, event := range stateEvents {
 		if event.Type == schema.EventTypeTicket && event.StateKey != nil {

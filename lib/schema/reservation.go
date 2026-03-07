@@ -26,10 +26,10 @@ const (
 	EventTypeReservation ref.EventType = "m.bureau.reservation"
 
 	// EventTypeRelayLink tracks the bidirectional connection between
-	// a relay ticket in an ops room and its origin ticket in a
-	// workspace room. Published by the ticket service alongside the
-	// relay ticket. The resource owner reads this to understand
-	// provenance; the ticket service reads it to cascade closure.
+	// a relay ticket in an ops room and its origin ticket. Published
+	// by the ticket service alongside the relay ticket. The resource
+	// owner reads this to understand provenance; the ticket service
+	// reads it to cascade closure.
 	//
 	// State key: relay ticket ID
 	// Room: resource ops room
@@ -38,7 +38,7 @@ const (
 	// EventTypeRelayPolicy declares which rooms may relay tickets
 	// into this ops room and what information crosses the boundary.
 	// Admin-only (PL 100): controls the authorization boundary
-	// between workspace rooms and ops rooms. A malicious rewrite
+	// between origin rooms and ops rooms. A malicious rewrite
 	// could open the ops room to unauthorized relay sources or
 	// suppress outbound filtering.
 	//
@@ -145,7 +145,7 @@ func (m ReservationMode) IsKnown() bool {
 
 // ClaimStatus represents the lifecycle state of a resource claim
 // within a reservation. The ticket service drives transitions by
-// watching ops rooms and mirroring state back to workspace tickets.
+// watching ops rooms and mirroring state back to origin tickets.
 type ClaimStatus string
 
 const (
@@ -165,7 +165,7 @@ const (
 	ClaimApproved ClaimStatus = "approved"
 
 	// ClaimGranted means the resource is available. The
-	// corresponding state_event gate on the workspace ticket is
+	// corresponding state_event gate on the origin ticket is
 	// satisfied.
 	ClaimGranted ClaimStatus = "granted"
 
@@ -211,7 +211,7 @@ func (s ClaimStatus) IsTerminal() bool {
 // granted. Cleared (empty content) when the reservation is released.
 //
 // The ticket service watches for this event with a state_event gate
-// on the workspace ticket: when the gate's content_match finds a
+// on the origin ticket: when the gate's content_match finds a
 // matching holder, the gate is satisfied.
 type ReservationGrant struct {
 	// Holder is the principal that holds the reservation.
@@ -270,8 +270,8 @@ func (g *ReservationGrant) Validate() error {
 }
 
 // RelayLink tracks the connection between a relay ticket in an ops
-// room and its origin ticket in a workspace room. Published by the
-// ticket service alongside the relay ticket for lifecycle tracking.
+// room and its origin ticket. Published by the ticket service
+// alongside the relay ticket for lifecycle tracking.
 type RelayLink struct {
 	// OriginRoom is the room ID containing the original ticket.
 	OriginRoom ref.RoomID `json:"origin_room"`
@@ -313,9 +313,9 @@ type RelayPolicy struct {
 	AllowedTypes []string `json:"allowed_types,omitempty"`
 
 	// OutboundFilter controls what information from the relay
-	// ticket is mirrored back to the workspace ticket. When nil,
-	// the ticket service uses default filtering (status and
-	// close_reason only).
+	// ticket is mirrored back to the origin ticket. When nil,
+	// the ticket service uses default filtering (status,
+	// close_reason, and status_reason only).
 	OutboundFilter *RelayFilter `json:"outbound_filter,omitempty"`
 }
 
@@ -338,8 +338,7 @@ func (p *RelayPolicy) Validate() error {
 type RelaySourceMatch string
 
 const (
-	// RelayMatchFleetMember authorizes any workspace room in the
-	// named fleet.
+	// RelayMatchFleetMember authorizes any room in the named fleet.
 	RelayMatchFleetMember RelaySourceMatch = "fleet_member"
 
 	// RelayMatchRoom authorizes a specific room by ID.
@@ -369,7 +368,7 @@ type RelaySource struct {
 	Match RelaySourceMatch `json:"match"`
 
 	// Fleet is the fleet alias (when Match is "fleet_member").
-	// Any workspace room belonging to this fleet may relay.
+	// Any room belonging to this fleet may relay.
 	Fleet string `json:"fleet,omitempty"`
 
 	// Room is the room ID (when Match is "room"). Only this
@@ -406,15 +405,48 @@ func (s *RelaySource) Validate() error {
 }
 
 // RelayFilter specifies which fields cross the relay boundary when
-// mirroring ops room state back to workspace tickets.
+// mirroring ops room state back to origin tickets.
 type RelayFilter struct {
-	// Include lists fields mirrored back to the workspace ticket.
-	// When empty, defaults to ["status", "close_reason"].
+	// Include lists fields mirrored back to the origin ticket.
+	// When empty with a non-nil filter, all fields are allowed
+	// (minus Exclude). The nil filter case is handled by Allows:
+	// only "status", "close_reason", and "status_reason" cross
+	// by default.
 	Include []string `json:"include,omitempty"`
 
 	// Exclude lists fields that stay in the ops room and are not
 	// relayed. Takes precedence over Include.
 	Exclude []string `json:"exclude,omitempty"`
+}
+
+// Allows reports whether the named field is permitted to cross the
+// relay boundary. Nil-receiver-safe: a nil filter uses the default
+// policy where only "status", "close_reason", and "status_reason"
+// are allowed.
+//
+// When the filter is non-nil:
+//   - Exclude takes precedence over Include.
+//   - An empty Include list means all fields are allowed (minus Exclude).
+//   - A populated Include list means only those fields are allowed
+//     (minus Exclude).
+func (f *RelayFilter) Allows(field string) bool {
+	if f == nil {
+		return field == "status" || field == "close_reason" || field == "status_reason"
+	}
+	for _, excluded := range f.Exclude {
+		if excluded == field {
+			return false
+		}
+	}
+	if len(f.Include) == 0 {
+		return true
+	}
+	for _, included := range f.Include {
+		if included == field {
+			return true
+		}
+	}
+	return false
 }
 
 // MachineDrainContent is the content of an EventTypeMachineDrain
@@ -469,7 +501,7 @@ func OpsRoomPowerLevels(adminUserID ref.UserID) map[string]any {
 
 	// Ticket service operations (PL 25). The ticket service creates
 	// relay tickets, enables ticket management, and publishes relay
-	// links that track workspace↔ops room ticket pairs.
+	// links that track origin↔ops room ticket pairs.
 	for _, eventType := range []ref.EventType{
 		EventTypeTicket,
 		EventTypeTicketConfig,

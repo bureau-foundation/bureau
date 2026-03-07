@@ -455,6 +455,70 @@ func TestRelayPolicyRoundTrip(t *testing.T) {
 	}
 }
 
+func TestRelayFilterAllows(t *testing.T) {
+	tests := []struct {
+		name   string
+		filter *RelayFilter
+		field  string
+		want   bool
+	}{
+		// Nil filter: only status and close_reason allowed (default policy).
+		{name: "nil allows status", filter: nil, field: "status", want: true},
+		{name: "nil allows close_reason", filter: nil, field: "close_reason", want: true},
+		{name: "nil allows status_reason", filter: nil, field: "status_reason", want: true},
+		{name: "nil denies body", filter: nil, field: "body", want: false},
+
+		// Non-nil, empty Include: allow all (minus Exclude).
+		{
+			name:   "empty include allows everything",
+			filter: &RelayFilter{},
+			field:  "status_reason",
+			want:   true,
+		},
+		{
+			name:   "empty include with exclude blocks excluded",
+			filter: &RelayFilter{Exclude: []string{"body", "status_reason"}},
+			field:  "status_reason",
+			want:   false,
+		},
+		{
+			name:   "empty include with exclude allows non-excluded",
+			filter: &RelayFilter{Exclude: []string{"body"}},
+			field:  "status",
+			want:   true,
+		},
+
+		// Non-nil, populated Include: only listed fields allowed.
+		{
+			name:   "include list allows listed field",
+			filter: &RelayFilter{Include: []string{"status", "close_reason", "status_reason"}},
+			field:  "status_reason",
+			want:   true,
+		},
+		{
+			name:   "include list denies unlisted field",
+			filter: &RelayFilter{Include: []string{"status", "close_reason"}},
+			field:  "status_reason",
+			want:   false,
+		},
+
+		// Exclude takes precedence over Include.
+		{
+			name:   "exclude overrides include",
+			filter: &RelayFilter{Include: []string{"status", "close_reason"}, Exclude: []string{"close_reason"}},
+			field:  "close_reason",
+			want:   false,
+		},
+	}
+	for _, testCase := range tests {
+		t.Run(testCase.name, func(t *testing.T) {
+			if got := testCase.filter.Allows(testCase.field); got != testCase.want {
+				t.Errorf("Allows(%q) = %v, want %v", testCase.field, got, testCase.want)
+			}
+		})
+	}
+}
+
 func TestMachineDrainContentValidate(t *testing.T) {
 	tests := []struct {
 		name    string

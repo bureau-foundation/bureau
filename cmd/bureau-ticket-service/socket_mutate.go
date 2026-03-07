@@ -898,13 +898,13 @@ func (ts *TicketService) handleUpdate(ctx context.Context, token *servicetoken.T
 
 	// If this update closed the ticket, resolve timer targets for
 	// dependents that may have become unblocked and close any relay
-	// tickets associated with this workspace ticket. Both are
+	// tickets associated with this origin ticket. Both are
 	// idempotent with handleClose — a ticket closed via "update"
 	// must trigger the same lifecycle cascades as one closed via
 	// the dedicated "close" action.
 	if content.Status == ticket.StatusClosed {
 		ts.resolveUnblockedTimerTargets(ctx, roomID, state, []string{ticketID})
-		ts.closeRelayTicketsForWorkspace(ctx, ticketID)
+		ts.closeRelayTicketsForOrigin(ctx, ticketID)
 	}
 
 	// Push a deadline monitoring entry if the deadline was changed.
@@ -1049,9 +1049,9 @@ func (ts *TicketService) handleClose(ctx context.Context, token *servicetoken.To
 	// already have a Target).
 	ts.resolveUnblockedTimerTargets(ctx, roomID, state, []string{ticketID})
 
-	// Close relay tickets if this workspace ticket had active
+	// Close relay tickets if this origin ticket had active
 	// reservations. This cascades the closure to ops rooms.
-	ts.closeRelayTicketsForWorkspace(ctx, ticketID)
+	ts.closeRelayTicketsForOrigin(ctx, ticketID)
 
 	return ticket.MutationResponse{
 		ID:      ticketID,

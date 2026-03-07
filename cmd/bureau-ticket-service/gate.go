@@ -531,7 +531,7 @@ func (ts *TicketService) trySatisfyCrossRoomGate(
 	ts.removeCrossRoomWatch(watchedRoomID, event.Type, currentGate.StateKey, watch.ticketID, watch.gateID)
 
 	// When a reservation gate fires, mirror the grant to the
-	// workspace claim.
+	// origin claim.
 	if currentGate.EventType == schema.EventTypeReservation {
 		if relEntry, ok := ts.relayEntries[watch.ticketID]; ok {
 			if relRef, ok := relEntry.relayTickets[watchedRoomID]; ok {

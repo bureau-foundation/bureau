@@ -22,7 +22,6 @@ func validReservationContent() ReservationContent {
 			},
 		},
 		MaxDuration: "2h",
-		PipelineRef: "benchmark-optimizer",
 	}
 }
 
@@ -60,9 +59,6 @@ func TestReservationContentRoundTrip(t *testing.T) {
 	if decoded.MaxDuration != "2h" {
 		t.Errorf("MaxDuration = %v, want %v", decoded.MaxDuration, "2h")
 	}
-	if decoded.PipelineRef != "benchmark-optimizer" {
-		t.Errorf("PipelineRef = %v, want %v", decoded.PipelineRef, "benchmark-optimizer")
-	}
 }
 
 func TestReservationContentValidate(t *testing.T) {
@@ -85,13 +81,6 @@ func TestReservationContentValidate(t *testing.T) {
 					Status:   schema.ClaimPending,
 					Quota:    &QuotaReservation{CostLimit: "50.00"},
 				})
-			},
-			wantErr: false,
-		},
-		{
-			name: "valid without pipeline (interactive)",
-			modify: func(r *ReservationContent) {
-				r.PipelineRef = ""
 			},
 			wantErr: false,
 		},
@@ -452,13 +441,27 @@ func TestTicketContentWithReservation(t *testing.T) {
 		}
 	})
 
-	t.Run("non-resource_request ticket with reservation is invalid", func(t *testing.T) {
+	t.Run("non-resource_request ticket with reservation is valid", func(t *testing.T) {
 		tc := validTicketContent()
 		tc.Type = TypeTask
 		reservation := validReservationContent()
 		tc.Reservation = &reservation
-		if err := tc.Validate(); err == nil {
-			t.Error("expected error for task with reservation")
+		if err := tc.Validate(); err != nil {
+			t.Errorf("unexpected error for task with reservation: %v", err)
+		}
+	})
+
+	t.Run("pipeline ticket with reservation is valid", func(t *testing.T) {
+		tc := validTicketContent()
+		tc.Type = TypePipeline
+		tc.Pipeline = &PipelineExecutionContent{
+			PipelineRef: "gpu-training",
+			TotalSteps:  3,
+		}
+		reservation := validReservationContent()
+		tc.Reservation = &reservation
+		if err := tc.Validate(); err != nil {
+			t.Errorf("unexpected error for pipeline with reservation: %v", err)
 		}
 	})
 
@@ -561,9 +564,6 @@ func TestTicketContentWithReservationRoundTrip(t *testing.T) {
 
 	if decoded.Reservation.MaxDuration != "2h" {
 		t.Errorf("MaxDuration = %v, want %v", decoded.Reservation.MaxDuration, "2h")
-	}
-	if decoded.Reservation.PipelineRef != "benchmark-optimizer" {
-		t.Errorf("PipelineRef = %v, want %v", decoded.Reservation.PipelineRef, "benchmark-optimizer")
 	}
 }
 

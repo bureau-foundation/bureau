@@ -442,15 +442,13 @@ func (t *TicketContent) Validate() error {
 	} else if t.Pipeline != nil {
 		return fmt.Errorf("ticket content: pipeline content must be nil when type is %q", string(t.Type))
 	}
-	if t.Type == TypeResourceRequest {
-		if t.Reservation == nil {
-			return errors.New("ticket content: reservation content is required when type is \"resource_request\"")
-		}
+	if t.Type == TypeResourceRequest && t.Reservation == nil {
+		return errors.New("ticket content: reservation content is required when type is \"resource_request\"")
+	}
+	if t.Reservation != nil {
 		if err := t.Reservation.Validate(); err != nil {
 			return fmt.Errorf("ticket content: reservation: %w", err)
 		}
-	} else if t.Reservation != nil {
-		return fmt.Errorf("ticket content: reservation content must be nil when type is %q", string(t.Type))
 	}
 	for i, resource := range t.Affects {
 		if resource == "" {

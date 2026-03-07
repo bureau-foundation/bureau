@@ -47,6 +47,19 @@ import (
 // last byte must be a null terminator, giving 107 usable bytes.
 const maxUnixSocketPathLength = 107
 
+// allPipelineGatesSatisfied reports whether every gate on a pipeline
+// ticket is satisfied. Used by processPipelineTickets to skip tickets
+// that are open but not yet ready — for example, a pipeline ticket
+// with reservation gates that haven't been granted yet.
+func allPipelineGatesSatisfied(content *ticket.TicketContent) bool {
+	for index := range content.Gates {
+		if content.Gates[index].Status != ticket.GateSatisfied {
+			return false
+		}
+	}
+	return true
+}
+
 // handlePipelineExecute validates the pipeline.execute command, creates
 // a pip- ticket, starts the executor sandbox immediately, and returns
 // "accepted" with the ticket ID. Starting the executor inline (rather
@@ -267,6 +280,13 @@ func (d *Daemon) processPipelineTickets(ctx context.Context, response *messaging
 				continue
 			}
 			if ticketContent.Status != ticket.StatusOpen {
+				continue
+			}
+			// Skip tickets with unsatisfied gates. A pipeline
+			// ticket with reservation gates is open but not yet
+			// ready — the daemon must wait for the reservation
+			// to be granted before starting the executor.
+			if !allPipelineGatesSatisfied(&ticketContent) {
 				continue
 			}
 			if ticketContent.Pipeline == nil {

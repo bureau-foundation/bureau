@@ -44,14 +44,14 @@ type relayTicketRef struct {
 	claimIndex int
 }
 
-// isRelayReady reports whether a resource_request ticket is ready for
-// relay: all existing gates (non-reservation) are satisfied, and the
-// ticket has not already been relayed. The reservation will add new
-// state_event gates after relay; those gates don't exist yet.
+// isRelayReady reports whether a ticket with a Reservation is ready
+// for relay: all existing gates (non-reservation) are satisfied, and
+// the ticket has not already been relayed. Any ticket type can carry
+// a Reservation — resource_request tickets for operator-initiated
+// locks, pipeline tickets for resource-bound execution, etc. The
+// relay mechanism adds state_event gates after relay; those gates
+// don't exist yet and don't block this check.
 func isRelayReady(content *ticket.TicketContent) bool {
-	if content.Type != ticket.TypeResourceRequest {
-		return false
-	}
 	if content.Reservation == nil || len(content.Reservation.Claims) == 0 {
 		return false
 	}
@@ -96,12 +96,12 @@ func isRelayed(content *ticket.TicketContent) bool {
 //     satisfied)
 func (ts *TicketService) checkAndInitiateRelay(ctx context.Context, roomID ref.RoomID, state *roomState, ticketID string, content ticket.TicketContent) {
 	if !isRelayReady(&content) {
-		if content.Type == ticket.TypeResourceRequest {
+		if content.Reservation != nil {
 			ts.logger.Info("relay check: not ready",
 				"ticket_id", ticketID,
 				"room_id", roomID,
-				"has_reservation", content.Reservation != nil,
-				"has_claims", content.Reservation != nil && len(content.Reservation.Claims) > 0,
+				"type", content.Type,
+				"has_claims", len(content.Reservation.Claims) > 0,
 				"status", content.Status,
 				"gate_count", len(content.Gates),
 			)
@@ -538,6 +538,9 @@ func (ts *TicketService) mirrorRelayTicketStatus(ctx context.Context, opsRoomID 
 		}
 		if wsContent.Reservation.Claims[claimIndex].Status == schema.ClaimGranted {
 			ts.updateClaimStatus(ctx, entry, workspaceTicketID, claimIndex, schema.ClaimPreempted, relayContent.CloseReason)
+			ts.closeTicketOnPreemption(ctx, entry.workspaceRoom, workspaceTicketID, relayContent.CloseReason)
+			ts.closeRelayTicketsForWorkspace(ctx, workspaceTicketID)
+			delete(ts.relayEntries, workspaceTicketID)
 		}
 		// Non-granted closure → denial cascade handles it.
 	}
@@ -696,6 +699,46 @@ func (ts *TicketService) cascadeDenial(
 
 	// Clean up the relay entry.
 	delete(ts.relayEntries, workspaceTicketID)
+}
+
+// closeTicketOnPreemption closes a ticket whose reservation was
+// preempted. The preempting resource owner closed the relay ticket in
+// the ops room, so the reservation is being forcibly reclaimed. Closing
+// the ticket cascades: for pipeline tickets, the executor detects
+// closure via its cancellation poll; for relay tickets,
+// closeRelayTicketsForWorkspace (called by the caller after this)
+// releases remaining relay tickets.
+//
+// Must be called with ts.mu held.
+func (ts *TicketService) closeTicketOnPreemption(ctx context.Context, roomID ref.RoomID, ticketID string, reason string) {
+	state, tracked := ts.rooms[roomID]
+	if !tracked {
+		return
+	}
+	content, exists := state.index.Get(ticketID)
+	if !exists || content.Status == ticket.StatusClosed {
+		return
+	}
+
+	now := ts.clock.Now().UTC().Format(time.RFC3339)
+	content.Status = ticket.StatusClosed
+	content.ClosedAt = now
+	content.CloseReason = fmt.Sprintf("preempted: %s", reason)
+	content.UpdatedAt = now
+
+	if err := ts.putWithEcho(ctx, roomID, state, ticketID, content); err != nil {
+		ts.logger.Error("failed to close ticket on preemption",
+			"ticket_id", ticketID,
+			"room_id", roomID,
+			"error", err,
+		)
+	} else {
+		ts.logger.Info("closed ticket on preemption",
+			"ticket_id", ticketID,
+			"room_id", roomID,
+			"reason", reason,
+		)
+	}
 }
 
 // closeRelayTicketsForWorkspace closes all relay tickets associated

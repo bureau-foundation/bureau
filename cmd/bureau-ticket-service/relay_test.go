@@ -1761,15 +1761,40 @@ func TestMirrorRelayTicketStatus(t *testing.T) {
 
 		ts.mirrorRelayTicketStatus(context.Background(), opsRoom, "relay-1", relayContent)
 
-		if len(writer.events) != 1 {
-			t.Fatalf("expected 1 write, got %d", len(writer.events))
+		// Preemption now produces two writes:
+		// 1. Claim status update (preempted)
+		// 2. Ticket closure (preempted: reason)
+		// (Relay ticket closure would be a third write, but the ops
+		// room is not tracked in ts.rooms so closeRelayTicketsForWorkspace
+		// skips it. The full cascade is exercised in integration tests.)
+		if len(writer.events) != 2 {
+			t.Fatalf("expected 2 writes, got %d", len(writer.events))
 		}
-		content := writer.events[0].Content.(ticket.TicketContent)
-		if content.Reservation.Claims[0].Status != schema.ClaimPreempted {
-			t.Errorf("claim status = %q, want %q", content.Reservation.Claims[0].Status, schema.ClaimPreempted)
+
+		// First write: claim status updated to preempted.
+		claimUpdate := writer.events[0].Content.(ticket.TicketContent)
+		if claimUpdate.Reservation.Claims[0].Status != schema.ClaimPreempted {
+			t.Errorf("claim status = %q, want %q", claimUpdate.Reservation.Claims[0].Status, schema.ClaimPreempted)
 		}
-		if content.Reservation.Claims[0].StatusReason != "duration exceeded" {
-			t.Errorf("claim reason = %q, want %q", content.Reservation.Claims[0].StatusReason, "duration exceeded")
+		if claimUpdate.Reservation.Claims[0].StatusReason != "duration exceeded" {
+			t.Errorf("claim reason = %q, want %q", claimUpdate.Reservation.Claims[0].StatusReason, "duration exceeded")
+		}
+
+		// Second write: ticket closed with preemption reason.
+		// This event also carries the preempted claim status from
+		// the first write — closeTicketOnPreemption re-reads the
+		// ticket from the index after the claim update.
+		ticketClosure := writer.events[1].Content.(ticket.TicketContent)
+		if ticketClosure.Status != ticket.StatusClosed {
+			t.Errorf("ticket status = %q, want %q", ticketClosure.Status, ticket.StatusClosed)
+		}
+		if ticketClosure.CloseReason != "preempted: duration exceeded" {
+			t.Errorf("close reason = %q, want %q", ticketClosure.CloseReason, "preempted: duration exceeded")
+		}
+
+		// Relay entry should be cleaned up.
+		if _, exists := ts.relayEntries["ws-tkt-1"]; exists {
+			t.Error("relay entry should be deleted after preemption")
 		}
 	})
 

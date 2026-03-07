@@ -36,14 +36,6 @@ type ReservationContent struct {
 	// overall reservation, not per-claim. The resource owner for
 	// each claim enforces duration on its own grant.
 	MaxDuration string `json:"max_duration"`
-
-	// PipelineRef identifies a pipeline to execute during the
-	// reservation window. The pipeline's lifecycle is tied to the
-	// reservation: pipeline completion releases the reservation;
-	// reservation preemption cancels the pipeline. Empty for
-	// interactive reservations (hold until ticket is manually
-	// closed).
-	PipelineRef string `json:"pipeline_ref,omitempty"`
 }
 
 // Validate checks that the reservation content is well-formed.

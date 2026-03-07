@@ -62,7 +62,10 @@ func setupReservationOpsRoom(
 			Match: schema.RelayMatchFleetMember,
 			Fleet: fleet.Ref.Localpart(),
 		}},
-		AllowedTypes: []string{string(ticket.TypeResourceRequest)},
+		AllowedTypes: []string{
+			string(ticket.TypeResourceRequest),
+			string(ticket.TypePipeline),
+		},
 	}
 	if _, err := admin.SendStateEvent(ctx, opsRoomID, schema.EventTypeRelayPolicy, "", relayPolicy); err != nil {
 		t.Fatalf("publish relay policy: %v", err)
@@ -398,6 +401,102 @@ func findSubstring(s, substr string) bool {
 	return false
 }
 
+// createPipelineWorkspaceRoom creates a workspace room that allows both
+// pipeline and resource_request ticket types. Pipeline tickets with
+// reservations need a room that permits the pipeline type; the relay
+// mechanism creates resource_request relay tickets in ops rooms regardless
+// of the workspace ticket type, but the workspace room's AllowedTypes
+// must include pipeline for the create API to accept the ticket.
+func createPipelineWorkspaceRoom(
+	t *testing.T,
+	admin *messaging.DirectSession,
+	fleet *testFleet,
+	ticketSvc ticketServiceDeployment,
+	name string,
+) ref.RoomID {
+	t.Helper()
+	ctx := t.Context()
+
+	alias := fleet.Ref.Localpart() + "/workspace/" + name
+	room, err := admin.CreateRoom(ctx, messaging.CreateRoomRequest{
+		Name:  "Workspace: " + name,
+		Alias: alias,
+	})
+	if err != nil {
+		t.Fatalf("create workspace room %s: %v", name, err)
+	}
+
+	// Configure ticket management allowing both pipeline and resource_request.
+	// Pipeline tickets get the "pip" prefix from PrefixForType; resource_request
+	// tickets get "rsv". The room prefix is a fallback for types without a
+	// type-specific prefix.
+	if err := ticketcmd.ConfigureRoom(ctx, slog.Default(), admin, room.RoomID, ticketSvc.Entity, ticketcmd.ConfigureRoomParams{
+		Prefix:       "pip",
+		AllowedTypes: []ticket.TicketType{ticket.TypePipeline, ticket.TypeResourceRequest},
+	}); err != nil {
+		t.Fatalf("configure tickets in workspace room %s: %v", name, err)
+	}
+
+	// Wait for ticket service readiness.
+	wsWatch := watchRoom(t, admin, room.RoomID)
+	wsWatch.WaitForEvent(t, func(event messaging.Event) bool {
+		return event.Type == schema.EventTypeServiceReady &&
+			event.Sender == ticketSvc.Account.UserID
+	}, "ticket service ready in workspace "+name)
+
+	return room.RoomID
+}
+
+// publishPipelineWithReservation creates a pipeline ticket with a
+// reservation via the ticket service's CBOR socket API. The ticket
+// carries both PipelineExecutionContent (pipeline_ref, total_steps)
+// and ReservationContent (machine claim). Returns the ticket ID.
+//
+// This exercises the production path where a single ticket is both the
+// pipeline execution record and the resource reservation holder — no
+// separate resource_request orchestration ticket.
+func publishPipelineWithReservation(
+	t *testing.T,
+	ticketClient *service.ServiceClient,
+	roomID ref.RoomID,
+	pipelineRef string,
+	machineName string,
+	mode schema.ReservationMode,
+	priority int,
+	maxDuration string,
+) string {
+	t.Helper()
+
+	var result ticket.CreateResponse
+	if err := ticketClient.Call(t.Context(), "create", map[string]any{
+		"room":     roomID.String(),
+		"title":    fmt.Sprintf("Pipeline: %s (machine/%s)", pipelineRef, machineName),
+		"type":     string(ticket.TypePipeline),
+		"priority": priority,
+		"pipeline": map[string]any{
+			"pipeline_ref": pipelineRef,
+			"total_steps":  3,
+		},
+		"reservation": map[string]any{
+			"claims": []map[string]any{{
+				"resource": map[string]any{
+					"type":   string(schema.ResourceMachine),
+					"target": machineName,
+				},
+				"mode":   string(mode),
+				"status": string(schema.ClaimPending),
+			}},
+			"max_duration": maxDuration,
+		},
+	}, &result); err != nil {
+		t.Fatalf("create pipeline ticket with reservation: %v", err)
+	}
+	t.Logf("created pipeline ticket %s (pipeline=%s, machine=%s, mode=%s)",
+		result.ID, pipelineRef, machineName, mode)
+
+	return result.ID
+}
+
 // advanceFleetClock advances the fleet controller's fake clock by the
 // given duration via the "advance-clock" socket action. Only works
 // when the fleet controller was started with BUREAU_TEST_CLOCK=1.
@@ -667,6 +766,126 @@ func TestReservationLifecycle(t *testing.T) {
 		// --- Cleanup ---
 		cleanupOpsWatch := watchRoom(t, admin, opsRoomID)
 		closeWorkspaceTicket(t, ticketClient, wsRoomB, ticketIDB, "test complete")
+		waitForReservationCleared(t, &cleanupOpsWatch, holderLocalpart)
+	})
+
+	t.Run("PipelineWithReservation", func(t *testing.T) {
+		// A pipeline ticket with a Reservation exercises the full relay
+		// lifecycle: the ticket service relays the pipeline ticket's
+		// reservation claims to the ops room, the fleet controller grants
+		// the reservation, and the cross-room gate fires back on the
+		// workspace ticket. Closing the pipeline ticket cascades relay
+		// ticket closure and reservation release — identical to a
+		// resource_request ticket but with type=pipeline.
+		wsRoomID := createPipelineWorkspaceRoom(t, admin, fleet, ticketSvc, "pip-rsv")
+
+		opsWatch := watchRoom(t, admin, opsRoomID)
+		wsWatch := watchRoom(t, admin, wsRoomID)
+
+		// Create a pipeline ticket with an exclusive machine reservation.
+		ticketID := publishPipelineWithReservation(t, ticketClient, wsRoomID,
+			"gpu-training", machine.Ref.Name(), schema.ModeExclusive, 2, "10m")
+
+		// Relay ticket appears in ops room. The relay mechanism always
+		// creates relay tickets as type=resource_request regardless of
+		// the workspace ticket type (prepareRelayTicket hardcodes this).
+		relayTicketID, relayContent := waitForRelayTicket(t, &opsWatch, machine.Ref.Name())
+		if relayContent.Reservation == nil || len(relayContent.Reservation.Claims) == 0 {
+			t.Fatal("relay ticket has no reservation claims")
+		}
+		if relayContent.Reservation.Claims[0].Resource.Target != machine.Ref.Name() {
+			t.Errorf("relay claim target = %q, want %q",
+				relayContent.Reservation.Claims[0].Resource.Target, machine.Ref.Name())
+		}
+
+		// Fleet controller grants the reservation.
+		holderLocalpart := requester.UserID.Localpart()
+		waitForTicketStatus(t, &opsWatch, relayTicketID, ticket.StatusInProgress)
+		waitForReservationGrant(t, &opsWatch, holderLocalpart)
+
+		// Workspace ticket claim reaches "granted" and reservation gate
+		// is satisfied by the cross-room gate evaluation path.
+		wsContent := waitForClaimStatus(t, &wsWatch, ticketID, schema.ClaimGranted)
+		if wsContent.Pipeline == nil {
+			t.Fatal("pipeline content lost after reservation grant")
+		}
+		if wsContent.Pipeline.PipelineRef != "gpu-training" {
+			t.Errorf("pipeline_ref = %q, want %q", wsContent.Pipeline.PipelineRef, "gpu-training")
+		}
+
+		// Verify all gates are satisfied (the reservation gate was added
+		// by relay and fired on the FC's reservation grant).
+		for gateIndex, gate := range wsContent.Gates {
+			if gate.Status != ticket.GateSatisfied {
+				t.Errorf("gate[%d] (%s) status = %s, want satisfied",
+					gateIndex, gate.Type, gate.Status)
+			}
+		}
+		t.Log("pipeline ticket gates all satisfied after reservation grant")
+
+		// Close the pipeline ticket (simulates executor completion).
+		// Cascade: relay ticket closes → reservation released.
+		cleanupOpsWatch := watchRoom(t, admin, opsRoomID)
+		closeWorkspaceTicket(t, ticketClient, wsRoomID, ticketID, "pipeline complete")
+		waitForReservationCleared(t, &cleanupOpsWatch, holderLocalpart)
+		t.Log("pipeline reservation released on ticket close")
+	})
+
+	t.Run("PipelineCancelledOnPreemption", func(t *testing.T) {
+		// When a higher-priority request preempts a pipeline ticket's
+		// reservation, the pipeline ticket must be closed automatically
+		// so the executor detects cancellation via its polling loop.
+		// This exercises the close-on-preemption path added in
+		// mirrorRelayTicketStatus.
+		wsRoomPipeline := createPipelineWorkspaceRoom(t, admin, fleet, ticketSvc, "pip-preempt")
+		wsRoomHighPri := createReservationWorkspaceRoom(t, admin, fleet, ticketSvc, "preempt-pip-high")
+
+		holderLocalpart := requester.UserID.Localpart()
+
+		// --- Phase 1: Grant pipeline reservation ---
+		opsWatch := watchRoom(t, admin, opsRoomID)
+		wsWatchPip := watchRoom(t, admin, wsRoomPipeline)
+
+		pipTicketID := publishPipelineWithReservation(t, ticketClient, wsRoomPipeline,
+			"preemptable-job", machine.Ref.Name(), schema.ModeExclusive, 3, "10m")
+
+		waitForRelayTicket(t, &opsWatch, machine.Ref.Name())
+		waitForReservationGrant(t, &opsWatch, holderLocalpart)
+		waitForClaimStatus(t, &wsWatchPip, pipTicketID, schema.ClaimGranted)
+		t.Log("pipeline reservation granted (P3)")
+
+		// --- Phase 2: Submit P1 request → pipeline preempted ---
+		opsWatch2 := watchRoom(t, admin, opsRoomID)
+		wsWatchPip2 := watchRoom(t, admin, wsRoomPipeline)
+		wsWatchHigh := watchRoom(t, admin, wsRoomHighPri)
+
+		highTicketID := publishResourceRequest(t, ticketClient, wsRoomHighPri,
+			machine.Ref.Name(), schema.ModeExclusive, 1, "10m")
+
+		// Pipeline ticket claim reaches "preempted".
+		preemptedContent := waitForClaimStatus(t, &wsWatchPip2, pipTicketID, schema.ClaimPreempted)
+		if preemptedContent.Pipeline == nil {
+			t.Fatal("pipeline content lost after preemption")
+		}
+
+		// Pipeline ticket is closed by the close-on-preemption path.
+		closedContent := waitForTicketStatus(t, &wsWatchPip2, pipTicketID, ticket.StatusClosed)
+		if closedContent.CloseReason == "" {
+			t.Error("preempted pipeline ticket has empty close reason")
+		}
+		if !containsSubstring(closedContent.CloseReason, "preempted") {
+			t.Errorf("close reason %q does not contain 'preempted'", closedContent.CloseReason)
+		}
+		t.Logf("pipeline ticket closed on preemption: %s", closedContent.CloseReason)
+
+		// High-priority request gets the reservation.
+		waitForReservationGrant(t, &opsWatch2, holderLocalpart)
+		waitForClaimStatus(t, &wsWatchHigh, highTicketID, schema.ClaimGranted)
+		t.Log("high-priority request granted after preemption")
+
+		// --- Cleanup ---
+		cleanupOpsWatch := watchRoom(t, admin, opsRoomID)
+		closeWorkspaceTicket(t, ticketClient, wsRoomHighPri, highTicketID, "test complete")
 		waitForReservationCleared(t, &cleanupOpsWatch, holderLocalpart)
 	})
 }

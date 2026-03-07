@@ -1109,6 +1109,107 @@ func TestReservationLifecycle(t *testing.T) {
 		t.Logf("workspace ticket closed: %s", wsClosedContent.CloseReason)
 	})
 
+	t.Run("OutboundFilter", func(t *testing.T) {
+		// An ops room with an OutboundFilter restricting what crosses
+		// the relay boundary. When the admin denies a relay ticket
+		// with a detailed close reason, the origin ticket must receive
+		// only the generic "reservation denied" — the ops room's
+		// internal detail must not leak back to the requesting room.
+		//
+		// This tests the filtering path: handleRelayTicketClosed →
+		// outboundFilterForClaim → filter.Allows("close_reason") →
+		// cascadeDenial with empty reason.
+		client := adminClient(t)
+		hsAdmin := homeserverAdmin(t)
+
+		filterMachine := newTestMachine(t, fleet, "rsv-filter")
+		provisionMachine(t, client, admin, hsAdmin, filterMachine.Ref,
+			filepath.Join(filterMachine.StateDir, "bootstrap.json"))
+
+		// Set up the ops room without FC (claims stay pending, denial
+		// path is exercised). Then overwrite the relay policy with an
+		// OutboundFilter that only permits "status" to cross the
+		// boundary — close_reason and status_reason are excluded.
+		opsRoomID := setupOpsRoomNoFC(t, admin, filterMachine, ticketSvc, fleet)
+
+		filteredPolicy := schema.RelayPolicy{
+			Sources: []schema.RelaySource{{
+				Match: schema.RelayMatchFleetMember,
+				Fleet: fleet.Ref.Localpart(),
+			}},
+			AllowedTypes: []string{
+				string(ticket.TypeResourceRequest),
+				string(ticket.TypePipeline),
+			},
+			OutboundFilter: &schema.RelayFilter{
+				Include: []string{"status"},
+			},
+		}
+		if _, err := admin.SendStateEvent(t.Context(), opsRoomID,
+			schema.EventTypeRelayPolicy, "", filteredPolicy); err != nil {
+			t.Fatalf("publish filtered relay policy: %v", err)
+		}
+		t.Log("published relay policy with OutboundFilter restricting to status only")
+
+		wsRoomID := createReservationWorkspaceRoom(t, admin, fleet, ticketSvc, "outbound-filter")
+
+		opsWatch := watchRoom(t, admin, opsRoomID)
+		wsWatch := watchRoom(t, admin, wsRoomID)
+
+		ticketID := publishResourceRequest(t, ticketClient, wsRoomID,
+			filterMachine.Ref.Name(), schema.ModeExclusive, 2, "10m")
+
+		// Relay ticket appears in ops room.
+		relayTicketID, relayContent := waitForRelayTicket(t, &opsWatch, filterMachine.Ref.Name())
+		t.Logf("relay ticket appeared: %s", relayTicketID)
+
+		// Verify the relay ticket body describes the resource, not
+		// the origin room (origin room ID must not leak into the
+		// ops room).
+		expectedBody := fmt.Sprintf("Relay for %s/%s (%s)",
+			schema.ResourceMachine, filterMachine.Ref.Name(), schema.ModeExclusive)
+		if relayContent.Body != expectedBody {
+			t.Errorf("relay ticket body = %q, want %q", relayContent.Body, expectedBody)
+		}
+
+		// Admin denies the relay ticket with a detailed internal
+		// reason. Without the OutboundFilter, this reason would
+		// propagate verbatim to the origin ticket.
+		denyContent := ticket.TicketContent{
+			Version:     1,
+			Title:       "denied",
+			Type:        ticket.TypeResourceRequest,
+			Status:      ticket.StatusClosed,
+			CloseReason: "internal maintenance window: GPU firmware update scheduled",
+			ClosedAt:    "2026-01-01T00:00:00Z",
+			UpdatedAt:   "2026-01-01T00:00:00Z",
+		}
+		if _, err := admin.SendStateEvent(t.Context(), opsRoomID,
+			schema.EventTypeTicket, relayTicketID, denyContent); err != nil {
+			t.Fatalf("deny relay ticket: %v", err)
+		}
+		t.Log("denied relay ticket with detailed internal reason")
+
+		// Origin ticket is closed. The OutboundFilter must suppress
+		// the ops room's detail — only the generic denial reason
+		// should appear.
+		wsContent := waitForTicketStatus(t, &wsWatch, ticketID, ticket.StatusClosed)
+		if wsContent.CloseReason != "reservation denied" {
+			t.Errorf("origin close reason = %q, want exactly %q "+
+				"(OutboundFilter should suppress ops room detail)",
+				wsContent.CloseReason, "reservation denied")
+		}
+
+		// Verify no ops room detail leaked through the filter.
+		if containsSubstring(wsContent.CloseReason, "maintenance") ||
+			containsSubstring(wsContent.CloseReason, "GPU") ||
+			containsSubstring(wsContent.CloseReason, "firmware") {
+			t.Error("ops room internal detail leaked through OutboundFilter into origin ticket")
+		}
+
+		t.Logf("origin ticket closed: %q (OutboundFilter correctly suppressed detail)", wsContent.CloseReason)
+	})
+
 	t.Run("RelayAuthRejection", func(t *testing.T) {
 		// A resource_request created in a room without a fleet-scoped
 		// alias cannot be relayed: the ticket service cannot determine

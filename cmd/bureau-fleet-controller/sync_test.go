@@ -1079,3 +1079,139 @@ func TestNoPendingEchoPassesThrough(t *testing.T) {
 		t.Error("assignment should be present after normal event processing")
 	}
 }
+
+// --- verifySenderMatchesStateKey ---
+
+func TestVerifySenderMatchesStateKey_SameServer(t *testing.T) {
+	fc := newTestFleetController(t)
+	machineUserID := testMachineUserID("gpu-box")
+	event := messaging.Event{
+		Sender:   machineUserID,
+		StateKey: stringPtr(machineUserID.StateKey()),
+		Type:     schema.EventTypeMachineStatus,
+	}
+	if !fc.verifySenderMatchesStateKey(event) {
+		t.Error("expected verification to pass when sender and state_key share the same server")
+	}
+}
+
+func TestVerifySenderMatchesStateKey_DifferentServer(t *testing.T) {
+	var logOutput strings.Builder
+	fc := newTestFleetController(t)
+	fc.logger = slog.New(slog.NewTextHandler(&logOutput, nil))
+
+	// Sender is on evil.server, state_key claims bureau.local.
+	sender := ref.MustParseUserID("@evil/fleet/prod/machine/impersonator:evil.server")
+	stateKey := testMachineUserID("gpu-box").StateKey() // bureau.local
+
+	event := messaging.Event{
+		Sender:   sender,
+		StateKey: &stateKey,
+		Type:     schema.EventTypeMachineStatus,
+	}
+	if fc.verifySenderMatchesStateKey(event) {
+		t.Error("expected verification to reject cross-server sender")
+	}
+	if !strings.Contains(logOutput.String(), "rejecting cross-server entity event") {
+		t.Errorf("expected warning log about cross-server rejection, got: %s", logOutput.String())
+	}
+}
+
+func TestVerifySenderMatchesStateKey_ZeroSender(t *testing.T) {
+	fc := newTestFleetController(t)
+	stateKey := testMachineUserID("gpu-box").StateKey()
+	event := messaging.Event{
+		StateKey: &stateKey,
+		Type:     schema.EventTypeMachineStatus,
+	}
+	// Zero sender should pass through (pre-federation events from
+	// initial state loading don't always have sender populated).
+	if !fc.verifySenderMatchesStateKey(event) {
+		t.Error("expected verification to pass with zero sender")
+	}
+}
+
+func TestVerifySenderMatchesStateKey_UnparseableStateKey(t *testing.T) {
+	fc := newTestFleetController(t)
+	sender := testMachineUserID("gpu-box")
+	badKey := "not-a-valid-user-id"
+	event := messaging.Event{
+		Sender:   sender,
+		StateKey: &badKey,
+		Type:     schema.EventTypeMachineStatus,
+	}
+	// Unparseable state_keys should pass through — the handler will
+	// reject them with a more specific error message.
+	if !fc.verifySenderMatchesStateKey(event) {
+		t.Error("expected verification to pass with unparseable state_key")
+	}
+}
+
+// TestProcessStateEventRejectsCrossServerMachineStatus verifies that
+// the dispatch layer in processStateEvent gates self-identifying events
+// through sender validation. A MachineStatus event from a foreign
+// server should be silently dropped — the machine state must not be
+// updated.
+func TestProcessStateEventRejectsCrossServerMachineStatus(t *testing.T) {
+	fc := newTestFleetController(t)
+	machineUserID := testMachineUserID("target")
+
+	// Pre-populate the machine so we can verify it isn't modified.
+	fc.machines[machineUserID] = &machineState{
+		assignments: make(map[ref.UserID]*schema.PrincipalAssignment),
+		healthState: healthSuspect,
+	}
+
+	// Forge a MachineStatus from a different server.
+	foreignSender := ref.MustParseUserID("@evil/fleet/prod/machine/target:evil.server")
+	statusContent := toContentMap(t, schema.MachineStatus{
+		Principal: machineUserID.String(),
+	})
+
+	roomID := mustRoomID("!machine:local")
+	fc.processStateEvent(roomID, messaging.Event{
+		Sender:   foreignSender,
+		Type:     schema.EventTypeMachineStatus,
+		StateKey: stringPtr(machineUserID.StateKey()),
+		Content:  statusContent,
+	})
+
+	// Machine health should NOT have been updated to "online" — the
+	// event should have been rejected at the dispatch level.
+	if fc.machines[machineUserID].healthState != healthSuspect {
+		t.Errorf("health state changed to %q — cross-server event was not rejected",
+			fc.machines[machineUserID].healthState)
+	}
+}
+
+// TestProcessStateEventAcceptsSameServerMachineStatus verifies that
+// legitimate MachineStatus events (sender server matches state_key
+// server) are processed normally.
+func TestProcessStateEventAcceptsSameServerMachineStatus(t *testing.T) {
+	fc := newTestFleetController(t)
+	fc.clock = clock.Fake(time.Date(2026, 1, 15, 12, 0, 0, 0, time.UTC))
+
+	machineUserID := testMachineUserID("legitimate")
+	fc.machines[machineUserID] = &machineState{
+		assignments: make(map[ref.UserID]*schema.PrincipalAssignment),
+		healthState: healthSuspect,
+	}
+
+	statusContent := toContentMap(t, schema.MachineStatus{
+		Principal: machineUserID.String(),
+	})
+
+	roomID := mustRoomID("!machine:local")
+	fc.processStateEvent(roomID, messaging.Event{
+		Sender:   machineUserID,
+		Type:     schema.EventTypeMachineStatus,
+		StateKey: stringPtr(machineUserID.StateKey()),
+		Content:  statusContent,
+	})
+
+	// Legitimate event should have updated health to online.
+	if fc.machines[machineUserID].healthState != healthOnline {
+		t.Errorf("health state = %q, want %q — same-server event should be accepted",
+			fc.machines[machineUserID].healthState, healthOnline)
+	}
+}

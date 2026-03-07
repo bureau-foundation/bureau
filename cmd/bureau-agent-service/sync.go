@@ -125,6 +125,22 @@ func (agentService *AgentService) handleSync(ctx context.Context, response *mess
 // to rooms other than the config room are ignored.
 func (agentService *AgentService) processStateEvents(events []messaging.Event) {
 	for _, event := range events {
+		// Agent state events are self-identifying: the agent publishes
+		// about itself, so the sender's server must match the server
+		// in the state_key. Reject cross-server events to prevent
+		// federation spoofing.
+		if event.StateKey != nil && !event.Sender.IsZero() {
+			stateKeyUserID, parseErr := ref.ParseUserIDFromStateKey(*event.StateKey)
+			if parseErr == nil && event.Sender.Server() != stateKeyUserID.Server() {
+				agentService.logger.Warn("rejecting cross-server agent event",
+					"event_type", event.Type,
+					"sender", event.Sender,
+					"state_key", *event.StateKey,
+				)
+				continue
+			}
+		}
+
 		switch event.Type {
 		case agent.EventTypeAgentSession:
 			agentService.logger.Debug("observed agent session event",

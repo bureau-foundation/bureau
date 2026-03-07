@@ -284,19 +284,74 @@ func (fc *FleetController) processStateEvent(roomID ref.RoomID, event messaging.
 		fc.processMachineDefinitionEvent(event)
 	case schema.EventTypeFleetConfig:
 		fc.processFleetConfigEvent(event)
+
+	// Self-identifying events: the sender IS the entity in the state_key.
+	// Validate that the sender's server matches the state_key's server
+	// to prevent federation spoofing (a malicious federated server
+	// publishing events for entities on our server).
 	case schema.EventTypeHALease:
+		if !fc.verifySenderMatchesStateKey(event) {
+			return
+		}
 		fc.processHALeaseEvent(event)
 	case schema.EventTypeMachineInfo:
+		if !fc.verifySenderMatchesStateKey(event) {
+			return
+		}
 		fc.processMachineInfoEvent(event)
 	case schema.EventTypeMachineStatus:
+		if !fc.verifySenderMatchesStateKey(event) {
+			return
+		}
 		fc.processMachineStatusEvent(event)
+	case schema.EventTypeDrainStatus:
+		if !fc.verifySenderMatchesStateKey(event) {
+			return
+		}
+		fc.processDrainStatusEvent(roomID, event)
+
+	// Third-party events: the sender is NOT the entity in the state_key.
+	// These are published by the FC, CLI, or admin on behalf of the entity.
+	// Security relies on room power levels, not sender-server matching.
 	case schema.EventTypeMachineConfig:
 		fc.processMachineConfigEvent(roomID, event)
 	case schema.EventTypeRelayLink:
 		fc.processRelayLinkEvent(roomID, event)
-	case schema.EventTypeDrainStatus:
-		fc.processDrainStatusEvent(roomID, event)
 	}
+}
+
+// verifySenderMatchesStateKey validates that the event sender's
+// homeserver matches the server encoded in the state_key. For
+// self-identifying events (where the entity publishes about itself),
+// this prevents federation spoofing: a malicious federated server
+// cannot publish machine_status, machine_info, ha_lease, or
+// drain_status events with state_keys that claim to be entities on
+// our server.
+//
+// Returns true if the servers match or the state_key cannot be parsed
+// (unparseable state_keys are rejected later by the handler). Returns
+// false and logs a warning if the servers differ.
+func (fc *FleetController) verifySenderMatchesStateKey(event messaging.Event) bool {
+	if event.StateKey == nil || event.Sender.IsZero() {
+		return true
+	}
+	stateKeyUserID, err := ref.ParseUserIDFromStateKey(*event.StateKey)
+	if err != nil {
+		// Unparseable state_key — let the handler reject it with a
+		// more specific error message.
+		return true
+	}
+	if event.Sender.Server() != stateKeyUserID.Server() {
+		fc.logger.Warn("rejecting cross-server entity event: sender server does not match state_key server",
+			"event_type", event.Type,
+			"sender", event.Sender,
+			"sender_server", event.Sender.Server(),
+			"state_key", *event.StateKey,
+			"state_key_server", stateKeyUserID.Server(),
+		)
+		return false
+	}
+	return true
 }
 
 // processStateEventWithContext routes state events that need a

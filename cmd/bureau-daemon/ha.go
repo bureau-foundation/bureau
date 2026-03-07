@@ -120,6 +120,21 @@ func (w *haWatchdog) syncFleetState(ctx context.Context) {
 			}
 
 		case schema.EventTypeHALease:
+			// Federation safety: HA leases are self-identifying (the
+			// holder publishes its own lease). Reject events where
+			// the sender's server doesn't match the state_key's
+			// server to prevent lease spoofing.
+			if !event.Sender.IsZero() {
+				stateKeyUserID, parseErr := ref.ParseUserIDFromStateKey(stateKey)
+				if parseErr == nil && event.Sender.Server() != stateKeyUserID.Server() {
+					w.logger.Warn("ignoring cross-server HA lease",
+						"sender", event.Sender,
+						"state_key", stateKey,
+					)
+					continue
+				}
+			}
+
 			var lease fleet.HALeaseContent
 			if err := json.Unmarshal(contentJSON, &lease); err != nil {
 				w.logger.Warn("parsing HA lease",

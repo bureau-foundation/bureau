@@ -308,6 +308,22 @@ func (d *Daemon) syncPeerAddresses(ctx context.Context) error {
 			continue
 		}
 
+		// Federation safety: verify that the sender's homeserver
+		// matches the server encoded in the state_key. This prevents
+		// a malicious federated server from publishing MachineStatus
+		// events with state_keys (and Principal fields) that claim to
+		// be machines on our server.
+		if event.StateKey != nil && !event.Sender.IsZero() {
+			stateKeyUserID, parseErr := ref.ParseUserIDFromStateKey(*event.StateKey)
+			if parseErr == nil && event.Sender.Server() != stateKeyUserID.Server() {
+				d.logger.Warn("ignoring cross-server machine status in peer sync",
+					"sender", event.Sender,
+					"state_key", *event.StateKey,
+				)
+				continue
+			}
+		}
+
 		contentJSON, err := json.Marshal(event.Content)
 		if err != nil {
 			continue

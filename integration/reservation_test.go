@@ -7,6 +7,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"log/slog"
+	"path/filepath"
 	"testing"
 	"time"
 
@@ -401,6 +402,68 @@ func findSubstring(s, substr string) bool {
 	return false
 }
 
+// setupOpsRoomNoFC sets up a machine's ops room for relay without the fleet
+// controller watching it. Ticket management and relay policy are configured,
+// and the ticket service is invited with PL 25 for publishing relay links.
+// Use this for tests that need relay ticket creation without FC grant
+// processing (e.g., denial cascade tests where claims must stay pending).
+func setupOpsRoomNoFC(
+	t *testing.T,
+	admin *messaging.DirectSession,
+	machine *testMachine,
+	ticketSvc ticketServiceDeployment,
+	fleet *testFleet,
+) ref.RoomID {
+	t.Helper()
+	ctx := t.Context()
+
+	opsAlias := machine.Ref.OpsRoomAlias()
+	opsRoomID, err := admin.ResolveAlias(ctx, opsAlias)
+	if err != nil {
+		t.Fatalf("resolve ops room alias %s: %v", opsAlias, err)
+	}
+
+	if _, err := admin.JoinRoom(ctx, opsRoomID); err != nil {
+		t.Fatalf("admin join ops room: %v", err)
+	}
+
+	// Relay policy before enabling tickets (ticket service reads it on join).
+	relayPolicy := schema.RelayPolicy{
+		Sources: []schema.RelaySource{{
+			Match: schema.RelayMatchFleetMember,
+			Fleet: fleet.Ref.Localpart(),
+		}},
+		AllowedTypes: []string{
+			string(ticket.TypeResourceRequest),
+			string(ticket.TypePipeline),
+		},
+	}
+	if _, err := admin.SendStateEvent(ctx, opsRoomID, schema.EventTypeRelayPolicy, "", relayPolicy); err != nil {
+		t.Fatalf("publish relay policy: %v", err)
+	}
+
+	opsWatch := watchRoom(t, admin, opsRoomID)
+
+	enableTicketsInRoom(t, admin, opsRoomID, ticketSvc, "rsv",
+		[]ticket.TicketType{ticket.TypeResourceRequest})
+
+	// Ticket service needs PL 25 for publishing relay links.
+	if err := schema.GrantPowerLevels(ctx, admin, opsRoomID, schema.PowerLevelGrants{
+		Users: map[ref.UserID]int{
+			ticketSvc.Account.UserID: 25,
+		},
+	}); err != nil {
+		t.Fatalf("grant ops room power levels: %v", err)
+	}
+
+	opsWatch.WaitForEvent(t, func(event messaging.Event) bool {
+		return event.Type == schema.EventTypeServiceReady &&
+			event.Sender == ticketSvc.Account.UserID
+	}, "ticket service ready in ops room")
+
+	return opsRoomID
+}
+
 // createPipelineWorkspaceRoom creates a workspace room that allows both
 // pipeline and resource_request ticket types. Pipeline tickets with
 // reservations need a room that permits the pipeline type; the relay
@@ -495,6 +558,84 @@ func publishPipelineWithReservation(
 		result.ID, pipelineRef, machineName, mode)
 
 	return result.ID
+}
+
+// publishMultiClaimResourceRequest creates a resource_request ticket
+// with claims on multiple machines via the ticket service socket API.
+// Returns the ticket ID. Each machine gets an exclusive claim.
+func publishMultiClaimResourceRequest(
+	t *testing.T,
+	ticketClient *service.ServiceClient,
+	roomID ref.RoomID,
+	machineNames []string,
+	priority int,
+	maxDuration string,
+) string {
+	t.Helper()
+
+	claims := make([]map[string]any, len(machineNames))
+	for index, name := range machineNames {
+		claims[index] = map[string]any{
+			"resource": map[string]any{
+				"type":   string(schema.ResourceMachine),
+				"target": name,
+			},
+			"mode":   string(schema.ModeExclusive),
+			"status": string(schema.ClaimPending),
+		}
+	}
+
+	var result ticket.CreateResponse
+	if err := ticketClient.Call(t.Context(), "create", map[string]any{
+		"room":     roomID.String(),
+		"title":    fmt.Sprintf("Multi-claim request: %v", machineNames),
+		"type":     string(ticket.TypeResourceRequest),
+		"priority": priority,
+		"reservation": map[string]any{
+			"claims":       claims,
+			"max_duration": maxDuration,
+		},
+	}, &result); err != nil {
+		t.Fatalf("create multi-claim resource request: %v", err)
+	}
+	t.Logf("created multi-claim request %s (machines=%v, priority=%d)", result.ID, machineNames, priority)
+
+	return result.ID
+}
+
+// waitForTicketNote waits for a ticket update that contains at least
+// one note whose body matches the given substring.
+func waitForTicketNote(t *testing.T, watch *roomWatch, ticketID string, bodySubstring string) ticket.TicketContent {
+	t.Helper()
+
+	event := watch.WaitForEvent(t, func(event messaging.Event) bool {
+		if event.Type != schema.EventTypeTicket {
+			return false
+		}
+		if event.StateKey == nil || *event.StateKey != ticketID {
+			return false
+		}
+		notes, _ := event.Content["notes"].([]any)
+		for _, noteRaw := range notes {
+			note, _ := noteRaw.(map[string]any)
+			body, _ := note["body"].(string)
+			if containsSubstring(body, bodySubstring) {
+				return true
+			}
+		}
+		return false
+	}, fmt.Sprintf("ticket %s note containing %q", ticketID, bodySubstring))
+
+	contentJSON, err := json.Marshal(event.Content)
+	if err != nil {
+		t.Fatalf("marshal ticket content: %v", err)
+	}
+	var content ticket.TicketContent
+	if err := json.Unmarshal(contentJSON, &content); err != nil {
+		t.Fatalf("unmarshal ticket content: %v", err)
+	}
+	t.Logf("ticket %s has note containing %q", ticketID, bodySubstring)
+	return content
 }
 
 // advanceFleetClock advances the fleet controller's fake clock by the
@@ -887,5 +1028,135 @@ func TestReservationLifecycle(t *testing.T) {
 		cleanupOpsWatch := watchRoom(t, admin, opsRoomID)
 		closeWorkspaceTicket(t, ticketClient, wsRoomHighPri, highTicketID, "test complete")
 		waitForReservationCleared(t, &cleanupOpsWatch, holderLocalpart)
+	})
+
+	t.Run("DenialCascade", func(t *testing.T) {
+		// A ticket with two claims targeting different machines. When
+		// one claim is denied (the resource owner closes the relay
+		// ticket without granting), the denial cascade closes the other
+		// relay ticket and the workspace ticket.
+		//
+		// Both machines use FC-free ops rooms. The fleet controller
+		// must NOT watch these rooms: if it grants either claim before
+		// the admin denies, handleRelayTicketClosed treats the closure
+		// as preemption instead of denial, and the cascade never fires.
+		client := adminClient(t)
+		hsAdmin := homeserverAdmin(t)
+
+		denyMachineA := newTestMachine(t, fleet, "rsv-deny-a")
+		provisionMachine(t, client, admin, hsAdmin, denyMachineA.Ref,
+			filepath.Join(denyMachineA.StateDir, "bootstrap.json"))
+		opsRoomA := setupOpsRoomNoFC(t, admin, denyMachineA, ticketSvc, fleet)
+
+		denyMachineB := newTestMachine(t, fleet, "rsv-deny-b")
+		provisionMachine(t, client, admin, hsAdmin, denyMachineB.Ref,
+			filepath.Join(denyMachineB.StateDir, "bootstrap.json"))
+		opsRoomB := setupOpsRoomNoFC(t, admin, denyMachineB, ticketSvc, fleet)
+
+		t.Logf("FC-free ops rooms: %s (A), %s (B)", opsRoomA, opsRoomB)
+
+		wsRoomID := createReservationWorkspaceRoom(t, admin, fleet, ticketSvc, "denial-cascade")
+
+		opsWatchA := watchRoom(t, admin, opsRoomA)
+		opsWatchB := watchRoom(t, admin, opsRoomB)
+
+		// Create a ticket claiming both machines.
+		ticketID := publishMultiClaimResourceRequest(t, ticketClient, wsRoomID,
+			[]string{denyMachineA.Ref.Name(), denyMachineB.Ref.Name()}, 2, "10m")
+
+		// Relay tickets appear in both ops rooms.
+		relayTicketIDA, _ := waitForRelayTicket(t, &opsWatchA, denyMachineA.Ref.Name())
+		relayTicketIDB, _ := waitForRelayTicket(t, &opsWatchB, denyMachineB.Ref.Name())
+		t.Logf("relay tickets: %s (A), %s (B)", relayTicketIDA, relayTicketIDB)
+
+		// Deny claim B by closing its relay ticket directly. The admin
+		// has PL 100 and can write ticket state events. The ticket
+		// service sees this closure via /sync and triggers
+		// handleRelayTicketClosed → cascadeDenial (because the claim
+		// was never granted).
+		denialWatchA := watchRoom(t, admin, opsRoomA)
+		denialWatchWS := watchRoom(t, admin, wsRoomID)
+
+		denyContent := ticket.TicketContent{
+			Version:     1,
+			Title:       "denied",
+			Type:        ticket.TypeResourceRequest,
+			Status:      ticket.StatusClosed,
+			CloseReason: "resource unavailable",
+			ClosedAt:    "2026-01-01T00:00:00Z",
+			UpdatedAt:   "2026-01-01T00:00:00Z",
+		}
+		if _, err := admin.SendStateEvent(t.Context(), opsRoomB,
+			schema.EventTypeTicket, relayTicketIDB, denyContent); err != nil {
+			t.Fatalf("deny relay ticket in ops room B: %v", err)
+		}
+		t.Log("denied relay ticket in ops room B")
+
+		// Denial cascade: relay ticket in ops room A is closed.
+		cascadedContent := waitForTicketStatus(t, &denialWatchA, relayTicketIDA, ticket.StatusClosed)
+		if !containsSubstring(cascadedContent.CloseReason, "denial cascade") {
+			t.Errorf("cascaded relay close reason = %q, want containing 'denial cascade'",
+				cascadedContent.CloseReason)
+		}
+		t.Logf("cascaded relay ticket closed: %s", cascadedContent.CloseReason)
+
+		// Workspace ticket is closed with denial reason.
+		wsClosedContent := waitForTicketStatus(t, &denialWatchWS, ticketID, ticket.StatusClosed)
+		if !containsSubstring(wsClosedContent.CloseReason, "reservation denied") {
+			t.Errorf("workspace close reason = %q, want containing 'reservation denied'",
+				wsClosedContent.CloseReason)
+		}
+		t.Logf("workspace ticket closed: %s", wsClosedContent.CloseReason)
+	})
+
+	t.Run("RelayAuthRejection", func(t *testing.T) {
+		// A resource_request created in a room without a fleet-scoped
+		// alias cannot be relayed: the ticket service cannot determine
+		// which fleet to relay into. The ticket gets a failure note
+		// explaining why relay failed.
+		ctx := t.Context()
+
+		// Create a workspace room with NO fleet-scoped alias. The
+		// ticket service reads the canonical alias to extract fleet
+		// identity; without /fleet/ in the alias, relay fails.
+		room, err := admin.CreateRoom(ctx, messaging.CreateRoomRequest{
+			Name:  "Workspace: unscoped",
+			Alias: "workspace-no-fleet-scope",
+		})
+		if err != nil {
+			t.Fatalf("create non-fleet workspace room: %v", err)
+		}
+
+		// Enable tickets in this room (required for the create API).
+		enableTicketsInRoom(t, admin, room.RoomID, ticketSvc, "rsv",
+			[]ticket.TicketType{ticket.TypeResourceRequest})
+		wsWatch := watchRoom(t, admin, room.RoomID)
+		wsWatch.WaitForEvent(t, func(event messaging.Event) bool {
+			return event.Type == schema.EventTypeServiceReady &&
+				event.Sender == ticketSvc.Account.UserID
+		}, "ticket service ready in non-fleet room")
+
+		// Watch for ticket updates before creating.
+		noteWatch := watchRoom(t, admin, room.RoomID)
+
+		// Create a resource_request targeting the existing machine.
+		// Relay initiation will fail because the workspace room has
+		// no fleet-scoped alias.
+		ticketID := publishResourceRequest(t, ticketClient, room.RoomID,
+			machine.Ref.Name(), schema.ModeExclusive, 2, "10m")
+
+		// The ticket gets a failure note explaining the relay error.
+		noteContent := waitForTicketNote(t, &noteWatch, ticketID, "relay failed")
+		foundNote := false
+		for _, note := range noteContent.Notes {
+			if containsSubstring(note.Body, "relay failed") {
+				t.Logf("relay failure note: %s", note.Body)
+				foundNote = true
+				break
+			}
+		}
+		if !foundNote {
+			t.Error("expected failure note on ticket but none found")
+		}
 	})
 }

@@ -57,6 +57,18 @@ func Push(ctx context.Context, session messaging.Session, templateRef schema.Tem
 		return nil, fmt.Errorf("publishing template %q to room %q (%s): %w", templateRef.Template, roomAlias, roomID, err)
 	}
 
+	// Verify the published state event is readable. The Matrix spec
+	// guarantees read-after-write consistency for state events: once
+	// PUT returns 200, GET must return the current state. If this
+	// read-back fails, the homeserver has a linearizability bug. We
+	// surface it here rather than letting callers (principal creation,
+	// template inheritance verification) fail with a confusing
+	// "template not found" error far from the publish site.
+	if _, err := Fetch(ctx, session, templateRef, serverName); err != nil {
+		return nil, fmt.Errorf("template %q published (event_id=%s) but read-back failed — homeserver state inconsistency: %w",
+			templateRef.Template, eventID, err)
+	}
+
 	return &PushResult{
 		EventID:   eventID,
 		RoomID:    roomID,

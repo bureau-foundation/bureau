@@ -177,8 +177,9 @@ func (d *Daemon) hasCredentialAccess(
 	}
 
 	// Condition 3: actor IS the credential identity.
-	// The credential state key matches the actor's full user ID.
-	if actor.String() == credentialRef.StateKey {
+	// The credential state key matches the actor's user ID in state_key
+	// format (localpart:server, without the @ prefix).
+	if actor.StateKey() == credentialRef.StateKey {
 		return credentialAccessResult{
 			Allowed: true,
 			Reason:  "actor is credential identity",

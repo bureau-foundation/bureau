@@ -112,6 +112,33 @@ const (
 	// State key: profile name (e.g., "sysadmin-runner-env")
 	// Room: #<ns>/fleet/<name>:<server>
 	EventTypeEnvironmentBuild ref.EventType = "m.bureau.environment_build"
+
+	// EventTypeProvenanceRoots holds the cryptographic trust roots for
+	// provenance verification. Each named root set contains the Fulcio
+	// root certificate and Rekor public key needed to verify Sigstore
+	// bundles. Operators publish this during fleet setup; machines sync
+	// it and cache the roots locally for offline verification.
+	//
+	// Admin-only (PL 100): a compromised trust root is a complete
+	// supply chain compromise — the attacker can sign arbitrary
+	// artifacts that pass verification.
+	//
+	// State key: "" (singleton per fleet)
+	// Room: #<ns>/fleet/<name>:<server>
+	EventTypeProvenanceRoots ref.EventType = "m.bureau.provenance_roots"
+
+	// EventTypeProvenancePolicy defines which OIDC identities the
+	// fleet trusts and how strictly each artifact category enforces
+	// provenance verification. The daemon reads this via /sync and
+	// configures its provenance verifier accordingly.
+	//
+	// Admin-only (PL 100): a compromised policy could whitelist a
+	// malicious signer, allowing attacker-controlled binaries,
+	// models, or artifacts to pass verification.
+	//
+	// State key: "" (singleton per fleet)
+	// Room: #<ns>/fleet/<name>:<server>
+	EventTypeProvenancePolicy ref.EventType = "m.bureau.provenance_policy"
 )
 
 // MachineRoomPowerLevels returns the power level content for machine
@@ -209,6 +236,8 @@ func FleetRoomPowerLevels(adminUserID ref.UserID) map[string]any {
 		EventTypeFleetConfig,
 		EventTypeFleetCache,
 		EventTypeEnvironmentBuild,
+		EventTypeProvenanceRoots,
+		EventTypeProvenancePolicy,
 	} {
 		events[eventType] = 100
 	}
@@ -302,10 +331,127 @@ type EnvironmentBuildContent struct {
 	// "/nix/store/...-bureau-sysadmin-runner-env").
 	StorePath string `json:"store_path"`
 
-	// Machine is the fleet-scoped machine localpart that performed
-	// the build (e.g., "bureau/fleet/prod/machine/workstation").
-	Machine string `json:"machine"`
+	// Machine is the fleet-scoped machine that performed the build
+	// (e.g., "@bureau/fleet/prod/machine/workstation:bureau.local").
+	Machine ref.UserID `json:"machine"`
 
 	// Timestamp is the RFC 3339 build completion time.
 	Timestamp string `json:"timestamp"`
+}
+
+// ProvenanceRootsContent holds the cryptographic trust roots for
+// provenance verification. Each named root set contains the
+// certificates and public keys needed to verify Sigstore bundles
+// signed under that root. Multiple root sets coexist — for example,
+// "sigstore_public" for open-source dependencies signed via Sigstore's
+// public infrastructure and "fleet_private" for attestations signed
+// by a private Sigstore instance.
+//
+// See provenance.md for the full verification model.
+type ProvenanceRootsContent struct {
+	// Roots maps root set names to their trust anchors. Each
+	// TrustedIdentity in the provenance policy references a root set
+	// by name.
+	Roots map[string]ProvenanceTrustRoot `json:"roots"`
+}
+
+// ProvenanceTrustRoot is a set of trust anchors for verifying Sigstore
+// bundles. The Fulcio root certificate is the CA that issues short-lived
+// signing certificates from OIDC tokens. The Rekor public key verifies
+// transparency log inclusion proofs. Both are PEM-encoded.
+type ProvenanceTrustRoot struct {
+	// TUFRootVersion tracks which TUF (The Update Framework) snapshot
+	// these roots were extracted from, for roots sourced from
+	// Sigstore's public infrastructure. Zero for private instances
+	// where TUF is not used.
+	TUFRootVersion int `json:"tuf_root_version,omitempty"`
+
+	// FulcioRootPEM is the PEM-encoded X.509 root certificate for
+	// Sigstore's certificate authority. Signing certificates in
+	// provenance bundles must chain to this root.
+	FulcioRootPEM string `json:"fulcio_root_pem"`
+
+	// RekorPublicKeyPEM is the PEM-encoded public key for the
+	// transparency log. Inclusion proofs in provenance bundles are
+	// verified against this key.
+	RekorPublicKeyPEM string `json:"rekor_public_key_pem"`
+}
+
+// ProvenancePolicyContent defines which OIDC identities the fleet
+// trusts for provenance verification and how strictly each artifact
+// category enforces verification. The daemon reads this via /sync and
+// configures its provenance verifier.
+//
+// See provenance.md for the full policy model, enforcement categories,
+// and verification points.
+type ProvenancePolicyContent struct {
+	// TrustedIdentities lists the OIDC signers this fleet accepts.
+	// A provenance bundle is verified if its Fulcio certificate
+	// chains to the referenced trust root and its OIDC claims match
+	// at least one trusted identity's patterns.
+	TrustedIdentities []TrustedIdentity `json:"trusted_identities"`
+
+	// Enforcement maps artifact categories to enforcement levels.
+	// Well-known categories: "nix_store_paths", "artifacts",
+	// "models", "forge_artifacts", "templates". Missing categories
+	// default to EnforcementLog. Unrecognized categories are ignored
+	// (forward-compatible).
+	Enforcement map[string]EnforcementLevel `json:"enforcement"`
+}
+
+// TrustedIdentity defines an OIDC signer that the fleet accepts for
+// provenance verification. All pattern fields use glob matching.
+type TrustedIdentity struct {
+	// Name is a human-readable label for this identity (e.g.,
+	// "bureau-ci", "partner-models"). Appears in verification
+	// results and audit logs.
+	Name string `json:"name"`
+
+	// Roots references a named root set in ProvenanceRootsContent.
+	// The bundle's Fulcio certificate must chain to this root set
+	// for the identity to match.
+	Roots string `json:"roots"`
+
+	// Issuer is the expected OIDC issuer URL in the Fulcio
+	// certificate. For GitHub Actions:
+	// "https://token.actions.githubusercontent.com".
+	Issuer string `json:"issuer"`
+
+	// SubjectPattern is a glob matched against the OIDC subject
+	// claim in the Fulcio certificate. For GitHub Actions, the
+	// subject has the form "repo:<owner>/<repo>:ref:<ref>".
+	SubjectPattern string `json:"subject_pattern"`
+
+	// WorkflowPattern is an optional glob matched against the
+	// GitHub Actions workflow path claim. Empty means any workflow
+	// matches.
+	WorkflowPattern string `json:"workflow_pattern,omitempty"`
+}
+
+// EnforcementLevel controls how provenance verification results are
+// handled at each verification point.
+type EnforcementLevel string
+
+const (
+	// EnforcementRequire rejects artifacts that fail provenance
+	// verification or have no provenance bundle.
+	EnforcementRequire EnforcementLevel = "require"
+
+	// EnforcementWarn accepts unverified artifacts but publishes a
+	// warning event to the fleet room.
+	EnforcementWarn EnforcementLevel = "warn"
+
+	// EnforcementLog accepts unverified artifacts with a log entry
+	// only. No operator-visible warning.
+	EnforcementLog EnforcementLevel = "log"
+)
+
+// IsKnown reports whether the enforcement level is a recognized value.
+func (e EnforcementLevel) IsKnown() bool {
+	switch e {
+	case EnforcementRequire, EnforcementWarn, EnforcementLog:
+		return true
+	default:
+		return false
+	}
 }

@@ -45,6 +45,9 @@ subsystem.
   logging.
 - **[nix.md](nix.md)** — Build and distribution: Bazel compilation, Nix
   packaging, flake structure, binary cache, remote execution.
+- **[provenance.md](provenance.md)** — Supply chain verification:
+  Sigstore/OIDC attestation at ingestion boundaries, offline bundle
+  verification, trust roots, provenance policy, federation trust.
 
 ### Services
 

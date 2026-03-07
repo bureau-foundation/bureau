@@ -49,6 +49,27 @@ func (d *Daemon) syncServiceDirectory(ctx context.Context) (added, removed, upda
 			continue
 		}
 
+		// Service events are self-identifying: the service publishes
+		// about itself, so the sender's server must match the server
+		// in the state_key. Under federation, a malicious server could
+		// publish service events with state_keys that look like they
+		// belong to entities on our server, injecting fake routes into
+		// every sandbox's proxy configuration. Reject cross-server
+		// events to prevent this.
+		if !event.Sender.IsZero() {
+			stateKeyUserID, parseErr := ref.ParseUserIDFromStateKey(*event.StateKey)
+			if parseErr == nil && event.Sender.Server() != stateKeyUserID.Server() {
+				d.logger.Warn("rejecting cross-server service event: sender server does not match state_key server",
+					"event_type", event.Type,
+					"sender", event.Sender,
+					"sender_server", event.Sender.Server(),
+					"state_key", *event.StateKey,
+					"state_key_server", stateKeyUserID.Server(),
+				)
+				continue
+			}
+		}
+
 		// Re-marshal the map[string]any content to JSON, then unmarshal
 		// into the typed struct. This round-trip is the cleanest way to
 		// convert between the messaging library's generic Event and our

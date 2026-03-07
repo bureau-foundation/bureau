@@ -68,10 +68,13 @@ type mockRoomMember struct {
 
 // mockRoomStateEvent represents a single state event in a GetRoomState response.
 // The Content field uses map[string]any because that's what the messaging
-// library's Event type uses after JSON unmarshaling.
+// library's Event type uses after JSON unmarshaling. Sender is included so
+// tests can exercise federation safety checks (sender-server must match
+// state_key-server for self-identifying events).
 type mockRoomStateEvent struct {
 	Type     ref.EventType  `json:"type"`
 	StateKey *string        `json:"state_key"`
+	Sender   ref.UserID     `json:"sender,omitempty"`
 	Content  map[string]any `json:"content"`
 }
 

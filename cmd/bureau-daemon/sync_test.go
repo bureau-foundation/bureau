@@ -374,11 +374,16 @@ func TestProcessSyncResponse_PreReconcileServiceSync(t *testing.T) {
 	// Set up a service in the service room. This simulates a service
 	// that registered while the daemon was unconfigured — the event was
 	// in a /sync response that was suppressed.
-	serviceKey := "bureau/fleet/test/service/stt/whisper"
+	serviceKey := "bureau/fleet/test/service/stt/whisper:bureau.local"
+	serviceSender, err := ref.ParseUserID("@bureau/fleet/test/service/stt/whisper:bureau.local")
+	if err != nil {
+		t.Fatalf("parse service sender: %v", err)
+	}
 	matrixState.setRoomState(serviceRoomID, []mockRoomStateEvent{
 		{
 			Type:     schema.EventTypeService,
 			StateKey: &serviceKey,
+			Sender:   serviceSender,
 			Content: map[string]any{
 				"principal":   "@bureau/fleet/test/service/stt/whisper:bureau.local",
 				"machine":     "@bureau/fleet/test/machine/remote:bureau.local",
@@ -480,12 +485,17 @@ func TestProcessSyncResponse_ServicesRoom(t *testing.T) {
 	})
 
 	// Set up the service room with one service via GetRoomState.
-	// User IDs must be fleet-scoped to match the ref.Entity UnmarshalText parser.
-	serviceKey := "service/stt/whisper"
+	// State key uses the full localpart:server format (UserID without '@').
+	serviceKey := "bureau/fleet/test/service/stt/whisper:bureau.local"
+	serviceSender, err := ref.ParseUserID("@bureau/fleet/test/service/stt/whisper:bureau.local")
+	if err != nil {
+		t.Fatalf("parse service sender: %v", err)
+	}
 	matrixState.setRoomState(serviceRoomID, []mockRoomStateEvent{
 		{
 			Type:     schema.EventTypeService,
 			StateKey: &serviceKey,
+			Sender:   serviceSender,
 			Content: map[string]any{
 				"principal":   "@bureau/fleet/test/service/stt/whisper:bureau.local",
 				"machine":     "@bureau/fleet/test/machine/remote:bureau.local",
@@ -580,6 +590,238 @@ func TestProcessSyncResponse_ServicesRoom(t *testing.T) {
 		if service.Endpoints[key] != wantValue {
 			t.Errorf("service endpoint %q = %q, want %q", key, service.Endpoints[key], wantValue)
 		}
+	}
+}
+
+func TestSyncServiceDirectory_RejectsCrossServerServiceEvent(t *testing.T) {
+	t.Parallel()
+
+	machine, fleet := testMachineSetup(t, "test", "bureau.local")
+
+	matrixState := newMockMatrixState()
+	matrixServer := httptest.NewServer(matrixState.handler())
+	t.Cleanup(matrixServer.Close)
+
+	const configRoomID = "!config:test"
+	const machineRoomID = "!machine:test"
+	const serviceRoomID = "!service:test"
+
+	// Set up the service room with two services via GetRoomState:
+	// one legitimate (sender matches state_key server) and one
+	// spoofed (sender from evil.com, state_key on bureau.local).
+	legitimateKey := "bureau/fleet/test/service/stt/whisper:bureau.local"
+	spoofedKey := "bureau/fleet/test/service/stt/evil:bureau.local"
+
+	legitimateSender, err := ref.ParseUserID("@bureau/fleet/test/service/stt/whisper:bureau.local")
+	if err != nil {
+		t.Fatalf("parse legitimate sender: %v", err)
+	}
+	spoofedSender, err := ref.ParseUserID("@attacker:evil.com")
+	if err != nil {
+		t.Fatalf("parse spoofed sender: %v", err)
+	}
+
+	matrixState.setRoomState(serviceRoomID, []mockRoomStateEvent{
+		{
+			Type:     schema.EventTypeService,
+			StateKey: &legitimateKey,
+			Sender:   legitimateSender,
+			Content: map[string]any{
+				"principal":   "@bureau/fleet/test/service/stt/whisper:bureau.local",
+				"machine":     "@bureau/fleet/test/machine/gpu:bureau.local",
+				"endpoints":   map[string]any{"cbor": "service.sock"},
+				"description": "Legitimate service",
+			},
+		},
+		{
+			Type:     schema.EventTypeService,
+			StateKey: &spoofedKey,
+			Sender:   spoofedSender,
+			Content: map[string]any{
+				"principal":   "@bureau/fleet/test/service/stt/evil:bureau.local",
+				"machine":     "@bureau/fleet/test/machine/gpu:bureau.local",
+				"endpoints":   map[string]any{"cbor": "evil.sock"},
+				"description": "Spoofed service from federated attacker",
+			},
+		},
+	})
+
+	// Empty machine room state (no peers needed for this test).
+	matrixState.setRoomState(machineRoomID, nil)
+
+	matrixClient, err := messaging.NewClient(messaging.ClientConfig{
+		HomeserverURL: matrixServer.URL,
+	})
+	if err != nil {
+		t.Fatalf("NewClient: %v", err)
+	}
+	session, err := matrixClient.SessionFromToken(machine.UserID(), "syt_test_token")
+	if err != nil {
+		t.Fatalf("SessionFromToken: %v", err)
+	}
+	t.Cleanup(func() { session.Close() })
+
+	daemon, _ := newTestDaemon(t)
+	daemon.session = session
+	daemon.runDir = principal.DefaultRunDir
+	daemon.machine = machine
+	daemon.fleet = fleet
+	daemon.configRoomID = mustRoomID(configRoomID)
+	daemon.machineRoomID = mustRoomID(machineRoomID)
+	daemon.serviceRoomID = mustRoomID(serviceRoomID)
+	daemon.logger = slog.New(slog.NewJSONHandler(os.Stderr, nil))
+
+	added, _, _, syncErr := daemon.syncServiceDirectory(context.Background())
+	if syncErr != nil {
+		t.Fatalf("syncServiceDirectory: %v", syncErr)
+	}
+
+	// Only the legitimate service should be in the directory.
+	if len(daemon.services) != 1 {
+		t.Errorf("services count = %d, want 1 (spoofed service should be rejected)", len(daemon.services))
+		for key := range daemon.services {
+			t.Logf("  service: %q", key)
+		}
+	}
+
+	if _, ok := daemon.services[legitimateKey]; !ok {
+		t.Error("legitimate service not found in directory")
+	}
+	if _, ok := daemon.services[spoofedKey]; ok {
+		t.Error("spoofed service should have been rejected but was found in directory")
+	}
+
+	// Only the legitimate service should appear in the added list.
+	if len(added) != 1 {
+		t.Errorf("added count = %d, want 1", len(added))
+	}
+}
+
+func TestSyncServiceDirectory_AcceptsSameServerServiceEvent(t *testing.T) {
+	t.Parallel()
+
+	machine, _ := testMachineSetup(t, "test", "bureau.local")
+
+	matrixState := newMockMatrixState()
+	matrixServer := httptest.NewServer(matrixState.handler())
+	t.Cleanup(matrixServer.Close)
+
+	const serviceRoomID = "!service:test"
+	const machineRoomID = "!machine:test"
+
+	serviceKey := "bureau/fleet/test/service/ticket/main:bureau.local"
+	sender, err := ref.ParseUserID("@bureau/fleet/test/service/ticket/main:bureau.local")
+	if err != nil {
+		t.Fatalf("parse sender: %v", err)
+	}
+
+	matrixState.setRoomState(serviceRoomID, []mockRoomStateEvent{
+		{
+			Type:     schema.EventTypeService,
+			StateKey: &serviceKey,
+			Sender:   sender,
+			Content: map[string]any{
+				"principal":   "@bureau/fleet/test/service/ticket/main:bureau.local",
+				"machine":     "@bureau/fleet/test/machine/gpu:bureau.local",
+				"endpoints":   map[string]any{"cbor": "service.sock"},
+				"description": "Same-server service",
+			},
+		},
+	})
+
+	matrixState.setRoomState(machineRoomID, nil)
+
+	matrixClient, err := messaging.NewClient(messaging.ClientConfig{
+		HomeserverURL: matrixServer.URL,
+	})
+	if err != nil {
+		t.Fatalf("NewClient: %v", err)
+	}
+	session, err := matrixClient.SessionFromToken(machine.UserID(), "syt_test_token")
+	if err != nil {
+		t.Fatalf("SessionFromToken: %v", err)
+	}
+	t.Cleanup(func() { session.Close() })
+
+	daemon, _ := newTestDaemon(t)
+	daemon.session = session
+	daemon.serviceRoomID = mustRoomID(serviceRoomID)
+	daemon.machineRoomID = mustRoomID(machineRoomID)
+	daemon.machine = machine
+	daemon.logger = slog.New(slog.NewJSONHandler(os.Stderr, nil))
+
+	_, _, _, syncErr := daemon.syncServiceDirectory(context.Background())
+	if syncErr != nil {
+		t.Fatalf("syncServiceDirectory: %v", syncErr)
+	}
+
+	if len(daemon.services) != 1 {
+		t.Errorf("services count = %d, want 1", len(daemon.services))
+	}
+	if _, ok := daemon.services[serviceKey]; !ok {
+		t.Error("same-server service should be accepted but was not found")
+	}
+}
+
+func TestSyncServiceDirectory_ZeroSenderBypasses(t *testing.T) {
+	// When the sender is zero (e.g., events from the initial state
+	// section that lack sender information), the federation check
+	// should be skipped and the event accepted.
+	t.Parallel()
+
+	machine, _ := testMachineSetup(t, "test", "bureau.local")
+
+	matrixState := newMockMatrixState()
+	matrixServer := httptest.NewServer(matrixState.handler())
+	t.Cleanup(matrixServer.Close)
+
+	const serviceRoomID = "!service:test"
+	const machineRoomID = "!machine:test"
+
+	serviceKey := "bureau/fleet/test/service/artifact/cache:bureau.local"
+
+	// No sender field — zero value UserID.
+	matrixState.setRoomState(serviceRoomID, []mockRoomStateEvent{
+		{
+			Type:     schema.EventTypeService,
+			StateKey: &serviceKey,
+			Content: map[string]any{
+				"principal":   "@bureau/fleet/test/service/artifact/cache:bureau.local",
+				"machine":     "@bureau/fleet/test/machine/storage:bureau.local",
+				"endpoints":   map[string]any{"cbor": "service.sock"},
+				"description": "Service with no sender info",
+			},
+		},
+	})
+
+	matrixState.setRoomState(machineRoomID, nil)
+
+	matrixClient, err := messaging.NewClient(messaging.ClientConfig{
+		HomeserverURL: matrixServer.URL,
+	})
+	if err != nil {
+		t.Fatalf("NewClient: %v", err)
+	}
+	session, err := matrixClient.SessionFromToken(machine.UserID(), "syt_test_token")
+	if err != nil {
+		t.Fatalf("SessionFromToken: %v", err)
+	}
+	t.Cleanup(func() { session.Close() })
+
+	daemon, _ := newTestDaemon(t)
+	daemon.session = session
+	daemon.serviceRoomID = mustRoomID(serviceRoomID)
+	daemon.machineRoomID = mustRoomID(machineRoomID)
+	daemon.machine = machine
+	daemon.logger = slog.New(slog.NewJSONHandler(os.Stderr, nil))
+
+	_, _, _, syncErr := daemon.syncServiceDirectory(context.Background())
+	if syncErr != nil {
+		t.Fatalf("syncServiceDirectory: %v", syncErr)
+	}
+
+	if len(daemon.services) != 1 {
+		t.Errorf("services count = %d, want 1 (zero sender should bypass check)", len(daemon.services))
 	}
 }
 
@@ -977,12 +1219,17 @@ func TestInitialSync(t *testing.T) {
 		},
 	})
 
-	// Set up service room state.
-	serviceKey := "service/tts/piper"
+	// Set up service room state with proper localpart:server state key.
+	serviceKey := "bureau/fleet/test/service/tts/piper:bureau.local"
+	serviceSender, err := ref.ParseUserID("@bureau/fleet/test/service/tts/piper:bureau.local")
+	if err != nil {
+		t.Fatalf("parse service sender: %v", err)
+	}
 	matrixState.setRoomState(serviceRoomID, []mockRoomStateEvent{
 		{
 			Type:     schema.EventTypeService,
 			StateKey: &serviceKey,
+			Sender:   serviceSender,
 			Content: map[string]any{
 				"principal":   "@bureau/fleet/test/service/tts/piper:bureau.local",
 				"machine":     "@bureau/fleet/test/machine/peer:bureau.local",

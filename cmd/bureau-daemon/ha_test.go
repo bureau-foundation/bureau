@@ -268,7 +268,8 @@ func TestHAAcquisitionSingleDaemon(t *testing.T) {
 
 	daemon, matrixState := newHATestDaemon(t)
 
-	serviceStateKey := "@bureau/fleet/test/service/fleet/prod:bureau.local"
+	serviceUserID := ref.MustParseUserID("@bureau/fleet/test/service/fleet/prod:bureau.local")
+	serviceStateKey := serviceUserID.StateKey()
 
 	// Set up existing machine config (empty).
 	matrixState.setStateEvent(daemon.configRoomID.String(),
@@ -280,7 +281,7 @@ func TestHAAcquisitionSingleDaemon(t *testing.T) {
 		schema.EventTypeHALease, serviceStateKey,
 		fleet.HALeaseContent{
 			Holder:     ref.MustParseUserID("@bureau/fleet/test/machine/dead:bureau.local"),
-			Service:    ref.MustParseUserID(serviceStateKey),
+			Service:    serviceUserID,
 			AcquiredAt: "2026-01-01T10:00:00Z",
 			ExpiresAt:  "2026-01-01T10:03:00Z",
 		})
@@ -354,7 +355,7 @@ func TestHAAcquisitionSingleDaemon(t *testing.T) {
 	}
 	found := false
 	for _, principal := range config.Principals {
-		if principal.Principal.UserID().String() == serviceStateKey {
+		if principal.Principal.UserID().StateKey() == serviceStateKey {
 			found = true
 			if principal.Template != "bureau/template:fleet-controller" {
 				t.Errorf("principal template = %q, want %q",
@@ -404,7 +405,8 @@ func TestHAAcquisitionPreferredBias(t *testing.T) {
 
 	daemon, matrixState := newHATestDaemon(t)
 
-	serviceStateKey := "@bureau/fleet/test/service/fleet/prod:bureau.local"
+	serviceUserID := ref.MustParseUserID("@bureau/fleet/test/service/fleet/prod:bureau.local")
+	serviceStateKey := serviceUserID.StateKey()
 
 	matrixState.setStateEvent(daemon.configRoomID.String(),
 		schema.EventTypeMachineConfig, daemon.machine.UserID().StateKey(),
@@ -415,7 +417,7 @@ func TestHAAcquisitionPreferredBias(t *testing.T) {
 		schema.EventTypeHALease, serviceStateKey,
 		fleet.HALeaseContent{
 			Holder:     ref.MustParseUserID("@bureau/fleet/test/machine/dead:bureau.local"),
-			Service:    ref.MustParseUserID(serviceStateKey),
+			Service:    serviceUserID,
 			AcquiredAt: "2026-01-01T10:00:00Z",
 			ExpiresAt:  "2026-01-01T10:03:00Z",
 		})
@@ -480,7 +482,8 @@ func TestHAAcquisitionIneligible(t *testing.T) {
 
 	daemon, matrixState := newHATestDaemon(t)
 
-	serviceStateKey := "@bureau/fleet/test/service/fleet/prod:bureau.local"
+	serviceUserID := ref.MustParseUserID("@bureau/fleet/test/service/fleet/prod:bureau.local")
+	serviceStateKey := serviceUserID.StateKey()
 
 	// Set up fleet room with a critical service that requires GPU.
 	matrixState.setRoomState(daemon.fleetRoomID.String(), []mockRoomStateEvent{
@@ -502,7 +505,7 @@ func TestHAAcquisitionIneligible(t *testing.T) {
 			StateKey: &serviceStateKey,
 			Content: map[string]any{
 				"holder":      "@bureau/fleet/test/machine/dead:bureau.local",
-				"service":     serviceStateKey,
+				"service":     serviceUserID.String(),
 				"acquired_at": "2026-01-01T10:00:00Z",
 				"expires_at":  "2026-01-01T10:03:00Z",
 			},
@@ -553,14 +556,15 @@ func TestHALeaseRenewal(t *testing.T) {
 
 	daemon, matrixState := newHATestDaemon(t)
 
-	serviceStateKey := "@bureau/fleet/test/service/fleet/prod:bureau.local"
+	serviceUserID := ref.MustParseUserID("@bureau/fleet/test/service/fleet/prod:bureau.local")
+	serviceStateKey := serviceUserID.StateKey()
 	ttl := 3 * daemon.statusInterval // 180s with 60s interval
 
 	// Write initial lease.
 	now := daemon.clock.Now()
 	initialLease := fleet.HALeaseContent{
 		Holder:     daemon.machine.UserID(),
-		Service:    ref.MustParseUserID(serviceStateKey),
+		Service:    serviceUserID,
 		AcquiredAt: now.UTC().Format(time.RFC3339),
 		ExpiresAt:  now.Add(ttl).UTC().Format(time.RFC3339),
 	}
@@ -626,7 +630,8 @@ func TestHALeaseRelease(t *testing.T) {
 
 	daemon, matrixState := newHATestDaemon(t)
 
-	serviceStateKey := "@bureau/fleet/test/service/fleet/prod:bureau.local"
+	serviceUserID := ref.MustParseUserID("@bureau/fleet/test/service/fleet/prod:bureau.local")
+	serviceStateKey := serviceUserID.StateKey()
 
 	// Set up a stateEventWritten channel to track writes.
 	writeChannel := make(chan string, 10)
@@ -825,7 +830,8 @@ func TestHAEvaluate_HealthyLease(t *testing.T) {
 
 	daemon, matrixState := newHATestDaemon(t)
 
-	serviceStateKey := "@bureau/fleet/test/service/fleet/prod:bureau.local"
+	serviceUserID := ref.MustParseUserID("@bureau/fleet/test/service/fleet/prod:bureau.local")
+	serviceStateKey := serviceUserID.StateKey()
 	now := daemon.clock.Now()
 
 	// Set up a healthy lease (expires in the future).
@@ -846,7 +852,7 @@ func TestHAEvaluate_HealthyLease(t *testing.T) {
 			StateKey: &serviceStateKey,
 			Content: map[string]any{
 				"holder":      "@bureau/fleet/test/machine/healthy:bureau.local",
-				"service":     serviceStateKey,
+				"service":     serviceUserID.String(),
 				"acquired_at": now.Add(-1 * time.Minute).UTC().Format(time.RFC3339),
 				"expires_at":  now.Add(2 * time.Hour).UTC().Format(time.RFC3339),
 			},
@@ -880,7 +886,8 @@ func TestHAProcessSyncResponse_FleetRoom(t *testing.T) {
 
 	daemon, matrixState := newHATestDaemon(t)
 
-	serviceStateKey := "@bureau/fleet/test/service/fleet/prod:bureau.local"
+	serviceUserID := ref.MustParseUserID("@bureau/fleet/test/service/fleet/prod:bureau.local")
+	serviceStateKey := serviceUserID.StateKey()
 	now := daemon.clock.Now()
 
 	// Config room needs to be set up for reconcile.
@@ -907,7 +914,7 @@ func TestHAProcessSyncResponse_FleetRoom(t *testing.T) {
 			StateKey: &serviceStateKey,
 			Content: map[string]any{
 				"holder":      "@bureau/fleet/test/machine/healthy:bureau.local",
-				"service":     serviceStateKey,
+				"service":     serviceUserID.String(),
 				"acquired_at": now.Add(-1 * time.Minute).UTC().Format(time.RFC3339),
 				"expires_at":  now.Add(2 * time.Hour).UTC().Format(time.RFC3339),
 			},
@@ -960,9 +967,12 @@ func TestHAReleaseAllLeases(t *testing.T) {
 	_ = ctx1
 	_ = ctx2
 
+	prodServiceStateKey := ref.MustParseUserID("@bureau/fleet/test/service/fleet/prod:bureau.local").StateKey()
+	stagingServiceStateKey := ref.MustParseUserID("@bureau/fleet/test/service/fleet/staging:bureau.local").StateKey()
+
 	daemon.haWatchdog.mu.Lock()
-	daemon.haWatchdog.heldLeases["@bureau/fleet/test/service/fleet/prod:bureau.local"] = cancel1
-	daemon.haWatchdog.heldLeases["@bureau/fleet/test/service/fleet/staging:bureau.local"] = cancel2
+	daemon.haWatchdog.heldLeases[prodServiceStateKey] = cancel1
+	daemon.haWatchdog.heldLeases[stagingServiceStateKey] = cancel2
 	daemon.haWatchdog.mu.Unlock()
 
 	// Track writes.

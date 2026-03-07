@@ -591,7 +591,7 @@ func verifyFullDecommission(ctx context.Context, session messaging.Session, mach
 	}
 
 	for _, event := range events {
-		if event.StateKey == nil || *event.StateKey != machineUserID.String() {
+		if event.StateKey == nil || *event.StateKey != machineUserID.StateKey() {
 			continue
 		}
 		if event.Type != schema.EventTypeMachineKey && event.Type != schema.EventTypeMachineStatus {

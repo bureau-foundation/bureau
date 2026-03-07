@@ -149,6 +149,46 @@ func TestValidateTemplateContent(t *testing.T) {
 			wantSubstrings: []string{`roles["agent"]`},
 		},
 		{
+			name: "valid passthrough template",
+			content: &schema.TemplateContent{
+				Description: "Passthrough agent",
+				Isolation:   schema.IsolationModeNone,
+				Command:     []string{"/bin/bash"},
+			},
+			expectedIssues: 0,
+		},
+		{
+			name: "unknown isolation mode",
+			content: &schema.TemplateContent{
+				Description: "Bad isolation",
+				Isolation:   "fortified",
+				Command:     []string{"/bin/bash"},
+			},
+			expectedIssues: 1,
+			wantSubstrings: []string{"unknown isolation mode"},
+		},
+		{
+			name: "passthrough contradicts namespaces",
+			content: &schema.TemplateContent{
+				Description: "Contradiction",
+				Isolation:   schema.IsolationModeNone,
+				Command:     []string{"/bin/bash"},
+				Namespaces:  &schema.TemplateNamespaces{PID: true},
+			},
+			expectedIssues: 1,
+			wantSubstrings: []string{"contradicts namespace"},
+		},
+		{
+			name: "passthrough with all-false namespaces is valid",
+			content: &schema.TemplateContent{
+				Description: "Passthrough with explicit zero namespaces",
+				Isolation:   schema.IsolationModeNone,
+				Command:     []string{"/bin/bash"},
+				Namespaces:  &schema.TemplateNamespaces{},
+			},
+			expectedIssues: 0,
+		},
+		{
 			name: "multiple issues",
 			content: &schema.TemplateContent{
 				Filesystem: []schema.TemplateMount{

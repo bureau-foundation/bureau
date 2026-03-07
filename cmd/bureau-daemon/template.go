@@ -83,6 +83,7 @@ func resolveExtraInheritsWithAuthor(
 // environment, extra env vars, payload).
 func resolveInstanceConfig(template *schema.TemplateContent, assignment *schema.PrincipalAssignment) *schema.SandboxSpec {
 	spec := &schema.SandboxSpec{
+		Isolation:        template.Isolation,
 		Command:          template.Command,
 		Filesystem:       template.Filesystem,
 		Namespaces:       template.Namespaces,

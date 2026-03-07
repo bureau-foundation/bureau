@@ -27,6 +27,14 @@ package schema
 //   - Payload → JSON written to /run/bureau/payload.json inside sandbox
 //   - Roles → passed to tmux session creation for layout resolution
 type SandboxSpec struct {
+	// Isolation controls the degree of host isolation. Empty or
+	// "standard" uses the Namespaces configuration as-is. "none"
+	// provides full host access with a bind-mounted root filesystem
+	// while retaining Bureau infrastructure paths (/run/bureau/).
+	// See IsolationMode constants. Propagated from TemplateContent
+	// after template resolution.
+	Isolation IsolationMode `json:"isolation,omitempty"`
+
 	// Command is the entrypoint command and arguments to exec inside the
 	// sandbox. The first element is the executable path; subsequent
 	// elements are arguments. This is the final resolved command after

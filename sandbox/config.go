@@ -11,10 +11,17 @@ import (
 	"strings"
 )
 
+// IsolationNone is the value for Profile.Isolation that enables passthrough
+// mode: full host access via bind-mounted root, host /dev, no namespace
+// unsharing. bwrap still provides a mount namespace for consistent
+// /run/bureau/ paths.
+const IsolationNone = "none"
+
 // Profile defines the sandbox configuration for a particular role.
 type Profile struct {
 	Name        string            `yaml:"name"`
 	Description string            `yaml:"description"`
+	Isolation   string            `yaml:"isolation,omitempty"`
 	Inherit     string            `yaml:"inherit,omitempty"`
 	Filesystem  []Mount           `yaml:"filesystem,omitempty"`
 	Namespaces  NamespaceConfig   `yaml:"namespaces,omitempty"`
@@ -97,6 +104,7 @@ func (p *Profile) Clone() *Profile {
 	clone := &Profile{
 		Name:        p.Name,
 		Description: p.Description,
+		Isolation:   p.Isolation,
 		Inherit:     p.Inherit,
 		Namespaces:  p.Namespaces,
 		Resources:   p.Resources,
@@ -133,6 +141,9 @@ func MergeProfiles(parent, child *Profile) *Profile {
 
 	if child.Description != "" {
 		result.Description = child.Description
+	}
+	if child.Isolation != "" {
+		result.Isolation = child.Isolation
 	}
 
 	// Filesystem: child completely replaces matching dest paths, adds new ones.

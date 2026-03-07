@@ -376,6 +376,10 @@ state events (`m.bureau.template`) published to template rooms (e.g.,
 
 A template specifies:
 
+- **Isolation**: sandbox isolation level — `"standard"` (default:
+  template-controlled namespace isolation) or `"none"` (passthrough:
+  full host access, no namespace unsharing, host /dev, bind-mounted
+  root). See fundamentals.md for details.
 - **Command**: the entrypoint command and arguments
 - **Environment**: Nix store path providing the execution environment
 - **EnvironmentVariables**: key-value pairs with `${VAR}` expansion

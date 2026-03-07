@@ -12,7 +12,8 @@ func TestSandboxSpecRoundTrip(t *testing.T) {
 	t.Parallel()
 
 	original := SandboxSpec{
-		Command: []string{"/usr/local/bin/claude", "--agent", "--no-tty"},
+		Isolation: IsolationModeNone,
+		Command:   []string{"/usr/local/bin/claude", "--agent", "--no-tty"},
 		Filesystem: []TemplateMount{
 			{Source: "/home/agent/worktree", Dest: "/workspace", Mode: MountModeRW},
 			{Type: "tmpfs", Dest: "/tmp", Options: "size=64M"},
@@ -80,6 +81,7 @@ func TestSandboxSpecRoundTrip(t *testing.T) {
 		t.Errorf("command = %v, want [/usr/local/bin/claude --agent --no-tty]", command)
 	}
 
+	assertField(t, raw, "isolation", "none")
 	assertField(t, raw, "environment_path", "/nix/store/abc123-bureau-agent-env")
 
 	// Verify filesystem structure.
@@ -124,6 +126,9 @@ func TestSandboxSpecRoundTrip(t *testing.T) {
 		t.Fatalf("Unmarshal: %v", err)
 	}
 
+	if decoded.Isolation != IsolationModeNone {
+		t.Errorf("Isolation: got %q, want %q", decoded.Isolation, IsolationModeNone)
+	}
 	if len(decoded.Command) != 3 || decoded.Command[0] != "/usr/local/bin/claude" {
 		t.Errorf("Command: got %v, want [/usr/local/bin/claude --agent --no-tty]", decoded.Command)
 	}
@@ -192,7 +197,7 @@ func TestSandboxSpecOmitsEmptyFields(t *testing.T) {
 	}
 
 	omittedFields := []string{
-		"filesystem", "namespaces", "resources", "security",
+		"isolation", "filesystem", "namespaces", "resources", "security",
 		"environment_variables", "environment_path",
 		"payload", "roles", "create_dirs", "proxy_services",
 	}

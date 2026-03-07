@@ -125,6 +125,22 @@ func validateTemplateContent(content *schema.TemplateContent) []string {
 		issues = append(issues, "description is empty (every template should have a human-readable description)")
 	}
 
+	// Validate isolation mode.
+	if content.Isolation != "" && !content.Isolation.IsKnown() {
+		issues = append(issues, fmt.Sprintf("unknown isolation mode %q (expected %q or %q)",
+			content.Isolation, schema.IsolationModeStandard, schema.IsolationModeNone))
+	}
+
+	// Cross-validate isolation with namespaces: passthrough mode
+	// contradicts namespace unsharing.
+	if content.Isolation == schema.IsolationModeNone && content.Namespaces != nil {
+		ns := content.Namespaces
+		if ns.PID || ns.Net || ns.IPC || ns.UTS {
+			issues = append(issues, "isolation \"none\" contradicts namespace configuration: "+
+				"passthrough mode does not unshare any namespaces, but namespaces are configured")
+		}
+	}
+
 	// If this template doesn't inherit, it should define enough to be usable.
 	if len(content.Inherits) == 0 {
 		if len(content.Command) == 0 {

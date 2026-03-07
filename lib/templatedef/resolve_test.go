@@ -610,6 +610,43 @@ func TestMergeScalarOverride(t *testing.T) {
 	}
 }
 
+func TestMergeIsolationOverride(t *testing.T) {
+	t.Parallel()
+
+	parent := &schema.TemplateContent{
+		Isolation: schema.IsolationModeStandard,
+		Command:   []string{"/bin/parent"},
+	}
+	child := &schema.TemplateContent{
+		Isolation: schema.IsolationModeNone,
+	}
+
+	result := Merge(parent, child)
+
+	if result.Isolation != schema.IsolationModeNone {
+		t.Errorf("Isolation = %q, want child override %q", result.Isolation, schema.IsolationModeNone)
+	}
+}
+
+func TestMergeIsolationInheritFromParent(t *testing.T) {
+	t.Parallel()
+
+	parent := &schema.TemplateContent{
+		Isolation: schema.IsolationModeNone,
+		Command:   []string{"/bin/parent"},
+	}
+	child := &schema.TemplateContent{
+		// Isolation empty: should inherit from parent.
+		Command: []string{"/bin/child"},
+	}
+
+	result := Merge(parent, child)
+
+	if result.Isolation != schema.IsolationModeNone {
+		t.Errorf("Isolation = %q, want parent value %q", result.Isolation, schema.IsolationModeNone)
+	}
+}
+
 func TestMergePointerOverride(t *testing.T) {
 	t.Parallel()
 

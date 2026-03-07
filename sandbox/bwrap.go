@@ -68,14 +68,48 @@ func (b *BwrapBuilder) Build(opts *BwrapOptions) ([]string, error) {
 	b.args = []string{}
 	b.env = make(map[string]string)
 
-	// Add namespace options.
-	b.addNamespaces(opts.Profile.Namespaces)
+	passthrough := opts.Profile.Isolation == IsolationNone
 
-	// Add security options.
+	if passthrough {
+		// Passthrough mode: no namespace unsharing. Validate that the
+		// profile does not also request namespace isolation — that is
+		// a contradictory configuration.
+		ns := opts.Profile.Namespaces
+		if ns.PID || ns.Net || ns.IPC || ns.UTS || ns.Cgroup || ns.User {
+			return nil, fmt.Errorf("isolation %q contradicts namespace configuration: "+
+				"PID=%v Net=%v IPC=%v UTS=%v Cgroup=%v User=%v",
+				IsolationNone, ns.PID, ns.Net, ns.IPC, ns.UTS, ns.Cgroup, ns.User)
+		}
+	} else {
+		// Standard mode: apply namespace options from profile.
+		b.addNamespaces(opts.Profile.Namespaces)
+	}
+
+	// Security options apply in both modes: die-with-parent prevents
+	// orphaned processes, new-session prevents signal leaks.
 	b.addSecurity(opts.Profile.Security)
 
-	// Add /proc and /dev.
-	b.addBaseMounts()
+	if passthrough {
+		// Bind the entire host root filesystem read-write. This is
+		// the base layer; subsequent profile mounts and Bureau
+		// infrastructure mounts overlay specific paths on top. bwrap
+		// processes mounts in order, so later mounts win at their
+		// specific destinations.
+		b.args = append(b.args, "--bind", "/", "/")
+
+		// Use host /dev via dev-bind instead of synthetic /dev. The
+		// synthetic --dev only provides null, zero, urandom;
+		// passthrough needs full host device access (perf event fds,
+		// /dev/dri, /dev/kvm, etc.).
+		b.args = append(b.args, "--dev-bind", "/dev", "/dev")
+
+		// /proc is the same in both modes when PID namespace is not
+		// unshared — mounting a fresh procfs gives the same view.
+		b.args = append(b.args, "--proc", "/proc")
+	} else {
+		// Standard mode: synthetic /proc and minimal /dev.
+		b.addBaseMounts()
+	}
 
 	// Add filesystem mounts from profile.
 	if err := b.addProfileMounts(opts.Profile, opts.OverlayMerged); err != nil {

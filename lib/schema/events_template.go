@@ -61,6 +61,56 @@ func (m MountMode) IsKnown() bool {
 	return false
 }
 
+// IsolationMode controls the degree of host isolation enforced by bwrap.
+type IsolationMode string
+
+const (
+	// IsolationModeStandard uses the template's namespace configuration
+	// to determine which Linux namespaces are unshared. This is the
+	// effective default when Isolation is empty — the sandbox respects
+	// whatever the template (and its inheritance chain) specifies for
+	// Namespaces, Security, and Filesystem.
+	IsolationModeStandard IsolationMode = "standard"
+
+	// IsolationModeNone provides full host access while retaining
+	// Bureau infrastructure (proxy socket, service sockets, observation
+	// relay, Matrix identity, lifecycle management). bwrap still creates
+	// a mount namespace for consistent /run/bureau/ paths, but:
+	//   - The host root is bind-mounted at / (read-write)
+	//   - Host /dev is device-bind-mounted (not synthetic)
+	//   - No Linux namespaces are unshared
+	//
+	// Use cases: performance profiling with host perf_event access,
+	// bootstrapping tasks that need host-level tooling, machine-scoped
+	// infrastructure agents.
+	//
+	// This mode provides NO security isolation. The sandboxed process
+	// has the same access as the user running the launcher. Do not use
+	// for untrusted code.
+	IsolationModeNone IsolationMode = "none"
+)
+
+// IsKnown reports whether m is one of the defined IsolationMode values.
+// The zero value ("") is treated as IsolationModeStandard at runtime
+// but is not itself a defined constant — callers should check for ""
+// separately or normalize via Effective().
+func (m IsolationMode) IsKnown() bool {
+	switch m {
+	case IsolationModeStandard, IsolationModeNone:
+		return true
+	}
+	return false
+}
+
+// Effective returns the IsolationMode that the runtime should use.
+// The zero value is normalized to IsolationModeStandard.
+func (m IsolationMode) Effective() IsolationMode {
+	if m == "" {
+		return IsolationModeStandard
+	}
+	return m
+}
+
 // PrincipalAssignment defines a single principal that should run on a machine.
 type PrincipalAssignment struct {
 	// Principal identifies this principal as a fleet-scoped entity reference.
@@ -349,6 +399,17 @@ type TemplateContent struct {
 	// Description is a human-readable summary of what this template
 	// provides (e.g., "GPU-accelerated LLM agent with IREE runtime").
 	Description string `json:"description,omitempty"`
+
+	// Isolation controls the degree of host isolation for sandboxes
+	// created from this template. Empty or "standard" uses the
+	// template's namespace configuration as-is. "none" provides full
+	// host access (bind-mounted root, host /dev, no namespace
+	// unsharing) while retaining Bureau infrastructure paths. See
+	// IsolationMode constants.
+	//
+	// During template inheritance, Isolation follows scalar merge
+	// semantics: child replaces parent if non-empty.
+	Isolation IsolationMode `json:"isolation,omitempty"`
 
 	// Inherits is an ordered list of parent template references. The
 	// daemon resolves each parent independently and merges left-to-right:

@@ -27,6 +27,11 @@ import (
 func specToProfile(spec *schema.SandboxSpec, proxySocketPath string) *sandbox.Profile {
 	profile := &sandbox.Profile{}
 
+	// Propagate isolation mode. The BwrapBuilder uses this to decide
+	// whether to inject --bind / / and --dev-bind /dev /dev (passthrough)
+	// or use the standard addBaseMounts / addNamespaces path.
+	profile.Isolation = string(spec.Isolation)
+
 	// Convert filesystem mounts.
 	for _, mount := range spec.Filesystem {
 		profile.Filesystem = append(profile.Filesystem, sandbox.Mount{

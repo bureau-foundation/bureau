@@ -238,6 +238,110 @@ func TestSplitBindSpec(t *testing.T) {
 	}
 }
 
+func TestBwrapBuilderPassthrough(t *testing.T) {
+	t.Parallel()
+
+	profile := &Profile{
+		Name:      "passthrough",
+		Isolation: IsolationNone,
+		Filesystem: []Mount{
+			{Source: "/workspace", Dest: "/workspace", Mode: "rw"},
+		},
+		Security: SecurityConfig{
+			DieWithParent: true,
+		},
+		Environment: map[string]string{
+			"PATH": "/usr/bin",
+		},
+	}
+
+	builder := NewBwrapBuilder()
+	args, err := builder.Build(&BwrapOptions{
+		Profile:  profile,
+		Command:  []string{"/bin/bash"},
+		ClearEnv: true,
+	})
+	if err != nil {
+		t.Fatalf("Build failed: %v", err)
+	}
+
+	argStr := strings.Join(args, " ")
+
+	// Must NOT have any --unshare-* flags.
+	if strings.Contains(argStr, "--unshare-") {
+		t.Errorf("passthrough mode should not have --unshare flags, got: %s", argStr)
+	}
+
+	// Must have --bind / / as the host root mount.
+	if !strings.Contains(argStr, "--bind / /") {
+		t.Error("passthrough mode should have --bind / /")
+	}
+
+	// Must have --dev-bind /dev /dev (host devices, not synthetic).
+	if !strings.Contains(argStr, "--dev-bind /dev /dev") {
+		t.Error("passthrough mode should have --dev-bind /dev /dev")
+	}
+
+	// Must NOT have --dev /dev (synthetic minimal devtmpfs).
+	// Check for the exact standalone token to avoid false match with
+	// --dev-bind.
+	for i, arg := range args {
+		if arg == "--dev" && i+1 < len(args) && args[i+1] == "/dev" {
+			t.Error("passthrough mode should not have --dev /dev (synthetic)")
+			break
+		}
+	}
+
+	// Must still have --proc /proc.
+	if !strings.Contains(argStr, "--proc /proc") {
+		t.Error("passthrough mode should have --proc /proc")
+	}
+
+	// Must still have --die-with-parent.
+	if !strings.Contains(argStr, "--die-with-parent") {
+		t.Error("passthrough mode should still have --die-with-parent")
+	}
+
+	// Must still have --clearenv.
+	if !strings.Contains(argStr, "--clearenv") {
+		t.Error("passthrough mode should still have --clearenv")
+	}
+
+	// Profile mounts should still be present (overlaid on root bind).
+	if !strings.Contains(argStr, "--bind /workspace /workspace") {
+		t.Error("passthrough mode should still have profile mounts")
+	}
+
+	// Command should be present.
+	if !strings.Contains(argStr, "-- /bin/bash") {
+		t.Error("missing command")
+	}
+}
+
+func TestBwrapBuilderPassthroughRejectsNamespaces(t *testing.T) {
+	t.Parallel()
+
+	profile := &Profile{
+		Name:      "conflict",
+		Isolation: IsolationNone,
+		Namespaces: NamespaceConfig{
+			PID: true,
+		},
+	}
+
+	builder := NewBwrapBuilder()
+	_, err := builder.Build(&BwrapOptions{
+		Profile: profile,
+		Command: []string{"/bin/bash"},
+	})
+	if err == nil {
+		t.Fatal("expected error for passthrough + namespace isolation")
+	}
+	if !strings.Contains(err.Error(), "contradicts") {
+		t.Errorf("error should mention contradiction, got: %v", err)
+	}
+}
+
 func TestPathHierarchy(t *testing.T) {
 	tests := []struct {
 		input    string

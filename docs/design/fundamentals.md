@@ -250,6 +250,34 @@ The sandbox filesystem is the entire Bureau API surface. No SDK is
 required. Any process that can read a file and open a socket is a
 Bureau principal.
 
+#### Passthrough mode
+
+Templates can set `isolation: "none"` to disable namespace isolation
+while retaining Bureau infrastructure. bwrap still creates a mount
+namespace (so the `/run/bureau/` layout is consistent), but the host
+root filesystem is bind-mounted read-write, host `/dev` is
+device-bind-mounted (not synthetic), and no Linux namespaces are
+unshared.
+
+A passthrough sandbox is a Bureau principal with full host access: it
+can see host processes, use host networking, access host devices
+(perf events, GPUs, KVM), and read/write the host filesystem — while
+still appearing in the observation dashboard, having a Matrix identity,
+receiving service sockets, and being lifecycle-managed by the daemon.
+
+Use cases:
+
+- Performance profiling agents that need `perf_event_open` and
+  `/proc` access
+- Bootstrapping agents that set up Bureau infrastructure
+- Machine-scoped infrastructure agents (monitoring, maintenance)
+- Running agent runtimes like Claude Code that need host-level
+  tooling access
+
+Passthrough mode provides NO security isolation. The sandboxed process
+has the same access as the user running the launcher. It is not
+appropriate for untrusted code.
+
 ### Proxy
 
 The proxy is the only path from inside a sandbox to the outside world.

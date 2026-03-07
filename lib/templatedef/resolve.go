@@ -281,6 +281,9 @@ func Merge(parent, child *schema.TemplateContent) schema.TemplateContent {
 	if child.Description != "" {
 		result.Description = child.Description
 	}
+	if child.Isolation != "" {
+		result.Isolation = child.Isolation
+	}
 	if len(child.Command) > 0 {
 		result.Command = child.Command
 	}

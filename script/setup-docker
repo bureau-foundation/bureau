@@ -1,0 +1,145 @@
+#!/usr/bin/env bash
+# Copyright 2026 The Bureau Authors
+# SPDX-License-Identifier: Apache-2.0
+#
+# Configure Docker daemon for Bureau development and testing.
+#
+# Bureau integration tests spin up Docker Compose stacks (one per test
+# run). Under parallel execution (--runs_per_test=N), multiple stacks
+# run simultaneously, each requiring its own bridge network. Docker's
+# default address pool allocates /20 subnets from a small range,
+# exhausting after ~15 networks. Bureau's test networks need only 2
+# addresses (gateway + homeserver container), so we configure /28
+# subnets from the 172.16.0.0/12 range, supporting 65k+ networks.
+#
+# Usage:
+#   script/setup-docker [--check] [--force]
+#
+# Options:
+#   --check   Verify the configuration is correct, exit 0/1
+#   --force   Overwrite existing daemon.json even if it has custom settings
+#   --help    Show this help
+#
+# Requires sudo for writing /etc/docker/daemon.json and restarting dockerd.
+
+set -euo pipefail
+
+SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+REPO_ROOT="$(cd "$SCRIPT_DIR/.." && pwd)"
+SOURCE_CONFIG="$REPO_ROOT/deploy/docker/daemon.json"
+TARGET_CONFIG="/etc/docker/daemon.json"
+
+CHECK_ONLY=false
+FORCE=false
+
+usage() {
+    sed -n '/^# Usage:/,/^[^#]/p' "$0" | sed 's/^# \?//' | head -n -1
+    exit "${1:-0}"
+}
+
+while [[ $# -gt 0 ]]; do
+    case "$1" in
+        --check)
+            CHECK_ONLY=true
+            shift
+            ;;
+        --force)
+            FORCE=true
+            shift
+            ;;
+        --help|-h)
+            usage 0
+            ;;
+        *)
+            echo "Unknown option: $1" >&2
+            usage 1
+            ;;
+    esac
+done
+
+# Verify the source config exists.
+if [ ! -f "$SOURCE_CONFIG" ]; then
+    echo "Error: source config not found at $SOURCE_CONFIG" >&2
+    exit 1
+fi
+
+# Check mode: verify daemon.json contains the address pool config.
+check_config() {
+    if [ ! -f "$TARGET_CONFIG" ]; then
+        return 1
+    fi
+    # Verify the file contains a default-address-pools entry with our
+    # base range. jq exits non-zero if the path doesn't exist or the
+    # value doesn't match.
+    if command -v jq &>/dev/null; then
+        jq -e '.["default-address-pools"][]? | select(.base == "172.16.0.0/12" and .size == 28)' \
+            "$TARGET_CONFIG" >/dev/null 2>&1
+    else
+        grep -q '"172.16.0.0/12"' "$TARGET_CONFIG" 2>/dev/null
+    fi
+}
+
+if [ "$CHECK_ONLY" = true ]; then
+    if check_config; then
+        echo "Docker daemon configured correctly."
+        exit 0
+    else
+        echo "Docker daemon not configured for Bureau."
+        echo "  Run: script/setup-docker"
+        exit 1
+    fi
+fi
+
+# Already configured?
+if [ "$FORCE" = false ] && check_config; then
+    echo "Docker daemon already configured correctly."
+    exit 0
+fi
+
+# Check for existing daemon.json with custom settings.
+if [ -f "$TARGET_CONFIG" ] && [ "$FORCE" = false ]; then
+    echo "Existing $TARGET_CONFIG found."
+    echo ""
+    echo "Current contents:"
+    cat "$TARGET_CONFIG"
+    echo ""
+    echo "Bureau needs to add default-address-pools. Options:"
+    echo "  1. Run with --force to overwrite (backs up existing file)"
+    echo "  2. Manually merge deploy/docker/daemon.json into $TARGET_CONFIG"
+    exit 1
+fi
+
+# Back up existing config if present.
+if [ -f "$TARGET_CONFIG" ]; then
+    BACKUP="${TARGET_CONFIG}.backup.$(date +%Y%m%d%H%M%S)"
+    echo "Backing up existing config to $BACKUP"
+    sudo cp "$TARGET_CONFIG" "$BACKUP"
+fi
+
+# Install the config.
+echo "Installing $TARGET_CONFIG..."
+sudo mkdir -p /etc/docker
+sudo cp "$SOURCE_CONFIG" "$TARGET_CONFIG"
+
+# Restart Docker daemon to pick up the new config.
+echo "Restarting Docker daemon..."
+sudo systemctl restart docker
+
+# Wait for Docker to come back.
+echo -n "Waiting for Docker"
+for _ in $(seq 1 30); do
+    if docker info &>/dev/null 2>&1; then
+        echo " ready."
+        echo ""
+        echo "Docker configured for Bureau development."
+        echo "  Address pool: 172.16.0.0/12 with /28 subnets (65k+ networks)"
+        exit 0
+    fi
+    echo -n "."
+    sleep 1
+done
+
+echo " timed out."
+echo "Error: Docker did not restart within 30 seconds." >&2
+echo "  Check: systemctl status docker" >&2
+exit 1

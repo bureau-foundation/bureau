@@ -100,6 +100,15 @@ if ! docker info &>/dev/null 2>&1; then
     exit 1
 fi
 
+# Verify Docker address pool configuration. Without this, parallel
+# integration test runs exhaust the default network pool.
+if ! "$SCRIPT_DIR/setup-docker" --check &>/dev/null; then
+    echo "Warning: Docker not configured for Bureau (address pool too small)." >&2
+    echo "  Run: script/setup-docker" >&2
+    echo "  See: deploy/docker/daemon.json" >&2
+    echo "" >&2
+fi
+
 # Create directories.
 mkdir -p "$STATE_DIR" "$WORKSPACE_DIR" "$CACHE_DIR" "$LOG_DIR" "$RUN_DIR"
 

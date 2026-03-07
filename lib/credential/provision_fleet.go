@@ -146,13 +146,13 @@ func FleetProvision(ctx context.Context, session messaging.Session, params Fleet
 	encryptedFor := make([]string, 0, len(machineKeys)+1)
 
 	// Sort by machine state_key for deterministic recipient ordering.
-	machineLocalparts := make([]string, 0, len(machineKeys))
+	machineStateKeys := make([]string, 0, len(machineKeys))
 	for stateKey := range machineKeys {
-		machineLocalparts = append(machineLocalparts, stateKey)
+		machineStateKeys = append(machineStateKeys, stateKey)
 	}
-	sort.Strings(machineLocalparts)
+	sort.Strings(machineStateKeys)
 
-	for _, stateKey := range machineLocalparts {
+	for _, stateKey := range machineStateKeys {
 		key := machineKeys[stateKey]
 		recipientKeys = append(recipientKeys, key.PublicKey)
 		// Parse the state_key (localpart:server) back to a machine ref
@@ -205,9 +205,17 @@ func FleetProvision(ctx context.Context, session messaging.Session, params Fleet
 }
 
 // enumerateMachineKeys reads all m.bureau.machine_key state events from
-// a fleet's machine room and returns a map from machine localpart to
-// MachineKey. Machines with empty public keys (decommissioned) or
-// unsupported algorithms are skipped.
+// a fleet's machine room and returns a map from state_key to MachineKey.
+// Machines with empty public keys (decommissioned), unsupported
+// algorithms, or cross-server senders are skipped.
+//
+// Machine key events are self-identifying: the machine publishes its
+// own public key. Under federation, a malicious server could publish a
+// machine_key event with a state_key claiming to be a machine on our
+// server, injecting the attacker's public key. Credentials encrypted to
+// that key would be decryptable by the attacker. Sender-server
+// validation prevents this by rejecting events where the sender's
+// homeserver differs from the server encoded in the state_key.
 func enumerateMachineKeys(ctx context.Context, session messaging.Session, machineRoomID ref.RoomID) (map[string]schema.MachineKey, error) {
 	events, err := session.GetRoomState(ctx, machineRoomID)
 	if err != nil {
@@ -218,6 +226,18 @@ func enumerateMachineKeys(ctx context.Context, session messaging.Session, machin
 	for _, event := range events {
 		if event.Type != schema.EventTypeMachineKey || event.StateKey == nil {
 			continue
+		}
+
+		// Federation safety: machine_key events are self-identifying
+		// (the machine publishes its own key). Reject events where the
+		// sender's server doesn't match the state_key's server to
+		// prevent a federated attacker from injecting a public key
+		// that they control.
+		if !event.Sender.IsZero() {
+			stateKeyUserID, parseErr := ref.ParseUserIDFromStateKey(*event.StateKey)
+			if parseErr == nil && event.Sender.Server() != stateKeyUserID.Server() {
+				continue
+			}
 		}
 
 		// Re-marshal the content map to JSON for type-safe deserialization.

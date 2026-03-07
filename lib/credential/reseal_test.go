@@ -230,9 +230,11 @@ func TestReseal_HappyPath_AddMachine(t *testing.T) {
 		},
 		// GetRoomState returns both machines.
 		getRoomState: func(_ context.Context, _ ref.RoomID) ([]messaging.Event, error) {
+			alphaSender := ref.MustParseUserID("@my_bureau/fleet/prod/machine/alpha:bureau.local")
+			betaSender := ref.MustParseUserID("@my_bureau/fleet/prod/machine/beta:bureau.local")
 			return []messaging.Event{
-				makeMachineKeyEvent("my_bureau/fleet/prod/machine/alpha:bureau.local", "age-x25519", machineKeypairA.PublicKey),
-				makeMachineKeyEvent("my_bureau/fleet/prod/machine/beta:bureau.local", "age-x25519", machineKeypairB.PublicKey),
+				makeMachineKeyEvent("my_bureau/fleet/prod/machine/alpha:bureau.local", alphaSender, "age-x25519", machineKeypairA.PublicKey),
+				makeMachineKeyEvent("my_bureau/fleet/prod/machine/beta:bureau.local", betaSender, "age-x25519", machineKeypairB.PublicKey),
 			}, nil
 		},
 		sendStateEvent: func(_ context.Context, _ ref.RoomID, _ ref.EventType, _ string, content any) (ref.EventID, error) {
@@ -357,10 +359,12 @@ func TestReseal_HappyPath_RemoveMachine(t *testing.T) {
 		},
 		// Only machine A remains in the fleet (B was decommissioned).
 		getRoomState: func(_ context.Context, _ ref.RoomID) ([]messaging.Event, error) {
+			alphaSender := ref.MustParseUserID("@my_bureau/fleet/prod/machine/alpha:bureau.local")
+			betaSender := ref.MustParseUserID("@my_bureau/fleet/prod/machine/beta:bureau.local")
 			return []messaging.Event{
-				makeMachineKeyEvent("my_bureau/fleet/prod/machine/alpha:bureau.local", "age-x25519", machineKeypairA.PublicKey),
+				makeMachineKeyEvent("my_bureau/fleet/prod/machine/alpha:bureau.local", alphaSender, "age-x25519", machineKeypairA.PublicKey),
 				// Machine B has empty key (decommissioned).
-				makeMachineKeyEvent("my_bureau/fleet/prod/machine/beta:bureau.local", "age-x25519", ""),
+				makeMachineKeyEvent("my_bureau/fleet/prod/machine/beta:bureau.local", betaSender, "age-x25519", ""),
 			}, nil
 		},
 		sendStateEvent: func(_ context.Context, _ ref.RoomID, _ ref.EventType, _ string, content any) (ref.EventID, error) {

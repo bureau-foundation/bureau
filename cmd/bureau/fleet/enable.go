@@ -411,17 +411,25 @@ func publishFleetBindings(ctx context.Context, session messaging.Session, fleet 
 			continue
 		}
 
-		// The state key is a machine localpart (fleet-scoped or legacy).
-		// Extract the bare machine name and construct a typed ref within
-		// this fleet so we can derive the config room alias.
-		machineName, extractErr := extractMachineName(*event.StateKey)
-		if extractErr != nil {
-			logger.Warn("cannot parse machine state key", "state_key", *event.StateKey, "error", extractErr)
-			continue
+		// Federation safety: machine_key events are self-identifying
+		// (the machine publishes its own key). Reject events where the
+		// sender's server doesn't match the state_key's server.
+		if !event.Sender.IsZero() {
+			stateKeyUserID, parseErr := ref.ParseUserIDFromStateKey(*event.StateKey)
+			if parseErr == nil && event.Sender.Server() != stateKeyUserID.Server() {
+				logger.Warn("rejecting cross-server machine_key event",
+					"sender", event.Sender,
+					"state_key", *event.StateKey,
+				)
+				continue
+			}
 		}
-		machine, refErr := ref.NewMachine(fleet, machineName)
+
+		// Parse the state_key (localpart:server format) into a typed
+		// machine ref to derive the config room alias.
+		machine, refErr := ref.ParseMachineStateKey(*event.StateKey)
 		if refErr != nil {
-			logger.Warn("invalid machine ref", "state_key", *event.StateKey, "error", refErr)
+			logger.Warn("cannot parse machine state key", "state_key", *event.StateKey, "error", refErr)
 			continue
 		}
 

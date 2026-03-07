@@ -31,8 +31,10 @@ func testFleet(t *testing.T) ref.Fleet {
 }
 
 // makeMachineKeyEvent constructs a messaging.Event that looks like an
-// m.bureau.machine_key state event from a real /sync response.
-func makeMachineKeyEvent(stateKey string, algorithm string, publicKey string) messaging.Event {
+// m.bureau.machine_key state event from a real /sync response. The
+// sender parameter sets the event's Sender field for federation
+// safety testing; pass a zero UserID to omit it.
+func makeMachineKeyEvent(stateKey string, sender ref.UserID, algorithm string, publicKey string) messaging.Event {
 	content := map[string]any{
 		"algorithm":  algorithm,
 		"public_key": publicKey,
@@ -40,6 +42,7 @@ func makeMachineKeyEvent(stateKey string, algorithm string, publicKey string) me
 	return messaging.Event{
 		Type:     schema.EventTypeMachineKey,
 		StateKey: &stateKey,
+		Sender:   sender,
 		Content:  content,
 	}
 }
@@ -185,16 +188,20 @@ func TestFleetProvision_SkipsDecommissionedMachines(t *testing.T) {
 
 	keypairActive := testKeypair(t)
 
+	gpuBoxSender := ref.MustParseUserID("@my_bureau/fleet/prod/machine/gpu-box:bureau.local")
+	oldBoxSender := ref.MustParseUserID("@my_bureau/fleet/prod/machine/old-box:bureau.local")
+	rsaBoxSender := ref.MustParseUserID("@my_bureau/fleet/prod/machine/rsa-box:bureau.local")
+
 	session := &mockSession{
 		userID: mustUserID("@operator:bureau.local"),
 		getRoomState: func(_ context.Context, _ ref.RoomID) ([]messaging.Event, error) {
 			return []messaging.Event{
 				// Active machine with valid key.
-				makeMachineKeyEvent("my_bureau/fleet/prod/machine/gpu-box:bureau.local", "age-x25519", keypairActive.PublicKey),
+				makeMachineKeyEvent("my_bureau/fleet/prod/machine/gpu-box:bureau.local", gpuBoxSender, "age-x25519", keypairActive.PublicKey),
 				// Decommissioned machine (empty public key).
-				makeMachineKeyEvent("my_bureau/fleet/prod/machine/old-box:bureau.local", "age-x25519", ""),
+				makeMachineKeyEvent("my_bureau/fleet/prod/machine/old-box:bureau.local", oldBoxSender, "age-x25519", ""),
 				// Machine with wrong algorithm (skipped).
-				makeMachineKeyEvent("my_bureau/fleet/prod/machine/rsa-box:bureau.local", "rsa-4096", "not-an-age-key"),
+				makeMachineKeyEvent("my_bureau/fleet/prod/machine/rsa-box:bureau.local", rsaBoxSender, "rsa-4096", "not-an-age-key"),
 			}, nil
 		},
 		sendStateEvent: func(_ context.Context, _ ref.RoomID, _ ref.EventType, _ string, _ any) (ref.EventID, error) {
@@ -245,10 +252,12 @@ func TestFleetProvision_HappyPathMultipleMachines(t *testing.T) {
 				t.Errorf("GetRoomState roomID = %q, want %q", roomID, "!machine:bureau.local")
 			}
 			emptyStateKey := ""
+			alphaSender := ref.MustParseUserID("@my_bureau/fleet/prod/machine/alpha:bureau.local")
+			betaSender := ref.MustParseUserID("@my_bureau/fleet/prod/machine/beta:bureau.local")
 			return []messaging.Event{
 				{Type: "m.room.create", StateKey: &emptyStateKey, Content: map[string]any{}},
-				makeMachineKeyEvent("my_bureau/fleet/prod/machine/alpha:bureau.local", "age-x25519", keypairA.PublicKey),
-				makeMachineKeyEvent("my_bureau/fleet/prod/machine/beta:bureau.local", "age-x25519", keypairB.PublicKey),
+				makeMachineKeyEvent("my_bureau/fleet/prod/machine/alpha:bureau.local", alphaSender, "age-x25519", keypairA.PublicKey),
+				makeMachineKeyEvent("my_bureau/fleet/prod/machine/beta:bureau.local", betaSender, "age-x25519", keypairB.PublicKey),
 			}, nil
 		},
 		sendStateEvent: func(_ context.Context, roomID ref.RoomID, eventType ref.EventType, stateKey string, content any) (ref.EventID, error) {
@@ -338,7 +347,7 @@ func TestFleetProvision_HappyPathWithEscrowKey(t *testing.T) {
 		userID: mustUserID("@operator:bureau.local"),
 		getRoomState: func(_ context.Context, _ ref.RoomID) ([]messaging.Event, error) {
 			return []messaging.Event{
-				makeMachineKeyEvent("my_bureau/fleet/prod/machine/solo:bureau.local", "age-x25519", machineKeypair.PublicKey),
+				makeMachineKeyEvent("my_bureau/fleet/prod/machine/solo:bureau.local", ref.MustParseUserID("@my_bureau/fleet/prod/machine/solo:bureau.local"), "age-x25519", machineKeypair.PublicKey),
 			}, nil
 		},
 		sendStateEvent: func(_ context.Context, _ ref.RoomID, _ ref.EventType, _ string, _ any) (ref.EventID, error) {
@@ -382,7 +391,7 @@ func TestFleetProvision_InvalidEscrowKey(t *testing.T) {
 		userID: mustUserID("@operator:bureau.local"),
 		getRoomState: func(_ context.Context, _ ref.RoomID) ([]messaging.Event, error) {
 			return []messaging.Event{
-				makeMachineKeyEvent("my_bureau/fleet/prod/machine/solo:bureau.local", "age-x25519", machineKeypair.PublicKey),
+				makeMachineKeyEvent("my_bureau/fleet/prod/machine/solo:bureau.local", ref.MustParseUserID("@my_bureau/fleet/prod/machine/solo:bureau.local"), "age-x25519", machineKeypair.PublicKey),
 			}, nil
 		},
 	}
@@ -412,7 +421,7 @@ func TestFleetProvision_SendStateEventFails(t *testing.T) {
 		userID: mustUserID("@operator:bureau.local"),
 		getRoomState: func(_ context.Context, _ ref.RoomID) ([]messaging.Event, error) {
 			return []messaging.Event{
-				makeMachineKeyEvent("my_bureau/fleet/prod/machine/solo:bureau.local", "age-x25519", machineKeypair.PublicKey),
+				makeMachineKeyEvent("my_bureau/fleet/prod/machine/solo:bureau.local", ref.MustParseUserID("@my_bureau/fleet/prod/machine/solo:bureau.local"), "age-x25519", machineKeypair.PublicKey),
 			}, nil
 		},
 		sendStateEvent: func(_ context.Context, _ ref.RoomID, _ ref.EventType, _ string, _ any) (ref.EventID, error) {
@@ -441,6 +450,10 @@ func TestEnumerateMachineKeys_FiltersCorrectly(t *testing.T) {
 	t.Parallel()
 
 	keypairGood := testKeypair(t)
+	goodSender := ref.MustParseUserID("@my_bureau/fleet/prod/machine/good:bureau.local")
+	decomSender := ref.MustParseUserID("@my_bureau/fleet/prod/machine/decommissioned:bureau.local")
+	rsaSender := ref.MustParseUserID("@my_bureau/fleet/prod/machine/rsa:bureau.local")
+	badkeySender := ref.MustParseUserID("@my_bureau/fleet/prod/machine/badkey:bureau.local")
 
 	session := &mockSession{
 		userID: mustUserID("@operator:bureau.local"),
@@ -450,15 +463,15 @@ func TestEnumerateMachineKeys_FiltersCorrectly(t *testing.T) {
 				// Non-machine-key event (should be skipped).
 				{Type: "m.room.create", StateKey: &emptyStateKey, Content: map[string]any{}},
 				// Valid machine key.
-				makeMachineKeyEvent("machine/good", "age-x25519", keypairGood.PublicKey),
+				makeMachineKeyEvent("my_bureau/fleet/prod/machine/good:bureau.local", goodSender, "age-x25519", keypairGood.PublicKey),
 				// Machine with nil StateKey (should be skipped).
 				{Type: schema.EventTypeMachineKey, StateKey: nil, Content: map[string]any{}},
 				// Empty public key (decommissioned, should be skipped).
-				makeMachineKeyEvent("machine/decommissioned", "age-x25519", ""),
+				makeMachineKeyEvent("my_bureau/fleet/prod/machine/decommissioned:bureau.local", decomSender, "age-x25519", ""),
 				// Wrong algorithm (should be skipped).
-				makeMachineKeyEvent("machine/rsa", "rsa-4096", "not-age"),
+				makeMachineKeyEvent("my_bureau/fleet/prod/machine/rsa:bureau.local", rsaSender, "rsa-4096", "not-age"),
 				// Invalid public key format (should be skipped).
-				makeMachineKeyEvent("machine/badkey", "age-x25519", "not-a-valid-age-key"),
+				makeMachineKeyEvent("my_bureau/fleet/prod/machine/badkey:bureau.local", badkeySender, "age-x25519", "not-a-valid-age-key"),
 			}, nil
 		},
 	}
@@ -472,12 +485,78 @@ func TestEnumerateMachineKeys_FiltersCorrectly(t *testing.T) {
 		t.Fatalf("expected 1 key, got %d: %v", len(keys), keys)
 	}
 
-	key, exists := keys["machine/good"]
+	key, exists := keys["my_bureau/fleet/prod/machine/good:bureau.local"]
 	if !exists {
-		t.Fatal("expected key for 'machine/good'")
+		t.Fatal("expected key for 'my_bureau/fleet/prod/machine/good:bureau.local'")
 	}
 	if key.PublicKey != keypairGood.PublicKey {
 		t.Errorf("key.PublicKey = %q, want %q", key.PublicKey, keypairGood.PublicKey)
+	}
+}
+
+func TestEnumerateMachineKeys_RejectsCrossServerSender(t *testing.T) {
+	t.Parallel()
+
+	keypairLegit := testKeypair(t)
+	keypairSpoofed := testKeypair(t)
+
+	legitSender := ref.MustParseUserID("@my_bureau/fleet/prod/machine/legit:bureau.local")
+	// Attacker on evil.server publishes a machine_key with a state_key
+	// claiming to be a machine on bureau.local.
+	attackerSender := ref.MustParseUserID("@evil/fleet/prod/machine/impersonator:evil.server")
+
+	session := &mockSession{
+		userID: mustUserID("@operator:bureau.local"),
+		getRoomState: func(_ context.Context, _ ref.RoomID) ([]messaging.Event, error) {
+			return []messaging.Event{
+				// Legitimate machine key — sender server matches state_key server.
+				makeMachineKeyEvent("my_bureau/fleet/prod/machine/legit:bureau.local", legitSender, "age-x25519", keypairLegit.PublicKey),
+				// Spoofed machine key — sender is on evil.server but state_key
+				// claims bureau.local. Should be rejected.
+				makeMachineKeyEvent("my_bureau/fleet/prod/machine/target:bureau.local", attackerSender, "age-x25519", keypairSpoofed.PublicKey),
+			}, nil
+		},
+	}
+
+	keys, err := enumerateMachineKeys(context.Background(), session, mustRoomID("!machine:bureau.local"))
+	if err != nil {
+		t.Fatalf("enumerateMachineKeys: %v", err)
+	}
+
+	if len(keys) != 1 {
+		t.Fatalf("expected 1 key (spoofed rejected), got %d", len(keys))
+	}
+	if _, exists := keys["my_bureau/fleet/prod/machine/legit:bureau.local"]; !exists {
+		t.Error("expected legitimate key to be included")
+	}
+	if _, exists := keys["my_bureau/fleet/prod/machine/target:bureau.local"]; exists {
+		t.Error("spoofed cross-server key should have been rejected")
+	}
+}
+
+func TestEnumerateMachineKeys_ZeroSenderBypasses(t *testing.T) {
+	t.Parallel()
+
+	keypair := testKeypair(t)
+
+	// Zero sender (e.g., from a GetRoomState response that omits sender
+	// metadata) should bypass the federation check gracefully.
+	session := &mockSession{
+		userID: mustUserID("@operator:bureau.local"),
+		getRoomState: func(_ context.Context, _ ref.RoomID) ([]messaging.Event, error) {
+			return []messaging.Event{
+				makeMachineKeyEvent("my_bureau/fleet/prod/machine/nosender:bureau.local", ref.UserID{}, "age-x25519", keypair.PublicKey),
+			}, nil
+		},
+	}
+
+	keys, err := enumerateMachineKeys(context.Background(), session, mustRoomID("!machine:bureau.local"))
+	if err != nil {
+		t.Fatalf("enumerateMachineKeys: %v", err)
+	}
+
+	if len(keys) != 1 {
+		t.Fatalf("expected 1 key (zero sender should bypass), got %d", len(keys))
 	}
 }
 
@@ -493,7 +572,7 @@ func TestFleetProvision_CredentialEventOmitsPrincipal(t *testing.T) {
 		userID: mustUserID("@operator:bureau.local"),
 		getRoomState: func(_ context.Context, _ ref.RoomID) ([]messaging.Event, error) {
 			return []messaging.Event{
-				makeMachineKeyEvent("my_bureau/fleet/prod/machine/solo:bureau.local", "age-x25519", machineKeypair.PublicKey),
+				makeMachineKeyEvent("my_bureau/fleet/prod/machine/solo:bureau.local", ref.MustParseUserID("@my_bureau/fleet/prod/machine/solo:bureau.local"), "age-x25519", machineKeypair.PublicKey),
 			}, nil
 		},
 		sendStateEvent: func(_ context.Context, _ ref.RoomID, _ ref.EventType, _ string, content any) (ref.EventID, error) {

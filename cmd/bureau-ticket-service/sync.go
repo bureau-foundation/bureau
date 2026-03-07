@@ -914,13 +914,13 @@ func (ts *TicketService) roomStats() []ticket.RoomSummary {
 // When the drain is cleared (empty content or zero ReservationHolder),
 // the service publishes a cleared drain_status (empty JSON object).
 //
-// The state key is the service's localpart (e.g.,
-// "fleet/prod/service/ticket/main"), matching the convention the FC
-// uses to track which services have acknowledged drain.
+// The state key is the service's full Matrix user ID (e.g.,
+// "@fleet/prod/service/ticket/main:bureau.local"), matching the
+// convention the FC uses to track which services have acknowledged drain.
 //
 // Caller must hold ts.mu (write lock).
 func (ts *TicketService) publishDrainStatus(ctx context.Context, roomID ref.RoomID, state *roomState, event messaging.Event) {
-	stateKey := ts.service.Localpart()
+	stateKey := ts.service.UserID().StateKey()
 
 	// Check if the drain was cleared. Empty content or a zero-value
 	// ReservationHolder means the drain has been lifted.

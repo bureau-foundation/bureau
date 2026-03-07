@@ -138,7 +138,7 @@ func TestAgentServiceSessionTracking(t *testing.T) {
 	// the agent_session state event first, then the agent_metrics state
 	// event. Once we see agent_metrics, both events are guaranteed to
 	// be readable.
-	metricsStateKey := agent.Account.UserID.Localpart()
+	metricsStateKey := agent.Account.UserID.StateKey()
 	metricsWatch.WaitForStateEvent(t, agentschema.EventTypeAgentMetrics, metricsStateKey)
 	t.Log("agent service wrote metrics state event")
 
@@ -153,7 +153,7 @@ func TestAgentServiceSessionTracking(t *testing.T) {
 	// --- Verify session state ---
 
 	sessionRaw, err := admin.GetStateEvent(ctx, machine.ConfigRoomID,
-		agentschema.EventTypeAgentSession, agent.Account.UserID.Localpart())
+		agentschema.EventTypeAgentSession, agent.Account.UserID.StateKey())
 	if err != nil {
 		t.Fatalf("get agent session state: %v", err)
 	}
@@ -178,7 +178,7 @@ func TestAgentServiceSessionTracking(t *testing.T) {
 	// --- Verify metrics ---
 
 	metricsRaw, err := admin.GetStateEvent(ctx, machine.ConfigRoomID,
-		agentschema.EventTypeAgentMetrics, agent.Account.UserID.Localpart())
+		agentschema.EventTypeAgentMetrics, agent.Account.UserID.StateKey())
 	if err != nil {
 		t.Fatalf("get agent metrics state: %v", err)
 	}
@@ -374,7 +374,7 @@ func TestAgentContextResumption(t *testing.T) {
 	// Wait for at least 2 sessions to complete. The metrics state
 	// event is written at the end of each session. We use WaitForEvent
 	// with a predicate that checks TotalSessionCount >= 2.
-	metricsStateKey := agent.Account.UserID.Localpart()
+	metricsStateKey := agent.Account.UserID.StateKey()
 	metricsWatch.WaitForEvent(t, func(event messaging.Event) bool {
 		if event.Type != agentschema.EventTypeAgentMetrics {
 			return false
@@ -411,7 +411,7 @@ func TestAgentContextResumption(t *testing.T) {
 
 	// Read session state to get the latest context commit ID.
 	sessionRaw, err := admin.GetStateEvent(ctx, machine.ConfigRoomID,
-		agentschema.EventTypeAgentSession, agent.Account.UserID.Localpart())
+		agentschema.EventTypeAgentSession, agent.Account.UserID.StateKey())
 	if err != nil {
 		t.Fatalf("get agent session state: %v", err)
 	}

@@ -16,40 +16,44 @@ import (
 // The signaling model is vanilla ICE: all ICE candidates are gathered
 // before the SDP is published, so connection establishment requires
 // exactly one signaling round-trip (offer → answer).
+//
+// All machine identity parameters are full Matrix user IDs (e.g.,
+// "@bureau/fleet/prod/machine/workstation:server") for federation
+// safety — bare localparts would collide across servers.
 type Signaler interface {
 	// PublishOffer publishes a complete SDP offer directed at a target
-	// machine. localpart is the offerer's machine localpart, targetLocalpart
-	// is the intended recipient. The implementation stores the SDP where the
-	// target can find it (e.g., a Matrix state event with state_key
-	// "<localpart>|<targetLocalpart>").
-	PublishOffer(ctx context.Context, localpart, targetLocalpart, sdp string) error
+	// machine. machineID is the offerer's full Matrix user ID, targetID
+	// is the intended recipient. The implementation stores the SDP where
+	// the target can find it (e.g., a Matrix state event with state_key
+	// "machineID|targetID").
+	PublishOffer(ctx context.Context, machineID, targetID, sdp string) error
 
 	// PublishAnswer publishes a complete SDP answer in response to a
 	// previously received offer. The state key matches the offer:
-	// "<offererLocalpart>|<localpart>".
-	PublishAnswer(ctx context.Context, offererLocalpart, localpart, sdp string) error
+	// "offererID|machineID".
+	PublishAnswer(ctx context.Context, offererID, machineID, sdp string) error
 
 	// PollOffers returns all pending WebRTC offers directed at this machine.
-	// The implementation filters for offers where the target matches localpart
+	// The implementation filters for offers where the target matches machineID
 	// and the timestamp is newer than what was last processed.
-	PollOffers(ctx context.Context, localpart string) ([]SignalMessage, error)
+	PollOffers(ctx context.Context, machineID string) ([]SignalMessage, error)
 
 	// PollAnswers returns all pending WebRTC answers to offers originated
 	// by this machine. The implementation filters for answers where the
-	// offerer matches localpart and the timestamp is newer than what was
+	// offerer matches machineID and the timestamp is newer than what was
 	// last processed.
-	PollAnswers(ctx context.Context, localpart string) ([]SignalMessage, error)
+	PollAnswers(ctx context.Context, machineID string) ([]SignalMessage, error)
 }
 
-// signalKeyMatcher extracts the peer localpart from a signaling state key
-// given the local machine's localpart, or returns ok=false if the key
+// signalKeyMatcher extracts the peer's user ID from a signaling state key
+// given the local machine's user ID, or returns ok=false if the key
 // doesn't match.
-type signalKeyMatcher func(stateKey, localpart string) (peerLocalpart string, ok bool)
+type signalKeyMatcher func(stateKey, machineID string) (peerID string, ok bool)
 
-// matchOfferKey matches signaling state keys for offers directed at localpart.
+// matchOfferKey matches signaling state keys for offers directed at machineID.
 // Offer keys have the form "offerer|target"; this returns the offerer.
-func matchOfferKey(stateKey, localpart string) (string, bool) {
-	suffix := signalingSeparator + localpart
+func matchOfferKey(stateKey, machineID string) (string, bool) {
+	suffix := signalingSeparator + machineID
 	if !strings.HasSuffix(stateKey, suffix) {
 		return "", false
 	}
@@ -61,9 +65,9 @@ func matchOfferKey(stateKey, localpart string) (string, bool) {
 }
 
 // matchAnswerKey matches signaling state keys for answers to offers from
-// localpart. Answer keys have the form "offerer|target"; this returns the target.
-func matchAnswerKey(stateKey, localpart string) (string, bool) {
-	prefix := localpart + signalingSeparator
+// machineID. Answer keys have the form "offerer|target"; this returns the target.
+func matchAnswerKey(stateKey, machineID string) (string, bool) {
+	prefix := machineID + signalingSeparator
 	if !strings.HasPrefix(stateKey, prefix) {
 		return "", false
 	}
@@ -95,10 +99,10 @@ type SignalNotifier interface {
 
 // SignalMessage represents a signaling message (offer or answer).
 type SignalMessage struct {
-	// PeerLocalpart is the machine localpart of the other party.
+	// PeerID is the full Matrix user ID of the other party.
 	// For received offers, this is the offerer. For received answers,
 	// this is the answerer (target).
-	PeerLocalpart string
+	PeerID string
 
 	// SDP is the complete Session Description Protocol string with all
 	// ICE candidates embedded.

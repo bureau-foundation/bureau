@@ -32,11 +32,11 @@ func TestWebRTCTransport_DialAndServe(t *testing.T) {
 	config := ICEConfig{InterfaceFilter: LoopbackInterfaceFilter}
 
 	// Transport A (client/dialer side).
-	transportA := NewWebRTCTransport(signaler, "machine/alpha", config, nil, logger)
+	transportA := NewWebRTCTransport(signaler, "@machine/alpha:test.local", config, nil, logger)
 	defer transportA.Close()
 
 	// Transport B (server/listener side).
-	transportB := NewWebRTCTransport(signaler, "machine/beta", config, nil, logger)
+	transportB := NewWebRTCTransport(signaler, "@machine/beta:test.local", config, nil, logger)
 	defer transportB.Close()
 
 	// Transport B serves HTTP.
@@ -56,7 +56,7 @@ func TestWebRTCTransport_DialAndServe(t *testing.T) {
 	testutil.RequireClosed(t, transportB.Ready(), 5*time.Second, "transportB ready")
 
 	// Transport A dials Transport B.
-	roundTripper := HTTPTransport(transportA, "machine/beta")
+	roundTripper := HTTPTransport(transportA, "@machine/beta:test.local")
 	client := &http.Client{
 		Transport: roundTripper,
 		Timeout:   30 * time.Second,
@@ -92,10 +92,10 @@ func TestWebRTCTransport_SequentialRequests(t *testing.T) {
 	logger := slog.New(slog.NewJSONHandler(io.Discard, nil))
 	config := ICEConfig{InterfaceFilter: LoopbackInterfaceFilter}
 
-	transportA := NewWebRTCTransport(signaler, "machine/alpha", config, nil, logger)
+	transportA := NewWebRTCTransport(signaler, "@machine/alpha:test.local", config, nil, logger)
 	defer transportA.Close()
 
-	transportB := NewWebRTCTransport(signaler, "machine/beta", config, nil, logger)
+	transportB := NewWebRTCTransport(signaler, "@machine/beta:test.local", config, nil, logger)
 	defer transportB.Close()
 
 	// Server echoes the request path back in the response body.
@@ -110,7 +110,7 @@ func TestWebRTCTransport_SequentialRequests(t *testing.T) {
 
 	testutil.RequireClosed(t, transportB.Ready(), 5*time.Second, "transportB ready")
 
-	roundTripper := HTTPTransport(transportA, "machine/beta")
+	roundTripper := HTTPTransport(transportA, "@machine/beta:test.local")
 	client := &http.Client{
 		Transport: roundTripper,
 		Timeout:   30 * time.Second,
@@ -141,10 +141,10 @@ func TestWebRTCTransport_ConcurrentDials(t *testing.T) {
 	logger := slog.New(slog.NewJSONHandler(io.Discard, nil))
 	config := ICEConfig{InterfaceFilter: LoopbackInterfaceFilter}
 
-	transportA := NewWebRTCTransport(signaler, "machine/alpha", config, nil, logger)
+	transportA := NewWebRTCTransport(signaler, "@machine/alpha:test.local", config, nil, logger)
 	defer transportA.Close()
 
-	transportB := NewWebRTCTransport(signaler, "machine/beta", config, nil, logger)
+	transportB := NewWebRTCTransport(signaler, "@machine/beta:test.local", config, nil, logger)
 	defer transportB.Close()
 
 	// Server echoes the request path back in the response body.
@@ -170,7 +170,7 @@ func TestWebRTCTransport_ConcurrentDials(t *testing.T) {
 			// Each goroutine gets its own RoundTripper and client so that
 			// Go's http.Transport doesn't serialize them through a single
 			// connection pool.
-			roundTripper := HTTPTransport(transportA, "machine/beta")
+			roundTripper := HTTPTransport(transportA, "@machine/beta:test.local")
 			client := &http.Client{
 				Transport: roundTripper,
 				Timeout:   30 * time.Second,
@@ -204,11 +204,11 @@ func TestWebRTCTransport_Address(t *testing.T) {
 	signaler := NewMemorySignaler()
 	logger := slog.New(slog.NewJSONHandler(io.Discard, nil))
 
-	wt := NewWebRTCTransport(signaler, "machine/workstation", ICEConfig{InterfaceFilter: LoopbackInterfaceFilter}, nil, logger)
+	wt := NewWebRTCTransport(signaler, "@machine/workstation:test.local", ICEConfig{InterfaceFilter: LoopbackInterfaceFilter}, nil, logger)
 	defer wt.Close()
 
-	if address := wt.Address(); address != "machine/workstation" {
-		t.Errorf("Address() = %q, want %q", address, "machine/workstation")
+	if address := wt.Address(); address != "@machine/workstation:test.local" {
+		t.Errorf("Address() = %q, want %q", address, "@machine/workstation:test.local")
 	}
 }
 
@@ -218,10 +218,10 @@ func TestWebRTCTransport_DialAfterClose(t *testing.T) {
 	signaler := NewMemorySignaler()
 	logger := slog.New(slog.NewJSONHandler(io.Discard, nil))
 
-	wt := NewWebRTCTransport(signaler, "machine/alpha", ICEConfig{InterfaceFilter: LoopbackInterfaceFilter}, nil, logger)
+	wt := NewWebRTCTransport(signaler, "@machine/alpha:test.local", ICEConfig{InterfaceFilter: LoopbackInterfaceFilter}, nil, logger)
 	wt.Close()
 
-	_, err := wt.DialContext(context.Background(), "machine/beta")
+	_, err := wt.DialContext(context.Background(), "@machine/beta:test.local")
 	if err == nil {
 		t.Fatal("expected error from DialContext after Close, got nil")
 	}
@@ -235,10 +235,10 @@ func TestWebRTCTransport_BidirectionalHTTP(t *testing.T) {
 	logger := slog.New(slog.NewJSONHandler(io.Discard, nil))
 	config := ICEConfig{InterfaceFilter: LoopbackInterfaceFilter}
 
-	transportA := NewWebRTCTransport(signaler, "machine/alpha", config, nil, logger)
+	transportA := NewWebRTCTransport(signaler, "@machine/alpha:test.local", config, nil, logger)
 	defer transportA.Close()
 
-	transportB := NewWebRTCTransport(signaler, "machine/beta", config, nil, logger)
+	transportB := NewWebRTCTransport(signaler, "@machine/beta:test.local", config, nil, logger)
 	defer transportB.Close()
 
 	ctx, cancel := context.WithCancel(context.Background())
@@ -260,7 +260,7 @@ func TestWebRTCTransport_BidirectionalHTTP(t *testing.T) {
 
 	// A → B
 	clientAtoB := &http.Client{
-		Transport: HTTPTransport(transportA, "machine/beta"),
+		Transport: HTTPTransport(transportA, "@machine/beta:test.local"),
 		Timeout:   30 * time.Second,
 	}
 	responseAtoB, err := clientAtoB.Get("http://transport/test")
@@ -276,7 +276,7 @@ func TestWebRTCTransport_BidirectionalHTTP(t *testing.T) {
 	// B → A (uses the PeerConnection that A already established, or creates
 	// a new one via signaling).
 	clientBtoA := &http.Client{
-		Transport: HTTPTransport(transportB, "machine/alpha"),
+		Transport: HTTPTransport(transportB, "@machine/alpha:test.local"),
 		Timeout:   30 * time.Second,
 	}
 	responseBtoA, err := clientBtoA.Get("http://transport/test")
@@ -296,7 +296,7 @@ func TestWebRTCTransport_UpdateICEConfig(t *testing.T) {
 	signaler := NewMemorySignaler()
 	logger := slog.New(slog.NewJSONHandler(io.Discard, nil))
 
-	wt := NewWebRTCTransport(signaler, "machine/alpha", ICEConfig{InterfaceFilter: LoopbackInterfaceFilter}, nil, logger)
+	wt := NewWebRTCTransport(signaler, "@machine/alpha:test.local", ICEConfig{InterfaceFilter: LoopbackInterfaceFilter}, nil, logger)
 	defer wt.Close()
 
 	// Initially empty.
@@ -328,27 +328,27 @@ func TestMemorySignaler_PublishAndPoll(t *testing.T) {
 	ctx := context.Background()
 
 	// Publish an offer from A to B.
-	if err := signaler.PublishOffer(ctx, "machine/a", "machine/b", "offer-sdp"); err != nil {
+	if err := signaler.PublishOffer(ctx, "@machine/a:test.local", "@machine/b:test.local", "offer-sdp"); err != nil {
 		t.Fatalf("PublishOffer failed: %v", err)
 	}
 
 	// B polls for offers.
-	offers, err := signaler.PollOffers(ctx, "machine/b")
+	offers, err := signaler.PollOffers(ctx, "@machine/b:test.local")
 	if err != nil {
 		t.Fatalf("PollOffers failed: %v", err)
 	}
 	if len(offers) != 1 {
 		t.Fatalf("expected 1 offer, got %d", len(offers))
 	}
-	if offers[0].PeerLocalpart != "machine/a" {
-		t.Errorf("PeerLocalpart = %q, want %q", offers[0].PeerLocalpart, "machine/a")
+	if offers[0].PeerID != "@machine/a:test.local" {
+		t.Errorf("PeerID = %q, want %q", offers[0].PeerID, "@machine/a:test.local")
 	}
 	if offers[0].SDP != "offer-sdp" {
 		t.Errorf("SDP = %q, want %q", offers[0].SDP, "offer-sdp")
 	}
 
 	// Polling again returns nothing (already seen).
-	offers, err = signaler.PollOffers(ctx, "machine/b")
+	offers, err = signaler.PollOffers(ctx, "@machine/b:test.local")
 	if err != nil {
 		t.Fatalf("second PollOffers failed: %v", err)
 	}
@@ -357,20 +357,20 @@ func TestMemorySignaler_PublishAndPoll(t *testing.T) {
 	}
 
 	// Publish an answer from B to A.
-	if err := signaler.PublishAnswer(ctx, "machine/a", "machine/b", "answer-sdp"); err != nil {
+	if err := signaler.PublishAnswer(ctx, "@machine/a:test.local", "@machine/b:test.local", "answer-sdp"); err != nil {
 		t.Fatalf("PublishAnswer failed: %v", err)
 	}
 
 	// A polls for answers.
-	answers, err := signaler.PollAnswers(ctx, "machine/a")
+	answers, err := signaler.PollAnswers(ctx, "@machine/a:test.local")
 	if err != nil {
 		t.Fatalf("PollAnswers failed: %v", err)
 	}
 	if len(answers) != 1 {
 		t.Fatalf("expected 1 answer, got %d", len(answers))
 	}
-	if answers[0].PeerLocalpart != "machine/b" {
-		t.Errorf("PeerLocalpart = %q, want %q", answers[0].PeerLocalpart, "machine/b")
+	if answers[0].PeerID != "@machine/b:test.local" {
+		t.Errorf("PeerID = %q, want %q", answers[0].PeerID, "@machine/b:test.local")
 	}
 	if answers[0].SDP != "answer-sdp" {
 		t.Errorf("SDP = %q, want %q", answers[0].SDP, "answer-sdp")
@@ -382,12 +382,12 @@ func TestMemorySignaler_IndependentConsumers(t *testing.T) {
 	ctx := context.Background()
 
 	// Publish an offer from A to both B and C (different keys).
-	if err := signaler.PublishOffer(ctx, "machine/a", "machine/b", "offer-for-b"); err != nil {
+	if err := signaler.PublishOffer(ctx, "@machine/a:test.local", "@machine/b:test.local", "offer-for-b"); err != nil {
 		t.Fatalf("PublishOffer to B failed: %v", err)
 	}
 
 	// B sees the offer.
-	offers, err := signaler.PollOffers(ctx, "machine/b")
+	offers, err := signaler.PollOffers(ctx, "@machine/b:test.local")
 	if err != nil {
 		t.Fatalf("PollOffers for B failed: %v", err)
 	}
@@ -396,7 +396,7 @@ func TestMemorySignaler_IndependentConsumers(t *testing.T) {
 	}
 
 	// C should not see an offer directed at B.
-	offers, err = signaler.PollOffers(ctx, "machine/c")
+	offers, err = signaler.PollOffers(ctx, "@machine/c:test.local")
 	if err != nil {
 		t.Fatalf("PollOffers for C failed: %v", err)
 	}
@@ -424,17 +424,17 @@ func TestWebRTCTransport_AuthenticatedConnection(t *testing.T) {
 
 	authAlpha := &testAuthenticator{
 		privateKey: privateKeyAlpha,
-		peerKeys:   map[string]ed25519.PublicKey{"machine/beta": publicKeyBeta},
+		peerKeys:   map[string]ed25519.PublicKey{"@machine/beta:test.local": publicKeyBeta},
 	}
 	authBeta := &testAuthenticator{
 		privateKey: privateKeyBeta,
-		peerKeys:   map[string]ed25519.PublicKey{"machine/alpha": publicKeyAlpha},
+		peerKeys:   map[string]ed25519.PublicKey{"@machine/alpha:test.local": publicKeyAlpha},
 	}
 
-	transportAlpha := NewWebRTCTransport(signaler, "machine/alpha", config, authAlpha, logger)
+	transportAlpha := NewWebRTCTransport(signaler, "@machine/alpha:test.local", config, authAlpha, logger)
 	defer transportAlpha.Close()
 
-	transportBeta := NewWebRTCTransport(signaler, "machine/beta", config, authBeta, logger)
+	transportBeta := NewWebRTCTransport(signaler, "@machine/beta:test.local", config, authBeta, logger)
 	defer transportBeta.Close()
 
 	handler := http.HandlerFunc(func(writer http.ResponseWriter, request *http.Request) {
@@ -449,7 +449,7 @@ func TestWebRTCTransport_AuthenticatedConnection(t *testing.T) {
 	testutil.RequireClosed(t, transportBeta.Ready(), 5*time.Second, "transportBeta ready")
 
 	client := &http.Client{
-		Transport: HTTPTransport(transportAlpha, "machine/beta"),
+		Transport: HTTPTransport(transportAlpha, "@machine/beta:test.local"),
 		Timeout:   30 * time.Second,
 	}
 
@@ -490,17 +490,17 @@ func TestWebRTCTransport_AuthenticationFailure(t *testing.T) {
 	// uses a rogue private key that doesn't match.
 	authAlpha := &testAuthenticator{
 		privateKey: privateKeyAlpha,
-		peerKeys:   map[string]ed25519.PublicKey{"machine/beta": publicKeyBeta},
+		peerKeys:   map[string]ed25519.PublicKey{"@machine/beta:test.local": publicKeyBeta},
 	}
 	authRogue := &testAuthenticator{
 		privateKey: privateKeyRogue,
-		peerKeys:   map[string]ed25519.PublicKey{"machine/alpha": publicKeyAlpha},
+		peerKeys:   map[string]ed25519.PublicKey{"@machine/alpha:test.local": publicKeyAlpha},
 	}
 
-	transportAlpha := NewWebRTCTransport(signaler, "machine/alpha", config, authAlpha, logger)
+	transportAlpha := NewWebRTCTransport(signaler, "@machine/alpha:test.local", config, authAlpha, logger)
 	defer transportAlpha.Close()
 
-	transportRogue := NewWebRTCTransport(signaler, "machine/beta", config, authRogue, logger)
+	transportRogue := NewWebRTCTransport(signaler, "@machine/beta:test.local", config, authRogue, logger)
 	defer transportRogue.Close()
 
 	handler := http.HandlerFunc(func(writer http.ResponseWriter, request *http.Request) {
@@ -513,7 +513,7 @@ func TestWebRTCTransport_AuthenticationFailure(t *testing.T) {
 	go transportRogue.Serve(ctx, handler)
 	testutil.RequireClosed(t, transportRogue.Ready(), 5*time.Second, "transportRogue ready")
 
-	_, err = transportAlpha.DialContext(ctx, "machine/beta")
+	_, err = transportAlpha.DialContext(ctx, "@machine/beta:test.local")
 	if err == nil {
 		t.Fatal("expected DialContext error for authentication failure, got nil")
 	}

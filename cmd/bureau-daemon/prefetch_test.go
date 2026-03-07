@@ -248,8 +248,7 @@ func TestReconcile_PrefetchFailureSkipsPrincipal(t *testing.T) {
 
 	daemon, fakeClock := newTestDaemon(t)
 	daemon.machine, daemon.fleet = testMachineSetup(t, "test", "test.local")
-	machineName := daemon.machine.Localpart()
-	serverName := daemon.machine.Server().String()
+	machineName := daemon.machine.UserID().StateKey()
 
 	// Track messages sent to the config room (prefetch error messages).
 	var (
@@ -285,7 +284,7 @@ func TestReconcile_PrefetchFailureSkipsPrincipal(t *testing.T) {
 	if err != nil {
 		t.Fatalf("creating client: %v", err)
 	}
-	session, err := client.SessionFromToken(mustParseUserID("@"+machineName+":"+serverName), "test-token")
+	session, err := client.SessionFromToken(daemon.machine.UserID(), "test-token")
 	if err != nil {
 		t.Fatalf("creating session: %v", err)
 	}
@@ -394,8 +393,7 @@ func TestReconcile_NoPrefetchWithoutEnvironmentPath(t *testing.T) {
 
 	daemon, _ := newTestDaemon(t)
 	daemon.machine, daemon.fleet = testMachineSetup(t, "test", "test.local")
-	machineName := daemon.machine.Localpart()
-	serverName := daemon.machine.Server().String()
+	machineName := daemon.machine.UserID().StateKey()
 
 	matrixState := newPrefetchTestMatrixState(t, daemon.fleet, configRoomID, templateRoomID, machineName)
 	// Override template to have no environment path.
@@ -412,7 +410,7 @@ func TestReconcile_NoPrefetchWithoutEnvironmentPath(t *testing.T) {
 	if err != nil {
 		t.Fatalf("creating client: %v", err)
 	}
-	session, err := client.SessionFromToken(mustParseUserID("@"+machineName+":"+serverName), "test-token")
+	session, err := client.SessionFromToken(daemon.machine.UserID(), "test-token")
 	if err != nil {
 		t.Fatalf("creating session: %v", err)
 	}
@@ -463,7 +461,7 @@ func TestReconcile_NoPrefetchWithoutEnvironmentPath(t *testing.T) {
 func newPrefetchTestMatrixState(t *testing.T, fleet ref.Fleet, configRoomID, templateRoomID, machineName string) *mockMatrixState {
 	t.Helper()
 
-	fleetLocalpart := fleet.Localpart() + "/agent/test"
+	agentEntity := testEntity(t, fleet, "agent/test")
 	state := newMockMatrixState()
 
 	state.setRoomAlias(fleet.Namespace().TemplateRoomAlias(), templateRoomID)
@@ -476,14 +474,14 @@ func newPrefetchTestMatrixState(t *testing.T, fleet ref.Fleet, configRoomID, tem
 	state.setStateEvent(configRoomID, schema.EventTypeMachineConfig, machineName, schema.MachineConfig{
 		Principals: []schema.PrincipalAssignment{
 			{
-				Principal: testEntity(t, fleet, "agent/test"),
+				Principal: agentEntity,
 				Template:  "bureau/template:test-template",
 				AutoStart: true,
 			},
 		},
 	})
 
-	state.setStateEvent(configRoomID, schema.EventTypeCredentials, fleetLocalpart, schema.Credentials{
+	state.setStateEvent(configRoomID, schema.EventTypeCredentials, agentEntity.UserID().StateKey(), schema.Credentials{
 		Ciphertext: "encrypted-test-credentials",
 	})
 

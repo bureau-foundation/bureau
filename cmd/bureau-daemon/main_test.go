@@ -171,8 +171,8 @@ func TestStatusSignificantlyChanged(t *testing.T) {
 				TemperatureMillidegrees: 65000,
 			},
 		},
-		Principals: map[string]schema.PrincipalResourceUsage{
-			"agent/coder": {CPUPercent: 40, MemoryMB: 500, Status: schema.PrincipalRunning},
+		Principals: map[ref.UserID]schema.PrincipalResourceUsage{
+			ref.MustParseUserID("@bureau/fleet/test/agent/coder:bureau.local"): {CPUPercent: 40, MemoryMB: 500, Status: schema.PrincipalRunning},
 		},
 	}
 
@@ -182,7 +182,7 @@ func TestStatusSignificantlyChanged(t *testing.T) {
 		status := *baseline
 		status.GPUStats = make([]schema.GPUStatus, len(baseline.GPUStats))
 		copy(status.GPUStats, baseline.GPUStats)
-		status.Principals = make(map[string]schema.PrincipalResourceUsage, len(baseline.Principals))
+		status.Principals = make(map[ref.UserID]schema.PrincipalResourceUsage, len(baseline.Principals))
 		for k, v := range baseline.Principals {
 			status.Principals[k] = v
 		}
@@ -325,9 +325,9 @@ func TestStatusSignificantlyChanged(t *testing.T) {
 		{
 			name: "principal status transition",
 			modify: func(s *schema.MachineStatus) {
-				usage := s.Principals["agent/coder"]
+				usage := s.Principals[ref.MustParseUserID("@bureau/fleet/test/agent/coder:bureau.local")]
 				usage.Status = schema.PrincipalIdle
-				s.Principals["agent/coder"] = usage
+				s.Principals[ref.MustParseUserID("@bureau/fleet/test/agent/coder:bureau.local")] = usage
 			},
 			changed: true,
 		},
@@ -336,18 +336,18 @@ func TestStatusSignificantlyChanged(t *testing.T) {
 		{
 			name: "principal CPU within deadband",
 			modify: func(s *schema.MachineStatus) {
-				usage := s.Principals["agent/coder"]
+				usage := s.Principals[ref.MustParseUserID("@bureau/fleet/test/agent/coder:bureau.local")]
 				usage.CPUPercent += principalCPUDeadbandPercent
-				s.Principals["agent/coder"] = usage
+				s.Principals[ref.MustParseUserID("@bureau/fleet/test/agent/coder:bureau.local")] = usage
 			},
 			changed: false,
 		},
 		{
 			name: "principal CPU exceeds deadband",
 			modify: func(s *schema.MachineStatus) {
-				usage := s.Principals["agent/coder"]
+				usage := s.Principals[ref.MustParseUserID("@bureau/fleet/test/agent/coder:bureau.local")]
 				usage.CPUPercent += principalCPUDeadbandPercent + 1
-				s.Principals["agent/coder"] = usage
+				s.Principals[ref.MustParseUserID("@bureau/fleet/test/agent/coder:bureau.local")] = usage
 			},
 			changed: true,
 		},
@@ -356,18 +356,18 @@ func TestStatusSignificantlyChanged(t *testing.T) {
 		{
 			name: "principal memory within deadband",
 			modify: func(s *schema.MachineStatus) {
-				usage := s.Principals["agent/coder"]
+				usage := s.Principals[ref.MustParseUserID("@bureau/fleet/test/agent/coder:bureau.local")]
 				usage.MemoryMB += principalMemoryDeadbandMB
-				s.Principals["agent/coder"] = usage
+				s.Principals[ref.MustParseUserID("@bureau/fleet/test/agent/coder:bureau.local")] = usage
 			},
 			changed: false,
 		},
 		{
 			name: "principal memory exceeds deadband",
 			modify: func(s *schema.MachineStatus) {
-				usage := s.Principals["agent/coder"]
+				usage := s.Principals[ref.MustParseUserID("@bureau/fleet/test/agent/coder:bureau.local")]
 				usage.MemoryMB += principalMemoryDeadbandMB + 1
-				s.Principals["agent/coder"] = usage
+				s.Principals[ref.MustParseUserID("@bureau/fleet/test/agent/coder:bureau.local")] = usage
 			},
 			changed: true,
 		},
@@ -376,14 +376,14 @@ func TestStatusSignificantlyChanged(t *testing.T) {
 		{
 			name: "principal added",
 			modify: func(s *schema.MachineStatus) {
-				s.Principals["agent/reviewer"] = schema.PrincipalResourceUsage{Status: schema.PrincipalStarting}
+				s.Principals[ref.MustParseUserID("@bureau/fleet/test/agent/reviewer:bureau.local")] = schema.PrincipalResourceUsage{Status: schema.PrincipalStarting}
 			},
 			changed: true,
 		},
 		{
 			name: "principal removed",
 			modify: func(s *schema.MachineStatus) {
-				delete(s.Principals, "agent/coder")
+				delete(s.Principals, ref.MustParseUserID("@bureau/fleet/test/agent/coder:bureau.local"))
 			},
 			changed: true,
 		},

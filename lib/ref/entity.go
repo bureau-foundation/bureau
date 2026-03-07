@@ -203,6 +203,13 @@ func ParseEntityUserID(userID string) (Entity, error) {
 	return ParseEntityLocalpart(localpart, newServerName(server))
 }
 
+// ParseEntityStateKey parses a state_key ("localpart:server" format,
+// without '@' prefix) into a generic Entity reference. See
+// UserID.StateKey for format details.
+func ParseEntityStateKey(stateKey string) (Entity, error) {
+	return ParseEntityUserID("@" + stateKey)
+}
+
 // ParseEntityLocalpart parses a fleet-scoped localpart and server into
 // a generic Entity reference. The localpart must have at least 5
 // segments (namespace/fleet/name/entityType/entityName).

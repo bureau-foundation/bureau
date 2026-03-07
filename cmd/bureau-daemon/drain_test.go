@@ -72,7 +72,7 @@ func TestProcessMachineDrainPublishesDrainStatus(t *testing.T) {
 	}
 
 	drainContent := schema.MachineDrainContent{
-		Services:          []string{"service/stt/whisper"},
+		Services:          []ref.UserID{ref.MustParseUserID("@bureau/fleet/test/service/stt/whisper:bureau.local")},
 		ReservationHolder: holder,
 		RequestedAt:       "2026-03-01T12:00:00Z",
 	}
@@ -83,7 +83,7 @@ func TestProcessMachineDrainPublishesDrainStatus(t *testing.T) {
 	daemon.processMachineDrain(ctx)
 
 	// Read back the drain_status the daemon published.
-	stateKey := daemon.machine.Localpart()
+	stateKey := daemon.machine.UserID().StateKey()
 	var status schema.DrainStatusContent
 	readDrainStatus(t, matrixState, daemon.opsRoomID.String(), stateKey, &status)
 
@@ -115,7 +115,7 @@ func TestProcessMachineDrainReportsInFlightCount(t *testing.T) {
 	}
 	matrixState.setStateEvent(daemon.opsRoomID.String(),
 		schema.EventTypeMachineDrain, "", schema.MachineDrainContent{
-			Services:          []string{"service/stt/whisper"},
+			Services:          []ref.UserID{ref.MustParseUserID("@bureau/fleet/test/service/stt/whisper:bureau.local")},
 			ReservationHolder: holder,
 			RequestedAt:       "2026-03-01T12:00:00Z",
 		})
@@ -128,7 +128,7 @@ func TestProcessMachineDrainReportsInFlightCount(t *testing.T) {
 
 	daemon.processMachineDrain(ctx)
 
-	stateKey := daemon.machine.Localpart()
+	stateKey := daemon.machine.UserID().StateKey()
 	var status schema.DrainStatusContent
 	readDrainStatus(t, matrixState, daemon.opsRoomID.String(), stateKey, &status)
 
@@ -159,7 +159,7 @@ func TestProcessMachineDrainClearedPublishesClear(t *testing.T) {
 	daemon.processMachineDrain(ctx)
 
 	// The daemon should publish a cleared drain_status (empty JSON object).
-	stateKey := daemon.machine.Localpart()
+	stateKey := daemon.machine.UserID().StateKey()
 	raw := readRawStateEvent(t, matrixState, daemon.opsRoomID.String(),
 		string(schema.EventTypeDrainStatus), stateKey)
 
@@ -187,7 +187,7 @@ func TestProcessMachineDrainNoDrainEvent(t *testing.T) {
 	daemon.processMachineDrain(ctx)
 
 	// Verify no drain_status was published.
-	stateKey := daemon.machine.Localpart()
+	stateKey := daemon.machine.UserID().StateKey()
 	raw := readRawStateEvent(t, matrixState, daemon.opsRoomID.String(),
 		string(schema.EventTypeDrainStatus), stateKey)
 	if raw != nil {
@@ -210,7 +210,7 @@ func TestProcessMachineDrainViaSync(t *testing.T) {
 		t.Fatalf("ParseEntity: %v", err)
 	}
 	drainContent := schema.MachineDrainContent{
-		Services:          []string{"service/stt/whisper"},
+		Services:          []ref.UserID{ref.MustParseUserID("@bureau/fleet/test/service/stt/whisper:bureau.local")},
 		ReservationHolder: holder,
 		RequestedAt:       "2026-03-01T12:00:00Z",
 	}
@@ -243,7 +243,7 @@ func TestProcessMachineDrainViaSync(t *testing.T) {
 
 	// processSyncResponse should have called processMachineDrain, which
 	// publishes a drain_status.
-	stateKey := daemon.machine.Localpart()
+	stateKey := daemon.machine.UserID().StateKey()
 	var status schema.DrainStatusContent
 	readDrainStatus(t, matrixState, daemon.opsRoomID.String(), stateKey, &status)
 

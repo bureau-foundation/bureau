@@ -25,10 +25,12 @@ func newReservationTestController(t *testing.T) (*FleetController, *fakeConfigSt
 	return fc, store
 }
 
-// testMachineLocalpart returns the full machine localpart for a short
-// machine name in the standard test fleet (bureau/fleet/prod).
-func testMachineLocalpart(name string) string {
-	return "bureau/fleet/prod/machine/" + name
+// testMachineStateKey returns the machine state_key string for a short
+// machine name in the standard test fleet. State keys use the
+// "localpart:server" format (without '@' prefix) for Matrix room
+// version 10+ compatibility.
+func testMachineStateKey(name string) string {
+	return testMachineUserID(name).StateKey()
 }
 
 // testOpsRoomID returns a deterministic ops room ID for a machine name.
@@ -162,19 +164,19 @@ func TestClassifyOpsRoomFromResourceRequestTicket(t *testing.T) {
 		},
 	}
 
-	machineLocalpart, classified := fc.classifyOpsRoom(roomID, content)
+	machineUserID, classified := fc.classifyOpsRoom(roomID, content)
 	if !classified {
 		t.Fatal("expected room to be classified as ops room")
 	}
-	if machineLocalpart != testMachineLocalpart("gpu-box") {
-		t.Errorf("machine localpart = %q, want %q", machineLocalpart, testMachineLocalpart("gpu-box"))
+	if machineUserID != testMachineUserID("gpu-box") {
+		t.Errorf("machine user ID = %v, want %v", machineUserID, testMachineUserID("gpu-box"))
 	}
 
 	// Verify the maps were populated.
-	if fc.opsRooms[testMachineLocalpart("gpu-box")] != roomID {
+	if fc.opsRooms[testMachineUserID("gpu-box")] != roomID {
 		t.Error("opsRooms should map machine to room ID")
 	}
-	if fc.opsRoomMachines[roomID] != testMachineLocalpart("gpu-box") {
+	if fc.opsRoomMachines[roomID] != testMachineUserID("gpu-box") {
 		t.Error("opsRoomMachines should map room ID to machine")
 	}
 }
@@ -294,7 +296,7 @@ func TestEnqueueReservation(t *testing.T) {
 	fc, _ := newReservationTestController(t)
 
 	opsRoomID := testOpsRoomID("gpu-box")
-	machineLocalpart := testMachineLocalpart("gpu-box")
+	machineUserID := testMachineUserID("gpu-box")
 	holder := testEntity(t, "agent/builder")
 
 	// Register relay link so holder can be resolved.
@@ -317,9 +319,9 @@ func TestEnqueueReservation(t *testing.T) {
 		},
 	}
 
-	fc.enqueueReservation(machineLocalpart, opsRoomID, "tkt-1", content, time.Date(2026, 3, 1, 10, 0, 0, 0, time.UTC).UnixMilli())
+	fc.enqueueReservation(machineUserID, opsRoomID, "tkt-1", content, time.Date(2026, 3, 1, 10, 0, 0, 0, time.UTC).UnixMilli())
 
-	reservation := fc.reservations[machineLocalpart]
+	reservation := fc.reservations[machineUserID]
 	if reservation == nil {
 		t.Fatal("reservation should exist after enqueue")
 	}
@@ -348,7 +350,7 @@ func TestEnqueueReservation(t *testing.T) {
 func TestEnqueueReservationSkipsDuplicate(t *testing.T) {
 	fc, _ := newReservationTestController(t)
 
-	machineLocalpart := testMachineLocalpart("gpu-box")
+	machineUserID := testMachineUserID("gpu-box")
 	opsRoomID := testOpsRoomID("gpu-box")
 
 	content := &ticket.TicketContent{
@@ -367,22 +369,22 @@ func TestEnqueueReservationSkipsDuplicate(t *testing.T) {
 	}
 
 	timestamp := time.Date(2026, 3, 1, 10, 0, 0, 0, time.UTC).UnixMilli()
-	fc.enqueueReservation(machineLocalpart, opsRoomID, "tkt-1", content, timestamp)
-	fc.enqueueReservation(machineLocalpart, opsRoomID, "tkt-1", content, timestamp)
+	fc.enqueueReservation(machineUserID, opsRoomID, "tkt-1", content, timestamp)
+	fc.enqueueReservation(machineUserID, opsRoomID, "tkt-1", content, timestamp)
 
-	if len(fc.reservations[machineLocalpart].queue) != 1 {
-		t.Errorf("duplicate enqueue should be ignored, got queue length %d", len(fc.reservations[machineLocalpart].queue))
+	if len(fc.reservations[machineUserID].queue) != 1 {
+		t.Errorf("duplicate enqueue should be ignored, got queue length %d", len(fc.reservations[machineUserID].queue))
 	}
 }
 
 func TestEnqueueReservationSkipsActiveTicket(t *testing.T) {
 	fc, _ := newReservationTestController(t)
 
-	machineLocalpart := testMachineLocalpart("gpu-box")
+	machineUserID := testMachineUserID("gpu-box")
 	opsRoomID := testOpsRoomID("gpu-box")
 
 	// Pre-populate an active reservation with the same ticket ID.
-	fc.reservations[machineLocalpart] = &machineReservation{
+	fc.reservations[machineUserID] = &machineReservation{
 		active: &activeReservation{
 			relayTicketID: "tkt-1",
 			opsRoomID:     opsRoomID,
@@ -404,9 +406,9 @@ func TestEnqueueReservationSkipsActiveTicket(t *testing.T) {
 		},
 	}
 
-	fc.enqueueReservation(machineLocalpart, opsRoomID, "tkt-1", content, 1740826800000) // 2025-03-01T10:00:00Z
+	fc.enqueueReservation(machineUserID, opsRoomID, "tkt-1", content, 1740826800000) // 2025-03-01T10:00:00Z
 
-	if len(fc.reservations[machineLocalpart].queue) != 0 {
+	if len(fc.reservations[machineUserID].queue) != 0 {
 		t.Error("should not enqueue a ticket that is already active")
 	}
 }
@@ -414,7 +416,7 @@ func TestEnqueueReservationSkipsActiveTicket(t *testing.T) {
 func TestEnqueueReservationRejectsInvalidDuration(t *testing.T) {
 	fc, _ := newReservationTestController(t)
 
-	machineLocalpart := testMachineLocalpart("gpu-box")
+	machineUserID := testMachineUserID("gpu-box")
 	opsRoomID := testOpsRoomID("gpu-box")
 
 	content := &ticket.TicketContent{
@@ -432,10 +434,10 @@ func TestEnqueueReservationRejectsInvalidDuration(t *testing.T) {
 		},
 	}
 
-	fc.enqueueReservation(machineLocalpart, opsRoomID, "tkt-bad", content, 1740826800000) // 2025-03-01T10:00:00Z
+	fc.enqueueReservation(machineUserID, opsRoomID, "tkt-bad", content, 1740826800000) // 2025-03-01T10:00:00Z
 
-	if _, exists := fc.reservations[machineLocalpart]; exists {
-		if len(fc.reservations[machineLocalpart].queue) != 0 {
+	if _, exists := fc.reservations[machineUserID]; exists {
+		if len(fc.reservations[machineUserID].queue) != 0 {
 			t.Error("invalid duration should prevent enqueue")
 		}
 	}
@@ -446,12 +448,12 @@ func TestEnqueueReservationRejectsInvalidDuration(t *testing.T) {
 func TestGrantReservation(t *testing.T) {
 	fc, store := newReservationTestController(t)
 
-	machineLocalpart := testMachineLocalpart("gpu-box")
+	machineUserID := testMachineUserID("gpu-box")
 	opsRoomID := testOpsRoomID("gpu-box")
 	holder := testEntity(t, "agent/builder")
 
-	fc.opsRooms[machineLocalpart] = opsRoomID
-	fc.opsRoomMachines[opsRoomID] = machineLocalpart
+	fc.opsRooms[machineUserID] = opsRoomID
+	fc.opsRoomMachines[opsRoomID] = machineUserID
 
 	// Seed a relay ticket in the store so setRelayTicketInProgress
 	// can read-modify-write it.
@@ -486,9 +488,9 @@ func TestGrantReservation(t *testing.T) {
 			},
 		},
 	}
-	fc.reservations[machineLocalpart] = reservation
+	fc.reservations[machineUserID] = reservation
 
-	fc.startDrain(context.Background(), machineLocalpart, reservation)
+	fc.startDrain(context.Background(), machineUserID, reservation)
 
 	// Queue should be empty after grant.
 	if len(reservation.queue) != 0 {
@@ -542,12 +544,12 @@ func TestGrantReservation(t *testing.T) {
 	if reservationWrite.EventType != schema.EventTypeReservation {
 		t.Errorf("write[2] event type = %q, want m.bureau.reservation", reservationWrite.EventType)
 	}
-	if reservationWrite.StateKey != holder.Localpart() {
-		t.Errorf("reservation state key = %q, want %q", reservationWrite.StateKey, holder.Localpart())
+	if reservationWrite.StateKey != holder.UserID().StateKey() {
+		t.Errorf("reservation state key = %q, want %q", reservationWrite.StateKey, holder.UserID().StateKey())
 	}
 
 	// Verify reservation grant content.
-	grantRaw := store.latestState(opsRoomID.String(), holder.Localpart())
+	grantRaw := store.latestState(opsRoomID.String(), holder.UserID().StateKey())
 	var grant schema.ReservationGrant
 	if err := json.Unmarshal(grantRaw, &grant); err != nil {
 		t.Fatalf("unmarshal grant: %v", err)
@@ -569,12 +571,12 @@ func TestGrantReservation(t *testing.T) {
 func TestGrantReservationInclusiveNoDrain(t *testing.T) {
 	fc, store := newReservationTestController(t)
 
-	machineLocalpart := testMachineLocalpart("gpu-box")
+	machineUserID := testMachineUserID("gpu-box")
 	opsRoomID := testOpsRoomID("gpu-box")
 	holder := testEntity(t, "agent/builder")
 
-	fc.opsRooms[machineLocalpart] = opsRoomID
-	fc.opsRoomMachines[opsRoomID] = machineLocalpart
+	fc.opsRooms[machineUserID] = opsRoomID
+	fc.opsRoomMachines[opsRoomID] = machineUserID
 
 	store.seedState(opsRoomID.String(), "tkt-1", &ticket.TicketContent{
 		Version:  5,
@@ -606,9 +608,9 @@ func TestGrantReservationInclusiveNoDrain(t *testing.T) {
 			},
 		},
 	}
-	fc.reservations[machineLocalpart] = reservation
+	fc.reservations[machineUserID] = reservation
 
-	fc.startDrain(context.Background(), machineLocalpart, reservation)
+	fc.startDrain(context.Background(), machineUserID, reservation)
 
 	// For inclusive mode, we expect only 2 writes: ticket in_progress
 	// and reservation grant. No drain.
@@ -629,21 +631,21 @@ func TestDrainWaitGrantAfterAcknowledgment(t *testing.T) {
 	fc, store := newReservationTestController(t)
 	fc.drainGracePeriod = 30 * time.Second
 
-	machineLocalpart := testMachineLocalpart("gpu-box")
+	machineUserID := testMachineUserID("gpu-box")
 	opsRoomID := testOpsRoomID("gpu-box")
 	holder := testEntity(t, "agent/builder")
 
-	fc.opsRooms[machineLocalpart] = opsRoomID
-	fc.opsRoomMachines[opsRoomID] = machineLocalpart
+	fc.opsRooms[machineUserID] = opsRoomID
+	fc.opsRoomMachines[opsRoomID] = machineUserID
 
 	// Place a fleet-managed service on the machine so the drain
 	// has something to wait for. The PrincipalAssignment must have a
 	// real Entity so that fleetManagedServicesOnMachine returns the
 	// full Matrix localpart (used as the drain_status state_key).
 	serviceEntity := testEntity(t, "service/stt/whisper")
-	fc.services["service/stt/whisper"] = &fleetServiceState{
-		instances: map[string]*schema.PrincipalAssignment{
-			machineLocalpart: {Principal: serviceEntity},
+	fc.services[testServiceUserID("service/stt/whisper")] = &fleetServiceState{
+		instances: map[ref.UserID]*schema.PrincipalAssignment{
+			machineUserID: {Principal: serviceEntity},
 		},
 	}
 
@@ -677,9 +679,9 @@ func TestDrainWaitGrantAfterAcknowledgment(t *testing.T) {
 			},
 		},
 	}
-	fc.reservations[machineLocalpart] = reservation
+	fc.reservations[machineUserID] = reservation
 
-	fc.startDrain(context.Background(), machineLocalpart, reservation)
+	fc.startDrain(context.Background(), machineUserID, reservation)
 
 	// Drain should be pending, not yet granted.
 	if reservation.pending == nil {
@@ -702,11 +704,10 @@ func TestDrainWaitGrantAfterAcknowledgment(t *testing.T) {
 	}
 
 	// Simulate the service acknowledging the drain with InFlight == 0.
-	// The state_key is the service's full Matrix localpart (what
-	// the service uses when publishing drain_status).
+	// The state_key is in "localpart:server" format (without '@' prefix).
 	drainStatusEvent := messaging.Event{
 		Type:     schema.EventTypeDrainStatus,
-		StateKey: stringPtr(serviceEntity.Localpart()),
+		StateKey: stringPtr(serviceEntity.UserID().StateKey()),
 		Content: mustContentMap(schema.DrainStatusContent{
 			Acknowledged: true,
 			InFlight:     0,
@@ -746,18 +747,18 @@ func TestDrainWaitTimeoutGrantsAnyway(t *testing.T) {
 	fc.clock = fakeClock
 	fc.drainGracePeriod = 10 * time.Second
 
-	machineLocalpart := testMachineLocalpart("gpu-box")
+	machineUserID := testMachineUserID("gpu-box")
 	opsRoomID := testOpsRoomID("gpu-box")
 	holder := testEntity(t, "agent/builder")
 
-	fc.opsRooms[machineLocalpart] = opsRoomID
-	fc.opsRoomMachines[opsRoomID] = machineLocalpart
+	fc.opsRooms[machineUserID] = opsRoomID
+	fc.opsRoomMachines[opsRoomID] = machineUserID
 
 	// Fleet-managed service that will NOT acknowledge.
 	serviceEntity := testEntity(t, "service/stt/whisper")
-	fc.services["service/stt/whisper"] = &fleetServiceState{
-		instances: map[string]*schema.PrincipalAssignment{
-			machineLocalpart: {Principal: serviceEntity},
+	fc.services[testServiceUserID("service/stt/whisper")] = &fleetServiceState{
+		instances: map[ref.UserID]*schema.PrincipalAssignment{
+			machineUserID: {Principal: serviceEntity},
 		},
 	}
 
@@ -791,9 +792,9 @@ func TestDrainWaitTimeoutGrantsAnyway(t *testing.T) {
 			},
 		},
 	}
-	fc.reservations[machineLocalpart] = reservation
+	fc.reservations[machineUserID] = reservation
 
-	fc.startDrain(context.Background(), machineLocalpart, reservation)
+	fc.startDrain(context.Background(), machineUserID, reservation)
 
 	// Before timeout: drain is pending.
 	if reservation.pending == nil {
@@ -823,12 +824,12 @@ func TestDrainWaitNoServicesGrantsImmediately(t *testing.T) {
 	fc, store := newReservationTestController(t)
 	fc.drainGracePeriod = 30 * time.Second
 
-	machineLocalpart := testMachineLocalpart("gpu-box")
+	machineUserID := testMachineUserID("gpu-box")
 	opsRoomID := testOpsRoomID("gpu-box")
 	holder := testEntity(t, "agent/builder")
 
-	fc.opsRooms[machineLocalpart] = opsRoomID
-	fc.opsRoomMachines[opsRoomID] = machineLocalpart
+	fc.opsRooms[machineUserID] = opsRoomID
+	fc.opsRoomMachines[opsRoomID] = machineUserID
 
 	// No fleet-managed services on this machine.
 
@@ -862,9 +863,9 @@ func TestDrainWaitNoServicesGrantsImmediately(t *testing.T) {
 			},
 		},
 	}
-	fc.reservations[machineLocalpart] = reservation
+	fc.reservations[machineUserID] = reservation
 
-	fc.startDrain(context.Background(), machineLocalpart, reservation)
+	fc.startDrain(context.Background(), machineUserID, reservation)
 
 	// With no services to wait for, the drain publishes but
 	// checkDrainCompletion should complete immediately since the
@@ -916,19 +917,19 @@ func TestDrainPreemptionDuringPending(t *testing.T) {
 	fc, store := newReservationTestController(t)
 	fc.drainGracePeriod = 30 * time.Second
 
-	machineLocalpart := testMachineLocalpart("gpu-box")
+	machineUserID := testMachineUserID("gpu-box")
 	opsRoomID := testOpsRoomID("gpu-box")
 	holderP3 := testEntity(t, "agent/low-priority")
 	holderP1 := testEntity(t, "agent/high-priority")
 
-	fc.opsRooms[machineLocalpart] = opsRoomID
-	fc.opsRoomMachines[opsRoomID] = machineLocalpart
+	fc.opsRooms[machineUserID] = opsRoomID
+	fc.opsRoomMachines[opsRoomID] = machineUserID
 
 	// Fleet-managed service on the machine.
 	serviceEntity := testEntity(t, "service/stt/whisper")
-	fc.services["service/stt/whisper"] = &fleetServiceState{
-		instances: map[string]*schema.PrincipalAssignment{
-			machineLocalpart: {Principal: serviceEntity},
+	fc.services[testServiceUserID("service/stt/whisper")] = &fleetServiceState{
+		instances: map[ref.UserID]*schema.PrincipalAssignment{
+			machineUserID: {Principal: serviceEntity},
 		},
 	}
 
@@ -980,9 +981,9 @@ func TestDrainPreemptionDuringPending(t *testing.T) {
 			},
 		},
 	}
-	fc.reservations[machineLocalpart] = reservation
+	fc.reservations[machineUserID] = reservation
 
-	fc.startDrain(context.Background(), machineLocalpart, reservation)
+	fc.startDrain(context.Background(), machineUserID, reservation)
 
 	if reservation.pending == nil {
 		t.Fatal("expected P3 drain to be pending")
@@ -1034,24 +1035,24 @@ func TestDrainServicesListPopulated(t *testing.T) {
 	fc, store := newReservationTestController(t)
 	fc.drainGracePeriod = 30 * time.Second
 
-	machineLocalpart := testMachineLocalpart("gpu-box")
+	machineUserID := testMachineUserID("gpu-box")
 	opsRoomID := testOpsRoomID("gpu-box")
 	holder := testEntity(t, "agent/builder")
 
-	fc.opsRooms[machineLocalpart] = opsRoomID
-	fc.opsRoomMachines[opsRoomID] = machineLocalpart
+	fc.opsRooms[machineUserID] = opsRoomID
+	fc.opsRoomMachines[opsRoomID] = machineUserID
 
 	// Two fleet-managed services on this machine.
 	whisperEntity := testEntity(t, "service/stt/whisper")
 	buildbarnEntity := testEntity(t, "service/buildbarn/worker")
-	fc.services["service/stt/whisper"] = &fleetServiceState{
-		instances: map[string]*schema.PrincipalAssignment{
-			machineLocalpart: {Principal: whisperEntity},
+	fc.services[testServiceUserID("service/stt/whisper")] = &fleetServiceState{
+		instances: map[ref.UserID]*schema.PrincipalAssignment{
+			machineUserID: {Principal: whisperEntity},
 		},
 	}
-	fc.services["service/buildbarn/worker"] = &fleetServiceState{
-		instances: map[string]*schema.PrincipalAssignment{
-			machineLocalpart: {Principal: buildbarnEntity},
+	fc.services[testServiceUserID("service/buildbarn/worker")] = &fleetServiceState{
+		instances: map[ref.UserID]*schema.PrincipalAssignment{
+			machineUserID: {Principal: buildbarnEntity},
 		},
 	}
 
@@ -1085,9 +1086,9 @@ func TestDrainServicesListPopulated(t *testing.T) {
 			},
 		},
 	}
-	fc.reservations[machineLocalpart] = reservation
+	fc.reservations[machineUserID] = reservation
 
-	fc.startDrain(context.Background(), machineLocalpart, reservation)
+	fc.startDrain(context.Background(), machineUserID, reservation)
 
 	// Find the drain write and verify Services is populated.
 	for _, write := range store.writes {
@@ -1106,15 +1107,15 @@ func TestDrainServicesListPopulated(t *testing.T) {
 			t.Errorf("drain services count = %d, want 2", len(drain.Services))
 		}
 		// Verify both services are listed (order may vary).
-		serviceSet := make(map[string]bool)
+		serviceSet := make(map[ref.UserID]bool)
 		for _, service := range drain.Services {
 			serviceSet[service] = true
 		}
-		if !serviceSet[whisperEntity.Localpart()] {
-			t.Errorf("drain services should include %s", whisperEntity.Localpart())
+		if !serviceSet[whisperEntity.UserID()] {
+			t.Errorf("drain services should include %s", whisperEntity.UserID())
 		}
-		if !serviceSet[buildbarnEntity.Localpart()] {
-			t.Errorf("drain services should include %s", buildbarnEntity.Localpart())
+		if !serviceSet[buildbarnEntity.UserID()] {
+			t.Errorf("drain services should include %s", buildbarnEntity.UserID())
 		}
 		return
 	}
@@ -1126,15 +1127,15 @@ func TestDrainServicesListPopulated(t *testing.T) {
 func TestReleaseReservationOnTicketClosed(t *testing.T) {
 	fc, store := newReservationTestController(t)
 
-	machineLocalpart := testMachineLocalpart("gpu-box")
+	machineUserID := testMachineUserID("gpu-box")
 	opsRoomID := testOpsRoomID("gpu-box")
 	holder := testEntity(t, "agent/builder")
 
-	fc.opsRooms[machineLocalpart] = opsRoomID
-	fc.opsRoomMachines[opsRoomID] = machineLocalpart
+	fc.opsRooms[machineUserID] = opsRoomID
+	fc.opsRoomMachines[opsRoomID] = machineUserID
 
 	// Set up an active exclusive reservation.
-	fc.reservations[machineLocalpart] = &machineReservation{
+	fc.reservations[machineUserID] = &machineReservation{
 		active: &activeReservation{
 			relayTicketID: "tkt-1",
 			opsRoomID:     opsRoomID,
@@ -1147,9 +1148,9 @@ func TestReleaseReservationOnTicketClosed(t *testing.T) {
 	}
 
 	// Simulate ticket closure.
-	fc.handleRelayTicketClosed(context.Background(), machineLocalpart, opsRoomID, "tkt-1", "Work completed")
+	fc.handleRelayTicketClosed(context.Background(), machineUserID, opsRoomID, "tkt-1", "Work completed")
 
-	reservation := fc.reservations[machineLocalpart]
+	reservation := fc.reservations[machineUserID]
 	if reservation.active != nil {
 		t.Error("active reservation should be nil after release")
 	}
@@ -1177,13 +1178,13 @@ func TestReleaseReservationOnTicketClosed(t *testing.T) {
 func TestReleaseReservationAdvancesQueue(t *testing.T) {
 	fc, store := newReservationTestController(t)
 
-	machineLocalpart := testMachineLocalpart("gpu-box")
+	machineUserID := testMachineUserID("gpu-box")
 	opsRoomID := testOpsRoomID("gpu-box")
 	holder1 := testEntity(t, "agent/builder")
 	holder2 := testEntity(t, "agent/tester")
 
-	fc.opsRooms[machineLocalpart] = opsRoomID
-	fc.opsRoomMachines[opsRoomID] = machineLocalpart
+	fc.opsRooms[machineUserID] = opsRoomID
+	fc.opsRoomMachines[opsRoomID] = machineUserID
 
 	// Seed the next ticket for the grant flow.
 	store.seedState(opsRoomID.String(), "tkt-2", &ticket.TicketContent{
@@ -1203,7 +1204,7 @@ func TestReleaseReservationAdvancesQueue(t *testing.T) {
 		},
 	})
 
-	fc.reservations[machineLocalpart] = &machineReservation{
+	fc.reservations[machineUserID] = &machineReservation{
 		active: &activeReservation{
 			relayTicketID: "tkt-1",
 			opsRoomID:     opsRoomID,
@@ -1226,9 +1227,9 @@ func TestReleaseReservationAdvancesQueue(t *testing.T) {
 		},
 	}
 
-	fc.handleRelayTicketClosed(context.Background(), machineLocalpart, opsRoomID, "tkt-1", "Done")
+	fc.handleRelayTicketClosed(context.Background(), machineUserID, opsRoomID, "tkt-1", "Done")
 
-	reservation := fc.reservations[machineLocalpart]
+	reservation := fc.reservations[machineUserID]
 	if reservation.active == nil {
 		t.Fatal("next queued reservation should be granted")
 	}
@@ -1243,10 +1244,10 @@ func TestReleaseReservationAdvancesQueue(t *testing.T) {
 func TestHandleRelayTicketClosedRemovesFromQueue(t *testing.T) {
 	fc, _ := newReservationTestController(t)
 
-	machineLocalpart := testMachineLocalpart("gpu-box")
+	machineUserID := testMachineUserID("gpu-box")
 	opsRoomID := testOpsRoomID("gpu-box")
 
-	fc.reservations[machineLocalpart] = &machineReservation{
+	fc.reservations[machineUserID] = &machineReservation{
 		queue: []queuedReservation{
 			{relayTicketID: "tkt-1", opsRoomID: opsRoomID},
 			{relayTicketID: "tkt-2", opsRoomID: opsRoomID},
@@ -1254,9 +1255,9 @@ func TestHandleRelayTicketClosedRemovesFromQueue(t *testing.T) {
 		},
 	}
 
-	fc.handleRelayTicketClosed(context.Background(), machineLocalpart, opsRoomID, "tkt-2", "Cancelled")
+	fc.handleRelayTicketClosed(context.Background(), machineUserID, opsRoomID, "tkt-2", "Cancelled")
 
-	queue := fc.reservations[machineLocalpart].queue
+	queue := fc.reservations[machineUserID].queue
 	if len(queue) != 2 {
 		t.Fatalf("queue length = %d, want 2", len(queue))
 	}
@@ -1272,13 +1273,13 @@ func TestHandleRelayTicketClosedRemovesFromQueue(t *testing.T) {
 func TestPreemptReservation(t *testing.T) {
 	fc, store := newReservationTestController(t)
 
-	machineLocalpart := testMachineLocalpart("gpu-box")
+	machineUserID := testMachineUserID("gpu-box")
 	opsRoomID := testOpsRoomID("gpu-box")
 	holder1 := testEntity(t, "agent/builder")
 	holder2 := testEntity(t, "agent/critical-task")
 
-	fc.opsRooms[machineLocalpart] = opsRoomID
-	fc.opsRoomMachines[opsRoomID] = machineLocalpart
+	fc.opsRooms[machineUserID] = opsRoomID
+	fc.opsRoomMachines[opsRoomID] = machineUserID
 
 	// Seed the active ticket (for closure read-modify-write).
 	store.seedState(opsRoomID.String(), "tkt-low", &ticket.TicketContent{
@@ -1338,9 +1339,9 @@ func TestPreemptReservation(t *testing.T) {
 			},
 		},
 	}
-	fc.reservations[machineLocalpart] = reservation
+	fc.reservations[machineUserID] = reservation
 
-	fc.preemptReservation(context.Background(), machineLocalpart, reservation)
+	fc.preemptReservation(context.Background(), machineUserID, reservation)
 
 	// The preempted ticket should have been closed.
 	closedTicketRaw := store.latestState(opsRoomID.String(), "tkt-low")
@@ -1370,13 +1371,13 @@ func TestPreemptReservation(t *testing.T) {
 func TestAdvanceReservationQueuesPreempts(t *testing.T) {
 	fc, store := newReservationTestController(t)
 
-	machineLocalpart := testMachineLocalpart("gpu-box")
+	machineUserID := testMachineUserID("gpu-box")
 	opsRoomID := testOpsRoomID("gpu-box")
 	holder1 := testEntity(t, "agent/builder")
 	holder2 := testEntity(t, "agent/critical")
 
-	fc.opsRooms[machineLocalpart] = opsRoomID
-	fc.opsRoomMachines[opsRoomID] = machineLocalpart
+	fc.opsRooms[machineUserID] = opsRoomID
+	fc.opsRoomMachines[opsRoomID] = machineUserID
 
 	store.seedState(opsRoomID.String(), "tkt-low", &ticket.TicketContent{
 		Version:  5,
@@ -1411,7 +1412,7 @@ func TestAdvanceReservationQueuesPreempts(t *testing.T) {
 		},
 	})
 
-	fc.reservations[machineLocalpart] = &machineReservation{
+	fc.reservations[machineUserID] = &machineReservation{
 		active: &activeReservation{
 			relayTicketID: "tkt-low",
 			opsRoomID:     opsRoomID,
@@ -1436,7 +1437,7 @@ func TestAdvanceReservationQueuesPreempts(t *testing.T) {
 
 	fc.advanceReservationQueues(context.Background())
 
-	reservation := fc.reservations[machineLocalpart]
+	reservation := fc.reservations[machineUserID]
 	if reservation.active == nil {
 		t.Fatal("active reservation should exist after preemption")
 	}
@@ -1448,12 +1449,12 @@ func TestAdvanceReservationQueuesPreempts(t *testing.T) {
 func TestAdvanceReservationQueuesNoPreemptSamePriority(t *testing.T) {
 	fc, _ := newReservationTestController(t)
 
-	machineLocalpart := testMachineLocalpart("gpu-box")
+	machineUserID := testMachineUserID("gpu-box")
 	opsRoomID := testOpsRoomID("gpu-box")
 	holder1 := testEntity(t, "agent/builder")
 	holder2 := testEntity(t, "agent/also-builder")
 
-	fc.reservations[machineLocalpart] = &machineReservation{
+	fc.reservations[machineUserID] = &machineReservation{
 		active: &activeReservation{
 			relayTicketID: "tkt-1",
 			opsRoomID:     opsRoomID,
@@ -1478,7 +1479,7 @@ func TestAdvanceReservationQueuesNoPreemptSamePriority(t *testing.T) {
 	fc.advanceReservationQueues(context.Background())
 
 	// Same priority should not preempt.
-	if fc.reservations[machineLocalpart].active.relayTicketID != "tkt-1" {
+	if fc.reservations[machineUserID].active.relayTicketID != "tkt-1" {
 		t.Error("same priority should not trigger preemption")
 	}
 }
@@ -1486,12 +1487,12 @@ func TestAdvanceReservationQueuesNoPreemptSamePriority(t *testing.T) {
 func TestAdvanceReservationQueuesGrantsWhenNoActive(t *testing.T) {
 	fc, store := newReservationTestController(t)
 
-	machineLocalpart := testMachineLocalpart("gpu-box")
+	machineUserID := testMachineUserID("gpu-box")
 	opsRoomID := testOpsRoomID("gpu-box")
 	holder := testEntity(t, "agent/builder")
 
-	fc.opsRooms[machineLocalpart] = opsRoomID
-	fc.opsRoomMachines[opsRoomID] = machineLocalpart
+	fc.opsRooms[machineUserID] = opsRoomID
+	fc.opsRoomMachines[opsRoomID] = machineUserID
 
 	store.seedState(opsRoomID.String(), "tkt-1", &ticket.TicketContent{
 		Version:  5,
@@ -1510,7 +1511,7 @@ func TestAdvanceReservationQueuesGrantsWhenNoActive(t *testing.T) {
 		},
 	})
 
-	fc.reservations[machineLocalpart] = &machineReservation{
+	fc.reservations[machineUserID] = &machineReservation{
 		queue: []queuedReservation{
 			{
 				relayTicketID: "tkt-1",
@@ -1526,7 +1527,7 @@ func TestAdvanceReservationQueuesGrantsWhenNoActive(t *testing.T) {
 
 	fc.advanceReservationQueues(context.Background())
 
-	reservation := fc.reservations[machineLocalpart]
+	reservation := fc.reservations[machineUserID]
 	if reservation.active == nil {
 		t.Fatal("queued reservation should be granted when no active")
 	}
@@ -1540,12 +1541,12 @@ func TestAdvanceReservationQueuesGrantsWhenNoActive(t *testing.T) {
 func TestCheckReservationExpiry(t *testing.T) {
 	fc, store := newReservationTestController(t)
 
-	machineLocalpart := testMachineLocalpart("gpu-box")
+	machineUserID := testMachineUserID("gpu-box")
 	opsRoomID := testOpsRoomID("gpu-box")
 	holder := testEntity(t, "agent/builder")
 
-	fc.opsRooms[machineLocalpart] = opsRoomID
-	fc.opsRoomMachines[opsRoomID] = machineLocalpart
+	fc.opsRooms[machineUserID] = opsRoomID
+	fc.opsRoomMachines[opsRoomID] = machineUserID
 
 	// Seed the ticket for closure.
 	store.seedState(opsRoomID.String(), "tkt-1", &ticket.TicketContent{
@@ -1565,7 +1566,7 @@ func TestCheckReservationExpiry(t *testing.T) {
 		},
 	})
 
-	fc.reservations[machineLocalpart] = &machineReservation{
+	fc.reservations[machineUserID] = &machineReservation{
 		active: &activeReservation{
 			relayTicketID: "tkt-1",
 			opsRoomID:     opsRoomID,
@@ -1594,7 +1595,7 @@ func TestCheckReservationExpiry(t *testing.T) {
 	}
 
 	// Active reservation should be cleared.
-	if fc.reservations[machineLocalpart].active != nil {
+	if fc.reservations[machineUserID].active != nil {
 		t.Error("active reservation should be nil after expiry")
 	}
 }
@@ -1602,14 +1603,14 @@ func TestCheckReservationExpiry(t *testing.T) {
 func TestCheckReservationExpiryNotYetExpired(t *testing.T) {
 	fc, store := newReservationTestController(t)
 
-	machineLocalpart := testMachineLocalpart("gpu-box")
+	machineUserID := testMachineUserID("gpu-box")
 	opsRoomID := testOpsRoomID("gpu-box")
 	holder := testEntity(t, "agent/builder")
 
-	fc.opsRooms[machineLocalpart] = opsRoomID
-	fc.opsRoomMachines[opsRoomID] = machineLocalpart
+	fc.opsRooms[machineUserID] = opsRoomID
+	fc.opsRoomMachines[opsRoomID] = machineUserID
 
-	fc.reservations[machineLocalpart] = &machineReservation{
+	fc.reservations[machineUserID] = &machineReservation{
 		active: &activeReservation{
 			relayTicketID: "tkt-1",
 			opsRoomID:     opsRoomID,
@@ -1628,7 +1629,7 @@ func TestCheckReservationExpiryNotYetExpired(t *testing.T) {
 	if len(store.writes) != 0 {
 		t.Errorf("expected 0 writes for non-expired reservation, got %d", len(store.writes))
 	}
-	if fc.reservations[machineLocalpart].active == nil {
+	if fc.reservations[machineUserID].active == nil {
 		t.Error("active reservation should still be present")
 	}
 }
@@ -1652,13 +1653,13 @@ func TestProcessOpsRoomTicketEventClassifiesAndEnqueues(t *testing.T) {
 	fc.processOpsRoomTicketEvent(context.Background(), opsRoomID, event)
 
 	// Room should be classified as ops room.
-	machineLocalpart := testMachineLocalpart("gpu-box")
-	if fc.opsRooms[machineLocalpart] != opsRoomID {
+	machineUserID := testMachineUserID("gpu-box")
+	if fc.opsRooms[machineUserID] != opsRoomID {
 		t.Error("room should be classified as ops room")
 	}
 
 	// Ticket should be enqueued.
-	reservation := fc.reservations[machineLocalpart]
+	reservation := fc.reservations[machineUserID]
 	if reservation == nil {
 		t.Fatal("reservation should exist")
 	}
@@ -1673,13 +1674,13 @@ func TestProcessOpsRoomTicketEventClassifiesAndEnqueues(t *testing.T) {
 func TestProcessOpsRoomTicketEventClosedReleasesActive(t *testing.T) {
 	fc, store := newReservationTestController(t)
 
-	machineLocalpart := testMachineLocalpart("gpu-box")
+	machineUserID := testMachineUserID("gpu-box")
 	opsRoomID := testOpsRoomID("gpu-box")
 	holder := testEntity(t, "agent/builder")
 
-	fc.opsRooms[machineLocalpart] = opsRoomID
-	fc.opsRoomMachines[opsRoomID] = machineLocalpart
-	fc.reservations[machineLocalpart] = &machineReservation{
+	fc.opsRooms[machineUserID] = opsRoomID
+	fc.opsRoomMachines[opsRoomID] = machineUserID
+	fc.reservations[machineUserID] = &machineReservation{
 		active: &activeReservation{
 			relayTicketID: "tkt-1",
 			opsRoomID:     opsRoomID,
@@ -1698,7 +1699,7 @@ func TestProcessOpsRoomTicketEventClosedReleasesActive(t *testing.T) {
 
 	fc.processOpsRoomTicketEvent(context.Background(), opsRoomID, event)
 
-	if fc.reservations[machineLocalpart].active != nil {
+	if fc.reservations[machineUserID].active != nil {
 		t.Error("active reservation should be released after ticket closure")
 	}
 
@@ -1717,13 +1718,13 @@ func TestProcessOpsRoomTicketEventClosedReleasesActive(t *testing.T) {
 func TestProcessOpsRoomTicketEventEmptyContentHandled(t *testing.T) {
 	fc, _ := newReservationTestController(t)
 
-	machineLocalpart := testMachineLocalpart("gpu-box")
+	machineUserID := testMachineUserID("gpu-box")
 	opsRoomID := testOpsRoomID("gpu-box")
 
-	fc.opsRooms[machineLocalpart] = opsRoomID
-	fc.opsRoomMachines[opsRoomID] = machineLocalpart
+	fc.opsRooms[machineUserID] = opsRoomID
+	fc.opsRoomMachines[opsRoomID] = machineUserID
 
-	fc.reservations[machineLocalpart] = &machineReservation{
+	fc.reservations[machineUserID] = &machineReservation{
 		queue: []queuedReservation{
 			{relayTicketID: "tkt-1", opsRoomID: opsRoomID},
 		},
@@ -1739,7 +1740,7 @@ func TestProcessOpsRoomTicketEventEmptyContentHandled(t *testing.T) {
 	fc.processOpsRoomTicketEvent(context.Background(), opsRoomID, event)
 
 	// Should be removed from queue.
-	if len(fc.reservations[machineLocalpart].queue) != 0 {
+	if len(fc.reservations[machineUserID].queue) != 0 {
 		t.Error("cleared ticket should be removed from queue")
 	}
 }
@@ -1749,12 +1750,12 @@ func TestProcessOpsRoomTicketEventEmptyContentHandled(t *testing.T) {
 func TestProcessLeaveOpsRoom(t *testing.T) {
 	fc := newTestFleetController(t)
 
-	machineLocalpart := testMachineLocalpart("gpu-box")
+	machineUserID := testMachineUserID("gpu-box")
 	opsRoomID := testOpsRoomID("gpu-box")
 
-	fc.opsRooms[machineLocalpart] = opsRoomID
-	fc.opsRoomMachines[opsRoomID] = machineLocalpart
-	fc.reservations[machineLocalpart] = &machineReservation{
+	fc.opsRooms[machineUserID] = opsRoomID
+	fc.opsRoomMachines[opsRoomID] = machineUserID
+	fc.reservations[machineUserID] = &machineReservation{
 		active: &activeReservation{relayTicketID: "tkt-1"},
 		queue:  []queuedReservation{{relayTicketID: "tkt-2"}},
 	}
@@ -1766,13 +1767,13 @@ func TestProcessLeaveOpsRoom(t *testing.T) {
 
 	fc.processLeave(opsRoomID)
 
-	if _, exists := fc.opsRooms[machineLocalpart]; exists {
+	if _, exists := fc.opsRooms[machineUserID]; exists {
 		t.Error("opsRooms should be cleaned up after leave")
 	}
 	if _, exists := fc.opsRoomMachines[opsRoomID]; exists {
 		t.Error("opsRoomMachines should be cleaned up after leave")
 	}
-	if _, exists := fc.reservations[machineLocalpart]; exists {
+	if _, exists := fc.reservations[machineUserID]; exists {
 		t.Error("reservations should be cleaned up after leave")
 	}
 
@@ -1795,7 +1796,7 @@ func TestProcessLeaveOpsRoom(t *testing.T) {
 func TestMachineResourceRef(t *testing.T) {
 	fc := newTestFleetController(t)
 
-	resourceRef := fc.machineResourceRef(testMachineLocalpart("gpu-box"))
+	resourceRef := fc.machineResourceRef(testMachineUserID("gpu-box"))
 	if resourceRef.Type != schema.ResourceMachine {
 		t.Errorf("type = %q, want machine", resourceRef.Type)
 	}
@@ -1809,7 +1810,7 @@ func TestMachineResourceRef(t *testing.T) {
 func TestHandleSyncProcessesReservationLifecycle(t *testing.T) {
 	fc, store := newReservationTestController(t)
 
-	machineLocalpart := testMachineLocalpart("gpu-box")
+	machineUserID := testMachineUserID("gpu-box")
 	opsRoomID := testOpsRoomID("gpu-box")
 	holder := testEntity(t, "agent/builder")
 
@@ -1857,11 +1858,11 @@ func TestHandleSyncProcessesReservationLifecycle(t *testing.T) {
 	//    and enqueued the reservation.
 	// 3. advanceReservationQueues granted the reservation.
 
-	if _, exists := fc.opsRooms[machineLocalpart]; !exists {
+	if _, exists := fc.opsRooms[machineUserID]; !exists {
 		t.Error("ops room should be classified after sync")
 	}
 
-	reservation := fc.reservations[machineLocalpart]
+	reservation := fc.reservations[machineUserID]
 	if reservation == nil {
 		t.Fatal("reservation should exist after sync")
 	}

@@ -16,10 +16,10 @@ import (
 	"github.com/bureau-foundation/bureau/messaging"
 )
 
-// signalingSeparator separates the offerer and target machine localparts
+// signalingSeparator separates the offerer and target machine user IDs
 // in a signaling state event's state key. The pipe character is not valid
-// in Matrix localparts (allowed: a-z, 0-9, ., _, =, -, /) so it provides
-// an unambiguous boundary.
+// in Matrix user IDs (allowed in localparts: a-z, 0-9, ., _, =, -, /)
+// so it provides an unambiguous boundary.
 const signalingSeparator = "|"
 
 // Compile-time interface check.
@@ -52,8 +52,8 @@ func NewMatrixSignaler(session *messaging.DirectSession, machineRoomID ref.RoomI
 }
 
 // PublishOffer publishes a complete SDP offer directed at the target machine.
-func (s *MatrixSignaler) PublishOffer(ctx context.Context, localpart, targetLocalpart, sdp string) error {
-	stateKey := localpart + signalingSeparator + targetLocalpart
+func (s *MatrixSignaler) PublishOffer(ctx context.Context, machineID, targetID, sdp string) error {
+	stateKey := machineID + signalingSeparator + targetID
 	content := schema.WebRTCSignal{
 		SDP:       sdp,
 		Timestamp: time.Now().UTC().Format(time.RFC3339Nano),
@@ -67,8 +67,8 @@ func (s *MatrixSignaler) PublishOffer(ctx context.Context, localpart, targetLoca
 }
 
 // PublishAnswer publishes a complete SDP answer in response to an offer.
-func (s *MatrixSignaler) PublishAnswer(ctx context.Context, offererLocalpart, localpart, sdp string) error {
-	stateKey := offererLocalpart + signalingSeparator + localpart
+func (s *MatrixSignaler) PublishAnswer(ctx context.Context, offererID, machineID, sdp string) error {
+	stateKey := offererID + signalingSeparator + machineID
 	content := schema.WebRTCSignal{
 		SDP:       sdp,
 		Timestamp: time.Now().UTC().Format(time.RFC3339Nano),
@@ -82,19 +82,19 @@ func (s *MatrixSignaler) PublishAnswer(ctx context.Context, offererLocalpart, lo
 }
 
 // PollOffers returns new SDP offers directed at this machine.
-func (s *MatrixSignaler) PollOffers(ctx context.Context, localpart string) ([]SignalMessage, error) {
-	return s.pollSignals(ctx, localpart, schema.EventTypeWebRTCOffer, matchOfferKey)
+func (s *MatrixSignaler) PollOffers(ctx context.Context, machineID string) ([]SignalMessage, error) {
+	return s.pollSignals(ctx, machineID, schema.EventTypeWebRTCOffer, matchOfferKey)
 }
 
 // PollAnswers returns new SDP answers to offers originated by this machine.
-func (s *MatrixSignaler) PollAnswers(ctx context.Context, localpart string) ([]SignalMessage, error) {
-	return s.pollSignals(ctx, localpart, schema.EventTypeWebRTCAnswer, matchAnswerKey)
+func (s *MatrixSignaler) PollAnswers(ctx context.Context, machineID string) ([]SignalMessage, error) {
+	return s.pollSignals(ctx, machineID, schema.EventTypeWebRTCAnswer, matchAnswerKey)
 }
 
 // pollSignals fetches room state and returns signal messages matching the
 // given event type whose state keys pass the matcher. The matcher extracts
-// the peer localpart from each state key.
-func (s *MatrixSignaler) pollSignals(ctx context.Context, localpart string, eventType ref.EventType, match signalKeyMatcher) ([]SignalMessage, error) {
+// the peer's user ID from each state key.
+func (s *MatrixSignaler) pollSignals(ctx context.Context, machineID string, eventType ref.EventType, match signalKeyMatcher) ([]SignalMessage, error) {
 	events, err := s.session.GetRoomState(ctx, s.machineRoomID)
 	if err != nil {
 		return nil, fmt.Errorf("fetching room state: %w", err)
@@ -111,7 +111,7 @@ func (s *MatrixSignaler) pollSignals(ctx context.Context, localpart string, even
 			stateKey = *event.StateKey
 		}
 
-		peerLocalpart, ok := match(stateKey, localpart)
+		peerID, ok := match(stateKey, machineID)
 		if !ok {
 			continue
 		}
@@ -126,9 +126,9 @@ func (s *MatrixSignaler) pollSignals(ctx context.Context, localpart string, even
 		}
 
 		messages = append(messages, SignalMessage{
-			PeerLocalpart: peerLocalpart,
-			SDP:           signal.SDP,
-			Timestamp:     signal.Timestamp,
+			PeerID:    peerID,
+			SDP:       signal.SDP,
+			Timestamp: signal.Timestamp,
 		})
 	}
 

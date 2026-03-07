@@ -43,7 +43,7 @@ type machineReservation struct {
 // report m.bureau.drain_status with Acknowledged before granting.
 type pendingDrain struct {
 	queued    queuedReservation
-	services  map[string]bool // service localpart → drained (Acknowledged)
+	services  map[ref.UserID]bool // service user ID → drained (Acknowledged)
 	startedAt time.Time
 }
 
@@ -74,16 +74,16 @@ type queuedReservation struct {
 // classifyOpsRoom checks if a ticket event's content identifies its
 // room as a machine ops room. If the ticket is a resource_request
 // with a machine resource, registers the room as that machine's ops
-// room and returns the machine localpart. Returns ("", false) if
+// room and returns the machine user ID. Returns (zero, false) if
 // the room cannot be classified from this event.
 //
 // Caller must hold fc.mu.
-func (fc *FleetController) classifyOpsRoom(roomID ref.RoomID, content *ticket.TicketContent) (string, bool) {
+func (fc *FleetController) classifyOpsRoom(roomID ref.RoomID, content *ticket.TicketContent) (ref.UserID, bool) {
 	if content.Type != ticket.TypeResourceRequest {
-		return "", false
+		return ref.UserID{}, false
 	}
 	if content.Reservation == nil || len(content.Reservation.Claims) == 0 {
-		return "", false
+		return ref.UserID{}, false
 	}
 
 	// Find the first machine claim to determine the ops room's machine.
@@ -92,7 +92,7 @@ func (fc *FleetController) classifyOpsRoom(roomID ref.RoomID, content *ticket.Ti
 			continue
 		}
 
-		// Build the full machine localpart from the short target name.
+		// Build the full machine ref from the short target name.
 		machine, err := ref.NewMachine(fc.fleet, claim.Resource.Target)
 		if err != nil {
 			fc.logger.Warn("cannot build machine ref from resource target",
@@ -102,19 +102,19 @@ func (fc *FleetController) classifyOpsRoom(roomID ref.RoomID, content *ticket.Ti
 			continue
 		}
 
-		localpart := machine.Localpart()
+		machineUserID := machine.UserID()
 		if _, exists := fc.opsRoomMachines[roomID]; !exists {
-			fc.opsRooms[localpart] = roomID
-			fc.opsRoomMachines[roomID] = localpart
+			fc.opsRooms[machineUserID] = roomID
+			fc.opsRoomMachines[roomID] = machineUserID
 			fc.logger.Info("ops room classified from ticket",
-				"machine", localpart,
+				"machine", machineUserID,
 				"room_id", roomID,
 			)
 		}
-		return localpart, true
+		return machineUserID, true
 	}
 
-	return "", false
+	return ref.UserID{}, false
 }
 
 // --- Relay link tracking ---
@@ -163,14 +163,24 @@ func (fc *FleetController) processDrainStatusEvent(roomID ref.RoomID, event mess
 	if event.StateKey == nil {
 		return
 	}
-	serviceLocalpart := *event.StateKey
+	stateKeyRaw := *event.StateKey
 
-	machineLocalpart, isOpsRoom := fc.opsRoomMachines[roomID]
+	serviceUserID, err := ref.ParseUserIDFromStateKey(stateKeyRaw)
+	if err != nil {
+		fc.logger.Warn("ignoring drain status event with unparseable state_key",
+			"room_id", roomID,
+			"state_key", stateKeyRaw,
+			"error", err,
+		)
+		return
+	}
+
+	machineUserID, isOpsRoom := fc.opsRoomMachines[roomID]
 	if !isOpsRoom {
 		return
 	}
 
-	reservation, exists := fc.reservations[machineLocalpart]
+	reservation, exists := fc.reservations[machineUserID]
 	if !exists || reservation.pending == nil {
 		return
 	}
@@ -179,25 +189,25 @@ func (fc *FleetController) processDrainStatusEvent(roomID ref.RoomID, event mess
 		return
 	}
 
-	content, err := parseEventContent[schema.DrainStatusContent](event)
-	if err != nil {
+	content, parseErr := parseEventContent[schema.DrainStatusContent](event)
+	if parseErr != nil {
 		fc.logger.Warn("failed to parse drain status event",
 			"room_id", roomID,
-			"state_key", serviceLocalpart,
-			"error", err,
+			"state_key", stateKeyRaw,
+			"error", parseErr,
 		)
 		return
 	}
 
 	// Check if this service is in the pending drain's tracked services.
-	if _, tracked := reservation.pending.services[serviceLocalpart]; !tracked {
+	if _, tracked := reservation.pending.services[serviceUserID]; !tracked {
 		// Not a tracked service. The daemon also publishes drain_status
-		// using its own localpart which may not be in the fleet service
+		// using its own user ID which may not be in the fleet service
 		// list. Accept it as an additional acknowledgment but don't
 		// block on it.
 		fc.logger.Info("drain status from untracked service (accepted but not blocking)",
-			"machine", machineLocalpart,
-			"service", serviceLocalpart,
+			"machine", machineUserID,
+			"service", serviceUserID,
 			"acknowledged", content.Acknowledged,
 			"in_flight", content.InFlight,
 		)
@@ -205,17 +215,17 @@ func (fc *FleetController) processDrainStatusEvent(roomID ref.RoomID, event mess
 	}
 
 	if content.Acknowledged {
-		reservation.pending.services[serviceLocalpart] = true
+		reservation.pending.services[serviceUserID] = true
 		fc.logger.Info("service drained",
-			"machine", machineLocalpart,
-			"service", serviceLocalpart,
+			"machine", machineUserID,
+			"service", serviceUserID,
 			"in_flight", content.InFlight,
 			"drained_at", content.DrainedAt,
 		)
 	} else {
 		fc.logger.Info("drain status update (not yet acknowledged)",
-			"machine", machineLocalpart,
-			"service", serviceLocalpart,
+			"machine", machineUserID,
+			"service", serviceUserID,
 			"acknowledged", content.Acknowledged,
 			"in_flight", content.InFlight,
 		)
@@ -234,9 +244,9 @@ func (fc *FleetController) processOpsRoomTicketEvent(ctx context.Context, roomID
 
 	if len(event.Content) == 0 {
 		// Empty content means the ticket state was cleared.
-		machineLocalpart, isOpsRoom := fc.opsRoomMachines[roomID]
+		machineUserID, isOpsRoom := fc.opsRoomMachines[roomID]
 		if isOpsRoom {
-			fc.handleRelayTicketRemoved(ctx, machineLocalpart, roomID, ticketID)
+			fc.handleRelayTicketRemoved(ctx, machineUserID, roomID, ticketID)
 		}
 		return
 	}
@@ -257,9 +267,9 @@ func (fc *FleetController) processOpsRoomTicketEvent(ctx context.Context, roomID
 	}
 
 	// Try to classify this room as an ops room if not already known.
-	machineLocalpart, isOpsRoom := fc.opsRoomMachines[roomID]
+	machineUserID, isOpsRoom := fc.opsRoomMachines[roomID]
 	if !isOpsRoom {
-		machineLocalpart, isOpsRoom = fc.classifyOpsRoom(roomID, content)
+		machineUserID, isOpsRoom = fc.classifyOpsRoom(roomID, content)
 		if !isOpsRoom {
 			return
 		}
@@ -267,9 +277,9 @@ func (fc *FleetController) processOpsRoomTicketEvent(ctx context.Context, roomID
 
 	switch content.Status {
 	case ticket.StatusOpen:
-		fc.enqueueReservation(machineLocalpart, roomID, ticketID, content, event.OriginServerTS)
+		fc.enqueueReservation(machineUserID, roomID, ticketID, content, event.OriginServerTS)
 	case ticket.StatusClosed:
-		fc.handleRelayTicketClosed(ctx, machineLocalpart, roomID, ticketID, content.CloseReason)
+		fc.handleRelayTicketClosed(ctx, machineUserID, roomID, ticketID, content.CloseReason)
 	case ticket.StatusInProgress:
 		// This is either our own echo (we set it to in_progress) or
 		// another service accepted the ticket. Either way, no action
@@ -281,8 +291,8 @@ func (fc *FleetController) processOpsRoomTicketEvent(ctx context.Context, roomID
 // queue if not already queued or active.
 //
 // Caller must hold fc.mu.
-func (fc *FleetController) enqueueReservation(machineLocalpart string, opsRoomID ref.RoomID, ticketID string, content *ticket.TicketContent, originServerTS int64) {
-	reservation := fc.ensureReservation(machineLocalpart)
+func (fc *FleetController) enqueueReservation(machineUserID ref.UserID, opsRoomID ref.RoomID, ticketID string, content *ticket.TicketContent, originServerTS int64) {
+	reservation := fc.ensureReservation(machineUserID)
 
 	// Skip if this ticket is already the active reservation.
 	if reservation.active != nil && reservation.active.relayTicketID == ticketID {
@@ -298,7 +308,7 @@ func (fc *FleetController) enqueueReservation(machineLocalpart string, opsRoomID
 
 	if content.Reservation == nil || len(content.Reservation.Claims) == 0 {
 		fc.logger.Warn("resource_request ticket has no claims",
-			"machine", machineLocalpart,
+			"machine", machineUserID,
 			"ticket_id", ticketID,
 		)
 		return
@@ -307,7 +317,7 @@ func (fc *FleetController) enqueueReservation(machineLocalpart string, opsRoomID
 	maxDuration, err := time.ParseDuration(content.Reservation.MaxDuration)
 	if err != nil {
 		fc.logger.Warn("invalid max_duration on relay ticket",
-			"machine", machineLocalpart,
+			"machine", machineUserID,
 			"ticket_id", ticketID,
 			"max_duration", content.Reservation.MaxDuration,
 			"error", err,
@@ -345,7 +355,7 @@ func (fc *FleetController) enqueueReservation(machineLocalpart string, opsRoomID
 	sortReservationQueue(reservation.queue)
 
 	fc.logger.Info("reservation enqueued",
-		"machine", machineLocalpart,
+		"machine", machineUserID,
 		"ticket_id", ticketID,
 		"priority", content.Priority,
 		"mode", mode,
@@ -360,31 +370,31 @@ func (fc *FleetController) enqueueReservation(machineLocalpart string, opsRoomID
 // If the ticket is in the queue, it is removed.
 //
 // Caller must hold fc.mu.
-func (fc *FleetController) handleRelayTicketClosed(ctx context.Context, machineLocalpart string, opsRoomID ref.RoomID, ticketID string, closeReason string) {
-	reservation, exists := fc.reservations[machineLocalpart]
+func (fc *FleetController) handleRelayTicketClosed(ctx context.Context, machineUserID ref.UserID, opsRoomID ref.RoomID, ticketID string, closeReason string) {
+	reservation, exists := fc.reservations[machineUserID]
 	if !exists {
 		return
 	}
 
 	// Check if this is the active reservation.
 	if reservation.active != nil && reservation.active.relayTicketID == ticketID {
-		fc.releaseReservation(ctx, machineLocalpart, reservation, "relay ticket closed: "+closeReason)
+		fc.releaseReservation(ctx, machineUserID, reservation, "relay ticket closed: "+closeReason)
 		return
 	}
 
 	// Check if this is the pending drain's ticket.
 	if reservation.pending != nil && reservation.pending.queued.relayTicketID == ticketID {
 		fc.logger.Info("pending drain ticket closed externally",
-			"machine", machineLocalpart,
+			"machine", machineUserID,
 			"ticket_id", ticketID,
 			"reason", closeReason,
 		)
 		// Clear drain without closing the ticket again (it's already closed).
-		opsRoom, exists := fc.opsRooms[machineLocalpart]
+		opsRoom, exists := fc.opsRooms[machineUserID]
 		if exists {
 			if _, err := fc.configStore.SendStateEvent(ctx, opsRoom, schema.EventTypeMachineDrain, "", json.RawMessage("{}")); err != nil {
 				fc.logger.Error("failed to clear drain after ticket closure",
-					"machine", machineLocalpart,
+					"machine", machineUserID,
 					"error", err,
 				)
 			}
@@ -398,7 +408,7 @@ func (fc *FleetController) handleRelayTicketClosed(ctx context.Context, machineL
 		if queued.relayTicketID == ticketID {
 			reservation.queue = append(reservation.queue[:i], reservation.queue[i+1:]...)
 			fc.logger.Info("queued reservation removed",
-				"machine", machineLocalpart,
+				"machine", machineUserID,
 				"ticket_id", ticketID,
 				"reason", closeReason,
 			)
@@ -411,8 +421,8 @@ func (fc *FleetController) handleRelayTicketClosed(ctx context.Context, machineL
 // cleared (empty content). Treated the same as closure.
 //
 // Caller must hold fc.mu.
-func (fc *FleetController) handleRelayTicketRemoved(ctx context.Context, machineLocalpart string, opsRoomID ref.RoomID, ticketID string) {
-	fc.handleRelayTicketClosed(ctx, machineLocalpart, opsRoomID, ticketID, "state cleared")
+func (fc *FleetController) handleRelayTicketRemoved(ctx context.Context, machineUserID ref.UserID, opsRoomID ref.RoomID, ticketID string) {
+	fc.handleRelayTicketClosed(ctx, machineUserID, opsRoomID, ticketID, "state cleared")
 }
 
 // --- Grant logic ---
@@ -427,7 +437,7 @@ func (fc *FleetController) handleRelayTicketRemoved(ctx context.Context, machine
 //
 // Caller must hold fc.mu.
 func (fc *FleetController) advanceReservationQueues(ctx context.Context) {
-	for machineLocalpart, reservation := range fc.reservations {
+	for machineUserID, reservation := range fc.reservations {
 		if len(reservation.queue) == 0 {
 			continue
 		}
@@ -438,7 +448,7 @@ func (fc *FleetController) advanceReservationQueues(ctx context.Context) {
 		if reservation.pending != nil {
 			queueHead := reservation.queue[0]
 			if queueHead.priority < reservation.pending.queued.priority {
-				fc.cancelPendingDrain(ctx, machineLocalpart, reservation, "preempted by higher priority request")
+				fc.cancelPendingDrain(ctx, machineUserID, reservation, "preempted by higher priority request")
 				// Fall through to start drain for the new queue head.
 			} else {
 				// Drain in progress, queue head is same or lower priority.
@@ -449,7 +459,7 @@ func (fc *FleetController) advanceReservationQueues(ctx context.Context) {
 		if reservation.active == nil && reservation.pending == nil {
 			// No active reservation and no pending drain — start
 			// granting the queue head.
-			fc.startDrain(ctx, machineLocalpart, reservation)
+			fc.startDrain(ctx, machineUserID, reservation)
 			continue
 		}
 
@@ -458,7 +468,7 @@ func (fc *FleetController) advanceReservationQueues(ctx context.Context) {
 			// priority (lower number) than the active reservation, preempt.
 			queueHead := reservation.queue[0]
 			if queueHead.priority < reservation.active.priority {
-				fc.preemptReservation(ctx, machineLocalpart, reservation)
+				fc.preemptReservation(ctx, machineUserID, reservation)
 			}
 		}
 	}
@@ -472,7 +482,7 @@ func (fc *FleetController) advanceReservationQueues(ctx context.Context) {
 // immediately.
 //
 // Caller must hold fc.mu.
-func (fc *FleetController) startDrain(ctx context.Context, machineLocalpart string, reservation *machineReservation) {
+func (fc *FleetController) startDrain(ctx context.Context, machineUserID ref.UserID, reservation *machineReservation) {
 	if len(reservation.queue) == 0 {
 		return
 	}
@@ -484,7 +494,7 @@ func (fc *FleetController) startDrain(ctx context.Context, machineLocalpart stri
 	// service that the resource owner has accepted the request.
 	if err := fc.setRelayTicketInProgress(ctx, queued.opsRoomID, queued.relayTicketID); err != nil {
 		fc.logger.Error("failed to set relay ticket in_progress",
-			"machine", machineLocalpart,
+			"machine", machineUserID,
 			"ticket_id", queued.relayTicketID,
 			"error", err,
 		)
@@ -493,7 +503,7 @@ func (fc *FleetController) startDrain(ctx context.Context, machineLocalpart stri
 
 	// Inclusive mode or no drain grace period: grant immediately.
 	if queued.mode != schema.ModeExclusive || fc.drainGracePeriod == 0 {
-		fc.completeGrant(ctx, machineLocalpart, reservation, queued)
+		fc.completeGrant(ctx, machineUserID, reservation, queued)
 		return
 	}
 
@@ -508,17 +518,17 @@ func (fc *FleetController) startDrain(ctx context.Context, machineLocalpart stri
 	drainStartedAt := fc.clock.Now()
 
 	// Exclusive mode: publish drain and wait for services.
-	drainServices := fc.fleetManagedServicesOnMachine(machineLocalpart)
-	if err := fc.publishMachineDrain(ctx, machineLocalpart, queued, drainStartedAt); err != nil {
+	drainServices := fc.fleetManagedServicesOnMachine(machineUserID)
+	if err := fc.publishMachineDrain(ctx, machineUserID, queued, drainStartedAt); err != nil {
 		fc.logger.Error("failed to publish machine drain",
-			"machine", machineLocalpart,
+			"machine", machineUserID,
 			"ticket_id", queued.relayTicketID,
 			"error", err,
 		)
 		// Grant immediately on drain publish failure — the drain
 		// protocol must not block grants when the homeserver is
 		// unreachable.
-		fc.completeGrant(ctx, machineLocalpart, reservation, queued)
+		fc.completeGrant(ctx, machineUserID, reservation, queued)
 		return
 	}
 
@@ -526,9 +536,9 @@ func (fc *FleetController) startDrain(ctx context.Context, machineLocalpart stri
 	// only drain responder is the machine daemon. We still wait
 	// for acknowledgment (the daemon reports sandbox count) but
 	// the drain is expected to complete quickly.
-	servicesDrained := make(map[string]bool, len(drainServices))
-	for _, localpart := range drainServices {
-		servicesDrained[localpart] = false
+	servicesDrained := make(map[ref.UserID]bool, len(drainServices))
+	for _, serviceUserID := range drainServices {
+		servicesDrained[serviceUserID] = false
 	}
 
 	reservation.pending = &pendingDrain{
@@ -538,7 +548,7 @@ func (fc *FleetController) startDrain(ctx context.Context, machineLocalpart stri
 	}
 
 	fc.logger.Info("drain published, waiting for services",
-		"machine", machineLocalpart,
+		"machine", machineUserID,
 		"ticket_id", queued.relayTicketID,
 		"services", len(drainServices),
 		"grace_period", fc.drainGracePeriod,
@@ -551,7 +561,7 @@ func (fc *FleetController) startDrain(ctx context.Context, machineLocalpart stri
 // exclusive mode.
 //
 // Caller must hold fc.mu.
-func (fc *FleetController) completeGrant(ctx context.Context, machineLocalpart string, reservation *machineReservation, queued queuedReservation) {
+func (fc *FleetController) completeGrant(ctx context.Context, machineUserID ref.UserID, reservation *machineReservation, queued queuedReservation) {
 	now := fc.clock.Now()
 	expiresAt := now.Add(queued.maxDuration)
 
@@ -561,9 +571,9 @@ func (fc *FleetController) completeGrant(ctx context.Context, machineLocalpart s
 	if queued.mode == schema.ModeExclusive && reservation.pending == nil {
 		// Direct call (not via drain-wait path) — publish drain for
 		// signal consistency even though we're granting immediately.
-		if err := fc.publishMachineDrain(ctx, machineLocalpart, queued, now); err != nil {
+		if err := fc.publishMachineDrain(ctx, machineUserID, queued, now); err != nil {
 			fc.logger.Error("failed to publish machine drain during direct grant",
-				"machine", machineLocalpart,
+				"machine", machineUserID,
 				"ticket_id", queued.relayTicketID,
 				"error", err,
 			)
@@ -576,7 +586,7 @@ func (fc *FleetController) completeGrant(ctx context.Context, machineLocalpart s
 	// Publish the reservation grant.
 	grant := schema.ReservationGrant{
 		Holder:      queued.holder,
-		Resource:    fc.machineResourceRef(machineLocalpart),
+		Resource:    fc.machineResourceRef(machineUserID),
 		Mode:        queued.mode,
 		GrantedAt:   now.UTC().Format(time.RFC3339),
 		ExpiresAt:   expiresAt.UTC().Format(time.RFC3339),
@@ -585,7 +595,7 @@ func (fc *FleetController) completeGrant(ctx context.Context, machineLocalpart s
 
 	if err := fc.publishReservationGrant(ctx, queued.opsRoomID, queued.holder, grant); err != nil {
 		fc.logger.Error("failed to publish reservation grant",
-			"machine", machineLocalpart,
+			"machine", machineUserID,
 			"ticket_id", queued.relayTicketID,
 			"error", err,
 		)
@@ -603,7 +613,7 @@ func (fc *FleetController) completeGrant(ctx context.Context, machineLocalpart s
 	}
 
 	fc.logger.Info("reservation granted",
-		"machine", machineLocalpart,
+		"machine", machineUserID,
 		"ticket_id", queued.relayTicketID,
 		"holder", queued.holder,
 		"mode", queued.mode,
@@ -628,7 +638,7 @@ func (fc *FleetController) completeGrant(ctx context.Context, machineLocalpart s
 func (fc *FleetController) checkDrainCompletion(ctx context.Context) {
 	now := fc.clock.Now()
 
-	for machineLocalpart, reservation := range fc.reservations {
+	for machineUserID, reservation := range fc.reservations {
 		if reservation.pending == nil {
 			continue
 		}
@@ -640,14 +650,14 @@ func (fc *FleetController) checkDrainCompletion(ctx context.Context) {
 		// drain_status events that arrived in the same sync batch
 		// as the ticket that started the drain (processed before
 		// the pending drain existed).
-		opsRoomID, hasOpsRoom := fc.opsRooms[machineLocalpart]
+		opsRoomID, hasOpsRoom := fc.opsRooms[machineUserID]
 		if hasOpsRoom {
-			for serviceLocalpart, drained := range pending.services {
+			for serviceUserID, drained := range pending.services {
 				if drained {
 					continue
 				}
 				raw, err := fc.configStore.GetStateEvent(ctx, opsRoomID,
-					schema.EventTypeDrainStatus, serviceLocalpart)
+					schema.EventTypeDrainStatus, serviceUserID.StateKey())
 				if err != nil {
 					// No drain_status yet — expected for services
 					// that haven't responded.
@@ -656,17 +666,17 @@ func (fc *FleetController) checkDrainCompletion(ctx context.Context) {
 				var status schema.DrainStatusContent
 				if err := json.Unmarshal(raw, &status); err != nil {
 					fc.logger.Warn("failed to parse drain_status state",
-						"machine", machineLocalpart,
-						"service", serviceLocalpart,
+						"machine", machineUserID,
+						"service", serviceUserID,
 						"error", err,
 					)
 					continue
 				}
 				if status.Acknowledged {
-					pending.services[serviceLocalpart] = true
+					pending.services[serviceUserID] = true
 					fc.logger.Info("service drained (from state read)",
-						"machine", machineLocalpart,
-						"service", serviceLocalpart,
+						"machine", machineUserID,
+						"service", serviceUserID,
 						"in_flight", status.InFlight,
 						"drained_at", status.DrainedAt,
 					)
@@ -685,30 +695,30 @@ func (fc *FleetController) checkDrainCompletion(ctx context.Context) {
 
 		if allDrained {
 			fc.logger.Info("all services drained, completing grant",
-				"machine", machineLocalpart,
+				"machine", machineUserID,
 				"ticket_id", pending.queued.relayTicketID,
 				"services", len(pending.services),
 			)
-			fc.completeGrant(ctx, machineLocalpart, reservation, pending.queued)
+			fc.completeGrant(ctx, machineUserID, reservation, pending.queued)
 			continue
 		}
 
 		// Check timeout.
 		if now.Sub(pending.startedAt) >= fc.drainGracePeriod {
 			// Collect which services did not acknowledge.
-			var unacknowledged []string
-			for service, drained := range pending.services {
+			var unacknowledged []ref.UserID
+			for serviceUserID, drained := range pending.services {
 				if !drained {
-					unacknowledged = append(unacknowledged, service)
+					unacknowledged = append(unacknowledged, serviceUserID)
 				}
 			}
 			fc.logger.Warn("drain grace period expired, granting without full acknowledgment",
-				"machine", machineLocalpart,
+				"machine", machineUserID,
 				"ticket_id", pending.queued.relayTicketID,
 				"unacknowledged_services", unacknowledged,
 				"grace_period", fc.drainGracePeriod,
 			)
-			fc.completeGrant(ctx, machineLocalpart, reservation, pending.queued)
+			fc.completeGrant(ctx, machineUserID, reservation, pending.queued)
 			continue
 		}
 	}
@@ -719,7 +729,7 @@ func (fc *FleetController) checkDrainCompletion(ctx context.Context) {
 // event.
 //
 // Caller must hold fc.mu.
-func (fc *FleetController) cancelPendingDrain(ctx context.Context, machineLocalpart string, reservation *machineReservation, reason string) {
+func (fc *FleetController) cancelPendingDrain(ctx context.Context, machineUserID ref.UserID, reservation *machineReservation, reason string) {
 	if reservation.pending == nil {
 		return
 	}
@@ -729,18 +739,18 @@ func (fc *FleetController) cancelPendingDrain(ctx context.Context, machineLocalp
 	// Close the relay ticket for the cancelled drain.
 	if err := fc.closeRelayTicket(ctx, pending.queued.opsRoomID, pending.queued.relayTicketID, reason); err != nil {
 		fc.logger.Error("failed to close cancelled drain relay ticket",
-			"machine", machineLocalpart,
+			"machine", machineUserID,
 			"ticket_id", pending.queued.relayTicketID,
 			"error", err,
 		)
 	}
 
 	// Clear the drain event.
-	opsRoomID, exists := fc.opsRooms[machineLocalpart]
+	opsRoomID, exists := fc.opsRooms[machineUserID]
 	if exists {
 		if _, err := fc.configStore.SendStateEvent(ctx, opsRoomID, schema.EventTypeMachineDrain, "", json.RawMessage("{}")); err != nil {
 			fc.logger.Error("failed to clear machine drain during cancel",
-				"machine", machineLocalpart,
+				"machine", machineUserID,
 				"room_id", opsRoomID,
 				"error", err,
 			)
@@ -748,7 +758,7 @@ func (fc *FleetController) cancelPendingDrain(ctx context.Context, machineLocalp
 	}
 
 	fc.logger.Info("pending drain cancelled",
-		"machine", machineLocalpart,
+		"machine", machineUserID,
 		"ticket_id", pending.queued.relayTicketID,
 		"reason", reason,
 	)
@@ -756,19 +766,19 @@ func (fc *FleetController) cancelPendingDrain(ctx context.Context, machineLocalp
 	reservation.pending = nil
 }
 
-// fleetManagedServicesOnMachine returns the localparts of
-// fleet-managed services that have instances placed on the given
-// machine. Returns the full Matrix localpart for each service (from
-// the PrincipalAssignment's Principal.Localpart()), which matches the
+// fleetManagedServicesOnMachine returns the user IDs of fleet-managed
+// services that have instances placed on the given machine. Returns
+// the full Matrix user ID for each service (from the
+// PrincipalAssignment's Principal.UserID()), which matches the
 // state_key convention services use when publishing drain_status.
 //
 // Used to populate the pending drain's tracked services map so the FC
 // can correlate drain_status events by state_key.
-func (fc *FleetController) fleetManagedServicesOnMachine(machineLocalpart string) []string {
-	var services []string
+func (fc *FleetController) fleetManagedServicesOnMachine(machineUserID ref.UserID) []ref.UserID {
+	var services []ref.UserID
 	for _, serviceState := range fc.services {
-		if assignment, onMachine := serviceState.instances[machineLocalpart]; onMachine {
-			services = append(services, assignment.Principal.Localpart())
+		if assignment, onMachine := serviceState.instances[machineUserID]; onMachine {
+			services = append(services, assignment.Principal.UserID())
 		}
 	}
 	return services
@@ -780,7 +790,7 @@ func (fc *FleetController) fleetManagedServicesOnMachine(machineLocalpart string
 // starts the drain-grant process for the queue head.
 //
 // Caller must hold fc.mu.
-func (fc *FleetController) preemptReservation(ctx context.Context, machineLocalpart string, reservation *machineReservation) {
+func (fc *FleetController) preemptReservation(ctx context.Context, machineUserID ref.UserID, reservation *machineReservation) {
 	if reservation.active == nil {
 		return
 	}
@@ -790,7 +800,7 @@ func (fc *FleetController) preemptReservation(ctx context.Context, machineLocalp
 	// Close the active relay ticket.
 	if err := fc.closeRelayTicket(ctx, reservation.active.opsRoomID, reservation.active.relayTicketID, "Preempted by higher priority request"); err != nil {
 		fc.logger.Error("failed to close preempted relay ticket",
-			"machine", machineLocalpart,
+			"machine", machineUserID,
 			"ticket_id", reservation.active.relayTicketID,
 			"error", err,
 		)
@@ -798,39 +808,39 @@ func (fc *FleetController) preemptReservation(ctx context.Context, machineLocalp
 	}
 
 	// Clear the reservation grant and drain events.
-	fc.clearReservation(ctx, machineLocalpart, reservation)
+	fc.clearReservation(ctx, machineUserID, reservation)
 
 	fc.logger.Info("reservation preempted",
-		"machine", machineLocalpart,
+		"machine", machineUserID,
 		"preempted_ticket", preemptedTicketID,
 		"preempting_ticket", reservation.queue[0].relayTicketID,
 	)
 
 	// Start drain for the queue head.
-	fc.startDrain(ctx, machineLocalpart, reservation)
+	fc.startDrain(ctx, machineUserID, reservation)
 }
 
 // releaseReservation clears the active reservation for a machine and
 // attempts to grant the next queued ticket.
 //
 // Caller must hold fc.mu.
-func (fc *FleetController) releaseReservation(ctx context.Context, machineLocalpart string, reservation *machineReservation, reason string) {
+func (fc *FleetController) releaseReservation(ctx context.Context, machineUserID ref.UserID, reservation *machineReservation, reason string) {
 	if reservation.active == nil {
 		return
 	}
 
 	releasedTicketID := reservation.active.relayTicketID
-	fc.clearReservation(ctx, machineLocalpart, reservation)
+	fc.clearReservation(ctx, machineUserID, reservation)
 
 	fc.logger.Info("reservation released",
-		"machine", machineLocalpart,
+		"machine", machineUserID,
 		"ticket_id", releasedTicketID,
 		"reason", reason,
 	)
 
 	// Try to start drain/grant for the next queued ticket.
 	if len(reservation.queue) > 0 {
-		fc.startDrain(ctx, machineLocalpart, reservation)
+		fc.startDrain(ctx, machineUserID, reservation)
 	}
 }
 
@@ -839,7 +849,7 @@ func (fc *FleetController) releaseReservation(ctx context.Context, machineLocalp
 // reservation.active to nil.
 //
 // Caller must hold fc.mu.
-func (fc *FleetController) clearReservation(ctx context.Context, machineLocalpart string, reservation *machineReservation) {
+func (fc *FleetController) clearReservation(ctx context.Context, machineUserID ref.UserID, reservation *machineReservation) {
 	if reservation.active == nil {
 		return
 	}
@@ -848,9 +858,9 @@ func (fc *FleetController) clearReservation(ctx context.Context, machineLocalpar
 	holder := reservation.active.holder
 
 	// Clear the reservation grant (empty content).
-	if _, err := fc.configStore.SendStateEvent(ctx, opsRoomID, schema.EventTypeReservation, holder.Localpart(), json.RawMessage("{}")); err != nil {
+	if _, err := fc.configStore.SendStateEvent(ctx, opsRoomID, schema.EventTypeReservation, holder.UserID().StateKey(), json.RawMessage("{}")); err != nil {
 		fc.logger.Error("failed to clear reservation grant",
-			"machine", machineLocalpart,
+			"machine", machineUserID,
 			"room_id", opsRoomID,
 			"error", err,
 		)
@@ -860,7 +870,7 @@ func (fc *FleetController) clearReservation(ctx context.Context, machineLocalpar
 	if reservation.active.mode == schema.ModeExclusive {
 		if _, err := fc.configStore.SendStateEvent(ctx, opsRoomID, schema.EventTypeMachineDrain, "", json.RawMessage("{}")); err != nil {
 			fc.logger.Error("failed to clear machine drain",
-				"machine", machineLocalpart,
+				"machine", machineUserID,
 				"room_id", opsRoomID,
 				"error", err,
 			)
@@ -880,7 +890,7 @@ func (fc *FleetController) clearReservation(ctx context.Context, machineLocalpar
 func (fc *FleetController) checkReservationExpiry(ctx context.Context) {
 	now := fc.clock.Now()
 
-	for machineLocalpart, reservation := range fc.reservations {
+	for machineUserID, reservation := range fc.reservations {
 		if reservation.active == nil {
 			continue
 		}
@@ -890,7 +900,7 @@ func (fc *FleetController) checkReservationExpiry(ctx context.Context) {
 		}
 
 		fc.logger.Warn("reservation expired",
-			"machine", machineLocalpart,
+			"machine", machineUserID,
 			"ticket_id", reservation.active.relayTicketID,
 			"expired_at", reservation.active.expiresAt.UTC().Format(time.RFC3339),
 		)
@@ -898,13 +908,13 @@ func (fc *FleetController) checkReservationExpiry(ctx context.Context) {
 		// Close the relay ticket with expiry reason.
 		if err := fc.closeRelayTicket(ctx, reservation.active.opsRoomID, reservation.active.relayTicketID, "Duration exceeded"); err != nil {
 			fc.logger.Error("failed to close expired relay ticket",
-				"machine", machineLocalpart,
+				"machine", machineUserID,
 				"ticket_id", reservation.active.relayTicketID,
 				"error", err,
 			)
 		}
 
-		fc.releaseReservation(ctx, machineLocalpart, reservation, "duration exceeded")
+		fc.releaseReservation(ctx, machineUserID, reservation, "duration exceeded")
 	}
 }
 
@@ -958,9 +968,10 @@ func (fc *FleetController) readTicketContent(ctx context.Context, roomID ref.Roo
 }
 
 // publishReservationGrant publishes an m.bureau.reservation state
-// event in the ops room. The state key is the holder's localpart.
+// event in the ops room. The state key is the holder's user ID in
+// state_key format (localpart:server, without '@' prefix).
 func (fc *FleetController) publishReservationGrant(ctx context.Context, opsRoomID ref.RoomID, holder ref.Entity, grant schema.ReservationGrant) error {
-	_, err := fc.configStore.SendStateEvent(ctx, opsRoomID, schema.EventTypeReservation, holder.Localpart(), grant)
+	_, err := fc.configStore.SendStateEvent(ctx, opsRoomID, schema.EventTypeReservation, holder.UserID().StateKey(), grant)
 	if err != nil {
 		return fmt.Errorf("publishing reservation grant: %w", err)
 	}
@@ -972,14 +983,14 @@ func (fc *FleetController) publishReservationGrant(ctx context.Context, opsRoomI
 // the machine. The requestedAt timestamp is provided by the caller
 // so the drain event and the pending drain state share the same
 // time reference (captured before the network call).
-func (fc *FleetController) publishMachineDrain(ctx context.Context, machineLocalpart string, queued queuedReservation, requestedAt time.Time) error {
-	opsRoomID, exists := fc.opsRooms[machineLocalpart]
+func (fc *FleetController) publishMachineDrain(ctx context.Context, machineUserID ref.UserID, queued queuedReservation, requestedAt time.Time) error {
+	opsRoomID, exists := fc.opsRooms[machineUserID]
 	if !exists {
-		return fmt.Errorf("no ops room for machine %s", machineLocalpart)
+		return fmt.Errorf("no ops room for machine %s", machineUserID)
 	}
 
 	drain := schema.MachineDrainContent{
-		Services:          fc.fleetManagedServicesOnMachine(machineLocalpart),
+		Services:          fc.fleetManagedServicesOnMachine(machineUserID),
 		ReservationHolder: queued.holder,
 		RequestedAt:       requestedAt.UTC().Format(time.RFC3339),
 	}
@@ -989,14 +1000,14 @@ func (fc *FleetController) publishMachineDrain(ctx context.Context, machineLocal
 }
 
 // machineResourceRef constructs a ResourceRef for a machine from its
-// localpart. Extracts the short machine name from the full fleet-
-// scoped localpart.
-func (fc *FleetController) machineResourceRef(machineLocalpart string) schema.ResourceRef {
-	machine, err := ref.ParseMachine(machineLocalpart, fc.serverName)
+// user ID. Extracts the short machine name from the full fleet-scoped
+// user ID.
+func (fc *FleetController) machineResourceRef(machineUserID ref.UserID) schema.ResourceRef {
+	machine, err := ref.ParseMachineUserID(machineUserID.String())
 	if err != nil {
-		// The localpart was already validated when the machine was
+		// The user ID was already validated when the machine was
 		// added to the fleet model, so this should not happen.
-		return schema.ResourceRef{Type: schema.ResourceMachine, Target: machineLocalpart}
+		return schema.ResourceRef{Type: schema.ResourceMachine, Target: machineUserID.String()}
 	}
 	return schema.ResourceRef{Type: schema.ResourceMachine, Target: machine.Name()}
 }
@@ -1007,11 +1018,11 @@ func (fc *FleetController) machineResourceRef(machineLocalpart string) schema.Re
 // creating one if it doesn't exist.
 //
 // Caller must hold fc.mu.
-func (fc *FleetController) ensureReservation(machineLocalpart string) *machineReservation {
-	reservation, exists := fc.reservations[machineLocalpart]
+func (fc *FleetController) ensureReservation(machineUserID ref.UserID) *machineReservation {
+	reservation, exists := fc.reservations[machineUserID]
 	if !exists {
 		reservation = &machineReservation{}
-		fc.reservations[machineLocalpart] = reservation
+		fc.reservations[machineUserID] = reservation
 	}
 	return reservation
 }

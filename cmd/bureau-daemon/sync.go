@@ -735,7 +735,7 @@ func (d *Daemon) processMachineDrain(ctx context.Context) {
 		return
 	}
 
-	stateKey := d.machine.Localpart()
+	stateKey := d.machine.UserID().StateKey()
 
 	// A drain with a zero-value ReservationHolder means the event was
 	// cleared (empty JSON object or tombstoned). The FC clears drain by

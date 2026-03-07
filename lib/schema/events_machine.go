@@ -69,10 +69,10 @@ type MachineStatus struct {
 	TransportAddress string `json:"transport_address,omitempty"`
 
 	// Principals reports per-sandbox resource usage derived from cgroup
-	// v2 statistics. Keyed by principal localpart. Populated by daemons
-	// that support enriched heartbeats. Omitted by older daemons —
-	// consumers must handle its absence gracefully.
-	Principals map[string]PrincipalResourceUsage `json:"principals,omitempty"`
+	// v2 statistics. Keyed by principal Matrix user ID. Populated by
+	// daemons that support enriched heartbeats. Omitted by older
+	// daemons — consumers must handle its absence gracefully.
+	Principals map[ref.UserID]PrincipalResourceUsage `json:"principals,omitempty"`
 }
 
 // SandboxCounts reports how many sandboxes are in each state.

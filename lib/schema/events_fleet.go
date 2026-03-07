@@ -29,7 +29,7 @@ const (
 	// for nonexistent services, wasting resources and potentially
 	// displacing real services.
 	//
-	// State key: service localpart (e.g., "service/stt/whisper")
+	// State key: service user ID (e.g., "@bureau/fleet/prod/service/stt/whisper:server")
 	// Room: #bureau/fleet:<server>
 	EventTypeFleetService ref.EventType = "m.bureau.fleet_service"
 
@@ -55,7 +55,7 @@ const (
 	// rewriting these could trigger failover storms, constant rebalancing,
 	// or unauthorized preemption.
 	//
-	// State key: fleet controller localpart (e.g., "service/fleet/prod")
+	// State key: fleet controller user ID (e.g., "@bureau/fleet/prod/service/fleet/prod:server")
 	// Room: #bureau/fleet:<server>
 	EventTypeFleetConfig ref.EventType = "m.bureau.fleet_config"
 
@@ -64,7 +64,7 @@ const (
 	// current holder goes offline. The random-backoff-plus-verify pattern
 	// compensates for Matrix's last-writer-wins semantics.
 	//
-	// State key: service localpart (e.g., "service/fleet/prod")
+	// State key: service user ID (e.g., "@bureau/fleet/prod/service/fleet/prod:server")
 	// Room: #bureau/fleet:<server>
 	EventTypeHALease ref.EventType = "m.bureau.ha_lease"
 
@@ -72,7 +72,7 @@ const (
 	// by a service through its proxy. The fleet controller uses these for
 	// scaling decisions (e.g., high queue depth triggers replica scale-up).
 	//
-	// State key: service localpart
+	// State key: service user ID
 	// Room: #bureau/service:<server>
 	EventTypeServiceStatus ref.EventType = "m.bureau.service_status"
 

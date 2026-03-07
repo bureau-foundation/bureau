@@ -106,7 +106,7 @@ func (d *Daemon) checkCredentialAccess(
 //
 //  1. Actor has admin power level (100) in the credential room.
 //  2. Actor has a grant with action matching credential/use/<ref>.
-//  3. Actor IS the credential identity (localpart matches state key).
+//  3. Actor IS the credential identity (full user ID matches state key).
 //
 // The first matching condition wins.
 func (d *Daemon) hasCredentialAccess(
@@ -177,8 +177,8 @@ func (d *Daemon) hasCredentialAccess(
 	}
 
 	// Condition 3: actor IS the credential identity.
-	// The credential state key matches the actor's localpart.
-	if actor.Localpart() == credentialRef.StateKey {
+	// The credential state key matches the actor's full user ID.
+	if actor.String() == credentialRef.StateKey {
 		return credentialAccessResult{
 			Allowed: true,
 			Reason:  "actor is credential identity",

@@ -24,7 +24,7 @@ type ProvisionParams struct {
 
 	// Principal identifies the target principal as a fleet-scoped entity
 	// reference. The Entity's UserID() is used as the MATRIX_USER_ID in the
-	// credential bundle, and Localpart() is used as the state event key.
+	// credential bundle and as the state event key.
 	Principal ref.Entity
 
 	// MachineRoomID is the Matrix room ID of the fleet's machine room
@@ -91,7 +91,7 @@ func Provision(ctx context.Context, session messaging.Session, params ProvisionP
 		return nil, fmt.Errorf("machine room ID is required")
 	}
 
-	machineLocalpart := params.Machine.Localpart()
+	machineStateKey := params.Machine.UserID().StateKey()
 
 	// Collect and sort credential key names for deterministic output.
 	credentialKeys := make([]string, 0, len(params.Credentials))
@@ -107,7 +107,7 @@ func Provision(ctx context.Context, session messaging.Session, params ProvisionP
 	}
 
 	// Fetch the machine's public key from the fleet machine room.
-	machineKey, err := messaging.GetState[schema.MachineKey](ctx, session, params.MachineRoomID, schema.EventTypeMachineKey, machineLocalpart)
+	machineKey, err := messaging.GetState[schema.MachineKey](ctx, session, params.MachineRoomID, schema.EventTypeMachineKey, machineStateKey)
 	if err != nil {
 		return nil, err
 	}
@@ -145,7 +145,8 @@ func Provision(ctx context.Context, session messaging.Session, params ProvisionP
 	}
 
 	// Publish the credentials state event. The state key is the
-	// fleet-scoped localpart, matching how the daemon reads credentials.
+	// "localpart:server" form (without '@'), matching how the daemon
+	// reads credentials and complying with room version 10+ rules.
 	principalUserID := params.Principal.UserID()
 	credentialEvent := schema.Credentials{
 		Version:       schema.CredentialsVersion,
@@ -157,7 +158,7 @@ func Provision(ctx context.Context, session messaging.Session, params ProvisionP
 		ProvisionedAt: time.Now().UTC().Format(time.RFC3339),
 	}
 
-	stateKey := params.Principal.Localpart()
+	stateKey := params.Principal.UserID().StateKey()
 	eventID, err := session.SendStateEvent(ctx, configRoomID, schema.EventTypeCredentials, stateKey, credentialEvent)
 	if err != nil {
 		return nil, fmt.Errorf("publishing credentials for %q: %w", principalUserID, err)

@@ -29,7 +29,7 @@ func TestHeartbeatIntervalDefault(t *testing.T) {
 
 func TestHeartbeatIntervalFromConfig(t *testing.T) {
 	fc := newTestFleetController(t)
-	fc.config["global"] = &fleet.FleetConfigContent{
+	fc.config[testConfigUserID()] = &fleet.FleetConfigContent{
 		HeartbeatIntervalSeconds: 10,
 	}
 	if got := fc.heartbeatInterval(); got != 10*time.Second {
@@ -39,7 +39,7 @@ func TestHeartbeatIntervalFromConfig(t *testing.T) {
 
 func TestHeartbeatIntervalIgnoresZero(t *testing.T) {
 	fc := newTestFleetController(t)
-	fc.config["global"] = &fleet.FleetConfigContent{
+	fc.config[testConfigUserID()] = &fleet.FleetConfigContent{
 		HeartbeatIntervalSeconds: 0,
 	}
 	if got := fc.heartbeatInterval(); got != defaultHeartbeatInterval {
@@ -55,18 +55,18 @@ func TestCheckMachineHealthOnline(t *testing.T) {
 	fc.clock = fakeClock
 	fc.configStore = newFakeConfigStore()
 
-	fc.machines["bureau/fleet/prod/machine/a"] = &machineState{
+	fc.machines[testMachineUserID("a")] = &machineState{
 		info:          &schema.MachineInfo{Hostname: "a"},
 		status:        &schema.MachineStatus{},
-		assignments:   make(map[string]*schema.PrincipalAssignment),
+		assignments:   make(map[ref.UserID]*schema.PrincipalAssignment),
 		lastHeartbeat: fakeClock.Now().Add(-10 * time.Second),
 		healthState:   healthOnline,
 	}
 
 	fc.checkMachineHealth(context.Background())
 
-	if fc.machines["bureau/fleet/prod/machine/a"].healthState != healthOnline {
-		t.Errorf("healthState = %q, want %q", fc.machines["bureau/fleet/prod/machine/a"].healthState, healthOnline)
+	if fc.machines[testMachineUserID("a")].healthState != healthOnline {
+		t.Errorf("healthState = %q, want %q", fc.machines[testMachineUserID("a")].healthState, healthOnline)
 	}
 }
 
@@ -77,18 +77,18 @@ func TestCheckMachineHealthSuspect(t *testing.T) {
 	fc.configStore = newFakeConfigStore()
 
 	// Heartbeat older than 1x interval (30s) but within 3x (90s).
-	fc.machines["bureau/fleet/prod/machine/a"] = &machineState{
+	fc.machines[testMachineUserID("a")] = &machineState{
 		info:          &schema.MachineInfo{Hostname: "a"},
 		status:        &schema.MachineStatus{},
-		assignments:   make(map[string]*schema.PrincipalAssignment),
+		assignments:   make(map[ref.UserID]*schema.PrincipalAssignment),
 		lastHeartbeat: fakeClock.Now().Add(-60 * time.Second),
 		healthState:   healthOnline,
 	}
 
 	fc.checkMachineHealth(context.Background())
 
-	if fc.machines["bureau/fleet/prod/machine/a"].healthState != healthSuspect {
-		t.Errorf("healthState = %q, want %q", fc.machines["bureau/fleet/prod/machine/a"].healthState, healthSuspect)
+	if fc.machines[testMachineUserID("a")].healthState != healthSuspect {
+		t.Errorf("healthState = %q, want %q", fc.machines[testMachineUserID("a")].healthState, healthSuspect)
 	}
 }
 
@@ -102,11 +102,11 @@ func TestCheckMachineHealthOfflineTriggersFailover(t *testing.T) {
 
 	// Seed a machine with a fleet-managed service.
 	webEntity := testEntity(t, "service/web")
-	fc.machines["bureau/fleet/prod/machine/a"] = &machineState{
+	fc.machines[testMachineUserID("a")] = &machineState{
 		info:   &schema.MachineInfo{Hostname: "a"},
 		status: &schema.MachineStatus{},
-		assignments: map[string]*schema.PrincipalAssignment{
-			"service/web": {
+		assignments: map[ref.UserID]*schema.PrincipalAssignment{
+			testServiceUserID("service/web"): {
 				Principal: webEntity,
 				Template:  "bureau/template:web",
 				Labels:    map[string]string{"fleet_managed": "service/fleet/prod"},
@@ -116,20 +116,20 @@ func TestCheckMachineHealthOfflineTriggersFailover(t *testing.T) {
 		lastHeartbeat: fakeClock.Now().Add(-120 * time.Second), // 4x interval: offline
 		healthState:   healthSuspect,
 	}
-	fc.configRooms["bureau/fleet/prod/machine/a"] = mustRoomID("!config-a:local")
+	fc.configRooms[testMachineUserID("a")] = mustRoomID("!config-a:local")
 
-	fc.services["service/web"] = &fleetServiceState{
+	fc.services[testServiceUserID("service/web")] = &fleetServiceState{
 		definition: &fleet.FleetServiceContent{
 			Template: "bureau/template:web",
 			Replicas: fleet.ReplicaSpec{Min: 1, Max: 3},
 		},
-		instances: map[string]*schema.PrincipalAssignment{
-			"bureau/fleet/prod/machine/a": fc.machines["bureau/fleet/prod/machine/a"].assignments["service/web"],
+		instances: map[ref.UserID]*schema.PrincipalAssignment{
+			testMachineUserID("a"): fc.machines[testMachineUserID("a")].assignments[testServiceUserID("service/web")],
 		},
 	}
 
 	// Seed the config store so unplace can read/write.
-	store.seedConfig("!config-a:local", "bureau/fleet/prod/machine/a", &schema.MachineConfig{
+	store.seedConfig("!config-a:local", testMachineUserID("a").StateKey(), &schema.MachineConfig{
 		Principals: []schema.PrincipalAssignment{
 			{
 				Principal: webEntity,
@@ -143,20 +143,20 @@ func TestCheckMachineHealthOfflineTriggersFailover(t *testing.T) {
 	fc.checkMachineHealth(context.Background())
 
 	// Machine should be offline.
-	if fc.machines["bureau/fleet/prod/machine/a"].healthState != healthOffline {
-		t.Errorf("healthState = %q, want %q", fc.machines["bureau/fleet/prod/machine/a"].healthState, healthOffline)
+	if fc.machines[testMachineUserID("a")].healthState != healthOffline {
+		t.Errorf("healthState = %q, want %q", fc.machines[testMachineUserID("a")].healthState, healthOffline)
 	}
 
 	// Service should be unplaced from machine/a.
-	if len(fc.machines["bureau/fleet/prod/machine/a"].assignments) != 0 {
-		t.Errorf("assignments count = %d, want 0", len(fc.machines["bureau/fleet/prod/machine/a"].assignments))
+	if len(fc.machines[testMachineUserID("a")].assignments) != 0 {
+		t.Errorf("assignments count = %d, want 0", len(fc.machines[testMachineUserID("a")].assignments))
 	}
-	if len(fc.services["service/web"].instances) != 0 {
-		t.Errorf("service instances count = %d, want 0", len(fc.services["service/web"].instances))
+	if len(fc.services[testServiceUserID("service/web")].instances) != 0 {
+		t.Errorf("service instances count = %d, want 0", len(fc.services[testServiceUserID("service/web")].instances))
 	}
 
 	// A fleet alert should have been published.
-	alertKey := storeKey("!fleet:local", "failover/service/web/bureau/fleet/prod/machine/a")
+	alertKey := storeKey("!fleet:local", "failover/"+testServiceUserID("service/web").String()+"/"+testMachineUserID("a").String())
 	if _, exists := store.configs[alertKey]; !exists {
 		t.Error("expected fleet alert to be published")
 	}
@@ -169,10 +169,10 @@ func TestCheckMachineHealthOfflineNotReTriggered(t *testing.T) {
 	fc.configStore = newFakeConfigStore()
 
 	// Machine already offline with no assignments (failover already happened).
-	fc.machines["bureau/fleet/prod/machine/a"] = &machineState{
+	fc.machines[testMachineUserID("a")] = &machineState{
 		info:          &schema.MachineInfo{Hostname: "a"},
 		status:        &schema.MachineStatus{},
-		assignments:   make(map[string]*schema.PrincipalAssignment),
+		assignments:   make(map[ref.UserID]*schema.PrincipalAssignment),
 		lastHeartbeat: fakeClock.Now().Add(-120 * time.Second),
 		healthState:   healthOffline,
 	}
@@ -180,8 +180,8 @@ func TestCheckMachineHealthOfflineNotReTriggered(t *testing.T) {
 	// Should not trigger failover again (no assignments to move).
 	fc.checkMachineHealth(context.Background())
 
-	if fc.machines["bureau/fleet/prod/machine/a"].healthState != healthOffline {
-		t.Errorf("healthState = %q, want %q", fc.machines["bureau/fleet/prod/machine/a"].healthState, healthOffline)
+	if fc.machines[testMachineUserID("a")].healthState != healthOffline {
+		t.Errorf("healthState = %q, want %q", fc.machines[testMachineUserID("a")].healthState, healthOffline)
 	}
 }
 
@@ -192,17 +192,17 @@ func TestCheckMachineHealthSkipsNoHeartbeat(t *testing.T) {
 	fc.configStore = newFakeConfigStore()
 
 	// Machine with no heartbeat (discovered through config room only).
-	fc.machines["bureau/fleet/prod/machine/a"] = &machineState{
+	fc.machines[testMachineUserID("a")] = &machineState{
 		info:        &schema.MachineInfo{Hostname: "a"},
-		assignments: make(map[string]*schema.PrincipalAssignment),
+		assignments: make(map[ref.UserID]*schema.PrincipalAssignment),
 	}
 
 	fc.checkMachineHealth(context.Background())
 
 	// Health state should remain at its zero value (empty string),
 	// not be changed to offline.
-	if fc.machines["bureau/fleet/prod/machine/a"].healthState != "" {
-		t.Errorf("healthState = %q, want empty (unchanged)", fc.machines["bureau/fleet/prod/machine/a"].healthState)
+	if fc.machines[testMachineUserID("a")].healthState != "" {
+		t.Errorf("healthState = %q, want empty (unchanged)", fc.machines[testMachineUserID("a")].healthState)
 	}
 }
 
@@ -213,23 +213,23 @@ func TestCheckMachineHealthCustomInterval(t *testing.T) {
 	fc.configStore = newFakeConfigStore()
 
 	// Set a 10-second heartbeat interval.
-	fc.config["global"] = &fleet.FleetConfigContent{
+	fc.config[testConfigUserID()] = &fleet.FleetConfigContent{
 		HeartbeatIntervalSeconds: 10,
 	}
 
 	// 25 seconds stale: within 3x of 10s, so suspect.
-	fc.machines["bureau/fleet/prod/machine/a"] = &machineState{
+	fc.machines[testMachineUserID("a")] = &machineState{
 		info:          &schema.MachineInfo{Hostname: "a"},
 		status:        &schema.MachineStatus{},
-		assignments:   make(map[string]*schema.PrincipalAssignment),
+		assignments:   make(map[ref.UserID]*schema.PrincipalAssignment),
 		lastHeartbeat: fakeClock.Now().Add(-25 * time.Second),
 		healthState:   healthOnline,
 	}
 
 	fc.checkMachineHealth(context.Background())
 
-	if fc.machines["bureau/fleet/prod/machine/a"].healthState != healthSuspect {
-		t.Errorf("healthState = %q, want %q", fc.machines["bureau/fleet/prod/machine/a"].healthState, healthSuspect)
+	if fc.machines[testMachineUserID("a")].healthState != healthSuspect {
+		t.Errorf("healthState = %q, want %q", fc.machines[testMachineUserID("a")].healthState, healthSuspect)
 	}
 }
 
@@ -240,23 +240,23 @@ func TestCheckMachineHealthCustomIntervalOffline(t *testing.T) {
 	fc.configStore = newFakeConfigStore()
 
 	// Set a 10-second heartbeat interval.
-	fc.config["global"] = &fleet.FleetConfigContent{
+	fc.config[testConfigUserID()] = &fleet.FleetConfigContent{
 		HeartbeatIntervalSeconds: 10,
 	}
 
 	// 35 seconds stale: beyond 3x of 10s = 30s, so offline.
-	fc.machines["bureau/fleet/prod/machine/a"] = &machineState{
+	fc.machines[testMachineUserID("a")] = &machineState{
 		info:          &schema.MachineInfo{Hostname: "a"},
 		status:        &schema.MachineStatus{},
-		assignments:   make(map[string]*schema.PrincipalAssignment),
+		assignments:   make(map[ref.UserID]*schema.PrincipalAssignment),
 		lastHeartbeat: fakeClock.Now().Add(-35 * time.Second),
 		healthState:   healthSuspect,
 	}
 
 	fc.checkMachineHealth(context.Background())
 
-	if fc.machines["bureau/fleet/prod/machine/a"].healthState != healthOffline {
-		t.Errorf("healthState = %q, want %q", fc.machines["bureau/fleet/prod/machine/a"].healthState, healthOffline)
+	if fc.machines[testMachineUserID("a")].healthState != healthOffline {
+		t.Errorf("healthState = %q, want %q", fc.machines[testMachineUserID("a")].healthState, healthOffline)
 	}
 }
 
@@ -272,16 +272,16 @@ func TestExecuteFailoverMultipleServices(t *testing.T) {
 
 	webEntity := testEntity(t, "service/web")
 	apiEntity := testEntity(t, "service/api")
-	fc.machines["bureau/fleet/prod/machine/a"] = &machineState{
+	fc.machines[testMachineUserID("a")] = &machineState{
 		info:   &schema.MachineInfo{Hostname: "a"},
 		status: &schema.MachineStatus{},
-		assignments: map[string]*schema.PrincipalAssignment{
-			"service/web": {
+		assignments: map[ref.UserID]*schema.PrincipalAssignment{
+			testServiceUserID("service/web"): {
 				Principal: webEntity,
 				Template:  "bureau/template:web",
 				Labels:    map[string]string{"fleet_managed": "service/fleet/prod"},
 			},
-			"service/api": {
+			testServiceUserID("service/api"): {
 				Principal: apiEntity,
 				Template:  "bureau/template:api",
 				Labels:    map[string]string{"fleet_managed": "service/fleet/prod"},
@@ -289,49 +289,49 @@ func TestExecuteFailoverMultipleServices(t *testing.T) {
 		},
 		configRoomID: mustRoomID("!config-a:local"),
 	}
-	fc.configRooms["bureau/fleet/prod/machine/a"] = mustRoomID("!config-a:local")
+	fc.configRooms[testMachineUserID("a")] = mustRoomID("!config-a:local")
 
-	fc.services["service/web"] = &fleetServiceState{
+	fc.services[testServiceUserID("service/web")] = &fleetServiceState{
 		definition: &fleet.FleetServiceContent{
 			Template: "bureau/template:web",
 			Replicas: fleet.ReplicaSpec{Min: 1, Max: 3},
 		},
-		instances: map[string]*schema.PrincipalAssignment{
-			"bureau/fleet/prod/machine/a": fc.machines["bureau/fleet/prod/machine/a"].assignments["service/web"],
+		instances: map[ref.UserID]*schema.PrincipalAssignment{
+			testMachineUserID("a"): fc.machines[testMachineUserID("a")].assignments[testServiceUserID("service/web")],
 		},
 	}
-	fc.services["service/api"] = &fleetServiceState{
+	fc.services[testServiceUserID("service/api")] = &fleetServiceState{
 		definition: &fleet.FleetServiceContent{
 			Template: "bureau/template:api",
 			Replicas: fleet.ReplicaSpec{Min: 1, Max: 3},
 		},
-		instances: map[string]*schema.PrincipalAssignment{
-			"bureau/fleet/prod/machine/a": fc.machines["bureau/fleet/prod/machine/a"].assignments["service/api"],
+		instances: map[ref.UserID]*schema.PrincipalAssignment{
+			testMachineUserID("a"): fc.machines[testMachineUserID("a")].assignments[testServiceUserID("service/api")],
 		},
 	}
 
-	store.seedConfig("!config-a:local", "bureau/fleet/prod/machine/a", &schema.MachineConfig{
+	store.seedConfig("!config-a:local", testMachineUserID("a").StateKey(), &schema.MachineConfig{
 		Principals: []schema.PrincipalAssignment{
 			{Principal: webEntity, Template: "bureau/template:web", AutoStart: true, Labels: map[string]string{"fleet_managed": "service/fleet/prod"}},
 			{Principal: apiEntity, Template: "bureau/template:api", AutoStart: true, Labels: map[string]string{"fleet_managed": "service/fleet/prod"}},
 		},
 	})
 
-	fc.executeFailover(context.Background(), "bureau/fleet/prod/machine/a", fc.machines["bureau/fleet/prod/machine/a"])
+	fc.executeFailover(context.Background(), testMachineUserID("a"), fc.machines[testMachineUserID("a")])
 
-	if len(fc.machines["bureau/fleet/prod/machine/a"].assignments) != 0 {
-		t.Errorf("assignments count = %d, want 0", len(fc.machines["bureau/fleet/prod/machine/a"].assignments))
+	if len(fc.machines[testMachineUserID("a")].assignments) != 0 {
+		t.Errorf("assignments count = %d, want 0", len(fc.machines[testMachineUserID("a")].assignments))
 	}
-	if len(fc.services["service/web"].instances) != 0 {
-		t.Errorf("web instances count = %d, want 0", len(fc.services["service/web"].instances))
+	if len(fc.services[testServiceUserID("service/web")].instances) != 0 {
+		t.Errorf("web instances count = %d, want 0", len(fc.services[testServiceUserID("service/web")].instances))
 	}
-	if len(fc.services["service/api"].instances) != 0 {
-		t.Errorf("api instances count = %d, want 0", len(fc.services["service/api"].instances))
+	if len(fc.services[testServiceUserID("service/api")].instances) != 0 {
+		t.Errorf("api instances count = %d, want 0", len(fc.services[testServiceUserID("service/api")].instances))
 	}
 
 	// Both alerts should be published.
-	webAlert := storeKey("!fleet:local", "failover/service/web/bureau/fleet/prod/machine/a")
-	apiAlert := storeKey("!fleet:local", "failover/service/api/bureau/fleet/prod/machine/a")
+	webAlert := storeKey("!fleet:local", "failover/"+testServiceUserID("service/web").String()+"/"+testMachineUserID("a").String())
+	apiAlert := storeKey("!fleet:local", "failover/"+testServiceUserID("service/api").String()+"/"+testMachineUserID("a").String())
 	if _, exists := store.configs[webAlert]; !exists {
 		t.Error("expected web failover alert")
 	}
@@ -346,12 +346,12 @@ func TestExecuteFailoverNoAssignments(t *testing.T) {
 	store := newFakeConfigStore()
 	fc.configStore = store
 
-	fc.machines["bureau/fleet/prod/machine/a"] = &machineState{
-		assignments: make(map[string]*schema.PrincipalAssignment),
+	fc.machines[testMachineUserID("a")] = &machineState{
+		assignments: make(map[ref.UserID]*schema.PrincipalAssignment),
 	}
 
 	// Should be a no-op.
-	fc.executeFailover(context.Background(), "bureau/fleet/prod/machine/a", fc.machines["bureau/fleet/prod/machine/a"])
+	fc.executeFailover(context.Background(), testMachineUserID("a"), fc.machines[testMachineUserID("a")])
 
 	if len(store.writes) != 0 {
 		t.Errorf("writes count = %d, want 0", len(store.writes))
@@ -434,7 +434,7 @@ func TestProcessMachineStatusEventSetsHeartbeat(t *testing.T) {
 	epoch := time.Date(2026, 1, 15, 12, 0, 0, 0, time.UTC)
 	fc.clock = clock.Fake(epoch)
 
-	event := makeEvent(schema.EventTypeMachineStatus, "bureau/fleet/prod/machine/a", map[string]any{
+	event := makeEvent(schema.EventTypeMachineStatus, testMachineUserID("a").StateKey(), map[string]any{
 		"principal":      "@bureau/fleet/prod/machine/a:bureau.local",
 		"cpu_percent":    42,
 		"memory_used_mb": 1000,
@@ -442,7 +442,7 @@ func TestProcessMachineStatusEventSetsHeartbeat(t *testing.T) {
 
 	fc.processMachineStatusEvent(event)
 
-	machine := fc.machines["bureau/fleet/prod/machine/a"]
+	machine := fc.machines[testMachineUserID("a")]
 	if machine == nil {
 		t.Fatal("expected machine to be created")
 	}
@@ -460,8 +460,8 @@ func TestProcessMachineStatusEventRecovery(t *testing.T) {
 	fc.clock = clock.Fake(epoch)
 
 	// Pre-populate machine as offline.
-	fc.machines["bureau/fleet/prod/machine/a"] = &machineState{
-		assignments: make(map[string]*schema.PrincipalAssignment),
+	fc.machines[testMachineUserID("a")] = &machineState{
+		assignments: make(map[ref.UserID]*schema.PrincipalAssignment),
 		healthState: healthOffline,
 	}
 
@@ -469,7 +469,7 @@ func TestProcessMachineStatusEventRecovery(t *testing.T) {
 	var logBuffer testLogBuffer
 	fc.logger = slog.New(slog.NewTextHandler(&logBuffer, &slog.HandlerOptions{Level: slog.LevelInfo}))
 
-	event := makeEvent(schema.EventTypeMachineStatus, "bureau/fleet/prod/machine/a", map[string]any{
+	event := makeEvent(schema.EventTypeMachineStatus, testMachineUserID("a").StateKey(), map[string]any{
 		"principal":      "@bureau/fleet/prod/machine/a:bureau.local",
 		"cpu_percent":    10,
 		"memory_used_mb": 500,
@@ -477,8 +477,8 @@ func TestProcessMachineStatusEventRecovery(t *testing.T) {
 
 	fc.processMachineStatusEvent(event)
 
-	if fc.machines["bureau/fleet/prod/machine/a"].healthState != healthOnline {
-		t.Errorf("healthState = %q, want %q", fc.machines["bureau/fleet/prod/machine/a"].healthState, healthOnline)
+	if fc.machines[testMachineUserID("a")].healthState != healthOnline {
+		t.Errorf("healthState = %q, want %q", fc.machines[testMachineUserID("a")].healthState, healthOnline)
 	}
 	if !logBuffer.contains("machine recovered") {
 		t.Error("expected recovery log message")
@@ -489,15 +489,15 @@ func TestProcessMachineStatusEventNoRecoveryLogWhenAlreadyOnline(t *testing.T) {
 	fc := newTestFleetController(t)
 	fc.clock = clock.Fake(time.Date(2026, 1, 15, 12, 0, 0, 0, time.UTC))
 
-	fc.machines["bureau/fleet/prod/machine/a"] = &machineState{
-		assignments: make(map[string]*schema.PrincipalAssignment),
+	fc.machines[testMachineUserID("a")] = &machineState{
+		assignments: make(map[ref.UserID]*schema.PrincipalAssignment),
 		healthState: healthOnline,
 	}
 
 	var logBuffer testLogBuffer
 	fc.logger = slog.New(slog.NewTextHandler(&logBuffer, &slog.HandlerOptions{Level: slog.LevelInfo}))
 
-	event := makeEvent(schema.EventTypeMachineStatus, "bureau/fleet/prod/machine/a", map[string]any{
+	event := makeEvent(schema.EventTypeMachineStatus, testMachineUserID("a").StateKey(), map[string]any{
 		"principal":      "@bureau/fleet/prod/machine/a:bureau.local",
 		"cpu_percent":    10,
 		"memory_used_mb": 500,
@@ -516,10 +516,10 @@ func TestMachineHealthAllMachines(t *testing.T) {
 	fc := sampleFleetController(t)
 	// Set health states on the sample machines.
 	epoch := time.Date(2026, 1, 15, 12, 0, 0, 0, time.UTC)
-	fc.machines["bureau/fleet/prod/machine/workstation"].lastHeartbeat = epoch.Add(-10 * time.Second)
-	fc.machines["bureau/fleet/prod/machine/workstation"].healthState = healthOnline
-	fc.machines["bureau/fleet/prod/machine/server"].lastHeartbeat = epoch.Add(-60 * time.Second)
-	fc.machines["bureau/fleet/prod/machine/server"].healthState = healthSuspect
+	fc.machines[testMachineUserID("workstation")].lastHeartbeat = epoch.Add(-10 * time.Second)
+	fc.machines[testMachineUserID("workstation")].healthState = healthOnline
+	fc.machines[testMachineUserID("server")].lastHeartbeat = epoch.Add(-60 * time.Second)
+	fc.machines[testMachineUserID("server")].healthState = healthSuspect
 
 	client, cleanup := testServer(t, fc)
 	defer cleanup()
@@ -533,25 +533,25 @@ func TestMachineHealthAllMachines(t *testing.T) {
 		t.Fatalf("machines count = %d, want 2", len(response.Machines))
 	}
 	// Should be sorted by localpart.
-	if response.Machines[0].Localpart != "bureau/fleet/prod/machine/server" {
-		t.Errorf("first machine = %q, want machine/server", response.Machines[0].Localpart)
+	if response.Machines[0].Localpart != testMachineUserID("server").String() {
+		t.Errorf("first machine = %q, want %q", response.Machines[0].Localpart, testMachineUserID("server").String())
 	}
-	if response.Machines[1].Localpart != "bureau/fleet/prod/machine/workstation" {
-		t.Errorf("second machine = %q, want machine/workstation", response.Machines[1].Localpart)
+	if response.Machines[1].Localpart != testMachineUserID("workstation").String() {
+		t.Errorf("second machine = %q, want %q", response.Machines[1].Localpart, testMachineUserID("workstation").String())
 	}
 }
 
 func TestMachineHealthSingleMachine(t *testing.T) {
 	fc := sampleFleetController(t)
 	epoch := time.Date(2026, 1, 15, 12, 0, 0, 0, time.UTC)
-	fc.machines["bureau/fleet/prod/machine/workstation"].lastHeartbeat = epoch.Add(-10 * time.Second)
-	fc.machines["bureau/fleet/prod/machine/workstation"].healthState = healthOnline
+	fc.machines[testMachineUserID("workstation")].lastHeartbeat = epoch.Add(-10 * time.Second)
+	fc.machines[testMachineUserID("workstation")].healthState = healthOnline
 
 	client, cleanup := testServer(t, fc)
 	defer cleanup()
 
 	var response machineHealthResponse
-	fields := map[string]any{"machine": "bureau/fleet/prod/machine/workstation"}
+	fields := map[string]any{"machine": testMachineUserID("workstation").String()}
 	if err := client.Call(context.Background(), "machine-health", fields, &response); err != nil {
 		t.Fatalf("machine-health call failed: %v", err)
 	}
@@ -570,7 +570,7 @@ func TestMachineHealthNotFound(t *testing.T) {
 	defer cleanup()
 
 	var response machineHealthResponse
-	fields := map[string]any{"machine": "bureau/fleet/prod/machine/nonexistent"}
+	fields := map[string]any{"machine": testMachineUserID("nonexistent").String()}
 	err := client.Call(context.Background(), "machine-health", fields, &response)
 	if err == nil {
 		t.Fatal("expected error for nonexistent machine")
@@ -592,14 +592,14 @@ func TestMachineHealthDeniedWithoutGrant(t *testing.T) {
 func TestMachineHealthUnknownState(t *testing.T) {
 	fc := sampleFleetController(t)
 	// Machine with no heartbeat should show "unknown".
-	fc.machines["bureau/fleet/prod/machine/workstation"].lastHeartbeat = time.Time{}
-	fc.machines["bureau/fleet/prod/machine/workstation"].healthState = ""
+	fc.machines[testMachineUserID("workstation")].lastHeartbeat = time.Time{}
+	fc.machines[testMachineUserID("workstation")].healthState = ""
 
 	client, cleanup := testServer(t, fc)
 	defer cleanup()
 
 	var response machineHealthResponse
-	fields := map[string]any{"machine": "bureau/fleet/prod/machine/workstation"}
+	fields := map[string]any{"machine": testMachineUserID("workstation").String()}
 	if err := client.Call(context.Background(), "machine-health", fields, &response); err != nil {
 		t.Fatalf("machine-health call failed: %v", err)
 	}

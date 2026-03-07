@@ -59,6 +59,27 @@ func testEntity(t *testing.T, accountLocalpart string) ref.Entity {
 	return entity
 }
 
+// testMachineUserID constructs a ref.UserID for a machine from its
+// short name (e.g., "workstation" ->
+// "@bureau/fleet/prod/machine/workstation:bureau.local").
+func testMachineUserID(name string) ref.UserID {
+	return ref.MustParseUserID("@bureau/fleet/prod/machine/" + name + ":bureau.local")
+}
+
+// testServiceUserID constructs a ref.UserID for a service from its
+// account localpart (e.g., "service/stt/whisper" ->
+// "@bureau/fleet/prod/service/stt/whisper:bureau.local").
+func testServiceUserID(localpart string) ref.UserID {
+	return ref.MustParseUserID("@bureau/fleet/prod/" + localpart + ":bureau.local")
+}
+
+// testConfigUserID constructs a ref.UserID for use as a config map key.
+// The config map is keyed by user ID; tests use a synthetic "global"
+// config keyed by a well-known user ID.
+func testConfigUserID() ref.UserID {
+	return ref.MustParseUserID("@bureau/fleet/prod/service/fleet/prod:bureau.local")
+}
+
 // newTestFleetController creates a FleetController suitable for unit
 // testing sync logic. The session is nil, which is safe for code paths
 // that don't make network calls.
@@ -78,16 +99,16 @@ func newTestFleetController(t *testing.T) *FleetController {
 		startedAt:       time.Date(2026, 1, 1, 12, 0, 0, 0, time.UTC),
 		fleet:           testFleetRef,
 		serverName:      testFleetRef.Server(),
-		machines:        make(map[string]*machineState),
-		services:        make(map[string]*fleetServiceState),
+		machines:        make(map[ref.UserID]*machineState),
+		services:        make(map[ref.UserID]*fleetServiceState),
 		definitions:     make(map[string]*fleet.MachineDefinitionContent),
-		config:          make(map[string]*fleet.FleetConfigContent),
-		leases:          make(map[string]*fleet.HALeaseContent),
-		configRooms:     make(map[string]ref.RoomID),
-		opsRooms:        make(map[string]ref.RoomID),
-		opsRoomMachines: make(map[ref.RoomID]string),
+		config:          make(map[ref.UserID]*fleet.FleetConfigContent),
+		leases:          make(map[ref.UserID]*fleet.HALeaseContent),
+		configRooms:     make(map[ref.UserID]ref.RoomID),
+		opsRooms:        make(map[ref.UserID]ref.RoomID),
+		opsRoomMachines: make(map[ref.RoomID]ref.UserID),
 		relayLinks:      make(map[opsTicketKey]schema.RelayLink),
-		reservations:    make(map[string]*machineReservation),
+		reservations:    make(map[ref.UserID]*machineReservation),
 		fleetRoomID:     fleetRoomID,
 		machineRoomID:   machineRoomID,
 		logger:          slog.New(slog.NewTextHandler(io.Discard, nil)),
@@ -203,7 +224,7 @@ func TestProcessFleetRoomState(t *testing.T) {
 	stateEvents := []messaging.Event{
 		{
 			Type:     schema.EventTypeFleetService,
-			StateKey: stringPtr("service/stt/whisper"),
+			StateKey: stringPtr(testServiceUserID("service/stt/whisper").StateKey()),
 			Content:  fleetServiceContent,
 		},
 		{
@@ -216,7 +237,7 @@ func TestProcessFleetRoomState(t *testing.T) {
 	fc.processRoomState(mustRoomID("!fleet:local"), stateEvents, nil)
 
 	// Verify fleet service was indexed.
-	serviceState, exists := fc.services["service/stt/whisper"]
+	serviceState, exists := fc.services[testServiceUserID("service/stt/whisper")]
 	if !exists {
 		t.Fatal("fleet service 'service/stt/whisper' should be in the services map")
 	}
@@ -262,22 +283,23 @@ func TestProcessMachineRoomState(t *testing.T) {
 		UptimeSeconds: 86400,
 	})
 
+	wsUserID := testMachineUserID("workstation")
 	stateEvents := []messaging.Event{
 		{
 			Type:     schema.EventTypeMachineInfo,
-			StateKey: stringPtr("bureau/fleet/prod/machine/workstation"),
+			StateKey: stringPtr(wsUserID.StateKey()),
 			Content:  machineInfoContent,
 		},
 		{
 			Type:     schema.EventTypeMachineStatus,
-			StateKey: stringPtr("bureau/fleet/prod/machine/workstation"),
+			StateKey: stringPtr(wsUserID.StateKey()),
 			Content:  machineStatusContent,
 		},
 	}
 
 	fc.processRoomState(mustRoomID("!machine:local"), stateEvents, nil)
 
-	machine, exists := fc.machines["bureau/fleet/prod/machine/workstation"]
+	machine, exists := fc.machines[wsUserID]
 	if !exists {
 		t.Fatal("machine 'machine/workstation' should be in the machines map")
 	}
@@ -304,6 +326,7 @@ func TestProcessMachineRoomState(t *testing.T) {
 func TestProcessConfigRoomState(t *testing.T) {
 	fc := newTestFleetController(t)
 
+	wsUserID := testMachineUserID("workstation")
 	machineConfigContent := toContentMap(t, schema.MachineConfig{
 		Principals: []schema.PrincipalAssignment{
 			{
@@ -325,7 +348,7 @@ func TestProcessConfigRoomState(t *testing.T) {
 	stateEvents := []messaging.Event{
 		{
 			Type:     schema.EventTypeMachineConfig,
-			StateKey: stringPtr("bureau/fleet/prod/machine/workstation"),
+			StateKey: stringPtr(wsUserID.StateKey()),
 			Content:  machineConfigContent,
 		},
 	}
@@ -333,7 +356,7 @@ func TestProcessConfigRoomState(t *testing.T) {
 	fc.processRoomState(mustRoomID("!config-ws:local"), stateEvents, nil)
 
 	// Verify the config room mapping was recorded.
-	configRoomID, exists := fc.configRooms["bureau/fleet/prod/machine/workstation"]
+	configRoomID, exists := fc.configRooms[wsUserID]
 	if !exists {
 		t.Fatal("config room mapping should exist for machine/workstation")
 	}
@@ -342,14 +365,15 @@ func TestProcessConfigRoomState(t *testing.T) {
 	}
 
 	// Verify the fleet-managed assignment was tracked.
-	machine, exists := fc.machines["bureau/fleet/prod/machine/workstation"]
+	machine, exists := fc.machines[wsUserID]
 	if !exists {
 		t.Fatal("machine 'machine/workstation' should be in the machines map")
 	}
 	if machine.configRoomID.String() != "!config-ws:local" {
 		t.Errorf("machine config room ID = %q, want %q", machine.configRoomID.String(), "!config-ws:local")
 	}
-	assignment, exists := machine.assignments["service/stt/whisper"]
+	whisperUserID := testServiceUserID("service/stt/whisper")
+	assignment, exists := machine.assignments[whisperUserID]
 	if !exists {
 		t.Fatal("fleet-managed assignment 'service/stt/whisper' should be tracked")
 	}
@@ -361,6 +385,7 @@ func TestProcessConfigRoomState(t *testing.T) {
 func TestProcessConfigRoomIgnoresNonFleetAssignments(t *testing.T) {
 	fc := newTestFleetController(t)
 
+	wsUserID := testMachineUserID("workstation")
 	machineConfigContent := toContentMap(t, schema.MachineConfig{
 		Principals: []schema.PrincipalAssignment{
 			{
@@ -375,14 +400,14 @@ func TestProcessConfigRoomIgnoresNonFleetAssignments(t *testing.T) {
 	stateEvents := []messaging.Event{
 		{
 			Type:     schema.EventTypeMachineConfig,
-			StateKey: stringPtr("bureau/fleet/prod/machine/workstation"),
+			StateKey: stringPtr(wsUserID.StateKey()),
 			Content:  machineConfigContent,
 		},
 	}
 
 	fc.processRoomState(mustRoomID("!config-ws:local"), stateEvents, nil)
 
-	machine, exists := fc.machines["bureau/fleet/prod/machine/workstation"]
+	machine, exists := fc.machines[wsUserID]
 	if !exists {
 		t.Fatal("machine should exist (created by config room processing)")
 	}
@@ -397,7 +422,7 @@ func TestProcessMachineConfigRejectsForeignFleet(t *testing.T) {
 	// Construct a machine config event from a different fleet
 	// ("staging" instead of "prod"). The fleet controller should
 	// silently reject it — no config room mapping, no machine entry.
-	foreignLocalpart := "bureau/fleet/staging/machine/intruder"
+	foreignUserID := ref.MustParseUserID("@bureau/fleet/staging/machine/intruder:bureau.local")
 
 	machineConfigContent := toContentMap(t, schema.MachineConfig{
 		Principals: []schema.PrincipalAssignment{
@@ -413,17 +438,17 @@ func TestProcessMachineConfigRejectsForeignFleet(t *testing.T) {
 	stateEvents := []messaging.Event{
 		{
 			Type:     schema.EventTypeMachineConfig,
-			StateKey: stringPtr(foreignLocalpart),
+			StateKey: stringPtr(foreignUserID.StateKey()),
 			Content:  machineConfigContent,
 		},
 	}
 
 	fc.processRoomState(mustRoomID("!foreign-config:local"), stateEvents, nil)
 
-	if _, exists := fc.configRooms[foreignLocalpart]; exists {
+	if _, exists := fc.configRooms[foreignUserID]; exists {
 		t.Error("foreign fleet config room should not be recorded")
 	}
-	if _, exists := fc.machines[foreignLocalpart]; exists {
+	if _, exists := fc.machines[foreignUserID]; exists {
 		t.Error("foreign fleet machine should not be tracked")
 	}
 }
@@ -432,9 +457,9 @@ func TestProcessMachineStatusRejectsForeignFleet(t *testing.T) {
 	fc := newTestFleetController(t)
 	fc.clock = clock.Fake(time.Date(2026, 1, 15, 12, 0, 0, 0, time.UTC))
 
-	foreignLocalpart := "bureau/fleet/staging/machine/intruder"
+	foreignUserID := ref.MustParseUserID("@bureau/fleet/staging/machine/intruder:bureau.local")
 
-	event := makeEvent(schema.EventTypeMachineStatus, foreignLocalpart, map[string]any{
+	event := makeEvent(schema.EventTypeMachineStatus, foreignUserID.StateKey(), map[string]any{
 		"principal":      "@bureau/fleet/staging/machine/intruder:bureau.local",
 		"cpu_percent":    50,
 		"memory_used_mb": 4000,
@@ -442,7 +467,7 @@ func TestProcessMachineStatusRejectsForeignFleet(t *testing.T) {
 
 	fc.processMachineStatusEvent(event)
 
-	if _, exists := fc.machines[foreignLocalpart]; exists {
+	if _, exists := fc.machines[foreignUserID]; exists {
 		t.Error("foreign fleet machine status should not be tracked")
 	}
 }
@@ -450,8 +475,10 @@ func TestProcessMachineStatusRejectsForeignFleet(t *testing.T) {
 func TestHandleSyncLeaveRemovesMachine(t *testing.T) {
 	fc := newTestFleetController(t)
 
+	wsUserID := testMachineUserID("workstation")
+	whisperUserID := testServiceUserID("service/stt/whisper")
 	// Set up a machine with a config room.
-	fc.machines["bureau/fleet/prod/machine/workstation"] = &machineState{
+	fc.machines[wsUserID] = &machineState{
 		info: &schema.MachineInfo{
 			Principal: "@machine/workstation:bureau.local",
 			Hostname:  "workstation",
@@ -460,15 +487,15 @@ func TestHandleSyncLeaveRemovesMachine(t *testing.T) {
 			Principal:  "@machine/workstation:bureau.local",
 			CPUPercent: 42,
 		},
-		assignments: map[string]*schema.PrincipalAssignment{
-			"service/stt/whisper": {
+		assignments: map[ref.UserID]*schema.PrincipalAssignment{
+			whisperUserID: {
 				Principal: testEntity(t, "service/stt/whisper"),
 				Template:  "bureau/template:whisper-stt",
 			},
 		},
 		configRoomID: mustRoomID("!config-ws:local"),
 	}
-	fc.configRooms["bureau/fleet/prod/machine/workstation"] = mustRoomID("!config-ws:local")
+	fc.configRooms[wsUserID] = mustRoomID("!config-ws:local")
 
 	response := &messaging.SyncResponse{
 		Rooms: messaging.RoomsSection{
@@ -481,12 +508,12 @@ func TestHandleSyncLeaveRemovesMachine(t *testing.T) {
 	fc.handleSync(context.Background(), response)
 
 	// Config room mapping should be removed.
-	if _, exists := fc.configRooms["bureau/fleet/prod/machine/workstation"]; exists {
+	if _, exists := fc.configRooms[wsUserID]; exists {
 		t.Fatal("config room mapping should have been removed after leave")
 	}
 
 	// Machine should still exist but with empty assignments.
-	machine, exists := fc.machines["bureau/fleet/prod/machine/workstation"]
+	machine, exists := fc.machines[wsUserID]
 	if !exists {
 		t.Fatal("machine should still exist after config room leave")
 	}
@@ -501,29 +528,31 @@ func TestHandleSyncLeaveRemovesMachine(t *testing.T) {
 func TestHandleSyncLeaveConfigRoomCleansUpServiceInstances(t *testing.T) {
 	fc := newTestFleetController(t)
 
+	wsUserID := testMachineUserID("workstation")
+	whisperUserID := testServiceUserID("service/stt/whisper")
 	assignment := &schema.PrincipalAssignment{
 		Principal: testEntity(t, "service/stt/whisper"),
 		Template:  "bureau/template:whisper-stt",
 		Labels:    map[string]string{"fleet_managed": "service/fleet/prod"},
 	}
 
-	fc.machines["bureau/fleet/prod/machine/workstation"] = &machineState{
+	fc.machines[wsUserID] = &machineState{
 		info:   &schema.MachineInfo{Hostname: "workstation"},
 		status: &schema.MachineStatus{CPUPercent: 42},
-		assignments: map[string]*schema.PrincipalAssignment{
-			"service/stt/whisper": assignment,
+		assignments: map[ref.UserID]*schema.PrincipalAssignment{
+			whisperUserID: assignment,
 		},
 		configRoomID: mustRoomID("!config-ws:local"),
 	}
-	fc.configRooms["bureau/fleet/prod/machine/workstation"] = mustRoomID("!config-ws:local")
+	fc.configRooms[wsUserID] = mustRoomID("!config-ws:local")
 
-	fc.services["service/stt/whisper"] = &fleetServiceState{
+	fc.services[whisperUserID] = &fleetServiceState{
 		definition: &fleet.FleetServiceContent{
 			Template: "bureau/template:whisper-stt",
 			Replicas: fleet.ReplicaSpec{Min: 1},
 		},
-		instances: map[string]*schema.PrincipalAssignment{
-			"bureau/fleet/prod/machine/workstation": assignment,
+		instances: map[ref.UserID]*schema.PrincipalAssignment{
+			wsUserID: assignment,
 		},
 	}
 
@@ -538,7 +567,7 @@ func TestHandleSyncLeaveConfigRoomCleansUpServiceInstances(t *testing.T) {
 	fc.handleSync(context.Background(), response)
 
 	// Service instances should be cleaned up.
-	serviceState := fc.services["service/stt/whisper"]
+	serviceState := fc.services[whisperUserID]
 	if len(serviceState.instances) != 0 {
 		t.Errorf("expected 0 service instances after config room leave, got %d", len(serviceState.instances))
 	}
@@ -547,28 +576,30 @@ func TestHandleSyncLeaveConfigRoomCleansUpServiceInstances(t *testing.T) {
 func TestHandleSyncLeaveMachineRoomClearsAllState(t *testing.T) {
 	fc := newTestFleetController(t)
 
+	alphaUserID := testMachineUserID("alpha")
+	workerUserID := testServiceUserID("service/worker")
 	assignment := &schema.PrincipalAssignment{
 		Principal: testEntity(t, "service/worker"),
 		Labels:    map[string]string{"fleet_managed": "service/fleet/prod"},
 	}
 
-	fc.machines["bureau/fleet/prod/machine/alpha"] = &machineState{
+	fc.machines[alphaUserID] = &machineState{
 		info:   &schema.MachineInfo{Hostname: "alpha"},
 		status: &schema.MachineStatus{},
-		assignments: map[string]*schema.PrincipalAssignment{
-			"service/worker": assignment,
+		assignments: map[ref.UserID]*schema.PrincipalAssignment{
+			workerUserID: assignment,
 		},
 	}
-	fc.machines["bureau/fleet/prod/machine/beta"] = &machineState{
+	fc.machines[testMachineUserID("beta")] = &machineState{
 		info:        &schema.MachineInfo{Hostname: "beta"},
 		status:      &schema.MachineStatus{},
-		assignments: make(map[string]*schema.PrincipalAssignment),
+		assignments: make(map[ref.UserID]*schema.PrincipalAssignment),
 	}
 
-	fc.services["service/worker"] = &fleetServiceState{
+	fc.services[workerUserID] = &fleetServiceState{
 		definition: &fleet.FleetServiceContent{Template: "t"},
-		instances: map[string]*schema.PrincipalAssignment{
-			"bureau/fleet/prod/machine/alpha": assignment,
+		instances: map[ref.UserID]*schema.PrincipalAssignment{
+			alphaUserID: assignment,
 		},
 	}
 
@@ -585,22 +616,24 @@ func TestHandleSyncLeaveMachineRoomClearsAllState(t *testing.T) {
 	if len(fc.machines) != 0 {
 		t.Errorf("expected 0 machines after machine room leave, got %d", len(fc.machines))
 	}
-	if len(fc.services["service/worker"].instances) != 0 {
+	if len(fc.services[workerUserID].instances) != 0 {
 		t.Errorf("expected 0 service instances after machine room leave, got %d",
-			len(fc.services["service/worker"].instances))
+			len(fc.services[workerUserID].instances))
 	}
 }
 
 func TestProcessMachineConfigTracksServiceInstances(t *testing.T) {
 	fc := newTestFleetController(t)
 
+	wsUserID := testMachineUserID("workstation")
+	whisperUserID := testServiceUserID("service/stt/whisper")
 	// Pre-populate a service definition so instance tracking works.
-	fc.services["service/stt/whisper"] = &fleetServiceState{
+	fc.services[whisperUserID] = &fleetServiceState{
 		definition: &fleet.FleetServiceContent{
 			Template: "bureau/template:whisper-stt",
 			Replicas: fleet.ReplicaSpec{Min: 1},
 		},
-		instances: make(map[string]*schema.PrincipalAssignment),
+		instances: make(map[ref.UserID]*schema.PrincipalAssignment),
 	}
 
 	// Process a machine config with a fleet-managed assignment.
@@ -618,7 +651,7 @@ func TestProcessMachineConfigTracksServiceInstances(t *testing.T) {
 	stateEvents := []messaging.Event{
 		{
 			Type:     schema.EventTypeMachineConfig,
-			StateKey: stringPtr("bureau/fleet/prod/machine/workstation"),
+			StateKey: stringPtr(wsUserID.StateKey()),
 			Content:  machineConfigContent,
 		},
 	}
@@ -626,11 +659,11 @@ func TestProcessMachineConfigTracksServiceInstances(t *testing.T) {
 	fc.processRoomState(mustRoomID("!config-ws:local"), stateEvents, nil)
 
 	// The service should now track an instance on this machine.
-	serviceState := fc.services["service/stt/whisper"]
+	serviceState := fc.services[whisperUserID]
 	if len(serviceState.instances) != 1 {
 		t.Fatalf("expected 1 service instance, got %d", len(serviceState.instances))
 	}
-	if _, exists := serviceState.instances["bureau/fleet/prod/machine/workstation"]; !exists {
+	if _, exists := serviceState.instances[wsUserID]; !exists {
 		t.Error("service should have instance on machine/workstation")
 	}
 }
@@ -638,6 +671,8 @@ func TestProcessMachineConfigTracksServiceInstances(t *testing.T) {
 func TestProcessMachineConfigRemovesStaleInstances(t *testing.T) {
 	fc := newTestFleetController(t)
 
+	wsUserID := testMachineUserID("workstation")
+	whisperUserID := testServiceUserID("service/stt/whisper")
 	oldAssignment := &schema.PrincipalAssignment{
 		Principal: testEntity(t, "service/stt/whisper"),
 		Template:  "bureau/template:whisper-stt",
@@ -645,19 +680,19 @@ func TestProcessMachineConfigRemovesStaleInstances(t *testing.T) {
 	}
 
 	// Pre-populate machine with an existing assignment.
-	fc.machines["bureau/fleet/prod/machine/workstation"] = &machineState{
-		assignments: map[string]*schema.PrincipalAssignment{
-			"service/stt/whisper": oldAssignment,
+	fc.machines[wsUserID] = &machineState{
+		assignments: map[ref.UserID]*schema.PrincipalAssignment{
+			whisperUserID: oldAssignment,
 		},
 		configRoomID: mustRoomID("!config-ws:local"),
 	}
-	fc.configRooms["bureau/fleet/prod/machine/workstation"] = mustRoomID("!config-ws:local")
+	fc.configRooms[wsUserID] = mustRoomID("!config-ws:local")
 
 	// Pre-populate service instances.
-	fc.services["service/stt/whisper"] = &fleetServiceState{
+	fc.services[whisperUserID] = &fleetServiceState{
 		definition: &fleet.FleetServiceContent{Template: "t"},
-		instances: map[string]*schema.PrincipalAssignment{
-			"bureau/fleet/prod/machine/workstation": oldAssignment,
+		instances: map[ref.UserID]*schema.PrincipalAssignment{
+			wsUserID: oldAssignment,
 		},
 	}
 
@@ -674,19 +709,19 @@ func TestProcessMachineConfigRemovesStaleInstances(t *testing.T) {
 
 	event := messaging.Event{
 		Type:     schema.EventTypeMachineConfig,
-		StateKey: stringPtr("bureau/fleet/prod/machine/workstation"),
+		StateKey: stringPtr(wsUserID.StateKey()),
 		Content:  machineConfigContent,
 	}
 	fc.processMachineConfigEvent(mustRoomID("!config-ws:local"), event)
 
 	// Service instance should be removed.
-	serviceState := fc.services["service/stt/whisper"]
+	serviceState := fc.services[whisperUserID]
 	if len(serviceState.instances) != 0 {
 		t.Errorf("expected 0 instances after assignment removal, got %d", len(serviceState.instances))
 	}
 
 	// Machine should have no fleet-managed assignments.
-	machine := fc.machines["bureau/fleet/prod/machine/workstation"]
+	machine := fc.machines[wsUserID]
 	if len(machine.assignments) != 0 {
 		t.Errorf("expected 0 fleet-managed assignments, got %d", len(machine.assignments))
 	}
@@ -695,8 +730,9 @@ func TestProcessMachineConfigRemovesStaleInstances(t *testing.T) {
 func TestHandleSyncUpdatesExistingMachine(t *testing.T) {
 	fc := newTestFleetController(t)
 
+	wsUserID := testMachineUserID("workstation")
 	// Pre-populate with initial machine state.
-	fc.machines["bureau/fleet/prod/machine/workstation"] = &machineState{
+	fc.machines[wsUserID] = &machineState{
 		info: &schema.MachineInfo{
 			Principal: "@machine/workstation:bureau.local",
 			Hostname:  "workstation",
@@ -706,7 +742,7 @@ func TestHandleSyncUpdatesExistingMachine(t *testing.T) {
 			CPUPercent:   42,
 			MemoryUsedMB: 32000,
 		},
-		assignments: make(map[string]*schema.PrincipalAssignment),
+		assignments: make(map[ref.UserID]*schema.PrincipalAssignment),
 	}
 
 	// Simulate an incremental sync with an updated machine status.
@@ -725,7 +761,7 @@ func TestHandleSyncUpdatesExistingMachine(t *testing.T) {
 						Events: []messaging.Event{
 							{
 								Type:     schema.EventTypeMachineStatus,
-								StateKey: stringPtr("bureau/fleet/prod/machine/workstation"),
+								StateKey: stringPtr(wsUserID.StateKey()),
 								Content:  updatedStatus,
 							},
 						},
@@ -737,7 +773,7 @@ func TestHandleSyncUpdatesExistingMachine(t *testing.T) {
 
 	fc.handleSync(context.Background(), response)
 
-	machine, exists := fc.machines["bureau/fleet/prod/machine/workstation"]
+	machine, exists := fc.machines[wsUserID]
 	if !exists {
 		t.Fatal("machine should still exist after sync update")
 	}
@@ -767,25 +803,27 @@ func TestHandleSyncUpdatesExistingMachine(t *testing.T) {
 func TestPendingEchoSkipsStaleConfigEvent(t *testing.T) {
 	fc := newTestFleetController(t)
 
+	wsUserID := testMachineUserID("workstation")
+	whisperUserID := testServiceUserID("service/stt/whisper")
 	// Set up a machine with a placed service and a pending echo.
 	placedAssignment := &schema.PrincipalAssignment{
 		Principal: testEntity(t, "service/stt/whisper"),
 		Template:  "bureau/template:whisper-stt",
 		Labels:    map[string]string{"fleet_managed": "service/fleet/prod"},
 	}
-	fc.machines["bureau/fleet/prod/machine/workstation"] = &machineState{
-		assignments: map[string]*schema.PrincipalAssignment{
-			"service/stt/whisper": placedAssignment,
+	fc.machines[wsUserID] = &machineState{
+		assignments: map[ref.UserID]*schema.PrincipalAssignment{
+			whisperUserID: placedAssignment,
 		},
 		configRoomID:       mustRoomID("!config-ws:local"),
 		pendingEchoEventID: ref.MustParseEventID("$echo-abc"),
 	}
-	fc.configRooms["bureau/fleet/prod/machine/workstation"] = mustRoomID("!config-ws:local")
+	fc.configRooms[wsUserID] = mustRoomID("!config-ws:local")
 
-	fc.services["service/stt/whisper"] = &fleetServiceState{
+	fc.services[whisperUserID] = &fleetServiceState{
 		definition: &fleet.FleetServiceContent{Template: "t"},
-		instances: map[string]*schema.PrincipalAssignment{
-			"bureau/fleet/prod/machine/workstation": placedAssignment,
+		instances: map[ref.UserID]*schema.PrincipalAssignment{
+			wsUserID: placedAssignment,
 		},
 	}
 
@@ -798,18 +836,18 @@ func TestPendingEchoSkipsStaleConfigEvent(t *testing.T) {
 	staleEvent := messaging.Event{
 		EventID:  ref.MustParseEventID("$stale-old-event"),
 		Type:     schema.EventTypeMachineConfig,
-		StateKey: stringPtr("bureau/fleet/prod/machine/workstation"),
+		StateKey: stringPtr(wsUserID.StateKey()),
 		Content:  staleContent,
 	}
 
 	fc.processMachineConfigEvent(mustRoomID("!config-ws:local"), staleEvent)
 
 	// Optimistic state from place() should be preserved.
-	machine := fc.machines["bureau/fleet/prod/machine/workstation"]
+	machine := fc.machines[wsUserID]
 	if len(machine.assignments) != 1 {
 		t.Fatalf("expected 1 assignment (preserved), got %d", len(machine.assignments))
 	}
-	if _, exists := machine.assignments["service/stt/whisper"]; !exists {
+	if _, exists := machine.assignments[whisperUserID]; !exists {
 		t.Error("placed assignment should still be present")
 	}
 
@@ -819,7 +857,7 @@ func TestPendingEchoSkipsStaleConfigEvent(t *testing.T) {
 	}
 
 	// Service instance should be preserved too.
-	serviceState := fc.services["service/stt/whisper"]
+	serviceState := fc.services[whisperUserID]
 	if len(serviceState.instances) != 1 {
 		t.Fatalf("expected 1 service instance (preserved), got %d", len(serviceState.instances))
 	}
@@ -831,24 +869,26 @@ func TestPendingEchoSkipsStaleConfigEvent(t *testing.T) {
 func TestPendingEchoClearsOnEchoArrival(t *testing.T) {
 	fc := newTestFleetController(t)
 
+	wsUserID := testMachineUserID("workstation")
+	whisperUserID := testServiceUserID("service/stt/whisper")
 	placedAssignment := &schema.PrincipalAssignment{
 		Principal: testEntity(t, "service/stt/whisper"),
 		Template:  "bureau/template:whisper-stt",
 		Labels:    map[string]string{"fleet_managed": "service/fleet/prod"},
 	}
-	fc.machines["bureau/fleet/prod/machine/workstation"] = &machineState{
-		assignments: map[string]*schema.PrincipalAssignment{
-			"service/stt/whisper": placedAssignment,
+	fc.machines[wsUserID] = &machineState{
+		assignments: map[ref.UserID]*schema.PrincipalAssignment{
+			whisperUserID: placedAssignment,
 		},
 		configRoomID:       mustRoomID("!config-ws:local"),
 		pendingEchoEventID: ref.MustParseEventID("$echo-abc"),
 	}
-	fc.configRooms["bureau/fleet/prod/machine/workstation"] = mustRoomID("!config-ws:local")
+	fc.configRooms[wsUserID] = mustRoomID("!config-ws:local")
 
-	fc.services["service/stt/whisper"] = &fleetServiceState{
+	fc.services[whisperUserID] = &fleetServiceState{
 		definition: &fleet.FleetServiceContent{Template: "t"},
-		instances: map[string]*schema.PrincipalAssignment{
-			"bureau/fleet/prod/machine/workstation": placedAssignment,
+		instances: map[ref.UserID]*schema.PrincipalAssignment{
+			wsUserID: placedAssignment,
 		},
 	}
 
@@ -867,14 +907,14 @@ func TestPendingEchoClearsOnEchoArrival(t *testing.T) {
 	echoEvent := messaging.Event{
 		EventID:  ref.MustParseEventID("$echo-abc"),
 		Type:     schema.EventTypeMachineConfig,
-		StateKey: stringPtr("bureau/fleet/prod/machine/workstation"),
+		StateKey: stringPtr(wsUserID.StateKey()),
 		Content:  echoContent,
 	}
 
 	fc.processMachineConfigEvent(mustRoomID("!config-ws:local"), echoEvent)
 
 	// Pending echo should be cleared.
-	machine := fc.machines["bureau/fleet/prod/machine/workstation"]
+	machine := fc.machines[wsUserID]
 	if !machine.pendingEchoEventID.IsZero() {
 		t.Errorf("pending echo should be cleared after echo arrival, got %q", machine.pendingEchoEventID)
 	}
@@ -890,9 +930,11 @@ func TestPendingEchoClearsOnEchoArrival(t *testing.T) {
 func TestPendingEchoAllowsSubsequentEvents(t *testing.T) {
 	fc := newTestFleetController(t)
 
-	fc.machines["bureau/fleet/prod/machine/workstation"] = &machineState{
-		assignments: map[string]*schema.PrincipalAssignment{
-			"service/stt/whisper": {
+	wsUserID := testMachineUserID("workstation")
+	whisperUserID := testServiceUserID("service/stt/whisper")
+	fc.machines[wsUserID] = &machineState{
+		assignments: map[ref.UserID]*schema.PrincipalAssignment{
+			whisperUserID: {
 				Principal: testEntity(t, "service/stt/whisper"),
 				Labels:    map[string]string{"fleet_managed": "service/fleet/prod"},
 			},
@@ -900,11 +942,11 @@ func TestPendingEchoAllowsSubsequentEvents(t *testing.T) {
 		configRoomID:       mustRoomID("!config-ws:local"),
 		pendingEchoEventID: ref.MustParseEventID("$echo-abc"),
 	}
-	fc.configRooms["bureau/fleet/prod/machine/workstation"] = mustRoomID("!config-ws:local")
+	fc.configRooms[wsUserID] = mustRoomID("!config-ws:local")
 
-	fc.services["service/stt/whisper"] = &fleetServiceState{
+	fc.services[whisperUserID] = &fleetServiceState{
 		definition: &fleet.FleetServiceContent{Template: "t"},
-		instances:  make(map[string]*schema.PrincipalAssignment),
+		instances:  make(map[ref.UserID]*schema.PrincipalAssignment),
 	}
 
 	// Process the echo to clear the pending state.
@@ -920,7 +962,7 @@ func TestPendingEchoAllowsSubsequentEvents(t *testing.T) {
 	fc.processMachineConfigEvent(mustRoomID("!config-ws:local"), messaging.Event{
 		EventID:  ref.MustParseEventID("$echo-abc"),
 		Type:     schema.EventTypeMachineConfig,
-		StateKey: stringPtr("bureau/fleet/prod/machine/workstation"),
+		StateKey: stringPtr(wsUserID.StateKey()),
 		Content:  echoContent,
 	})
 
@@ -931,12 +973,12 @@ func TestPendingEchoAllowsSubsequentEvents(t *testing.T) {
 	fc.processMachineConfigEvent(mustRoomID("!config-ws:local"), messaging.Event{
 		EventID:  ref.MustParseEventID("$later-event"),
 		Type:     schema.EventTypeMachineConfig,
-		StateKey: stringPtr("bureau/fleet/prod/machine/workstation"),
+		StateKey: stringPtr(wsUserID.StateKey()),
 		Content:  emptyContent,
 	})
 
 	// The subsequent event should have been applied — assignments empty.
-	machine := fc.machines["bureau/fleet/prod/machine/workstation"]
+	machine := fc.machines[wsUserID]
 	if len(machine.assignments) != 0 {
 		t.Fatalf("expected 0 assignments after subsequent event, got %d", len(machine.assignments))
 	}
@@ -949,15 +991,16 @@ func TestPendingEchoAllowsSubsequentEvents(t *testing.T) {
 func TestPendingEchoLatestWriteWins(t *testing.T) {
 	fc := newTestFleetController(t)
 
-	fc.machines["bureau/fleet/prod/machine/workstation"] = &machineState{
-		assignments:        make(map[string]*schema.PrincipalAssignment),
+	wsUserID := testMachineUserID("workstation")
+	fc.machines[wsUserID] = &machineState{
+		assignments:        make(map[ref.UserID]*schema.PrincipalAssignment),
 		configRoomID:       mustRoomID("!config-ws:local"),
 		pendingEchoEventID: ref.MustParseEventID("$echo-first"),
 	}
-	fc.configRooms["bureau/fleet/prod/machine/workstation"] = mustRoomID("!config-ws:local")
+	fc.configRooms[wsUserID] = mustRoomID("!config-ws:local")
 
 	// Simulate a second write overwriting the pending echo.
-	fc.machines["bureau/fleet/prod/machine/workstation"].pendingEchoEventID = ref.MustParseEventID("$echo-second")
+	fc.machines[wsUserID].pendingEchoEventID = ref.MustParseEventID("$echo-second")
 
 	// The echo of the first write arrives — should still be skipped
 	// because we're waiting for the second echo.
@@ -967,11 +1010,11 @@ func TestPendingEchoLatestWriteWins(t *testing.T) {
 	fc.processMachineConfigEvent(mustRoomID("!config-ws:local"), messaging.Event{
 		EventID:  ref.MustParseEventID("$echo-first"),
 		Type:     schema.EventTypeMachineConfig,
-		StateKey: stringPtr("bureau/fleet/prod/machine/workstation"),
+		StateKey: stringPtr(wsUserID.StateKey()),
 		Content:  firstContent,
 	})
 
-	machine := fc.machines["bureau/fleet/prod/machine/workstation"]
+	machine := fc.machines[wsUserID]
 	if machine.pendingEchoEventID != ref.MustParseEventID("$echo-second") {
 		t.Errorf("pending echo should still be %q after first echo, got %q",
 			"$echo-second", machine.pendingEchoEventID)
@@ -984,7 +1027,7 @@ func TestPendingEchoLatestWriteWins(t *testing.T) {
 	fc.processMachineConfigEvent(mustRoomID("!config-ws:local"), messaging.Event{
 		EventID:  ref.MustParseEventID("$echo-second"),
 		Type:     schema.EventTypeMachineConfig,
-		StateKey: stringPtr("bureau/fleet/prod/machine/workstation"),
+		StateKey: stringPtr(wsUserID.StateKey()),
 		Content:  secondContent,
 	})
 
@@ -998,16 +1041,18 @@ func TestPendingEchoLatestWriteWins(t *testing.T) {
 func TestNoPendingEchoPassesThrough(t *testing.T) {
 	fc := newTestFleetController(t)
 
-	fc.machines["bureau/fleet/prod/machine/workstation"] = &machineState{
-		assignments:  make(map[string]*schema.PrincipalAssignment),
+	wsUserID := testMachineUserID("workstation")
+	whisperUserID := testServiceUserID("service/stt/whisper")
+	fc.machines[wsUserID] = &machineState{
+		assignments:  make(map[ref.UserID]*schema.PrincipalAssignment),
 		configRoomID: mustRoomID("!config-ws:local"),
 		// No pending echo.
 	}
-	fc.configRooms["bureau/fleet/prod/machine/workstation"] = mustRoomID("!config-ws:local")
+	fc.configRooms[wsUserID] = mustRoomID("!config-ws:local")
 
-	fc.services["service/stt/whisper"] = &fleetServiceState{
+	fc.services[whisperUserID] = &fleetServiceState{
 		definition: &fleet.FleetServiceContent{Template: "t"},
-		instances:  make(map[string]*schema.PrincipalAssignment),
+		instances:  make(map[ref.UserID]*schema.PrincipalAssignment),
 	}
 
 	configContent := toContentMap(t, schema.MachineConfig{
@@ -1022,15 +1067,15 @@ func TestNoPendingEchoPassesThrough(t *testing.T) {
 	fc.processMachineConfigEvent(mustRoomID("!config-ws:local"), messaging.Event{
 		EventID:  ref.MustParseEventID("$normal-event"),
 		Type:     schema.EventTypeMachineConfig,
-		StateKey: stringPtr("bureau/fleet/prod/machine/workstation"),
+		StateKey: stringPtr(wsUserID.StateKey()),
 		Content:  configContent,
 	})
 
-	machine := fc.machines["bureau/fleet/prod/machine/workstation"]
+	machine := fc.machines[wsUserID]
 	if len(machine.assignments) != 1 {
 		t.Fatalf("expected 1 assignment from normal event, got %d", len(machine.assignments))
 	}
-	if _, exists := machine.assignments["service/stt/whisper"]; !exists {
+	if _, exists := machine.assignments[whisperUserID]; !exists {
 		t.Error("assignment should be present after normal event processing")
 	}
 }

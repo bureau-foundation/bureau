@@ -84,6 +84,7 @@ func TestBootstrapScript(t *testing.T) {
 		t.Fatalf("create machine ref: %v", err)
 	}
 	machineName := machineRef.Localpart()
+	machineStateKey := machineRef.UserID().StateKey()
 
 	bootstrapPath := filepath.Join(t.TempDir(), "bootstrap.json")
 	bootstrapClient := adminClient(t)
@@ -167,7 +168,7 @@ func TestBootstrapScript(t *testing.T) {
 	machineRoomID := bootstrapFleet.MachineRoomID
 	// First boot already completed, so the key exists in room state.
 	machineKeyJSON, err := admin.GetStateEvent(ctx, machineRoomID,
-		schema.EventTypeMachineKey, machineName)
+		schema.EventTypeMachineKey, machineStateKey)
 	if err != nil {
 		t.Fatalf("get machine key: %v", err)
 	}
@@ -241,7 +242,7 @@ func TestBootstrapScript(t *testing.T) {
 
 		// Wait for daemon heartbeat in Matrix.
 		statusWatch.WaitForStateEvent(t,
-			schema.EventTypeMachineStatus, machineName)
+			schema.EventTypeMachineStatus, machineStateKey)
 		t.Log("daemon started and publishing status")
 
 		// --- Verify daemon status file ---
@@ -267,6 +268,7 @@ func TestBootstrapScript(t *testing.T) {
 		containerMachine := &testMachine{
 			Ref:           machineRef,
 			Name:          machineName,
+			UserID:        machineRef.UserID(),
 			PublicKey:     machineKey.PublicKey,
 			ConfigRoomID:  configRoomID,
 			MachineRoomID: bootstrapFleet.MachineRoomID,

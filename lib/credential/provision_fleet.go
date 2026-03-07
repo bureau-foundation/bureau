@@ -145,20 +145,21 @@ func FleetProvision(ctx context.Context, session messaging.Session, params Fleet
 	recipientKeys := make([]string, 0, len(machineKeys)+1)
 	encryptedFor := make([]string, 0, len(machineKeys)+1)
 
-	// Sort by machine localpart for deterministic recipient ordering.
+	// Sort by machine state_key for deterministic recipient ordering.
 	machineLocalparts := make([]string, 0, len(machineKeys))
-	for localpart := range machineKeys {
-		machineLocalparts = append(machineLocalparts, localpart)
+	for stateKey := range machineKeys {
+		machineLocalparts = append(machineLocalparts, stateKey)
 	}
 	sort.Strings(machineLocalparts)
 
-	for _, localpart := range machineLocalparts {
-		key := machineKeys[localpart]
+	for _, stateKey := range machineLocalparts {
+		key := machineKeys[stateKey]
 		recipientKeys = append(recipientKeys, key.PublicKey)
-		// Construct the machine user ID for the EncryptedFor list.
-		machineRef, parseErr := ref.ParseMachine(localpart, params.Fleet.Server())
+		// Parse the state_key (localpart:server) back to a machine ref
+		// to get the full user ID for the EncryptedFor list.
+		machineRef, parseErr := ref.ParseMachineStateKey(stateKey)
 		if parseErr != nil {
-			return nil, fmt.Errorf("constructing machine ref for %q: %w", localpart, parseErr)
+			return nil, fmt.Errorf("constructing machine ref for %q: %w", stateKey, parseErr)
 		}
 		encryptedFor = append(encryptedFor, machineRef.UserID().String())
 	}

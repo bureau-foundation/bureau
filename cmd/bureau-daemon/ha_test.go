@@ -102,8 +102,8 @@ func TestHASyncFleetState(t *testing.T) {
 			Type:     schema.EventTypeHALease,
 			StateKey: &leaseKey,
 			Content: map[string]any{
-				"holder":      "machine/other",
-				"service":     "service/fleet/prod",
+				"holder":      "@bureau/fleet/test/machine/other:bureau.local",
+				"service":     "@bureau/fleet/test/service/fleet/prod:bureau.local",
 				"acquired_at": "2026-01-01T11:00:00Z",
 				"expires_at":  "2026-01-01T14:00:00Z",
 			},
@@ -136,8 +136,9 @@ func TestHASyncFleetState(t *testing.T) {
 	if !hasLease {
 		t.Fatal("lease for service/fleet/prod should be present")
 	}
-	if lease.Holder != "machine/other" {
-		t.Errorf("lease holder = %q, want %q", lease.Holder, "machine/other")
+	expectedHolder := ref.MustParseUserID("@bureau/fleet/test/machine/other:bureau.local")
+	if lease.Holder != expectedHolder {
+		t.Errorf("lease holder = %q, want %q", lease.Holder, expectedHolder)
 	}
 }
 
@@ -246,7 +247,7 @@ func TestHAEligibilityCheck(t *testing.T) {
 
 			// Set up MachineInfo with the test labels.
 			matrixState.setStateEvent(daemon.machineRoomID.String(),
-				schema.EventTypeMachineInfo, daemon.machine.Localpart(),
+				schema.EventTypeMachineInfo, daemon.machine.UserID().StateKey(),
 				schema.MachineInfo{
 					Principal: daemon.machine.UserID().String(),
 					Labels:    test.labels,
@@ -267,19 +268,19 @@ func TestHAAcquisitionSingleDaemon(t *testing.T) {
 
 	daemon, matrixState := newHATestDaemon(t)
 
-	serviceLocalpart := "service/fleet/prod"
+	serviceStateKey := "@bureau/fleet/test/service/fleet/prod:bureau.local"
 
 	// Set up existing machine config (empty).
 	matrixState.setStateEvent(daemon.configRoomID.String(),
-		schema.EventTypeMachineConfig, daemon.machine.Localpart(),
+		schema.EventTypeMachineConfig, daemon.machine.UserID().StateKey(),
 		schema.MachineConfig{})
 
 	// Set up an expired lease from another machine.
 	matrixState.setStateEvent(daemon.fleetRoomID.String(),
-		schema.EventTypeHALease, serviceLocalpart,
+		schema.EventTypeHALease, serviceStateKey,
 		fleet.HALeaseContent{
-			Holder:     "machine/dead",
-			Service:    serviceLocalpart,
+			Holder:     ref.MustParseUserID("@bureau/fleet/test/machine/dead:bureau.local"),
+			Service:    ref.MustParseUserID(serviceStateKey),
 			AcquiredAt: "2026-01-01T10:00:00Z",
 			ExpiresAt:  "2026-01-01T10:03:00Z",
 		})
@@ -302,7 +303,7 @@ func TestHAAcquisitionSingleDaemon(t *testing.T) {
 	// timeout, we need to run this in a goroutine and advance the clock.
 	errChannel := make(chan error, 1)
 	go func() {
-		errChannel <- daemon.haWatchdog.attemptAcquisition(ctx, serviceLocalpart, definition)
+		errChannel <- daemon.haWatchdog.attemptAcquisition(ctx, serviceStateKey, definition)
 	}()
 
 	// Wait for the acquisition goroutine to register its initial delay timer.
@@ -328,7 +329,7 @@ func TestHAAcquisitionSingleDaemon(t *testing.T) {
 
 	// Verify the lease is now held by us.
 	raw, err := daemon.session.GetStateEvent(ctx, daemon.fleetRoomID,
-		schema.EventTypeHALease, serviceLocalpart)
+		schema.EventTypeHALease, serviceStateKey)
 	if err != nil {
 		t.Fatalf("GetStateEvent: %v", err)
 	}
@@ -336,14 +337,14 @@ func TestHAAcquisitionSingleDaemon(t *testing.T) {
 	if err := json.Unmarshal(raw, &lease); err != nil {
 		t.Fatalf("Unmarshal: %v", err)
 	}
-	if lease.Holder != daemon.machine.Localpart() {
-		t.Errorf("lease holder = %q, want %q", lease.Holder, daemon.machine.Localpart())
+	if lease.Holder != daemon.machine.UserID() {
+		t.Errorf("lease holder = %q, want %q", lease.Holder, daemon.machine.UserID())
 	}
 
 	// Verify the config room has the PrincipalAssignment with authorization
 	// fields propagated from the FleetServiceContent definition.
 	raw, err = daemon.session.GetStateEvent(ctx, daemon.configRoomID,
-		schema.EventTypeMachineConfig, daemon.machine.Localpart())
+		schema.EventTypeMachineConfig, daemon.machine.UserID().StateKey())
 	if err != nil {
 		t.Fatalf("GetStateEvent config: %v", err)
 	}
@@ -353,7 +354,7 @@ func TestHAAcquisitionSingleDaemon(t *testing.T) {
 	}
 	found := false
 	for _, principal := range config.Principals {
-		if principal.Principal.AccountLocalpart() == serviceLocalpart {
+		if principal.Principal.UserID().String() == serviceStateKey {
 			found = true
 			if principal.Template != "bureau/template:fleet-controller" {
 				t.Errorf("principal template = %q, want %q",
@@ -374,12 +375,12 @@ func TestHAAcquisitionSingleDaemon(t *testing.T) {
 		}
 	}
 	if !found {
-		t.Errorf("PrincipalAssignment for %q not found in config", serviceLocalpart)
+		t.Errorf("PrincipalAssignment for %q not found in config", serviceStateKey)
 	}
 
 	// Verify the held lease is tracked.
 	daemon.haWatchdog.mu.Lock()
-	_, held := daemon.haWatchdog.heldLeases[serviceLocalpart]
+	_, held := daemon.haWatchdog.heldLeases[serviceStateKey]
 	daemon.haWatchdog.mu.Unlock()
 	if !held {
 		t.Error("lease should be tracked in heldLeases")
@@ -403,18 +404,18 @@ func TestHAAcquisitionPreferredBias(t *testing.T) {
 
 	daemon, matrixState := newHATestDaemon(t)
 
-	serviceLocalpart := "service/fleet/prod"
+	serviceStateKey := "@bureau/fleet/test/service/fleet/prod:bureau.local"
 
 	matrixState.setStateEvent(daemon.configRoomID.String(),
-		schema.EventTypeMachineConfig, daemon.machine.Localpart(),
+		schema.EventTypeMachineConfig, daemon.machine.UserID().StateKey(),
 		schema.MachineConfig{})
 
 	// Expired lease.
 	matrixState.setStateEvent(daemon.fleetRoomID.String(),
-		schema.EventTypeHALease, serviceLocalpart,
+		schema.EventTypeHALease, serviceStateKey,
 		fleet.HALeaseContent{
-			Holder:     "machine/dead",
-			Service:    serviceLocalpart,
+			Holder:     ref.MustParseUserID("@bureau/fleet/test/machine/dead:bureau.local"),
+			Service:    ref.MustParseUserID(serviceStateKey),
 			AcquiredAt: "2026-01-01T10:00:00Z",
 			ExpiresAt:  "2026-01-01T10:03:00Z",
 		})
@@ -433,7 +434,7 @@ func TestHAAcquisitionPreferredBias(t *testing.T) {
 
 	errChannel := make(chan error, 1)
 	go func() {
-		errChannel <- daemon.haWatchdog.attemptAcquisition(ctx, serviceLocalpart, definition)
+		errChannel <- daemon.haWatchdog.attemptAcquisition(ctx, serviceStateKey, definition)
 	}()
 
 	// The preferred delay is 1-3s. Advancing 4s guarantees the delay
@@ -459,7 +460,7 @@ func TestHAAcquisitionPreferredBias(t *testing.T) {
 
 	// Verify we acquired the lease.
 	raw, err := daemon.session.GetStateEvent(ctx, daemon.fleetRoomID,
-		schema.EventTypeHALease, serviceLocalpart)
+		schema.EventTypeHALease, serviceStateKey)
 	if err != nil {
 		t.Fatalf("GetStateEvent: %v", err)
 	}
@@ -467,8 +468,8 @@ func TestHAAcquisitionPreferredBias(t *testing.T) {
 	if err := json.Unmarshal(raw, &lease); err != nil {
 		t.Fatalf("Unmarshal: %v", err)
 	}
-	if lease.Holder != daemon.machine.Localpart() {
-		t.Errorf("lease holder = %q, want %q", lease.Holder, daemon.machine.Localpart())
+	if lease.Holder != daemon.machine.UserID() {
+		t.Errorf("lease holder = %q, want %q", lease.Holder, daemon.machine.UserID())
 	}
 }
 
@@ -479,13 +480,13 @@ func TestHAAcquisitionIneligible(t *testing.T) {
 
 	daemon, matrixState := newHATestDaemon(t)
 
-	serviceLocalpart := "service/fleet/prod"
+	serviceStateKey := "@bureau/fleet/test/service/fleet/prod:bureau.local"
 
 	// Set up fleet room with a critical service that requires GPU.
 	matrixState.setRoomState(daemon.fleetRoomID.String(), []mockRoomStateEvent{
 		{
 			Type:     schema.EventTypeFleetService,
-			StateKey: &serviceLocalpart,
+			StateKey: &serviceStateKey,
 			Content: map[string]any{
 				"template": "bureau/template:fleet-controller",
 				"ha_class": "critical",
@@ -498,10 +499,10 @@ func TestHAAcquisitionIneligible(t *testing.T) {
 		},
 		{
 			Type:     schema.EventTypeHALease,
-			StateKey: &serviceLocalpart,
+			StateKey: &serviceStateKey,
 			Content: map[string]any{
-				"holder":      "machine/dead",
-				"service":     serviceLocalpart,
+				"holder":      "@bureau/fleet/test/machine/dead:bureau.local",
+				"service":     serviceStateKey,
 				"acquired_at": "2026-01-01T10:00:00Z",
 				"expires_at":  "2026-01-01T10:03:00Z",
 			},
@@ -510,7 +511,7 @@ func TestHAAcquisitionIneligible(t *testing.T) {
 
 	// This machine has no GPU label.
 	matrixState.setStateEvent(daemon.machineRoomID.String(),
-		schema.EventTypeMachineInfo, daemon.machine.Localpart(),
+		schema.EventTypeMachineInfo, daemon.machine.UserID().StateKey(),
 		schema.MachineInfo{
 			Principal: daemon.machine.UserID().String(),
 			Labels:    map[string]string{},
@@ -552,19 +553,19 @@ func TestHALeaseRenewal(t *testing.T) {
 
 	daemon, matrixState := newHATestDaemon(t)
 
-	serviceLocalpart := "service/fleet/prod"
+	serviceStateKey := "@bureau/fleet/test/service/fleet/prod:bureau.local"
 	ttl := 3 * daemon.statusInterval // 180s with 60s interval
 
 	// Write initial lease.
 	now := daemon.clock.Now()
 	initialLease := fleet.HALeaseContent{
-		Holder:     daemon.machine.Localpart(),
-		Service:    serviceLocalpart,
+		Holder:     daemon.machine.UserID(),
+		Service:    ref.MustParseUserID(serviceStateKey),
 		AcquiredAt: now.UTC().Format(time.RFC3339),
 		ExpiresAt:  now.Add(ttl).UTC().Format(time.RFC3339),
 	}
 	matrixState.setStateEvent(daemon.fleetRoomID.String(),
-		schema.EventTypeHALease, serviceLocalpart, initialLease)
+		schema.EventTypeHALease, serviceStateKey, initialLease)
 
 	// Set up a stateEventWritten channel to track writes.
 	writeChannel := make(chan string, 10)
@@ -576,7 +577,7 @@ func TestHALeaseRenewal(t *testing.T) {
 	renewCtx, renewCancel := context.WithCancel(context.Background())
 	defer renewCancel()
 
-	go daemon.haWatchdog.renewLease(renewCtx, serviceLocalpart, ttl)
+	go daemon.haWatchdog.renewLease(renewCtx, serviceStateKey, ttl)
 
 	fakeClock := daemon.haWatchdog.clock.(*clock.FakeClock)
 
@@ -594,7 +595,7 @@ func TestHALeaseRenewal(t *testing.T) {
 	// Read the renewed lease and verify ExpiresAt was extended.
 	ctx := context.Background()
 	raw, err := daemon.session.GetStateEvent(ctx, daemon.fleetRoomID,
-		schema.EventTypeHALease, serviceLocalpart)
+		schema.EventTypeHALease, serviceStateKey)
 	if err != nil {
 		t.Fatalf("GetStateEvent: %v", err)
 	}
@@ -603,8 +604,8 @@ func TestHALeaseRenewal(t *testing.T) {
 		t.Fatalf("Unmarshal: %v", err)
 	}
 
-	if renewed.Holder != daemon.machine.Localpart() {
-		t.Errorf("renewed holder = %q, want %q", renewed.Holder, daemon.machine.Localpart())
+	if renewed.Holder != daemon.machine.UserID() {
+		t.Errorf("renewed holder = %q, want %q", renewed.Holder, daemon.machine.UserID())
 	}
 
 	renewedExpiresAt, err := time.Parse(time.RFC3339, renewed.ExpiresAt)
@@ -625,7 +626,7 @@ func TestHALeaseRelease(t *testing.T) {
 
 	daemon, matrixState := newHATestDaemon(t)
 
-	serviceLocalpart := "service/fleet/prod"
+	serviceStateKey := "@bureau/fleet/test/service/fleet/prod:bureau.local"
 
 	// Set up a stateEventWritten channel to track writes.
 	writeChannel := make(chan string, 10)
@@ -636,7 +637,7 @@ func TestHALeaseRelease(t *testing.T) {
 	// Simulate holding a lease with a renewal goroutine.
 	renewCtx, renewCancel := context.WithCancel(context.Background())
 	daemon.haWatchdog.mu.Lock()
-	daemon.haWatchdog.heldLeases[serviceLocalpart] = renewCancel
+	daemon.haWatchdog.heldLeases[serviceStateKey] = renewCancel
 	daemon.haWatchdog.mu.Unlock()
 
 	// Start renewal goroutine to verify it gets cancelled.
@@ -647,7 +648,7 @@ func TestHALeaseRelease(t *testing.T) {
 	}()
 
 	ctx := context.Background()
-	daemon.haWatchdog.releaseLease(ctx, serviceLocalpart)
+	daemon.haWatchdog.releaseLease(ctx, serviceStateKey)
 
 	// Verify the renewal goroutine was cancelled.
 	testutil.RequireClosed(t, renewalDone, 5*time.Second, "renewal goroutine cancellation")
@@ -656,7 +657,7 @@ func TestHALeaseRelease(t *testing.T) {
 	testutil.RequireReceive(t, writeChannel, 5*time.Second, "lease release write")
 
 	raw, err := daemon.session.GetStateEvent(ctx, daemon.fleetRoomID,
-		schema.EventTypeHALease, serviceLocalpart)
+		schema.EventTypeHALease, serviceStateKey)
 	if err != nil {
 		t.Fatalf("GetStateEvent: %v", err)
 	}
@@ -676,7 +677,7 @@ func TestHALeaseRelease(t *testing.T) {
 
 	// Verify the lease was removed from heldLeases.
 	daemon.haWatchdog.mu.Lock()
-	_, stillHeld := daemon.haWatchdog.heldLeases[serviceLocalpart]
+	_, stillHeld := daemon.haWatchdog.heldLeases[serviceStateKey]
 	daemon.haWatchdog.mu.Unlock()
 	if stillHeld {
 		t.Error("lease should be removed from heldLeases after release")
@@ -702,13 +703,13 @@ func TestHAIsLeaseHealthy(t *testing.T) {
 		},
 		{
 			name:  "empty holder",
-			lease: &fleet.HALeaseContent{Holder: ""},
+			lease: &fleet.HALeaseContent{},
 			want:  false,
 		},
 		{
 			name: "expired lease",
 			lease: &fleet.HALeaseContent{
-				Holder:    "machine/other",
+				Holder:    ref.MustParseUserID("@bureau/fleet/test/machine/other:bureau.local"),
 				ExpiresAt: now.Add(-1 * time.Hour).UTC().Format(time.RFC3339),
 			},
 			want: false,
@@ -716,7 +717,7 @@ func TestHAIsLeaseHealthy(t *testing.T) {
 		{
 			name: "valid lease",
 			lease: &fleet.HALeaseContent{
-				Holder:    "machine/other",
+				Holder:    ref.MustParseUserID("@bureau/fleet/test/machine/other:bureau.local"),
 				ExpiresAt: now.Add(1 * time.Hour).UTC().Format(time.RFC3339),
 			},
 			want: true,
@@ -724,7 +725,7 @@ func TestHAIsLeaseHealthy(t *testing.T) {
 		{
 			name: "unparseable expiry",
 			lease: &fleet.HALeaseContent{
-				Holder:    "machine/other",
+				Holder:    ref.MustParseUserID("@bureau/fleet/test/machine/other:bureau.local"),
 				ExpiresAt: "not-a-date",
 			},
 			want: false,
@@ -824,14 +825,14 @@ func TestHAEvaluate_HealthyLease(t *testing.T) {
 
 	daemon, matrixState := newHATestDaemon(t)
 
-	serviceLocalpart := "service/fleet/prod"
+	serviceStateKey := "@bureau/fleet/test/service/fleet/prod:bureau.local"
 	now := daemon.clock.Now()
 
 	// Set up a healthy lease (expires in the future).
 	matrixState.setRoomState(daemon.fleetRoomID.String(), []mockRoomStateEvent{
 		{
 			Type:     schema.EventTypeFleetService,
-			StateKey: &serviceLocalpart,
+			StateKey: &serviceStateKey,
 			Content: map[string]any{
 				"template":  "bureau/template:fleet-controller",
 				"ha_class":  "critical",
@@ -842,10 +843,10 @@ func TestHAEvaluate_HealthyLease(t *testing.T) {
 		},
 		{
 			Type:     schema.EventTypeHALease,
-			StateKey: &serviceLocalpart,
+			StateKey: &serviceStateKey,
 			Content: map[string]any{
-				"holder":      "machine/healthy",
-				"service":     serviceLocalpart,
+				"holder":      "@bureau/fleet/test/machine/healthy:bureau.local",
+				"service":     serviceStateKey,
 				"acquired_at": now.Add(-1 * time.Minute).UTC().Format(time.RFC3339),
 				"expires_at":  now.Add(2 * time.Hour).UTC().Format(time.RFC3339),
 			},
@@ -879,12 +880,12 @@ func TestHAProcessSyncResponse_FleetRoom(t *testing.T) {
 
 	daemon, matrixState := newHATestDaemon(t)
 
-	serviceLocalpart := "service/fleet/prod"
+	serviceStateKey := "@bureau/fleet/test/service/fleet/prod:bureau.local"
 	now := daemon.clock.Now()
 
 	// Config room needs to be set up for reconcile.
 	matrixState.setStateEvent(daemon.configRoomID.String(),
-		schema.EventTypeMachineConfig, daemon.machine.Localpart(),
+		schema.EventTypeMachineConfig, daemon.machine.UserID().StateKey(),
 		schema.MachineConfig{})
 
 	// Set up fleet room state with a healthy lease (so evaluate is
@@ -892,7 +893,7 @@ func TestHAProcessSyncResponse_FleetRoom(t *testing.T) {
 	matrixState.setRoomState(daemon.fleetRoomID.String(), []mockRoomStateEvent{
 		{
 			Type:     schema.EventTypeFleetService,
-			StateKey: &serviceLocalpart,
+			StateKey: &serviceStateKey,
 			Content: map[string]any{
 				"template":  "bureau/template:fleet-controller",
 				"ha_class":  "critical",
@@ -903,10 +904,10 @@ func TestHAProcessSyncResponse_FleetRoom(t *testing.T) {
 		},
 		{
 			Type:     schema.EventTypeHALease,
-			StateKey: &serviceLocalpart,
+			StateKey: &serviceStateKey,
 			Content: map[string]any{
-				"holder":      "machine/healthy",
-				"service":     serviceLocalpart,
+				"holder":      "@bureau/fleet/test/machine/healthy:bureau.local",
+				"service":     serviceStateKey,
 				"acquired_at": now.Add(-1 * time.Minute).UTC().Format(time.RFC3339),
 				"expires_at":  now.Add(2 * time.Hour).UTC().Format(time.RFC3339),
 			},
@@ -914,7 +915,7 @@ func TestHAProcessSyncResponse_FleetRoom(t *testing.T) {
 	})
 
 	// Construct a sync response with fleet room state changes.
-	stateKey := serviceLocalpart
+	stateKey := serviceStateKey
 	response := &messaging.SyncResponse{
 		NextBatch: "batch_1",
 		Rooms: messaging.RoomsSection{
@@ -960,8 +961,8 @@ func TestHAReleaseAllLeases(t *testing.T) {
 	_ = ctx2
 
 	daemon.haWatchdog.mu.Lock()
-	daemon.haWatchdog.heldLeases["service/fleet/prod"] = cancel1
-	daemon.haWatchdog.heldLeases["service/fleet/staging"] = cancel2
+	daemon.haWatchdog.heldLeases["@bureau/fleet/test/service/fleet/prod:bureau.local"] = cancel1
+	daemon.haWatchdog.heldLeases["@bureau/fleet/test/service/fleet/staging:bureau.local"] = cancel2
 	daemon.haWatchdog.mu.Unlock()
 
 	// Track writes.

@@ -10,6 +10,7 @@ import (
 	"time"
 
 	"github.com/bureau-foundation/bureau/cmd/bureau/cli"
+	"github.com/bureau-foundation/bureau/lib/ref"
 	"github.com/bureau-foundation/bureau/lib/schema"
 	"github.com/bureau-foundation/bureau/lib/schema/fleet"
 	"github.com/bureau-foundation/bureau/messaging"
@@ -182,7 +183,10 @@ func runDefine(ctx context.Context, localpart string, logger *slog.Logger, param
 		}
 	}
 
-	if _, err := session.SendStateEvent(ctx, fleetRoomID, schema.EventTypeFleetService, localpart, &content); err != nil {
+	// State keys for entity-scoped events use the full Matrix user ID.
+	stateKey := ref.MatrixUserID(localpart, scope.Fleet.Server()).StateKey()
+
+	if _, err := session.SendStateEvent(ctx, fleetRoomID, schema.EventTypeFleetService, stateKey, &content); err != nil {
 		return cli.Transient("publishing fleet service definition: %w", err)
 	}
 

@@ -105,7 +105,7 @@ waitForNotification[schema.GrantsUpdatedMessage](
 ```go
 watch := watchRoom(t, admin, machineRoomID)
 startProcess(t, "daemon", daemonBinary, args...)
-watch.WaitForStateEvent(t, "m.bureau.machine_status", machine.Name)
+watch.WaitForStateEvent(t, "m.bureau.machine_status", machine.UserID.StateKey())
 ```
 
 ```go

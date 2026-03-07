@@ -200,7 +200,7 @@ func runCreate(ctx context.Context, logger *slog.Logger, templateRef schema.Temp
 	var fleetRegistered bool
 	var fleetRoomID ref.RoomID
 	if !params.NoFleetRegister {
-		fleetRoomID, err = registerServiceWithFleet(ctx, adminSession, fleet, machine, params.Name, templateRef, params, logger)
+		fleetRoomID, err = registerServiceWithFleet(ctx, adminSession, fleet, machine, principalEntity.UserID().StateKey(), templateRef, params, logger)
 		if err != nil {
 			return err
 		}
@@ -233,9 +233,10 @@ func runCreate(ctx context.Context, logger *slog.Logger, templateRef schema.Temp
 
 // registerServiceWithFleet publishes a FleetServiceContent state event to
 // the fleet config room, making the service visible to the fleet controller.
-// The state key is the service's account localpart (e.g., "service/ticket"),
-// matching the fleet controller's expectation.
-func registerServiceWithFleet(ctx context.Context, session messaging.Session, fleet ref.Fleet, machine ref.Machine, accountLocalpart string, templateRef schema.TemplateRef, params serviceCreateParams, logger *slog.Logger) (ref.RoomID, error) {
+// The state key is the service's full Matrix user ID (e.g.,
+// "@bureau/fleet/prod/service/ticket:bureau.local"), matching the fleet
+// controller's expectation.
+func registerServiceWithFleet(ctx context.Context, session messaging.Session, fleet ref.Fleet, machine ref.Machine, serviceStateKey string, templateRef schema.TemplateRef, params serviceCreateParams, logger *slog.Logger) (ref.RoomID, error) {
 	fleetRoomID, err := session.ResolveAlias(ctx, fleet.RoomAlias())
 	if err != nil {
 		if messaging.IsMatrixError(err, messaging.ErrCodeNotFound) {
@@ -263,14 +264,14 @@ func registerServiceWithFleet(ctx context.Context, session messaging.Session, fl
 		},
 	}
 
-	_, err = session.SendStateEvent(ctx, fleetRoomID, schema.EventTypeFleetService, accountLocalpart, content)
+	_, err = session.SendStateEvent(ctx, fleetRoomID, schema.EventTypeFleetService, serviceStateKey, content)
 	if err != nil {
 		return ref.RoomID{}, cli.Internal("publishing fleet service definition: %w", err)
 	}
 
 	logger.Info("registered service with fleet",
 		"fleet_room", fleetRoomID,
-		"state_key", accountLocalpart,
+		"state_key", serviceStateKey,
 		"failover", failover,
 		"priority", params.Priority,
 	)

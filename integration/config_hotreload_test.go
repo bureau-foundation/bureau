@@ -233,8 +233,9 @@ func TestServiceVisibilityHotReload(t *testing.T) {
 	if err != nil {
 		t.Fatalf("construct mock service entity ref: %v", err)
 	}
+	mockServiceStateKey := mockServiceEntity.UserID().StateKey()
 	_, err = admin.SendStateEvent(ctx, fleet.ServiceRoomID, schema.EventTypeService,
-		"service/vis-hr/test", schema.Service{
+		mockServiceStateKey, schema.Service{
 			Principal:   mockServiceEntity,
 			Machine:     machine.Ref,
 			Endpoints:   map[string]string{"http": "http.sock"},
@@ -253,8 +254,8 @@ func TestServiceVisibilityHotReload(t *testing.T) {
 	waitForNotification[schema.ServiceDirectoryUpdatedMessage](
 		t, &watch, schema.MsgTypeServiceDirectoryUpdated, machine.UserID,
 		func(m schema.ServiceDirectoryUpdatedMessage) bool {
-			return slices.Contains(m.Added, "service/vis-hr/test")
-		}, "service directory update adding service/vis-hr/test")
+			return slices.Contains(m.Added, mockServiceStateKey)
+		}, "service directory update adding "+mockServiceStateKey)
 
 	entries := proxyServiceDiscovery(t, proxyClient, "")
 	if len(entries) != 1 {

@@ -101,7 +101,7 @@ func runDestroy(ctx context.Context, localpart string, logger *slog.Logger, para
 
 	purged := false
 	if params.Purge {
-		if err := principal.PurgeCredentials(ctx, session, location.ConfigRoomID, localpart); err != nil {
+		if err := principal.PurgeCredentials(ctx, session, location.ConfigRoomID, location.Assignment.Principal.UserID()); err != nil {
 			logger.Warn("failed to purge credentials", "error", err)
 		} else {
 			purged = true
@@ -112,7 +112,7 @@ func runDestroy(ctx context.Context, localpart string, logger *slog.Logger, para
 	// stops tracking this service. Publishing empty content causes the
 	// fleet controller to remove the service from its map. Best-effort:
 	// the primary operation (assignment removal) already succeeded.
-	fleetCleared := clearFleetRegistration(ctx, session, location.Machine.Fleet(), localpart, logger)
+	fleetCleared := clearFleetRegistration(ctx, session, location.Machine.Fleet(), location.Assignment.Principal.UserID().StateKey(), logger)
 
 	if done, err := params.EmitJSON(serviceDestroyResult{
 		Localpart:     localpart,
@@ -140,7 +140,7 @@ func runDestroy(ctx context.Context, localpart string, logger *slog.Logger, para
 // service from the fleet config room. This is best-effort: if the fleet room
 // cannot be resolved or the publish fails, a warning is logged but the
 // destroy operation is not failed (the assignment is already removed).
-func clearFleetRegistration(ctx context.Context, session messaging.Session, fleet ref.Fleet, accountLocalpart string, logger *slog.Logger) bool {
+func clearFleetRegistration(ctx context.Context, session messaging.Session, fleet ref.Fleet, serviceStateKey string, logger *slog.Logger) bool {
 	fleetRoomID, err := session.ResolveAlias(ctx, fleet.RoomAlias())
 	if err != nil {
 		logger.Warn("cannot resolve fleet room to clear service definition",
@@ -150,14 +150,14 @@ func clearFleetRegistration(ctx context.Context, session messaging.Session, flee
 
 	// Publishing empty content (struct{}{}) causes the fleet controller
 	// to delete the service from its tracking map.
-	_, err = session.SendStateEvent(ctx, fleetRoomID, schema.EventTypeFleetService, accountLocalpart, struct{}{})
+	_, err = session.SendStateEvent(ctx, fleetRoomID, schema.EventTypeFleetService, serviceStateKey, struct{}{})
 	if err != nil {
 		logger.Warn("failed to clear fleet service definition",
-			"fleet_room", fleetRoomID, "state_key", accountLocalpart, "error", err)
+			"fleet_room", fleetRoomID, "state_key", serviceStateKey, "error", err)
 		return false
 	}
 
 	logger.Info("cleared fleet service definition",
-		"fleet_room", fleetRoomID, "state_key", accountLocalpart)
+		"fleet_room", fleetRoomID, "state_key", serviceStateKey)
 	return true
 }

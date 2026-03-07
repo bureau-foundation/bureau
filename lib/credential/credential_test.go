@@ -276,7 +276,7 @@ func TestProvision_MachineKeyFetchFails(t *testing.T) {
 	if err == nil {
 		t.Fatal("expected error when machine key fetch fails, got nil")
 	}
-	expected := `reading m.bureau.machine_key["my_bureau/fleet/prod/machine/workstation"] from room !room:bureau.local: homeserver unreachable`
+	expected := `reading m.bureau.machine_key["my_bureau/fleet/prod/machine/workstation:bureau.local"] from room !room:bureau.local: homeserver unreachable`
 	if got := err.Error(); got != expected {
 		t.Errorf("error = %q, want %q", got, expected)
 	}
@@ -401,8 +401,8 @@ func TestProvision_HappyPath(t *testing.T) {
 			if eventType != schema.EventTypeMachineKey {
 				t.Errorf("GetStateEvent eventType = %q, want %q", eventType, schema.EventTypeMachineKey)
 			}
-			if stateKey != machine.Localpart() {
-				t.Errorf("GetStateEvent stateKey = %q, want %q", stateKey, machine.Localpart())
+			if stateKey != machine.UserID().StateKey() {
+				t.Errorf("GetStateEvent stateKey = %q, want %q", stateKey, machine.UserID().StateKey())
 			}
 			return machineKeyJSON("age-x25519", keypair.PublicKey), nil
 		},
@@ -456,8 +456,8 @@ func TestProvision_HappyPath(t *testing.T) {
 	if capturedEventType != schema.EventTypeCredentials {
 		t.Errorf("SendStateEvent eventType = %q, want %q", capturedEventType, schema.EventTypeCredentials)
 	}
-	if capturedStateKey != entity.Localpart() {
-		t.Errorf("SendStateEvent stateKey = %q, want %q", capturedStateKey, entity.Localpart())
+	if capturedStateKey != entity.UserID().StateKey() {
+		t.Errorf("SendStateEvent stateKey = %q, want %q", capturedStateKey, entity.UserID().StateKey())
 	}
 
 	// Verify the credential event content.

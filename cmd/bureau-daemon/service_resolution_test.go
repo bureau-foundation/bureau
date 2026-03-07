@@ -37,7 +37,7 @@ func TestReconcile_ServiceMountsResolved(t *testing.T) {
 
 	daemon, _ := newTestDaemon(t)
 	daemon.machine, daemon.fleet = testMachineSetup(t, "test", "test.local")
-	machineName := daemon.machine.Localpart()
+	machineName := daemon.machine.UserID().StateKey()
 
 	matrixState := newMockMatrixState()
 	matrixState.setRoomAlias(daemon.fleet.Namespace().TemplateRoomAlias(), templateRoomID)
@@ -56,7 +56,7 @@ func TestReconcile_ServiceMountsResolved(t *testing.T) {
 
 	// Register the service in the in-memory directory so that
 	// resolveServiceMounts can check locality (local vs remote).
-	daemon.services[ticketEntity.Localpart()] = &schema.Service{
+	daemon.services[ticketEntity.UserID().StateKey()] = &schema.Service{
 		Principal: ticketEntity,
 		Machine:   daemon.machine,
 		Endpoints: map[string]string{"cbor": "service.sock"},
@@ -72,7 +72,7 @@ func TestReconcile_ServiceMountsResolved(t *testing.T) {
 			},
 		},
 	})
-	matrixState.setStateEvent(configRoomID, schema.EventTypeCredentials, daemon.fleet.Localpart()+"/iree/amdgpu/pm", schema.Credentials{
+	matrixState.setStateEvent(configRoomID, schema.EventTypeCredentials, testEntity(t, daemon.fleet, "iree/amdgpu/pm").UserID().StateKey(), schema.Credentials{
 		Ciphertext: "encrypted-test-credentials",
 	})
 
@@ -179,7 +179,7 @@ func TestReconcile_ServiceMountsUnresolvable(t *testing.T) {
 
 	daemon, _ := newTestDaemon(t)
 	daemon.machine, daemon.fleet = testMachineSetup(t, "test", "test.local")
-	machineName := daemon.machine.Localpart()
+	machineName := daemon.machine.UserID().StateKey()
 
 	matrixState := newMockMatrixState()
 	matrixState.setRoomAlias(daemon.fleet.Namespace().TemplateRoomAlias(), templateRoomID)
@@ -199,7 +199,7 @@ func TestReconcile_ServiceMountsUnresolvable(t *testing.T) {
 			},
 		},
 	})
-	matrixState.setStateEvent(configRoomID, schema.EventTypeCredentials, daemon.fleet.Localpart()+"/iree/amdgpu/pm", schema.Credentials{
+	matrixState.setStateEvent(configRoomID, schema.EventTypeCredentials, testEntity(t, daemon.fleet, "iree/amdgpu/pm").UserID().StateKey(), schema.Credentials{
 		Ciphertext: "encrypted-test-credentials",
 	})
 
@@ -236,7 +236,7 @@ func TestReconcile_ServiceMountsWorkspaceRoom(t *testing.T) {
 
 	daemon, _ := newTestDaemon(t)
 	daemon.machine, daemon.fleet = testMachineSetup(t, "test", "test.local")
-	machineName := daemon.machine.Localpart()
+	machineName := daemon.machine.UserID().StateKey()
 
 	matrixState := newMockMatrixState()
 	matrixState.setRoomAlias(daemon.fleet.Namespace().TemplateRoomAlias(), templateRoomID)
@@ -260,12 +260,12 @@ func TestReconcile_ServiceMountsWorkspaceRoom(t *testing.T) {
 	})
 
 	// Register both service principals in the in-memory directory.
-	daemon.services[globalTicketEntity.Localpart()] = &schema.Service{
+	daemon.services[globalTicketEntity.UserID().StateKey()] = &schema.Service{
 		Principal: globalTicketEntity,
 		Machine:   daemon.machine,
 		Endpoints: map[string]string{"cbor": "service.sock"},
 	}
-	daemon.services[wsTicketEntity.Localpart()] = &schema.Service{
+	daemon.services[wsTicketEntity.UserID().StateKey()] = &schema.Service{
 		Principal: wsTicketEntity,
 		Machine:   daemon.machine,
 		Endpoints: map[string]string{"cbor": "service.sock"},
@@ -294,7 +294,7 @@ func TestReconcile_ServiceMountsWorkspaceRoom(t *testing.T) {
 			},
 		},
 	})
-	matrixState.setStateEvent(configRoomID, schema.EventTypeCredentials, daemon.fleet.Localpart()+"/iree/amdgpu/pm", schema.Credentials{
+	matrixState.setStateEvent(configRoomID, schema.EventTypeCredentials, testEntity(t, daemon.fleet, "iree/amdgpu/pm").UserID().StateKey(), schema.Credentials{
 		Ciphertext: "encrypted-test-credentials",
 	})
 
@@ -389,7 +389,7 @@ func TestReconcile_ServiceMountsMultipleServices(t *testing.T) {
 
 	daemon, _ := newTestDaemon(t)
 	daemon.machine, daemon.fleet = testMachineSetup(t, "test", "test.local")
-	machineName := daemon.machine.Localpart()
+	machineName := daemon.machine.UserID().StateKey()
 
 	matrixState := newMockMatrixState()
 	matrixState.setRoomAlias(daemon.fleet.Namespace().TemplateRoomAlias(), templateRoomID)
@@ -411,12 +411,12 @@ func TestReconcile_ServiceMountsMultipleServices(t *testing.T) {
 	})
 
 	// Register both services in the in-memory directory.
-	daemon.services[ticketEntity.Localpart()] = &schema.Service{
+	daemon.services[ticketEntity.UserID().StateKey()] = &schema.Service{
 		Principal: ticketEntity,
 		Machine:   daemon.machine,
 		Endpoints: map[string]string{"cbor": "service.sock"},
 	}
-	daemon.services[ragEntity.Localpart()] = &schema.Service{
+	daemon.services[ragEntity.UserID().StateKey()] = &schema.Service{
 		Principal: ragEntity,
 		Machine:   daemon.machine,
 		Endpoints: map[string]string{"cbor": "service.sock"},
@@ -431,7 +431,7 @@ func TestReconcile_ServiceMountsMultipleServices(t *testing.T) {
 			},
 		},
 	})
-	matrixState.setStateEvent(configRoomID, schema.EventTypeCredentials, daemon.fleet.Localpart()+"/iree/amdgpu/pm", schema.Credentials{
+	matrixState.setStateEvent(configRoomID, schema.EventTypeCredentials, testEntity(t, daemon.fleet, "iree/amdgpu/pm").UserID().StateKey(), schema.Credentials{
 		Ciphertext: "encrypted-test-credentials",
 	})
 
@@ -536,7 +536,7 @@ func TestReconcile_ServiceMountsPartialFailure(t *testing.T) {
 
 	daemon, _ := newTestDaemon(t)
 	daemon.machine, daemon.fleet = testMachineSetup(t, "test", "test.local")
-	machineName := daemon.machine.Localpart()
+	machineName := daemon.machine.UserID().StateKey()
 
 	matrixState := newMockMatrixState()
 	matrixState.setRoomAlias(daemon.fleet.Namespace().TemplateRoomAlias(), templateRoomID)
@@ -561,7 +561,7 @@ func TestReconcile_ServiceMountsPartialFailure(t *testing.T) {
 			},
 		},
 	})
-	matrixState.setStateEvent(configRoomID, schema.EventTypeCredentials, daemon.fleet.Localpart()+"/iree/amdgpu/pm", schema.Credentials{
+	matrixState.setStateEvent(configRoomID, schema.EventTypeCredentials, testEntity(t, daemon.fleet, "iree/amdgpu/pm").UserID().StateKey(), schema.Credentials{
 		Ciphertext: "encrypted-test-credentials",
 	})
 
@@ -595,7 +595,7 @@ func TestReconcile_NoServiceMountsWithoutRequiredServices(t *testing.T) {
 
 	daemon, _ := newTestDaemon(t)
 	daemon.machine, daemon.fleet = testMachineSetup(t, "test", "test.local")
-	machineName := daemon.machine.Localpart()
+	machineName := daemon.machine.UserID().StateKey()
 
 	matrixState := newMockMatrixState()
 	matrixState.setRoomAlias(daemon.fleet.Namespace().TemplateRoomAlias(), templateRoomID)
@@ -614,7 +614,7 @@ func TestReconcile_NoServiceMountsWithoutRequiredServices(t *testing.T) {
 			},
 		},
 	})
-	matrixState.setStateEvent(configRoomID, schema.EventTypeCredentials, daemon.fleet.Localpart()+"/iree/amdgpu/pm", schema.Credentials{
+	matrixState.setStateEvent(configRoomID, schema.EventTypeCredentials, testEntity(t, daemon.fleet, "iree/amdgpu/pm").UserID().StateKey(), schema.Credentials{
 		Ciphertext: "encrypted-test-credentials",
 	})
 
@@ -840,7 +840,7 @@ func TestResolveEndpointSocket(t *testing.T) {
 		servicePrincipal := serviceRef.Entity()
 
 		// Register the service with multiple endpoints.
-		daemon.services[servicePrincipal.Localpart()] = &schema.Service{
+		daemon.services[servicePrincipal.UserID().StateKey()] = &schema.Service{
 			Principal: servicePrincipal,
 			Machine:   daemon.machine,
 			Endpoints: map[string]string{
@@ -886,7 +886,7 @@ func TestResolveEndpointSocket(t *testing.T) {
 		}
 		principal := serviceRef.Entity()
 
-		daemon.services[principal.Localpart()] = &schema.Service{
+		daemon.services[principal.UserID().StateKey()] = &schema.Service{
 			Principal: principal,
 			Machine:   daemon.machine,
 			Endpoints: map[string]string{"cbor": "service.sock"},

@@ -94,8 +94,8 @@ type machineState struct {
 	status *schema.MachineStatus
 
 	// assignments tracks fleet-managed PrincipalAssignment events on
-	// this machine. Keyed by the assignment's principal localpart.
-	assignments map[string]*schema.PrincipalAssignment
+	// this machine. Keyed by the assignment's principal user ID.
+	assignments map[ref.UserID]*schema.PrincipalAssignment
 
 	// configRoomID is the machine's config room ID, used for writing
 	// PrincipalAssignment events.
@@ -133,9 +133,9 @@ type machineState struct {
 type fleetServiceState struct {
 	definition *fleet.FleetServiceContent
 
-	// instances maps machine localparts to the PrincipalAssignment
+	// instances maps machine user IDs to the PrincipalAssignment
 	// the fleet controller wrote for this service on that machine.
-	instances map[string]*schema.PrincipalAssignment
+	instances map[ref.UserID]*schema.PrincipalAssignment
 }
 
 // initialSync performs the first /sync and builds the fleet model from
@@ -314,27 +314,36 @@ func (fc *FleetController) processStateEventWithContext(ctx context.Context, roo
 // processFleetServiceEvent parses a fleet service definition and
 // updates the services map.
 func (fc *FleetController) processFleetServiceEvent(event messaging.Event) {
-	stateKey := *event.StateKey
+	stateKeyRaw := *event.StateKey
+	stateKeyUserID, err := ref.ParseUserIDFromStateKey(stateKeyRaw)
+	if err != nil {
+		fc.logger.Warn("ignoring fleet service event with unparseable state_key",
+			"state_key", stateKeyRaw,
+			"error", err,
+		)
+		return
+	}
+
 	if len(event.Content) == 0 {
-		delete(fc.services, stateKey)
+		delete(fc.services, stateKeyUserID)
 		return
 	}
 
 	content, err := parseEventContent[fleet.FleetServiceContent](event)
 	if err != nil {
 		fc.logger.Warn("failed to parse fleet service event",
-			"state_key", stateKey,
+			"state_key", stateKeyRaw,
 			"error", err,
 		)
 		return
 	}
 
-	state, exists := fc.services[stateKey]
+	state, exists := fc.services[stateKeyUserID]
 	if !exists {
 		state = &fleetServiceState{
-			instances: make(map[string]*schema.PrincipalAssignment),
+			instances: make(map[ref.UserID]*schema.PrincipalAssignment),
 		}
-		fc.services[stateKey] = state
+		fc.services[stateKeyUserID] = state
 	}
 	state.definition = content
 }
@@ -363,85 +372,109 @@ func (fc *FleetController) processMachineDefinitionEvent(event messaging.Event) 
 // processFleetConfigEvent parses a fleet config and updates the
 // config map.
 func (fc *FleetController) processFleetConfigEvent(event messaging.Event) {
-	stateKey := *event.StateKey
+	stateKeyRaw := *event.StateKey
+	stateKeyUserID, err := ref.ParseUserIDFromStateKey(stateKeyRaw)
+	if err != nil {
+		fc.logger.Warn("ignoring fleet config event with unparseable state_key",
+			"state_key", stateKeyRaw,
+			"error", err,
+		)
+		return
+	}
+
 	if len(event.Content) == 0 {
-		delete(fc.config, stateKey)
+		delete(fc.config, stateKeyUserID)
 		return
 	}
 
 	content, err := parseEventContent[fleet.FleetConfigContent](event)
 	if err != nil {
 		fc.logger.Warn("failed to parse fleet config event",
-			"state_key", stateKey,
+			"state_key", stateKeyRaw,
 			"error", err,
 		)
 		return
 	}
 
-	fc.config[stateKey] = content
+	fc.config[stateKeyUserID] = content
 }
 
 // processHALeaseEvent parses an HA lease and updates the leases map.
 func (fc *FleetController) processHALeaseEvent(event messaging.Event) {
-	stateKey := *event.StateKey
+	stateKeyRaw := *event.StateKey
+	stateKeyUserID, err := ref.ParseUserIDFromStateKey(stateKeyRaw)
+	if err != nil {
+		fc.logger.Warn("ignoring HA lease event with unparseable state_key",
+			"state_key", stateKeyRaw,
+			"error", err,
+		)
+		return
+	}
+
 	if len(event.Content) == 0 {
-		delete(fc.leases, stateKey)
+		delete(fc.leases, stateKeyUserID)
 		return
 	}
 
 	content, err := parseEventContent[fleet.HALeaseContent](event)
 	if err != nil {
 		fc.logger.Warn("failed to parse HA lease event",
-			"state_key", stateKey,
+			"state_key", stateKeyRaw,
 			"error", err,
 		)
 		return
 	}
 
-	fc.leases[stateKey] = content
+	fc.leases[stateKeyUserID] = content
 }
 
 // processMachineInfoEvent parses a machine info event and updates the
 // machines map.
 func (fc *FleetController) processMachineInfoEvent(event messaging.Event) {
-	stateKey := *event.StateKey
+	stateKeyRaw := *event.StateKey
 	if len(event.Content) == 0 {
+		return
+	}
+
+	machineUserID, ok := fc.machineInFleet(stateKeyRaw)
+	if !ok {
 		return
 	}
 
 	content, err := parseEventContent[schema.MachineInfo](event)
 	if err != nil {
 		fc.logger.Warn("failed to parse machine info event",
-			"state_key", stateKey,
+			"state_key", stateKeyRaw,
 			"error", err,
 		)
 		return
 	}
 
-	machine, exists := fc.machines[stateKey]
+	machine, exists := fc.machines[machineUserID]
 	if !exists {
 		machine = &machineState{
-			assignments: make(map[string]*schema.PrincipalAssignment),
+			assignments: make(map[ref.UserID]*schema.PrincipalAssignment),
 		}
-		fc.machines[stateKey] = machine
+		fc.machines[machineUserID] = machine
 	}
 	machine.info = content
 }
 
-// machineInFleet validates that a machine localpart belongs to this
-// fleet controller's fleet. Returns false (with a warning log) if the
-// localpart doesn't parse as a machine reference or belongs to a
+// machineInFleet validates that a state_key parses as a machine user
+// ID belonging to this fleet controller's fleet. Returns the parsed
+// UserID and true on success. Returns (zero, false) with a warning log
+// if the state_key doesn't parse as a machine user ID or belongs to a
 // different fleet. This prevents cross-fleet contamination when a fleet
 // controller is accidentally invited to a config room owned by another
 // fleet.
-func (fc *FleetController) machineInFleet(stateKey string) bool {
-	machine, err := ref.ParseMachine(stateKey, fc.serverName)
+func (fc *FleetController) machineInFleet(stateKey string) (ref.UserID, bool) {
+	machine, err := ref.ParseMachineStateKey(stateKey)
 	if err != nil {
-		fc.logger.Warn("ignoring machine event with unparseable localpart",
+		fc.logger.Warn("ignoring machine event with unparseable state_key",
 			"state_key", stateKey,
 			"error", err,
 		)
-		return false
+		return ref.UserID{}, false
 	}
 	if machine.Fleet().Localpart() != fc.fleet.Localpart() {
 		fc.logger.Warn("ignoring machine event from foreign fleet",
@@ -449,9 +482,9 @@ func (fc *FleetController) machineInFleet(stateKey string) bool {
 			"expected_fleet", fc.fleet.Localpart(),
 			"actual_fleet", machine.Fleet().Localpart(),
 		)
-		return false
+		return ref.UserID{}, false
 	}
-	return true
+	return machine.UserID(), true
 }
 
 // processMachineStatusEvent parses a machine status event and updates
@@ -460,29 +493,30 @@ func (fc *FleetController) machineInFleet(stateKey string) bool {
 // and its healthState is set to "online". If the machine was previously
 // offline or suspect, recovery is logged.
 func (fc *FleetController) processMachineStatusEvent(event messaging.Event) {
-	stateKey := *event.StateKey
+	stateKeyRaw := *event.StateKey
 	if len(event.Content) == 0 {
 		return
 	}
-	if !fc.machineInFleet(stateKey) {
+	machineUserID, ok := fc.machineInFleet(stateKeyRaw)
+	if !ok {
 		return
 	}
 
 	content, err := parseEventContent[schema.MachineStatus](event)
 	if err != nil {
 		fc.logger.Warn("failed to parse machine status event",
-			"state_key", stateKey,
+			"state_key", stateKeyRaw,
 			"error", err,
 		)
 		return
 	}
 
-	machine, exists := fc.machines[stateKey]
+	machine, exists := fc.machines[machineUserID]
 	if !exists {
 		machine = &machineState{
-			assignments: make(map[string]*schema.PrincipalAssignment),
+			assignments: make(map[ref.UserID]*schema.PrincipalAssignment),
 		}
-		fc.machines[stateKey] = machine
+		fc.machines[machineUserID] = machine
 	}
 
 	previousHealthState := machine.healthState
@@ -493,18 +527,19 @@ func (fc *FleetController) processMachineStatusEvent(event messaging.Event) {
 
 	if previousHealthState == healthOffline || previousHealthState == healthSuspect {
 		fc.logger.Info("machine recovered",
-			"machine", stateKey,
+			"machine", machineUserID,
 			"previous_state", previousHealthState,
 		)
 	}
 }
 
 // processPresenceEvents updates machine presence state from m.presence
-// events received via /sync. The sender's localpart is matched against
-// tracked machine entries. Presence provides a fast-path liveness
-// signal: when the homeserver reports a daemon offline (TCP connection
-// dropped), the fleet controller can immediately suspect the machine
-// rather than waiting for heartbeat staleness.
+// events received via /sync. The sender (a full Matrix user ID) is
+// matched against tracked machine entries. Presence provides a
+// fast-path liveness signal: when the homeserver reports a daemon
+// offline (TCP connection dropped), the fleet controller can
+// immediately suspect the machine rather than waiting for heartbeat
+// staleness.
 //
 // When a presence state transition is detected, a FleetPresenceChanged
 // notification is published to the fleet room for operator visibility.
@@ -518,9 +553,8 @@ func (fc *FleetController) processPresenceEvents(ctx context.Context, events []m
 		if event.Sender.IsZero() {
 			continue
 		}
-		senderLocalpart := event.Sender.Localpart()
 
-		machine, exists := fc.machines[senderLocalpart]
+		machine, exists := fc.machines[event.Sender]
 		if !exists {
 			continue
 		}
@@ -530,12 +564,12 @@ func (fc *FleetController) processPresenceEvents(ctx context.Context, events []m
 
 		if previousPresence != event.Content.Presence {
 			fc.logger.Info("machine presence changed",
-				"machine", senderLocalpart,
+				"machine", event.Sender,
 				"previous", previousPresence,
 				"current", event.Content.Presence,
 			)
 			fc.sendFleetNotification(ctx,
-				fleet.NewFleetPresenceChangedMessage(senderLocalpart, previousPresence, event.Content.Presence))
+				fleet.NewFleetPresenceChangedMessage(event.Sender.String(), previousPresence, event.Content.Presence))
 		}
 	}
 }
@@ -544,11 +578,12 @@ func (fc *FleetController) processPresenceEvents(ctx context.Context, events []m
 // per-machine config room and extracts fleet-managed
 // PrincipalAssignment entries.
 func (fc *FleetController) processMachineConfigEvent(roomID ref.RoomID, event messaging.Event) {
-	stateKey := *event.StateKey
+	stateKeyRaw := *event.StateKey
 	if len(event.Content) == 0 {
 		return
 	}
-	if !fc.machineInFleet(stateKey) {
+	machineUserID, ok := fc.machineInFleet(stateKeyRaw)
+	if !ok {
 		return
 	}
 
@@ -556,22 +591,22 @@ func (fc *FleetController) processMachineConfigEvent(roomID ref.RoomID, event me
 	if err != nil {
 		fc.logger.Warn("failed to parse machine config event",
 			"room_id", roomID,
-			"state_key", stateKey,
+			"state_key", stateKeyRaw,
 			"error", err,
 		)
 		return
 	}
 
 	// Track the config room mapping.
-	fc.configRooms[stateKey] = roomID
+	fc.configRooms[machineUserID] = roomID
 
 	// Ensure the machine entry exists so we can check pending echoes.
-	machine, exists := fc.machines[stateKey]
+	machine, exists := fc.machines[machineUserID]
 	if !exists {
 		machine = &machineState{
-			assignments: make(map[string]*schema.PrincipalAssignment),
+			assignments: make(map[ref.UserID]*schema.PrincipalAssignment),
 		}
-		fc.machines[stateKey] = machine
+		fc.machines[machineUserID] = machine
 	}
 	machine.configRoomID = roomID
 
@@ -589,31 +624,30 @@ func (fc *FleetController) processMachineConfigEvent(roomID ref.RoomID, event me
 
 	// Extract fleet-managed assignments from the config event and
 	// update the service instance index incrementally.
-	machineLocalpart := stateKey
 	oldAssignments := machine.assignments
 
-	fleetAssignments := make(map[string]*schema.PrincipalAssignment)
+	fleetAssignments := make(map[ref.UserID]*schema.PrincipalAssignment)
 	for index := range content.Principals {
 		assignment := &content.Principals[index]
 		if isFleetManaged(assignment) {
-			fleetAssignments[assignment.Principal.AccountLocalpart()] = assignment
+			fleetAssignments[assignment.Principal.UserID()] = assignment
 		}
 	}
 
 	// Remove stale service instance entries for assignments that
 	// are no longer on this machine.
-	for localpart := range oldAssignments {
-		if _, stillAssigned := fleetAssignments[localpart]; !stillAssigned {
-			if serviceState, exists := fc.services[localpart]; exists {
-				delete(serviceState.instances, machineLocalpart)
+	for serviceUserID := range oldAssignments {
+		if _, stillAssigned := fleetAssignments[serviceUserID]; !stillAssigned {
+			if serviceState, exists := fc.services[serviceUserID]; exists {
+				delete(serviceState.instances, machineUserID)
 			}
 		}
 	}
 
 	// Add or update service instance entries for current assignments.
-	for localpart, assignment := range fleetAssignments {
-		if serviceState, exists := fc.services[localpart]; exists {
-			serviceState.instances[machineLocalpart] = assignment
+	for serviceUserID, assignment := range fleetAssignments {
+		if serviceState, exists := fc.services[serviceUserID]; exists {
+			serviceState.instances[machineUserID] = assignment
 		}
 	}
 
@@ -668,13 +702,13 @@ func (fc *FleetController) handleSync(ctx context.Context, response *messaging.S
 
 	// Snapshot config rooms and services before processing so we can
 	// detect new discoveries and emit notifications.
-	previousConfigRooms := make(map[string]bool, len(fc.configRooms))
-	for machineLocalpart := range fc.configRooms {
-		previousConfigRooms[machineLocalpart] = true
+	previousConfigRooms := make(map[ref.UserID]bool, len(fc.configRooms))
+	for machineUserID := range fc.configRooms {
+		previousConfigRooms[machineUserID] = true
 	}
-	previousServices := make(map[string]bool, len(fc.services))
-	for serviceLocalpart := range fc.services {
-		previousServices[serviceLocalpart] = true
+	previousServices := make(map[ref.UserID]bool, len(fc.services))
+	for serviceUserID := range fc.services {
+		previousServices[serviceUserID] = true
 	}
 
 	// Clean up state for rooms the fleet controller has been removed
@@ -757,14 +791,14 @@ func (fc *FleetController) handleSync(ctx context.Context, response *messaging.S
 // was the fleet or machine room, the event is logged as a warning.
 func (fc *FleetController) processLeave(roomID ref.RoomID) {
 	// Check if this is an ops room and clean up reservation state.
-	if machineLocalpart, isOpsRoom := fc.opsRoomMachines[roomID]; isOpsRoom {
+	if machineUserID, isOpsRoom := fc.opsRoomMachines[roomID]; isOpsRoom {
 		fc.logger.Info("ops room left, clearing reservation state",
 			"room_id", roomID,
-			"machine", machineLocalpart,
+			"machine", machineUserID,
 		)
-		delete(fc.opsRooms, machineLocalpart)
+		delete(fc.opsRooms, machineUserID)
 		delete(fc.opsRoomMachines, roomID)
-		delete(fc.reservations, machineLocalpart)
+		delete(fc.reservations, machineUserID)
 
 		// Clean up relay links for this room.
 		for key := range fc.relayLinks {
@@ -777,24 +811,24 @@ func (fc *FleetController) processLeave(roomID ref.RoomID) {
 
 	// Check if this is a config room and clean up the associated
 	// machine state.
-	for machineLocalpart, configRoom := range fc.configRooms {
+	for machineUserID, configRoom := range fc.configRooms {
 		if configRoom != roomID {
 			continue
 		}
 		fc.logger.Info("config room left, removing machine assignments",
 			"room_id", roomID,
-			"machine", machineLocalpart,
+			"machine", machineUserID,
 		)
-		if machine, exists := fc.machines[machineLocalpart]; exists {
-			for localpart := range machine.assignments {
-				if serviceState, exists := fc.services[localpart]; exists {
-					delete(serviceState.instances, machineLocalpart)
+		if machine, exists := fc.machines[machineUserID]; exists {
+			for serviceUserID := range machine.assignments {
+				if serviceState, exists := fc.services[serviceUserID]; exists {
+					delete(serviceState.instances, machineUserID)
 				}
 			}
-			machine.assignments = make(map[string]*schema.PrincipalAssignment)
+			machine.assignments = make(map[ref.UserID]*schema.PrincipalAssignment)
 			machine.configRoomID = ref.RoomID{}
 		}
-		delete(fc.configRooms, machineLocalpart)
+		delete(fc.configRooms, machineUserID)
 		return
 	}
 
@@ -805,9 +839,9 @@ func (fc *FleetController) processLeave(roomID ref.RoomID) {
 		// receive heartbeats. Replace with a fresh map rather
 		// than deleting during iteration. Also clear all service
 		// instances since they reference machines.
-		fc.machines = make(map[string]*machineState)
+		fc.machines = make(map[ref.UserID]*machineState)
 		for _, serviceState := range fc.services {
-			serviceState.instances = make(map[string]*schema.PrincipalAssignment)
+			serviceState.instances = make(map[ref.UserID]*schema.PrincipalAssignment)
 		}
 		return
 	}
@@ -855,14 +889,14 @@ func collectStateEvents(room messaging.JoinedRoom) []messaging.Event {
 func (fc *FleetController) rebuildServiceInstances() {
 	// Clear all existing instance tracking.
 	for _, serviceState := range fc.services {
-		serviceState.instances = make(map[string]*schema.PrincipalAssignment)
+		serviceState.instances = make(map[ref.UserID]*schema.PrincipalAssignment)
 	}
 
 	// Rebuild from machine assignments.
-	for machineLocalpart, machine := range fc.machines {
-		for localpart, assignment := range machine.assignments {
-			if serviceState, exists := fc.services[localpart]; exists {
-				serviceState.instances[machineLocalpart] = assignment
+	for machineUserID, machine := range fc.machines {
+		for serviceUserID, assignment := range machine.assignments {
+			if serviceState, exists := fc.services[serviceUserID]; exists {
+				serviceState.instances[machineUserID] = assignment
 			}
 		}
 	}
@@ -896,21 +930,21 @@ func parseEventContent[T any](event messaging.Event) (*T, error) {
 // the fleet room for config rooms and services that are new since the
 // previous snapshot. Pass nil maps for initial sync (everything is new)
 // or snapshots of the previous state for incremental sync.
-func (fc *FleetController) emitDiscoveryNotifications(ctx context.Context, previousConfigRooms, previousServices map[string]bool) {
-	for machineLocalpart, roomID := range fc.configRooms {
-		if previousConfigRooms != nil && previousConfigRooms[machineLocalpart] {
+func (fc *FleetController) emitDiscoveryNotifications(ctx context.Context, previousConfigRooms, previousServices map[ref.UserID]bool) {
+	for machineUserID, roomID := range fc.configRooms {
+		if previousConfigRooms != nil && previousConfigRooms[machineUserID] {
 			continue
 		}
 		fc.sendFleetNotification(ctx,
-			fleet.NewFleetConfigRoomDiscoveredMessage(machineLocalpart, roomID.String()))
+			fleet.NewFleetConfigRoomDiscoveredMessage(machineUserID.String(), roomID.String()))
 	}
 
-	for serviceLocalpart := range fc.services {
-		if previousServices != nil && previousServices[serviceLocalpart] {
+	for serviceUserID := range fc.services {
+		if previousServices != nil && previousServices[serviceUserID] {
 			continue
 		}
 		fc.sendFleetNotification(ctx,
-			fleet.NewFleetServiceDiscoveredMessage(serviceLocalpart))
+			fleet.NewFleetServiceDiscoveredMessage(serviceUserID.String()))
 	}
 }
 
@@ -924,18 +958,18 @@ func (fc *FleetController) emitDiscoveryNotifications(ctx context.Context, previ
 // new rooms).
 //
 // Caller must hold fc.mu.
-func (fc *FleetController) publishServiceBindings(ctx context.Context, previousConfigRooms map[string]bool) {
+func (fc *FleetController) publishServiceBindings(ctx context.Context, previousConfigRooms map[ref.UserID]bool) {
 	binding := schema.ServiceBindingContent{Principal: fc.serviceEntity}
 
-	for machineLocalpart, roomID := range fc.configRooms {
-		if previousConfigRooms != nil && previousConfigRooms[machineLocalpart] {
+	for machineUserID, roomID := range fc.configRooms {
+		if previousConfigRooms != nil && previousConfigRooms[machineUserID] {
 			continue
 		}
 
 		_, err := fc.configStore.SendStateEvent(ctx, roomID, schema.EventTypeServiceBinding, "fleet", binding)
 		if err != nil {
 			fc.logger.Warn("failed to publish fleet service binding",
-				"machine", machineLocalpart,
+				"machine", machineUserID,
 				"config_room", roomID,
 				"error", err,
 			)
@@ -943,11 +977,11 @@ func (fc *FleetController) publishServiceBindings(ctx context.Context, previousC
 		}
 
 		fc.logger.Info("published fleet service binding",
-			"machine", machineLocalpart,
+			"machine", machineUserID,
 			"config_room", roomID,
 		)
 		fc.sendFleetNotification(ctx,
-			fleet.NewFleetServiceBindingPublishedMessage(machineLocalpart, roomID.String()))
+			fleet.NewFleetServiceBindingPublishedMessage(machineUserID.String(), roomID.String()))
 	}
 }
 

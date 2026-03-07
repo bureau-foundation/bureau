@@ -7,6 +7,7 @@ import (
 	"encoding/json"
 	"fmt"
 
+	"github.com/bureau-foundation/bureau/lib/ref"
 	"github.com/bureau-foundation/bureau/lib/schema"
 )
 
@@ -774,16 +775,19 @@ type FleetConfigContent struct {
 // critical service. Daemons compete to acquire this lease when the
 // current holder goes offline.
 type HALeaseContent struct {
-	// Holder is the machine localpart currently holding the lease
-	// (e.g., "machine/workstation").
-	Holder string `json:"holder"`
+	// Holder is the machine currently holding the lease, identified
+	// by its full Matrix user ID
+	// (e.g., "@my_bureau/fleet/prod/machine/workstation:bureau.local").
+	Holder ref.UserID `json:"holder"`
 
 	// ExpiresAt is an ISO 8601 timestamp. If the holder does not
 	// renew the lease before this time, other daemons may claim it.
 	ExpiresAt string `json:"expires_at"`
 
-	// Service is the fleet service localpart this lease covers.
-	Service string `json:"service"`
+	// Service is the fleet service this lease covers, identified by
+	// its full Matrix user ID
+	// (e.g., "@my_bureau/fleet/prod/service/fleet/controller:bureau.local").
+	Service ref.UserID `json:"service"`
 
 	// AcquiredAt is when the current holder acquired the lease.
 	AcquiredAt string `json:"acquired_at"`
@@ -793,8 +797,9 @@ type HALeaseContent struct {
 // by a service. The fleet controller uses these for scaling decisions
 // (e.g., high queue depth triggers replica scale-up).
 type ServiceStatusContent struct {
-	// Machine is the machine localpart where this instance is running.
-	Machine string `json:"machine"`
+	// Machine is the machine where this instance is running,
+	// identified by its full Matrix user ID.
+	Machine ref.UserID `json:"machine"`
 
 	// QueueDepth is the number of pending requests or tasks.
 	QueueDepth int `json:"queue_depth,omitempty"`

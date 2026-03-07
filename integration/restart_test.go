@@ -68,7 +68,7 @@ func TestDaemonRestartRecovery(t *testing.T) {
 	// publishes status on its interval; use a watch from the current
 	// sync position to catch the next heartbeat.
 	runningWatch := watchRoom(t, admin, fleet.MachineRoomID)
-	runningWatch.WaitForMachineStatus(t, machine.Name, func(status schema.MachineStatus) bool {
+	runningWatch.WaitForMachineStatus(t, machine.UserID.StateKey(), func(status schema.MachineStatus) bool {
 		return status.Sandboxes.Running == 1
 	}, "initial heartbeat with Running=1")
 
@@ -101,7 +101,7 @@ func TestDaemonRestartRecovery(t *testing.T) {
 	// principal field; the new daemon will overwrite it with the real one.
 	ctx := t.Context()
 	_, err := admin.SendStateEvent(ctx, fleet.MachineRoomID, schema.EventTypeMachineStatus,
-		machine.Name, map[string]any{
+		machine.UserID.StateKey(), map[string]any{
 			"principal": "",
 			"sandboxes": map[string]any{"running": -1},
 		})
@@ -127,7 +127,7 @@ func TestDaemonRestartRecovery(t *testing.T) {
 	// Wait for the new daemon to publish a heartbeat with the correct
 	// running count. The sentinel has running=-1, so any valid heartbeat
 	// with running >= 0 is from the new daemon.
-	recoveryWatch.WaitForMachineStatus(t, machine.Name, func(status schema.MachineStatus) bool {
+	recoveryWatch.WaitForMachineStatus(t, machine.UserID.StateKey(), func(status schema.MachineStatus) bool {
 		return status.Principal == machine.UserID.String() && status.Sandboxes.Running == 1
 	}, "heartbeat from new daemon with Running=1")
 	t.Log("new daemon adopted sandbox and published correct heartbeat")

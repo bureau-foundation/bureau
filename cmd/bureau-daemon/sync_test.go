@@ -226,7 +226,7 @@ func TestProcessSyncResponse_MachineRoomSelfEventsFiltered(t *testing.T) {
 
 	// Sync response with a machine room state change from the daemon
 	// itself (self-event from heartbeat).
-	selfKey := machine.Localpart()
+	selfKey := machine.UserID().StateKey()
 	response := &messaging.SyncResponse{
 		NextBatch: "batch_1",
 		Rooms: messaging.RoomsSection{
@@ -263,7 +263,7 @@ func TestProcessSyncResponse_ConfigRoom(t *testing.T) {
 	t.Parallel()
 
 	machine, fleet := testMachineSetup(t, "test", "bureau.local")
-	machineName := machine.Localpart()
+	machineName := machine.UserID().StateKey()
 
 	matrixState := newMockMatrixState()
 	matrixServer := httptest.NewServer(matrixState.handler())
@@ -353,7 +353,7 @@ func TestProcessSyncResponse_PreReconcileServiceSync(t *testing.T) {
 	t.Parallel()
 
 	machine, fleet := testMachineSetup(t, "test", "bureau.local")
-	machineName := machine.Localpart()
+	machineName := machine.UserID().StateKey()
 
 	matrixState := newMockMatrixState()
 	matrixServer := httptest.NewServer(matrixState.handler())
@@ -471,7 +471,7 @@ func TestProcessSyncResponse_ServicesRoom(t *testing.T) {
 	// Set up a MachineConfig so the daemon is configured. Service
 	// directory sync is skipped for unconfigured daemons (no proxies
 	// to push the directory to).
-	machineName := machine.Localpart()
+	machineName := machine.UserID().StateKey()
 	matrixState.setStateEvent(configRoomID, schema.EventTypeMachineConfig, machineName, schema.MachineConfig{
 		Principals: []schema.PrincipalAssignment{{
 			Principal: testEntity(t, fleet, "test/agent"),
@@ -946,7 +946,7 @@ func TestInitialSync(t *testing.T) {
 	t.Parallel()
 
 	machine, fleet := testMachineSetup(t, "test", "bureau.local")
-	machineName := machine.Localpart()
+	machineName := machine.UserID().StateKey()
 
 	matrixState := newMockMatrixState()
 	matrixServer := httptest.NewServer(matrixState.handler())
@@ -1076,7 +1076,7 @@ func TestProcessSyncResponse_WorkspaceRoomTriggersReconcile(t *testing.T) {
 	t.Parallel()
 
 	machine, fleet := testMachineSetup(t, "test", "bureau.local")
-	machineName := machine.Localpart()
+	machineName := machine.UserID().StateKey()
 
 	matrixState := newMockMatrixState()
 	matrixServer := httptest.NewServer(matrixState.handler())
@@ -1178,7 +1178,7 @@ func TestProcessSyncResponse_TemplateRoomTriggersReconcile(t *testing.T) {
 	t.Parallel()
 
 	machine, fleet := testMachineSetup(t, "test", "bureau.local")
-	machineName := machine.Localpart()
+	machineName := machine.UserID().StateKey()
 
 	matrixState := newMockMatrixState()
 	matrixServer := httptest.NewServer(matrixState.handler())
@@ -1343,7 +1343,7 @@ func TestProcessSyncResponse_AcceptsInvites(t *testing.T) {
 	t.Parallel()
 
 	machine, fleet := testMachineSetup(t, "test", "bureau.local")
-	machineName := machine.Localpart()
+	machineName := machine.UserID().StateKey()
 
 	matrixState := newMockMatrixState()
 	matrixServer := httptest.NewServer(matrixState.handler())
@@ -1417,7 +1417,7 @@ func TestInitialSync_AcceptsInvites(t *testing.T) {
 	t.Parallel()
 
 	machine, fleet := testMachineSetup(t, "test", "bureau.local")
-	machineName := machine.Localpart()
+	machineName := machine.UserID().StateKey()
 
 	matrixState := newMockMatrixState()
 	matrixServer := httptest.NewServer(matrixState.handler())

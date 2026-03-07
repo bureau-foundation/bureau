@@ -291,14 +291,13 @@ func TestHealthMonitorThresholdTriggersRollback(t *testing.T) {
 
 	daemon, fakeClock := newTestDaemon(t)
 	daemon.machine, daemon.fleet = testMachineSetup(t, "test", "test.local")
-	machineName := daemon.machine.Localpart()
-	serverName := daemon.machine.Server().String()
+	machineName := daemon.machine.UserID().StateKey()
 
 	ipcEntity := testEntity(t, daemon.fleet, accountLocalpart)
 
 	// Mock Matrix: principal still in config with credentials.
-	// The credentials state key uses the fleet-scoped localpart
-	// (Entity.Localpart()), matching what readCredentials looks up.
+	// The credentials state key uses the full user ID,
+	// matching what readCredentials looks up.
 	state := newMockMatrixState()
 	state.setStateEvent(configRoomID, schema.EventTypeMachineConfig, machineName, schema.MachineConfig{
 		Principals: []schema.PrincipalAssignment{{
@@ -306,7 +305,7 @@ func TestHealthMonitorThresholdTriggersRollback(t *testing.T) {
 			AutoStart: true,
 		}},
 	})
-	state.setStateEvent(configRoomID, schema.EventTypeCredentials, ipcEntity.Localpart(), schema.Credentials{
+	state.setStateEvent(configRoomID, schema.EventTypeCredentials, ipcEntity.UserID().StateKey(), schema.Credentials{
 		Ciphertext: "encrypted-creds",
 	})
 
@@ -337,7 +336,7 @@ func TestHealthMonitorThresholdTriggersRollback(t *testing.T) {
 	if err != nil {
 		t.Fatalf("creating client: %v", err)
 	}
-	session, err := client.SessionFromToken(mustParseUserID("@"+machineName+":"+serverName), "test-token")
+	session, err := client.SessionFromToken(daemon.machine.UserID(), "test-token")
 	if err != nil {
 		t.Fatalf("creating session: %v", err)
 	}
@@ -510,8 +509,7 @@ func TestRollbackNoPreviousSpec(t *testing.T) {
 
 	daemon, _ := newTestDaemon(t)
 	daemon.machine, daemon.fleet = testMachineSetup(t, "test", "test.local")
-	machineName := daemon.machine.Localpart()
-	serverName := daemon.machine.Server().String()
+	machineName := daemon.machine.UserID().StateKey()
 
 	ipcEntity := testEntity(t, daemon.fleet, accountLocalpart)
 
@@ -549,7 +547,7 @@ func TestRollbackNoPreviousSpec(t *testing.T) {
 	if err != nil {
 		t.Fatalf("creating client: %v", err)
 	}
-	session, err := client.SessionFromToken(mustParseUserID("@"+machineName+":"+serverName), "test-token")
+	session, err := client.SessionFromToken(daemon.machine.UserID(), "test-token")
 	if err != nil {
 		t.Fatalf("creating session: %v", err)
 	}
@@ -650,8 +648,7 @@ func TestRollbackCredentialRotation(t *testing.T) {
 
 	daemon, fakeClock := newTestDaemon(t)
 	daemon.machine, daemon.fleet = testMachineSetup(t, "test", "test.local")
-	machineName := daemon.machine.Localpart()
-	serverName := daemon.machine.Server().String()
+	machineName := daemon.machine.UserID().StateKey()
 
 	ipcEntity := testEntity(t, daemon.fleet, accountLocalpart)
 
@@ -665,7 +662,7 @@ func TestRollbackCredentialRotation(t *testing.T) {
 			AutoStart: true,
 		}},
 	})
-	state.setStateEvent(configRoomID, schema.EventTypeCredentials, ipcEntity.Localpart(), schema.Credentials{
+	state.setStateEvent(configRoomID, schema.EventTypeCredentials, ipcEntity.UserID().StateKey(), schema.Credentials{
 		Ciphertext: newCiphertext,
 	})
 
@@ -700,7 +697,7 @@ func TestRollbackCredentialRotation(t *testing.T) {
 	if err != nil {
 		t.Fatalf("creating client: %v", err)
 	}
-	session, err := client.SessionFromToken(mustParseUserID("@"+machineName+":"+serverName), "test-token")
+	session, err := client.SessionFromToken(daemon.machine.UserID(), "test-token")
 	if err != nil {
 		t.Fatalf("creating session: %v", err)
 	}
@@ -865,8 +862,7 @@ func TestRollbackCredentialRotationNoPreviousCredentials(t *testing.T) {
 
 	daemon, _ := newTestDaemon(t)
 	daemon.machine, daemon.fleet = testMachineSetup(t, "test", "test.local")
-	machineName := daemon.machine.Localpart()
-	serverName := daemon.machine.Server().String()
+	machineName := daemon.machine.UserID().StateKey()
 
 	ipcEntity := testEntity(t, daemon.fleet, accountLocalpart)
 
@@ -877,7 +873,7 @@ func TestRollbackCredentialRotationNoPreviousCredentials(t *testing.T) {
 			AutoStart: true,
 		}},
 	})
-	state.setStateEvent(configRoomID, schema.EventTypeCredentials, ipcEntity.Localpart(), schema.Credentials{
+	state.setStateEvent(configRoomID, schema.EventTypeCredentials, ipcEntity.UserID().StateKey(), schema.Credentials{
 		Ciphertext: currentCiphertext,
 	})
 
@@ -910,7 +906,7 @@ func TestRollbackCredentialRotationNoPreviousCredentials(t *testing.T) {
 	if err != nil {
 		t.Fatalf("creating client: %v", err)
 	}
-	session, err := client.SessionFromToken(mustParseUserID("@"+machineName+":"+serverName), "test-token")
+	session, err := client.SessionFromToken(daemon.machine.UserID(), "test-token")
 	if err != nil {
 		t.Fatalf("creating session: %v", err)
 	}
@@ -1014,8 +1010,7 @@ func TestReconcileStartsHealthMonitorForTemplate(t *testing.T) {
 
 	daemon, _ := newTestDaemon(t)
 	daemon.machine, daemon.fleet = testMachineSetup(t, "test", "test.local")
-	machineName := daemon.machine.Localpart()
-	serverName := daemon.machine.Server().String()
+	machineName := daemon.machine.UserID().StateKey()
 
 	state := newMockMatrixState()
 	state.setRoomAlias(daemon.fleet.Namespace().TemplateRoomAlias(), templateRoomID)
@@ -1027,7 +1022,6 @@ func TestReconcileStartsHealthMonitorForTemplate(t *testing.T) {
 		},
 	})
 	fleetEntity := testEntity(t, daemon.fleet, "agent/test")
-	fleetLocalpart := fleetEntity.Localpart()
 	state.setStateEvent(configRoomID, schema.EventTypeMachineConfig, machineName, schema.MachineConfig{
 		Principals: []schema.PrincipalAssignment{{
 			Principal: fleetEntity,
@@ -1035,7 +1029,7 @@ func TestReconcileStartsHealthMonitorForTemplate(t *testing.T) {
 			AutoStart: true,
 		}},
 	})
-	state.setStateEvent(configRoomID, schema.EventTypeCredentials, fleetLocalpart, schema.Credentials{
+	state.setStateEvent(configRoomID, schema.EventTypeCredentials, fleetEntity.UserID().StateKey(), schema.Credentials{
 		Ciphertext: "encrypted-test-credentials",
 	})
 
@@ -1053,7 +1047,7 @@ func TestReconcileStartsHealthMonitorForTemplate(t *testing.T) {
 	if err != nil {
 		t.Fatalf("creating client: %v", err)
 	}
-	session, err := client.SessionFromToken(mustParseUserID("@"+machineName+":"+serverName), "test-token")
+	session, err := client.SessionFromToken(daemon.machine.UserID(), "test-token")
 	if err != nil {
 		t.Fatalf("creating session: %v", err)
 	}
@@ -1109,8 +1103,7 @@ func TestReconcileNoHealthMonitorWithoutHealthCheck(t *testing.T) {
 
 	daemon, _ := newTestDaemon(t)
 	daemon.machine, daemon.fleet = testMachineSetup(t, "test", "test.local")
-	machineName := daemon.machine.Localpart()
-	serverName := daemon.machine.Server().String()
+	machineName := daemon.machine.UserID().StateKey()
 
 	state := newMockMatrixState()
 	state.setRoomAlias(daemon.fleet.Namespace().TemplateRoomAlias(), templateRoomID)
@@ -1119,7 +1112,6 @@ func TestReconcileNoHealthMonitorWithoutHealthCheck(t *testing.T) {
 		// No HealthCheck
 	})
 	fleetEntity := testEntity(t, daemon.fleet, "agent/test")
-	fleetLocalpart := fleetEntity.Localpart()
 	state.setStateEvent(configRoomID, schema.EventTypeMachineConfig, machineName, schema.MachineConfig{
 		Principals: []schema.PrincipalAssignment{{
 			Principal: fleetEntity,
@@ -1127,7 +1119,7 @@ func TestReconcileNoHealthMonitorWithoutHealthCheck(t *testing.T) {
 			AutoStart: true,
 		}},
 	})
-	state.setStateEvent(configRoomID, schema.EventTypeCredentials, fleetLocalpart, schema.Credentials{
+	state.setStateEvent(configRoomID, schema.EventTypeCredentials, fleetEntity.UserID().StateKey(), schema.Credentials{
 		Ciphertext: "encrypted-test-credentials",
 	})
 
@@ -1138,7 +1130,7 @@ func TestReconcileNoHealthMonitorWithoutHealthCheck(t *testing.T) {
 	if err != nil {
 		t.Fatalf("creating client: %v", err)
 	}
-	session, err := client.SessionFromToken(mustParseUserID("@"+machineName+":"+serverName), "test-token")
+	session, err := client.SessionFromToken(daemon.machine.UserID(), "test-token")
 	if err != nil {
 		t.Fatalf("creating session: %v", err)
 	}
@@ -1186,8 +1178,7 @@ func TestReconcileStopsHealthMonitorOnDestroy(t *testing.T) {
 
 	daemon, fakeClock2 := newTestDaemon(t)
 	daemon.machine, daemon.fleet = testMachineSetup(t, "test", "test.local")
-	machineName := daemon.machine.Localpart()
-	serverName := daemon.machine.Server().String()
+	machineName := daemon.machine.UserID().StateKey()
 	_ = fakeClock2
 
 	// Config with NO principals — the running one should be destroyed.
@@ -1210,7 +1201,7 @@ func TestReconcileStopsHealthMonitorOnDestroy(t *testing.T) {
 	if err != nil {
 		t.Fatalf("creating client: %v", err)
 	}
-	session, err := client.SessionFromToken(mustParseUserID("@"+machineName+":"+serverName), "test-token")
+	session, err := client.SessionFromToken(daemon.machine.UserID(), "test-token")
 	if err != nil {
 		t.Fatalf("creating session: %v", err)
 	}
@@ -1488,20 +1479,19 @@ func TestRollbackLauncherRejectsCreate(t *testing.T) {
 
 	daemon, _ := newTestDaemon(t)
 	daemon.machine, daemon.fleet = testMachineSetup(t, "test", "test.local")
-	machineName := daemon.machine.Localpart()
-	serverName := daemon.machine.Server().String()
+	machineName := daemon.machine.UserID().StateKey()
 
 	// Matrix state: principal in config with credentials (so rollback
 	// reaches the create-sandbox step before the launcher rejects it).
-	ipcLocalpart := "bureau/fleet/test/" + localpart
+	principalEntity := testEntity(t, daemon.fleet, localpart)
 	state := newMockMatrixState()
 	state.setStateEvent(configRoomID, schema.EventTypeMachineConfig, machineName, schema.MachineConfig{
 		Principals: []schema.PrincipalAssignment{{
-			Principal: testEntity(t, daemon.fleet, localpart),
+			Principal: principalEntity,
 			AutoStart: true,
 		}},
 	})
-	state.setStateEvent(configRoomID, schema.EventTypeCredentials, ipcLocalpart, schema.Credentials{
+	state.setStateEvent(configRoomID, schema.EventTypeCredentials, principalEntity.UserID().StateKey(), schema.Credentials{
 		Ciphertext: "encrypted-creds",
 	})
 
@@ -1531,7 +1521,7 @@ func TestRollbackLauncherRejectsCreate(t *testing.T) {
 	if err != nil {
 		t.Fatalf("creating client: %v", err)
 	}
-	session, err := client.SessionFromToken(mustParseUserID("@"+machineName+":"+serverName), "test-token")
+	session, err := client.SessionFromToken(daemon.machine.UserID(), "test-token")
 	if err != nil {
 		t.Fatalf("creating session: %v", err)
 	}
@@ -1638,8 +1628,7 @@ func TestRollbackCredentialsMissing(t *testing.T) {
 
 	daemon, _ := newTestDaemon(t)
 	daemon.machine, daemon.fleet = testMachineSetup(t, "test", "test.local")
-	machineName := daemon.machine.Localpart()
-	serverName := daemon.machine.Server().String()
+	machineName := daemon.machine.UserID().StateKey()
 
 	ipcEntity := testEntity(t, daemon.fleet, localpart)
 	// Matrix state: principal in config but NO credentials. The
@@ -1678,7 +1667,7 @@ func TestRollbackCredentialsMissing(t *testing.T) {
 	if err != nil {
 		t.Fatalf("creating client: %v", err)
 	}
-	session, err := client.SessionFromToken(mustParseUserID("@"+machineName+":"+serverName), "test-token")
+	session, err := client.SessionFromToken(daemon.machine.UserID(), "test-token")
 	if err != nil {
 		t.Fatalf("creating session: %v", err)
 	}
@@ -1775,8 +1764,7 @@ func TestDestroyExtrasCleansPreviousSpecs(t *testing.T) {
 
 	daemon, fakeClock := newTestDaemon(t)
 	daemon.machine, daemon.fleet = testMachineSetup(t, "test", "test.local")
-	machineName := daemon.machine.Localpart()
-	serverName := daemon.machine.Server().String()
+	machineName := daemon.machine.UserID().StateKey()
 
 	// Config with NO principals — the running one should be destroyed.
 	state := newMockMatrixState()
@@ -1796,7 +1784,7 @@ func TestDestroyExtrasCleansPreviousSpecs(t *testing.T) {
 	if err != nil {
 		t.Fatalf("creating client: %v", err)
 	}
-	session, err := client.SessionFromToken(mustParseUserID("@"+machineName+":"+serverName), "test-token")
+	session, err := client.SessionFromToken(daemon.machine.UserID(), "test-token")
 	if err != nil {
 		t.Fatalf("creating session: %v", err)
 	}

@@ -8,6 +8,7 @@ import (
 	"fmt"
 	"time"
 
+	"github.com/bureau-foundation/bureau/lib/ref"
 	"github.com/bureau-foundation/bureau/lib/schema"
 	"github.com/bureau-foundation/bureau/lib/schema/fleet"
 )
@@ -56,7 +57,7 @@ func (fc *FleetController) checkMachineHealth(ctx context.Context) {
 	suspectThreshold := interval
 	offlineThreshold := 3 * interval
 
-	for machineLocalpart, machine := range fc.machines {
+	for machineUserID, machine := range fc.machines {
 		if machine.lastHeartbeat.IsZero() {
 			continue
 		}
@@ -70,7 +71,7 @@ func (fc *FleetController) checkMachineHealth(ctx context.Context) {
 		case staleness <= offlineThreshold:
 			if previousState != healthSuspect {
 				fc.logger.Warn("machine heartbeat suspect",
-					"machine", machineLocalpart,
+					"machine", machineUserID,
 					"staleness", staleness,
 					"threshold", suspectThreshold,
 				)
@@ -80,11 +81,11 @@ func (fc *FleetController) checkMachineHealth(ctx context.Context) {
 			machine.healthState = healthOffline
 			if previousState != healthOffline {
 				fc.logger.Error("machine offline",
-					"machine", machineLocalpart,
+					"machine", machineUserID,
 					"staleness", staleness,
 					"threshold", offlineThreshold,
 				)
-				fc.executeFailover(ctx, machineLocalpart, machine)
+				fc.executeFailover(ctx, machineUserID, machine)
 			}
 		}
 
@@ -96,7 +97,7 @@ func (fc *FleetController) checkMachineHealth(ctx context.Context) {
 		if machine.presenceState == "offline" && machine.healthState == healthOnline {
 			machine.healthState = healthSuspect
 			fc.logger.Warn("machine suspect via presence offline",
-				"machine", machineLocalpart,
+				"machine", machineUserID,
 				"staleness", staleness,
 			)
 		}
@@ -109,19 +110,21 @@ func (fc *FleetController) checkMachineHealth(ctx context.Context) {
 // or on the next cycle).
 //
 // Caller must hold fc.mu.
-func (fc *FleetController) executeFailover(ctx context.Context, machineLocalpart string, machine *machineState) {
-	// Snapshot the service localparts before iterating because
+func (fc *FleetController) executeFailover(ctx context.Context, machineUserID ref.UserID, machine *machineState) {
+	// Snapshot the service user IDs before iterating because
 	// unplace modifies machine.assignments.
-	servicesToFailover := make([]string, 0, len(machine.assignments))
-	for serviceLocalpart := range machine.assignments {
-		servicesToFailover = append(servicesToFailover, serviceLocalpart)
+	servicesToFailover := make([]ref.UserID, 0, len(machine.assignments))
+	for serviceUserID := range machine.assignments {
+		servicesToFailover = append(servicesToFailover, serviceUserID)
 	}
 
-	for _, serviceLocalpart := range servicesToFailover {
-		if err := fc.unplace(ctx, serviceLocalpart, machineLocalpart); err != nil {
+	machineUserIDStr := machineUserID.String()
+	for _, serviceUserID := range servicesToFailover {
+		serviceUserIDStr := serviceUserID.String()
+		if err := fc.unplace(ctx, serviceUserID, machineUserID); err != nil {
 			fc.logger.Error("failover: unplace failed",
-				"service", serviceLocalpart,
-				"machine", machineLocalpart,
+				"service", serviceUserID,
+				"machine", machineUserID,
 				"error", err,
 			)
 			continue
@@ -130,15 +133,15 @@ func (fc *FleetController) executeFailover(ctx context.Context, machineLocalpart
 		fc.publishFleetAlert(ctx, fleet.FleetAlertContent{
 			AlertType: fleet.AlertFailover,
 			Fleet:     fc.principalName,
-			Service:   serviceLocalpart,
-			Machine:   machineLocalpart,
+			Service:   serviceUserIDStr,
+			Machine:   machineUserIDStr,
 			Message: fmt.Sprintf("machine %s offline, removed service %s",
-				machineLocalpart, serviceLocalpart),
+				machineUserIDStr, serviceUserIDStr),
 			ProposedActions: []fleet.ProposedAction{
 				{
 					Action:      fleet.ProposedPlace,
-					Service:     serviceLocalpart,
-					FromMachine: machineLocalpart,
+					Service:     serviceUserIDStr,
+					FromMachine: machineUserIDStr,
 				},
 			},
 		})

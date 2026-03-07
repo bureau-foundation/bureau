@@ -82,6 +82,7 @@ func TestUpdateLifecycle(t *testing.T) {
 		t.Fatalf("create machine ref: %v", err)
 	}
 	machineName := machineRef.Localpart()
+	machineStateKey := machineRef.UserID().StateKey()
 
 	bootstrapPath := filepath.Join(t.TempDir(), "bootstrap.json")
 	bootstrapClient := adminClient(t)
@@ -182,7 +183,7 @@ func TestUpdateLifecycle(t *testing.T) {
 			"pkill", "-f", "bureau-daemon").Run()
 	})
 
-	statusWatch.WaitForStateEvent(t, schema.EventTypeMachineStatus, machineName)
+	statusWatch.WaitForStateEvent(t, schema.EventTypeMachineStatus, machineStateKey)
 	t.Log("daemon started and publishing status")
 
 	// --- Resolve config room and deploy a principal ---
@@ -197,7 +198,7 @@ func TestUpdateLifecycle(t *testing.T) {
 
 	// Read machine public key for credential encryption.
 	machineKeyJSON, err := admin.GetStateEvent(ctx, updateFleet.MachineRoomID,
-		schema.EventTypeMachineKey, machineName)
+		schema.EventTypeMachineKey, machineStateKey)
 	if err != nil {
 		t.Fatalf("get machine key: %v", err)
 	}
@@ -211,6 +212,7 @@ func TestUpdateLifecycle(t *testing.T) {
 	containerMachine := &testMachine{
 		Ref:           machineRef,
 		Name:          machineName,
+		UserID:        machineRef.UserID(),
 		PublicKey:     machineKey.PublicKey,
 		ConfigRoomID:  configRoomID,
 		MachineRoomID: updateFleet.MachineRoomID,
@@ -233,7 +235,7 @@ func TestUpdateLifecycle(t *testing.T) {
 	t.Run("ForwardUpdate", func(t *testing.T) {
 		configWatch := watchRoom(t, admin, configRoomID)
 
-		publishBureauVersion(t, admin, configRoomID, machineName, v2Version)
+		publishBureauVersion(t, admin, configRoomID, machineStateKey, v2Version)
 		t.Log("published v2 BureauVersion")
 
 		// Wait for the v2 daemon to post self-update success. The v1
@@ -269,7 +271,7 @@ func TestUpdateLifecycle(t *testing.T) {
 	t.Run("Rollback", func(t *testing.T) {
 		configWatch := watchRoom(t, admin, configRoomID)
 
-		publishBureauVersion(t, admin, configRoomID, machineName, v1Version)
+		publishBureauVersion(t, admin, configRoomID, machineStateKey, v1Version)
 		t.Log("published v1 BureauVersion (rollback)")
 
 		waitForNotification[schema.DaemonSelfUpdateMessage](

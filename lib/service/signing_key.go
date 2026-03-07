@@ -17,13 +17,13 @@ import (
 // LoadTokenSigningKey fetches the daemon's Ed25519 token signing
 // public key from the system room. The daemon publishes the key as an
 // m.bureau.token_signing_key state event with the machine's full user ID
-// (e.g., "@bureau/fleet/prod/machine/workstation:server") as the state key.
+// (e.g., "bureau/fleet/prod/machine/workstation:server") as the state key.
 //
 // Returns the decoded public key suitable for use in AuthConfig. Fails
 // if the state event doesn't exist, the public key field is empty, or
 // the hex decoding produces a key of the wrong length.
 func LoadTokenSigningKey(ctx context.Context, session messaging.Session, systemRoomID ref.RoomID, machine ref.Machine) (ed25519.PublicKey, error) {
-	stateKey := machine.UserID().String()
+	stateKey := machine.UserID().StateKey()
 	content, err := messaging.GetState[schema.TokenSigningKeyContent](ctx, session, systemRoomID, schema.EventTypeTokenSigningKey, stateKey)
 	if err != nil {
 		return nil, fmt.Errorf("fetching token signing key for %s from %s: %w", stateKey, systemRoomID, err)

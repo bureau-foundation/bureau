@@ -37,11 +37,12 @@ type Registration struct {
 }
 
 // Register publishes an m.bureau.service state event to the service
-// room. The state key is the service's fleet-scoped localpart (e.g.,
-// "bureau/fleet/prod/service/stt/whisper"). The daemon's syncServiceDirectory
-// picks this up and makes the service available for routing.
+// room. The state key is the service's user ID in state_key format
+// (e.g., "bureau/fleet/prod/service/stt/whisper:server"). The daemon's
+// syncServiceDirectory picks this up and makes the service available
+// for routing.
 func Register(ctx context.Context, session messaging.Session, serviceRoomID ref.RoomID, svc ref.Service, reg Registration) error {
-	stateKey := svc.Localpart()
+	stateKey := svc.UserID().StateKey()
 	endpoints := reg.Endpoints
 	if endpoints == nil {
 		endpoints = map[string]string{"cbor": "service.sock"}
@@ -66,7 +67,7 @@ func Register(ctx context.Context, session messaging.Session, serviceRoomID ref.
 // syncServiceDirectory skips entries with empty principals, effectively
 // removing the service from the directory.
 func Deregister(ctx context.Context, session messaging.Session, serviceRoomID ref.RoomID, svc ref.Service) error {
-	stateKey := svc.Localpart()
+	stateKey := svc.UserID().StateKey()
 	empty := schema.Service{}
 	if _, err := session.SendStateEvent(ctx, serviceRoomID, schema.EventTypeService, stateKey, empty); err != nil {
 		return fmt.Errorf("deregistering service %s from %s: %w", stateKey, serviceRoomID, err)

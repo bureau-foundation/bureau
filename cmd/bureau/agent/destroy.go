@@ -98,7 +98,7 @@ func runDestroy(ctx context.Context, localpart string, logger *slog.Logger, para
 
 	purged := false
 	if params.Purge {
-		if err := principal.PurgeCredentials(ctx, session, location.ConfigRoomID, localpart); err != nil {
+		if err := principal.PurgeCredentials(ctx, session, location.ConfigRoomID, location.Assignment.Principal.UserID()); err != nil {
 			logger.Warn("failed to purge credentials", "localpart", localpart, "error", err)
 		} else {
 			purged = true

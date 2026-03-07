@@ -529,7 +529,7 @@ func TestMachineDrainContentValidate(t *testing.T) {
 		{
 			name: "valid with services",
 			drain: MachineDrainContent{
-				Services:          []string{"buildbarn-worker", "whisper-stt"},
+				Services:          []ref.UserID{ref.MustParseUserID("@bureau/fleet/prod/service/buildbarn-worker:bureau.local"), ref.MustParseUserID("@bureau/fleet/prod/service/whisper-stt:bureau.local")},
 				ReservationHolder: testEntity(t, "@bureau/fleet/prod/agent/benchmark:bureau.local"),
 				RequestedAt:       "2026-03-04T03:00:00Z",
 			},
@@ -578,7 +578,7 @@ func TestMachineDrainContentValidate(t *testing.T) {
 
 func TestMachineDrainContentRoundTrip(t *testing.T) {
 	original := MachineDrainContent{
-		Services:          []string{"buildbarn-worker"},
+		Services:          []ref.UserID{ref.MustParseUserID("@bureau/fleet/prod/service/buildbarn-worker:bureau.local")},
 		ReservationHolder: testEntity(t, "@bureau/fleet/prod/agent/benchmark:bureau.local"),
 		RequestedAt:       "2026-03-04T03:00:00Z",
 	}
@@ -593,8 +593,9 @@ func TestMachineDrainContentRoundTrip(t *testing.T) {
 		t.Fatalf("Unmarshal: %v", err)
 	}
 
-	if len(decoded.Services) != 1 || decoded.Services[0] != "buildbarn-worker" {
-		t.Errorf("Services = %v, want [buildbarn-worker]", decoded.Services)
+	expectedService := ref.MustParseUserID("@bureau/fleet/prod/service/buildbarn-worker:bureau.local")
+	if len(decoded.Services) != 1 || decoded.Services[0] != expectedService {
+		t.Errorf("Services = %v, want [%s]", decoded.Services, expectedService)
 	}
 	if decoded.ReservationHolder != original.ReservationHolder {
 		t.Errorf("ReservationHolder = %v, want %v", decoded.ReservationHolder, original.ReservationHolder)

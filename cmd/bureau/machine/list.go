@@ -127,7 +127,7 @@ func ListMachines(ctx context.Context, session messaging.Session, fleetRef ref.F
 			WithHint("Check that the homeserver is running. Run 'bureau matrix doctor' to diagnose.")
 	}
 
-	// Index machine keys, statuses, and hardware info by state_key (machine name).
+	// Index machine keys, statuses, and hardware info by state_key (localpart:server).
 	machines := make(map[string]*MachineEntry)
 
 	for _, event := range events {
@@ -297,11 +297,17 @@ func printTable(writer *tabwriter.Writer, entries []*MachineEntry) {
 
 // getOrCreate returns the MachineEntry for the given name, creating it
 // if it doesn't exist yet.
-func getOrCreate(machines map[string]*MachineEntry, name string) *MachineEntry {
-	entry, exists := machines[name]
+func getOrCreate(machines map[string]*MachineEntry, stateKey string) *MachineEntry {
+	entry, exists := machines[stateKey]
 	if !exists {
-		entry = &MachineEntry{Name: name}
-		machines[name] = entry
+		// State_keys use "localpart:server" format. Parse back to
+		// extract the fleet-scoped localpart for display.
+		displayName := stateKey
+		if userID, err := ref.ParseUserIDFromStateKey(stateKey); err == nil {
+			displayName = userID.Localpart()
+		}
+		entry = &MachineEntry{Name: displayName}
+		machines[stateKey] = entry
 	}
 	return entry
 }

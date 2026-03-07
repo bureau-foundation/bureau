@@ -113,8 +113,9 @@ func setupDrainTestEnv(t *testing.T, suffix string) *drainTestEnv {
 	// The MachineConfig already has the fleet_managed label (set during
 	// deployService above), so the FC will track the existing instance
 	// and NOT try to place a duplicate.
+	ticketServiceUserID := ticketSvcResult.Entity.UserID()
 	fleetWatch := watchRoom(t, admin, fleet.FleetRoomID)
-	publishFleetService(t, admin, fleet.FleetRoomID, ticketServiceLocalpart, fleetschema.FleetServiceContent{
+	publishFleetService(t, admin, fleet.FleetRoomID, ticketServiceUserID.StateKey(), fleetschema.FleetServiceContent{
 		Template: templateRef,
 		Replicas: fleetschema.ReplicaSpec{Min: 1, Max: 1},
 		Failover: fleetschema.FailoverNone,
@@ -123,7 +124,7 @@ func setupDrainTestEnv(t *testing.T, suffix string) *drainTestEnv {
 			PreferredMachines: []string{machine.Name},
 		},
 	})
-	waitForFleetService(t, &fleetWatch, fc, ticketServiceLocalpart)
+	waitForFleetService(t, &fleetWatch, fc, ticketServiceUserID.String())
 	t.Logf("fleet controller discovered ticket service as fleet-managed")
 
 	requester := registerFleetPrincipal(t, fleet, "agent/"+suffix+"-requester", "test-pass")
@@ -158,9 +159,10 @@ func setupDrainTestEnv(t *testing.T, suffix string) *drainTestEnv {
 func registerGhostService(t *testing.T, env *drainTestEnv, ghostLocalpart string) {
 	t.Helper()
 
+	ghostUserID := fleetServiceUserID(t, env.fleet, ghostLocalpart[len("service/"):])
 	fleetWatch := watchRoom(t, env.admin, env.fleet.FleetRoomID)
 
-	publishFleetService(t, env.admin, env.fleet.FleetRoomID, ghostLocalpart, fleetschema.FleetServiceContent{
+	publishFleetService(t, env.admin, env.fleet.FleetRoomID, ghostUserID.StateKey(), fleetschema.FleetServiceContent{
 		Template: env.templateRef,
 		Replicas: fleetschema.ReplicaSpec{Min: 1, Max: 1},
 		Failover: fleetschema.FailoverNone,
@@ -177,15 +179,15 @@ func registerGhostService(t *testing.T, env *drainTestEnv, ghostLocalpart string
 	})
 	pushMachineConfig(t, env.admin, env.machine, deploymentConfig{})
 
-	waitForFleetService(t, &fleetWatch, env.fc, ghostLocalpart)
+	waitForFleetService(t, &fleetWatch, env.fc, ghostUserID.String())
 	t.Logf("ghost service %s registered and discovered by FC", ghostLocalpart)
 }
 
 // --- Drain test helpers ---
 
 // waitForDrainStatus waits for a drain_status state event from the given
-// service (identified by state key, which is the service's full Matrix
-// localpart). Returns the parsed DrainStatusContent.
+// entity (identified by state key, which is the entity's full Matrix user
+// ID). Returns the parsed DrainStatusContent.
 func waitForDrainStatus(t *testing.T, watch *roomWatch, stateKey string) schema.DrainStatusContent {
 	t.Helper()
 
@@ -306,14 +308,14 @@ func TestDrainCoordination(t *testing.T) {
 		// The ticket service and daemon both publish drain_status in
 		// response to the drain event. The FC waits specifically for
 		// the ticket service (it's fleet-managed).
-		ticketDrainStatus := waitForDrainStatus(t, &opsWatch, env.ticketSvc.Entity.Localpart())
+		ticketDrainStatus := waitForDrainStatus(t, &opsWatch, env.ticketSvc.Entity.UserID().StateKey())
 		if !ticketDrainStatus.Acknowledged {
 			t.Error("ticket service drain_status should be acknowledged")
 		}
 
 		// The machine daemon also publishes drain_status (informational,
 		// not gating the grant).
-		daemonDrainStatus := waitForDrainStatus(t, &opsWatch, env.machine.Ref.Localpart())
+		daemonDrainStatus := waitForDrainStatus(t, &opsWatch, env.machine.UserID.StateKey())
 		if !daemonDrainStatus.Acknowledged {
 			t.Error("daemon drain_status should be acknowledged")
 		}
@@ -321,8 +323,8 @@ func TestDrainCoordination(t *testing.T) {
 		// FC sees the ticket service's drain_status (in_flight == 0,
 		// no active relay tickets when the drain started), completes
 		// the grant.
-		holderLocalpart := env.requester.UserID.Localpart()
-		grant := waitForReservationGrant(t, &opsWatch, holderLocalpart)
+		holderStateKey := env.requester.UserID.StateKey()
+		grant := waitForReservationGrant(t, &opsWatch, holderStateKey)
 		if grant.Mode != schema.ModeExclusive {
 			t.Errorf("grant mode = %q, want %q", grant.Mode, schema.ModeExclusive)
 		}
@@ -330,7 +332,7 @@ func TestDrainCoordination(t *testing.T) {
 		// Cleanup: close workspace ticket to release reservation.
 		cleanupWatch := watchRoom(t, env.admin, env.opsRoomID)
 		closeWorkspaceTicket(t, env.ticketClient, wsRoomID, ticketID, "drain coord test complete")
-		waitForReservationCleared(t, &cleanupWatch, holderLocalpart)
+		waitForReservationCleared(t, &cleanupWatch, holderStateKey)
 		t.Log("coordinated grant test complete")
 	})
 
@@ -350,8 +352,8 @@ func TestDrainCoordination(t *testing.T) {
 
 		// FC grants immediately (no drain for inclusive mode).
 		waitForTicketStatus(t, &opsWatch, relayTicketID, ticket.StatusInProgress)
-		holderLocalpart := env.requester.UserID.Localpart()
-		grant := waitForReservationGrant(t, &opsWatch, holderLocalpart)
+		holderStateKey := env.requester.UserID.StateKey()
+		grant := waitForReservationGrant(t, &opsWatch, holderStateKey)
 		if grant.Mode != schema.ModeInclusive {
 			t.Errorf("grant mode = %q, want %q", grant.Mode, schema.ModeInclusive)
 		}
@@ -367,7 +369,7 @@ func TestDrainCoordination(t *testing.T) {
 		// Cleanup.
 		cleanupWatch := watchRoom(t, env.admin, env.opsRoomID)
 		closeWorkspaceTicket(t, env.ticketClient, wsRoomID, ticketID, "inclusive test complete")
-		waitForReservationCleared(t, &cleanupWatch, holderLocalpart)
+		waitForReservationCleared(t, &cleanupWatch, holderStateKey)
 	})
 
 	t.Run("DrainClearedOnRelease", func(t *testing.T) {
@@ -385,22 +387,22 @@ func TestDrainCoordination(t *testing.T) {
 		_, _ = waitForRelayTicket(t, &opsWatch, env.machine.Ref.Name())
 		waitForMachineDrain(t, &opsWatch)
 
-		holderLocalpart := env.requester.UserID.Localpart()
-		waitForReservationGrant(t, &opsWatch, holderLocalpart)
+		holderStateKey := env.requester.UserID.StateKey()
+		waitForReservationGrant(t, &opsWatch, holderStateKey)
 
 		// Now release: close the workspace ticket.
 		releaseWatch := watchRoom(t, env.admin, env.opsRoomID)
 		closeWorkspaceTicket(t, env.ticketClient, wsRoomID, ticketID, "drain release test")
 
 		// Reservation cleared.
-		waitForReservationCleared(t, &releaseWatch, holderLocalpart)
+		waitForReservationCleared(t, &releaseWatch, holderStateKey)
 
 		// Drain cleared.
 		waitForDrainCleared(t, &releaseWatch)
 
 		// Services respond to drain clear by clearing drain_status.
-		waitForDrainStatusCleared(t, &releaseWatch, env.machine.Ref.Localpart())
-		waitForDrainStatusCleared(t, &releaseWatch, env.ticketSvc.Entity.Localpart())
+		waitForDrainStatusCleared(t, &releaseWatch, env.machine.UserID.StateKey())
+		waitForDrainStatusCleared(t, &releaseWatch, env.ticketSvc.Entity.UserID().StateKey())
 
 		t.Log("drain cleared on release verified")
 	})
@@ -419,19 +421,19 @@ func TestDrainCoordination(t *testing.T) {
 		drain := waitForMachineDrain(t, &opsWatch)
 
 		// The Services list should include the fleet-managed ticket
-		// service's full Matrix localpart.
-		ticketServiceFullLocalpart := env.ticketSvc.Entity.Localpart()
-		if !slices.Contains(drain.Services, ticketServiceFullLocalpart) {
+		// service's full Matrix user ID.
+		ticketServiceUserID := env.ticketSvc.Entity.UserID()
+		if !slices.Contains(drain.Services, ticketServiceUserID) {
 			t.Errorf("drain services = %v, want to contain %q",
-				drain.Services, ticketServiceFullLocalpart)
+				drain.Services, ticketServiceUserID)
 		}
 
 		// Cleanup.
-		holderLocalpart := env.requester.UserID.Localpart()
-		waitForReservationGrant(t, &opsWatch, holderLocalpart)
+		holderStateKey := env.requester.UserID.StateKey()
+		waitForReservationGrant(t, &opsWatch, holderStateKey)
 		cleanupWatch := watchRoom(t, env.admin, env.opsRoomID)
 		closeWorkspaceTicket(t, env.ticketClient, wsRoomID, ticketID, "services list test complete")
-		waitForReservationCleared(t, &cleanupWatch, holderLocalpart)
+		waitForReservationCleared(t, &cleanupWatch, holderStateKey)
 
 		t.Log("drain services list populated correctly")
 	})
@@ -476,8 +478,8 @@ func TestDrainTimeout(t *testing.T) {
 	advanceFleetClock(t, env.fc, 10*time.Second)
 
 	// FC times out waiting for the ghost service and grants anyway.
-	holderLocalpart := env.requester.UserID.Localpart()
-	grant := waitForReservationGrant(t, &opsWatch, holderLocalpart)
+	holderStateKey := env.requester.UserID.StateKey()
+	grant := waitForReservationGrant(t, &opsWatch, holderStateKey)
 	if grant.Mode != schema.ModeExclusive {
 		t.Errorf("grant mode = %q, want %q", grant.Mode, schema.ModeExclusive)
 	}
@@ -486,7 +488,7 @@ func TestDrainTimeout(t *testing.T) {
 	// Cleanup.
 	cleanupWatch := watchRoom(t, env.admin, env.opsRoomID)
 	closeWorkspaceTicket(t, env.ticketClient, wsRoomID, ticketID, "drain timeout test complete")
-	waitForReservationCleared(t, &cleanupWatch, holderLocalpart)
+	waitForReservationCleared(t, &cleanupWatch, holderStateKey)
 }
 
 // TestDrainPreemption verifies that a higher-priority request arriving
@@ -508,7 +510,7 @@ func TestDrainPreemption(t *testing.T) {
 	wsRoomP3 := createReservationWorkspaceRoom(t, env.admin, env.fleet, env.ticketSvc, "preempt-low")
 	wsRoomP1 := createReservationWorkspaceRoom(t, env.admin, env.fleet, env.ticketSvc, "preempt-high")
 
-	holderLocalpart := env.requester.UserID.Localpart()
+	holderStateKey := env.requester.UserID.StateKey()
 
 	// Phase 1: Submit P3 exclusive request. FC publishes drain,
 	// enters pending state (ghost service won't respond).
@@ -550,7 +552,7 @@ func TestDrainPreemption(t *testing.T) {
 	// advanced clock and grants via timeout.
 	advanceFleetClock(t, env.fc, 10*time.Second)
 
-	grant := waitForReservationGrant(t, &opsWatch2, holderLocalpart)
+	grant := waitForReservationGrant(t, &opsWatch2, holderStateKey)
 	if grant.Mode != schema.ModeExclusive {
 		t.Errorf("grant mode = %q, want %q", grant.Mode, schema.ModeExclusive)
 	}
@@ -560,5 +562,5 @@ func TestDrainPreemption(t *testing.T) {
 	cleanupWatch := watchRoom(t, env.admin, env.opsRoomID)
 	closeWorkspaceTicket(t, env.ticketClient, wsRoomP3, ticketIDP3, "preempt cleanup P3")
 	closeWorkspaceTicket(t, env.ticketClient, wsRoomP1, ticketIDP1, "preempt cleanup P1")
-	waitForReservationCleared(t, &cleanupWatch, holderLocalpart)
+	waitForReservationCleared(t, &cleanupWatch, holderStateKey)
 }

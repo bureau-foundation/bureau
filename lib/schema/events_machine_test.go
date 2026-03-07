@@ -886,20 +886,20 @@ func TestMachineStatusWithPrincipals(t *testing.T) {
 		MemoryUsedMB:  24576,
 		Sandboxes:     SandboxCounts{Running: 3},
 		UptimeSeconds: 86400,
-		Principals: map[string]PrincipalResourceUsage{
-			"service/stt/whisper": {
+		Principals: map[ref.UserID]PrincipalResourceUsage{
+			ref.MustParseUserID("@bureau/fleet/prod/service/stt/whisper:bureau.local"): {
 				CPUPercent:  30,
 				MemoryMB:    8192,
 				GPUPercent:  79,
 				GPUMemoryMB: 12288,
 				Status:      "running",
 			},
-			"iree/amdgpu/pm": {
+			ref.MustParseUserID("@bureau/fleet/prod/iree/amdgpu/pm:bureau.local"): {
 				CPUPercent: 25,
 				MemoryMB:   4096,
 				Status:     "running",
 			},
-			"service/ticket/iree": {
+			ref.MustParseUserID("@bureau/fleet/prod/service/ticket/iree:bureau.local"): {
 				CPUPercent: 2,
 				MemoryMB:   256,
 				Status:     "idle",
@@ -926,10 +926,11 @@ func TestMachineStatusWithPrincipals(t *testing.T) {
 		t.Fatalf("principals count = %d, want 3", len(principals))
 	}
 
-	// Verify a specific principal.
-	whisper, ok := principals["service/stt/whisper"].(map[string]any)
+	// Verify a specific principal (JSON key is full user ID).
+	whisperKey := "@bureau/fleet/prod/service/stt/whisper:bureau.local"
+	whisper, ok := principals[whisperKey].(map[string]any)
 	if !ok {
-		t.Fatal("service/stt/whisper missing from principals")
+		t.Fatalf("%s missing from principals", whisperKey)
 	}
 	assertField(t, whisper, "cpu_percent", float64(30))
 	assertField(t, whisper, "memory_mb", float64(8192))
@@ -943,7 +944,7 @@ func TestMachineStatusWithPrincipals(t *testing.T) {
 	if len(decoded.Principals) != 3 {
 		t.Fatalf("round-trip principals count = %d, want 3", len(decoded.Principals))
 	}
-	decodedWhisper := decoded.Principals["service/stt/whisper"]
+	decodedWhisper := decoded.Principals[ref.MustParseUserID(whisperKey)]
 	if decodedWhisper.CPUPercent != 30 || decodedWhisper.GPUPercent != 79 {
 		t.Errorf("round-trip whisper: got %+v", decodedWhisper)
 	}

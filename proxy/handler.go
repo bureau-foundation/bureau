@@ -86,8 +86,8 @@ type Handler struct {
 // and pushes it to each proxy. Agents query the proxy to discover services
 // without needing direct access to the Matrix service room.
 type ServiceDirectoryEntry struct {
-	// Localpart is the service identifier (the Matrix state key),
-	// e.g., "service/stt/whisper".
+	// Localpart is the service type localpart, e.g., "service/stt/whisper".
+	// Used for pattern matching against ServiceVisibility grants.
 	Localpart string `json:"localpart"`
 
 	// Principal is the full Matrix user ID of the service provider,

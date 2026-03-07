@@ -70,6 +70,33 @@ func (u UserID) Server() ServerName {
 	return newServerName(server)
 }
 
+// StateKey returns the user ID in Matrix state_key format:
+// "localpart:server" (without the '@' prefix). This format is used
+// as state_keys for entity-scoped Matrix state events.
+//
+// The '@' prefix is omitted because Matrix room versions 10+ (MSC3757)
+// enforce that state_keys starting with '@' can only be published by
+// the user whose ID matches the state_key. Since many Bureau events
+// are published by admins or fleet controllers on behalf of entities,
+// the '@'-free format avoids this auth restriction while still
+// including the server name for federation collision prevention.
+//
+// Panics if called on a zero-value UserID.
+func (u UserID) StateKey() string {
+	if u.id == "" {
+		panic("UserID.StateKey called on zero value")
+	}
+	return u.id[1:] // strip leading '@'
+}
+
+// ParseUserIDFromStateKey parses a state_key in "localpart:server"
+// format back into a UserID by prepending '@'. This is the inverse of
+// UserID.StateKey(). Returns an error if the result is not a valid
+// Matrix user ID.
+func ParseUserIDFromStateKey(stateKey string) (UserID, error) {
+	return ParseUserID("@" + stateKey)
+}
+
 // MustParseUserID is like ParseUserID but panics on error. Use in
 // tests and static initialization where the input is known-valid.
 func MustParseUserID(raw string) UserID {

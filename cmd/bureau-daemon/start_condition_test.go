@@ -25,6 +25,14 @@ import (
 	"github.com/bureau-foundation/bureau/messaging"
 )
 
+// testCredentialStateKey returns the credential state key (full user ID) for
+// an entity path relative to a fleet. Used in tests to set credential state
+// events with the correct key format.
+func testCredentialStateKey(t *testing.T, fleet ref.Fleet, entityPath string) string {
+	t.Helper()
+	return testEntity(t, fleet, entityPath).UserID().StateKey()
+}
+
 // waitForDrainComplete advances the daemon's fake clock past the drain
 // grace period and waits for the force-kill goroutine to complete. The
 // principal should be draining after reconcile; this helper triggers
@@ -60,8 +68,7 @@ func TestReconcile_StartConditionMet(t *testing.T) {
 	)
 
 	machine, fleet := testMachineSetup(t, "test", "test.local")
-	machineName := machine.Localpart()
-	fleetPrefix := fleet.Localpart() + "/"
+	machineName := machine.UserID().StateKey()
 
 	matrixState := newStartConditionTestState(t, fleet, configRoomID, templateRoomID)
 
@@ -90,7 +97,7 @@ func TestReconcile_StartConditionMet(t *testing.T) {
 			},
 		},
 	})
-	matrixState.setStateEvent(configRoomID, schema.EventTypeCredentials, fleetPrefix+"iree/amdgpu/pm", schema.Credentials{
+	matrixState.setStateEvent(configRoomID, schema.EventTypeCredentials, testCredentialStateKey(t, fleet, "iree/amdgpu/pm"), schema.Credentials{
 		Ciphertext: "encrypted-test-credentials",
 	})
 
@@ -124,8 +131,7 @@ func TestReconcile_StartConditionNotMet(t *testing.T) {
 	)
 
 	machine, fleet := testMachineSetup(t, "test", "test.local")
-	machineName := machine.Localpart()
-	fleetPrefix := fleet.Localpart() + "/"
+	machineName := machine.UserID().StateKey()
 
 	matrixState := newStartConditionTestState(t, fleet, configRoomID, templateRoomID)
 
@@ -147,7 +153,7 @@ func TestReconcile_StartConditionNotMet(t *testing.T) {
 			},
 		},
 	})
-	matrixState.setStateEvent(configRoomID, schema.EventTypeCredentials, fleetPrefix+"iree/amdgpu/pm", schema.Credentials{
+	matrixState.setStateEvent(configRoomID, schema.EventTypeCredentials, testCredentialStateKey(t, fleet, "iree/amdgpu/pm"), schema.Credentials{
 		Ciphertext: "encrypted-test-credentials",
 	})
 
@@ -182,8 +188,7 @@ func TestReconcile_StartConditionDeferredThenLaunches(t *testing.T) {
 	)
 
 	machine, fleet := testMachineSetup(t, "test", "test.local")
-	machineName := machine.Localpart()
-	fleetPrefix := fleet.Localpart() + "/"
+	machineName := machine.UserID().StateKey()
 
 	matrixState := newStartConditionTestState(t, fleet, configRoomID, templateRoomID)
 	matrixState.setRoomAlias(ref.MustParseRoomAlias("#iree/amdgpu/inference:test.local"), workspaceRoomID)
@@ -203,7 +208,7 @@ func TestReconcile_StartConditionDeferredThenLaunches(t *testing.T) {
 			},
 		},
 	})
-	matrixState.setStateEvent(configRoomID, schema.EventTypeCredentials, fleetPrefix+"iree/amdgpu/pm", schema.Credentials{
+	matrixState.setStateEvent(configRoomID, schema.EventTypeCredentials, testCredentialStateKey(t, fleet, "iree/amdgpu/pm"), schema.Credentials{
 		Ciphertext: "encrypted-test-credentials",
 	})
 
@@ -256,8 +261,7 @@ func TestReconcile_NoStartCondition(t *testing.T) {
 	)
 
 	machine, fleet := testMachineSetup(t, "test", "test.local")
-	machineName := machine.Localpart()
-	fleetPrefix := fleet.Localpart() + "/"
+	machineName := machine.UserID().StateKey()
 
 	matrixState := newStartConditionTestState(t, fleet, configRoomID, templateRoomID)
 
@@ -271,7 +275,7 @@ func TestReconcile_NoStartCondition(t *testing.T) {
 			},
 		},
 	})
-	matrixState.setStateEvent(configRoomID, schema.EventTypeCredentials, fleetPrefix+"agent/test", schema.Credentials{
+	matrixState.setStateEvent(configRoomID, schema.EventTypeCredentials, testCredentialStateKey(t, fleet, "agent/test"), schema.Credentials{
 		Ciphertext: "encrypted-test-credentials",
 	})
 
@@ -301,8 +305,7 @@ func TestReconcile_StartConditionConfigRoom(t *testing.T) {
 	)
 
 	machine, fleet := testMachineSetup(t, "test", "test.local")
-	machineName := machine.Localpart()
-	fleetPrefix := fleet.Localpart() + "/"
+	machineName := machine.UserID().StateKey()
 
 	matrixState := newStartConditionTestState(t, fleet, configRoomID, templateRoomID)
 
@@ -321,7 +324,7 @@ func TestReconcile_StartConditionConfigRoom(t *testing.T) {
 			},
 		},
 	})
-	matrixState.setStateEvent(configRoomID, schema.EventTypeCredentials, fleetPrefix+"agent/gated", schema.Credentials{
+	matrixState.setStateEvent(configRoomID, schema.EventTypeCredentials, testCredentialStateKey(t, fleet, "agent/gated"), schema.Credentials{
 		Ciphertext: "encrypted-test-credentials",
 	})
 
@@ -356,8 +359,7 @@ func TestReconcile_StartConditionUnresolvableAlias(t *testing.T) {
 	)
 
 	machine, fleet := testMachineSetup(t, "test", "test.local")
-	machineName := machine.Localpart()
-	fleetPrefix := fleet.Localpart() + "/"
+	machineName := machine.UserID().StateKey()
 
 	matrixState := newStartConditionTestState(t, fleet, configRoomID, templateRoomID)
 
@@ -376,7 +378,7 @@ func TestReconcile_StartConditionUnresolvableAlias(t *testing.T) {
 			},
 		},
 	})
-	matrixState.setStateEvent(configRoomID, schema.EventTypeCredentials, fleetPrefix+"agent/orphan", schema.Credentials{
+	matrixState.setStateEvent(configRoomID, schema.EventTypeCredentials, testCredentialStateKey(t, fleet, "agent/orphan"), schema.Credentials{
 		Ciphertext: "encrypted-test-credentials",
 	})
 
@@ -413,8 +415,7 @@ func TestReconcile_StartConditionContentMismatch(t *testing.T) {
 	)
 
 	machine, fleet := testMachineSetup(t, "test", "test.local")
-	machineName := machine.Localpart()
-	fleetPrefix := fleet.Localpart() + "/"
+	machineName := machine.UserID().StateKey()
 
 	matrixState := newStartConditionTestState(t, fleet, configRoomID, templateRoomID)
 
@@ -442,7 +443,7 @@ func TestReconcile_StartConditionContentMismatch(t *testing.T) {
 			},
 		},
 	})
-	matrixState.setStateEvent(configRoomID, schema.EventTypeCredentials, fleetPrefix+"iree/amdgpu/pm", schema.Credentials{
+	matrixState.setStateEvent(configRoomID, schema.EventTypeCredentials, testCredentialStateKey(t, fleet, "iree/amdgpu/pm"), schema.Credentials{
 		Ciphertext: "encrypted-test-credentials",
 	})
 
@@ -497,8 +498,7 @@ func TestReconcile_ContentMatchArrayContains(t *testing.T) {
 	)
 
 	machine, fleet := testMachineSetup(t, "test", "test.local")
-	machineName := machine.Localpart()
-	fleetPrefix := fleet.Localpart() + "/"
+	machineName := machine.UserID().StateKey()
 
 	matrixState := newStartConditionTestState(t, fleet, configRoomID, templateRoomID)
 
@@ -525,7 +525,7 @@ func TestReconcile_ContentMatchArrayContains(t *testing.T) {
 			},
 		},
 	})
-	matrixState.setStateEvent(configRoomID, schema.EventTypeCredentials, fleetPrefix+"agent/bugfix", schema.Credentials{
+	matrixState.setStateEvent(configRoomID, schema.EventTypeCredentials, testCredentialStateKey(t, fleet, "agent/bugfix"), schema.Credentials{
 		Ciphertext: "encrypted-credentials",
 	})
 
@@ -557,8 +557,7 @@ func TestReconcile_ContentMatchArrayDoesNotContain(t *testing.T) {
 	)
 
 	machine, fleet := testMachineSetup(t, "test", "test.local")
-	machineName := machine.Localpart()
-	fleetPrefix := fleet.Localpart() + "/"
+	machineName := machine.UserID().StateKey()
 
 	matrixState := newStartConditionTestState(t, fleet, configRoomID, templateRoomID)
 
@@ -585,7 +584,7 @@ func TestReconcile_ContentMatchArrayDoesNotContain(t *testing.T) {
 			},
 		},
 	})
-	matrixState.setStateEvent(configRoomID, schema.EventTypeCredentials, fleetPrefix+"agent/security", schema.Credentials{
+	matrixState.setStateEvent(configRoomID, schema.EventTypeCredentials, testCredentialStateKey(t, fleet, "agent/security"), schema.Credentials{
 		Ciphertext: "encrypted-credentials",
 	})
 
@@ -617,8 +616,7 @@ func TestReconcile_ContentMatchArrayWithNonStringElements(t *testing.T) {
 	)
 
 	machine, fleet := testMachineSetup(t, "test", "test.local")
-	machineName := machine.Localpart()
-	fleetPrefix := fleet.Localpart() + "/"
+	machineName := machine.UserID().StateKey()
 
 	matrixState := newStartConditionTestState(t, fleet, configRoomID, templateRoomID)
 
@@ -645,7 +643,7 @@ func TestReconcile_ContentMatchArrayWithNonStringElements(t *testing.T) {
 			},
 		},
 	})
-	matrixState.setStateEvent(configRoomID, schema.EventTypeCredentials, fleetPrefix+"agent/numeric", schema.Credentials{
+	matrixState.setStateEvent(configRoomID, schema.EventTypeCredentials, testCredentialStateKey(t, fleet, "agent/numeric"), schema.Credentials{
 		Ciphertext: "encrypted-credentials",
 	})
 
@@ -677,8 +675,7 @@ func TestReconcile_ContentMatchMixedStringAndArray(t *testing.T) {
 	)
 
 	machine, fleet := testMachineSetup(t, "test", "test.local")
-	machineName := machine.Localpart()
-	fleetPrefix := fleet.Localpart() + "/"
+	machineName := machine.UserID().StateKey()
 
 	matrixState := newStartConditionTestState(t, fleet, configRoomID, templateRoomID)
 
@@ -705,7 +702,7 @@ func TestReconcile_ContentMatchMixedStringAndArray(t *testing.T) {
 			},
 		},
 	})
-	matrixState.setStateEvent(configRoomID, schema.EventTypeCredentials, fleetPrefix+"agent/secbug", schema.Credentials{
+	matrixState.setStateEvent(configRoomID, schema.EventTypeCredentials, testCredentialStateKey(t, fleet, "agent/secbug"), schema.Credentials{
 		Ciphertext: "encrypted-credentials",
 	})
 
@@ -736,8 +733,7 @@ func TestReconcile_ContentMatchMixedStringAndArray_PartialFail(t *testing.T) {
 	)
 
 	machine, fleet := testMachineSetup(t, "test", "test.local")
-	machineName := machine.Localpart()
-	fleetPrefix := fleet.Localpart() + "/"
+	machineName := machine.UserID().StateKey()
 
 	matrixState := newStartConditionTestState(t, fleet, configRoomID, templateRoomID)
 
@@ -764,7 +760,7 @@ func TestReconcile_ContentMatchMixedStringAndArray_PartialFail(t *testing.T) {
 			},
 		},
 	})
-	matrixState.setStateEvent(configRoomID, schema.EventTypeCredentials, fleetPrefix+"agent/seconly", schema.Credentials{
+	matrixState.setStateEvent(configRoomID, schema.EventTypeCredentials, testCredentialStateKey(t, fleet, "agent/seconly"), schema.Credentials{
 		Ciphertext: "encrypted-credentials",
 	})
 
@@ -795,8 +791,7 @@ func TestReconcile_ContentMatchEmptyArray(t *testing.T) {
 	)
 
 	machine, fleet := testMachineSetup(t, "test", "test.local")
-	machineName := machine.Localpart()
-	fleetPrefix := fleet.Localpart() + "/"
+	machineName := machine.UserID().StateKey()
 
 	matrixState := newStartConditionTestState(t, fleet, configRoomID, templateRoomID)
 
@@ -822,7 +817,7 @@ func TestReconcile_ContentMatchEmptyArray(t *testing.T) {
 			},
 		},
 	})
-	matrixState.setStateEvent(configRoomID, schema.EventTypeCredentials, fleetPrefix+"agent/empty", schema.Credentials{
+	matrixState.setStateEvent(configRoomID, schema.EventTypeCredentials, testCredentialStateKey(t, fleet, "agent/empty"), schema.Credentials{
 		Ciphertext: "encrypted-credentials",
 	})
 
@@ -857,8 +852,7 @@ func TestReconcile_RunningPrincipalStoppedWhenConditionFails(t *testing.T) {
 	)
 
 	machine, fleet := testMachineSetup(t, "test", "test.local")
-	machineName := machine.Localpart()
-	fleetPrefix := fleet.Localpart() + "/"
+	machineName := machine.UserID().StateKey()
 
 	matrixState := newStartConditionTestState(t, fleet, configRoomID, templateRoomID)
 
@@ -886,7 +880,7 @@ func TestReconcile_RunningPrincipalStoppedWhenConditionFails(t *testing.T) {
 			},
 		},
 	})
-	matrixState.setStateEvent(configRoomID, schema.EventTypeCredentials, fleetPrefix+"iree/amdgpu/pm", schema.Credentials{
+	matrixState.setStateEvent(configRoomID, schema.EventTypeCredentials, testCredentialStateKey(t, fleet, "iree/amdgpu/pm"), schema.Credentials{
 		Ciphertext: "encrypted-test-credentials",
 	})
 
@@ -957,8 +951,7 @@ func TestReconcile_ConditionFalseDoesNotStopUnconditionedPrincipal(t *testing.T)
 	)
 
 	machine, fleet := testMachineSetup(t, "test", "test.local")
-	machineName := machine.Localpart()
-	fleetPrefix := fleet.Localpart() + "/"
+	machineName := machine.UserID().StateKey()
 
 	matrixState := newStartConditionTestState(t, fleet, configRoomID, templateRoomID)
 
@@ -993,10 +986,10 @@ func TestReconcile_ConditionFalseDoesNotStopUnconditionedPrincipal(t *testing.T)
 			},
 		},
 	})
-	matrixState.setStateEvent(configRoomID, schema.EventTypeCredentials, fleetPrefix+"iree/amdgpu/pm", schema.Credentials{
+	matrixState.setStateEvent(configRoomID, schema.EventTypeCredentials, testCredentialStateKey(t, fleet, "iree/amdgpu/pm"), schema.Credentials{
 		Ciphertext: "encrypted-test-credentials",
 	})
-	matrixState.setStateEvent(configRoomID, schema.EventTypeCredentials, fleetPrefix+"sysadmin/test", schema.Credentials{
+	matrixState.setStateEvent(configRoomID, schema.EventTypeCredentials, testCredentialStateKey(t, fleet, "sysadmin/test"), schema.Credentials{
 		Ciphertext: "encrypted-sysadmin-credentials",
 	})
 
@@ -1070,8 +1063,7 @@ func TestReconcile_TriggerContentPassedToLauncher(t *testing.T) {
 	)
 
 	machine, fleet := testMachineSetup(t, "test", "test.local")
-	machineName := machine.Localpart()
-	fleetPrefix := fleet.Localpart() + "/"
+	machineName := machine.UserID().StateKey()
 
 	matrixState := newStartConditionTestState(t, fleet, configRoomID, templateRoomID)
 
@@ -1102,7 +1094,7 @@ func TestReconcile_TriggerContentPassedToLauncher(t *testing.T) {
 			},
 		},
 	})
-	matrixState.setStateEvent(configRoomID, schema.EventTypeCredentials, fleetPrefix+"iree/amdgpu/inference/teardown", schema.Credentials{
+	matrixState.setStateEvent(configRoomID, schema.EventTypeCredentials, testCredentialStateKey(t, fleet, "iree/amdgpu/inference/teardown"), schema.Credentials{
 		Ciphertext: "encrypted-teardown-credentials",
 	})
 
@@ -1204,8 +1196,7 @@ func TestReconcile_NoTriggerContentForUnconditionedPrincipal(t *testing.T) {
 	)
 
 	machine, fleet := testMachineSetup(t, "test", "test.local")
-	machineName := machine.Localpart()
-	fleetPrefix := fleet.Localpart() + "/"
+	machineName := machine.UserID().StateKey()
 
 	matrixState := newStartConditionTestState(t, fleet, configRoomID, templateRoomID)
 
@@ -1218,7 +1209,7 @@ func TestReconcile_NoTriggerContentForUnconditionedPrincipal(t *testing.T) {
 			},
 		},
 	})
-	matrixState.setStateEvent(configRoomID, schema.EventTypeCredentials, fleetPrefix+"agent/always", schema.Credentials{
+	matrixState.setStateEvent(configRoomID, schema.EventTypeCredentials, testCredentialStateKey(t, fleet, "agent/always"), schema.Credentials{
 		Ciphertext: "encrypted-always-credentials",
 	})
 
@@ -1305,8 +1296,7 @@ func TestReconcile_ArrayContainmentTriggerContent(t *testing.T) {
 	)
 
 	machine, fleet := testMachineSetup(t, "test", "test.local")
-	machineName := machine.Localpart()
-	fleetPrefix := fleet.Localpart() + "/"
+	machineName := machine.UserID().StateKey()
 
 	matrixState := newStartConditionTestState(t, fleet, configRoomID, templateRoomID)
 
@@ -1335,7 +1325,7 @@ func TestReconcile_ArrayContainmentTriggerContent(t *testing.T) {
 			},
 		},
 	})
-	matrixState.setStateEvent(configRoomID, schema.EventTypeCredentials, fleetPrefix+"agent/oncall", schema.Credentials{
+	matrixState.setStateEvent(configRoomID, schema.EventTypeCredentials, testCredentialStateKey(t, fleet, "agent/oncall"), schema.Credentials{
 		Ciphertext: "encrypted-oncall-credentials",
 	})
 
@@ -1456,8 +1446,7 @@ func TestReconcile_ArrayContainmentDeferredThenLaunches(t *testing.T) {
 	)
 
 	machine, fleet := testMachineSetup(t, "test", "test.local")
-	machineName := machine.Localpart()
-	fleetPrefix := fleet.Localpart() + "/"
+	machineName := machine.UserID().StateKey()
 
 	matrixState := newStartConditionTestState(t, fleet, configRoomID, templateRoomID)
 
@@ -1484,7 +1473,7 @@ func TestReconcile_ArrayContainmentDeferredThenLaunches(t *testing.T) {
 			},
 		},
 	})
-	matrixState.setStateEvent(configRoomID, schema.EventTypeCredentials, fleetPrefix+"agent/deployer", schema.Credentials{
+	matrixState.setStateEvent(configRoomID, schema.EventTypeCredentials, testCredentialStateKey(t, fleet, "agent/deployer"), schema.Credentials{
 		Ciphertext: "encrypted-deployer-credentials",
 	})
 
@@ -1544,8 +1533,7 @@ func TestReconcile_ArrayContainmentRunningPrincipalStopped(t *testing.T) {
 	)
 
 	machine, fleet := testMachineSetup(t, "test", "test.local")
-	machineName := machine.Localpart()
-	fleetPrefix := fleet.Localpart() + "/"
+	machineName := machine.UserID().StateKey()
 
 	matrixState := newStartConditionTestState(t, fleet, configRoomID, templateRoomID)
 
@@ -1571,7 +1559,7 @@ func TestReconcile_ArrayContainmentRunningPrincipalStopped(t *testing.T) {
 			},
 		},
 	})
-	matrixState.setStateEvent(configRoomID, schema.EventTypeCredentials, fleetPrefix+"agent/worker", schema.Credentials{
+	matrixState.setStateEvent(configRoomID, schema.EventTypeCredentials, testCredentialStateKey(t, fleet, "agent/worker"), schema.Credentials{
 		Ciphertext: "encrypted-worker-credentials",
 	})
 
@@ -1639,8 +1627,7 @@ func TestReconcile_ArrayContainmentMultiplePrincipals(t *testing.T) {
 	)
 
 	machine, fleet := testMachineSetup(t, "test", "test.local")
-	machineName := machine.Localpart()
-	fleetPrefix := fleet.Localpart() + "/"
+	machineName := machine.UserID().StateKey()
 
 	matrixState := newStartConditionTestState(t, fleet, configRoomID, templateRoomID)
 
@@ -1689,13 +1676,13 @@ func TestReconcile_ArrayContainmentMultiplePrincipals(t *testing.T) {
 			},
 		},
 	})
-	matrixState.setStateEvent(configRoomID, schema.EventTypeCredentials, fleetPrefix+"agent/bugfixer", schema.Credentials{
+	matrixState.setStateEvent(configRoomID, schema.EventTypeCredentials, testCredentialStateKey(t, fleet, "agent/bugfixer"), schema.Credentials{
 		Ciphertext: "encrypted-bugfixer-credentials",
 	})
-	matrixState.setStateEvent(configRoomID, schema.EventTypeCredentials, fleetPrefix+"agent/frontend", schema.Credentials{
+	matrixState.setStateEvent(configRoomID, schema.EventTypeCredentials, testCredentialStateKey(t, fleet, "agent/frontend"), schema.Credentials{
 		Ciphertext: "encrypted-frontend-credentials",
 	})
-	matrixState.setStateEvent(configRoomID, schema.EventTypeCredentials, fleetPrefix+"agent/backend", schema.Credentials{
+	matrixState.setStateEvent(configRoomID, schema.EventTypeCredentials, testCredentialStateKey(t, fleet, "agent/backend"), schema.Credentials{
 		Ciphertext: "encrypted-backend-credentials",
 	})
 
@@ -1758,8 +1745,7 @@ func TestReconcile_ArrayContainmentFieldTypeChangesToArray(t *testing.T) {
 	)
 
 	machine, fleet := testMachineSetup(t, "test", "test.local")
-	machineName := machine.Localpart()
-	fleetPrefix := fleet.Localpart() + "/"
+	machineName := machine.UserID().StateKey()
 
 	matrixState := newStartConditionTestState(t, fleet, configRoomID, templateRoomID)
 
@@ -1785,7 +1771,7 @@ func TestReconcile_ArrayContainmentFieldTypeChangesToArray(t *testing.T) {
 			},
 		},
 	})
-	matrixState.setStateEvent(configRoomID, schema.EventTypeCredentials, fleetPrefix+"agent/infra", schema.Credentials{
+	matrixState.setStateEvent(configRoomID, schema.EventTypeCredentials, testCredentialStateKey(t, fleet, "agent/infra"), schema.Credentials{
 		Ciphertext: "encrypted-infra-credentials",
 	})
 

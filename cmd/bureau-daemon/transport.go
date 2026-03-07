@@ -53,11 +53,10 @@ func (d *Daemon) startTransport(ctx context.Context, relaySocketPath string) err
 		privateKey:   d.tokenSigningPrivateKey,
 		session:      d.session,
 		systemRoomID: d.systemRoomID,
-		serverName:   d.machine.Server().String(),
 	}
 
 	// Create the WebRTC transport (implements both Listener and Dialer).
-	webrtcTransport := transport.NewWebRTCTransport(signaler, d.machine.Localpart(), iceConfig, authenticator, d.logger)
+	webrtcTransport := transport.NewWebRTCTransport(signaler, d.machine.UserID().StateKey(), iceConfig, authenticator, d.logger)
 	d.transportListener = webrtcTransport
 	d.transportDialer = webrtcTransport
 	d.relaySocketPath = relaySocketPath
@@ -573,7 +572,7 @@ func (d *Daemon) handleTransportTunnel(w http.ResponseWriter, r *http.Request) {
 	// preserve any bytes the HTTP server read ahead during hijack.
 	transportReader := &bufferedConn{reader: transportBuffer.Reader, Conn: transportConnection}
 
-	if d.serviceHasCapability(serviceLocalpart, "content-addressed-store") {
+	if d.serviceHasCapability(serviceRef.UserID().StateKey(), "content-addressed-store") {
 		if err := d.bridgeWithTokenInjection(transportReader, serviceConnection); err != nil {
 			d.logger.Warn("tunnel: bridge with token injection error",
 				"localpart", serviceLocalpart,
@@ -594,10 +593,10 @@ func (d *Daemon) handleTransportTunnel(w http.ResponseWriter, r *http.Request) {
 	)
 }
 
-// serviceHasCapability returns true if the named service (by localpart)
+// serviceHasCapability returns true if the named service (by state key)
 // is in the service directory and has the specified capability string.
-func (d *Daemon) serviceHasCapability(localpart, capability string) bool {
-	service, exists := d.services[localpart]
+func (d *Daemon) serviceHasCapability(stateKey, capability string) bool {
+	service, exists := d.services[stateKey]
 	if !exists {
 		return false
 	}
@@ -881,7 +880,6 @@ type peerAuthenticator struct {
 	privateKey   ed25519.PrivateKey
 	session      peerAuthSession
 	systemRoomID ref.RoomID
-	serverName   string
 }
 
 // peerAuthSession is the subset of messaging.Session needed by
@@ -894,40 +892,38 @@ func (a *peerAuthenticator) Sign(message []byte) []byte {
 	return ed25519.Sign(a.privateKey, message)
 }
 
-func (a *peerAuthenticator) VerifyPeer(peerLocalpart string, message, signature []byte) error {
+func (a *peerAuthenticator) VerifyPeer(peerIdentifier string, message, signature []byte) error {
 	// Fetch the peer's token signing public key from Matrix room state.
 	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
 	defer cancel()
 
-	// Token signing keys are published with the machine's full user ID
-	// (e.g., "@bureau/fleet/prod/machine/box:server") as the state key.
-	// The transport layer identifies peers by localpart, so we construct
-	// the full user ID here.
-	stateKey := "@" + peerLocalpart + ":" + a.serverName
+	// Token signing keys are published with the machine's state_key format
+	// (localpart:server, e.g., "bureau/fleet/prod/machine/box:server").
+	// The transport layer identifies peers by the same format.
 	rawContent, err := a.session.GetStateEvent(ctx, a.systemRoomID,
-		schema.EventTypeTokenSigningKey, stateKey)
+		schema.EventTypeTokenSigningKey, peerIdentifier)
 	if err != nil {
-		return fmt.Errorf("fetching token signing key for %s: %w", peerLocalpart, err)
+		return fmt.Errorf("fetching token signing key for %s: %w", peerIdentifier, err)
 	}
 
 	var content schema.TokenSigningKeyContent
 	if err := json.Unmarshal(rawContent, &content); err != nil {
-		return fmt.Errorf("parsing token signing key for %s: %w", peerLocalpart, err)
+		return fmt.Errorf("parsing token signing key for %s: %w", peerIdentifier, err)
 	}
 
 	publicKeyBytes, err := hex.DecodeString(content.PublicKey)
 	if err != nil {
-		return fmt.Errorf("decoding public key hex for %s: %w", peerLocalpart, err)
+		return fmt.Errorf("decoding public key hex for %s: %w", peerIdentifier, err)
 	}
 
 	if len(publicKeyBytes) != ed25519.PublicKeySize {
 		return fmt.Errorf("invalid public key length for %s: got %d bytes, want %d",
-			peerLocalpart, len(publicKeyBytes), ed25519.PublicKeySize)
+			peerIdentifier, len(publicKeyBytes), ed25519.PublicKeySize)
 	}
 
 	publicKey := ed25519.PublicKey(publicKeyBytes)
 	if !ed25519.Verify(publicKey, message, signature) {
-		return fmt.Errorf("Ed25519 signature verification failed for %s", peerLocalpart)
+		return fmt.Errorf("Ed25519 signature verification failed for %s", peerIdentifier)
 	}
 
 	return nil

@@ -99,7 +99,7 @@ func TestIndexCommit(t *testing.T) {
 			t.Fatal("commit not found in index")
 		}
 
-		timeline := service.principalTimelines["agent/test"]
+		timeline := service.principalTimelines["agent/test:bureau.local"]
 		if len(timeline) != 1 {
 			t.Fatalf("timeline length = %d, want 1", len(timeline))
 		}
@@ -126,7 +126,7 @@ func TestIndexCommit(t *testing.T) {
 			t.Error("content not updated on re-index")
 		}
 
-		timeline := service.principalTimelines["agent/test"]
+		timeline := service.principalTimelines["agent/test:bureau.local"]
 		if len(timeline) != 1 {
 			t.Fatalf("timeline length = %d, want 1 (should not duplicate)", len(timeline))
 		}
@@ -141,7 +141,7 @@ func TestIndexCommit(t *testing.T) {
 		service.indexCommit("ctx-aaaa0000", testContextCommit("@agent/test:bureau.local", "2026-01-15T10:00:00Z"))
 		service.indexCommit("ctx-bbbb0000", testContextCommit("@agent/test:bureau.local", "2026-01-15T11:00:00Z"))
 
-		timeline := service.principalTimelines["agent/test"]
+		timeline := service.principalTimelines["agent/test:bureau.local"]
 		if len(timeline) != 3 {
 			t.Fatalf("timeline length = %d, want 3", len(timeline))
 		}
@@ -168,11 +168,11 @@ func TestIndexCommit(t *testing.T) {
 		service.indexCommit("ctx-aaaa0000", testContextCommit("@agent/alice:bureau.local", "2026-01-15T10:00:00Z"))
 		service.indexCommit("ctx-bbbb0000", testContextCommit("@agent/bob:bureau.local", "2026-01-15T10:00:00Z"))
 
-		if len(service.principalTimelines["agent/alice"]) != 1 {
-			t.Errorf("alice timeline length = %d, want 1", len(service.principalTimelines["agent/alice"]))
+		if len(service.principalTimelines["agent/alice:bureau.local"]) != 1 {
+			t.Errorf("alice timeline length = %d, want 1", len(service.principalTimelines["agent/alice:bureau.local"]))
 		}
-		if len(service.principalTimelines["agent/bob"]) != 1 {
-			t.Errorf("bob timeline length = %d, want 1", len(service.principalTimelines["agent/bob"]))
+		if len(service.principalTimelines["agent/bob:bureau.local"]) != 1 {
+			t.Errorf("bob timeline length = %d, want 1", len(service.principalTimelines["agent/bob:bureau.local"]))
 		}
 	})
 

@@ -101,16 +101,16 @@ func run() error {
 		serviceRoomID:    boot.ServiceRoomID,
 		startedAt:        boot.Clock.Now(),
 		drainGracePeriod: drainGracePeriod,
-		machines:         make(map[string]*machineState),
-		services:         make(map[string]*fleetServiceState),
+		machines:         make(map[ref.UserID]*machineState),
+		services:         make(map[ref.UserID]*fleetServiceState),
 		definitions:      make(map[string]*fleet.MachineDefinitionContent),
-		config:           make(map[string]*fleet.FleetConfigContent),
-		leases:           make(map[string]*fleet.HALeaseContent),
-		configRooms:      make(map[string]ref.RoomID),
-		opsRooms:         make(map[string]ref.RoomID),
-		opsRoomMachines:  make(map[ref.RoomID]string),
+		config:           make(map[ref.UserID]*fleet.FleetConfigContent),
+		leases:           make(map[ref.UserID]*fleet.HALeaseContent),
+		configRooms:      make(map[ref.UserID]ref.RoomID),
+		opsRooms:         make(map[ref.UserID]ref.RoomID),
+		opsRoomMachines:  make(map[ref.RoomID]ref.UserID),
 		relayLinks:       make(map[opsTicketKey]schema.RelayLink),
-		reservations:     make(map[string]*machineReservation),
+		reservations:     make(map[ref.UserID]*machineReservation),
 		fleetRoomID:      fleetRoomID,
 		machineRoomID:    machineRoomID,
 		logger:           boot.Logger,
@@ -173,26 +173,26 @@ type FleetController struct {
 	startedAt     time.Time
 
 	// In-memory fleet model, rebuilt from /sync.
-	machines    map[string]*machineState
-	services    map[string]*fleetServiceState
+	machines    map[ref.UserID]*machineState
+	services    map[ref.UserID]*fleetServiceState
 	definitions map[string]*fleet.MachineDefinitionContent
-	config      map[string]*fleet.FleetConfigContent
-	leases      map[string]*fleet.HALeaseContent
+	config      map[ref.UserID]*fleet.FleetConfigContent
+	leases      map[ref.UserID]*fleet.HALeaseContent
 
-	// configRooms maps machine localparts to their config room IDs.
+	// configRooms maps machine user IDs to their config room IDs.
 	// Populated from room aliases during initial sync.
-	configRooms map[string]ref.RoomID
+	configRooms map[ref.UserID]ref.RoomID
 
-	// opsRooms maps machine localparts to their ops room IDs.
+	// opsRooms maps machine user IDs to their ops room IDs.
 	// Ops rooms are classified lazily from ticket events: when a
 	// resource_request ticket appears in a room, the fleet controller
 	// extracts the machine target and registers the room.
-	opsRooms map[string]ref.RoomID
+	opsRooms map[ref.UserID]ref.RoomID
 
 	// opsRoomMachines is the reverse of opsRooms: maps room IDs to
-	// machine localparts. Used to route ticket and relay events to
+	// machine user IDs. Used to route ticket and relay events to
 	// the correct machine's reservation queue.
-	opsRoomMachines map[ref.RoomID]string
+	opsRoomMachines map[ref.RoomID]ref.UserID
 
 	// relayLinks maps ops room ticket keys to their relay link
 	// content. Populated from m.bureau.relay_link events. The fleet
@@ -201,7 +201,7 @@ type FleetController struct {
 
 	// reservations tracks per-machine reservation state: the active
 	// reservation (if any) and the queue of pending requests.
-	reservations map[string]*machineReservation
+	reservations map[ref.UserID]*machineReservation
 
 	// drainGracePeriod is the maximum time the fleet controller waits
 	// for services to acknowledge a drain before granting the

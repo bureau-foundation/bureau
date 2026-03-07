@@ -102,10 +102,10 @@ type principalReadRequest struct {
 // authorizeRead checks that the caller is authorized to read the target
 // principal's data. Self-reads are always allowed. Cross-principal reads
 // require an agent/read grant with the target as a grant target.
-func authorizeRead(token *servicetoken.Token, principalLocal string) error {
-	if principalLocal != token.Subject.Localpart() {
-		if !servicetoken.GrantsAllow(token.Grants, "agent/read", principalLocal) {
-			return fmt.Errorf("access denied: no agent/read grant for %s", principalLocal)
+func authorizeRead(token *servicetoken.Token, principalStateKey string) error {
+	if principalStateKey != token.Subject.StateKey() {
+		if !servicetoken.GrantsAllow(token.Grants, "agent/read", principalStateKey) {
+			return fmt.Errorf("access denied: no agent/read grant for %s", principalStateKey)
 		}
 	}
 	return nil
@@ -121,16 +121,16 @@ func resolvePrincipalForRead(token *servicetoken.Token, raw []byte) (string, err
 		return "", fmt.Errorf("invalid request: %w", err)
 	}
 
-	principalLocal := request.PrincipalLocal
-	if principalLocal == "" {
-		principalLocal = token.Subject.Localpart()
+	principalStateKey := request.PrincipalLocal
+	if principalStateKey == "" {
+		principalStateKey = token.Subject.StateKey()
 	}
 
-	if err := authorizeRead(token, principalLocal); err != nil {
+	if err := authorizeRead(token, principalStateKey); err != nil {
 		return "", err
 	}
 
-	return principalLocal, nil
+	return principalStateKey, nil
 }
 
 // --- Session handlers ---
@@ -143,12 +143,12 @@ type getSessionResponse struct {
 }
 
 func (agentService *AgentService) handleGetSession(ctx context.Context, token *servicetoken.Token, raw []byte) (any, error) {
-	principalLocal, err := resolvePrincipalForRead(token, raw)
+	principalStateKey, err := resolvePrincipalForRead(token, raw)
 	if err != nil {
 		return nil, err
 	}
 
-	content, err := agentService.readSessionState(ctx, principalLocal)
+	content, err := agentService.readSessionState(ctx, principalStateKey)
 	if err != nil {
 		return nil, fmt.Errorf("reading session state: %w", err)
 	}
@@ -172,10 +172,10 @@ func (agentService *AgentService) handleStartSession(ctx context.Context, token 
 		return nil, fmt.Errorf("session_id is required")
 	}
 
-	principalLocal := token.Subject.Localpart()
+	principalStateKey := token.Subject.StateKey()
 
 	// Read current state, apply mutation, write back.
-	current, err := agentService.readSessionState(ctx, principalLocal)
+	current, err := agentService.readSessionState(ctx, principalStateKey)
 	if err != nil {
 		return nil, fmt.Errorf("reading current session state: %w", err)
 	}
@@ -197,20 +197,20 @@ func (agentService *AgentService) handleStartSession(ctx context.Context, token 
 
 	if _, err := agentService.session.SendStateEvent(
 		ctx, agentService.configRoomID,
-		agent.EventTypeAgentSession, principalLocal, current,
+		agent.EventTypeAgentSession, principalStateKey, current,
 	); err != nil {
 		return nil, fmt.Errorf("writing session state: %w", err)
 	}
 
 	// Initialize the live session metrics entry. Checkpoint events
 	// arriving via checkpoint-context will accumulate into this.
-	agentService.liveMetrics[principalLocal] = &liveSessionMetrics{
+	agentService.liveMetrics[principalStateKey] = &liveSessionMetrics{
 		SessionID: request.SessionID,
 		StartedAt: current.ActiveSessionStartedAt,
 	}
 
 	agentService.logger.Info("session started",
-		"principal", principalLocal,
+		"principal", principalStateKey,
 		"session_id", request.SessionID,
 	)
 
@@ -255,16 +255,16 @@ func (agentService *AgentService) handleEndSession(ctx context.Context, token *s
 		return nil, fmt.Errorf("session_id is required")
 	}
 
-	principalLocal := token.Subject.Localpart()
+	principalStateKey := token.Subject.StateKey()
 
 	// Update session state.
-	sessionContent, err := agentService.readSessionState(ctx, principalLocal)
+	sessionContent, err := agentService.readSessionState(ctx, principalStateKey)
 	if err != nil {
 		return nil, fmt.Errorf("reading current session state: %w", err)
 	}
 
 	if sessionContent == nil {
-		return nil, fmt.Errorf("no session state exists for %s", principalLocal)
+		return nil, fmt.Errorf("no session state exists for %s", principalStateKey)
 	}
 
 	if err := sessionContent.CanModify(); err != nil {
@@ -291,13 +291,13 @@ func (agentService *AgentService) handleEndSession(ctx context.Context, token *s
 
 	if _, err := agentService.session.SendStateEvent(
 		ctx, agentService.configRoomID,
-		agent.EventTypeAgentSession, principalLocal, sessionContent,
+		agent.EventTypeAgentSession, principalStateKey, sessionContent,
 	); err != nil {
 		return nil, fmt.Errorf("writing session state: %w", err)
 	}
 
 	// Update aggregated metrics.
-	metricsContent, err := agentService.readMetricsState(ctx, principalLocal)
+	metricsContent, err := agentService.readMetricsState(ctx, principalStateKey)
 	if err != nil {
 		return nil, fmt.Errorf("reading current metrics state: %w", err)
 	}
@@ -313,7 +313,7 @@ func (agentService *AgentService) handleEndSession(ctx context.Context, token *s
 	// Idempotency: skip if this session's metrics were already applied.
 	if metricsContent.LastSessionID == request.SessionID {
 		agentService.logger.Info("session metrics already applied, skipping",
-			"principal", principalLocal,
+			"principal", principalStateKey,
 			"session_id", request.SessionID,
 		)
 	} else {
@@ -332,7 +332,7 @@ func (agentService *AgentService) handleEndSession(ctx context.Context, token *s
 
 		if _, err := agentService.session.SendStateEvent(
 			ctx, agentService.configRoomID,
-			agent.EventTypeAgentMetrics, principalLocal, metricsContent,
+			agent.EventTypeAgentMetrics, principalStateKey, metricsContent,
 		); err != nil {
 			return nil, fmt.Errorf("writing metrics state: %w", err)
 		}
@@ -342,10 +342,10 @@ func (agentService *AgentService) handleEndSession(ctx context.Context, token *s
 	// counters have been folded into the lifetime m.bureau.agent_metrics
 	// state event above — keeping them around would show stale data
 	// for the completed session.
-	delete(agentService.liveMetrics, principalLocal)
+	delete(agentService.liveMetrics, principalStateKey)
 
 	agentService.logger.Info("session ended",
-		"principal", principalLocal,
+		"principal", principalStateKey,
 		"session_id", request.SessionID,
 		"input_tokens", request.InputTokens,
 		"output_tokens", request.OutputTokens,
@@ -386,10 +386,10 @@ func (agentService *AgentService) handleStoreSessionLog(ctx context.Context, tok
 		return nil, fmt.Errorf("data is required")
 	}
 
-	principalLocal := token.Subject.Localpart()
+	principalStateKey := token.Subject.StateKey()
 
 	// Verify the caller has an active session matching the request.
-	sessionContent, err := agentService.readSessionState(ctx, principalLocal)
+	sessionContent, err := agentService.readSessionState(ctx, principalStateKey)
 	if err != nil {
 		return nil, fmt.Errorf("reading session state: %w", err)
 	}
@@ -420,7 +420,7 @@ func (agentService *AgentService) handleStoreSessionLog(ctx context.Context, tok
 	artifactRef := storeResponse.Ref
 
 	agentService.logger.Info("session log stored",
-		"principal", principalLocal,
+		"principal", principalStateKey,
 		"session_id", request.SessionID,
 		"ref", artifactRef,
 		"size", len(request.Data),
@@ -472,7 +472,7 @@ func (agentService *AgentService) handleArchiveArtifact(ctx context.Context, tok
 		return nil, fmt.Errorf("label is required")
 	}
 
-	principalLocal := token.Subject.Localpart()
+	principalStateKey := token.Subject.StateKey()
 
 	header := &artifactstore.StoreHeader{
 		Action:      "store",
@@ -488,7 +488,7 @@ func (agentService *AgentService) handleArchiveArtifact(ctx context.Context, tok
 	}
 
 	agentService.logger.Info("artifact archived",
-		"principal", principalLocal,
+		"principal", principalStateKey,
 		"ref", storeResponse.Ref,
 		"label", request.Label,
 		"content_type", request.ContentType,
@@ -535,12 +535,12 @@ type liveSessionMetricsWire struct {
 }
 
 func (agentService *AgentService) handleGetMetrics(ctx context.Context, token *servicetoken.Token, raw []byte) (any, error) {
-	principalLocal, err := resolvePrincipalForRead(token, raw)
+	principalStateKey, err := resolvePrincipalForRead(token, raw)
 	if err != nil {
 		return nil, err
 	}
 
-	content, err := agentService.readMetricsState(ctx, principalLocal)
+	content, err := agentService.readMetricsState(ctx, principalStateKey)
 	if err != nil {
 		return nil, fmt.Errorf("reading metrics state: %w", err)
 	}
@@ -549,7 +549,7 @@ func (agentService *AgentService) handleGetMetrics(ctx context.Context, token *s
 
 	// Include live session metrics if an active session is accumulating
 	// checkpoint data for this principal.
-	if live := agentService.liveMetrics[principalLocal]; live != nil {
+	if live := agentService.liveMetrics[principalStateKey]; live != nil {
 		var lastActivity string
 		if !live.LastActivityAt.IsZero() {
 			lastActivity = live.LastActivityAt.UTC().Format("2006-01-02T15:04:05Z")
@@ -579,17 +579,17 @@ func (agentService *AgentService) handleGetMetrics(ctx context.Context, token *s
 //
 // Decode failures are logged as warnings — live metrics are best-effort
 // observability and must not block checkpoint persistence.
-func (agentService *AgentService) accumulateLiveMetrics(principalLocal, sessionID string, data []byte) {
+func (agentService *AgentService) accumulateLiveMetrics(principalStateKey, sessionID string, data []byte) {
 	var events []agentdriver.Event
 	if err := codec.Unmarshal(data, &events); err != nil {
 		agentService.logger.Warn("decoding checkpoint events for live metrics",
-			"principal", principalLocal,
+			"principal", principalStateKey,
 			"error", err,
 		)
 		return
 	}
 
-	live := agentService.liveMetrics[principalLocal]
+	live := agentService.liveMetrics[principalStateKey]
 	if live == nil {
 		// No entry from start-session (agent service may have
 		// restarted mid-session). Create one with the current time
@@ -598,7 +598,7 @@ func (agentService *AgentService) accumulateLiveMetrics(principalLocal, sessionI
 			SessionID: sessionID,
 			StartedAt: agentService.clock.Now().UTC().Format("2006-01-02T15:04:05Z"),
 		}
-		agentService.liveMetrics[principalLocal] = live
+		agentService.liveMetrics[principalStateKey] = live
 	}
 
 	for _, event := range events {
@@ -662,9 +662,9 @@ func (agentService *AgentService) handleSetContext(ctx context.Context, token *s
 		return nil, fmt.Errorf("content_type is required")
 	}
 
-	principalLocal := token.Subject.Localpart()
+	principalStateKey := token.Subject.StateKey()
 
-	current, err := agentService.readContextState(ctx, principalLocal)
+	current, err := agentService.readContextState(ctx, principalStateKey)
 	if err != nil {
 		return nil, fmt.Errorf("reading current context state: %w", err)
 	}
@@ -693,13 +693,13 @@ func (agentService *AgentService) handleSetContext(ctx context.Context, token *s
 
 	if _, err := agentService.session.SendStateEvent(
 		ctx, agentService.configRoomID,
-		agent.EventTypeAgentContext, principalLocal, current,
+		agent.EventTypeAgentContext, principalStateKey, current,
 	); err != nil {
 		return nil, fmt.Errorf("writing context state: %w", err)
 	}
 
 	agentService.logger.Info("context entry set",
-		"principal", principalLocal,
+		"principal", principalStateKey,
 		"key", request.Key,
 		"artifact_ref", request.ArtifactRef,
 	)
@@ -729,16 +729,16 @@ func (agentService *AgentService) handleGetContext(ctx context.Context, token *s
 		return nil, fmt.Errorf("key is required")
 	}
 
-	principalLocal := request.PrincipalLocal
-	if principalLocal == "" {
-		principalLocal = token.Subject.Localpart()
+	principalStateKey := request.PrincipalLocal
+	if principalStateKey == "" {
+		principalStateKey = token.Subject.StateKey()
 	}
 
-	if err := authorizeRead(token, principalLocal); err != nil {
+	if err := authorizeRead(token, principalStateKey); err != nil {
 		return nil, err
 	}
 
-	content, err := agentService.readContextState(ctx, principalLocal)
+	content, err := agentService.readContextState(ctx, principalStateKey)
 	if err != nil {
 		return nil, fmt.Errorf("reading context state: %w", err)
 	}
@@ -771,15 +771,15 @@ func (agentService *AgentService) handleDeleteContext(ctx context.Context, token
 		return nil, fmt.Errorf("key is required")
 	}
 
-	principalLocal := token.Subject.Localpart()
+	principalStateKey := token.Subject.StateKey()
 
-	current, err := agentService.readContextState(ctx, principalLocal)
+	current, err := agentService.readContextState(ctx, principalStateKey)
 	if err != nil {
 		return nil, fmt.Errorf("reading current context state: %w", err)
 	}
 
 	if current == nil || current.Entries == nil {
-		return nil, fmt.Errorf("no context entry %q exists for %s", request.Key, principalLocal)
+		return nil, fmt.Errorf("no context entry %q exists for %s", request.Key, principalStateKey)
 	}
 
 	if err := current.CanModify(); err != nil {
@@ -787,7 +787,7 @@ func (agentService *AgentService) handleDeleteContext(ctx context.Context, token
 	}
 
 	if _, exists := current.Entries[request.Key]; !exists {
-		return nil, fmt.Errorf("no context entry %q exists for %s", request.Key, principalLocal)
+		return nil, fmt.Errorf("no context entry %q exists for %s", request.Key, principalStateKey)
 	}
 
 	delete(current.Entries, request.Key)
@@ -800,13 +800,13 @@ func (agentService *AgentService) handleDeleteContext(ctx context.Context, token
 
 	if _, err := agentService.session.SendStateEvent(
 		ctx, agentService.configRoomID,
-		agent.EventTypeAgentContext, principalLocal, current,
+		agent.EventTypeAgentContext, principalStateKey, current,
 	); err != nil {
 		return nil, fmt.Errorf("writing context state: %w", err)
 	}
 
 	agentService.logger.Info("context entry deleted",
-		"principal", principalLocal,
+		"principal", principalStateKey,
 		"key", request.Key,
 	)
 
@@ -831,16 +831,16 @@ func (agentService *AgentService) handleListContext(ctx context.Context, token *
 		return nil, fmt.Errorf("invalid request: %w", err)
 	}
 
-	principalLocal := request.PrincipalLocal
-	if principalLocal == "" {
-		principalLocal = token.Subject.Localpart()
+	principalStateKey := request.PrincipalLocal
+	if principalStateKey == "" {
+		principalStateKey = token.Subject.StateKey()
 	}
 
-	if err := authorizeRead(token, principalLocal); err != nil {
+	if err := authorizeRead(token, principalStateKey); err != nil {
 		return nil, err
 	}
 
-	content, err := agentService.readContextState(ctx, principalLocal)
+	content, err := agentService.readContextState(ctx, principalStateKey)
 	if err != nil {
 		return nil, fmt.Errorf("reading context state: %w", err)
 	}
@@ -980,12 +980,12 @@ func (agentService *AgentService) handleCheckpointContext(ctx context.Context, t
 	// persistence.
 	if hasData && request.Format == "events-v1" {
 		agentService.accumulateLiveMetrics(
-			token.Subject.Localpart(), request.SessionID, request.Data,
+			token.Subject.StateKey(), request.SessionID, request.Data,
 		)
 	}
 
 	agentService.logger.Info("context commit created",
-		"principal", token.Subject.Localpart(),
+		"principal", token.Subject.String(),
 		"commit_id", commitID,
 		"commit_type", request.CommitType,
 		"artifact_ref", artifactRef,
@@ -1104,7 +1104,7 @@ func (agentService *AgentService) handleMaterializeContext(ctx context.Context, 
 	}
 
 	agentService.logger.Info("context materialized",
-		"principal", token.Subject.Localpart(),
+		"principal", token.Subject.String(),
 		"tip_commit", request.CommitID,
 		"stop_strategy", stopStrategy,
 		"format", chainFormat,
@@ -1134,39 +1134,39 @@ func (agentService *AgentService) handleMaterializeContext(ctx context.Context, 
 
 // readSessionState reads the m.bureau.agent_session state event for a
 // principal from the config room. Returns nil if no event exists.
-func (agentService *AgentService) readSessionState(ctx context.Context, principalLocal string) (*agent.AgentSessionContent, error) {
-	content, err := messaging.GetState[agent.AgentSessionContent](ctx, agentService.session, agentService.configRoomID, agent.EventTypeAgentSession, principalLocal)
+func (agentService *AgentService) readSessionState(ctx context.Context, principalStateKey string) (*agent.AgentSessionContent, error) {
+	content, err := messaging.GetState[agent.AgentSessionContent](ctx, agentService.session, agentService.configRoomID, agent.EventTypeAgentSession, principalStateKey)
 	if err != nil {
 		if messaging.IsMatrixError(err, messaging.ErrCodeNotFound) {
 			return nil, nil
 		}
-		return nil, fmt.Errorf("reading session state for %s: %w", principalLocal, err)
+		return nil, fmt.Errorf("reading session state for %s: %w", principalStateKey, err)
 	}
 	return &content, nil
 }
 
 // readContextState reads the m.bureau.agent_context state event for a
 // principal from the config room. Returns nil if no event exists.
-func (agentService *AgentService) readContextState(ctx context.Context, principalLocal string) (*agent.AgentContextContent, error) {
-	content, err := messaging.GetState[agent.AgentContextContent](ctx, agentService.session, agentService.configRoomID, agent.EventTypeAgentContext, principalLocal)
+func (agentService *AgentService) readContextState(ctx context.Context, principalStateKey string) (*agent.AgentContextContent, error) {
+	content, err := messaging.GetState[agent.AgentContextContent](ctx, agentService.session, agentService.configRoomID, agent.EventTypeAgentContext, principalStateKey)
 	if err != nil {
 		if messaging.IsMatrixError(err, messaging.ErrCodeNotFound) {
 			return nil, nil
 		}
-		return nil, fmt.Errorf("reading context state for %s: %w", principalLocal, err)
+		return nil, fmt.Errorf("reading context state for %s: %w", principalStateKey, err)
 	}
 	return &content, nil
 }
 
 // readMetricsState reads the m.bureau.agent_metrics state event for a
 // principal from the config room. Returns nil if no event exists.
-func (agentService *AgentService) readMetricsState(ctx context.Context, principalLocal string) (*agent.AgentMetricsContent, error) {
-	content, err := messaging.GetState[agent.AgentMetricsContent](ctx, agentService.session, agentService.configRoomID, agent.EventTypeAgentMetrics, principalLocal)
+func (agentService *AgentService) readMetricsState(ctx context.Context, principalStateKey string) (*agent.AgentMetricsContent, error) {
+	content, err := messaging.GetState[agent.AgentMetricsContent](ctx, agentService.session, agentService.configRoomID, agent.EventTypeAgentMetrics, principalStateKey)
 	if err != nil {
 		if messaging.IsMatrixError(err, messaging.ErrCodeNotFound) {
 			return nil, nil
 		}
-		return nil, fmt.Errorf("reading metrics state for %s: %w", principalLocal, err)
+		return nil, fmt.Errorf("reading metrics state for %s: %w", principalStateKey, err)
 	}
 	return &content, nil
 }
@@ -1274,7 +1274,7 @@ func (agentService *AgentService) handleShowContextCommit(ctx context.Context, t
 
 	// Authorize: the caller must be the commit's principal or hold
 	// an agent/read grant for that principal.
-	if err := authorizeRead(token, content.Principal.Localpart()); err != nil {
+	if err := authorizeRead(token, content.Principal.StateKey()); err != nil {
 		return nil, err
 	}
 
@@ -1322,7 +1322,7 @@ func (agentService *AgentService) handleHistoryContext(ctx context.Context, toke
 		return nil, err
 	}
 
-	if err := authorizeRead(token, tipContent.Principal.Localpart()); err != nil {
+	if err := authorizeRead(token, tipContent.Principal.StateKey()); err != nil {
 		return nil, err
 	}
 
@@ -1392,10 +1392,10 @@ func (agentService *AgentService) handleUpdateContextMetadata(ctx context.Contex
 
 	// Authorize write: the caller must be the commit's principal or
 	// hold an agent/write grant (e.g., batch summarization service).
-	principalLocal := content.Principal.Localpart()
-	if principalLocal != token.Subject.Localpart() {
-		if !servicetoken.GrantsAllow(token.Grants, "agent/write", principalLocal) {
-			return nil, fmt.Errorf("access denied: no agent/write grant for %s", principalLocal)
+	principalStateKey := content.Principal.StateKey()
+	if principalStateKey != token.Subject.StateKey() {
+		if !servicetoken.GrantsAllow(token.Grants, "agent/write", principalStateKey) {
+			return nil, fmt.Errorf("access denied: no agent/write grant for %s", principalStateKey)
 		}
 	}
 
@@ -1448,12 +1448,12 @@ func (agentService *AgentService) handleResolveContext(ctx context.Context, toke
 		return nil, fmt.Errorf("timestamp is required")
 	}
 
-	principalLocal := request.PrincipalLocal
-	if principalLocal == "" {
-		principalLocal = token.Subject.Localpart()
+	principalStateKey := request.PrincipalLocal
+	if principalStateKey == "" {
+		principalStateKey = token.Subject.StateKey()
 	}
 
-	if err := authorizeRead(token, principalLocal); err != nil {
+	if err := authorizeRead(token, principalStateKey); err != nil {
 		return nil, err
 	}
 
@@ -1467,7 +1467,7 @@ func (agentService *AgentService) handleResolveContext(ctx context.Context, toke
 		}
 	}
 
-	timeline := agentService.principalTimelines[principalLocal]
+	timeline := agentService.principalTimelines[principalStateKey]
 	if len(timeline) == 0 {
 		return resolveContextResponse{}, nil
 	}

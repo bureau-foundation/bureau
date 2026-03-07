@@ -164,7 +164,6 @@ func firstBootFromBootstrapConfig(ctx context.Context, bootstrapFilePath string,
 // a room the account is already in.
 func publishKeyAndJoinFleetRooms(ctx context.Context, session *messaging.DirectSession, machine ref.Machine, keypair *sealed.Keypair, logger *slog.Logger) error {
 	fleet := machine.Fleet()
-	username := machine.Localpart()
 
 	machineAlias := fleet.MachineRoomAlias()
 	machineRoomID, err := session.ResolveAlias(ctx, machineAlias)
@@ -180,7 +179,8 @@ func publishKeyAndJoinFleetRooms(ctx context.Context, session *messaging.DirectS
 		Algorithm: "age-x25519",
 		PublicKey: keypair.PublicKey,
 	}
-	_, err = session.SendStateEvent(ctx, machineRoomID, schema.EventTypeMachineKey, username, machineKeyContent)
+	machineStateKey := machine.UserID().StateKey()
+	_, err = session.SendStateEvent(ctx, machineRoomID, schema.EventTypeMachineKey, machineStateKey, machineKeyContent)
 	if err != nil {
 		return fmt.Errorf("publishing machine key: %w", err)
 	}

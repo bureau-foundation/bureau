@@ -258,17 +258,17 @@ func (ts *TicketService) initiateRelay(
 		// watches the ops room for an m.bureau.reservation event
 		// with the holder matching the origin ticket's creator.
 		//
-		// The gate's state key is the creator's localpart (the
-		// convention for reservation state events). The
-		// content_match checks that the holder field matches.
-		holderLocalpart := content.CreatedBy.Localpart()
+		// The gate's state key is the creator's user ID in
+		// state_key format (localpart:server), matching the
+		// reservation state event convention.
+		holderStateKey := content.CreatedBy.StateKey()
 		gateID := fmt.Sprintf("rsv-%d", claimIndex)
 		gate := ticket.TicketGate{
 			ID:        gateID,
 			Type:      ticket.GateStateEvent,
 			Status:    ticket.GatePending,
 			EventType: schema.EventTypeReservation,
-			StateKey:  holderLocalpart,
+			StateKey:  holderStateKey,
 			RoomAlias: opsAlias,
 			ContentMatch: schema.ContentMatch{
 				"holder": schema.Eq(content.CreatedBy.String()),

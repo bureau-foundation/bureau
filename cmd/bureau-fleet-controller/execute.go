@@ -25,38 +25,38 @@ type configStore interface {
 // readMachineConfig reads the current MachineConfig from a machine's
 // config room. Returns an empty MachineConfig if no config event
 // exists yet.
-func (fc *FleetController) readMachineConfig(ctx context.Context, machineLocalpart string) (*schema.MachineConfig, error) {
-	configRoomID, exists := fc.configRooms[machineLocalpart]
+func (fc *FleetController) readMachineConfig(ctx context.Context, machineUserID ref.UserID) (*schema.MachineConfig, error) {
+	configRoomID, exists := fc.configRooms[machineUserID]
 	if !exists {
-		return nil, fmt.Errorf("no config room for machine %s", machineLocalpart)
+		return nil, fmt.Errorf("no config room for machine %s", machineUserID)
 	}
 
-	raw, err := fc.configStore.GetStateEvent(ctx, configRoomID, schema.EventTypeMachineConfig, machineLocalpart)
+	raw, err := fc.configStore.GetStateEvent(ctx, configRoomID, schema.EventTypeMachineConfig, machineUserID.StateKey())
 	if err != nil {
 		if messaging.IsMatrixError(err, messaging.ErrCodeNotFound) {
 			return &schema.MachineConfig{}, nil
 		}
-		return nil, fmt.Errorf("reading machine config for %s: %w", machineLocalpart, err)
+		return nil, fmt.Errorf("reading machine config for %s: %w", machineUserID, err)
 	}
 
 	var config schema.MachineConfig
 	if err := json.Unmarshal(raw, &config); err != nil {
-		return nil, fmt.Errorf("parsing machine config for %s: %w", machineLocalpart, err)
+		return nil, fmt.Errorf("parsing machine config for %s: %w", machineUserID, err)
 	}
 	return &config, nil
 }
 
 // writeMachineConfig writes a MachineConfig state event to a machine's
 // config room and returns the event ID assigned by the homeserver.
-func (fc *FleetController) writeMachineConfig(ctx context.Context, machineLocalpart string, config *schema.MachineConfig) (ref.EventID, error) {
-	configRoomID, exists := fc.configRooms[machineLocalpart]
+func (fc *FleetController) writeMachineConfig(ctx context.Context, machineUserID ref.UserID, config *schema.MachineConfig) (ref.EventID, error) {
+	configRoomID, exists := fc.configRooms[machineUserID]
 	if !exists {
-		return ref.EventID{}, fmt.Errorf("no config room for machine %s", machineLocalpart)
+		return ref.EventID{}, fmt.Errorf("no config room for machine %s", machineUserID)
 	}
 
-	eventID, err := fc.configStore.SendStateEvent(ctx, configRoomID, schema.EventTypeMachineConfig, machineLocalpart, config)
+	eventID, err := fc.configStore.SendStateEvent(ctx, configRoomID, schema.EventTypeMachineConfig, machineUserID.StateKey(), config)
 	if err != nil {
-		return ref.EventID{}, fmt.Errorf("writing machine config for %s: %w", machineLocalpart, err)
+		return ref.EventID{}, fmt.Errorf("writing machine config for %s: %w", machineUserID, err)
 	}
 	return eventID, nil
 }
@@ -116,39 +116,46 @@ func fleetPayloadToMap(raw json.RawMessage) (map[string]any, error) {
 // existing principals), and writes the updated config back.
 //
 // Caller must hold fc.mu.
-func (fc *FleetController) place(ctx context.Context, serviceLocalpart, machineLocalpart string) error {
-	serviceState, exists := fc.services[serviceLocalpart]
+func (fc *FleetController) place(ctx context.Context, serviceUserID, machineUserID ref.UserID) error {
+	serviceState, exists := fc.services[serviceUserID]
 	if !exists {
-		return fmt.Errorf("service %s not found", serviceLocalpart)
+		return fmt.Errorf("service %s not found", serviceUserID)
 	}
 	if serviceState.definition == nil {
-		return fmt.Errorf("service %s has no definition", serviceLocalpart)
+		return fmt.Errorf("service %s has no definition", serviceUserID)
 	}
 
-	machine, exists := fc.machines[machineLocalpart]
+	machine, exists := fc.machines[machineUserID]
 	if !exists {
-		return fmt.Errorf("machine %s not found", machineLocalpart)
+		return fmt.Errorf("machine %s not found", machineUserID)
 	}
 	if machine.configRoomID.IsZero() {
-		return fmt.Errorf("machine %s has no config room", machineLocalpart)
+		return fmt.Errorf("machine %s has no config room", machineUserID)
 	}
 
-	if _, alreadyPlaced := machine.assignments[serviceLocalpart]; alreadyPlaced {
-		return fmt.Errorf("service %s is already placed on machine %s", serviceLocalpart, machineLocalpart)
+	if _, alreadyPlaced := machine.assignments[serviceUserID]; alreadyPlaced {
+		return fmt.Errorf("service %s is already placed on machine %s", serviceUserID, machineUserID)
 	}
 
-	config, err := fc.readMachineConfig(ctx, machineLocalpart)
+	config, err := fc.readMachineConfig(ctx, machineUserID)
 	if err != nil {
 		return err
 	}
 
-	assignment, err := fc.buildAssignment(serviceLocalpart, serviceState.definition)
+	// buildAssignment takes the bare account localpart (e.g.,
+	// "service/stt/whisper") for entity construction. Extract it
+	// from the full user ID via the Entity's AccountLocalpart.
+	serviceEntity, err := ref.ParseEntityUserID(serviceUserID.String())
+	if err != nil {
+		return fmt.Errorf("parsing service user ID %s: %w", serviceUserID, err)
+	}
+	assignment, err := fc.buildAssignment(serviceEntity.AccountLocalpart(), serviceState.definition)
 	if err != nil {
 		return err
 	}
 	config.Principals = append(config.Principals, assignment)
 
-	eventID, err := fc.writeMachineConfig(ctx, machineLocalpart, config)
+	eventID, err := fc.writeMachineConfig(ctx, machineUserID, config)
 	if err != nil {
 		return err
 	}
@@ -159,12 +166,12 @@ func (fc *FleetController) place(ctx context.Context, serviceLocalpart, machineL
 
 	// Update in-memory model.
 	assignmentCopy := assignment
-	machine.assignments[serviceLocalpart] = &assignmentCopy
-	serviceState.instances[machineLocalpart] = &assignmentCopy
+	machine.assignments[serviceUserID] = &assignmentCopy
+	serviceState.instances[machineUserID] = &assignmentCopy
 
 	fc.logger.Info("service placed",
-		"service", serviceLocalpart,
-		"machine", machineLocalpart,
+		"service", serviceUserID,
+		"machine", machineUserID,
 	)
 	return nil
 }
@@ -175,41 +182,43 @@ func (fc *FleetController) place(ctx context.Context, serviceLocalpart, machineL
 // Preserves all other principals.
 //
 // Caller must hold fc.mu.
-func (fc *FleetController) unplace(ctx context.Context, serviceLocalpart, machineLocalpart string) error {
-	machine, exists := fc.machines[machineLocalpart]
+func (fc *FleetController) unplace(ctx context.Context, serviceUserID, machineUserID ref.UserID) error {
+	machine, exists := fc.machines[machineUserID]
 	if !exists {
-		return fmt.Errorf("machine %s not found", machineLocalpart)
+		return fmt.Errorf("machine %s not found", machineUserID)
 	}
 	if machine.configRoomID.IsZero() {
-		return fmt.Errorf("machine %s has no config room", machineLocalpart)
+		return fmt.Errorf("machine %s has no config room", machineUserID)
 	}
 
-	assignment, exists := machine.assignments[serviceLocalpart]
+	assignment, exists := machine.assignments[serviceUserID]
 	if !exists {
-		return fmt.Errorf("service %s is not placed on machine %s", serviceLocalpart, machineLocalpart)
+		return fmt.Errorf("service %s is not placed on machine %s", serviceUserID, machineUserID)
 	}
 	if assignment.Labels["fleet_managed"] != fc.principalName {
 		return fmt.Errorf("service %s on machine %s is managed by %q, not %q",
-			serviceLocalpart, machineLocalpart,
+			serviceUserID, machineUserID,
 			assignment.Labels["fleet_managed"], fc.principalName)
 	}
 
-	config, err := fc.readMachineConfig(ctx, machineLocalpart)
+	config, err := fc.readMachineConfig(ctx, machineUserID)
 	if err != nil {
 		return err
 	}
 
 	// Remove only the matching principal, preserve everything else.
+	// Compare by user ID to match regardless of whether the localpart
+	// or user ID was used in the original assignment.
 	filtered := make([]schema.PrincipalAssignment, 0, len(config.Principals))
 	for _, principal := range config.Principals {
-		if principal.Principal.AccountLocalpart() == serviceLocalpart {
+		if principal.Principal.UserID() == serviceUserID {
 			continue
 		}
 		filtered = append(filtered, principal)
 	}
 	config.Principals = filtered
 
-	eventID, err := fc.writeMachineConfig(ctx, machineLocalpart, config)
+	eventID, err := fc.writeMachineConfig(ctx, machineUserID, config)
 	if err != nil {
 		return err
 	}
@@ -219,14 +228,14 @@ func (fc *FleetController) unplace(ctx context.Context, serviceLocalpart, machin
 	machine.pendingEchoEventID = eventID
 
 	// Update in-memory model.
-	delete(machine.assignments, serviceLocalpart)
-	if serviceState, exists := fc.services[serviceLocalpart]; exists {
-		delete(serviceState.instances, machineLocalpart)
+	delete(machine.assignments, serviceUserID)
+	if serviceState, exists := fc.services[serviceUserID]; exists {
+		delete(serviceState.instances, machineUserID)
 	}
 
 	fc.logger.Info("service unplaced",
-		"service", serviceLocalpart,
-		"machine", machineLocalpart,
+		"service", serviceUserID,
+		"machine", machineUserID,
 	)
 	return nil
 }
@@ -238,10 +247,10 @@ func (fc *FleetController) unplace(ctx context.Context, serviceLocalpart, machin
 // already cordoned (no write performed).
 //
 // Caller must hold fc.mu.
-func (fc *FleetController) cordonMachine(ctx context.Context, machineLocalpart string) (bool, error) {
-	machine, exists := fc.machines[machineLocalpart]
+func (fc *FleetController) cordonMachine(ctx context.Context, machineUserID ref.UserID) (bool, error) {
+	machine, exists := fc.machines[machineUserID]
 	if !exists {
-		return false, fmt.Errorf("machine %s not found", machineLocalpart)
+		return false, fmt.Errorf("machine %s not found", machineUserID)
 	}
 
 	// Check in-memory model first — avoids a Matrix round-trip if
@@ -251,17 +260,17 @@ func (fc *FleetController) cordonMachine(ctx context.Context, machineLocalpart s
 	}
 
 	// Read the canonical MachineInfo from the machine room.
-	raw, err := fc.configStore.GetStateEvent(ctx, fc.machineRoomID, schema.EventTypeMachineInfo, machineLocalpart)
+	raw, err := fc.configStore.GetStateEvent(ctx, fc.machineRoomID, schema.EventTypeMachineInfo, machineUserID.StateKey())
 	if err != nil {
 		if messaging.IsMatrixError(err, messaging.ErrCodeNotFound) {
-			return false, fmt.Errorf("no MachineInfo for machine %s in machine room", machineLocalpart)
+			return false, fmt.Errorf("no MachineInfo for machine %s in machine room", machineUserID)
 		}
-		return false, fmt.Errorf("reading MachineInfo for %s: %w", machineLocalpart, err)
+		return false, fmt.Errorf("reading MachineInfo for %s: %w", machineUserID, err)
 	}
 
 	var info schema.MachineInfo
 	if err := json.Unmarshal(raw, &info); err != nil {
-		return false, fmt.Errorf("parsing MachineInfo for %s: %w", machineLocalpart, err)
+		return false, fmt.Errorf("parsing MachineInfo for %s: %w", machineUserID, err)
 	}
 
 	if info.Labels == nil {
@@ -269,8 +278,8 @@ func (fc *FleetController) cordonMachine(ctx context.Context, machineLocalpart s
 	}
 	info.Labels["cordoned"] = "true"
 
-	if _, err := fc.configStore.SendStateEvent(ctx, fc.machineRoomID, schema.EventTypeMachineInfo, machineLocalpart, &info); err != nil {
-		return false, fmt.Errorf("writing cordoned label for %s: %w", machineLocalpart, err)
+	if _, err := fc.configStore.SendStateEvent(ctx, fc.machineRoomID, schema.EventTypeMachineInfo, machineUserID.StateKey(), &info); err != nil {
+		return false, fmt.Errorf("writing cordoned label for %s: %w", machineUserID, err)
 	}
 
 	// Update in-memory model to match.
@@ -281,7 +290,7 @@ func (fc *FleetController) cordonMachine(ctx context.Context, machineLocalpart s
 		machine.info.Labels["cordoned"] = "true"
 	}
 
-	fc.logger.Info("machine cordoned by drain", "machine", machineLocalpart)
+	fc.logger.Info("machine cordoned by drain", "machine", machineUserID)
 	return false, nil
 }
 
@@ -299,7 +308,7 @@ func (fc *FleetController) cordonMachine(ctx context.Context, machineLocalpart s
 //
 // Caller must hold fc.mu.
 func (fc *FleetController) reconcile(ctx context.Context) {
-	for serviceLocalpart, serviceState := range fc.services {
+	for serviceUserID, serviceState := range fc.services {
 		if serviceState.definition == nil {
 			continue
 		}
@@ -309,11 +318,11 @@ func (fc *FleetController) reconcile(ctx context.Context) {
 		desiredMax := serviceState.definition.Replicas.Max
 
 		if currentCount < desiredMin {
-			fc.reconcilePlaceDeficit(ctx, serviceLocalpart, serviceState, desiredMin-currentCount)
+			fc.reconcilePlaceDeficit(ctx, serviceUserID, serviceState, desiredMin-currentCount)
 		}
 
 		if desiredMax > 0 && currentCount > desiredMax {
-			fc.reconcileRemoveExcess(ctx, serviceLocalpart, serviceState, currentCount-desiredMax)
+			fc.reconcileRemoveExcess(ctx, serviceUserID, serviceState, currentCount-desiredMax)
 		}
 	}
 }
@@ -321,13 +330,13 @@ func (fc *FleetController) reconcile(ctx context.Context) {
 // reconcilePlaceDeficit places up to `deficit` new instances of a
 // service on the highest-scored eligible machines that don't already
 // host the service.
-func (fc *FleetController) reconcilePlaceDeficit(ctx context.Context, serviceLocalpart string, serviceState *fleetServiceState, deficit int) {
+func (fc *FleetController) reconcilePlaceDeficit(ctx context.Context, serviceUserID ref.UserID, serviceState *fleetServiceState, deficit int) {
 	candidates := fc.scorePlacement(serviceState.definition)
 
 	// Filter out machines that already host this service.
 	var available []placementCandidate
 	for _, candidate := range candidates {
-		if _, hasInstance := serviceState.instances[candidate.machineLocalpart]; !hasInstance {
+		if _, hasInstance := serviceState.instances[candidate.machineUserID]; !hasInstance {
 			available = append(available, candidate)
 		}
 	}
@@ -337,10 +346,10 @@ func (fc *FleetController) reconcilePlaceDeficit(ctx context.Context, serviceLoc
 		if placed >= deficit {
 			break
 		}
-		if err := fc.place(ctx, serviceLocalpart, candidate.machineLocalpart); err != nil {
+		if err := fc.place(ctx, serviceUserID, candidate.machineUserID); err != nil {
 			fc.logger.Error("reconcile: placement failed",
-				"service", serviceLocalpart,
-				"machine", candidate.machineLocalpart,
+				"service", serviceUserID,
+				"machine", candidate.machineUserID,
 				"error", err,
 			)
 			continue
@@ -350,7 +359,7 @@ func (fc *FleetController) reconcilePlaceDeficit(ctx context.Context, serviceLoc
 
 	if placed < deficit {
 		fc.logger.Warn("reconcile: insufficient eligible machines",
-			"service", serviceLocalpart,
+			"service", serviceUserID,
 			"desired_min", serviceState.definition.Replicas.Min,
 			"current", len(serviceState.instances)-placed,
 			"placed", placed,
@@ -361,17 +370,17 @@ func (fc *FleetController) reconcilePlaceDeficit(ctx context.Context, serviceLoc
 
 // reconcileRemoveExcess removes up to `excess` instances of a service,
 // starting with the lowest-scored machines. Ties are broken by machine
-// localpart for determinism.
-func (fc *FleetController) reconcileRemoveExcess(ctx context.Context, serviceLocalpart string, serviceState *fleetServiceState, excess int) {
+// user ID string for determinism.
+func (fc *FleetController) reconcileRemoveExcess(ctx context.Context, serviceUserID ref.UserID, serviceState *fleetServiceState, excess int) {
 	type scoredInstance struct {
-		machineLocalpart string
-		score            int
+		machineUserID ref.UserID
+		score         int
 	}
 
 	var instances []scoredInstance
-	for machineLocalpart := range serviceState.instances {
-		score := fc.scoreMachine(machineLocalpart, serviceState.definition)
-		instances = append(instances, scoredInstance{machineLocalpart, score})
+	for machineUserID := range serviceState.instances {
+		score := fc.scoreMachine(machineUserID, serviceState.definition)
+		instances = append(instances, scoredInstance{machineUserID, score})
 	}
 
 	// Sort ascending by score so weakest instances are removed first.
@@ -379,7 +388,7 @@ func (fc *FleetController) reconcileRemoveExcess(ctx context.Context, serviceLoc
 		if instances[i].score != instances[j].score {
 			return instances[i].score < instances[j].score
 		}
-		return instances[i].machineLocalpart < instances[j].machineLocalpart
+		return instances[i].machineUserID.String() < instances[j].machineUserID.String()
 	})
 
 	removed := 0
@@ -387,10 +396,10 @@ func (fc *FleetController) reconcileRemoveExcess(ctx context.Context, serviceLoc
 		if removed >= excess {
 			break
 		}
-		if err := fc.unplace(ctx, serviceLocalpart, instance.machineLocalpart); err != nil {
+		if err := fc.unplace(ctx, serviceUserID, instance.machineUserID); err != nil {
 			fc.logger.Error("reconcile: removal failed",
-				"service", serviceLocalpart,
-				"machine", instance.machineLocalpart,
+				"service", serviceUserID,
+				"machine", instance.machineUserID,
 				"error", err,
 			)
 			continue

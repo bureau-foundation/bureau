@@ -10,6 +10,7 @@ import (
 	"time"
 
 	"github.com/bureau-foundation/bureau/lib/codec"
+	"github.com/bureau-foundation/bureau/lib/ref"
 	"github.com/bureau-foundation/bureau/lib/schema"
 	"github.com/bureau-foundation/bureau/lib/schema/fleet"
 	"github.com/bureau-foundation/bureau/lib/service"
@@ -133,9 +134,9 @@ func (fc *FleetController) handleListMachines(ctx context.Context, token *servic
 	defer fc.mu.Unlock()
 
 	summaries := make([]machineSummary, 0, len(fc.machines))
-	for localpart, machine := range fc.machines {
+	for machineUserID, machine := range fc.machines {
 		summary := machineSummary{
-			Localpart:    localpart,
+			Localpart:    machineUserID.String(),
 			Assignments:  len(machine.assignments),
 			ConfigRoomID: machine.configRoomID.String(),
 		}
@@ -191,9 +192,9 @@ func (fc *FleetController) handleListServices(ctx context.Context, token *servic
 	defer fc.mu.Unlock()
 
 	summaries := make([]serviceSummary, 0, len(fc.services))
-	for localpart, serviceState := range fc.services {
+	for serviceUserID, serviceState := range fc.services {
 		summary := serviceSummary{
-			Localpart: localpart,
+			Localpart: serviceUserID.String(),
 			Instances: len(serviceState.instances),
 		}
 
@@ -249,7 +250,12 @@ func (fc *FleetController) handleShowMachine(ctx context.Context, token *service
 		return nil, fmt.Errorf("missing required field: machine")
 	}
 
-	machine, exists := fc.machines[request.Machine]
+	machineUserID, err := ref.ParseUserID(request.Machine)
+	if err != nil {
+		return nil, fmt.Errorf("invalid machine identifier %q: %w", request.Machine, err)
+	}
+
+	machine, exists := fc.machines[machineUserID]
 	if !exists {
 		return nil, fmt.Errorf("machine %s not found", request.Machine)
 	}
@@ -312,16 +318,21 @@ func (fc *FleetController) handleShowService(ctx context.Context, token *service
 		return nil, fmt.Errorf("missing required field: service")
 	}
 
-	serviceState, exists := fc.services[request.Service]
+	serviceUserID, err := ref.ParseUserID(request.Service)
+	if err != nil {
+		return nil, fmt.Errorf("invalid service identifier %q: %w", request.Service, err)
+	}
+
+	serviceState, exists := fc.services[serviceUserID]
 	if !exists {
 		return nil, fmt.Errorf("service %s not found", request.Service)
 	}
 
 	// Collect instances into a sorted slice for deterministic output.
 	instances := make([]serviceInstance, 0, len(serviceState.instances))
-	for machineLocalpart, assignment := range serviceState.instances {
+	for machineUserID, assignment := range serviceState.instances {
 		instances = append(instances, serviceInstance{
-			Machine:    machineLocalpart,
+			Machine:    machineUserID.String(),
 			Assignment: assignment,
 		})
 	}
@@ -370,16 +381,21 @@ func (fc *FleetController) handlePlace(ctx context.Context, token *servicetoken.
 		return nil, fmt.Errorf("missing required field: service")
 	}
 
+	serviceUserID, err := ref.ParseUserID(request.Service)
+	if err != nil {
+		return nil, fmt.Errorf("invalid service identifier %q: %w", request.Service, err)
+	}
+
 	fc.mu.Lock()
 	defer fc.mu.Unlock()
 
 	// Determine the target machine.
-	targetMachine := request.Machine
+	var targetMachineUserID ref.UserID
 	score := -1
 
-	if targetMachine == "" {
+	if request.Machine == "" {
 		// Use scoring engine to select the best machine.
-		serviceState, exists := fc.services[request.Service]
+		serviceState, exists := fc.services[serviceUserID]
 		if !exists {
 			return nil, fmt.Errorf("service %s not found", request.Service)
 		}
@@ -392,7 +408,7 @@ func (fc *FleetController) handlePlace(ctx context.Context, token *servicetoken.
 		// Filter out machines that already host this service.
 		var available []placementCandidate
 		for _, candidate := range candidates {
-			if _, hasInstance := serviceState.instances[candidate.machineLocalpart]; !hasInstance {
+			if _, hasInstance := serviceState.instances[candidate.machineUserID]; !hasInstance {
 				available = append(available, candidate)
 			}
 		}
@@ -400,17 +416,22 @@ func (fc *FleetController) handlePlace(ctx context.Context, token *servicetoken.
 		if len(available) == 0 {
 			return nil, fmt.Errorf("no eligible machines for service %s", request.Service)
 		}
-		targetMachine = available[0].machineLocalpart
+		targetMachineUserID = available[0].machineUserID
 		score = available[0].score
+	} else {
+		targetMachineUserID, err = ref.ParseUserID(request.Machine)
+		if err != nil {
+			return nil, fmt.Errorf("invalid machine identifier %q: %w", request.Machine, err)
+		}
 	}
 
-	if err := fc.place(ctx, request.Service, targetMachine); err != nil {
+	if err := fc.place(ctx, serviceUserID, targetMachineUserID); err != nil {
 		return nil, err
 	}
 
 	return placeResponse{
 		Service: request.Service,
-		Machine: targetMachine,
+		Machine: targetMachineUserID.String(),
 		Score:   score,
 	}, nil
 }
@@ -447,10 +468,19 @@ func (fc *FleetController) handleUnplace(ctx context.Context, token *servicetoke
 		return nil, fmt.Errorf("missing required field: machine")
 	}
 
+	serviceUserID, err := ref.ParseUserID(request.Service)
+	if err != nil {
+		return nil, fmt.Errorf("invalid service identifier %q: %w", request.Service, err)
+	}
+	machineUserID, err := ref.ParseUserID(request.Machine)
+	if err != nil {
+		return nil, fmt.Errorf("invalid machine identifier %q: %w", request.Machine, err)
+	}
+
 	fc.mu.Lock()
 	defer fc.mu.Unlock()
 
-	if err := fc.unplace(ctx, request.Service, request.Machine); err != nil {
+	if err := fc.unplace(ctx, serviceUserID, machineUserID); err != nil {
 		return nil, err
 	}
 
@@ -496,10 +526,15 @@ func (fc *FleetController) handlePlan(ctx context.Context, token *servicetoken.T
 		return nil, fmt.Errorf("missing required field: service")
 	}
 
+	serviceUserID, err := ref.ParseUserID(request.Service)
+	if err != nil {
+		return nil, fmt.Errorf("invalid service identifier %q: %w", request.Service, err)
+	}
+
 	fc.mu.Lock()
 	defer fc.mu.Unlock()
 
-	serviceState, exists := fc.services[request.Service]
+	serviceState, exists := fc.services[serviceUserID]
 	if !exists {
 		return nil, fmt.Errorf("service %s not found", request.Service)
 	}
@@ -512,15 +547,15 @@ func (fc *FleetController) handlePlan(ctx context.Context, token *servicetoken.T
 	candidates := make([]planCandidate, len(scored))
 	for i, candidate := range scored {
 		candidates[i] = planCandidate{
-			Machine: candidate.machineLocalpart,
+			Machine: candidate.machineUserID.String(),
 			Score:   candidate.score,
 		}
 	}
 
 	// Collect current placement (sorted for determinism).
 	currentMachines := make([]string, 0, len(serviceState.instances))
-	for machineLocalpart := range serviceState.instances {
-		currentMachines = append(currentMachines, machineLocalpart)
+	for machineUserID := range serviceState.instances {
+		currentMachines = append(currentMachines, machineUserID.String())
 	}
 	sort.Strings(currentMachines)
 
@@ -572,7 +607,11 @@ func (fc *FleetController) handleMachineHealth(ctx context.Context, token *servi
 	now := fc.clock.Now()
 
 	if request.Machine != "" {
-		machine, exists := fc.machines[request.Machine]
+		machineUserID, err := ref.ParseUserID(request.Machine)
+		if err != nil {
+			return nil, fmt.Errorf("invalid machine identifier %q: %w", request.Machine, err)
+		}
+		machine, exists := fc.machines[machineUserID]
 		if !exists {
 			return nil, fmt.Errorf("machine %s not found", request.Machine)
 		}
@@ -582,8 +621,8 @@ func (fc *FleetController) handleMachineHealth(ctx context.Context, token *servi
 	}
 
 	entries := make([]machineHealthEntry, 0, len(fc.machines))
-	for localpart, machine := range fc.machines {
-		entries = append(entries, buildHealthEntry(localpart, machine, now))
+	for machineUserID, machine := range fc.machines {
+		entries = append(entries, buildHealthEntry(machineUserID.String(), machine, now))
 	}
 	sort.Slice(entries, func(i, j int) bool {
 		return entries[i].Localpart < entries[j].Localpart
@@ -661,17 +700,22 @@ func (fc *FleetController) handleDrain(ctx context.Context, token *servicetoken.
 		return nil, fmt.Errorf("missing required field: machine")
 	}
 
+	machineUserID, err := ref.ParseUserID(request.Machine)
+	if err != nil {
+		return nil, fmt.Errorf("invalid machine identifier %q: %w", request.Machine, err)
+	}
+
 	fc.mu.Lock()
 	defer fc.mu.Unlock()
 
-	machine, exists := fc.machines[request.Machine]
+	machine, exists := fc.machines[machineUserID]
 	if !exists {
 		return nil, fmt.Errorf("machine %s not found", request.Machine)
 	}
 
 	// Auto-cordon to prevent the reconcile loop from placing services
 	// back on this machine after drain releases the lock.
-	alreadyCordoned, err := fc.cordonMachine(ctx, request.Machine)
+	alreadyCordoned, err := fc.cordonMachine(ctx, machineUserID)
 	if err != nil {
 		return nil, fmt.Errorf("cordoning machine %s: %w", request.Machine, err)
 	}
@@ -687,15 +731,18 @@ func (fc *FleetController) handleDrain(ctx context.Context, token *servicetoken.
 	}
 
 	// Collect and sort assignments for deterministic processing order.
-	serviceLocalparts := make([]string, 0, len(machine.assignments))
-	for serviceLocalpart := range machine.assignments {
-		serviceLocalparts = append(serviceLocalparts, serviceLocalpart)
+	serviceUserIDs := make([]ref.UserID, 0, len(machine.assignments))
+	for serviceUserID := range machine.assignments {
+		serviceUserIDs = append(serviceUserIDs, serviceUserID)
 	}
-	sort.Strings(serviceLocalparts)
+	sort.Slice(serviceUserIDs, func(i, j int) bool {
+		return serviceUserIDs[i].String() < serviceUserIDs[j].String()
+	})
 
-	for _, serviceLocalpart := range serviceLocalparts {
+	for _, serviceUserID := range serviceUserIDs {
+		serviceLocalpart := serviceUserID.String()
 
-		serviceState, exists := fc.services[serviceLocalpart]
+		serviceState, exists := fc.services[serviceUserID]
 		if !exists {
 			response.Stuck = append(response.Stuck, drainStuckEntry{
 				Service: serviceLocalpart,
@@ -716,10 +763,10 @@ func (fc *FleetController) handleDrain(ctx context.Context, token *servicetoken.
 		candidates := fc.scorePlacement(serviceState.definition)
 		var eligible []placementCandidate
 		for _, candidate := range candidates {
-			if candidate.machineLocalpart == request.Machine {
+			if candidate.machineUserID == machineUserID {
 				continue
 			}
-			if _, hasInstance := serviceState.instances[candidate.machineLocalpart]; hasInstance {
+			if _, hasInstance := serviceState.instances[candidate.machineUserID]; hasInstance {
 				continue
 			}
 			eligible = append(eligible, candidate)
@@ -735,28 +782,28 @@ func (fc *FleetController) handleDrain(ctx context.Context, token *servicetoken.
 
 		target := eligible[0]
 
-		if err := fc.place(ctx, serviceLocalpart, target.machineLocalpart); err != nil {
+		if err := fc.place(ctx, serviceUserID, target.machineUserID); err != nil {
 			response.Stuck = append(response.Stuck, drainStuckEntry{
 				Service: serviceLocalpart,
-				Reason:  fmt.Sprintf("placement on %s failed: %v", target.machineLocalpart, err),
+				Reason:  fmt.Sprintf("placement on %s failed: %v", target.machineUserID, err),
 			})
 			continue
 		}
 
-		if err := fc.unplace(ctx, serviceLocalpart, request.Machine); err != nil {
+		if err := fc.unplace(ctx, serviceUserID, machineUserID); err != nil {
 			// The service is now on two machines. Record as stuck with
 			// enough detail for the operator to fix manually.
 			response.Stuck = append(response.Stuck, drainStuckEntry{
 				Service: serviceLocalpart,
 				Reason: fmt.Sprintf("placed on %s but unplace from %s failed: %v (service is on both machines — fix with 'bureau service unplace')",
-					target.machineLocalpart, request.Machine, err),
+					target.machineUserID, request.Machine, err),
 			})
 			continue
 		}
 
 		response.Moved = append(response.Moved, drainMovedEntry{
 			Service:   serviceLocalpart,
-			ToMachine: target.machineLocalpart,
+			ToMachine: target.machineUserID.String(),
 			Score:     target.score,
 		})
 	}

@@ -24,9 +24,9 @@ var (
 // immediately when signals are published, eliminating poll latency in tests.
 type MemorySignaler struct {
 	mu       sync.Mutex
-	offers   map[string]SignalMessage // key: "offerer|target"
-	answers  map[string]SignalMessage // key: "offerer|target"
-	lastSeen map[string]time.Time     // key: "offerer|target" — tracks per-consumer state
+	offers   map[string]SignalMessage // key: "offererID|targetID"
+	answers  map[string]SignalMessage // key: "offererID|targetID"
+	lastSeen map[string]time.Time     // key: "offererID|targetID" — tracks per-consumer state
 
 	subscriberMu sync.Mutex
 	subscribers  []chan struct{}
@@ -65,13 +65,13 @@ func (s *MemorySignaler) notifySubscribers() {
 	}
 }
 
-func (s *MemorySignaler) PublishOffer(_ context.Context, localpart, targetLocalpart, sdp string) error {
+func (s *MemorySignaler) PublishOffer(_ context.Context, machineID, targetID, sdp string) error {
 	s.mu.Lock()
-	key := localpart + signalingSeparator + targetLocalpart
+	key := machineID + signalingSeparator + targetID
 	s.offers[key] = SignalMessage{
-		PeerLocalpart: localpart,
-		SDP:           sdp,
-		Timestamp:     time.Now().UTC().Format(time.RFC3339Nano),
+		PeerID:    machineID,
+		SDP:       sdp,
+		Timestamp: time.Now().UTC().Format(time.RFC3339Nano),
 	}
 	s.mu.Unlock()
 
@@ -79,13 +79,13 @@ func (s *MemorySignaler) PublishOffer(_ context.Context, localpart, targetLocalp
 	return nil
 }
 
-func (s *MemorySignaler) PublishAnswer(_ context.Context, offererLocalpart, localpart, sdp string) error {
+func (s *MemorySignaler) PublishAnswer(_ context.Context, offererID, machineID, sdp string) error {
 	s.mu.Lock()
-	key := offererLocalpart + signalingSeparator + localpart
+	key := offererID + signalingSeparator + machineID
 	s.answers[key] = SignalMessage{
-		PeerLocalpart: localpart,
-		SDP:           sdp,
-		Timestamp:     time.Now().UTC().Format(time.RFC3339Nano),
+		PeerID:    machineID,
+		SDP:       sdp,
+		Timestamp: time.Now().UTC().Format(time.RFC3339Nano),
 	}
 	s.mu.Unlock()
 
@@ -93,24 +93,24 @@ func (s *MemorySignaler) PublishAnswer(_ context.Context, offererLocalpart, loca
 	return nil
 }
 
-func (s *MemorySignaler) PollOffers(_ context.Context, localpart string) ([]SignalMessage, error) {
-	return s.pollSignals(localpart, s.offers, "offers", matchOfferKey)
+func (s *MemorySignaler) PollOffers(_ context.Context, machineID string) ([]SignalMessage, error) {
+	return s.pollSignals(machineID, s.offers, "offers", matchOfferKey)
 }
 
-func (s *MemorySignaler) PollAnswers(_ context.Context, localpart string) ([]SignalMessage, error) {
-	return s.pollSignals(localpart, s.answers, "answers", matchAnswerKey)
+func (s *MemorySignaler) PollAnswers(_ context.Context, machineID string) ([]SignalMessage, error) {
+	return s.pollSignals(machineID, s.answers, "answers", matchAnswerKey)
 }
 
 // pollSignals iterates a signal store and returns messages whose keys match
 // the given matcher, filtering out already-seen timestamps.
-func (s *MemorySignaler) pollSignals(localpart string, store map[string]SignalMessage, storeLabel string, match signalKeyMatcher) ([]SignalMessage, error) {
+func (s *MemorySignaler) pollSignals(machineID string, store map[string]SignalMessage, storeLabel string, match signalKeyMatcher) ([]SignalMessage, error) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 
 	var messages []SignalMessage
 
 	for key, message := range store {
-		if _, ok := match(key, localpart); !ok {
+		if _, ok := match(key, machineID); !ok {
 			continue
 		}
 
@@ -119,7 +119,7 @@ func (s *MemorySignaler) pollSignals(localpart string, store map[string]SignalMe
 			continue
 		}
 
-		seenKey := storeLabel + ":" + localpart + ":" + key
+		seenKey := storeLabel + ":" + machineID + ":" + key
 		if last, ok := s.lastSeen[seenKey]; ok && !timestamp.After(last) {
 			continue
 		}

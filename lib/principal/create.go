@@ -414,11 +414,11 @@ func registerAndProvision(ctx context.Context, client *messaging.Client, session
 // assignment exists independently of account creation — for example, when
 // re-running an "enable" command after the service account already exists.
 func AssignPrincipals(ctx context.Context, session messaging.Session, configRoomID ref.RoomID, params []CreateParams) (ref.EventID, error) {
-	machineLocalpart := params[0].Machine.Localpart()
+	machineStateKey := params[0].Machine.UserID().StateKey()
 
-	config, err := messaging.GetState[schema.MachineConfig](ctx, session, configRoomID, schema.EventTypeMachineConfig, machineLocalpart)
+	config, err := messaging.GetState[schema.MachineConfig](ctx, session, configRoomID, schema.EventTypeMachineConfig, machineStateKey)
 	if err != nil && !messaging.IsMatrixError(err, messaging.ErrCodeNotFound) {
-		return ref.EventID{}, fmt.Errorf("read machine config for %s: %w", machineLocalpart, err)
+		return ref.EventID{}, fmt.Errorf("read machine config for %s: %w", params[0].Machine.Localpart(), err)
 	}
 
 	for _, p := range params {
@@ -455,9 +455,9 @@ func AssignPrincipals(ctx context.Context, session messaging.Session, configRoom
 		}
 	}
 
-	eventID, err := session.SendStateEvent(ctx, configRoomID, schema.EventTypeMachineConfig, machineLocalpart, config)
+	eventID, err := session.SendStateEvent(ctx, configRoomID, schema.EventTypeMachineConfig, machineStateKey, config)
 	if err != nil {
-		return ref.EventID{}, fmt.Errorf("publish machine config for %s: %w", machineLocalpart, err)
+		return ref.EventID{}, fmt.Errorf("publish machine config for %s: %w", params[0].Machine.Localpart(), err)
 	}
 
 	return eventID, nil

@@ -253,13 +253,13 @@ func TestHasCredentialAccess_IdentityMatch(t *testing.T) {
 	daemon, matrixState := credentialAccessTestSetup(t)
 	credRoomID := mustRoomID(testCredentialRoomID)
 
-	// Actor's localpart matches the credential state key.
+	// Actor's full user ID matches the credential state key.
 	actor := ref.MustParseUserID("@nix-builder:bureau.local")
 
 	matrixState.setStateEvent(testCredentialRoomID, schema.MatrixEventTypePowerLevels, "",
 		schema.PowerLevels{})
 
-	credRef := schema.CredentialRef{Room: "bureau/creds", StateKey: "nix-builder"}
+	credRef := schema.CredentialRef{Room: "bureau/creds", StateKey: "@nix-builder:bureau.local"}
 	action := schema.ActionCredentialUsePrefix + credRef.String()
 
 	result := daemon.hasCredentialAccess(context.Background(), credRoomID, actor, credRef, action)
@@ -281,7 +281,7 @@ func TestHasCredentialAccess_IdentityMismatch(t *testing.T) {
 	matrixState.setStateEvent(testCredentialRoomID, schema.MatrixEventTypePowerLevels, "",
 		schema.PowerLevels{})
 
-	credRef := schema.CredentialRef{Room: "bureau/creds", StateKey: "nix-builder"}
+	credRef := schema.CredentialRef{Room: "bureau/creds", StateKey: "@nix-builder:bureau.local"}
 	action := schema.ActionCredentialUsePrefix + credRef.String()
 
 	result := daemon.hasCredentialAccess(context.Background(), credRoomID, actor, credRef, action)

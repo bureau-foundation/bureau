@@ -240,12 +240,11 @@ func TestCredentialService_ProvisionMergesExistingCredentials(t *testing.T) {
 		t.Fatalf("Encrypt: %v", err)
 	}
 
-	// Mock Matrix state with existing credentials. The state key must be
-	// fleet-scoped because handleProvisionCredential constructs
-	// fleet.Localpart() + "/" + request.Principal for the lookup.
-	fleetScopedPrincipal := daemon.fleet.Localpart() + "/agent/builder"
+	// Mock Matrix state with existing credentials. The state key is the
+	// principal's full user ID, matching what readCredentials looks up.
+	principalEntity := testEntity(t, daemon.fleet, "agent/builder")
 	state := newMockMatrixState()
-	state.setStateEvent(daemon.configRoomID.String(), schema.EventTypeCredentials, fleetScopedPrincipal, schema.Credentials{
+	state.setStateEvent(daemon.configRoomID.String(), schema.EventTypeCredentials, principalEntity.UserID().StateKey(), schema.Credentials{
 		Version:    1,
 		Principal:  testEntity(t, daemon.fleet, "agent/builder").UserID(),
 		Keys:       []string{"OPENAI_API_KEY"},

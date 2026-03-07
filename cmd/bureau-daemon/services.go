@@ -611,7 +611,7 @@ func (d *Daemon) pushDirectoryToProxy(ctx context.Context, consumer ref.Entity, 
 // directory suitable for pushing to consumer proxies.
 func (d *Daemon) buildServiceDirectory() []adminDirectoryEntry {
 	entries := make([]adminDirectoryEntry, 0, len(d.services))
-	for localpart, service := range d.services {
+	for _, service := range d.services {
 		endpointNames := make([]string, 0, len(service.Endpoints))
 		for name := range service.Endpoints {
 			endpointNames = append(endpointNames, name)
@@ -619,7 +619,7 @@ func (d *Daemon) buildServiceDirectory() []adminDirectoryEntry {
 		sort.Strings(endpointNames)
 
 		entries = append(entries, adminDirectoryEntry{
-			Localpart:    localpart,
+			Localpart:    service.Principal.AccountLocalpart(),
 			Principal:    service.Principal.UserID(),
 			Machine:      service.Machine.UserID(),
 			Endpoints:    endpointNames,
@@ -636,6 +636,9 @@ func (d *Daemon) buildServiceDirectory() []adminDirectoryEntry {
 // ServiceDirectoryEntry but defined locally to keep the daemon binary
 // decoupled from the proxy library.
 type adminDirectoryEntry struct {
+	// Localpart is the service type localpart (e.g., "service/stt/whisper"),
+	// extracted from the service principal. Used by the proxy for pattern
+	// matching against ServiceVisibility grants.
 	Localpart    string         `json:"localpart"`
 	Principal    ref.UserID     `json:"principal"`
 	Machine      ref.UserID     `json:"machine"`
@@ -747,11 +750,13 @@ func (d *Daemon) discoverSharedCache(ctx context.Context) {
 	}
 
 	// Look up the service in the directory to find which machine runs it.
-	cacheService, exists := d.services[binding.Principal.Localpart()]
+	// The service directory is keyed by Matrix state_key (localpart:server,
+	// no '@' prefix).
+	cacheService, exists := d.services[binding.Principal.UserID().StateKey()]
 	if !exists {
 		d.logger.Warn("artifact-cache binding references unknown service",
 			"principal", binding.Principal,
-			"localpart", binding.Principal.Localpart(),
+			"user_id", binding.Principal.UserID(),
 		)
 		return
 	}

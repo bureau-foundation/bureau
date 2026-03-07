@@ -1441,7 +1441,7 @@ func (d *Daemon) evaluateStartCondition(ctx context.Context, principal ref.Entit
 
 // readMachineConfig reads the MachineConfig state event from the config room.
 func (d *Daemon) readMachineConfig(ctx context.Context) (*schema.MachineConfig, error) {
-	config, err := messaging.GetState[schema.MachineConfig](ctx, d.session, d.configRoomID, schema.EventTypeMachineConfig, d.machine.Localpart())
+	config, err := messaging.GetState[schema.MachineConfig](ctx, d.session, d.configRoomID, schema.EventTypeMachineConfig, d.machine.UserID().StateKey())
 	if err != nil {
 		return nil, err
 	}
@@ -1541,7 +1541,7 @@ func (d *Daemon) applyHostEnvironment(spec *schema.SandboxSpec) {
 
 // readCredentials reads the Credentials state event for a principal.
 func (d *Daemon) readCredentials(ctx context.Context, principal ref.Entity) (*schema.Credentials, error) {
-	stateKey := principal.Localpart()
+	stateKey := principal.UserID().StateKey()
 	credentials, err := messaging.GetState[schema.Credentials](ctx, d.session, d.configRoomID, schema.EventTypeCredentials, stateKey)
 	if err != nil {
 		return nil, err
@@ -1933,8 +1933,10 @@ func (d *Daemon) resolveServiceMounts(ctx context.Context, requiredServices []st
 		}
 
 		// Look up the service in the in-memory directory to determine
-		// whether it runs on this machine or a remote one.
-		service, ok := d.services[principal.Localpart()]
+		// whether it runs on this machine or a remote one. The service
+		// directory is keyed by Matrix state_key (localpart:server,
+		// no '@' prefix).
+		service, ok := d.services[principal.UserID().StateKey()]
 		if !ok {
 			return nil, fmt.Errorf("service binding for %q resolved to principal %s, but the principal is not yet in the service directory (may still be starting)", spec, principal)
 		}
@@ -2104,8 +2106,10 @@ func (d *Daemon) resolveEndpointSocket(principal ref.Entity, endpoint string) (s
 	}
 
 	// Look up the service's declared endpoints from the in-memory directory.
-	serviceLocalpart := principal.Localpart()
-	service, ok := d.services[serviceLocalpart]
+	// The service directory is keyed by Matrix state_key (localpart:server,
+	// no '@' prefix).
+	serviceStateKey := principal.UserID().StateKey()
+	service, ok := d.services[serviceStateKey]
 	if !ok {
 		return "", fmt.Errorf("service principal %s has a binding but is not yet in the service directory (may still be starting)", principal)
 	}

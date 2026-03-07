@@ -2106,8 +2106,8 @@ func TestPublishDrainStatusWithActiveRelays(t *testing.T) {
 	if written.EventType != schema.EventTypeDrainStatus {
 		t.Errorf("event type = %s, want %s", written.EventType, schema.EventTypeDrainStatus)
 	}
-	if written.StateKey != ts.service.Localpart() {
-		t.Errorf("state key = %q, want %q", written.StateKey, ts.service.Localpart())
+	if written.StateKey != ts.service.UserID().StateKey() {
+		t.Errorf("state key = %q, want %q", written.StateKey, ts.service.UserID().StateKey())
 	}
 
 	status, ok := written.Content.(schema.DrainStatusContent)
@@ -2265,7 +2265,7 @@ func drainContentMap(t *testing.T, holderUserID string) map[string]any {
 		t.Fatalf("ParseEntityUserID: %v", err)
 	}
 	drain := schema.MachineDrainContent{
-		Services:          []string{"service/ticket/test"},
+		Services:          []ref.UserID{ref.MustParseUserID("@service/ticket/test:bureau.local")},
 		ReservationHolder: holder,
 		RequestedAt:       "2026-03-01T12:00:00Z",
 	}

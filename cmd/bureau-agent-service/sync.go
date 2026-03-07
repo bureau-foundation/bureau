@@ -164,7 +164,7 @@ func (agentService *AgentService) indexCommit(commitID string, content agent.Con
 	if content.Principal.IsZero() {
 		return
 	}
-	principalLocal := content.Principal.Localpart()
+	principalStateKey := content.Principal.StateKey()
 
 	entry := timelineEntry{
 		CreatedAt: content.CreatedAt,
@@ -173,10 +173,10 @@ func (agentService *AgentService) indexCommit(commitID string, content agent.Con
 
 	// Insert in sorted order by CreatedAt. ISO 8601 timestamps with
 	// consistent formatting sort lexicographically for UTC.
-	timeline := agentService.principalTimelines[principalLocal]
+	timeline := agentService.principalTimelines[principalStateKey]
 	insertPosition := sort.Search(len(timeline), func(i int) bool {
 		return timeline[i].CreatedAt > entry.CreatedAt
 	})
 	timeline = slices.Insert(timeline, insertPosition, entry)
-	agentService.principalTimelines[principalLocal] = timeline
+	agentService.principalTimelines[principalStateKey] = timeline
 }

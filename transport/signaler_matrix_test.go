@@ -154,7 +154,7 @@ func TestMatrixSignaler_PublishAndPollOffer(t *testing.T) {
 	ctx := context.Background()
 
 	// Publish an offer from machine-a to machine-b.
-	if err := signaler.PublishOffer(ctx, "machine/a", "machine/b", "v=0\r\noffer-sdp"); err != nil {
+	if err := signaler.PublishOffer(ctx, "@machine/a:bureau.local", "@machine/b:bureau.local", "v=0\r\noffer-sdp"); err != nil {
 		t.Fatalf("PublishOffer failed: %v", err)
 	}
 
@@ -164,14 +164,14 @@ func TestMatrixSignaler_PublishAndPollOffer(t *testing.T) {
 	if offerEvents == nil {
 		t.Fatal("no offer events stored")
 	}
-	if _, ok := offerEvents["machine/a|machine/b"]; !ok {
-		t.Errorf("offer not stored under expected state key 'machine/a|machine/b'")
+	if _, ok := offerEvents["@machine/a:bureau.local|@machine/b:bureau.local"]; !ok {
+		t.Errorf("offer not stored under expected state key '@machine/a:bureau.local|@machine/b:bureau.local'")
 	}
 	mock.mu.Unlock()
 
 	// Create a second signaler for machine-b and poll for offers.
 	signalerB := newTestMatrixSignaler(t, mock)
-	offers, err := signalerB.PollOffers(ctx, "machine/b")
+	offers, err := signalerB.PollOffers(ctx, "@machine/b:bureau.local")
 	if err != nil {
 		t.Fatalf("PollOffers failed: %v", err)
 	}
@@ -179,15 +179,15 @@ func TestMatrixSignaler_PublishAndPollOffer(t *testing.T) {
 	if len(offers) != 1 {
 		t.Fatalf("expected 1 offer, got %d", len(offers))
 	}
-	if offers[0].PeerLocalpart != "machine/a" {
-		t.Errorf("PeerLocalpart = %q, want %q", offers[0].PeerLocalpart, "machine/a")
+	if offers[0].PeerID != "@machine/a:bureau.local" {
+		t.Errorf("PeerID = %q, want %q", offers[0].PeerID, "@machine/a:bureau.local")
 	}
 	if offers[0].SDP != "v=0\r\noffer-sdp" {
 		t.Errorf("SDP = %q, want %q", offers[0].SDP, "v=0\r\noffer-sdp")
 	}
 
 	// Polling again should return nothing (already seen).
-	offers, err = signalerB.PollOffers(ctx, "machine/b")
+	offers, err = signalerB.PollOffers(ctx, "@machine/b:bureau.local")
 	if err != nil {
 		t.Fatalf("second PollOffers failed: %v", err)
 	}
@@ -202,7 +202,7 @@ func TestMatrixSignaler_PublishAndPollAnswer(t *testing.T) {
 	ctx := context.Background()
 
 	// Publish an answer from machine-b to machine-a's offer.
-	if err := signaler.PublishAnswer(ctx, "machine/a", "machine/b", "v=0\r\nanswer-sdp"); err != nil {
+	if err := signaler.PublishAnswer(ctx, "@machine/a:bureau.local", "@machine/b:bureau.local", "v=0\r\nanswer-sdp"); err != nil {
 		t.Fatalf("PublishAnswer failed: %v", err)
 	}
 
@@ -212,14 +212,14 @@ func TestMatrixSignaler_PublishAndPollAnswer(t *testing.T) {
 	if answerEvents == nil {
 		t.Fatal("no answer events stored")
 	}
-	if _, ok := answerEvents["machine/a|machine/b"]; !ok {
-		t.Errorf("answer not stored under expected state key 'machine/a|machine/b'")
+	if _, ok := answerEvents["@machine/a:bureau.local|@machine/b:bureau.local"]; !ok {
+		t.Errorf("answer not stored under expected state key '@machine/a:bureau.local|@machine/b:bureau.local'")
 	}
 	mock.mu.Unlock()
 
 	// Machine-a polls for answers to its offers.
 	signalerA := newTestMatrixSignaler(t, mock)
-	answers, err := signalerA.PollAnswers(ctx, "machine/a")
+	answers, err := signalerA.PollAnswers(ctx, "@machine/a:bureau.local")
 	if err != nil {
 		t.Fatalf("PollAnswers failed: %v", err)
 	}
@@ -227,8 +227,8 @@ func TestMatrixSignaler_PublishAndPollAnswer(t *testing.T) {
 	if len(answers) != 1 {
 		t.Fatalf("expected 1 answer, got %d", len(answers))
 	}
-	if answers[0].PeerLocalpart != "machine/b" {
-		t.Errorf("PeerLocalpart = %q, want %q", answers[0].PeerLocalpart, "machine/b")
+	if answers[0].PeerID != "@machine/b:bureau.local" {
+		t.Errorf("PeerID = %q, want %q", answers[0].PeerID, "@machine/b:bureau.local")
 	}
 	if answers[0].SDP != "v=0\r\nanswer-sdp" {
 		t.Errorf("SDP = %q, want %q", answers[0].SDP, "v=0\r\nanswer-sdp")
@@ -242,12 +242,12 @@ func TestMatrixSignaler_IgnoresOtherEventTypes(t *testing.T) {
 	// Inject a non-WebRTC event directly into the mock.
 	mock.mu.Lock()
 	mock.events["m.bureau.machine_status"] = map[string]json.RawMessage{
-		"machine/a|machine/b": json.RawMessage(`{"status":"online"}`),
+		"@machine/a:bureau.local|@machine/b:bureau.local": json.RawMessage(`{"status":"online"}`),
 	}
 	mock.mu.Unlock()
 
 	signaler := newTestMatrixSignaler(t, mock)
-	offers, err := signaler.PollOffers(ctx, "machine/b")
+	offers, err := signaler.PollOffers(ctx, "@machine/b:bureau.local")
 	if err != nil {
 		t.Fatalf("PollOffers failed: %v", err)
 	}
@@ -262,13 +262,13 @@ func TestMatrixSignaler_IgnoresOffersForOtherTargets(t *testing.T) {
 	ctx := context.Background()
 
 	// Publish an offer from A to C (not to B).
-	if err := signaler.PublishOffer(ctx, "machine/a", "machine/c", "v=0\r\noffer-for-c"); err != nil {
+	if err := signaler.PublishOffer(ctx, "@machine/a:bureau.local", "@machine/c:bureau.local", "v=0\r\noffer-for-c"); err != nil {
 		t.Fatalf("PublishOffer failed: %v", err)
 	}
 
 	// Machine B should see no offers.
 	signalerB := newTestMatrixSignaler(t, mock)
-	offers, err := signalerB.PollOffers(ctx, "machine/b")
+	offers, err := signalerB.PollOffers(ctx, "@machine/b:bureau.local")
 	if err != nil {
 		t.Fatalf("PollOffers failed: %v", err)
 	}

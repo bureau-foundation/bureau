@@ -49,7 +49,8 @@ func TestHALeaseAcquisition(t *testing.T) {
 	fleetWatch := watchRoom(t, admin, fleet.FleetRoomID)
 	configWatch := watchRoom(t, admin, machine.ConfigRoomID)
 
-	publishFleetService(t, admin, fleet.FleetRoomID, serviceLocalpart, fleetschema.FleetServiceContent{
+	serviceStateKey := serviceAccount.UserID.StateKey()
+	publishFleetService(t, admin, fleet.FleetRoomID, serviceStateKey, fleetschema.FleetServiceContent{
 		Template: templateRef,
 		HAClass:  "critical",
 		Replicas: fleetschema.ReplicaSpec{Min: 1},
@@ -62,21 +63,21 @@ func TestHALeaseAcquisition(t *testing.T) {
 
 	// Wait for the daemon to acquire the HA lease.
 	leaseJSON := fleetWatch.WaitForStateEvent(t,
-		schema.EventTypeHALease, serviceLocalpart)
+		schema.EventTypeHALease, serviceStateKey)
 	var lease fleetschema.HALeaseContent
 	if err := json.Unmarshal(leaseJSON, &lease); err != nil {
 		t.Fatalf("unmarshal HA lease: %v", err)
 	}
-	if lease.Holder != machine.Name {
-		t.Errorf("lease holder = %q, want %q", lease.Holder, machine.Name)
+	if lease.Holder != machine.UserID {
+		t.Errorf("lease holder = %q, want %q", lease.Holder, machine.UserID)
 	}
-	if lease.Service != serviceLocalpart {
-		t.Errorf("lease service = %q, want %q", lease.Service, serviceLocalpart)
+	if lease.Service != serviceAccount.UserID {
+		t.Errorf("lease service = %q, want %q", lease.Service, serviceAccount.UserID)
 	}
 
 	// Wait for the daemon to write the HA-generated PrincipalAssignment.
 	configJSON := configWatch.WaitForStateEvent(t,
-		schema.EventTypeMachineConfig, machine.Name)
+		schema.EventTypeMachineConfig, machine.UserID.StateKey())
 	var config schema.MachineConfig
 	if err := json.Unmarshal(configJSON, &config); err != nil {
 		t.Fatalf("unmarshal machine config: %v", err)
@@ -185,7 +186,8 @@ func TestHALeaseFailover(t *testing.T) {
 	// --- Phase 1: Initial acquisition ---
 	fleetWatch := watchRoom(t, admin, fleet.FleetRoomID)
 
-	publishFleetService(t, admin, fleet.FleetRoomID, serviceLocalpart, fleetschema.FleetServiceContent{
+	serviceStateKey := serviceAccount.UserID.StateKey()
+	publishFleetService(t, admin, fleet.FleetRoomID, serviceStateKey, fleetschema.FleetServiceContent{
 		Template: templateRef,
 		HAClass:  "critical",
 		Replicas: fleetschema.ReplicaSpec{Min: 1},
@@ -202,11 +204,11 @@ func TestHALeaseFailover(t *testing.T) {
 		if event.Type != schema.EventTypeHALease {
 			return false
 		}
-		if event.StateKey == nil || *event.StateKey != serviceLocalpart {
+		if event.StateKey == nil || *event.StateKey != serviceStateKey {
 			return false
 		}
 		eventHolder, _ := event.Content["holder"].(string)
-		return eventHolder == machineA.Name || eventHolder == machineB.Name
+		return eventHolder == machineA.UserID.String() || eventHolder == machineB.UserID.String()
 	}, "initial HA lease acquisition")
 
 	// During the race both machines write competing lease claims within
@@ -214,7 +216,7 @@ func TestHALeaseFailover(t *testing.T) {
 	// immediately overwritten by the other machine. Read the
 	// authoritative state to determine the actual winner.
 	leaseJSON, err := admin.GetStateEvent(t.Context(), fleet.FleetRoomID,
-		schema.EventTypeHALease, serviceLocalpart)
+		schema.EventTypeHALease, serviceStateKey)
 	if err != nil {
 		t.Fatalf("get HA lease state: %v", err)
 	}
@@ -227,7 +229,7 @@ func TestHALeaseFailover(t *testing.T) {
 
 	var winner, loser *testMachine
 	var winnerDone chan struct{}
-	if holder == machineA.Name {
+	if holder == machineA.UserID {
 		winner = machineA
 		loser = machineB
 		winnerDone = daemonADone
@@ -249,7 +251,7 @@ func TestHALeaseFailover(t *testing.T) {
 	// --- Phase 2: Kill the winner's daemon ---
 	failoverWatch := watchRoom(t, admin, fleet.FleetRoomID)
 
-	if holder == machineA.Name {
+	if holder == machineA.UserID {
 		daemonA.Process.Signal(syscall.SIGTERM)
 	} else {
 		daemonB.Process.Signal(syscall.SIGTERM)
@@ -271,11 +273,11 @@ func TestHALeaseFailover(t *testing.T) {
 		if event.Type != schema.EventTypeHALease {
 			return false
 		}
-		if event.StateKey == nil || *event.StateKey != serviceLocalpart {
+		if event.StateKey == nil || *event.StateKey != serviceStateKey {
 			return false
 		}
 		eventHolder, _ := event.Content["holder"].(string)
-		return eventHolder == loser.Name
+		return eventHolder == loser.UserID.String()
 	}, "HA lease failover to "+loser.Name)
 	t.Logf("failover lease acquired by %s", loser.Name)
 

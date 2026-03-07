@@ -51,6 +51,7 @@ func TestMachineLifecycle(t *testing.T) {
 		t.Fatalf("create machine ref: %v", err)
 	}
 	machineName := machineRef.Localpart()
+	machineStateKey := machineRef.UserID().StateKey()
 	machineUserID := machineRef.UserID()
 	machineRoomID := fleet.MachineRoomID
 
@@ -121,7 +122,7 @@ func TestMachineLifecycle(t *testing.T) {
 	// The launcher published this during first boot (which already completed),
 	// so the event exists in the room state — read it directly.
 	machineKeyJSON, err := admin.GetStateEvent(ctx, machineRoomID,
-		schema.EventTypeMachineKey, machineName)
+		schema.EventTypeMachineKey, machineStateKey)
 	if err != nil {
 		t.Fatalf("get machine key: %v", err)
 	}
@@ -193,7 +194,7 @@ func TestMachineLifecycle(t *testing.T) {
 
 		// Wait for MachineStatus heartbeat.
 		statusJSON := statusWatch.WaitForStateEvent(t,
-			schema.EventTypeMachineStatus, machineName)
+			schema.EventTypeMachineStatus, machineStateKey)
 		var status struct {
 			Principal string `json:"principal"`
 		}
@@ -266,7 +267,7 @@ func TestMachineLifecycle(t *testing.T) {
 
 		// Wait for a fresh MachineStatus heartbeat after restart.
 		statusWatch.WaitForStateEvent(t,
-			schema.EventTypeMachineStatus, machineName)
+			schema.EventTypeMachineStatus, machineStateKey)
 		t.Log("machine reconnected and published status after restart")
 	})
 
@@ -275,7 +276,7 @@ func TestMachineLifecycle(t *testing.T) {
 
 	// Verify machine key was cleared (empty content).
 	clearedKeyJSON, err := admin.GetStateEvent(ctx, machineRoomID,
-		schema.EventTypeMachineKey, machineName)
+		schema.EventTypeMachineKey, machineStateKey)
 	if err != nil {
 		t.Fatalf("get machine key after decommission: %v", err)
 	}
@@ -288,7 +289,7 @@ func TestMachineLifecycle(t *testing.T) {
 
 	// Verify machine status was cleared.
 	clearedStatusJSON, err := admin.GetStateEvent(ctx, machineRoomID,
-		schema.EventTypeMachineStatus, machineName)
+		schema.EventTypeMachineStatus, machineStateKey)
 	if err != nil {
 		t.Fatalf("get machine status after decommission: %v", err)
 	}
@@ -336,6 +337,7 @@ func TestMachineReProvision(t *testing.T) {
 		t.Fatalf("create machine ref: %v", err)
 	}
 	machineName := machineRef.Localpart()
+	machineStateKey := machineRef.UserID().StateKey()
 	machineRoomID := fleet.MachineRoomID
 
 	client := adminClient(t)
@@ -402,7 +404,7 @@ func TestMachineReProvision(t *testing.T) {
 		)
 
 		statusWatch.WaitForStateEvent(t,
-			schema.EventTypeMachineStatus, machineName)
+			schema.EventTypeMachineStatus, machineStateKey)
 		t.Log("machine operational after initial provision")
 	})
 	// Subtest cleanup stops daemon and launcher.
@@ -413,7 +415,7 @@ func TestMachineReProvision(t *testing.T) {
 
 	// Verify state is cleared.
 	clearedKeyJSON, err := admin.GetStateEvent(ctx, machineRoomID,
-		schema.EventTypeMachineKey, machineName)
+		schema.EventTypeMachineKey, machineStateKey)
 	if err != nil {
 		t.Fatalf("get machine key after decommission: %v", err)
 	}
@@ -489,7 +491,7 @@ func TestMachineReProvision(t *testing.T) {
 		)
 
 		statusWatch.WaitForStateEvent(t,
-			schema.EventTypeMachineStatus, machineName)
+			schema.EventTypeMachineStatus, machineStateKey)
 		t.Log("machine operational after re-provision")
 	})
 
@@ -628,17 +630,18 @@ func TestTwoMachineFleet(t *testing.T) {
 	decommissionMachine(t, admin, machineB.Ref)
 
 	// Verify both machine keys are cleared.
-	for _, name := range []string{machineA.Name, machineB.Name} {
+	for _, machine := range []*testMachine{machineA, machineB} {
+		stateKey := machine.UserID.StateKey()
 		keyJSON, err := admin.GetStateEvent(ctx, machineRoomID,
-			schema.EventTypeMachineKey, name)
+			schema.EventTypeMachineKey, stateKey)
 		if err != nil {
-			t.Fatalf("get machine key for %s after decommission: %v", name, err)
+			t.Fatalf("get machine key for %s after decommission: %v", machine.Name, err)
 		}
 		var key struct {
 			PublicKey string `json:"public_key"`
 		}
 		if json.Unmarshal(keyJSON, &key) == nil && key.PublicKey != "" {
-			t.Errorf("machine %s key should be cleared after decommission, got %q", name, key.PublicKey)
+			t.Errorf("machine %s key should be cleared after decommission, got %q", machine.Name, key.PublicKey)
 		}
 	}
 

@@ -24,7 +24,7 @@ const (
 	// first boots. Contains the machine's age public key for credential
 	// encryption.
 	//
-	// State key: machine localpart (e.g., "machine/workstation")
+	// State key: machine user ID (e.g., "@bureau/fleet/prod/machine/workstation:server")
 	// Room: #bureau/machine:<server>
 	EventTypeMachineKey ref.EventType = "m.bureau.machine_key"
 
@@ -35,21 +35,21 @@ const (
 	// heartbeat with changing values), MachineInfo is published once
 	// and only updated if the hardware inventory changes.
 	//
-	// State key: machine localpart (e.g., "machine/workstation")
+	// State key: machine user ID (e.g., "@bureau/fleet/prod/machine/workstation:server")
 	// Room: #bureau/machine:<server>
 	EventTypeMachineInfo ref.EventType = "m.bureau.machine_info"
 
 	// EventTypeMachineStatus is published to #bureau/machine by each
 	// machine's daemon as a periodic heartbeat with resource stats.
 	//
-	// State key: machine localpart (e.g., "machine/workstation")
+	// State key: machine user ID (e.g., "@bureau/fleet/prod/machine/workstation:server")
 	// Room: #bureau/machine:<server>
 	EventTypeMachineStatus ref.EventType = "m.bureau.machine_status"
 
 	// EventTypeMachineConfig is published to a per-machine config room
 	// and defines which principals should run on that machine.
 	//
-	// State key: machine localpart (e.g., "machine/workstation")
+	// State key: machine user ID (e.g., "@bureau/fleet/prod/machine/workstation:server")
 	// Room: #<machine-localpart>:<server>
 	EventTypeMachineConfig ref.EventType = "m.bureau.machine_config"
 
@@ -57,7 +57,7 @@ const (
 	// and contains age-encrypted credential bundles for a specific
 	// principal on that machine.
 	//
-	// State key: principal localpart (e.g., "iree/amdgpu/pm")
+	// State key: principal user ID (e.g., "@bureau/fleet/prod/service/stt/whisper:server")
 	// Room: #<machine-localpart>:<server>
 	EventTypeCredentials ref.EventType = "m.bureau.credentials"
 )
@@ -69,7 +69,7 @@ const (
 	// EventTypeService is published to #bureau/service when a principal
 	// starts providing a service. Used for service discovery.
 	//
-	// State key: principal localpart (e.g., "service/stt/whisper")
+	// State key: principal user ID (e.g., "@bureau/fleet/prod/service/stt/whisper:server")
 	// Room: #bureau/service:<server>
 	EventTypeService ref.EventType = "m.bureau.service"
 
@@ -107,8 +107,8 @@ const (
 	// complete SDP offer, and publishes it as a state event. The target
 	// daemon polls for offers directed at it and responds with an answer.
 	//
-	// State key: "<offerer-localpart>|<target-localpart>"
-	// The pipe character is not valid in Matrix localparts, so it
+	// State key: "<offerer-user-id>|<target-user-id>"
+	// The pipe character is not valid in Matrix user IDs, so it
 	// unambiguously separates the two machine identities.
 	//
 	// Room: #bureau/machine:<server>
@@ -118,7 +118,7 @@ const (
 	// to a WebRTC offer. Uses the same state key format as the offer so
 	// the offerer can poll for answers to its outstanding offers.
 	//
-	// State key: "<offerer-localpart>|<target-localpart>"
+	// State key: "<offerer-user-id>|<target-user-id>"
 	// Room: #bureau/machine:<server>
 	EventTypeWebRTCAnswer ref.EventType = "m.bureau.webrtc_answer"
 )

@@ -259,11 +259,11 @@ func waitForRelayTicket(t *testing.T, watch *roomWatch, machineName string) (str
 }
 
 // waitForReservationGrant waits for an m.bureau.reservation state event
-// with the given holder localpart and returns the parsed grant.
-func waitForReservationGrant(t *testing.T, watch *roomWatch, holderLocalpart string) schema.ReservationGrant {
+// with the given holder state key and returns the parsed grant.
+func waitForReservationGrant(t *testing.T, watch *roomWatch, holderStateKey string) schema.ReservationGrant {
 	t.Helper()
 
-	raw := watch.WaitForStateEvent(t, schema.EventTypeReservation, holderLocalpart)
+	raw := watch.WaitForStateEvent(t, schema.EventTypeReservation, holderStateKey)
 	var grant schema.ReservationGrant
 	if err := json.Unmarshal(raw, &grant); err != nil {
 		t.Fatalf("unmarshal reservation grant: %v", err)
@@ -273,22 +273,22 @@ func waitForReservationGrant(t *testing.T, watch *roomWatch, holderLocalpart str
 }
 
 // waitForReservationCleared waits for the reservation grant to be cleared
-// (empty content) for the given holder.
-func waitForReservationCleared(t *testing.T, watch *roomWatch, holderLocalpart string) {
+// (empty content) for the given holder state key (full user ID).
+func waitForReservationCleared(t *testing.T, watch *roomWatch, holderStateKey string) {
 	t.Helper()
 
 	watch.WaitForEvent(t, func(event messaging.Event) bool {
 		if event.Type != schema.EventTypeReservation {
 			return false
 		}
-		if event.StateKey == nil || *event.StateKey != holderLocalpart {
+		if event.StateKey == nil || *event.StateKey != holderStateKey {
 			return false
 		}
 		// Cleared reservation has empty or near-empty content.
 		// The fleet controller publishes `{}` to clear.
 		return len(event.Content) == 0
-	}, "reservation cleared for "+holderLocalpart)
-	t.Logf("reservation cleared for %s", holderLocalpart)
+	}, "reservation cleared for "+holderStateKey)
+	t.Logf("reservation cleared for %s", holderStateKey)
 }
 
 // waitForMachineDrain waits for an m.bureau.machine_drain state event
@@ -740,10 +740,10 @@ func TestReservationLifecycle(t *testing.T) {
 		}
 
 		// Reservation grant published.
-		holderLocalpart := requester.UserID.Localpart()
-		grant := waitForReservationGrant(t, &opsWatch, holderLocalpart)
-		if grant.Holder.String() != requester.UserID.Localpart() {
-			t.Errorf("grant holder = %q, want %q", grant.Holder, requester.UserID.Localpart())
+		holderStateKey := requester.UserID.StateKey()
+		grant := waitForReservationGrant(t, &opsWatch, holderStateKey)
+		if grant.Holder.UserID() != requester.UserID {
+			t.Errorf("grant holder = %q, want %q", grant.Holder, requester.UserID)
 		}
 		if grant.Mode != schema.ModeExclusive {
 			t.Errorf("grant mode = %q, want %q", grant.Mode, schema.ModeExclusive)
@@ -769,7 +769,7 @@ func TestReservationLifecycle(t *testing.T) {
 		// --- Cleanup: close workspace ticket to release reservation ---
 		cleanupOpsWatch := watchRoom(t, admin, opsRoomID)
 		closeWorkspaceTicket(t, ticketClient, wsRoomID, ticketID, "test complete")
-		waitForReservationCleared(t, &cleanupOpsWatch, holderLocalpart)
+		waitForReservationCleared(t, &cleanupOpsWatch, holderStateKey)
 		t.Log("grant flow cleanup complete")
 	})
 
@@ -778,7 +778,7 @@ func TestReservationLifecycle(t *testing.T) {
 		wsRoomP3 := createReservationWorkspaceRoom(t, admin, fleet, ticketSvc, "preempt-low")
 		wsRoomP1 := createReservationWorkspaceRoom(t, admin, fleet, ticketSvc, "preempt-high")
 
-		holderLocalpart := requester.UserID.Localpart()
+		holderStateKey := requester.UserID.StateKey()
 
 		// --- Phase 1: Grant P3 request ---
 		opsWatch := watchRoom(t, admin, opsRoomID)
@@ -787,7 +787,7 @@ func TestReservationLifecycle(t *testing.T) {
 		ticketIDP3 := publishResourceRequest(t, ticketClient, wsRoomP3, machine.Ref.Name(), schema.ModeExclusive, 3, "10m")
 
 		relayTicketIDP3, _ := waitForRelayTicket(t, &opsWatch, machine.Ref.Name())
-		waitForReservationGrant(t, &opsWatch, holderLocalpart)
+		waitForReservationGrant(t, &opsWatch, holderStateKey)
 		waitForClaimStatus(t, &wsWatchP3, ticketIDP3, schema.ClaimGranted)
 		t.Log("P3 reservation granted")
 
@@ -806,8 +806,8 @@ func TestReservationLifecycle(t *testing.T) {
 		t.Logf("P3 relay ticket closed: %s", p3Closed.CloseReason)
 
 		// P3 reservation cleared, P1 reservation granted.
-		waitForReservationCleared(t, &opsWatch2, holderLocalpart)
-		waitForReservationGrant(t, &opsWatch2, holderLocalpart)
+		waitForReservationCleared(t, &opsWatch2, holderStateKey)
+		waitForReservationGrant(t, &opsWatch2, holderStateKey)
 
 		// P3 workspace claim reaches "preempted".
 		waitForClaimStatus(t, &wsWatchP3b, ticketIDP3, schema.ClaimPreempted)
@@ -819,7 +819,7 @@ func TestReservationLifecycle(t *testing.T) {
 		// --- Cleanup ---
 		cleanupOpsWatch := watchRoom(t, admin, opsRoomID)
 		closeWorkspaceTicket(t, ticketClient, wsRoomP1, ticketIDP1, "test complete")
-		waitForReservationCleared(t, &cleanupOpsWatch, holderLocalpart)
+		waitForReservationCleared(t, &cleanupOpsWatch, holderStateKey)
 	})
 
 	t.Run("DurationExpiry", func(t *testing.T) {
@@ -831,12 +831,12 @@ func TestReservationLifecycle(t *testing.T) {
 		// real wall clock time. The fleet controller's test clock is
 		// frozen; we advance it past the expiry point after the grant
 		// is confirmed.
-		holderLocalpart := requester.UserID.Localpart()
+		holderStateKey := requester.UserID.StateKey()
 		publishResourceRequest(t, ticketClient, wsRoomID, machine.Ref.Name(), schema.ModeExclusive, 2, "1h")
 
 		// Wait for grant.
 		relayTicketID, _ := waitForRelayTicket(t, &opsWatch, machine.Ref.Name())
-		waitForReservationGrant(t, &opsWatch, holderLocalpart)
+		waitForReservationGrant(t, &opsWatch, holderStateKey)
 		t.Log("reservation granted, advancing test clock past expiry")
 
 		// Advance the fleet controller's fake clock past the 1-hour
@@ -861,7 +861,7 @@ func TestReservationLifecycle(t *testing.T) {
 		t.Logf("relay ticket closed: %s", expiredContent.CloseReason)
 
 		// Reservation and drain cleared.
-		waitForReservationCleared(t, &opsWatch2, holderLocalpart)
+		waitForReservationCleared(t, &opsWatch2, holderStateKey)
 		waitForDrainCleared(t, &opsWatch2)
 		t.Log("duration expiry verified")
 	})
@@ -870,7 +870,7 @@ func TestReservationLifecycle(t *testing.T) {
 		wsRoomA := createReservationWorkspaceRoom(t, admin, fleet, ticketSvc, "queue-a")
 		wsRoomB := createReservationWorkspaceRoom(t, admin, fleet, ticketSvc, "queue-b")
 
-		holderLocalpart := requester.UserID.Localpart()
+		holderStateKey := requester.UserID.StateKey()
 
 		// --- Phase 1: Grant ticket A ---
 		opsWatch := watchRoom(t, admin, opsRoomID)
@@ -878,7 +878,7 @@ func TestReservationLifecycle(t *testing.T) {
 
 		ticketIDA := publishResourceRequest(t, ticketClient, wsRoomA, machine.Ref.Name(), schema.ModeExclusive, 2, "10m")
 		waitForRelayTicket(t, &opsWatch, machine.Ref.Name())
-		waitForReservationGrant(t, &opsWatch, holderLocalpart)
+		waitForReservationGrant(t, &opsWatch, holderStateKey)
 		waitForClaimStatus(t, &wsWatchA, ticketIDA, schema.ClaimGranted)
 		t.Log("ticket A granted")
 
@@ -899,10 +899,10 @@ func TestReservationLifecycle(t *testing.T) {
 		closeWorkspaceTicket(t, ticketClient, wsRoomA, ticketIDA, "releasing resource")
 
 		// Ticket A reservation cleared.
-		waitForReservationCleared(t, &opsWatch3, holderLocalpart)
+		waitForReservationCleared(t, &opsWatch3, holderStateKey)
 
 		// Ticket B reservation granted (queue advanced).
-		waitForReservationGrant(t, &opsWatch3, holderLocalpart)
+		waitForReservationGrant(t, &opsWatch3, holderStateKey)
 
 		// Ticket B workspace claim reaches "granted".
 		waitForClaimStatus(t, &wsWatchB, ticketIDB, schema.ClaimGranted)
@@ -911,7 +911,7 @@ func TestReservationLifecycle(t *testing.T) {
 		// --- Cleanup ---
 		cleanupOpsWatch := watchRoom(t, admin, opsRoomID)
 		closeWorkspaceTicket(t, ticketClient, wsRoomB, ticketIDB, "test complete")
-		waitForReservationCleared(t, &cleanupOpsWatch, holderLocalpart)
+		waitForReservationCleared(t, &cleanupOpsWatch, holderStateKey)
 	})
 
 	t.Run("PipelineWithReservation", func(t *testing.T) {
@@ -944,9 +944,9 @@ func TestReservationLifecycle(t *testing.T) {
 		}
 
 		// Fleet controller grants the reservation.
-		holderLocalpart := requester.UserID.Localpart()
+		holderStateKey := requester.UserID.StateKey()
 		waitForTicketStatus(t, &opsWatch, relayTicketID, ticket.StatusInProgress)
-		waitForReservationGrant(t, &opsWatch, holderLocalpart)
+		waitForReservationGrant(t, &opsWatch, holderStateKey)
 
 		// Workspace ticket claim reaches "granted" and reservation gate
 		// is satisfied by the cross-room gate evaluation path.
@@ -972,7 +972,7 @@ func TestReservationLifecycle(t *testing.T) {
 		// Cascade: relay ticket closes → reservation released.
 		cleanupOpsWatch := watchRoom(t, admin, opsRoomID)
 		closeWorkspaceTicket(t, ticketClient, wsRoomID, ticketID, "pipeline complete")
-		waitForReservationCleared(t, &cleanupOpsWatch, holderLocalpart)
+		waitForReservationCleared(t, &cleanupOpsWatch, holderStateKey)
 		t.Log("pipeline reservation released on ticket close")
 	})
 
@@ -985,7 +985,7 @@ func TestReservationLifecycle(t *testing.T) {
 		wsRoomPipeline := createPipelineWorkspaceRoom(t, admin, fleet, ticketSvc, "pip-preempt")
 		wsRoomHighPri := createReservationWorkspaceRoom(t, admin, fleet, ticketSvc, "preempt-pip-high")
 
-		holderLocalpart := requester.UserID.Localpart()
+		holderStateKey := requester.UserID.StateKey()
 
 		// --- Phase 1: Grant pipeline reservation ---
 		opsWatch := watchRoom(t, admin, opsRoomID)
@@ -995,7 +995,7 @@ func TestReservationLifecycle(t *testing.T) {
 			"preemptable-job", machine.Ref.Name(), schema.ModeExclusive, 3, "10m")
 
 		waitForRelayTicket(t, &opsWatch, machine.Ref.Name())
-		waitForReservationGrant(t, &opsWatch, holderLocalpart)
+		waitForReservationGrant(t, &opsWatch, holderStateKey)
 		waitForClaimStatus(t, &wsWatchPip, pipTicketID, schema.ClaimGranted)
 		t.Log("pipeline reservation granted (P3)")
 
@@ -1024,14 +1024,14 @@ func TestReservationLifecycle(t *testing.T) {
 		t.Logf("pipeline ticket closed on preemption: %s", closedContent.CloseReason)
 
 		// High-priority request gets the reservation.
-		waitForReservationGrant(t, &opsWatch2, holderLocalpart)
+		waitForReservationGrant(t, &opsWatch2, holderStateKey)
 		waitForClaimStatus(t, &wsWatchHigh, highTicketID, schema.ClaimGranted)
 		t.Log("high-priority request granted after preemption")
 
 		// --- Cleanup ---
 		cleanupOpsWatch := watchRoom(t, admin, opsRoomID)
 		closeWorkspaceTicket(t, ticketClient, wsRoomHighPri, highTicketID, "test complete")
-		waitForReservationCleared(t, &cleanupOpsWatch, holderLocalpart)
+		waitForReservationCleared(t, &cleanupOpsWatch, holderStateKey)
 	})
 
 	t.Run("DenialCascade", func(t *testing.T) {

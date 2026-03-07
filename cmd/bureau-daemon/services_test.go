@@ -590,16 +590,16 @@ func TestBuildServiceDirectory(t *testing.T) {
 	daemon.logger = slog.New(slog.NewJSONHandler(os.Stderr, nil))
 	gpuMachine, _ := testMachineSetup(t, "gpu-1", "bureau.local")
 
-	sttLocalpart, sttService := testServiceEntry(t, daemon.fleet, "stt/whisper", gpuMachine, map[string]string{"http": "http.sock"})
+	sttStateKey, sttService := testServiceEntry(t, daemon.fleet, "stt/whisper", gpuMachine, map[string]string{"http": "http.sock"})
 	sttService.Capabilities = []string{"streaming", "speaker-diarization"}
 	sttService.Description = "Speech-to-text via Whisper"
 	sttService.Metadata = map[string]any{"model": "large-v3"}
-	daemon.services[sttLocalpart] = sttService
+	daemon.services[sttStateKey] = sttService
 
-	ttsLocalpart, ttsService := testServiceEntry(t, daemon.fleet, "tts/piper", gpuMachine, map[string]string{"http": "http.sock"})
+	ttsStateKey, ttsService := testServiceEntry(t, daemon.fleet, "tts/piper", gpuMachine, map[string]string{"http": "http.sock"})
 	ttsService.Capabilities = []string{"streaming"}
 	ttsService.Description = "Text-to-speech via Piper"
-	daemon.services[ttsLocalpart] = ttsService
+	daemon.services[ttsStateKey] = ttsService
 
 	directory := daemon.buildServiceDirectory()
 
@@ -608,14 +608,17 @@ func TestBuildServiceDirectory(t *testing.T) {
 	}
 
 	// Build a lookup map for easier assertions (order is non-deterministic).
+	// The Localpart field contains the service principal's localpart, not
+	// the map key (which is the full user ID state_key).
 	byLocalpart := make(map[string]adminDirectoryEntry, len(directory))
 	for _, entry := range directory {
 		byLocalpart[entry.Localpart] = entry
 	}
 
-	whisper, ok := byLocalpart[sttLocalpart]
+	sttAccountLocalpart := sttService.Principal.AccountLocalpart()
+	whisper, ok := byLocalpart[sttAccountLocalpart]
 	if !ok {
-		t.Fatalf("missing %s in directory", sttLocalpart)
+		t.Fatalf("missing %s in directory", sttAccountLocalpart)
 	}
 	if whisper.Principal != sttService.Principal.UserID() {
 		t.Errorf("whisper principal = %q, want %q", whisper.Principal, sttService.Principal.UserID())
@@ -630,9 +633,10 @@ func TestBuildServiceDirectory(t *testing.T) {
 		t.Errorf("whisper metadata not preserved: %v", whisper.Metadata)
 	}
 
-	piper, ok := byLocalpart[ttsLocalpart]
+	ttsAccountLocalpart := ttsService.Principal.AccountLocalpart()
+	piper, ok := byLocalpart[ttsAccountLocalpart]
 	if !ok {
-		t.Fatalf("missing %s in directory", ttsLocalpart)
+		t.Fatalf("missing %s in directory", ttsAccountLocalpart)
 	}
 	if piper.Description != "Text-to-speech via Piper" {
 		t.Errorf("piper description = %q", piper.Description)

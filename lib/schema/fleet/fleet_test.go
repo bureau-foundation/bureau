@@ -8,6 +8,8 @@ import (
 	"reflect"
 	"testing"
 
+	"github.com/bureau-foundation/bureau/lib/ref"
+
 	"github.com/bureau-foundation/bureau/lib/schema"
 	"github.com/bureau-foundation/bureau/lib/schema/ticket"
 )
@@ -588,9 +590,9 @@ func TestFleetConfigContentOmitsDefaults(t *testing.T) {
 
 func TestHALeaseContentRoundTrip(t *testing.T) {
 	original := HALeaseContent{
-		Holder:     "machine/workstation",
+		Holder:     ref.MustParseUserID("@machine/workstation:bureau.local"),
 		ExpiresAt:  "2026-02-14T12:00:30Z",
-		Service:    "service/fleet/prod",
+		Service:    ref.MustParseUserID("@service/fleet/prod:bureau.local"),
 		AcquiredAt: "2026-02-14T12:00:00Z",
 	}
 
@@ -604,9 +606,9 @@ func TestHALeaseContentRoundTrip(t *testing.T) {
 		t.Fatalf("Unmarshal to map: %v", err)
 	}
 
-	assertField(t, raw, "holder", "machine/workstation")
+	assertField(t, raw, "holder", "@machine/workstation:bureau.local")
 	assertField(t, raw, "expires_at", "2026-02-14T12:00:30Z")
-	assertField(t, raw, "service", "service/fleet/prod")
+	assertField(t, raw, "service", "@service/fleet/prod:bureau.local")
 	assertField(t, raw, "acquired_at", "2026-02-14T12:00:00Z")
 
 	var decoded HALeaseContent
@@ -620,7 +622,7 @@ func TestHALeaseContentRoundTrip(t *testing.T) {
 
 func TestServiceStatusContentRoundTrip(t *testing.T) {
 	original := ServiceStatusContent{
-		Machine:           "machine/workstation",
+		Machine:           ref.MustParseUserID("@machine/workstation:bureau.local"),
 		QueueDepth:        34,
 		AvgLatencyMS:      250,
 		RequestsPerMinute: 120,
@@ -638,7 +640,7 @@ func TestServiceStatusContentRoundTrip(t *testing.T) {
 		t.Fatalf("Unmarshal to map: %v", err)
 	}
 
-	assertField(t, raw, "machine", "machine/workstation")
+	assertField(t, raw, "machine", "@machine/workstation:bureau.local")
 	assertField(t, raw, "queue_depth", float64(34))
 	assertField(t, raw, "avg_latency_ms", float64(250))
 	assertField(t, raw, "requests_per_minute", float64(120))
@@ -657,7 +659,7 @@ func TestServiceStatusContentRoundTrip(t *testing.T) {
 func TestServiceStatusContentOmitsOptionalMetrics(t *testing.T) {
 	// Service that only reports health, no detailed metrics.
 	status := ServiceStatusContent{
-		Machine: "machine/pi-kitchen",
+		Machine: ref.MustParseUserID("@bureau/fleet/prod/machine/pi-kitchen:bureau.local"),
 		Healthy: true,
 	}
 

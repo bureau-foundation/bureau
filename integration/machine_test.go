@@ -286,7 +286,7 @@ func startMachineLauncher(t *testing.T, admin *messaging.DirectSession, machine 
 
 	// Retrieve the machine's public key from Matrix.
 	machineKeyJSON := keyWatch.WaitForStateEvent(t,
-		schema.EventTypeMachineKey, machine.Name)
+		schema.EventTypeMachineKey, machine.UserID.StateKey())
 	var machineKey struct {
 		PublicKey string `json:"public_key"`
 	}
@@ -414,7 +414,7 @@ func waitForDaemonReady(t *testing.T, admin *messaging.DirectSession, machine *t
 
 	// Wait for daemon readiness (MachineStatus heartbeat).
 	statusWatch.WaitForStateEvent(t,
-		schema.EventTypeMachineStatus, machine.Name)
+		schema.EventTypeMachineStatus, machine.UserID.StateKey())
 
 	// Resolve the per-machine config room and join as admin.
 	configAlias := machine.Ref.RoomAlias()
@@ -713,7 +713,7 @@ func pushMachineConfig(t *testing.T, admin *messaging.DirectSession, machine *te
 	}
 
 	_, err := admin.SendStateEvent(t.Context(), machine.ConfigRoomID,
-		schema.EventTypeMachineConfig, machine.Name, machineConfig)
+		schema.EventTypeMachineConfig, machine.UserID.StateKey(), machineConfig)
 	if err != nil {
 		t.Fatalf("push machine config: %v", err)
 	}
@@ -756,7 +756,7 @@ func deployPrincipals(t *testing.T, admin *messaging.DirectSession, machine *tes
 	// is preserved when principals are added.
 	if config.DefaultPolicy != nil {
 		_, err := admin.SendStateEvent(t.Context(), machine.ConfigRoomID,
-			schema.EventTypeMachineConfig, machine.Name, schema.MachineConfig{
+			schema.EventTypeMachineConfig, machine.UserID.StateKey(), schema.MachineConfig{
 				DefaultPolicy: config.DefaultPolicy,
 			})
 		if err != nil {
@@ -1410,7 +1410,7 @@ func deployService(
 	// service create command's default behavior (opt-in in the test
 	// helper since most tests don't need fleet controller interaction).
 	if options.FleetRegister {
-		publishFleetService(t, admin, fleet.FleetRoomID, options.Localpart, fleetschema.FleetServiceContent{
+		publishFleetService(t, admin, fleet.FleetRoomID, principalEntity.UserID().StateKey(), fleetschema.FleetServiceContent{
 			Template: templateRef.String(),
 			Replicas: fleetschema.ReplicaSpec{Min: 1, Max: 1},
 			Failover: fleetschema.FailoverNone,
@@ -1440,12 +1440,12 @@ func deployService(
 	// Wait for daemon to discover the service registration (posted by
 	// BootstrapViaProxy to the fleet service room) via /sync and
 	// propagate the service directory to all proxies.
-	fleetScopedLocalpart := principalEntity.Localpart()
+	serviceStateKey := principalEntity.UserID().StateKey()
 	waitForNotification[schema.ServiceDirectoryUpdatedMessage](
 		t, &serviceWatch, schema.MsgTypeServiceDirectoryUpdated, machine.UserID,
 		func(message schema.ServiceDirectoryUpdatedMessage) bool {
-			return slices.Contains(message.Added, fleetScopedLocalpart)
-		}, "service directory update adding "+fleetScopedLocalpart)
+			return slices.Contains(message.Added, serviceStateKey)
+		}, "service directory update adding "+serviceStateKey)
 
 	// The service socket is behind a symlink created by the launcher
 	// (ServiceSocketPath → configDir/listen/service.sock). The symlink

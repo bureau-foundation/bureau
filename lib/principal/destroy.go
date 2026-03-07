@@ -28,7 +28,8 @@ type DestroyResult struct {
 // principal's sandbox. The principal's Matrix account is preserved
 // for audit trail purposes.
 func Destroy(ctx context.Context, session messaging.Session, configRoomID ref.RoomID, machine ref.Machine, localpart string) (*DestroyResult, error) {
-	config, err := messaging.GetState[schema.MachineConfig](ctx, session, configRoomID, schema.EventTypeMachineConfig, machine.Localpart())
+	machineStateKey := machine.UserID().StateKey()
+	config, err := messaging.GetState[schema.MachineConfig](ctx, session, configRoomID, schema.EventTypeMachineConfig, machineStateKey)
 	if err != nil {
 		return nil, fmt.Errorf("read machine config for %s: %w", machine.Localpart(), err)
 	}
@@ -47,7 +48,7 @@ func Destroy(ctx context.Context, session messaging.Session, configRoomID ref.Ro
 	}
 	config.Principals = filtered
 
-	eventID, err := session.SendStateEvent(ctx, configRoomID, schema.EventTypeMachineConfig, machine.Localpart(), config)
+	eventID, err := session.SendStateEvent(ctx, configRoomID, schema.EventTypeMachineConfig, machineStateKey, config)
 	if err != nil {
 		return nil, fmt.Errorf("publish machine config for %s: %w", machine.Localpart(), err)
 	}
@@ -61,7 +62,7 @@ func Destroy(ctx context.Context, session messaging.Session, configRoomID ref.Ro
 // to keep credentials around for re-provisioning (destroy without purge)
 // or may want to purge without destroying the assignment (credential
 // rotation).
-func PurgeCredentials(ctx context.Context, session messaging.Session, configRoomID ref.RoomID, localpart string) error {
-	_, err := session.SendStateEvent(ctx, configRoomID, schema.EventTypeCredentials, localpart, struct{}{})
+func PurgeCredentials(ctx context.Context, session messaging.Session, configRoomID ref.RoomID, principalUserID ref.UserID) error {
+	_, err := session.SendStateEvent(ctx, configRoomID, schema.EventTypeCredentials, principalUserID.StateKey(), struct{}{})
 	return err
 }

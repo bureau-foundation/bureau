@@ -33,6 +33,12 @@ func ParseServiceUserID(userID string) (Service, error) {
 	return Service{entity: ent}, nil
 }
 
+// ParseServiceStateKey parses a state_key ("localpart:server" format,
+// without '@' prefix) into a Service. See UserID.StateKey for format details.
+func ParseServiceStateKey(stateKey string) (Service, error) {
+	return ParseServiceUserID("@" + stateKey)
+}
+
 // ParseService parses a fleet-scoped localpart and server into a Service.
 func ParseService(localpart string, server ServerName) (Service, error) {
 	ent, err := parseEntityLocalpart(localpart, server, entityTypeService)

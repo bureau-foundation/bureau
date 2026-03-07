@@ -49,7 +49,7 @@ const (
 	// session's artifact ref (for resume), and a pointer to a session
 	// index artifact listing all historical sessions.
 	//
-	// State key: principal localpart (e.g., "iree/amdgpu/pm")
+	// State key: principal user ID (e.g., "@bureau/fleet/prod/agent/pm:server")
 	// Room: #<machine-localpart>:<server>
 	EventTypeAgentSession ref.EventType = "m.bureau.agent_session"
 
@@ -59,7 +59,7 @@ const (
 	// count). The agent service writes this at session end so the
 	// next session can resume the conversation.
 	//
-	// State key: principal localpart (e.g., "iree/amdgpu/pm")
+	// State key: principal user ID (e.g., "@bureau/fleet/prod/agent/pm:server")
 	// Room: #<machine-localpart>:<server>
 	EventTypeAgentContext ref.EventType = "m.bureau.agent_context"
 
@@ -69,7 +69,7 @@ const (
 	// event for fast reads. A detailed per-session metrics breakdown
 	// is stored as an artifact.
 	//
-	// State key: principal localpart (e.g., "iree/amdgpu/pm")
+	// State key: principal user ID (e.g., "@bureau/fleet/prod/agent/pm:server")
 	// Room: #<machine-localpart>:<server>
 	EventTypeAgentMetrics ref.EventType = "m.bureau.agent_metrics"
 )

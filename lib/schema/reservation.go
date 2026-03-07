@@ -21,7 +21,7 @@ const (
 	// budget controller) when a reservation is granted. Cleared when
 	// the reservation is released.
 	//
-	// State key: holder principal localpart
+	// State key: holder principal user ID
 	// Room: resource ops room (e.g., #.../machine/<name>/ops)
 	EventTypeReservation ref.EventType = "m.bureau.reservation"
 
@@ -62,7 +62,7 @@ const (
 	// event. The fleet controller watches these to determine when
 	// all services have quiesced before granting the reservation.
 	//
-	// State key: reporting entity's user ID localpart
+	// State key: reporting entity's full user ID
 	// Room: machine ops room
 	EventTypeDrainStatus ref.EventType = "m.bureau.drain_status"
 )
@@ -465,10 +465,11 @@ func (f *RelayFilter) Allows(field string) bool {
 // gracefully drain when listed. Cleared (empty content) when the
 // reservation is released and services should resume.
 type MachineDrainContent struct {
-	// Services lists service types to gracefully drain. Services
-	// not listed continue running. Empty means drain all
-	// fleet-managed services on the machine.
-	Services []string `json:"services,omitempty"`
+	// Services lists services to gracefully drain, identified by
+	// their full Matrix user IDs. Services not listed continue
+	// running. Empty means drain all fleet-managed services on the
+	// machine.
+	Services []ref.UserID `json:"services,omitempty"`
 
 	// ReservationHolder is the principal that holds the reservation
 	// causing the drain.

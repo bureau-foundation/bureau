@@ -39,15 +39,16 @@ type haWatchdog struct {
 	mu sync.Mutex
 
 	// criticalServices caches ha_class:critical service definitions
-	// from #bureau/fleet. Keyed by service localpart.
+	// from #bureau/fleet. Keyed by state_key (service full user ID).
 	criticalServices map[string]*fleet.FleetServiceContent
 
-	// leases caches current HA lease state. Keyed by service localpart.
+	// leases caches current HA lease state. Keyed by state_key
+	// (service full user ID).
 	leases map[string]*fleet.HALeaseContent
 
 	// heldLeases tracks leases this daemon currently holds and is
 	// actively renewing. Each entry's CancelFunc stops the renewal
-	// goroutine. Keyed by service localpart.
+	// goroutine. Keyed by state_key (service full user ID).
 	heldLeases map[string]context.CancelFunc
 
 	// clock provides time operations. Uses the daemon's clock for
@@ -194,7 +195,7 @@ func (w *haWatchdog) evaluate(ctx context.Context) {
 // heartbeat proxy: a healthy holder renews the lease at ttl/3 intervals,
 // so an unexpired lease implies recent activity.
 func (w *haWatchdog) isLeaseHealthy(lease *fleet.HALeaseContent, now time.Time) bool {
-	if lease == nil || lease.Holder == "" {
+	if lease == nil || lease.Holder.IsZero() {
 		return false
 	}
 
@@ -250,7 +251,7 @@ func (w *haWatchdog) fetchMachineLabels() map[string]string {
 	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
 	defer cancel()
 
-	info, err := messaging.GetState[schema.MachineInfo](ctx, w.daemon.session, w.daemon.machineRoomID, schema.EventTypeMachineInfo, w.daemon.machine.Localpart())
+	info, err := messaging.GetState[schema.MachineInfo](ctx, w.daemon.session, w.daemon.machineRoomID, schema.EventTypeMachineInfo, w.daemon.machine.UserID().StateKey())
 	if err != nil {
 		w.logger.Debug("failed to fetch machine info for eligibility check", "error", err)
 		return nil
@@ -319,7 +320,7 @@ func (w *haWatchdog) attemptAcquisition(ctx context.Context, serviceLocalpart st
 
 	// If the lease was acquired by another machine while we waited,
 	// check whether the new holder is healthy.
-	if currentLease != nil && currentLease.Holder != "" {
+	if currentLease != nil && !currentLease.Holder.IsZero() {
 		expiresAt, parseErr := time.Parse(time.RFC3339, currentLease.ExpiresAt)
 		if parseErr == nil && !w.clock.Now().After(expiresAt) {
 			// Another daemon already acquired a valid lease. Back off.
@@ -331,12 +332,18 @@ func (w *haWatchdog) attemptAcquisition(ctx context.Context, serviceLocalpart st
 		}
 	}
 
-	// Write our lease claim.
+	// Write our lease claim. The serviceLocalpart parameter is the
+	// state_key from Matrix, which is the service's full user ID.
+	serviceUserID, parseErr := ref.ParseUserIDFromStateKey(serviceLocalpart)
+	if parseErr != nil {
+		return fmt.Errorf("parsing service state key %q as user ID: %w", serviceLocalpart, parseErr)
+	}
+
 	now := w.clock.Now()
 	ttl := w.leaseTTL()
 	newLease := fleet.HALeaseContent{
-		Holder:     w.daemon.machine.Localpart(),
-		Service:    serviceLocalpart,
+		Holder:     w.daemon.machine.UserID(),
+		Service:    serviceUserID,
 		AcquiredAt: now.UTC().Format(time.RFC3339),
 		ExpiresAt:  now.Add(ttl).UTC().Format(time.RFC3339),
 	}
@@ -366,7 +373,7 @@ func (w *haWatchdog) attemptAcquisition(ctx context.Context, serviceLocalpart st
 		return fmt.Errorf("reading lease for verification: %w", err)
 	}
 
-	if verifiedLease == nil || verifiedLease.Holder != w.daemon.machine.Localpart() {
+	if verifiedLease == nil || verifiedLease.Holder != w.daemon.machine.UserID() {
 		w.logger.Info("lost HA lease race",
 			"service", serviceLocalpart,
 			"winner", leaseHolder(verifiedLease),
@@ -410,7 +417,13 @@ func (w *haWatchdog) startHosting(ctx context.Context, serviceLocalpart string, 
 		return
 	}
 
-	entity, err := ref.NewEntityFromAccountLocalpart(w.daemon.fleet, serviceLocalpart)
+	serviceUserID, err := ref.ParseUserIDFromStateKey(serviceLocalpart)
+	if err != nil {
+		w.logger.Error("cannot parse service user ID for HA assignment",
+			"service", serviceLocalpart, "error", err)
+		return
+	}
+	entity, err := ref.NewEntityFromAccountLocalpart(w.daemon.fleet, serviceUserID.Localpart())
 	if err != nil {
 		w.logger.Error("cannot parse service localpart for HA assignment",
 			"service", serviceLocalpart, "error", err)
@@ -447,17 +460,29 @@ func (w *haWatchdog) startHosting(ctx context.Context, serviceLocalpart string, 
 // config room, adds or updates the PrincipalAssignment for the given
 // service, and writes the updated config back.
 func (w *haWatchdog) writePrincipalAssignment(ctx context.Context, serviceLocalpart string, assignment schema.PrincipalAssignment) {
-	config, err := messaging.GetState[schema.MachineConfig](ctx, w.daemon.session, w.daemon.configRoomID, schema.EventTypeMachineConfig, w.daemon.machine.Localpart())
+	machineStateKey := w.daemon.machine.UserID().StateKey()
+	config, err := messaging.GetState[schema.MachineConfig](ctx, w.daemon.session, w.daemon.configRoomID, schema.EventTypeMachineConfig, machineStateKey)
 	if err != nil && !messaging.IsMatrixError(err, messaging.ErrCodeNotFound) {
 		w.logger.Error("reading machine config for HA assignment",
 			"service", serviceLocalpart, "error", err)
 		return
 	}
 
-	// Check if the assignment already exists.
+	// Check if the assignment already exists. The serviceLocalpart
+	// parameter is the full user ID state_key; extract the localpart
+	// to compare against PrincipalAssignment entities which use
+	// account localparts for identity.
+	serviceUserID, parseErr := ref.ParseUserIDFromStateKey(serviceLocalpart)
+	if parseErr != nil {
+		w.logger.Error("cannot parse service user ID for config update",
+			"service", serviceLocalpart, "error", parseErr)
+		return
+	}
+	accountLocalpart := serviceUserID.Localpart()
+
 	found := false
 	for index := range config.Principals {
-		if config.Principals[index].Principal.AccountLocalpart() == serviceLocalpart {
+		if config.Principals[index].Principal.AccountLocalpart() == accountLocalpart {
 			config.Principals[index] = assignment
 			found = true
 			break
@@ -468,7 +493,7 @@ func (w *haWatchdog) writePrincipalAssignment(ctx context.Context, serviceLocalp
 	}
 
 	if _, err := w.daemon.session.SendStateEvent(ctx, w.daemon.configRoomID,
-		schema.EventTypeMachineConfig, w.daemon.machine.Localpart(), config); err != nil {
+		schema.EventTypeMachineConfig, machineStateKey, config); err != nil {
 		w.logger.Error("writing machine config for HA assignment",
 			"service", serviceLocalpart, "error", err)
 	}
@@ -477,6 +502,14 @@ func (w *haWatchdog) writePrincipalAssignment(ctx context.Context, serviceLocalp
 // renewLease periodically renews an HA lease at ttl/3 intervals.
 // Runs until the context is cancelled (shutdown or lease release).
 func (w *haWatchdog) renewLease(ctx context.Context, serviceLocalpart string, ttl time.Duration) {
+	// Parse the service state_key once for lease construction.
+	serviceUserID, parseErr := ref.ParseUserIDFromStateKey(serviceLocalpart)
+	if parseErr != nil {
+		w.logger.Error("cannot parse service user ID for lease renewal",
+			"service", serviceLocalpart, "error", parseErr)
+		return
+	}
+
 	renewalInterval := ttl / 3
 	ticker := w.clock.NewTicker(renewalInterval)
 	defer ticker.Stop()
@@ -488,8 +521,8 @@ func (w *haWatchdog) renewLease(ctx context.Context, serviceLocalpart string, tt
 		case <-ticker.C:
 			now := w.clock.Now()
 			lease := fleet.HALeaseContent{
-				Holder:     w.daemon.machine.Localpart(),
-				Service:    serviceLocalpart,
+				Holder:     w.daemon.machine.UserID(),
+				Service:    serviceUserID,
 				AcquiredAt: now.UTC().Format(time.RFC3339),
 				ExpiresAt:  now.Add(ttl).UTC().Format(time.RFC3339),
 			}
@@ -526,10 +559,17 @@ func (w *haWatchdog) releaseLease(ctx context.Context, serviceLocalpart string) 
 	}
 
 	// Write an expired lease so other daemons see it immediately.
+	serviceUserID, parseErr := ref.ParseUserIDFromStateKey(serviceLocalpart)
+	if parseErr != nil {
+		w.logger.Error("cannot parse service user ID for lease release",
+			"service", serviceLocalpart, "error", parseErr)
+		return
+	}
+
 	now := w.clock.Now()
 	lease := fleet.HALeaseContent{
-		Holder:     w.daemon.machine.Localpart(),
-		Service:    serviceLocalpart,
+		Holder:     w.daemon.machine.UserID(),
+		Service:    serviceUserID,
 		AcquiredAt: now.UTC().Format(time.RFC3339),
 		ExpiresAt:  now.Add(-1 * time.Second).UTC().Format(time.RFC3339),
 	}
@@ -567,10 +607,10 @@ func (w *haWatchdog) leaseTTL() time.Duration {
 // leaseHolder returns the holder of a lease, or "<none>" if the lease
 // is nil or has no holder.
 func leaseHolder(lease *fleet.HALeaseContent) string {
-	if lease == nil || lease.Holder == "" {
+	if lease == nil || lease.Holder.IsZero() {
 		return "<none>"
 	}
-	return lease.Holder
+	return lease.Holder.String()
 }
 
 // fleetPayloadToMap converts a json.RawMessage payload from a

@@ -35,6 +35,14 @@ func ParseMachineUserID(userID string) (Machine, error) {
 	return Machine{entity: ent}, nil
 }
 
+// ParseMachineStateKey parses a state_key ("localpart:server" format,
+// without '@' prefix) into a Machine. This is the inverse of
+// Machine.UserID().StateKey(). See UserID.StateKey for why state_keys
+// use this format instead of full Matrix user IDs.
+func ParseMachineStateKey(stateKey string) (Machine, error) {
+	return ParseMachineUserID("@" + stateKey)
+}
+
 // ParseMachine parses a fleet-scoped localpart and server into a Machine.
 func ParseMachine(localpart string, server ServerName) (Machine, error) {
 	ent, err := parseEntityLocalpart(localpart, server, entityTypeMachine)

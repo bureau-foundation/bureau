@@ -173,8 +173,8 @@ func runUpgrade(ctx context.Context, args []string, params *upgradeParams, logge
 	// Read-modify-write MachineConfig. Read the existing config (404
 	// means no config yet), set BureauVersion, and publish. This
 	// preserves existing Principals and DefaultPolicy.
-	machineLocalpart := machine.Localpart()
-	config, err := messaging.GetState[schema.MachineConfig](ctx, session, configRoomID, schema.EventTypeMachineConfig, machineLocalpart)
+	machineStateKey := machine.UserID().StateKey()
+	config, err := messaging.GetState[schema.MachineConfig](ctx, session, configRoomID, schema.EventTypeMachineConfig, machineStateKey)
 	if err != nil && !messaging.IsMatrixError(err, messaging.ErrCodeNotFound) {
 		return cli.Transient("reading machine config: %w", err).
 			WithHint("Check that the homeserver is running. Run 'bureau matrix doctor' to diagnose.")
@@ -182,7 +182,7 @@ func runUpgrade(ctx context.Context, args []string, params *upgradeParams, logge
 
 	config.BureauVersion = version
 
-	eventID, err := session.SendStateEvent(ctx, configRoomID, schema.EventTypeMachineConfig, machineLocalpart, config)
+	eventID, err := session.SendStateEvent(ctx, configRoomID, schema.EventTypeMachineConfig, machineStateKey, config)
 	if err != nil {
 		return cli.Transient("publishing machine config: %w", err).
 			WithHint("Check that the homeserver is running and you have write access to the config room.\n" +

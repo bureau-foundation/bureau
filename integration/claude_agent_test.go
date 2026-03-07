@@ -152,7 +152,7 @@ func TestClaudeAgentLifecycle(t *testing.T) {
 	// flow (after agent_session). Once we see it, both events are
 	// readable and the full pipeline has completed.
 
-	metricsStateKey := agent.Account.UserID.Localpart()
+	metricsStateKey := agent.Account.UserID.StateKey()
 	metricsWatch.WaitForStateEvent(t, agentschema.EventTypeAgentMetrics, metricsStateKey)
 	t.Log("Claude agent service wrote metrics state event")
 
@@ -173,7 +173,7 @@ func TestClaudeAgentLifecycle(t *testing.T) {
 	// --- Verify session state ---
 
 	sessionRaw, err := admin.GetStateEvent(ctx, machine.ConfigRoomID,
-		agentschema.EventTypeAgentSession, agent.Account.UserID.Localpart())
+		agentschema.EventTypeAgentSession, agent.Account.UserID.StateKey())
 	if err != nil {
 		t.Fatalf("get agent session state: %v", err)
 	}
@@ -198,7 +198,7 @@ func TestClaudeAgentLifecycle(t *testing.T) {
 	// --- Verify metrics ---
 
 	metricsRaw, err := admin.GetStateEvent(ctx, machine.ConfigRoomID,
-		agentschema.EventTypeAgentMetrics, agent.Account.UserID.Localpart())
+		agentschema.EventTypeAgentMetrics, agent.Account.UserID.StateKey())
 	if err != nil {
 		t.Fatalf("get agent metrics state: %v", err)
 	}

@@ -452,7 +452,7 @@ func TestReconcileBureauVersion_NilVersion(t *testing.T) {
 
 	daemon, _ := newTestDaemon(t)
 	daemon.machine, daemon.fleet = testMachineSetup(t, "test", "test.local")
-	machineName := daemon.machine.Localpart()
+	machineName := daemon.machine.UserID().StateKey()
 
 	state := newMockMatrixState()
 	state.setStateEvent(configRoomID, schema.EventTypeMachineConfig, machineName, schema.MachineConfig{
@@ -522,7 +522,7 @@ func TestReconcileBureauVersion_ProxyChanged(t *testing.T) {
 
 	daemon, _ := newTestDaemon(t)
 	daemon.machine, daemon.fleet = testMachineSetup(t, "test", "test.local")
-	machineName := daemon.machine.Localpart()
+	machineName := daemon.machine.UserID().StateKey()
 
 	// Configure MachineConfig with BureauVersion pointing to the desired paths.
 	state := newMockMatrixState()
@@ -652,8 +652,7 @@ func TestReconcileStructuralChangeTriggersRestart(t *testing.T) {
 
 	daemon, _ := newTestDaemon(t)
 	daemon.machine, daemon.fleet = testMachineSetup(t, "test", "test.local")
-	machineName := daemon.machine.Localpart()
-	fleetPrefix := daemon.fleet.Localpart() + "/"
+	machineName := daemon.machine.UserID().StateKey()
 
 	// Start with one command, then change the template to a different command.
 	state := newMockMatrixState()
@@ -670,7 +669,7 @@ func TestReconcileStructuralChangeTriggersRestart(t *testing.T) {
 			},
 		},
 	})
-	state.setStateEvent(configRoomID, schema.EventTypeCredentials, fleetPrefix+"agent/test", schema.Credentials{
+	state.setStateEvent(configRoomID, schema.EventTypeCredentials, testCredentialStateKey(t, daemon.fleet, "agent/test"), schema.Credentials{
 		Ciphertext: "encrypted-test-credentials",
 	})
 
@@ -805,8 +804,7 @@ func TestReconcileStructuralChangeOnly(t *testing.T) {
 
 	daemon, _ := newTestDaemon(t)
 	daemon.machine, daemon.fleet = testMachineSetup(t, "test", "test.local")
-	machineName := daemon.machine.Localpart()
-	fleetPrefix := daemon.fleet.Localpart() + "/"
+	machineName := daemon.machine.UserID().StateKey()
 
 	// Template with changed command but same payload.
 	state := newMockMatrixState()
@@ -823,7 +821,7 @@ func TestReconcileStructuralChangeOnly(t *testing.T) {
 			},
 		},
 	})
-	state.setStateEvent(configRoomID, schema.EventTypeCredentials, fleetPrefix+"agent/test", schema.Credentials{
+	state.setStateEvent(configRoomID, schema.EventTypeCredentials, testCredentialStateKey(t, daemon.fleet, "agent/test"), schema.Credentials{
 		Ciphertext: "encrypted-test-credentials",
 	})
 
@@ -915,8 +913,7 @@ func TestReconcileCredentialRefChangeTriggersRestart(t *testing.T) {
 
 	daemon, _ := newTestDaemon(t)
 	daemon.machine, daemon.fleet = testMachineSetup(t, "test", "test.local")
-	machineName := daemon.machine.Localpart()
-	fleetPrefix := daemon.fleet.Localpart() + "/"
+	machineName := daemon.machine.UserID().StateKey()
 
 	// Template with a command and a CredentialRef (changed from the stored version).
 	state := newMockMatrixState()
@@ -934,7 +931,7 @@ func TestReconcileCredentialRefChangeTriggersRestart(t *testing.T) {
 			},
 		},
 	})
-	state.setStateEvent(configRoomID, schema.EventTypeCredentials, fleetPrefix+"agent/test", schema.Credentials{
+	state.setStateEvent(configRoomID, schema.EventTypeCredentials, testCredentialStateKey(t, daemon.fleet, "agent/test"), schema.Credentials{
 		Ciphertext: "encrypted-test-credentials",
 	})
 
@@ -1036,8 +1033,7 @@ func TestReconcilePayloadOnlyChangeHotReloads(t *testing.T) {
 
 	daemon, _ := newTestDaemon(t)
 	daemon.machine, daemon.fleet = testMachineSetup(t, "test", "test.local")
-	machineName := daemon.machine.Localpart()
-	fleetPrefix := daemon.fleet.Localpart() + "/"
+	machineName := daemon.machine.UserID().StateKey()
 
 	agentTestEntity := testEntity(t, daemon.fleet, "agent/test")
 
@@ -1057,7 +1053,7 @@ func TestReconcilePayloadOnlyChangeHotReloads(t *testing.T) {
 			},
 		},
 	})
-	state.setStateEvent(configRoomID, schema.EventTypeCredentials, fleetPrefix+"agent/test", schema.Credentials{
+	state.setStateEvent(configRoomID, schema.EventTypeCredentials, testCredentialStateKey(t, daemon.fleet, "agent/test"), schema.Credentials{
 		Ciphertext: "encrypted-test-credentials",
 	})
 
@@ -2465,8 +2461,7 @@ func TestReconcileAuthorizationGrantsHotReload(t *testing.T) {
 
 	daemon, _ := newTestDaemon(t)
 	daemon.machine, daemon.fleet = testMachineSetup(t, "test", "test.local")
-	machineName := daemon.machine.Localpart()
-	fleetPrefix := daemon.fleet.Localpart() + "/"
+	machineName := daemon.machine.UserID().StateKey()
 
 	// MachineConfig with a MatrixPolicy and ServiceVisibility — these get
 	// synthesized into grants since there's no explicit Authorization field.
@@ -2481,7 +2476,7 @@ func TestReconcileAuthorizationGrantsHotReload(t *testing.T) {
 			},
 		},
 	})
-	state.setStateEvent(configRoomID, schema.EventTypeCredentials, fleetPrefix+"agent/test", schema.Credentials{
+	state.setStateEvent(configRoomID, schema.EventTypeCredentials, testCredentialStateKey(t, daemon.fleet, "agent/test"), schema.Credentials{
 		Ciphertext: "encrypted-test-credentials",
 	})
 
@@ -3290,8 +3285,7 @@ func TestReconcileCommandBinaryValidationBlocksCreate(t *testing.T) {
 
 	daemon, _ := newTestDaemon(t)
 	daemon.machine, daemon.fleet = testMachineSetup(t, "test", "test.local")
-	machineName := daemon.machine.Localpart()
-	fleetPrefix := daemon.fleet.Localpart() + "/"
+	machineName := daemon.machine.UserID().StateKey()
 
 	state := newMockMatrixState()
 	state.setRoomAlias(daemon.fleet.Namespace().TemplateRoomAlias(), templateRoomID)
@@ -3307,7 +3301,7 @@ func TestReconcileCommandBinaryValidationBlocksCreate(t *testing.T) {
 			},
 		},
 	})
-	state.setStateEvent(configRoomID, schema.EventTypeCredentials, fleetPrefix+"agent/test", schema.Credentials{
+	state.setStateEvent(configRoomID, schema.EventTypeCredentials, testCredentialStateKey(t, daemon.fleet, "agent/test"), schema.Credentials{
 		Ciphertext: "encrypted-test-credentials",
 	})
 

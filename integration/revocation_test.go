@@ -144,6 +144,7 @@ func TestMachineRevocation_CLIRevoke(t *testing.T) {
 	// Set up and start the machine.
 	machine := newTestMachine(t, fleet, "revoke-cli")
 	machineName := machine.Name
+	machineStateKey := machine.UserID.StateKey()
 	machineUserID := machine.UserID
 	startMachine(t, admin, machine, machineOptions{
 		LauncherBinary: launcherBinary,
@@ -198,7 +199,7 @@ func TestMachineRevocation_CLIRevoke(t *testing.T) {
 
 	// Verify the credential revocation event was published.
 	revocationJSON := machineRoomWatch.WaitForStateEvent(t,
-		schema.EventTypeCredentialRevocation, machineName)
+		schema.EventTypeCredentialRevocation, machineStateKey)
 	var revocation schema.CredentialRevocationContent
 	if err := json.Unmarshal(revocationJSON, &revocation); err != nil {
 		t.Fatalf("unmarshal revocation event: %v", err)
@@ -222,8 +223,7 @@ func TestMachineRevocation_CLIRevoke(t *testing.T) {
 	}
 
 	// Verify both principals are listed in the revocation event. The
-	// Principals field contains fleet-scoped localparts because credential
-	// state keys are fleet-scoped (from credential.Provision).
+	// Principals field contains credential state_keys (full user IDs).
 	entityA, err := ref.NewEntityFromAccountLocalpart(fleet.Ref, principalALocalpart)
 	if err != nil {
 		t.Fatalf("construct entity for principal A: %v", err)
@@ -236,7 +236,7 @@ func TestMachineRevocation_CLIRevoke(t *testing.T) {
 	for _, principal := range revocation.Principals {
 		principalSet[principal] = true
 	}
-	for _, expected := range []string{entityA.Localpart(), entityB.Localpart()} {
+	for _, expected := range []string{entityA.UserID().StateKey(), entityB.UserID().StateKey()} {
 		if !principalSet[expected] {
 			t.Errorf("revocation principals should contain %q, got %v", expected, revocation.Principals)
 		}
@@ -244,7 +244,7 @@ func TestMachineRevocation_CLIRevoke(t *testing.T) {
 
 	// Verify machine_key was cleared (tombstoned with empty content).
 	clearedKeyJSON, err := admin.GetStateEvent(ctx, machine.MachineRoomID,
-		schema.EventTypeMachineKey, machineName)
+		schema.EventTypeMachineKey, machineStateKey)
 	if err != nil {
 		t.Fatalf("get machine key after revocation: %v", err)
 	}
@@ -257,7 +257,7 @@ func TestMachineRevocation_CLIRevoke(t *testing.T) {
 
 	// Verify machine_status was cleared.
 	clearedStatusJSON, err := admin.GetStateEvent(ctx, machine.MachineRoomID,
-		schema.EventTypeMachineStatus, machineName)
+		schema.EventTypeMachineStatus, machineStateKey)
 	if err != nil {
 		t.Fatalf("get machine status after revocation: %v", err)
 	}

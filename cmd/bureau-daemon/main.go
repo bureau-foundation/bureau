@@ -895,8 +895,8 @@ type Daemon struct {
 	serviceResyncCountdown int
 
 	// services is the cached service directory, built from m.bureau.service
-	// state events in #bureau/service. Keyed by service localpart (the
-	// state_key of the Matrix event, e.g., "service/stt/whisper").
+	// state events in #bureau/service. Keyed by service user ID (the
+	// state_key of the Matrix event, e.g., "@bureau/fleet/prod/service/stt/whisper:server").
 	services map[string]*schema.Service
 
 	// proxyRoutes tracks services currently registered on consumer proxies
@@ -1498,7 +1498,7 @@ func (d *Daemon) publishStatus(ctx context.Context, status schema.MachineStatus)
 		d.logger.Warn("updating presence status_msg", "error", err)
 	}
 
-	_, err := d.session.SendStateEvent(ctx, d.machineRoomID, schema.EventTypeMachineStatus, d.machine.Localpart(), status)
+	_, err := d.session.SendStateEvent(ctx, d.machineRoomID, schema.EventTypeMachineStatus, d.machine.UserID().StateKey(), status)
 	if err != nil {
 		d.logger.Error("publishing machine status", "error", err)
 		return
@@ -1594,13 +1594,13 @@ func gpuStatsChanged(current, previous []schema.GPUStatus) bool {
 // thresholds. Different key sets (principal added/removed) or a status
 // transition (starting→running→idle) are always meaningful. CPU and
 // memory use per-principal deadbands.
-func principalsChanged(current, previous map[string]schema.PrincipalResourceUsage) bool {
+func principalsChanged(current, previous map[ref.UserID]schema.PrincipalResourceUsage) bool {
 	if len(current) != len(previous) {
 		return true
 	}
 
-	for name, currentUsage := range current {
-		previousUsage, exists := previous[name]
+	for userID, currentUsage := range current {
+		previousUsage, exists := previous[userID]
 		if !exists {
 			return true
 		}
@@ -1702,14 +1702,14 @@ func (d *Daemon) writeDaemonStatus() {
 // in the status loop goroutine. The previousCgroupCPU map is accessed
 // without locking because collectStatus is the sole accessor (same
 // single-goroutine pattern as previousCPU).
-func (d *Daemon) collectPrincipalResources(principals []ref.Entity) map[string]schema.PrincipalResourceUsage {
+func (d *Daemon) collectPrincipalResources(principals []ref.Entity) map[ref.UserID]schema.PrincipalResourceUsage {
 	if len(principals) == 0 {
 		return nil
 	}
 
 	intervalMicroseconds := uint64(d.statusInterval / time.Microsecond)
 
-	result := make(map[string]schema.PrincipalResourceUsage, len(principals))
+	result := make(map[ref.UserID]schema.PrincipalResourceUsage, len(principals))
 	runningSet := make(map[ref.Entity]bool, len(principals))
 
 	for _, principal := range principals {
@@ -1730,9 +1730,7 @@ func (d *Daemon) collectPrincipalResources(principals []ref.Entity) map[string]s
 
 		status := hwinfo.DerivePrincipalStatus(cpuPercent, previousCPU != nil)
 
-		// The status event uses account localparts as keys (matching the
-		// MachineStatus.Principals wire format).
-		result[principal.AccountLocalpart()] = schema.PrincipalResourceUsage{
+		result[principal.UserID()] = schema.PrincipalResourceUsage{
 			CPUPercent: cpuPercent,
 			MemoryMB:   memoryMB,
 			Status:     status,
@@ -1760,7 +1758,7 @@ func (d *Daemon) publishMachineInfo(ctx context.Context) {
 	info := hwinfo.Probe(d.machine.UserID().String(), amdProber, nvidiaProber)
 	info.DaemonVersion = version.Info()
 
-	_, err := d.session.SendStateEvent(ctx, d.machineRoomID, schema.EventTypeMachineInfo, d.machine.Localpart(), info)
+	_, err := d.session.SendStateEvent(ctx, d.machineRoomID, schema.EventTypeMachineInfo, d.machine.UserID().StateKey(), info)
 	if err != nil {
 		d.logger.Error("publishing machine info", "error", err)
 		return
@@ -1790,7 +1788,7 @@ func (d *Daemon) publishTokenSigningKey(ctx context.Context, keyWasGenerated boo
 
 	if !keyWasGenerated {
 		// Check whether the current state event already has our key.
-		existing, err := messaging.GetState[schema.TokenSigningKeyContent](ctx, d.session, d.systemRoomID, schema.EventTypeTokenSigningKey, d.machine.UserID().String())
+		existing, err := messaging.GetState[schema.TokenSigningKeyContent](ctx, d.session, d.systemRoomID, schema.EventTypeTokenSigningKey, d.machine.UserID().StateKey())
 		if err == nil {
 			if existing.PublicKey == publicKeyHex {
 				d.logger.Info("token signing key already published, skipping")
@@ -1808,7 +1806,7 @@ func (d *Daemon) publishTokenSigningKey(ctx context.Context, keyWasGenerated boo
 		Machine:   d.machine.UserID(),
 	}
 	_, err := d.session.SendStateEvent(ctx, d.systemRoomID,
-		schema.EventTypeTokenSigningKey, d.machine.UserID().String(), content)
+		schema.EventTypeTokenSigningKey, d.machine.UserID().StateKey(), content)
 	if err != nil {
 		d.logger.Error("publishing token signing key", "error", err)
 		return

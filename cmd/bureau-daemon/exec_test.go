@@ -465,8 +465,7 @@ func TestReconcileBureauVersion_DaemonChanged_TriggersExec(t *testing.T) {
 
 	daemon, _ := newTestDaemon(t)
 	daemon.machine, daemon.fleet = testMachineSetup(t, "test", "test.local")
-	machineName := daemon.machine.Localpart()
-	serverName := daemon.machine.Server().String()
+	machineName := daemon.machine.UserID().StateKey()
 
 	// Create a real binary to hash (reuse the test binary itself).
 	testBinary, err := os.Executable()
@@ -500,7 +499,7 @@ func TestReconcileBureauVersion_DaemonChanged_TriggersExec(t *testing.T) {
 	if err != nil {
 		t.Fatalf("creating client: %v", err)
 	}
-	session, err := client.SessionFromToken(mustParseUserID("@"+machineName+":"+serverName), "test-token")
+	session, err := client.SessionFromToken(daemon.machine.UserID(), "test-token")
 	if err != nil {
 		t.Fatalf("creating session: %v", err)
 	}

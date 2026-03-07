@@ -12,7 +12,10 @@ go_library(
     ],
     importpath = "github.com/bureau-foundation/bureau/lib/schema/fleet",
     visibility = ["//visibility:public"],
-    deps = ["//lib/schema"],
+    deps = [
+        "//lib/ref",
+        "//lib/schema",
+    ],
 )
 
 go_test(
@@ -20,6 +23,7 @@ go_test(
     srcs = ["fleet_test.go"],
     embed = [":fleet"],
     deps = [
+        "//lib/ref",
         "//lib/schema",
         "//lib/schema/ticket",
     ],

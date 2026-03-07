@@ -147,7 +147,7 @@ func readMachineConfig(ctx context.Context, session messaging.Session, machine r
 		return ref.RoomID{}, nil, fmt.Errorf("resolve config room for %s: %w", machine.Localpart(), err)
 	}
 
-	config, err := messaging.GetState[schema.MachineConfig](ctx, session, configRoomID, schema.EventTypeMachineConfig, machine.Localpart())
+	config, err := messaging.GetState[schema.MachineConfig](ctx, session, configRoomID, schema.EventTypeMachineConfig, machine.UserID().StateKey())
 	if err != nil {
 		if messaging.IsMatrixError(err, messaging.ErrCodeNotFound) {
 			return configRoomID, &schema.MachineConfig{}, nil

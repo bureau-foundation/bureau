@@ -60,7 +60,7 @@ const answerTimeout = 30 * time.Second
 // rogue peers.
 type WebRTCTransport struct {
 	signaler      Signaler
-	localpart     string
+	machineID     string
 	authenticator PeerAuthenticator // nil disables peer authentication
 	logger        *slog.Logger
 
@@ -97,7 +97,7 @@ type WebRTCTransport struct {
 // accessing the peers map and when reading or modifying peerState fields.
 type peerState struct {
 	connection  *webrtc.PeerConnection
-	localpart   string
+	peerID      string
 	established chan struct{} // closed when peer is ready for HTTP data channels
 
 	// establishedOnce guards closing the established channel. Multiple
@@ -121,15 +121,17 @@ type peerState struct {
 	authError error
 }
 
-// NewWebRTCTransport creates a WebRTC transport. The localpart identifies
-// this machine in signaling (e.g., "machine/workstation"). The signaler
-// provides the mechanism for exchanging SDP offers and answers. The
-// authenticator, if non-nil, enables mutual Ed25519 peer authentication
-// on each new PeerConnection.
-func NewWebRTCTransport(signaler Signaler, localpart string, iceConfig ICEConfig, authenticator PeerAuthenticator, logger *slog.Logger) *WebRTCTransport {
+// NewWebRTCTransport creates a WebRTC transport. machineID is this
+// machine's full Matrix user ID (e.g.,
+// "@bureau/fleet/prod/machine/workstation:server"), used in signaling
+// state keys for federation-safe identity. The signaler provides the
+// mechanism for exchanging SDP offers and answers. The authenticator,
+// if non-nil, enables mutual Ed25519 peer authentication on each new
+// PeerConnection.
+func NewWebRTCTransport(signaler Signaler, machineID string, iceConfig ICEConfig, authenticator PeerAuthenticator, logger *slog.Logger) *WebRTCTransport {
 	return &WebRTCTransport{
 		signaler:           signaler,
-		localpart:          localpart,
+		machineID:          machineID,
 		iceConfig:          iceConfig,
 		authenticator:      authenticator,
 		logger:             logger,
@@ -190,7 +192,7 @@ func (wt *WebRTCTransport) Serve(ctx context.Context, handler http.Handler) erro
 // daemons use this value (via MachineStatus.TransportAddress) to identify
 // this machine for signaling.
 func (wt *WebRTCTransport) Address() string {
-	return wt.localpart
+	return wt.machineID
 }
 
 // Close shuts down all PeerConnections and stops the signaling poller.
@@ -255,10 +257,10 @@ func (wt *WebRTCTransport) DialContext(ctx context.Context, address string) (net
 // creating and signaling a new PeerConnection if necessary. If another
 // goroutine is already establishing a connection to this peer, callers
 // wait for that attempt rather than starting a parallel one.
-func (wt *WebRTCTransport) getOrCreatePeer(ctx context.Context, peerLocalpart string) (*peerState, error) {
+func (wt *WebRTCTransport) getOrCreatePeer(ctx context.Context, peerID string) (*peerState, error) {
 	wt.mu.Lock()
 
-	if peer, ok := wt.peers[peerLocalpart]; ok {
+	if peer, ok := wt.peers[peerID]; ok {
 		state := peer.connection.ICEConnectionState()
 		if state != webrtc.ICEConnectionStateFailed &&
 			state != webrtc.ICEConnectionStateClosed {
@@ -267,7 +269,7 @@ func (wt *WebRTCTransport) getOrCreatePeer(ctx context.Context, peerLocalpart st
 		}
 		// Connection is dead. Tear down and re-establish.
 		peer.connection.Close()
-		delete(wt.peers, peerLocalpart)
+		delete(wt.peers, peerID)
 	}
 
 	// Create the PeerConnection and store it in the map before releasing
@@ -281,19 +283,19 @@ func (wt *WebRTCTransport) getOrCreatePeer(ctx context.Context, peerLocalpart st
 
 	peer := &peerState{
 		connection:  pc,
-		localpart:   peerLocalpart,
+		peerID:      peerID,
 		established: make(chan struct{}),
 		authChannel: make(chan io.ReadWriteCloser, 1),
 	}
-	wt.peers[peerLocalpart] = peer
+	wt.peers[peerID] = peer
 	wt.mu.Unlock()
 
 	// Run signaling outside the lock. On failure, clean up the map entry
 	// so the next caller retries.
 	if err := wt.establishOutbound(ctx, peer); err != nil {
 		wt.mu.Lock()
-		if current, ok := wt.peers[peerLocalpart]; ok && current == peer {
-			delete(wt.peers, peerLocalpart)
+		if current, ok := wt.peers[peerID]; ok && current == peer {
+			delete(wt.peers, peerID)
 		}
 		wt.mu.Unlock()
 		pc.Close()
@@ -308,7 +310,7 @@ func (wt *WebRTCTransport) getOrCreatePeer(ctx context.Context, peerLocalpart st
 // PeerConnection and registered it before calling this. On success the
 // peer.established channel will be closed by the ICE state handler.
 func (wt *WebRTCTransport) establishOutbound(ctx context.Context, peer *peerState) error {
-	peerLocalpart := peer.localpart
+	peerID := peer.peerID
 	pc := peer.connection
 
 	// Register inbound data channel handler (the peer may open channels to us).
@@ -318,7 +320,7 @@ func (wt *WebRTCTransport) establishOutbound(ctx context.Context, peer *peerStat
 
 	// Monitor ICE connection state.
 	pc.OnICEConnectionStateChange(func(state webrtc.ICEConnectionState) {
-		wt.handleICEStateChange(peerLocalpart, peer, state)
+		wt.handleICEStateChange(peerID, peer, state)
 	})
 
 	// Create a trigger data channel to generate the SDP offer. The remote
@@ -350,16 +352,16 @@ func (wt *WebRTCTransport) establishOutbound(ctx context.Context, peer *peerStat
 
 	// Publish the complete SDP offer.
 	completeSDP := pc.LocalDescription().SDP
-	if err := wt.signaler.PublishOffer(ctx, wt.localpart, peerLocalpart, completeSDP); err != nil {
+	if err := wt.signaler.PublishOffer(ctx, wt.machineID, peerID, completeSDP); err != nil {
 		return fmt.Errorf("publishing SDP offer: %w", err)
 	}
 
-	wt.logger.Info("WebRTC offer published", "peer", peerLocalpart)
+	wt.logger.Info("WebRTC offer published", "peer", peerID)
 
 	// Poll for the answer.
-	answerSDP, err := wt.waitForAnswer(ctx, peerLocalpart)
+	answerSDP, err := wt.waitForAnswer(ctx, peerID)
 	if err != nil {
-		return fmt.Errorf("waiting for SDP answer from %s: %w", peerLocalpart, err)
+		return fmt.Errorf("waiting for SDP answer from %s: %w", peerID, err)
 	}
 
 	// Set the remote description.
@@ -371,14 +373,14 @@ func (wt *WebRTCTransport) establishOutbound(ctx context.Context, peer *peerStat
 		return fmt.Errorf("setting remote description: %w", err)
 	}
 
-	wt.logger.Info("WebRTC outbound connection established", "peer", peerLocalpart)
+	wt.logger.Info("WebRTC outbound connection established", "peer", peerID)
 	return nil
 }
 
 // waitForAnswer polls the signaler for an SDP answer from the specified peer.
 // When the signaler implements SignalNotifier, checks happen immediately on
 // each notification rather than waiting for the next poll interval.
-func (wt *WebRTCTransport) waitForAnswer(ctx context.Context, peerLocalpart string) (string, error) {
+func (wt *WebRTCTransport) waitForAnswer(ctx context.Context, peerID string) (string, error) {
 	var notifications <-chan struct{}
 	if notifier, ok := wt.signaler.(SignalNotifier); ok {
 		notifications = notifier.Subscribe()
@@ -389,13 +391,13 @@ func (wt *WebRTCTransport) waitForAnswer(ctx context.Context, peerLocalpart stri
 	defer ticker.Stop()
 
 	checkAnswers := func() (string, bool) {
-		answers, err := wt.signaler.PollAnswers(ctx, wt.localpart)
+		answers, err := wt.signaler.PollAnswers(ctx, wt.machineID)
 		if err != nil {
 			wt.logger.Warn("polling for SDP answer failed", "error", err)
 			return "", false
 		}
 		for _, answer := range answers {
-			if answer.PeerLocalpart == peerLocalpart {
+			if answer.PeerID == peerID {
 				return answer.SDP, true
 			}
 		}
@@ -453,7 +455,7 @@ func (wt *WebRTCTransport) signalingPoller(ctx context.Context) {
 
 // processInboundOffers checks for new SDP offers and answers them.
 func (wt *WebRTCTransport) processInboundOffers(ctx context.Context) {
-	offers, err := wt.signaler.PollOffers(ctx, wt.localpart)
+	offers, err := wt.signaler.PollOffers(ctx, wt.machineID)
 	if err != nil {
 		wt.logger.Warn("polling for SDP offers failed", "error", err)
 		return
@@ -461,7 +463,7 @@ func (wt *WebRTCTransport) processInboundOffers(ctx context.Context) {
 
 	for _, offer := range offers {
 		wt.mu.Lock()
-		existing, hasExisting := wt.peers[offer.PeerLocalpart]
+		existing, hasExisting := wt.peers[offer.PeerID]
 		wt.mu.Unlock()
 
 		if hasExisting {
@@ -474,27 +476,27 @@ func (wt *WebRTCTransport) processInboundOffers(ctx context.Context) {
 				// canonical offerer. If the peer should be the offerer (their
 				// localpart < ours), accept their offer and tear down our
 				// outbound attempt. Otherwise, ignore their offer.
-				if offer.PeerLocalpart > wt.localpart {
+				if offer.PeerID > wt.machineID {
 					// We are the canonical offerer. Ignore their offer.
 					continue
 				}
 				// They are the canonical offerer. Tear down our connection.
 				wt.mu.Lock()
 				existing.connection.Close()
-				delete(wt.peers, offer.PeerLocalpart)
+				delete(wt.peers, offer.PeerID)
 				wt.mu.Unlock()
 			} else {
 				// Existing connection is dead. Clean it up.
 				wt.mu.Lock()
 				existing.connection.Close()
-				delete(wt.peers, offer.PeerLocalpart)
+				delete(wt.peers, offer.PeerID)
 				wt.mu.Unlock()
 			}
 		}
 
 		if err := wt.answerOffer(ctx, offer); err != nil {
 			wt.logger.Error("answering WebRTC offer failed",
-				"peer", offer.PeerLocalpart,
+				"peer", offer.PeerID,
 				"error", err,
 			)
 		}
@@ -510,7 +512,7 @@ func (wt *WebRTCTransport) answerOffer(ctx context.Context, offer SignalMessage)
 
 	peer := &peerState{
 		connection:  pc,
-		localpart:   offer.PeerLocalpart,
+		peerID:      offer.PeerID,
 		established: make(chan struct{}),
 		authChannel: make(chan io.ReadWriteCloser, 1),
 	}
@@ -522,7 +524,7 @@ func (wt *WebRTCTransport) answerOffer(ctx context.Context, offer SignalMessage)
 
 	// Monitor ICE connection state.
 	pc.OnICEConnectionStateChange(func(state webrtc.ICEConnectionState) {
-		wt.handleICEStateChange(offer.PeerLocalpart, peer, state)
+		wt.handleICEStateChange(offer.PeerID, peer, state)
 	})
 
 	// Set the remote offer.
@@ -561,18 +563,18 @@ func (wt *WebRTCTransport) answerOffer(ctx context.Context, offer SignalMessage)
 
 	// Publish the complete answer.
 	completeSDP := pc.LocalDescription().SDP
-	if err := wt.signaler.PublishAnswer(ctx, offer.PeerLocalpart, wt.localpart, completeSDP); err != nil {
+	if err := wt.signaler.PublishAnswer(ctx, offer.PeerID, wt.machineID, completeSDP); err != nil {
 		pc.Close()
 		return fmt.Errorf("publishing SDP answer: %w", err)
 	}
 
 	// Store the peer.
 	wt.mu.Lock()
-	wt.peers[offer.PeerLocalpart] = peer
+	wt.peers[offer.PeerID] = peer
 	wt.mu.Unlock()
 
 	wt.logger.Info("WebRTC inbound connection answered",
-		"peer", offer.PeerLocalpart,
+		"peer", offer.PeerID,
 	)
 
 	return nil
@@ -606,7 +608,7 @@ func (wt *WebRTCTransport) handleInboundDataChannel(dc *webrtc.DataChannel, peer
 			rawChannel, err := dc.Detach()
 			if err != nil {
 				wt.logger.Error("detaching auth data channel failed",
-					"peer", peer.localpart,
+					"peer", peer.peerID,
 					"error", err,
 				)
 				return
@@ -615,7 +617,7 @@ func (wt *WebRTCTransport) handleInboundDataChannel(dc *webrtc.DataChannel, peer
 			case peer.authChannel <- rawChannel:
 			default:
 				wt.logger.Warn("duplicate auth channel received, closing",
-					"peer", peer.localpart,
+					"peer", peer.peerID,
 				)
 				rawChannel.Close()
 			}
@@ -624,7 +626,7 @@ func (wt *WebRTCTransport) handleInboundDataChannel(dc *webrtc.DataChannel, peer
 	}
 
 	wt.logger.Debug("inbound data channel received",
-		"peer", peer.localpart,
+		"peer", peer.peerID,
 		"label", dc.Label(),
 	)
 	dc.OnOpen(func() {
@@ -641,7 +643,7 @@ func (wt *WebRTCTransport) handleInboundDataChannel(dc *webrtc.DataChannel, peer
 			}
 			if peer.authError != nil {
 				wt.logger.Warn("rejecting data channel from unauthenticated peer",
-					"peer", peer.localpart,
+					"peer", peer.peerID,
 					"label", dc.Label(),
 				)
 				dc.Close()
@@ -650,13 +652,13 @@ func (wt *WebRTCTransport) handleInboundDataChannel(dc *webrtc.DataChannel, peer
 		}
 
 		wt.logger.Debug("inbound data channel opened",
-			"peer", peer.localpart,
+			"peer", peer.peerID,
 			"label", dc.Label(),
 		)
 		rawChannel, err := dc.Detach()
 		if err != nil {
 			wt.logger.Error("detaching inbound data channel failed",
-				"peer", peer.localpart,
+				"peer", peer.peerID,
 				"label", dc.Label(),
 				"error", err,
 			)
@@ -665,8 +667,8 @@ func (wt *WebRTCTransport) handleInboundDataChannel(dc *webrtc.DataChannel, peer
 
 		conn := NewDataChannelConn(
 			rawChannel,
-			wt.localpart+"/"+dc.Label(),
-			peer.localpart+"/"+dc.Label(),
+			wt.machineID+"/"+dc.Label(),
+			peer.peerID+"/"+dc.Label(),
 		)
 
 		select {
@@ -681,9 +683,9 @@ func (wt *WebRTCTransport) handleInboundDataChannel(dc *webrtc.DataChannel, peer
 // established signal. When a PeerAuthenticator is configured, ICE
 // Connected triggers the authentication handshake rather than
 // immediately signaling established.
-func (wt *WebRTCTransport) handleICEStateChange(peerLocalpart string, peer *peerState, state webrtc.ICEConnectionState) {
+func (wt *WebRTCTransport) handleICEStateChange(peerID string, peer *peerState, state webrtc.ICEConnectionState) {
 	wt.logger.Info("ICE state change",
-		"peer", peerLocalpart,
+		"peer", peerID,
 		"state", state.String(),
 	)
 
@@ -703,7 +705,7 @@ func (wt *WebRTCTransport) handleICEStateChange(peerLocalpart string, peer *peer
 
 	case webrtc.ICEConnectionStateFailed:
 		wt.logger.Warn("WebRTC connection failed, will re-establish on next dial",
-			"peer", peerLocalpart,
+			"peer", peerID,
 		)
 		// Don't remove from peers map here — DialContext/getOrCreatePeer
 		// checks the state and re-establishes if needed.
@@ -716,8 +718,8 @@ func (wt *WebRTCTransport) handleICEStateChange(peerLocalpart string, peer *peer
 
 	case webrtc.ICEConnectionStateClosed:
 		wt.mu.Lock()
-		if current, ok := wt.peers[peerLocalpart]; ok && current == peer {
-			delete(wt.peers, peerLocalpart)
+		if current, ok := wt.peers[peerID]; ok && current == peer {
+			delete(wt.peers, peerID)
 		}
 		wt.mu.Unlock()
 
@@ -741,7 +743,7 @@ func (wt *WebRTCTransport) authenticatePeer(peer *peerState) {
 	err := wt.performPeerAuth(peer)
 	if err != nil {
 		wt.logger.Error("peer authentication failed",
-			"peer", peer.localpart,
+			"peer", peer.peerID,
 			"error", err,
 		)
 		peer.authError = err
@@ -750,7 +752,7 @@ func (wt *WebRTCTransport) authenticatePeer(peer *peerState) {
 		return
 	}
 
-	wt.logger.Info("peer authenticated", "peer", peer.localpart)
+	wt.logger.Info("peer authenticated", "peer", peer.peerID)
 	peer.establishedOnce.Do(func() { close(peer.established) })
 }
 
@@ -760,7 +762,7 @@ func (wt *WebRTCTransport) authenticatePeer(peer *peerState) {
 func (wt *WebRTCTransport) performPeerAuth(peer *peerState) error {
 	// Deterministic tie-breaking: the lexicographically smaller
 	// localpart creates the auth data channel.
-	weCreate := wt.localpart < peer.localpart
+	weCreate := wt.machineID < peer.peerID
 
 	var authChannel io.ReadWriteCloser
 	if weCreate {
@@ -803,7 +805,7 @@ func (wt *WebRTCTransport) performPeerAuth(peer *peerState) error {
 	}
 	defer authChannel.Close()
 
-	return runPeerAuth(authChannel, wt.authenticator, wt.localpart, peer.localpart)
+	return runPeerAuth(authChannel, wt.authenticator, wt.machineID, peer.peerID)
 }
 
 // removePeer tears down a peer's PeerConnection and removes it from the
@@ -811,8 +813,8 @@ func (wt *WebRTCTransport) performPeerAuth(peer *peerState) error {
 // goroutine may have already replaced it).
 func (wt *WebRTCTransport) removePeer(peer *peerState) {
 	wt.mu.Lock()
-	if current, ok := wt.peers[peer.localpart]; ok && current == peer {
-		delete(wt.peers, peer.localpart)
+	if current, ok := wt.peers[peer.peerID]; ok && current == peer {
+		delete(wt.peers, peer.peerID)
 	}
 	wt.mu.Unlock()
 	peer.connection.Close()
@@ -826,7 +828,7 @@ func (wt *WebRTCTransport) openDataChannel(peer *peerState) (net.Conn, error) {
 
 	wt.logger.Debug("opening data channel",
 		"label", label,
-		"peer", peer.localpart,
+		"peer", peer.peerID,
 	)
 
 	ordered := true
@@ -840,14 +842,14 @@ func (wt *WebRTCTransport) openDataChannel(peer *peerState) (net.Conn, error) {
 	// Wait for the data channel to open.
 	openChan := make(chan struct{})
 	dc.OnOpen(func() {
-		wt.logger.Debug("data channel opened", "label", label, "peer", peer.localpart)
+		wt.logger.Debug("data channel opened", "label", label, "peer", peer.peerID)
 		close(openChan)
 	})
 
 	select {
 	case <-openChan:
 	case <-time.After(10 * time.Second):
-		wt.logger.Warn("data channel open timed out", "label", label, "peer", peer.localpart)
+		wt.logger.Warn("data channel open timed out", "label", label, "peer", peer.peerID)
 		dc.Close()
 		return nil, fmt.Errorf("data channel %s did not open within 10s", label)
 	case <-wt.closed:
@@ -863,8 +865,8 @@ func (wt *WebRTCTransport) openDataChannel(peer *peerState) (net.Conn, error) {
 
 	return NewDataChannelConn(
 		rawChannel,
-		wt.localpart+"/"+label,
-		peer.localpart+"/"+label,
+		wt.machineID+"/"+label,
+		peer.peerID+"/"+label,
 	), nil
 }
 

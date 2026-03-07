@@ -132,7 +132,7 @@ failure explicitly.`,
 func Decommission(ctx context.Context, session *messaging.DirectSession, params DecommissionParams, logger *slog.Logger) error {
 	machine := params.Machine
 	fleet := machine.Fleet()
-	machineUsername := machine.Localpart()
+	machineStateKey := machine.UserID().StateKey()
 	machineUserID := machine.UserID()
 
 	logger.Info("decommissioning machine",
@@ -156,14 +156,14 @@ func Decommission(ctx context.Context, session *messaging.DirectSession, params 
 			WithHint("Has 'bureau matrix setup' been run for this fleet? Check with 'bureau matrix doctor'.")
 	}
 
-	_, err = session.SendStateEvent(ctx, machineRoomID, schema.EventTypeMachineKey, machineUsername, map[string]any{})
+	_, err = session.SendStateEvent(ctx, machineRoomID, schema.EventTypeMachineKey, machineStateKey, map[string]any{})
 	if err != nil {
 		logger.Warn("could not clear machine_key", "error", err)
 	} else {
 		logger.Info("cleared machine_key")
 	}
 
-	_, err = session.SendStateEvent(ctx, machineRoomID, schema.EventTypeMachineStatus, machineUsername, map[string]any{})
+	_, err = session.SendStateEvent(ctx, machineRoomID, schema.EventTypeMachineStatus, machineStateKey, map[string]any{})
 	if err != nil {
 		logger.Warn("could not clear machine_status", "error", err)
 	} else {
@@ -182,7 +182,7 @@ func Decommission(ctx context.Context, session *messaging.DirectSession, params 
 		}
 	} else {
 		// Clear machine_config.
-		_, err = session.SendStateEvent(ctx, configRoomID, schema.EventTypeMachineConfig, machineUsername, map[string]any{})
+		_, err = session.SendStateEvent(ctx, configRoomID, schema.EventTypeMachineConfig, machineStateKey, map[string]any{})
 		if err != nil {
 			logger.Warn("could not clear machine_config", "error", err)
 		} else {
@@ -214,7 +214,7 @@ func Decommission(ctx context.Context, session *messaging.DirectSession, params 
 		}
 	} else {
 		// Clear reservation and drain state events.
-		_, err = session.SendStateEvent(ctx, opsRoomID, schema.EventTypeReservation, machineUsername, map[string]any{})
+		_, err = session.SendStateEvent(ctx, opsRoomID, schema.EventTypeReservation, machineStateKey, map[string]any{})
 		if err != nil {
 			logger.Warn("could not clear reservation", "error", err)
 		} else {

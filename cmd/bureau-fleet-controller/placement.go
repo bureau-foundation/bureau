@@ -9,6 +9,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/bureau-foundation/bureau/lib/ref"
 	"github.com/bureau-foundation/bureau/lib/schema/fleet"
 )
 
@@ -16,11 +17,11 @@ import (
 // service. Any negative score means "do not place here."
 const ineligible = -1
 
-// placementCandidate pairs a machine localpart with its placement score.
+// placementCandidate pairs a machine user ID with its placement score.
 // Returned by scorePlacement in descending score order.
 type placementCandidate struct {
-	machineLocalpart string
-	score            int
+	machineUserID ref.UserID
+	score         int
 }
 
 // scoreMachine evaluates a single candidate machine for hosting a service.
@@ -31,8 +32,8 @@ type placementCandidate struct {
 //
 // The function is pure: it reads fc.machines and fc.services but performs
 // no I/O and has no side effects.
-func (fc *FleetController) scoreMachine(machineLocalpart string, service *fleet.FleetServiceContent) int {
-	machine, exists := fc.machines[machineLocalpart]
+func (fc *FleetController) scoreMachine(machineUserID ref.UserID, service *fleet.FleetServiceContent) int {
+	machine, exists := fc.machines[machineUserID]
 	if !exists {
 		return ineligible
 	}
@@ -70,6 +71,7 @@ func (fc *FleetController) scoreMachine(machineLocalpart string, service *fleet.
 	// AllowedMachines restricts which machines are candidates. If the
 	// list is non-empty, the machine localpart must match at least one
 	// glob pattern.
+	machineLocalpart := machineUserID.Localpart()
 	if len(service.Placement.AllowedMachines) > 0 {
 		allowed := false
 		for _, pattern := range service.Placement.AllowedMachines {
@@ -119,9 +121,13 @@ func (fc *FleetController) scoreMachine(machineLocalpart string, service *fleet.
 	}
 
 	// Anti-affinity: the machine must not already host any service
-	// listed in AntiAffinity.
-	for _, antiAffinityLocalpart := range service.Placement.AntiAffinity {
-		if _, assigned := machine.assignments[antiAffinityLocalpart]; assigned {
+	// listed in AntiAffinity. Values are full Matrix user IDs.
+	for _, antiAffinityRaw := range service.Placement.AntiAffinity {
+		antiAffinityUserID, err := ref.ParseUserID(antiAffinityRaw)
+		if err != nil {
+			continue
+		}
+		if _, assigned := machine.assignments[antiAffinityUserID]; assigned {
 			return ineligible
 		}
 	}
@@ -188,12 +194,16 @@ func (fc *FleetController) scoreMachine(machineLocalpart string, service *fleet.
 	}
 
 	// Co-locate bonus: proportional to how many co-locate targets are
-	// already on this machine.
+	// already on this machine. Values are full Matrix user IDs.
 	coLocateScore := 0
 	if len(service.Placement.CoLocateWith) > 0 {
 		coLocatedCount := 0
-		for _, coLocateLocalpart := range service.Placement.CoLocateWith {
-			if _, assigned := machine.assignments[coLocateLocalpart]; assigned {
+		for _, coLocateRaw := range service.Placement.CoLocateWith {
+			coLocateUserID, err := ref.ParseUserID(coLocateRaw)
+			if err != nil {
+				continue
+			}
+			if _, assigned := machine.assignments[coLocateUserID]; assigned {
 				coLocatedCount++
 			}
 		}
@@ -242,18 +252,18 @@ func (fc *FleetController) scoreMachine(machineLocalpart string, service *fleet.
 
 // scorePlacement returns a scored list of all eligible machines for a
 // service, sorted by score descending. Ties are broken by machine
-// localpart (lexicographic, ascending) for determinism.
+// user ID string (lexicographic, ascending) for determinism.
 func (fc *FleetController) scorePlacement(service *fleet.FleetServiceContent) []placementCandidate {
 	var candidates []placementCandidate
 
-	for machineLocalpart := range fc.machines {
-		score := fc.scoreMachine(machineLocalpart, service)
+	for machineUserID := range fc.machines {
+		score := fc.scoreMachine(machineUserID, service)
 		if score == ineligible {
 			continue
 		}
 		candidates = append(candidates, placementCandidate{
-			machineLocalpart: machineLocalpart,
-			score:            score,
+			machineUserID: machineUserID,
+			score:         score,
 		})
 	}
 
@@ -261,7 +271,7 @@ func (fc *FleetController) scorePlacement(service *fleet.FleetServiceContent) []
 		if candidates[i].score != candidates[j].score {
 			return candidates[i].score > candidates[j].score
 		}
-		return candidates[i].machineLocalpart < candidates[j].machineLocalpart
+		return candidates[i].machineUserID.String() < candidates[j].machineUserID.String()
 	})
 
 	return candidates

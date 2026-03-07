@@ -148,14 +148,14 @@ func newExecuteTestController(t *testing.T) (*FleetController, *fakeConfigStore)
 func TestReadMachineConfigExisting(t *testing.T) {
 	fc, store := newExecuteTestController(t)
 
-	fc.configRooms["bureau/fleet/prod/machine/workstation"] = mustRoomID("!config-ws:local")
-	store.seedConfig("!config-ws:local", "bureau/fleet/prod/machine/workstation", &schema.MachineConfig{
+	fc.configRooms[testMachineUserID("workstation")] = mustRoomID("!config-ws:local")
+	store.seedConfig("!config-ws:local", testMachineUserID("workstation").StateKey(), &schema.MachineConfig{
 		Principals: []schema.PrincipalAssignment{
 			{Principal: testEntity(t, "service/stt/whisper"), Template: "bureau/template:whisper-stt"},
 		},
 	})
 
-	config, err := fc.readMachineConfig(context.Background(), "bureau/fleet/prod/machine/workstation")
+	config, err := fc.readMachineConfig(context.Background(), testMachineUserID("workstation"))
 	if err != nil {
 		t.Fatalf("readMachineConfig: %v", err)
 	}
@@ -170,10 +170,10 @@ func TestReadMachineConfigExisting(t *testing.T) {
 func TestReadMachineConfigNotFound(t *testing.T) {
 	fc, _ := newExecuteTestController(t)
 
-	fc.configRooms["bureau/fleet/prod/machine/workstation"] = mustRoomID("!config-ws:local")
+	fc.configRooms[testMachineUserID("workstation")] = mustRoomID("!config-ws:local")
 	// Don't seed any config — should return empty MachineConfig.
 
-	config, err := fc.readMachineConfig(context.Background(), "bureau/fleet/prod/machine/workstation")
+	config, err := fc.readMachineConfig(context.Background(), testMachineUserID("workstation"))
 	if err != nil {
 		t.Fatalf("readMachineConfig should succeed with empty config: %v", err)
 	}
@@ -186,7 +186,7 @@ func TestReadMachineConfigNoConfigRoom(t *testing.T) {
 	fc, _ := newExecuteTestController(t)
 	// Don't add any config room mapping.
 
-	_, err := fc.readMachineConfig(context.Background(), "bureau/fleet/prod/machine/workstation")
+	_, err := fc.readMachineConfig(context.Background(), testMachineUserID("workstation"))
 	if err == nil {
 		t.Fatal("expected error for missing config room")
 	}
@@ -197,14 +197,14 @@ func TestReadMachineConfigNoConfigRoom(t *testing.T) {
 func TestWriteMachineConfig(t *testing.T) {
 	fc, store := newExecuteTestController(t)
 
-	fc.configRooms["bureau/fleet/prod/machine/workstation"] = mustRoomID("!config-ws:local")
+	fc.configRooms[testMachineUserID("workstation")] = mustRoomID("!config-ws:local")
 
 	config := &schema.MachineConfig{
 		Principals: []schema.PrincipalAssignment{
 			{Principal: testEntity(t, "service/stt/whisper"), Template: "bureau/template:whisper-stt"},
 		},
 	}
-	eventID, err := fc.writeMachineConfig(context.Background(), "bureau/fleet/prod/machine/workstation", config)
+	eventID, err := fc.writeMachineConfig(context.Background(), testMachineUserID("workstation"), config)
 	if err != nil {
 		t.Fatalf("writeMachineConfig: %v", err)
 	}
@@ -221,15 +221,15 @@ func TestWriteMachineConfig(t *testing.T) {
 	if store.writes[0].EventType != schema.EventTypeMachineConfig {
 		t.Errorf("write event type = %q, want %q", store.writes[0].EventType, schema.EventTypeMachineConfig)
 	}
-	if store.writes[0].StateKey != "bureau/fleet/prod/machine/workstation" {
-		t.Errorf("write state key = %q, want bureau/fleet/prod/machine/workstation", store.writes[0].StateKey)
+	if store.writes[0].StateKey != testMachineUserID("workstation").StateKey() {
+		t.Errorf("write state key = %q, want %s", store.writes[0].StateKey, testMachineUserID("workstation").StateKey())
 	}
 }
 
 func TestWriteMachineConfigNoConfigRoom(t *testing.T) {
 	fc, _ := newExecuteTestController(t)
 
-	_, err := fc.writeMachineConfig(context.Background(), "bureau/fleet/prod/machine/workstation", &schema.MachineConfig{})
+	_, err := fc.writeMachineConfig(context.Background(), testMachineUserID("workstation"), &schema.MachineConfig{})
 	if err == nil {
 		t.Fatal("expected error for missing config room")
 	}
@@ -366,24 +366,24 @@ func TestBuildAssignmentNilAuthorization(t *testing.T) {
 func TestPlaceHappyPath(t *testing.T) {
 	fc, store := newExecuteTestController(t)
 
-	fc.machines["bureau/fleet/prod/machine/workstation"] = &machineState{
+	fc.machines[testMachineUserID("workstation")] = &machineState{
 		info:         &schema.MachineInfo{Hostname: "workstation", MemoryTotalMB: 65536},
 		status:       &schema.MachineStatus{CPUPercent: 42},
-		assignments:  make(map[string]*schema.PrincipalAssignment),
+		assignments:  make(map[ref.UserID]*schema.PrincipalAssignment),
 		configRoomID: mustRoomID("!config-ws:local"),
 	}
-	fc.configRooms["bureau/fleet/prod/machine/workstation"] = mustRoomID("!config-ws:local")
+	fc.configRooms[testMachineUserID("workstation")] = mustRoomID("!config-ws:local")
 
-	fc.services["service/stt/whisper"] = &fleetServiceState{
+	fc.services[testServiceUserID("service/stt/whisper")] = &fleetServiceState{
 		definition: &fleet.FleetServiceContent{
 			Template: "bureau/template:whisper-stt",
 			Replicas: fleet.ReplicaSpec{Min: 1},
 		},
-		instances: make(map[string]*schema.PrincipalAssignment),
+		instances: make(map[ref.UserID]*schema.PrincipalAssignment),
 	}
 
 	// No existing config — readMachineConfig will return empty.
-	err := fc.place(context.Background(), "service/stt/whisper", "bureau/fleet/prod/machine/workstation")
+	err := fc.place(context.Background(), testServiceUserID("service/stt/whisper"), testMachineUserID("workstation"))
 	if err != nil {
 		t.Fatalf("place: %v", err)
 	}
@@ -392,7 +392,7 @@ func TestPlaceHappyPath(t *testing.T) {
 	if len(store.writes) != 1 {
 		t.Fatalf("expected 1 write, got %d", len(store.writes))
 	}
-	written := store.latestConfig("!config-ws:local", "bureau/fleet/prod/machine/workstation")
+	written := store.latestConfig("!config-ws:local", testMachineUserID("workstation").StateKey())
 	if len(written.Principals) != 1 {
 		t.Fatalf("expected 1 principal in written config, got %d", len(written.Principals))
 	}
@@ -404,12 +404,12 @@ func TestPlaceHappyPath(t *testing.T) {
 	}
 
 	// Verify in-memory model was updated.
-	machine := fc.machines["bureau/fleet/prod/machine/workstation"]
-	if _, exists := machine.assignments["service/stt/whisper"]; !exists {
+	machine := fc.machines[testMachineUserID("workstation")]
+	if _, exists := machine.assignments[testServiceUserID("service/stt/whisper")]; !exists {
 		t.Error("machine assignments should contain the placed service")
 	}
-	serviceState := fc.services["service/stt/whisper"]
-	if _, exists := serviceState.instances["bureau/fleet/prod/machine/workstation"]; !exists {
+	serviceState := fc.services[testServiceUserID("service/stt/whisper")]
+	if _, exists := serviceState.instances[testMachineUserID("workstation")]; !exists {
 		t.Error("service instances should contain the target machine")
 	}
 
@@ -422,24 +422,24 @@ func TestPlaceHappyPath(t *testing.T) {
 func TestPlacePreservesExistingPrincipals(t *testing.T) {
 	fc, store := newExecuteTestController(t)
 
-	fc.machines["bureau/fleet/prod/machine/workstation"] = &machineState{
+	fc.machines[testMachineUserID("workstation")] = &machineState{
 		info:         &schema.MachineInfo{Hostname: "workstation", MemoryTotalMB: 65536},
 		status:       &schema.MachineStatus{CPUPercent: 42},
-		assignments:  make(map[string]*schema.PrincipalAssignment),
+		assignments:  make(map[ref.UserID]*schema.PrincipalAssignment),
 		configRoomID: mustRoomID("!config-ws:local"),
 	}
-	fc.configRooms["bureau/fleet/prod/machine/workstation"] = mustRoomID("!config-ws:local")
+	fc.configRooms[testMachineUserID("workstation")] = mustRoomID("!config-ws:local")
 
-	fc.services["service/stt/whisper"] = &fleetServiceState{
+	fc.services[testServiceUserID("service/stt/whisper")] = &fleetServiceState{
 		definition: &fleet.FleetServiceContent{
 			Template: "bureau/template:whisper-stt",
 			Replicas: fleet.ReplicaSpec{Min: 1},
 		},
-		instances: make(map[string]*schema.PrincipalAssignment),
+		instances: make(map[ref.UserID]*schema.PrincipalAssignment),
 	}
 
 	// Seed an existing non-fleet principal.
-	store.seedConfig("!config-ws:local", "bureau/fleet/prod/machine/workstation", &schema.MachineConfig{
+	store.seedConfig("!config-ws:local", testMachineUserID("workstation").StateKey(), &schema.MachineConfig{
 		Principals: []schema.PrincipalAssignment{
 			{
 				Principal: testEntity(t, "agent/coding/main"),
@@ -449,12 +449,12 @@ func TestPlacePreservesExistingPrincipals(t *testing.T) {
 		},
 	})
 
-	err := fc.place(context.Background(), "service/stt/whisper", "bureau/fleet/prod/machine/workstation")
+	err := fc.place(context.Background(), testServiceUserID("service/stt/whisper"), testMachineUserID("workstation"))
 	if err != nil {
 		t.Fatalf("place: %v", err)
 	}
 
-	written := store.latestConfig("!config-ws:local", "bureau/fleet/prod/machine/workstation")
+	written := store.latestConfig("!config-ws:local", testMachineUserID("workstation").StateKey())
 	if len(written.Principals) != 2 {
 		t.Fatalf("expected 2 principals (existing + new), got %d", len(written.Principals))
 	}
@@ -475,13 +475,13 @@ func TestPlacePreservesExistingPrincipals(t *testing.T) {
 func TestPlaceServiceNotFound(t *testing.T) {
 	fc, _ := newExecuteTestController(t)
 
-	fc.machines["bureau/fleet/prod/machine/workstation"] = &machineState{
+	fc.machines[testMachineUserID("workstation")] = &machineState{
 		info:         &schema.MachineInfo{},
-		assignments:  make(map[string]*schema.PrincipalAssignment),
+		assignments:  make(map[ref.UserID]*schema.PrincipalAssignment),
 		configRoomID: mustRoomID("!config-ws:local"),
 	}
 
-	err := fc.place(context.Background(), "service/nonexistent", "bureau/fleet/prod/machine/workstation")
+	err := fc.place(context.Background(), testServiceUserID("service/nonexistent"), testMachineUserID("workstation"))
 	if err == nil {
 		t.Fatal("expected error for nonexistent service")
 	}
@@ -490,17 +490,17 @@ func TestPlaceServiceNotFound(t *testing.T) {
 func TestPlaceServiceNoDefinition(t *testing.T) {
 	fc, _ := newExecuteTestController(t)
 
-	fc.machines["bureau/fleet/prod/machine/workstation"] = &machineState{
+	fc.machines[testMachineUserID("workstation")] = &machineState{
 		info:         &schema.MachineInfo{},
-		assignments:  make(map[string]*schema.PrincipalAssignment),
+		assignments:  make(map[ref.UserID]*schema.PrincipalAssignment),
 		configRoomID: mustRoomID("!config-ws:local"),
 	}
-	fc.services["service/pending"] = &fleetServiceState{
+	fc.services[testServiceUserID("service/pending")] = &fleetServiceState{
 		definition: nil,
-		instances:  make(map[string]*schema.PrincipalAssignment),
+		instances:  make(map[ref.UserID]*schema.PrincipalAssignment),
 	}
 
-	err := fc.place(context.Background(), "service/pending", "bureau/fleet/prod/machine/workstation")
+	err := fc.place(context.Background(), testServiceUserID("service/pending"), testMachineUserID("workstation"))
 	if err == nil {
 		t.Fatal("expected error for service with no definition")
 	}
@@ -509,12 +509,12 @@ func TestPlaceServiceNoDefinition(t *testing.T) {
 func TestPlaceMachineNotFound(t *testing.T) {
 	fc, _ := newExecuteTestController(t)
 
-	fc.services["service/stt/whisper"] = &fleetServiceState{
+	fc.services[testServiceUserID("service/stt/whisper")] = &fleetServiceState{
 		definition: &fleet.FleetServiceContent{Template: "t"},
-		instances:  make(map[string]*schema.PrincipalAssignment),
+		instances:  make(map[ref.UserID]*schema.PrincipalAssignment),
 	}
 
-	err := fc.place(context.Background(), "service/stt/whisper", "bureau/fleet/prod/machine/nonexistent")
+	err := fc.place(context.Background(), testServiceUserID("service/stt/whisper"), testMachineUserID("nonexistent"))
 	if err == nil {
 		t.Fatal("expected error for nonexistent machine")
 	}
@@ -523,17 +523,17 @@ func TestPlaceMachineNotFound(t *testing.T) {
 func TestPlaceMachineNoConfigRoom(t *testing.T) {
 	fc, _ := newExecuteTestController(t)
 
-	fc.machines["bureau/fleet/prod/machine/workstation"] = &machineState{
+	fc.machines[testMachineUserID("workstation")] = &machineState{
 		info:        &schema.MachineInfo{},
-		assignments: make(map[string]*schema.PrincipalAssignment),
+		assignments: make(map[ref.UserID]*schema.PrincipalAssignment),
 		// configRoomID left at zero value: no config room.
 	}
-	fc.services["service/stt/whisper"] = &fleetServiceState{
+	fc.services[testServiceUserID("service/stt/whisper")] = &fleetServiceState{
 		definition: &fleet.FleetServiceContent{Template: "t"},
-		instances:  make(map[string]*schema.PrincipalAssignment),
+		instances:  make(map[ref.UserID]*schema.PrincipalAssignment),
 	}
 
-	err := fc.place(context.Background(), "service/stt/whisper", "bureau/fleet/prod/machine/workstation")
+	err := fc.place(context.Background(), testServiceUserID("service/stt/whisper"), testMachineUserID("workstation"))
 	if err == nil {
 		t.Fatal("expected error for machine with no config room")
 	}
@@ -546,20 +546,20 @@ func TestPlaceAlreadyPlaced(t *testing.T) {
 		Principal: testEntity(t, "service/stt/whisper"),
 		Labels:    map[string]string{"fleet_managed": "service/fleet/prod"},
 	}
-	fc.machines["bureau/fleet/prod/machine/workstation"] = &machineState{
+	fc.machines[testMachineUserID("workstation")] = &machineState{
 		info: &schema.MachineInfo{},
-		assignments: map[string]*schema.PrincipalAssignment{
-			"service/stt/whisper": existingAssignment,
+		assignments: map[ref.UserID]*schema.PrincipalAssignment{
+			testServiceUserID("service/stt/whisper"): existingAssignment,
 		},
 		configRoomID: mustRoomID("!config-ws:local"),
 	}
-	fc.configRooms["bureau/fleet/prod/machine/workstation"] = mustRoomID("!config-ws:local")
-	fc.services["service/stt/whisper"] = &fleetServiceState{
+	fc.configRooms[testMachineUserID("workstation")] = mustRoomID("!config-ws:local")
+	fc.services[testServiceUserID("service/stt/whisper")] = &fleetServiceState{
 		definition: &fleet.FleetServiceContent{Template: "t"},
-		instances:  make(map[string]*schema.PrincipalAssignment),
+		instances:  make(map[ref.UserID]*schema.PrincipalAssignment),
 	}
 
-	err := fc.place(context.Background(), "service/stt/whisper", "bureau/fleet/prod/machine/workstation")
+	err := fc.place(context.Background(), testServiceUserID("service/stt/whisper"), testMachineUserID("workstation"))
 	if err == nil {
 		t.Fatal("expected error for already-placed service")
 	}
@@ -577,27 +577,27 @@ func TestUnplaceHappyPath(t *testing.T) {
 		Labels:    map[string]string{"fleet_managed": "service/fleet/prod"},
 	}
 
-	fc.machines["bureau/fleet/prod/machine/workstation"] = &machineState{
+	fc.machines[testMachineUserID("workstation")] = &machineState{
 		info: &schema.MachineInfo{Hostname: "workstation"},
-		assignments: map[string]*schema.PrincipalAssignment{
-			"service/stt/whisper": existingAssignment,
+		assignments: map[ref.UserID]*schema.PrincipalAssignment{
+			testServiceUserID("service/stt/whisper"): existingAssignment,
 		},
 		configRoomID: mustRoomID("!config-ws:local"),
 	}
-	fc.configRooms["bureau/fleet/prod/machine/workstation"] = mustRoomID("!config-ws:local")
+	fc.configRooms[testMachineUserID("workstation")] = mustRoomID("!config-ws:local")
 
-	fc.services["service/stt/whisper"] = &fleetServiceState{
+	fc.services[testServiceUserID("service/stt/whisper")] = &fleetServiceState{
 		definition: &fleet.FleetServiceContent{
 			Template: "bureau/template:whisper-stt",
 			Replicas: fleet.ReplicaSpec{Min: 1},
 		},
-		instances: map[string]*schema.PrincipalAssignment{
-			"bureau/fleet/prod/machine/workstation": existingAssignment,
+		instances: map[ref.UserID]*schema.PrincipalAssignment{
+			testMachineUserID("workstation"): existingAssignment,
 		},
 	}
 
 	// Seed the Matrix config with the fleet assignment and a non-fleet one.
-	store.seedConfig("!config-ws:local", "bureau/fleet/prod/machine/workstation", &schema.MachineConfig{
+	store.seedConfig("!config-ws:local", testMachineUserID("workstation").StateKey(), &schema.MachineConfig{
 		Principals: []schema.PrincipalAssignment{
 			{
 				Principal: testEntity(t, "service/stt/whisper"),
@@ -613,13 +613,13 @@ func TestUnplaceHappyPath(t *testing.T) {
 		},
 	})
 
-	err := fc.unplace(context.Background(), "service/stt/whisper", "bureau/fleet/prod/machine/workstation")
+	err := fc.unplace(context.Background(), testServiceUserID("service/stt/whisper"), testMachineUserID("workstation"))
 	if err != nil {
 		t.Fatalf("unplace: %v", err)
 	}
 
 	// Verify the fleet assignment was removed but the non-fleet one preserved.
-	written := store.latestConfig("!config-ws:local", "bureau/fleet/prod/machine/workstation")
+	written := store.latestConfig("!config-ws:local", testMachineUserID("workstation").StateKey())
 	if len(written.Principals) != 1 {
 		t.Fatalf("expected 1 principal after unplace, got %d", len(written.Principals))
 	}
@@ -628,12 +628,12 @@ func TestUnplaceHappyPath(t *testing.T) {
 	}
 
 	// Verify in-memory model was updated.
-	machine := fc.machines["bureau/fleet/prod/machine/workstation"]
-	if _, exists := machine.assignments["service/stt/whisper"]; exists {
+	machine := fc.machines[testMachineUserID("workstation")]
+	if _, exists := machine.assignments[testServiceUserID("service/stt/whisper")]; exists {
 		t.Error("machine assignments should not contain the unplaced service")
 	}
-	serviceState := fc.services["service/stt/whisper"]
-	if _, exists := serviceState.instances["bureau/fleet/prod/machine/workstation"]; exists {
+	serviceState := fc.services[testServiceUserID("service/stt/whisper")]
+	if _, exists := serviceState.instances[testMachineUserID("workstation")]; exists {
 		t.Error("service instances should not contain the target machine")
 	}
 
@@ -646,13 +646,13 @@ func TestUnplaceHappyPath(t *testing.T) {
 func TestUnplaceNotPlaced(t *testing.T) {
 	fc, _ := newExecuteTestController(t)
 
-	fc.machines["bureau/fleet/prod/machine/workstation"] = &machineState{
+	fc.machines[testMachineUserID("workstation")] = &machineState{
 		info:         &schema.MachineInfo{},
-		assignments:  make(map[string]*schema.PrincipalAssignment),
+		assignments:  make(map[ref.UserID]*schema.PrincipalAssignment),
 		configRoomID: mustRoomID("!config-ws:local"),
 	}
 
-	err := fc.unplace(context.Background(), "service/stt/whisper", "bureau/fleet/prod/machine/workstation")
+	err := fc.unplace(context.Background(), testServiceUserID("service/stt/whisper"), testMachineUserID("workstation"))
 	if err == nil {
 		t.Fatal("expected error for service not placed on machine")
 	}
@@ -662,10 +662,10 @@ func TestUnplaceWrongFleetController(t *testing.T) {
 	fc, _ := newExecuteTestController(t)
 
 	// Assignment managed by a different fleet controller.
-	fc.machines["bureau/fleet/prod/machine/workstation"] = &machineState{
+	fc.machines[testMachineUserID("workstation")] = &machineState{
 		info: &schema.MachineInfo{},
-		assignments: map[string]*schema.PrincipalAssignment{
-			"service/stt/whisper": {
+		assignments: map[ref.UserID]*schema.PrincipalAssignment{
+			testServiceUserID("service/stt/whisper"): {
 				Principal: testEntity(t, "service/stt/whisper"),
 				Labels:    map[string]string{"fleet_managed": "service/fleet/staging"},
 			},
@@ -673,7 +673,7 @@ func TestUnplaceWrongFleetController(t *testing.T) {
 		configRoomID: mustRoomID("!config-ws:local"),
 	}
 
-	err := fc.unplace(context.Background(), "service/stt/whisper", "bureau/fleet/prod/machine/workstation")
+	err := fc.unplace(context.Background(), testServiceUserID("service/stt/whisper"), testMachineUserID("workstation"))
 	if err == nil {
 		t.Fatal("expected error for assignment managed by different fleet controller")
 	}
@@ -682,7 +682,7 @@ func TestUnplaceWrongFleetController(t *testing.T) {
 func TestUnplaceMachineNotFound(t *testing.T) {
 	fc, _ := newExecuteTestController(t)
 
-	err := fc.unplace(context.Background(), "service/stt/whisper", "bureau/fleet/prod/machine/nonexistent")
+	err := fc.unplace(context.Background(), testServiceUserID("service/stt/whisper"), testMachineUserID("nonexistent"))
 	if err == nil {
 		t.Fatal("expected error for nonexistent machine")
 	}
@@ -694,15 +694,16 @@ func TestReconcileUnderReplicated(t *testing.T) {
 	fc, store := newExecuteTestController(t)
 
 	// Two machines eligible for placement.
-	for _, name := range []string{"bureau/fleet/prod/machine/alpha", "bureau/fleet/prod/machine/beta"} {
+	for _, shortName := range []string{"alpha", "beta"} {
+		machineUID := testMachineUserID(shortName)
 		machine := standardMachine()
-		machine.configRoomID = mustRoomID("!config-" + name + ":local")
-		fc.machines[name] = machine
-		fc.configRooms[name] = machine.configRoomID
+		machine.configRoomID = mustRoomID("!config-bureau/fleet/prod/machine/" + shortName + ":local")
+		fc.machines[machineUID] = machine
+		fc.configRooms[machineUID] = machine.configRoomID
 	}
 
 	// Service needs min 2 replicas but has 0 instances.
-	fc.services["service/worker"] = &fleetServiceState{
+	fc.services[testServiceUserID("service/worker")] = &fleetServiceState{
 		definition: &fleet.FleetServiceContent{
 			Template: "bureau/template:worker",
 			Replicas: fleet.ReplicaSpec{Min: 2},
@@ -714,13 +715,13 @@ func TestReconcileUnderReplicated(t *testing.T) {
 				Requires: []string{"gpu"},
 			},
 		},
-		instances: make(map[string]*schema.PrincipalAssignment),
+		instances: make(map[ref.UserID]*schema.PrincipalAssignment),
 	}
 
 	fc.reconcile(context.Background())
 
 	// Both machines should have received a placement.
-	serviceState := fc.services["service/worker"]
+	serviceState := fc.services[testServiceUserID("service/worker")]
 	if len(serviceState.instances) != 2 {
 		t.Errorf("expected 2 instances after reconcile, got %d", len(serviceState.instances))
 	}
@@ -762,36 +763,37 @@ func TestReconcileOverReplicated(t *testing.T) {
 	machineAlpha.status.CPUPercent = 20
 	machineAlpha.status.MemoryUsedMB = 16000
 	machineAlpha.configRoomID = mustRoomID("!config-alpha:local")
-	machineAlpha.assignments = map[string]*schema.PrincipalAssignment{
-		"service/worker": fleetAssignment("alpha"),
+	machineAlpha.assignments = map[ref.UserID]*schema.PrincipalAssignment{
+		testServiceUserID("service/worker"): fleetAssignment("alpha"),
 	}
-	fc.machines["bureau/fleet/prod/machine/alpha"] = machineAlpha
-	fc.configRooms["bureau/fleet/prod/machine/alpha"] = mustRoomID("!config-alpha:local")
+	fc.machines[testMachineUserID("alpha")] = machineAlpha
+	fc.configRooms[testMachineUserID("alpha")] = mustRoomID("!config-alpha:local")
 
 	// Machine beta: high utilization (low score — should be removed).
 	machineBeta := standardMachine()
 	machineBeta.status.CPUPercent = 80
 	machineBeta.status.MemoryUsedMB = 55000
 	machineBeta.configRoomID = mustRoomID("!config-beta:local")
-	machineBeta.assignments = map[string]*schema.PrincipalAssignment{
-		"service/worker": fleetAssignment("beta"),
+	machineBeta.assignments = map[ref.UserID]*schema.PrincipalAssignment{
+		testServiceUserID("service/worker"): fleetAssignment("beta"),
 	}
-	fc.machines["bureau/fleet/prod/machine/beta"] = machineBeta
-	fc.configRooms["bureau/fleet/prod/machine/beta"] = mustRoomID("!config-beta:local")
+	fc.machines[testMachineUserID("beta")] = machineBeta
+	fc.configRooms[testMachineUserID("beta")] = mustRoomID("!config-beta:local")
 
-	fc.services["service/worker"] = &fleetServiceState{
+	fc.services[testServiceUserID("service/worker")] = &fleetServiceState{
 		definition: definition,
-		instances: map[string]*schema.PrincipalAssignment{
-			"bureau/fleet/prod/machine/alpha": fleetAssignment("alpha"),
-			"bureau/fleet/prod/machine/beta":  fleetAssignment("beta"),
+		instances: map[ref.UserID]*schema.PrincipalAssignment{
+			testMachineUserID("alpha"): fleetAssignment("alpha"),
+			testMachineUserID("beta"):  fleetAssignment("beta"),
 		},
 	}
 
 	// Seed configs so unplace can read them.
-	for _, name := range []string{"bureau/fleet/prod/machine/alpha", "bureau/fleet/prod/machine/beta"} {
-		store.seedConfig(fc.configRooms[name].String(), name, &schema.MachineConfig{
+	for _, shortName := range []string{"alpha", "beta"} {
+		machineUID := testMachineUserID(shortName)
+		store.seedConfig(fc.configRooms[machineUID].String(), machineUID.StateKey(), &schema.MachineConfig{
 			Principals: []schema.PrincipalAssignment{
-				*fleetAssignment(name),
+				*fleetAssignment(shortName),
 			},
 		})
 	}
@@ -799,14 +801,14 @@ func TestReconcileOverReplicated(t *testing.T) {
 	fc.reconcile(context.Background())
 
 	// Should have removed the lowest-scored machine (beta, higher CPU).
-	serviceState := fc.services["service/worker"]
+	serviceState := fc.services[testServiceUserID("service/worker")]
 	if len(serviceState.instances) != 1 {
 		t.Fatalf("expected 1 instance after reconcile, got %d", len(serviceState.instances))
 	}
-	if _, exists := serviceState.instances["bureau/fleet/prod/machine/alpha"]; !exists {
+	if _, exists := serviceState.instances[testMachineUserID("alpha")]; !exists {
 		t.Error("bureau/fleet/prod/machine/alpha should be the remaining instance (higher score)")
 	}
-	if _, exists := serviceState.instances["bureau/fleet/prod/machine/beta"]; exists {
+	if _, exists := serviceState.instances[testMachineUserID("beta")]; exists {
 		t.Error("bureau/fleet/prod/machine/beta should have been removed (lower score)")
 	}
 
@@ -830,13 +832,13 @@ func TestReconcileAlreadySatisfied(t *testing.T) {
 		AutoStart: true,
 		Labels:    map[string]string{"fleet_managed": "service/fleet/prod"},
 	}
-	machine.assignments = map[string]*schema.PrincipalAssignment{
-		"service/worker": existingAssignment,
+	machine.assignments = map[ref.UserID]*schema.PrincipalAssignment{
+		testServiceUserID("service/worker"): existingAssignment,
 	}
-	fc.machines["bureau/fleet/prod/machine/workstation"] = machine
-	fc.configRooms["bureau/fleet/prod/machine/workstation"] = mustRoomID("!config-ws:local")
+	fc.machines[testMachineUserID("workstation")] = machine
+	fc.configRooms[testMachineUserID("workstation")] = mustRoomID("!config-ws:local")
 
-	fc.services["service/worker"] = &fleetServiceState{
+	fc.services[testServiceUserID("service/worker")] = &fleetServiceState{
 		definition: &fleet.FleetServiceContent{
 			Template: "bureau/template:worker",
 			Replicas: fleet.ReplicaSpec{Min: 1},
@@ -848,8 +850,8 @@ func TestReconcileAlreadySatisfied(t *testing.T) {
 				Requires: []string{"gpu"},
 			},
 		},
-		instances: map[string]*schema.PrincipalAssignment{
-			"bureau/fleet/prod/machine/workstation": existingAssignment,
+		instances: map[ref.UserID]*schema.PrincipalAssignment{
+			testMachineUserID("workstation"): existingAssignment,
 		},
 	}
 
@@ -864,9 +866,9 @@ func TestReconcileAlreadySatisfied(t *testing.T) {
 func TestReconcileSkipsServicesWithoutDefinition(t *testing.T) {
 	fc, store := newExecuteTestController(t)
 
-	fc.services["service/orphan"] = &fleetServiceState{
+	fc.services[testServiceUserID("service/orphan")] = &fleetServiceState{
 		definition: nil,
-		instances:  make(map[string]*schema.PrincipalAssignment),
+		instances:  make(map[ref.UserID]*schema.PrincipalAssignment),
 	}
 
 	fc.reconcile(context.Background())
@@ -882,10 +884,10 @@ func TestReconcileInsufficientMachines(t *testing.T) {
 	// One eligible machine, but service wants min 3.
 	machine := standardMachine()
 	machine.configRoomID = mustRoomID("!config-ws:local")
-	fc.machines["bureau/fleet/prod/machine/workstation"] = machine
-	fc.configRooms["bureau/fleet/prod/machine/workstation"] = mustRoomID("!config-ws:local")
+	fc.machines[testMachineUserID("workstation")] = machine
+	fc.configRooms[testMachineUserID("workstation")] = mustRoomID("!config-ws:local")
 
-	fc.services["service/worker"] = &fleetServiceState{
+	fc.services[testServiceUserID("service/worker")] = &fleetServiceState{
 		definition: &fleet.FleetServiceContent{
 			Template: "bureau/template:worker",
 			Replicas: fleet.ReplicaSpec{Min: 3},
@@ -897,13 +899,13 @@ func TestReconcileInsufficientMachines(t *testing.T) {
 				Requires: []string{"gpu"},
 			},
 		},
-		instances: make(map[string]*schema.PrincipalAssignment),
+		instances: make(map[ref.UserID]*schema.PrincipalAssignment),
 	}
 
 	fc.reconcile(context.Background())
 
 	// Should have placed on the 1 available machine despite wanting 3.
-	serviceState := fc.services["service/worker"]
+	serviceState := fc.services[testServiceUserID("service/worker")]
 	if len(serviceState.instances) != 1 {
 		t.Errorf("expected 1 instance (placed on only available machine), got %d", len(serviceState.instances))
 	}
@@ -923,41 +925,41 @@ func TestRebuildServiceInstances(t *testing.T) {
 		Labels:    map[string]string{"fleet_managed": "service/fleet/prod"},
 	}
 
-	fc.machines["bureau/fleet/prod/machine/workstation"] = &machineState{
+	fc.machines[testMachineUserID("workstation")] = &machineState{
 		info: &schema.MachineInfo{Hostname: "workstation"},
-		assignments: map[string]*schema.PrincipalAssignment{
-			"service/stt/whisper": assignment,
+		assignments: map[ref.UserID]*schema.PrincipalAssignment{
+			testServiceUserID("service/stt/whisper"): assignment,
 		},
 		configRoomID: mustRoomID("!config-ws:local"),
 	}
-	fc.machines["bureau/fleet/prod/machine/server"] = &machineState{
+	fc.machines[testMachineUserID("server")] = &machineState{
 		info: &schema.MachineInfo{Hostname: "server"},
-		assignments: map[string]*schema.PrincipalAssignment{
-			"service/stt/whisper": assignment,
+		assignments: map[ref.UserID]*schema.PrincipalAssignment{
+			testServiceUserID("service/stt/whisper"): assignment,
 		},
 		configRoomID: mustRoomID("!config-srv:local"),
 	}
 
 	// Service exists but instances are empty (simulating post-initial-sync
 	// before rebuild).
-	fc.services["service/stt/whisper"] = &fleetServiceState{
+	fc.services[testServiceUserID("service/stt/whisper")] = &fleetServiceState{
 		definition: &fleet.FleetServiceContent{
 			Template: "bureau/template:whisper-stt",
 			Replicas: fleet.ReplicaSpec{Min: 2},
 		},
-		instances: make(map[string]*schema.PrincipalAssignment),
+		instances: make(map[ref.UserID]*schema.PrincipalAssignment),
 	}
 
 	fc.rebuildServiceInstances()
 
-	serviceState := fc.services["service/stt/whisper"]
+	serviceState := fc.services[testServiceUserID("service/stt/whisper")]
 	if len(serviceState.instances) != 2 {
 		t.Fatalf("expected 2 instances after rebuild, got %d", len(serviceState.instances))
 	}
-	if _, exists := serviceState.instances["bureau/fleet/prod/machine/workstation"]; !exists {
+	if _, exists := serviceState.instances[testMachineUserID("workstation")]; !exists {
 		t.Error("instances should contain bureau/fleet/prod/machine/workstation")
 	}
-	if _, exists := serviceState.instances["bureau/fleet/prod/machine/server"]; !exists {
+	if _, exists := serviceState.instances[testMachineUserID("server")]; !exists {
 		t.Error("instances should contain bureau/fleet/prod/machine/server")
 	}
 }
@@ -966,24 +968,24 @@ func TestRebuildServiceInstancesIgnoresUnknownServices(t *testing.T) {
 	fc, _ := newExecuteTestController(t)
 
 	// Machine has an assignment for a service not in fc.services.
-	fc.machines["bureau/fleet/prod/machine/workstation"] = &machineState{
-		assignments: map[string]*schema.PrincipalAssignment{
-			"service/unknown": {
+	fc.machines[testMachineUserID("workstation")] = &machineState{
+		assignments: map[ref.UserID]*schema.PrincipalAssignment{
+			testServiceUserID("service/unknown"): {
 				Principal: testEntity(t, "service/unknown"),
 				Labels:    map[string]string{"fleet_managed": "service/fleet/prod"},
 			},
 		},
 	}
 
-	fc.services["service/worker"] = &fleetServiceState{
+	fc.services[testServiceUserID("service/worker")] = &fleetServiceState{
 		definition: &fleet.FleetServiceContent{Template: "t"},
-		instances:  make(map[string]*schema.PrincipalAssignment),
+		instances:  make(map[ref.UserID]*schema.PrincipalAssignment),
 	}
 
 	// Should not panic or add stale entries.
 	fc.rebuildServiceInstances()
 
-	if len(fc.services["service/worker"].instances) != 0 {
+	if len(fc.services[testServiceUserID("service/worker")].instances) != 0 {
 		t.Error("worker should have 0 instances (machine has unrelated assignment)")
 	}
 }

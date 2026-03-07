@@ -19,7 +19,7 @@ const (
 	// invalidate cached tokens and revoke external API keys provisioned
 	// through the affected machine.
 	//
-	// State key: machine localpart (e.g., "machine/workstation")
+	// State key: machine user ID (e.g., "@bureau/fleet/prod/machine/workstation:server")
 	// Room: #bureau/machine:<server>
 	EventTypeCredentialRevocation ref.EventType = "m.bureau.credential_revocation"
 )

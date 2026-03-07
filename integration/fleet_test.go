@@ -222,7 +222,7 @@ func TestMachineJoinsFleet(t *testing.T) {
 
 	// Verify machine key algorithm and value.
 	machineKeyJSON, err := admin.GetStateEvent(ctx, machine.MachineRoomID,
-		schema.EventTypeMachineKey, machine.Name)
+		schema.EventTypeMachineKey, machine.UserID.StateKey())
 	if err != nil {
 		t.Fatalf("get machine key: %v", err)
 	}
@@ -242,7 +242,7 @@ func TestMachineJoinsFleet(t *testing.T) {
 
 	// Verify MachineStatus contents.
 	statusJSON, err := admin.GetStateEvent(ctx, machine.MachineRoomID,
-		schema.EventTypeMachineStatus, machine.Name)
+		schema.EventTypeMachineStatus, machine.UserID.StateKey())
 	if err != nil {
 		t.Fatalf("get machine status: %v", err)
 	}
@@ -371,7 +371,7 @@ func TestPrincipalAssignment(t *testing.T) {
 	// Verify MachineStatus reflects the running sandbox. The daemon publishes
 	// status on its interval; watch from the current sync position.
 	sandboxWatch := watchRoom(t, admin, machine.MachineRoomID)
-	sandboxWatch.WaitForMachineStatus(t, machine.Name, func(status schema.MachineStatus) bool {
+	sandboxWatch.WaitForMachineStatus(t, machine.UserID.StateKey(), func(status schema.MachineStatus) bool {
 		return status.Sandboxes.Running > 0
 	}, "MachineStatus with running sandboxes")
 }
@@ -433,7 +433,7 @@ func TestOperatorFlow(t *testing.T) {
 		// its running map when publishing the heartbeat). ListTargets reads
 		// from the same running map, so a single call suffices after this.
 		listWatch := watchRoom(t, admin, machine.MachineRoomID)
-		listWatch.WaitForMachineStatus(t, machine.Name, func(status schema.MachineStatus) bool {
+		listWatch.WaitForMachineStatus(t, machine.UserID.StateKey(), func(status schema.MachineStatus) bool {
 			return status.Sandboxes.Running > 0
 		}, "MachineStatus with running sandboxes for ListTargets")
 
@@ -962,7 +962,7 @@ func TestConfigReconciliation(t *testing.T) {
 
 		// Verify MachineStatus reflects zero running sandboxes.
 		zeroWatch := watchRoom(t, admin, machine.MachineRoomID)
-		zeroWatch.WaitForMachineStatus(t, machine.Name, func(status schema.MachineStatus) bool {
+		zeroWatch.WaitForMachineStatus(t, machine.UserID.StateKey(), func(status schema.MachineStatus) bool {
 			return status.Sandboxes.Running == 0
 		}, "MachineStatus with 0 running sandboxes")
 	})
@@ -1143,7 +1143,7 @@ func TestCrossMachineRequiredService(t *testing.T) {
 	// The daemon's reconcile path for this agent:
 	//   resolveServiceMounts("test-svc")
 	//     → resolveServiceBinding("test-svc") → svc.Entity
-	//     → d.services[entity.Localpart()] → service on provider machine
+	//     → d.services[entity.UserID()] → service on provider machine
 	//     → resolveRemoteServiceMount → startTunnel → tunnel socket
 	//     → launcherServiceMount{Role: "test-svc", SocketPath: tunnel}
 	//   create-sandbox IPC with the tunnel socket as a service mount

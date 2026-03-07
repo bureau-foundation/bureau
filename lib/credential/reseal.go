@@ -161,22 +161,22 @@ func Reseal(ctx context.Context, session messaging.Session, params ResealParams)
 		return nil, fmt.Errorf("no machines with valid keys found in fleet machine room %s", params.MachineRoomID)
 	}
 
-	// Build recipient list: sorted machine keys + escrow.
-	machineLocalparts := make([]string, 0, len(machineKeys))
-	for localpart := range machineKeys {
-		machineLocalparts = append(machineLocalparts, localpart)
+	// Build recipient list: sorted machine state_keys + escrow.
+	machineStateKeys := make([]string, 0, len(machineKeys))
+	for stateKey := range machineKeys {
+		machineStateKeys = append(machineStateKeys, stateKey)
 	}
-	sort.Strings(machineLocalparts)
+	sort.Strings(machineStateKeys)
 
 	recipientKeys := make([]string, 0, len(machineKeys)+1)
 	encryptedFor := make([]string, 0, len(machineKeys)+1)
 
-	for _, localpart := range machineLocalparts {
-		key := machineKeys[localpart]
+	for _, stateKey := range machineStateKeys {
+		key := machineKeys[stateKey]
 		recipientKeys = append(recipientKeys, key.PublicKey)
-		machineRef, parseErr := ref.ParseMachine(localpart, params.Fleet.Server())
+		machineRef, parseErr := ref.ParseMachineStateKey(stateKey)
 		if parseErr != nil {
-			return nil, fmt.Errorf("constructing machine ref for %q: %w", localpart, parseErr)
+			return nil, fmt.Errorf("constructing machine ref for %q: %w", stateKey, parseErr)
 		}
 		encryptedFor = append(encryptedFor, machineRef.UserID().String())
 	}

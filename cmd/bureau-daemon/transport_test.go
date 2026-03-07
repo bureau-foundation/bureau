@@ -24,15 +24,16 @@ import (
 )
 
 // testServiceEntry constructs a fleet-scoped service map entry for tests.
-// Returns the fleet-scoped localpart (map key) and the schema.Service value.
-// The service name uses hierarchical format (e.g., "stt/whisper").
+// Returns the service user ID (map key, matching the EventTypeService state_key)
+// and the schema.Service value. The service name uses hierarchical format
+// (e.g., "stt/whisper").
 func testServiceEntry(t *testing.T, fleet ref.Fleet, serviceName string, machine ref.Machine, endpoints map[string]string) (string, *schema.Service) {
 	t.Helper()
 	serviceRef, err := ref.NewService(fleet, serviceName)
 	if err != nil {
 		t.Fatalf("construct test service ref %q: %v", serviceName, err)
 	}
-	return serviceRef.Localpart(), &schema.Service{
+	return serviceRef.UserID().StateKey(), &schema.Service{
 		Principal: serviceRef.Entity(),
 		Machine:   machine,
 		Endpoints: endpoints,
@@ -1021,7 +1022,7 @@ func TestTunnelEndpointRouting(t *testing.T) {
 	servicePrincipal := serviceRef.Entity()
 
 	// Register the service with both endpoints in the provider daemon's directory.
-	providerDaemon.services[serviceLocalpart] = &schema.Service{
+	providerDaemon.services[servicePrincipal.UserID().StateKey()] = &schema.Service{
 		Principal: servicePrincipal,
 		Machine:   providerDaemon.machine,
 		Endpoints: map[string]string{

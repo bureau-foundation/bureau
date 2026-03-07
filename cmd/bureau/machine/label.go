@@ -331,7 +331,7 @@ func modifyMachineLabels(ctx context.Context, session messaging.Session, machine
 		return nil, cli.Transient("resolving fleet machine room %s: %w", machineRoomAlias, err)
 	}
 
-	stateKey := machine.Localpart()
+	stateKey := machine.UserID().StateKey()
 	info, err := messaging.GetState[schema.MachineInfo](ctx, session, machineRoomID, schema.EventTypeMachineInfo, stateKey)
 	if err != nil {
 		if messaging.IsMatrixError(err, messaging.ErrCodeNotFound) {

@@ -142,7 +142,7 @@ func Revoke(ctx context.Context, adminSession *messaging.DirectSession, admin me
 	machine := params.Machine
 	fleet := machine.Fleet()
 	adminUserID := adminSession.UserID()
-	machineUsername := machine.Localpart()
+	machineStateKey := machine.UserID().StateKey()
 	machineUserID := machine.UserID()
 
 	logger.Warn("emergency revocation initiated",
@@ -249,14 +249,14 @@ func Revoke(ctx context.Context, adminSession *messaging.DirectSession, admin me
 
 	// Clear state events. The machine is already kicked from all
 	// rooms, so it cannot overwrite these cleared values.
-	_, err = adminSession.SendStateEvent(ctx, machineRoomID, schema.EventTypeMachineKey, machineUsername, map[string]any{})
+	_, err = adminSession.SendStateEvent(ctx, machineRoomID, schema.EventTypeMachineKey, machineStateKey, map[string]any{})
 	if err != nil {
 		logger.Warn("could not clear machine_key", "error", err)
 	} else {
 		logger.Info("cleared machine_key")
 	}
 
-	_, err = adminSession.SendStateEvent(ctx, machineRoomID, schema.EventTypeMachineStatus, machineUsername, map[string]any{})
+	_, err = adminSession.SendStateEvent(ctx, machineRoomID, schema.EventTypeMachineStatus, machineStateKey, map[string]any{})
 	if err != nil {
 		logger.Warn("could not clear machine_status", "error", err)
 	} else {
@@ -267,7 +267,7 @@ func Revoke(ctx context.Context, adminSession *messaging.DirectSession, admin me
 	var credentialKeys []string
 
 	if configRoomExists {
-		_, err = adminSession.SendStateEvent(ctx, configRoomID, schema.EventTypeMachineConfig, machineUsername, map[string]any{})
+		_, err = adminSession.SendStateEvent(ctx, configRoomID, schema.EventTypeMachineConfig, machineStateKey, map[string]any{})
 		if err != nil {
 			logger.Warn("could not clear machine_config", "error", err)
 		} else {
@@ -287,7 +287,7 @@ func Revoke(ctx context.Context, adminSession *messaging.DirectSession, admin me
 	// Other machines and future connectors watch for this event to
 	// invalidate cached tokens and revoke external API keys.
 	revocationContent := schema.CredentialRevocationContent{
-		Machine:            machineUsername,
+		Machine:            machine.Localpart(),
 		MachineUserID:      machineUserID,
 		Principals:         principals,
 		CredentialKeys:     credentialKeys,
@@ -297,7 +297,7 @@ func Revoke(ctx context.Context, adminSession *messaging.DirectSession, admin me
 		AccountDeactivated: accountDeactivated,
 	}
 	_, err = adminSession.SendStateEvent(ctx, machineRoomID,
-		schema.EventTypeCredentialRevocation, machineUsername, revocationContent)
+		schema.EventTypeCredentialRevocation, machineStateKey, revocationContent)
 	if err != nil {
 		logger.Warn("could not publish revocation event", "error", err)
 	} else {

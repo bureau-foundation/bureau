@@ -190,11 +190,11 @@ func TestFleetProvision_SkipsDecommissionedMachines(t *testing.T) {
 		getRoomState: func(_ context.Context, _ ref.RoomID) ([]messaging.Event, error) {
 			return []messaging.Event{
 				// Active machine with valid key.
-				makeMachineKeyEvent("my_bureau/fleet/prod/machine/gpu-box", "age-x25519", keypairActive.PublicKey),
+				makeMachineKeyEvent("my_bureau/fleet/prod/machine/gpu-box:bureau.local", "age-x25519", keypairActive.PublicKey),
 				// Decommissioned machine (empty public key).
-				makeMachineKeyEvent("my_bureau/fleet/prod/machine/old-box", "age-x25519", ""),
+				makeMachineKeyEvent("my_bureau/fleet/prod/machine/old-box:bureau.local", "age-x25519", ""),
 				// Machine with wrong algorithm (skipped).
-				makeMachineKeyEvent("my_bureau/fleet/prod/machine/rsa-box", "rsa-4096", "not-an-age-key"),
+				makeMachineKeyEvent("my_bureau/fleet/prod/machine/rsa-box:bureau.local", "rsa-4096", "not-an-age-key"),
 			}, nil
 		},
 		sendStateEvent: func(_ context.Context, _ ref.RoomID, _ ref.EventType, _ string, _ any) (ref.EventID, error) {
@@ -247,8 +247,8 @@ func TestFleetProvision_HappyPathMultipleMachines(t *testing.T) {
 			emptyStateKey := ""
 			return []messaging.Event{
 				{Type: "m.room.create", StateKey: &emptyStateKey, Content: map[string]any{}},
-				makeMachineKeyEvent("my_bureau/fleet/prod/machine/alpha", "age-x25519", keypairA.PublicKey),
-				makeMachineKeyEvent("my_bureau/fleet/prod/machine/beta", "age-x25519", keypairB.PublicKey),
+				makeMachineKeyEvent("my_bureau/fleet/prod/machine/alpha:bureau.local", "age-x25519", keypairA.PublicKey),
+				makeMachineKeyEvent("my_bureau/fleet/prod/machine/beta:bureau.local", "age-x25519", keypairB.PublicKey),
 			}, nil
 		},
 		sendStateEvent: func(_ context.Context, roomID ref.RoomID, eventType ref.EventType, stateKey string, content any) (ref.EventID, error) {
@@ -338,7 +338,7 @@ func TestFleetProvision_HappyPathWithEscrowKey(t *testing.T) {
 		userID: mustUserID("@operator:bureau.local"),
 		getRoomState: func(_ context.Context, _ ref.RoomID) ([]messaging.Event, error) {
 			return []messaging.Event{
-				makeMachineKeyEvent("my_bureau/fleet/prod/machine/solo", "age-x25519", machineKeypair.PublicKey),
+				makeMachineKeyEvent("my_bureau/fleet/prod/machine/solo:bureau.local", "age-x25519", machineKeypair.PublicKey),
 			}, nil
 		},
 		sendStateEvent: func(_ context.Context, _ ref.RoomID, _ ref.EventType, _ string, _ any) (ref.EventID, error) {
@@ -382,7 +382,7 @@ func TestFleetProvision_InvalidEscrowKey(t *testing.T) {
 		userID: mustUserID("@operator:bureau.local"),
 		getRoomState: func(_ context.Context, _ ref.RoomID) ([]messaging.Event, error) {
 			return []messaging.Event{
-				makeMachineKeyEvent("my_bureau/fleet/prod/machine/solo", "age-x25519", machineKeypair.PublicKey),
+				makeMachineKeyEvent("my_bureau/fleet/prod/machine/solo:bureau.local", "age-x25519", machineKeypair.PublicKey),
 			}, nil
 		},
 	}
@@ -412,7 +412,7 @@ func TestFleetProvision_SendStateEventFails(t *testing.T) {
 		userID: mustUserID("@operator:bureau.local"),
 		getRoomState: func(_ context.Context, _ ref.RoomID) ([]messaging.Event, error) {
 			return []messaging.Event{
-				makeMachineKeyEvent("my_bureau/fleet/prod/machine/solo", "age-x25519", machineKeypair.PublicKey),
+				makeMachineKeyEvent("my_bureau/fleet/prod/machine/solo:bureau.local", "age-x25519", machineKeypair.PublicKey),
 			}, nil
 		},
 		sendStateEvent: func(_ context.Context, _ ref.RoomID, _ ref.EventType, _ string, _ any) (ref.EventID, error) {
@@ -493,7 +493,7 @@ func TestFleetProvision_CredentialEventOmitsPrincipal(t *testing.T) {
 		userID: mustUserID("@operator:bureau.local"),
 		getRoomState: func(_ context.Context, _ ref.RoomID) ([]messaging.Event, error) {
 			return []messaging.Event{
-				makeMachineKeyEvent("my_bureau/fleet/prod/machine/solo", "age-x25519", machineKeypair.PublicKey),
+				makeMachineKeyEvent("my_bureau/fleet/prod/machine/solo:bureau.local", "age-x25519", machineKeypair.PublicKey),
 			}, nil
 		},
 		sendStateEvent: func(_ context.Context, _ ref.RoomID, _ ref.EventType, _ string, content any) (ref.EventID, error) {

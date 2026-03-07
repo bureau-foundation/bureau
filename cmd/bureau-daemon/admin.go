@@ -114,7 +114,7 @@ func (d *Daemon) handleProvisionCredential(ctx context.Context, token *serviceto
 
 	// Construct a fleet-scoped Entity from the bare account localpart
 	// so we can use it for readCredentials (which derives the state
-	// key from Entity.Localpart()) and for the credential state key.
+	// key from Entity.UserID()) and for the credential state key.
 	principalEntity, err := ref.NewEntityFromAccountLocalpart(d.fleet, request.Principal)
 	if err != nil {
 		return nil, fmt.Errorf("invalid principal %q: %w", request.Principal, err)
@@ -182,7 +182,7 @@ func (d *Daemon) handleProvisionCredential(ctx context.Context, token *serviceto
 		updatedCredentials.EncryptedFor = recipientKeys
 	}
 
-	credentialStateKey := principalEntity.Localpart()
+	credentialStateKey := principalEntity.UserID().StateKey()
 	if _, err := d.session.SendStateEvent(ctx, d.configRoomID, schema.EventTypeCredentials, credentialStateKey, updatedCredentials); err != nil {
 		return nil, fmt.Errorf("publishing updated credentials: %w", err)
 	}

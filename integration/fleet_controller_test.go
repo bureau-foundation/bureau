@@ -178,13 +178,14 @@ func fleetClient(t *testing.T, fc *fleetController, token []byte) *service.Servi
 }
 
 // publishFleetService publishes a FleetServiceContent state event to
-// the fleet room. The state key is the service localpart.
-func publishFleetService(t *testing.T, admin *messaging.DirectSession, fleetRoomID ref.RoomID, serviceLocalpart string, definition fleetschema.FleetServiceContent) {
+// the fleet room. The state key is the service's federation-safe state
+// key (localpart:server, without the @ prefix).
+func publishFleetService(t *testing.T, admin *messaging.DirectSession, fleetRoomID ref.RoomID, serviceStateKey string, definition fleetschema.FleetServiceContent) {
 	t.Helper()
 
-	_, err := admin.SendStateEvent(t.Context(), fleetRoomID, schema.EventTypeFleetService, serviceLocalpart, definition)
+	_, err := admin.SendStateEvent(t.Context(), fleetRoomID, schema.EventTypeFleetService, serviceStateKey, definition)
 	if err != nil {
-		t.Fatalf("publish fleet service %s: %v", serviceLocalpart, err)
+		t.Fatalf("publish fleet service %s: %v", serviceStateKey, err)
 	}
 }
 
@@ -192,12 +193,12 @@ func publishFleetService(t *testing.T, admin *messaging.DirectSession, fleetRoom
 // event, removing the service from the fleet controller's tracking map.
 // This matches the production clearFleetRegistration() behavior in
 // cmd/bureau/service/destroy.go.
-func clearFleetService(t *testing.T, admin *messaging.DirectSession, fleetRoomID ref.RoomID, serviceLocalpart string) {
+func clearFleetService(t *testing.T, admin *messaging.DirectSession, fleetRoomID ref.RoomID, serviceStateKey string) {
 	t.Helper()
 
-	_, err := admin.SendStateEvent(t.Context(), fleetRoomID, schema.EventTypeFleetService, serviceLocalpart, struct{}{})
+	_, err := admin.SendStateEvent(t.Context(), fleetRoomID, schema.EventTypeFleetService, serviceStateKey, struct{}{})
 	if err != nil {
-		t.Fatalf("clear fleet service %s: %v", serviceLocalpart, err)
+		t.Fatalf("clear fleet service %s: %v", serviceStateKey, err)
 	}
 }
 
@@ -233,7 +234,7 @@ func grantFleetControllerConfigAccess(t *testing.T, admin *messaging.DirectSessi
 // startFleetController returns the machine is guaranteed to be in the model.
 // If the machine is missing, it's a bug in the fleet controller startup
 // sequence, not a timing issue.
-func assertFleetMachine(t *testing.T, client *service.ServiceClient, machineLocalpart string) {
+func assertFleetMachine(t *testing.T, client *service.ServiceClient, machineIdentifier string) {
 	t.Helper()
 
 	var response fleetListMachinesResponse
@@ -242,12 +243,12 @@ func assertFleetMachine(t *testing.T, client *service.ServiceClient, machineLoca
 	}
 
 	for _, machine := range response.Machines {
-		if machine.Localpart == machineLocalpart {
+		if machine.Localpart == machineIdentifier {
 			return
 		}
 	}
 
-	t.Fatalf("machine %q not found in fleet controller model (model has %d machines)", machineLocalpart, len(response.Machines))
+	t.Fatalf("machine %q not found in fleet controller model (model has %d machines)", machineIdentifier, len(response.Machines))
 }
 
 // waitForFleetConfigRoom waits for the fleet controller to discover and
@@ -263,15 +264,15 @@ func assertFleetMachine(t *testing.T, client *service.ServiceClient, machineLoca
 // The fleetWatch must be created on the fleet room BEFORE starting the
 // fleet controller so the admin's sync checkpoint captures the
 // notification event.
-func waitForFleetConfigRoom(t *testing.T, fleetWatch *roomWatch, fc *fleetController, machineLocalpart string) {
+func waitForFleetConfigRoom(t *testing.T, fleetWatch *roomWatch, fc *fleetController, machineIdentifier string) {
 	t.Helper()
 
 	waitForNotification[fleetschema.FleetConfigRoomDiscoveredMessage](
 		t, fleetWatch, fleetschema.MsgTypeFleetConfigRoomDiscovered, fc.UserID,
 		func(m fleetschema.FleetConfigRoomDiscoveredMessage) bool {
-			return m.Machine == machineLocalpart
+			return m.Machine == machineIdentifier
 		},
-		"fleet controller discovers config room for "+machineLocalpart,
+		"fleet controller discovers config room for "+machineIdentifier,
 	)
 }
 
@@ -283,16 +284,28 @@ func waitForFleetConfigRoom(t *testing.T, fleetWatch *roomWatch, fc *fleetContro
 // The fleetWatch must be created on the fleet room BEFORE publishing the
 // service definition so the admin's sync checkpoint captures the
 // notification event.
-func waitForFleetService(t *testing.T, fleetWatch *roomWatch, fc *fleetController, serviceLocalpart string) {
+func waitForFleetService(t *testing.T, fleetWatch *roomWatch, fc *fleetController, serviceIdentifier string) {
 	t.Helper()
 
 	waitForNotification[fleetschema.FleetServiceDiscoveredMessage](
 		t, fleetWatch, fleetschema.MsgTypeFleetServiceDiscovered, fc.UserID,
 		func(m fleetschema.FleetServiceDiscoveredMessage) bool {
-			return m.Service == serviceLocalpart
+			return m.Service == serviceIdentifier
 		},
-		"fleet controller discovers service "+serviceLocalpart,
+		"fleet controller discovers service "+serviceIdentifier,
 	)
+}
+
+// fleetServiceUserID constructs a ref.UserID for a fleet service given
+// the fleet reference and the service name (e.g., "stt/lifecycle").
+// The service name is the part after "service/" in the account localpart.
+func fleetServiceUserID(t *testing.T, fleet *testFleet, name string) ref.UserID {
+	t.Helper()
+	svcRef, err := ref.NewService(fleet.Ref, name)
+	if err != nil {
+		t.Fatalf("create service ref for %q: %v", name, err)
+	}
+	return svcRef.UserID()
 }
 
 // mintFleetToken creates a fleet service token signed by the machine's
@@ -421,7 +434,7 @@ func TestFleetControllerLifecycle(t *testing.T) {
 	// --- Sub-test: list machines ---
 	t.Run("ListMachines", func(t *testing.T) {
 		authClient := fleetClient(t, fc, operatorToken)
-		assertFleetMachine(t, authClient, machine.Name)
+		assertFleetMachine(t, authClient, machine.UserID.String())
 
 		var response fleetListMachinesResponse
 		if err := authClient.Call(ctx, "list-machines", nil, &response); err != nil {
@@ -434,7 +447,7 @@ func TestFleetControllerLifecycle(t *testing.T) {
 
 		var found bool
 		for _, summary := range response.Machines {
-			if summary.Localpart == machine.Name {
+			if summary.Localpart == machine.UserID.String() {
 				found = true
 				// The daemon publishes MachineInfo with hostname from
 				// hwinfo.Probe. In a test environment the hostname
@@ -461,12 +474,12 @@ func TestFleetControllerLifecycle(t *testing.T) {
 
 		var response fleetShowMachineResponse
 		if err := authClient.Call(ctx, "show-machine",
-			map[string]any{"machine": machine.Name}, &response); err != nil {
+			map[string]any{"machine": machine.UserID.String()}, &response); err != nil {
 			t.Fatalf("show-machine: %v", err)
 		}
 
-		if response.Localpart != machine.Name {
-			t.Errorf("show-machine localpart = %q, want %q", response.Localpart, machine.Name)
+		if response.Localpart != machine.UserID.String() {
+			t.Errorf("show-machine localpart = %q, want %q", response.Localpart, machine.UserID.String())
 		}
 		if response.Info == nil {
 			t.Error("show-machine Info is nil (expected MachineInfo from daemon)")
@@ -478,13 +491,15 @@ func TestFleetControllerLifecycle(t *testing.T) {
 
 	// --- Sub-test: publish and discover a fleet service ---
 	t.Run("ServiceDiscovery", func(t *testing.T) {
-		serviceLocalpart := "service/stt/lifecycle"
+		svcUserID := fleetServiceUserID(t, fleet, "stt/lifecycle")
+		svcStateKey := svcUserID.StateKey()
+		svcID := svcUserID.String()
 
 		// Create a fleet room watch before publishing so we can
 		// event-wait for the service discovered notification.
 		fleetWatch := watchRoom(t, admin, fleet.FleetRoomID)
 
-		publishFleetService(t, admin, fleet.FleetRoomID, serviceLocalpart, fleetschema.FleetServiceContent{
+		publishFleetService(t, admin, fleet.FleetRoomID, svcStateKey, fleetschema.FleetServiceContent{
 			Template: ns.Namespace.TemplateRoomAliasLocalpart() + ":whisper-stt",
 			Replicas: fleetschema.ReplicaSpec{Min: 0},
 			Failover: "migrate",
@@ -492,7 +507,7 @@ func TestFleetControllerLifecycle(t *testing.T) {
 		})
 
 		authClient := fleetClient(t, fc, operatorToken)
-		waitForFleetService(t, &fleetWatch, fc, serviceLocalpart)
+		waitForFleetService(t, &fleetWatch, fc, svcID)
 
 		// Verify the service appears in list-services with correct fields.
 		var listResponse fleetListServicesResponse
@@ -502,7 +517,7 @@ func TestFleetControllerLifecycle(t *testing.T) {
 
 		var found bool
 		for _, svc := range listResponse.Services {
-			if svc.Localpart == serviceLocalpart {
+			if svc.Localpart == svcID {
 				found = true
 				expectedTemplate := ns.Namespace.TemplateRoomAliasLocalpart() + ":whisper-stt"
 				if svc.Template != expectedTemplate {
@@ -525,13 +540,13 @@ func TestFleetControllerLifecycle(t *testing.T) {
 			}
 		}
 		if !found {
-			t.Errorf("service %q not found in list-services response", serviceLocalpart)
+			t.Errorf("service %q not found in list-services response", svcID)
 		}
 	})
 
 	// --- Sub-test: show service ---
 	t.Run("ShowService", func(t *testing.T) {
-		serviceLocalpart := "service/stt/lifecycle"
+		svcID := fleetServiceUserID(t, fleet, "stt/lifecycle").String()
 
 		authClient := fleetClient(t, fc, operatorToken)
 		// The service was published in the ServiceDiscovery sub-test.
@@ -539,12 +554,12 @@ func TestFleetControllerLifecycle(t *testing.T) {
 		// controller has already processed it.
 		var response fleetShowServiceResponse
 		if err := authClient.Call(ctx, "show-service",
-			map[string]any{"service": serviceLocalpart}, &response); err != nil {
+			map[string]any{"service": svcID}, &response); err != nil {
 			t.Fatalf("show-service: %v", err)
 		}
 
-		if response.Localpart != serviceLocalpart {
-			t.Errorf("show-service localpart = %q, want %q", response.Localpart, serviceLocalpart)
+		if response.Localpart != svcID {
+			t.Errorf("show-service localpart = %q, want %q", response.Localpart, svcID)
 		}
 		if response.Definition == nil {
 			t.Fatal("show-service definition is nil")
@@ -562,17 +577,17 @@ func TestFleetControllerLifecycle(t *testing.T) {
 
 	// --- Sub-test: plan (dry-run scoring) ---
 	t.Run("Plan", func(t *testing.T) {
-		serviceLocalpart := "service/stt/lifecycle"
+		svcID := fleetServiceUserID(t, fleet, "stt/lifecycle").String()
 
 		authClient := fleetClient(t, fc, operatorToken)
 		var response fleetPlanResponse
 		if err := authClient.Call(ctx, "plan",
-			map[string]any{"service": serviceLocalpart}, &response); err != nil {
+			map[string]any{"service": svcID}, &response); err != nil {
 			t.Fatalf("plan: %v", err)
 		}
 
-		if response.Service != serviceLocalpart {
-			t.Errorf("plan service = %q, want %q", response.Service, serviceLocalpart)
+		if response.Service != svcID {
+			t.Errorf("plan service = %q, want %q", response.Service, svcID)
 		}
 		// The machine should appear as a candidate (it's the only one
 		// and has no constraints to violate).
@@ -581,7 +596,7 @@ func TestFleetControllerLifecycle(t *testing.T) {
 		}
 		var foundCandidate bool
 		for _, candidate := range response.Candidates {
-			if candidate.Machine == machine.Name {
+			if candidate.Machine == machine.UserID.String() {
 				foundCandidate = true
 				if candidate.Score <= 0 {
 					t.Errorf("candidate score = %d, want > 0", candidate.Score)
@@ -604,7 +619,7 @@ func TestFleetControllerLifecycle(t *testing.T) {
 
 		var response fleetMachineHealthResponse
 		if err := authClient.Call(ctx, "machine-health",
-			map[string]any{"machine": machine.Name}, &response); err != nil {
+			map[string]any{"machine": machine.UserID.String()}, &response); err != nil {
 			t.Fatalf("machine-health: %v", err)
 		}
 
@@ -612,8 +627,8 @@ func TestFleetControllerLifecycle(t *testing.T) {
 			t.Fatalf("machine-health returned %d entries, want 1", len(response.Machines))
 		}
 		entry := response.Machines[0]
-		if entry.Localpart != machine.Name {
-			t.Errorf("health localpart = %q, want %q", entry.Localpart, machine.Name)
+		if entry.Localpart != machine.UserID.String() {
+			t.Errorf("health localpart = %q, want %q", entry.Localpart, machine.UserID.String())
 		}
 		// The machine published a heartbeat during startMachine, so the
 		// fleet controller should have a recent heartbeat timestamp and
@@ -696,7 +711,12 @@ func TestFleetPlaceAndUnplace(t *testing.T) {
 	ctx := t.Context()
 
 	// Wait for the fleet controller to discover the config room.
-	waitForFleetConfigRoom(t, &configDiscoverWatch, fc, machine.Name)
+	waitForFleetConfigRoom(t, &configDiscoverWatch, fc, machine.UserID.String())
+
+	// Construct the service user ID for FC API interactions.
+	svcUserID := fleetServiceUserID(t, fleet, "stt/place-test")
+	svcStateKey := svcUserID.StateKey()
+	svcID := svcUserID.String()
 
 	// Create a fleet room watch before publishing the service so we
 	// can event-wait for the service discovered notification.
@@ -706,29 +726,29 @@ func TestFleetPlaceAndUnplace(t *testing.T) {
 	// loop does not auto-place it. This test exercises explicit place
 	// and unplace calls; auto-placement is tested separately in
 	// TestFleetAutoPlacement.
-	publishFleetService(t, admin, fleet.FleetRoomID, serviceLocalpart, fleetschema.FleetServiceContent{
+	publishFleetService(t, admin, fleet.FleetRoomID, svcStateKey, fleetschema.FleetServiceContent{
 		Template: templateRef,
 		Replicas: fleetschema.ReplicaSpec{Min: 0},
 		Failover: "migrate",
 		Priority: 10,
 	})
-	waitForFleetService(t, &serviceDiscoverWatch, fc, serviceLocalpart)
+	waitForFleetService(t, &serviceDiscoverWatch, fc, svcID)
 
 	// --- Place the service ---
 	t.Run("Place", func(t *testing.T) {
 		var placeResponse fleetPlaceResponse
 		if err := authClient.Call(ctx, "place", map[string]any{
-			"service": serviceLocalpart,
-			"machine": machine.Name,
+			"service": svcID,
+			"machine": machine.UserID.String(),
 		}, &placeResponse); err != nil {
 			t.Fatalf("place: %v", err)
 		}
 
-		if placeResponse.Service != serviceLocalpart {
-			t.Errorf("place response service = %q, want %q", placeResponse.Service, serviceLocalpart)
+		if placeResponse.Service != svcID {
+			t.Errorf("place response service = %q, want %q", placeResponse.Service, svcID)
 		}
-		if placeResponse.Machine != machine.Name {
-			t.Errorf("place response machine = %q, want %q", placeResponse.Machine, machine.Name)
+		if placeResponse.Machine != machine.UserID.String() {
+			t.Errorf("place response machine = %q, want %q", placeResponse.Machine, machine.UserID.String())
 		}
 
 		// Wait for the daemon to create the proxy. The daemon detects
@@ -747,21 +767,21 @@ func TestFleetPlaceAndUnplace(t *testing.T) {
 		// Verify show-service reflects the placement.
 		var showService fleetShowServiceResponse
 		if err := authClient.Call(ctx, "show-service",
-			map[string]any{"service": serviceLocalpart}, &showService); err != nil {
+			map[string]any{"service": svcID}, &showService); err != nil {
 			t.Fatalf("show-service: %v", err)
 		}
 		if len(showService.Instances) != 1 {
 			t.Fatalf("show-service instances = %d, want 1", len(showService.Instances))
 		}
-		if showService.Instances[0].Machine != machine.Name {
+		if showService.Instances[0].Machine != machine.UserID.String() {
 			t.Errorf("instance machine = %q, want %q",
-				showService.Instances[0].Machine, machine.Name)
+				showService.Instances[0].Machine, machine.UserID.String())
 		}
 
 		// Verify show-machine reflects the assignment.
 		var showMachine fleetShowMachineResponse
 		if err := authClient.Call(ctx, "show-machine",
-			map[string]any{"machine": machine.Name}, &showMachine); err != nil {
+			map[string]any{"machine": machine.UserID.String()}, &showMachine); err != nil {
 			t.Fatalf("show-machine: %v", err)
 		}
 		var foundAssignment bool
@@ -786,19 +806,19 @@ func TestFleetPlaceAndUnplace(t *testing.T) {
 
 		var unplaceResponse fleetUnplaceResponse
 		if err := authClient.Call(ctx, "unplace", map[string]any{
-			"service": serviceLocalpart,
-			"machine": machine.Name,
+			"service": svcID,
+			"machine": machine.UserID.String(),
 		}, &unplaceResponse); err != nil {
 			t.Fatalf("unplace: %v", err)
 		}
 
-		if unplaceResponse.Service != serviceLocalpart {
+		if unplaceResponse.Service != svcID {
 			t.Errorf("unplace response service = %q, want %q",
-				unplaceResponse.Service, serviceLocalpart)
+				unplaceResponse.Service, svcID)
 		}
-		if unplaceResponse.Machine != machine.Name {
+		if unplaceResponse.Machine != machine.UserID.String() {
 			t.Errorf("unplace response machine = %q, want %q",
-				unplaceResponse.Machine, machine.Name)
+				unplaceResponse.Machine, machine.UserID.String())
 		}
 
 		// Wait for the daemon to tear down the proxy. The daemon
@@ -809,7 +829,7 @@ func TestFleetPlaceAndUnplace(t *testing.T) {
 		// Verify show-service reflects zero instances.
 		var showService fleetShowServiceResponse
 		if err := authClient.Call(ctx, "show-service",
-			map[string]any{"service": serviceLocalpart}, &showService); err != nil {
+			map[string]any{"service": svcID}, &showService); err != nil {
 			t.Fatalf("show-service: %v", err)
 		}
 		if len(showService.Instances) != 0 {
@@ -876,13 +896,18 @@ func TestFleetReconciliation(t *testing.T) {
 	operatorToken := mintFleetToken(t, fleet, machineA, []string{fleetschema.ActionAll})
 
 	// Wait for the fleet controller to discover both config rooms.
-	waitForFleetConfigRoom(t, &discoverWatch, fc, machineA.Name)
-	waitForFleetConfigRoom(t, &discoverWatch, fc, machineB.Name)
+	waitForFleetConfigRoom(t, &discoverWatch, fc, machineA.UserID.String())
+	waitForFleetConfigRoom(t, &discoverWatch, fc, machineB.UserID.String())
+
+	// Construct service user ID for FC API interactions.
+	svcUserID := fleetServiceUserID(t, fleet, "stt/reconcile-test")
+	svcStateKey := svcUserID.StateKey()
+	svcID := svcUserID.String()
 
 	// Publish the fleet service with Min=2. The fleet controller
 	// discovers the service via /sync, runs reconcile, detects a
 	// deficit of 2, scores both machines, and calls place() for each.
-	publishFleetService(t, admin, fleet.FleetRoomID, serviceLocalpart, fleetschema.FleetServiceContent{
+	publishFleetService(t, admin, fleet.FleetRoomID, svcStateKey, fleetschema.FleetServiceContent{
 		Template: templateRef,
 		Replicas: fleetschema.ReplicaSpec{Min: 2},
 		Placement: fleetschema.PlacementConstraints{
@@ -891,7 +916,7 @@ func TestFleetReconciliation(t *testing.T) {
 		Failover: "migrate",
 		Priority: 10,
 	})
-	waitForFleetService(t, &discoverWatch, fc, serviceLocalpart)
+	waitForFleetService(t, &discoverWatch, fc, svcID)
 
 	// Wait for proxy sockets on both machines. Proxy socket existence
 	// proves the full chain: fleet controller reconcile → place() writes
@@ -917,7 +942,7 @@ func TestFleetReconciliation(t *testing.T) {
 
 	var showService fleetShowServiceResponse
 	if err := authClient.Call(ctx, "show-service",
-		map[string]any{"service": serviceLocalpart}, &showService); err != nil {
+		map[string]any{"service": svcID}, &showService); err != nil {
 		t.Fatalf("show-service: %v", err)
 	}
 	if len(showService.Instances) != 2 {
@@ -927,10 +952,10 @@ func TestFleetReconciliation(t *testing.T) {
 	for _, instance := range showService.Instances {
 		instanceMachines[instance.Machine] = true
 	}
-	if !instanceMachines[machineA.Name] {
+	if !instanceMachines[machineA.UserID.String()] {
 		t.Errorf("show-service missing instance on %s", machineA.Name)
 	}
-	if !instanceMachines[machineB.Name] {
+	if !instanceMachines[machineB.UserID.String()] {
 		t.Errorf("show-service missing instance on %s", machineB.Name)
 	}
 
@@ -940,7 +965,7 @@ func TestFleetReconciliation(t *testing.T) {
 	for _, machine := range []*testMachine{machineA, machineB} {
 		var showMachine fleetShowMachineResponse
 		if err := authClient.Call(ctx, "show-machine",
-			map[string]any{"machine": machine.Name}, &showMachine); err != nil {
+			map[string]any{"machine": machine.UserID.String()}, &showMachine); err != nil {
 			t.Fatalf("show-machine %s: %v", machine.Name, err)
 		}
 		var foundAssignment bool
@@ -1177,7 +1202,7 @@ func TestFleetEligibilityConstraints(t *testing.T) {
 		{machineB, map[string]string{"gpu": "t4", "tier": "production"}},
 	} {
 		if err := schema.SetMachineLabels(ctx, admin, labelEntry.machine.MachineRoomID,
-			labelEntry.machine.Name, labelEntry.labels); err != nil {
+			labelEntry.machine.UserID.StateKey(), labelEntry.labels); err != nil {
 			t.Fatalf("set labels for %s: %v", labelEntry.machine.Name, err)
 		}
 	}
@@ -1199,17 +1224,17 @@ func TestFleetEligibilityConstraints(t *testing.T) {
 	authClient := fleetClient(t, fc, operatorToken)
 
 	// Wait for the fleet controller to discover both config rooms.
-	waitForFleetConfigRoom(t, &discoverWatch, fc, machineA.Name)
-	waitForFleetConfigRoom(t, &discoverWatch, fc, machineB.Name)
+	waitForFleetConfigRoom(t, &discoverWatch, fc, machineA.UserID.String())
+	waitForFleetConfigRoom(t, &discoverWatch, fc, machineB.UserID.String())
 
 	// planCandidateMachines calls the plan API and returns the set of
-	// candidate machine localparts.
-	planCandidateMachines := func(t *testing.T, serviceLocalpart string) map[string]bool {
+	// candidate machine identifiers (full user ID strings).
+	planCandidateMachines := func(t *testing.T, serviceIdentifier string) map[string]bool {
 		t.Helper()
 		var response fleetPlanResponse
 		if err := authClient.Call(ctx, "plan",
-			map[string]any{"service": serviceLocalpart}, &response); err != nil {
-			t.Fatalf("plan %s: %v", serviceLocalpart, err)
+			map[string]any{"service": serviceIdentifier}, &response); err != nil {
+			t.Fatalf("plan %s: %v", serviceIdentifier, err)
 		}
 		candidates := make(map[string]bool, len(response.Candidates))
 		for _, candidate := range response.Candidates {
@@ -1220,19 +1245,21 @@ func TestFleetEligibilityConstraints(t *testing.T) {
 
 	// publishAndDiscover publishes a fleet service and waits for the
 	// fleet controller to process it via /sync.
-	publishAndDiscover := func(t *testing.T, serviceLocalpart string, definition fleetschema.FleetServiceContent) {
+	publishAndDiscover := func(t *testing.T, serviceStateKey string, svcID string, definition fleetschema.FleetServiceContent) {
 		t.Helper()
 		serviceWatch := watchRoom(t, admin, fleet.FleetRoomID)
-		publishFleetService(t, admin, fleet.FleetRoomID, serviceLocalpart, definition)
-		waitForFleetService(t, &serviceWatch, fc, serviceLocalpart)
+		publishFleetService(t, admin, fleet.FleetRoomID, serviceStateKey, definition)
+		waitForFleetService(t, &serviceWatch, fc, svcID)
 	}
 
 	// --- RequiredLabels: key=value matching ---
 	// Service requires gpu=h100. MachineA has gpu:h100, machineB has
 	// gpu:t4. Only machineA should be eligible.
 	t.Run("RequiredLabels", func(t *testing.T) {
-		serviceLocalpart := "service/stt/elig-required"
-		publishAndDiscover(t, serviceLocalpart, fleetschema.FleetServiceContent{
+		svcUserID := fleetServiceUserID(t, fleet, "stt/elig-required")
+		svcStateKey := svcUserID.StateKey()
+		svcID := svcUserID.String()
+		publishAndDiscover(t, svcStateKey, svcID, fleetschema.FleetServiceContent{
 			Template: ns.Namespace.TemplateRoomAliasLocalpart() + ":whisper-stt",
 			Replicas: fleetschema.ReplicaSpec{Min: 0},
 			Placement: fleetschema.PlacementConstraints{
@@ -1242,11 +1269,11 @@ func TestFleetEligibilityConstraints(t *testing.T) {
 			Failover: "none",
 		})
 
-		candidates := planCandidateMachines(t, serviceLocalpart)
-		if !candidates[machineA.Name] {
+		candidates := planCandidateMachines(t, svcID)
+		if !candidates[machineA.UserID.String()] {
 			t.Errorf("machineA (%s) should be eligible (has gpu=h100)", machineA.Name)
 		}
-		if candidates[machineB.Name] {
+		if candidates[machineB.UserID.String()] {
 			t.Errorf("machineB (%s) should be ineligible (has gpu=t4, not h100)", machineB.Name)
 		}
 	})
@@ -1255,8 +1282,10 @@ func TestFleetEligibilityConstraints(t *testing.T) {
 	// Service requires "gpu" (no =value). Both machines have a gpu
 	// label (different values). Both should be eligible.
 	t.Run("LabelPresenceOnly", func(t *testing.T) {
-		serviceLocalpart := "service/stt/elig-presence"
-		publishAndDiscover(t, serviceLocalpart, fleetschema.FleetServiceContent{
+		svcUserID := fleetServiceUserID(t, fleet, "stt/elig-presence")
+		svcStateKey := svcUserID.StateKey()
+		svcID := svcUserID.String()
+		publishAndDiscover(t, svcStateKey, svcID, fleetschema.FleetServiceContent{
 			Template: ns.Namespace.TemplateRoomAliasLocalpart() + ":whisper-stt",
 			Replicas: fleetschema.ReplicaSpec{Min: 0},
 			Placement: fleetschema.PlacementConstraints{
@@ -1266,11 +1295,11 @@ func TestFleetEligibilityConstraints(t *testing.T) {
 			Failover: "none",
 		})
 
-		candidates := planCandidateMachines(t, serviceLocalpart)
-		if !candidates[machineA.Name] {
+		candidates := planCandidateMachines(t, svcID)
+		if !candidates[machineA.UserID.String()] {
 			t.Errorf("machineA (%s) should be eligible (has gpu label)", machineA.Name)
 		}
-		if !candidates[machineB.Name] {
+		if !candidates[machineB.UserID.String()] {
 			t.Errorf("machineB (%s) should be eligible (has gpu label)", machineB.Name)
 		}
 	})
@@ -1282,8 +1311,10 @@ func TestFleetEligibilityConstraints(t *testing.T) {
 	// only machineB.
 	t.Run("AntiAffinity", func(t *testing.T) {
 		// Publish and discover the baseline service.
-		baselineLocalpart := "service/stt/elig-baseline"
-		publishAndDiscover(t, baselineLocalpart, fleetschema.FleetServiceContent{
+		baselineUserID := fleetServiceUserID(t, fleet, "stt/elig-baseline")
+		baselineStateKey := baselineUserID.StateKey()
+		baselineID := baselineUserID.String()
+		publishAndDiscover(t, baselineStateKey, baselineID, fleetschema.FleetServiceContent{
 			Template: ns.Namespace.TemplateRoomAliasLocalpart() + ":baseline-stt",
 			Replicas: fleetschema.ReplicaSpec{Min: 0},
 			Placement: fleetschema.PlacementConstraints{
@@ -1301,29 +1332,33 @@ func TestFleetEligibilityConstraints(t *testing.T) {
 		// only need the fleet controller's in-memory state.
 		var placeResponse fleetPlaceResponse
 		if err := authClient.Call(ctx, "place", map[string]any{
-			"service": baselineLocalpart,
-			"machine": machineA.Name,
+			"service": baselineID,
+			"machine": machineA.UserID.String(),
 		}, &placeResponse); err != nil {
 			t.Fatalf("place baseline on machineA: %v", err)
 		}
 
 		// Publish a second service with anti-affinity to the baseline.
-		antiAffinityLocalpart := "service/stt/elig-anti"
-		publishAndDiscover(t, antiAffinityLocalpart, fleetschema.FleetServiceContent{
+		// AntiAffinity values are parsed with ref.ParseUserID(), so they
+		// need the full @localpart:server format.
+		antiUserID := fleetServiceUserID(t, fleet, "stt/elig-anti")
+		antiStateKey := antiUserID.StateKey()
+		antiID := antiUserID.String()
+		publishAndDiscover(t, antiStateKey, antiID, fleetschema.FleetServiceContent{
 			Template: ns.Namespace.TemplateRoomAliasLocalpart() + ":anti-stt",
 			Replicas: fleetschema.ReplicaSpec{Min: 0},
 			Placement: fleetschema.PlacementConstraints{
-				AntiAffinity:    []string{baselineLocalpart},
+				AntiAffinity:    []string{baselineID},
 				AllowedMachines: []string{machineA.Name, machineB.Name},
 			},
 			Failover: "none",
 		})
 
-		candidates := planCandidateMachines(t, antiAffinityLocalpart)
-		if candidates[machineA.Name] {
+		candidates := planCandidateMachines(t, antiID)
+		if candidates[machineA.UserID.String()] {
 			t.Errorf("machineA (%s) should be ineligible (hosts baseline service)", machineA.Name)
 		}
-		if !candidates[machineB.Name] {
+		if !candidates[machineB.UserID.String()] {
 			t.Errorf("machineB (%s) should be eligible (does not host baseline)", machineB.Name)
 		}
 	})
@@ -1391,7 +1426,7 @@ func TestFleetPresenceDetection(t *testing.T) {
 	// Wait for the fleet controller to discover the machine's config
 	// room. After this, the fleet controller has the machine in its
 	// model and is processing presence events for it.
-	waitForFleetConfigRoom(t, &fleetWatch, fc, machine.Name)
+	waitForFleetConfigRoom(t, &fleetWatch, fc, machine.UserID.String())
 
 	operatorToken := mintFleetToken(t, fleet, machine, []string{fleetschema.ActionAll})
 	authClient := fleetClient(t, fc, operatorToken)
@@ -1401,7 +1436,7 @@ func TestFleetPresenceDetection(t *testing.T) {
 	// the fleet controller received it via /sync.
 	var initialHealth fleetMachineHealthResponse
 	if err := authClient.Call(t.Context(), "machine-health",
-		map[string]any{"machine": machine.Name}, &initialHealth); err != nil {
+		map[string]any{"machine": machine.UserID.String()}, &initialHealth); err != nil {
 		t.Fatalf("machine-health (initial): %v", err)
 	}
 	if length := len(initialHealth.Machines); length != 1 {
@@ -1450,7 +1485,7 @@ func TestFleetPresenceDetection(t *testing.T) {
 	presenceChanged := waitForNotification[fleetschema.FleetPresenceChangedMessage](
 		t, &presenceWatch, fleetschema.MsgTypeFleetPresenceChanged, fc.UserID,
 		func(message fleetschema.FleetPresenceChangedMessage) bool {
-			return message.Machine == machine.Name && message.Current == "offline"
+			return message.Machine == machine.UserID.String() && message.Current == "offline"
 		}, "presence changed to offline for "+machine.Name)
 
 	t.Logf("fleet controller received presence offline (previous=%q)", presenceChanged.Previous)
@@ -1460,7 +1495,7 @@ func TestFleetPresenceDetection(t *testing.T) {
 	// reflects the updated state.
 	var afterHealth fleetMachineHealthResponse
 	if err := authClient.Call(t.Context(), "machine-health",
-		map[string]any{"machine": machine.Name}, &afterHealth); err != nil {
+		map[string]any{"machine": machine.UserID.String()}, &afterHealth); err != nil {
 		t.Fatalf("machine-health (after presence offline): %v", err)
 	}
 
@@ -1511,12 +1546,21 @@ func TestServiceFleetRegistration(t *testing.T) {
 	controllerName := "service/fleet/reg"
 	fleetWatch := watchRoom(t, admin, fleet.FleetRoomID)
 	fc := startFleetController(t, admin, machine, controllerName, fleet)
-	waitForFleetConfigRoom(t, &fleetWatch, fc, machine.Name)
+	waitForFleetConfigRoom(t, &fleetWatch, fc, machine.UserID.String())
 
 	operatorToken := mintFleetToken(t, fleet, machine, []string{fleetschema.ActionAll})
 	authClient := fleetClient(t, fc, operatorToken)
 
 	ctx := t.Context()
+
+	// Construct service user IDs for FC API interactions.
+	svcUserID := fleetServiceUserID(t, fleet, "test/fleet-reg")
+	svcStateKey := svcUserID.StateKey()
+	svcID := svcUserID.String()
+
+	sentinelUserID := fleetServiceUserID(t, fleet, "test/fleet-reg-sentinel")
+	sentinelStateKey := sentinelUserID.StateKey()
+	sentinelID := sentinelUserID.String()
 
 	// Phase 1: Deploy a service with fleet registration.
 	// Set up the fleet watch BEFORE deploying so we capture the
@@ -1532,7 +1576,7 @@ func TestServiceFleetRegistration(t *testing.T) {
 	_ = svc // service socket not needed for this test
 
 	// Wait for the fleet controller to discover the service definition.
-	waitForFleetService(t, &serviceFleetWatch, fc, "service/test/fleet-reg")
+	waitForFleetService(t, &serviceFleetWatch, fc, svcID)
 
 	// Phase 2: Verify the fleet controller has the correct service fields.
 	var listResponse fleetListServicesResponse
@@ -1542,7 +1586,7 @@ func TestServiceFleetRegistration(t *testing.T) {
 
 	var found bool
 	for _, service := range listResponse.Services {
-		if service.Localpart == "service/test/fleet-reg" {
+		if service.Localpart == svcID {
 			found = true
 			if service.Replicas != 1 {
 				t.Errorf("service replicas = %d, want 1", service.Replicas)
@@ -1557,13 +1601,13 @@ func TestServiceFleetRegistration(t *testing.T) {
 		}
 	}
 	if !found {
-		t.Fatalf("service %q not found in list-services after registration", "service/test/fleet-reg")
+		t.Fatalf("service %q not found in list-services after registration", svcID)
 	}
 
 	// Verify show-service returns the full definition with placement.
 	var showResponse fleetShowServiceResponse
 	if err := authClient.Call(ctx, "show-service",
-		map[string]any{"service": "service/test/fleet-reg"}, &showResponse); err != nil {
+		map[string]any{"service": svcID}, &showResponse); err != nil {
 		t.Fatalf("show-service: %v", err)
 	}
 	if showResponse.Definition == nil {
@@ -1584,13 +1628,13 @@ func TestServiceFleetRegistration(t *testing.T) {
 	// notification arrives, the clear has already been processed.
 	sentinelWatch := watchRoom(t, admin, fleet.FleetRoomID)
 
-	clearFleetService(t, admin, fleet.FleetRoomID, "service/test/fleet-reg")
-	publishFleetService(t, admin, fleet.FleetRoomID, "service/test/fleet-reg-sentinel", fleetschema.FleetServiceContent{
+	clearFleetService(t, admin, fleet.FleetRoomID, svcStateKey)
+	publishFleetService(t, admin, fleet.FleetRoomID, sentinelStateKey, fleetschema.FleetServiceContent{
 		Template: ns.Namespace.TemplateRoomAliasLocalpart() + ":sentinel",
 		Replicas: fleetschema.ReplicaSpec{Min: 0},
 	})
 
-	waitForFleetService(t, &sentinelWatch, fc, "service/test/fleet-reg-sentinel")
+	waitForFleetService(t, &sentinelWatch, fc, sentinelID)
 
 	// Phase 4: Verify the original service is gone from the fleet model.
 	var afterListResponse fleetListServicesResponse
@@ -1599,13 +1643,13 @@ func TestServiceFleetRegistration(t *testing.T) {
 	}
 
 	for _, service := range afterListResponse.Services {
-		if service.Localpart == "service/test/fleet-reg" {
-			t.Fatalf("service %q still present in fleet controller after clearing registration", "service/test/fleet-reg")
+		if service.Localpart == svcID {
+			t.Fatalf("service %q still present in fleet controller after clearing registration", svcID)
 		}
 	}
 
 	// Clean up sentinel.
-	clearFleetService(t, admin, fleet.FleetRoomID, "service/test/fleet-reg-sentinel")
+	clearFleetService(t, admin, fleet.FleetRoomID, sentinelStateKey)
 
 	t.Log("fleet registration lifecycle: registered, verified, cleared, verified removal")
 }

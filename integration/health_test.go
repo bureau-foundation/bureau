@@ -127,16 +127,15 @@ func TestSocketHealthCredRotation(t *testing.T) {
 	password := "credrot-test-password"
 	account := registerFleetPrincipal(t, fleet, "service/telemetry/credrot", password)
 
-	// The service directory uses fleet-scoped localparts as state keys
-	// (e.g., "bureau/fleet/.../service/telemetry/credrot"), while daemon
-	// notifications (health check, credential rotation) use bare account
-	// localparts. Construct the fleet-scoped entity for the service
-	// directory predicate.
+	// The service directory uses state_key format user IDs as keys
+	// (e.g., "bureau/fleet/.../service/telemetry/credrot:server").
+	// Construct the fleet-scoped entity to derive the state_key for the
+	// service directory predicate.
 	principalEntity, err := ref.NewEntityFromAccountLocalpart(fleet.Ref, account.Localpart)
 	if err != nil {
 		t.Fatalf("construct fleet-scoped entity: %v", err)
 	}
-	fleetScopedLocalpart := principalEntity.Localpart()
+	serviceStateKey := principalEntity.UserID().StateKey()
 
 	// Invite the service principal to the system room (token signing
 	// key access) and fleet service room (service registration).
@@ -183,17 +182,18 @@ func TestSocketHealthCredRotation(t *testing.T) {
 	})
 
 	// Wait for the service to register in the fleet service directory.
-	// Service directory state keys are fleet-scoped localparts.
+	// Service directory entries are keyed by state_key format user IDs
+	// (localpart:server), matching the service room state event keys.
 	waitForNotification[schema.ServiceDirectoryUpdatedMessage](
 		t, &serviceWatch, schema.MsgTypeServiceDirectoryUpdated, machine.UserID,
 		func(m schema.ServiceDirectoryUpdatedMessage) bool {
 			for _, added := range m.Added {
-				if added == fleetScopedLocalpart {
+				if added == serviceStateKey {
 					return true
 				}
 			}
 			return false
-		}, "service directory update for "+fleetScopedLocalpart)
+		}, "service directory update for "+serviceStateKey)
 
 	// Wait for the service socket to be ready. The symlink is created
 	// by the launcher during sandbox setup, but the target (the actual
@@ -305,12 +305,13 @@ func TestLiveCredentialRotation(t *testing.T) {
 	password := "livecred-test-password"
 	account := registerFleetPrincipal(t, fleet, "service/telemetry/livecred", password)
 
-	// Construct the fleet-scoped entity for the service directory predicate.
+	// Construct the fleet-scoped entity to derive the state_key for the
+	// service directory predicate.
 	principalEntity, err := ref.NewEntityFromAccountLocalpart(fleet.Ref, account.Localpart)
 	if err != nil {
 		t.Fatalf("construct fleet-scoped entity: %v", err)
 	}
-	fleetScopedLocalpart := principalEntity.Localpart()
+	serviceStateKey := principalEntity.UserID().StateKey()
 
 	// Invite the service principal to system and fleet service rooms.
 	systemRoomID := resolveSystemRoom(t, admin, ns.Namespace)
@@ -353,12 +354,12 @@ func TestLiveCredentialRotation(t *testing.T) {
 		t, &serviceWatch, schema.MsgTypeServiceDirectoryUpdated, machine.UserID,
 		func(m schema.ServiceDirectoryUpdatedMessage) bool {
 			for _, added := range m.Added {
-				if added == fleetScopedLocalpart {
+				if added == serviceStateKey {
 					return true
 				}
 			}
 			return false
-		}, "service directory update for "+fleetScopedLocalpart)
+		}, "service directory update for "+serviceStateKey)
 
 	// Wait for the service socket to be ready.
 	socketPath := machine.PrincipalServiceSocketPath(t, account.Localpart)

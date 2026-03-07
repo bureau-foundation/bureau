@@ -131,6 +131,7 @@ func TestBuildSyncFilterIncludesFleetTypes(t *testing.T) {
 		schema.EventTypeRelayLink,
 		schema.EventTypeReservation,
 		schema.EventTypeMachineDrain,
+		schema.EventTypeDrainStatus,
 		schema.EventTypeRelayPolicy,
 	}
 

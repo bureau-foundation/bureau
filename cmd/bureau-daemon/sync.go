@@ -7,13 +7,14 @@ package main
 // waits for the homeserver to push state changes as they happen rather
 // than polling periodically.
 //
-// Six categories of rooms are monitored reactively:
+// Seven categories of rooms are monitored reactively:
 //   - Config room: m.bureau.machine_config, m.bureau.credentials → reconcile
 //   - Machines room: m.bureau.machine_status → peer address updates
 //   - Services room: m.bureau.service → service directory updates
 //   - Fleet room: m.bureau.fleet_service, m.bureau.ha_lease → HA evaluation
 //   - Template room: m.bureau.template → reconcile (so template updates
 //     are detected without requiring a MachineConfig touch)
+//   - Ops room: m.bureau.machine_drain → drain status reporting
 //   - Workspace rooms: m.bureau.workspace, m.bureau.project → reconcile
 //     (joined dynamically when the daemon accepts invites)
 //
@@ -35,6 +36,7 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"time"
 
 	"github.com/bureau-foundation/bureau/lib/ref"
 	"github.com/bureau-foundation/bureau/lib/schema"
@@ -89,6 +91,7 @@ func buildSyncFilter(excludeRooms []ref.RoomID) string {
 		schema.EventTypeTemporalGrant,
 		schema.EventTypeFleetService,
 		schema.EventTypeHALease,
+		schema.EventTypeMachineDrain,
 		schema.MatrixEventTypeRoomMember,
 		schema.MatrixEventTypePowerLevels,
 	}
@@ -270,7 +273,7 @@ func (d *Daemon) syncErrorHandler(err error) service.SyncErrorAction {
 // StartConditions. Handlers are called in dependency order: peer addresses
 // before services (so relay routing has up-to-date addresses).
 func (d *Daemon) processSyncResponse(ctx context.Context, response *messaging.SyncResponse) {
-	var needsReconcile, needsPeerSync, needsServiceSync, needsHAEval bool
+	var needsReconcile, needsPeerSync, needsServiceSync, needsHAEval, needsDrainEval bool
 
 	// Accept any pending invites. The daemon is invited to workspace rooms
 	// by "bureau workspace create" and must join to read workspace state
@@ -366,6 +369,16 @@ func (d *Daemon) processSyncResponse(ctx context.Context, response *messaging.Sy
 					"room_id", roomID)
 				needsReconcile = true
 			}
+		case d.opsRoomID:
+			// Only react to m.bureau.machine_drain state events (drain
+			// coordination from the fleet controller). Other ops room
+			// events — including the daemon's own m.bureau.drain_status
+			// publications — must NOT trigger re-evaluation, or the
+			// daemon enters an infinite loop: publish drain_status →
+			// see it in /sync → re-evaluate → publish again.
+			if !d.opsRoomID.IsZero() && roomHasEventType(room, schema.EventTypeMachineDrain) {
+				needsDrainEval = true
+			}
 		case d.systemRoomID, d.pipelineRoomID:
 			// These rooms are excluded from /sync via the not_rooms
 			// filter. If events arrive anyway (homeserver filter
@@ -409,12 +422,13 @@ func (d *Daemon) processSyncResponse(ctx context.Context, response *messaging.Sy
 	// Diagnostic logging: which flags were set and why. Only emitted
 	// when at least one handler will run (avoids noise on empty /sync
 	// responses from long-poll timeouts).
-	if needsReconcile || needsPeerSync || needsServiceSync || needsHAEval {
+	if needsReconcile || needsPeerSync || needsServiceSync || needsHAEval || needsDrainEval {
 		d.logger.Info("sync response flags",
 			"needs_reconcile", needsReconcile,
 			"needs_peer_sync", needsPeerSync,
 			"needs_service_sync", needsServiceSync,
 			"needs_ha_eval", needsHAEval,
+			"needs_drain_eval", needsDrainEval,
 			"service_resync_countdown", d.serviceResyncCountdown,
 		)
 	}
@@ -564,6 +578,10 @@ func (d *Daemon) processSyncResponse(ctx context.Context, response *messaging.Sy
 		d.writeDaemonStatus()
 	}
 
+	if needsDrainEval {
+		d.processMachineDrain(ctx)
+	}
+
 	// Process command messages from all rooms. Commands can arrive in
 	// workspace rooms, config rooms, or any room the daemon is joined to.
 	// Authorization is checked per-command via room power levels.
@@ -679,6 +697,96 @@ func (d *Daemon) processTemporalGrantEvents(response *messaging.SyncResponse) {
 				)
 			}
 		}
+	}
+}
+
+// processMachineDrain reads the current m.bureau.machine_drain state from
+// the ops room and publishes a corresponding m.bureau.drain_status response.
+// When a drain is active, the daemon reports the count of running sandboxes
+// as in-flight work. When the drain is cleared, the daemon clears its own
+// drain_status.
+//
+// The daemon's drain_status state key is its machine's full localpart
+// (the namespace-qualified Matrix localpart like
+// "ns/fleet/prod/machine/gpu-box"). The FC correlates drain_status
+// events by matching the state key against the user ID localparts of
+// fleet-managed services on the draining machine.
+//
+// The daemon does not actively stop sandboxes in response to drain — it
+// reports current state so the FC can make informed grant decisions. The FC
+// proceeds after its grace period regardless.
+func (d *Daemon) processMachineDrain(ctx context.Context) {
+	drainContent, err := messaging.GetState[schema.MachineDrainContent](
+		ctx, d.session, d.opsRoomID, schema.EventTypeMachineDrain, "")
+	if err != nil {
+		// State event not found means no drain has ever been published.
+		// This is normal for machines that have never had an exclusive
+		// reservation. Treat as "no active drain."
+		if messaging.IsMatrixError(err, messaging.ErrCodeNotFound) {
+			return
+		}
+		if ctx.Err() != nil {
+			return // context canceled during shutdown
+		}
+		d.logger.Error("failed to read machine drain state from ops room",
+			"ops_room", d.opsRoomID,
+			"error", err,
+		)
+		return
+	}
+
+	stateKey := d.machine.Localpart()
+
+	// A drain with a zero-value ReservationHolder means the event was
+	// cleared (empty JSON object or tombstoned). The FC clears drain by
+	// publishing "{}". Respond by clearing our drain_status.
+	if drainContent.ReservationHolder.IsZero() {
+		d.logger.Info("drain cleared, publishing cleared drain_status",
+			"ops_room", d.opsRoomID,
+		)
+		if _, err := d.session.SendStateEvent(ctx, d.opsRoomID,
+			schema.EventTypeDrainStatus, stateKey, json.RawMessage("{}")); err != nil {
+			if ctx.Err() != nil {
+				return // context canceled during shutdown
+			}
+			d.logger.Error("failed to clear drain_status in ops room",
+				"ops_room", d.opsRoomID,
+				"error", err,
+			)
+		}
+		return
+	}
+
+	// Active drain — count running sandboxes. The reconcile mutex guards
+	// the lifecycle map.
+	d.reconcileMu.RLock()
+	inFlight := d.aliveCount()
+	d.reconcileMu.RUnlock()
+
+	status := schema.DrainStatusContent{
+		Acknowledged: true,
+		InFlight:     inFlight,
+	}
+	if inFlight == 0 {
+		status.DrainedAt = d.clock.Now().UTC().Format(time.RFC3339)
+	}
+
+	d.logger.Info("drain active, publishing drain_status",
+		"ops_room", d.opsRoomID,
+		"in_flight", inFlight,
+		"reservation_holder", drainContent.ReservationHolder,
+	)
+
+	if _, err := d.session.SendStateEvent(ctx, d.opsRoomID,
+		schema.EventTypeDrainStatus, stateKey, status); err != nil {
+		if ctx.Err() != nil {
+			return // context canceled during shutdown
+		}
+		d.logger.Error("failed to publish drain_status to ops room",
+			"ops_room", d.opsRoomID,
+			"in_flight", inFlight,
+			"error", err,
+		)
 	}
 }
 

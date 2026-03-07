@@ -55,6 +55,16 @@ const (
 	// State key: "" (singleton per ops room)
 	// Room: machine ops room
 	EventTypeMachineDrain ref.EventType = "m.bureau.machine_drain"
+
+	// EventTypeDrainStatus reports a service's or daemon's drain
+	// progress in response to a machine drain event. Published by
+	// each service and the machine daemon after observing a drain
+	// event. The fleet controller watches these to determine when
+	// all services have quiesced before granting the reservation.
+	//
+	// State key: reporting entity's user ID localpart
+	// Room: machine ops room
+	EventTypeDrainStatus ref.EventType = "m.bureau.drain_status"
 )
 
 // ResourceType identifies the category of a reservable resource.
@@ -483,6 +493,52 @@ func (d *MachineDrainContent) Validate() error {
 	return nil
 }
 
+// DrainStatusContent is the content of an EventTypeDrainStatus state
+// event. Published by services and the machine daemon to report drain
+// progress. The fleet controller aggregates these to determine when
+// all services have quiesced before granting an exclusive reservation.
+//
+// A service publishes this with Acknowledged=true when it sees a drain
+// event, updates InFlight as operations complete, and sets DrainedAt
+// when InFlight reaches zero. When the drain is cleared (reservation
+// released), services publish empty content to clear the state event.
+type DrainStatusContent struct {
+	// Acknowledged is true when the service has seen and accepted
+	// the drain request. A false value means the service has not
+	// yet processed the drain event.
+	Acknowledged bool `json:"acknowledged"`
+
+	// InFlight is the count of operations still in progress. For
+	// the daemon this is running sandboxes; for the ticket service
+	// this is active relay tickets in the ops room.
+	InFlight int `json:"in_flight"`
+
+	// DrainedAt is the RFC 3339 UTC timestamp when InFlight
+	// reached zero. Empty while operations are still in progress.
+	DrainedAt string `json:"drained_at,omitempty"`
+}
+
+// Validate checks that the drain status content is internally
+// consistent. When Acknowledged is true and InFlight is zero,
+// DrainedAt must be present and valid RFC 3339.
+func (d *DrainStatusContent) Validate() error {
+	if d.InFlight < 0 {
+		return fmt.Errorf("drain status: in_flight must be non-negative, got %d", d.InFlight)
+	}
+	if d.Acknowledged && d.InFlight == 0 {
+		if d.DrainedAt == "" {
+			return errors.New("drain status: drained_at is required when acknowledged and in_flight is 0")
+		}
+		if _, err := time.Parse(time.RFC3339, d.DrainedAt); err != nil {
+			return fmt.Errorf("drain status: drained_at must be RFC 3339: %w", err)
+		}
+	}
+	if d.DrainedAt != "" && d.InFlight > 0 {
+		return fmt.Errorf("drain status: drained_at must be empty when in_flight is %d", d.InFlight)
+	}
+	return nil
+}
+
 // OpsRoomPowerLevels returns the power level content for resource ops
 // rooms. Ops rooms use per-event-type PL overrides to give each member
 // write access only to the events it owns:
@@ -499,13 +555,16 @@ func (d *MachineDrainContent) Validate() error {
 func OpsRoomPowerLevels(adminUserID ref.UserID) map[string]any {
 	events := AdminProtectedEvents()
 
-	// Ticket service operations (PL 25). The ticket service creates
-	// relay tickets, enables ticket management, and publishes relay
-	// links that track origin↔ops room ticket pairs.
+	// Ticket service and drain status operations (PL 25). The ticket
+	// service creates relay tickets, enables ticket management, and
+	// publishes relay links that track origin↔ops room ticket pairs.
+	// Drain status is published by both the ticket service (PL 25)
+	// and the machine daemon (PL 50) — PL 25 ensures both can write.
 	for _, eventType := range []ref.EventType{
 		EventTypeTicket,
 		EventTypeTicketConfig,
 		EventTypeRelayLink,
+		EventTypeDrainStatus,
 	} {
 		events[eventType] = 25
 	}

@@ -86,13 +86,15 @@ func setupReservationOpsRoom(
 	// Grant ops room power levels AFTER enableTicketsInRoom. The
 	// configureTicketPowerLevels function (called by enableTicketsInRoom)
 	// sets the ticket service to PL 10 for standard ticket rooms. Ops
-	// rooms need PL 25 for the ticket service (to publish relay links)
-	// and PL 50 for the fleet controller (to publish reservations and
-	// drain). This read-modify-write overrides the PL 10 with PL 25.
+	// rooms need PL 25 for the ticket service (to publish relay links
+	// and drain_status), PL 50 for the fleet controller (to publish
+	// reservations and drain), and PL 50 for the machine daemon (to
+	// publish drain_status). This read-modify-write overrides the PL 10.
 	if err := schema.GrantPowerLevels(ctx, admin, opsRoomID, schema.PowerLevelGrants{
 		Users: map[ref.UserID]int{
 			ticketSvc.Account.UserID: 25,
 			fleetController.UserID:   50,
+			machine.UserID:           50,
 		},
 	}); err != nil {
 		t.Fatalf("grant ops room power levels: %v", err)
@@ -447,10 +449,12 @@ func setupOpsRoomNoFC(
 	enableTicketsInRoom(t, admin, opsRoomID, ticketSvc, "rsv",
 		[]ticket.TicketType{ticket.TypeResourceRequest})
 
-	// Ticket service needs PL 25 for publishing relay links.
+	// Ticket service needs PL 25 for publishing relay links and
+	// drain_status. Machine daemon needs PL 50 for drain_status.
 	if err := schema.GrantPowerLevels(ctx, admin, opsRoomID, schema.PowerLevelGrants{
 		Users: map[ref.UserID]int{
 			ticketSvc.Account.UserID: 25,
+			machine.UserID:           50,
 		},
 	}); err != nil {
 		t.Fatalf("grant ops room power levels: %v", err)

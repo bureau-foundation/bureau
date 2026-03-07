@@ -88,6 +88,7 @@ go_test(
         "command_test.go",
         "credential_access_test.go",
         "daemon_test.go",
+        "drain_test.go",
         "exec_test.go",
         "ha_test.go",
         "health_test.go",

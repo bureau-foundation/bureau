@@ -2042,3 +2042,240 @@ func TestMirrorReservationGrant(t *testing.T) {
 		}
 	})
 }
+
+// --- Drain status tests ---
+
+func TestPublishDrainStatusWithActiveRelays(t *testing.T) {
+	t.Parallel()
+
+	ts, writer, _ := relayTestService(t)
+
+	opsRoom := testRoomID("!ops-gpu:bureau.local")
+	originRoom := testRoomID("!workspace:bureau.local")
+
+	// Set up the ops room with ticket management and two relay tickets.
+	ts.rooms[opsRoom] = newTrackedRoom(map[string]ticket.TicketContent{
+		"relay-1": {
+			Type:   ticket.TypeResourceRequest,
+			Status: ticket.StatusOpen,
+		},
+		"relay-2": {
+			Type:   ticket.TypeResourceRequest,
+			Status: ticket.StatusInProgress,
+		},
+	})
+	ts.rooms[originRoom] = newTrackedRoom(map[string]ticket.TicketContent{
+		"origin-1": {
+			Type:   ticket.TypeResourceRequest,
+			Status: ticket.StatusOpen,
+		},
+	})
+
+	ts.relayEntries["origin-1"] = &relayEntry{
+		originRoom:   originRoom,
+		originTicket: "origin-1",
+		relayTickets: map[ref.RoomID]relayTicketRef{
+			opsRoom: {ticketID: "relay-1", claimIndex: 0},
+		},
+	}
+	// relay-2 is from a different origin (simulates another relay in the same ops room).
+	ts.relayEntries["origin-other"] = &relayEntry{
+		originRoom:   testRoomID("!workspace-2:bureau.local"),
+		originTicket: "origin-other",
+		relayTickets: map[ref.RoomID]relayTicketRef{
+			opsRoom: {ticketID: "relay-2", claimIndex: 0},
+		},
+	}
+
+	// Build a drain event with an active drain.
+	drainStateKey := ""
+	drainEvent := messaging.Event{
+		Type:     schema.EventTypeMachineDrain,
+		StateKey: &drainStateKey,
+		Content:  drainContentMap(t, "@bureau/fleet/prod/agent/benchmark:bureau.local"),
+	}
+
+	ts.publishDrainStatus(context.Background(), opsRoom, ts.rooms[opsRoom], drainEvent)
+
+	// Should have published one drain_status event.
+	if len(writer.events) != 1 {
+		t.Fatalf("expected 1 drain_status write, got %d", len(writer.events))
+	}
+
+	written := writer.events[0]
+	if written.EventType != schema.EventTypeDrainStatus {
+		t.Errorf("event type = %s, want %s", written.EventType, schema.EventTypeDrainStatus)
+	}
+	if written.StateKey != ts.service.Localpart() {
+		t.Errorf("state key = %q, want %q", written.StateKey, ts.service.Localpart())
+	}
+
+	status, ok := written.Content.(schema.DrainStatusContent)
+	if !ok {
+		t.Fatalf("content type = %T, want schema.DrainStatusContent", written.Content)
+	}
+	if !status.Acknowledged {
+		t.Error("drain_status should be acknowledged")
+	}
+	if status.InFlight != 2 {
+		t.Errorf("InFlight = %d, want 2 (two active relay tickets)", status.InFlight)
+	}
+	if status.DrainedAt != "" {
+		t.Errorf("DrainedAt should be empty when InFlight > 0, got %q", status.DrainedAt)
+	}
+}
+
+func TestPublishDrainStatusZeroInFlight(t *testing.T) {
+	t.Parallel()
+
+	ts, writer, _ := relayTestService(t)
+
+	opsRoom := testRoomID("!ops-gpu:bureau.local")
+
+	// Ops room with ticket management but no active relay tickets.
+	ts.rooms[opsRoom] = newTrackedRoom(map[string]ticket.TicketContent{})
+
+	drainStateKey := ""
+	drainEvent := messaging.Event{
+		Type:     schema.EventTypeMachineDrain,
+		StateKey: &drainStateKey,
+		Content:  drainContentMap(t, "@bureau/fleet/prod/agent/benchmark:bureau.local"),
+	}
+
+	ts.publishDrainStatus(context.Background(), opsRoom, ts.rooms[opsRoom], drainEvent)
+
+	if len(writer.events) != 1 {
+		t.Fatalf("expected 1 drain_status write, got %d", len(writer.events))
+	}
+
+	status, ok := writer.events[0].Content.(schema.DrainStatusContent)
+	if !ok {
+		t.Fatalf("content type = %T, want schema.DrainStatusContent", writer.events[0].Content)
+	}
+	if !status.Acknowledged {
+		t.Error("drain_status should be acknowledged")
+	}
+	if status.InFlight != 0 {
+		t.Errorf("InFlight = %d, want 0", status.InFlight)
+	}
+	expectedDrainedAt := ts.clock.Now().UTC().Format(time.RFC3339)
+	if status.DrainedAt != expectedDrainedAt {
+		t.Errorf("DrainedAt = %q, want %q", status.DrainedAt, expectedDrainedAt)
+	}
+}
+
+func TestPublishDrainStatusClearedDrain(t *testing.T) {
+	t.Parallel()
+
+	ts, writer, _ := relayTestService(t)
+
+	opsRoom := testRoomID("!ops-gpu:bureau.local")
+	ts.rooms[opsRoom] = newTrackedRoom(map[string]ticket.TicketContent{})
+
+	// Cleared drain: empty content.
+	drainStateKey := ""
+	drainEvent := messaging.Event{
+		Type:     schema.EventTypeMachineDrain,
+		StateKey: &drainStateKey,
+		Content:  map[string]any{},
+	}
+
+	ts.publishDrainStatus(context.Background(), opsRoom, ts.rooms[opsRoom], drainEvent)
+
+	if len(writer.events) != 1 {
+		t.Fatalf("expected 1 drain_status clear write, got %d", len(writer.events))
+	}
+
+	written := writer.events[0]
+	if written.EventType != schema.EventTypeDrainStatus {
+		t.Errorf("event type = %s, want %s", written.EventType, schema.EventTypeDrainStatus)
+	}
+
+	// Cleared drain should publish empty JSON object.
+	raw, ok := written.Content.(json.RawMessage)
+	if !ok {
+		t.Fatalf("cleared drain_status content type = %T, want json.RawMessage", written.Content)
+	}
+	if string(raw) != "{}" {
+		t.Errorf("cleared drain_status content = %s, want {}", raw)
+	}
+}
+
+func TestPublishDrainStatusExcludesClosedRelayTickets(t *testing.T) {
+	t.Parallel()
+
+	ts, writer, _ := relayTestService(t)
+
+	opsRoom := testRoomID("!ops-gpu:bureau.local")
+	originRoom := testRoomID("!workspace:bureau.local")
+
+	// One open relay, one closed relay.
+	ts.rooms[opsRoom] = newTrackedRoom(map[string]ticket.TicketContent{
+		"relay-open": {
+			Type:   ticket.TypeResourceRequest,
+			Status: ticket.StatusOpen,
+		},
+		"relay-closed": {
+			Type:   ticket.TypeResourceRequest,
+			Status: ticket.StatusClosed,
+		},
+	})
+	ts.rooms[originRoom] = newTrackedRoom(map[string]ticket.TicketContent{})
+
+	ts.relayEntries["origin-1"] = &relayEntry{
+		originRoom:   originRoom,
+		originTicket: "origin-1",
+		relayTickets: map[ref.RoomID]relayTicketRef{
+			opsRoom: {ticketID: "relay-open", claimIndex: 0},
+		},
+	}
+	ts.relayEntries["origin-2"] = &relayEntry{
+		originRoom:   originRoom,
+		originTicket: "origin-2",
+		relayTickets: map[ref.RoomID]relayTicketRef{
+			opsRoom: {ticketID: "relay-closed", claimIndex: 0},
+		},
+	}
+
+	drainStateKey := ""
+	drainEvent := messaging.Event{
+		Type:     schema.EventTypeMachineDrain,
+		StateKey: &drainStateKey,
+		Content:  drainContentMap(t, "@bureau/fleet/prod/agent/benchmark:bureau.local"),
+	}
+
+	ts.publishDrainStatus(context.Background(), opsRoom, ts.rooms[opsRoom], drainEvent)
+
+	if len(writer.events) != 1 {
+		t.Fatalf("expected 1 write, got %d", len(writer.events))
+	}
+
+	status := writer.events[0].Content.(schema.DrainStatusContent)
+	if status.InFlight != 1 {
+		t.Errorf("InFlight = %d, want 1 (only the open relay ticket)", status.InFlight)
+	}
+}
+
+// drainContentMap builds a drain event content map with a valid
+// MachineDrainContent for testing.
+func drainContentMap(t *testing.T, holderUserID string) map[string]any {
+	t.Helper()
+	holder, err := ref.ParseEntityUserID(holderUserID)
+	if err != nil {
+		t.Fatalf("ParseEntityUserID: %v", err)
+	}
+	drain := schema.MachineDrainContent{
+		Services:          []string{"service/ticket/test"},
+		ReservationHolder: holder,
+		RequestedAt:       "2026-03-01T12:00:00Z",
+	}
+	data, err := json.Marshal(drain)
+	if err != nil {
+		t.Fatalf("Marshal: %v", err)
+	}
+	var result map[string]any
+	if err := json.Unmarshal(data, &result); err != nil {
+		t.Fatalf("Unmarshal: %v", err)
+	}
+	return result
+}

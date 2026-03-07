@@ -292,6 +292,23 @@ func run() error {
 			"alias", pipelineAlias, "error", err)
 	}
 
+	// Resolve and join the machine's ops room for drain coordination.
+	// The ops room may not exist if no reservation has been made for
+	// this machine yet. Non-fatal: the daemon proceeds without drain
+	// awareness and will discover the ops room when it appears in /sync
+	// as an invite.
+	opsAlias := machine.OpsRoomAlias()
+	opsRoomID, err := session.ResolveAlias(ctx, opsAlias)
+	if err != nil {
+		logger.Warn("ops room not available (drain coordination disabled until room is created)",
+			"alias", opsAlias, "error", err)
+	} else {
+		if _, err := session.JoinRoom(ctx, opsRoomID); err != nil {
+			logger.Warn("failed to join ops room (may need admin invitation)",
+				"room_id", opsRoomID, "alias", opsAlias, "error", err)
+		}
+	}
+
 	logger.Info("fleet rooms ready",
 		"fleet", fleet.Localpart(),
 		"fleet_room", fleetRoomID,
@@ -300,6 +317,7 @@ func run() error {
 		"service_room", serviceRoomID,
 		"template_room", templateRoomID,
 		"pipeline_room", pipelineRoomID,
+		"ops_room", opsRoomID,
 	)
 
 	// Build the sync filter after room resolution. The system and pipeline
@@ -343,6 +361,7 @@ func run() error {
 		fleetRoomID:            fleetRoomID,
 		templateRoomID:         templateRoomID,
 		pipelineRoomID:         pipelineRoomID,
+		opsRoomID:              opsRoomID,
 		syncFilter:             syncFilter,
 		runDir:                 runDir,
 		fleetRunDir:            fleet.RunDir(runDir),
@@ -602,6 +621,7 @@ type Daemon struct {
 	fleetCacheConfig *schema.FleetCacheContent // fleet cache config from m.bureau.fleet_cache; nil if not published
 	templateRoomID   ref.RoomID                // included in /sync; filtered for m.bureau.template events only
 	pipelineRoomID   ref.RoomID                // excluded from /sync via not_rooms; matched as defense-in-depth
+	opsRoomID        ref.RoomID                // machine ops room for drain coordination; zero if not resolved
 	syncFilter       string                    // inline Matrix /sync filter JSON (room- and type-scoped)
 
 	// workspaceAliases maps room IDs to their canonical aliases for

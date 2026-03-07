@@ -488,7 +488,7 @@ func TestGrantReservation(t *testing.T) {
 	}
 	fc.reservations[machineLocalpart] = reservation
 
-	fc.grantReservation(context.Background(), machineLocalpart, reservation)
+	fc.startDrain(context.Background(), machineLocalpart, reservation)
 
 	// Queue should be empty after grant.
 	if len(reservation.queue) != 0 {
@@ -608,7 +608,7 @@ func TestGrantReservationInclusiveNoDrain(t *testing.T) {
 	}
 	fc.reservations[machineLocalpart] = reservation
 
-	fc.grantReservation(context.Background(), machineLocalpart, reservation)
+	fc.startDrain(context.Background(), machineLocalpart, reservation)
 
 	// For inclusive mode, we expect only 2 writes: ticket in_progress
 	// and reservation grant. No drain.
@@ -621,6 +621,504 @@ func TestGrantReservationInclusiveNoDrain(t *testing.T) {
 	if drainWritten {
 		t.Error("inclusive mode should not publish a machine drain")
 	}
+}
+
+// --- Drain-wait tests ---
+
+func TestDrainWaitGrantAfterAcknowledgment(t *testing.T) {
+	fc, store := newReservationTestController(t)
+	fc.drainGracePeriod = 30 * time.Second
+
+	machineLocalpart := testMachineLocalpart("gpu-box")
+	opsRoomID := testOpsRoomID("gpu-box")
+	holder := testEntity(t, "agent/builder")
+
+	fc.opsRooms[machineLocalpart] = opsRoomID
+	fc.opsRoomMachines[opsRoomID] = machineLocalpart
+
+	// Place a fleet-managed service on the machine so the drain
+	// has something to wait for. The PrincipalAssignment must have a
+	// real Entity so that fleetManagedServicesOnMachine returns the
+	// full Matrix localpart (used as the drain_status state_key).
+	serviceEntity := testEntity(t, "service/stt/whisper")
+	fc.services["service/stt/whisper"] = &fleetServiceState{
+		instances: map[string]*schema.PrincipalAssignment{
+			machineLocalpart: {Principal: serviceEntity},
+		},
+	}
+
+	store.seedState(opsRoomID.String(), "tkt-1", &ticket.TicketContent{
+		Version:  5,
+		Status:   ticket.StatusOpen,
+		Priority: 1,
+		Type:     ticket.TypeResourceRequest,
+		Reservation: &ticket.ReservationContent{
+			Claims: []ticket.ResourceClaim{
+				{
+					Resource: schema.ResourceRef{Type: schema.ResourceMachine, Target: "gpu-box"},
+					Mode:     schema.ModeExclusive,
+					Status:   schema.ClaimPending,
+				},
+			},
+			MaxDuration: "2h",
+		},
+	})
+
+	reservation := &machineReservation{
+		queue: []queuedReservation{
+			{
+				relayTicketID: "tkt-1",
+				opsRoomID:     opsRoomID,
+				holder:        holder,
+				mode:          schema.ModeExclusive,
+				priority:      1,
+				maxDuration:   2 * time.Hour,
+				createdAt:     time.Date(2026, 3, 1, 10, 0, 0, 0, time.UTC),
+			},
+		},
+	}
+	fc.reservations[machineLocalpart] = reservation
+
+	fc.startDrain(context.Background(), machineLocalpart, reservation)
+
+	// Drain should be pending, not yet granted.
+	if reservation.pending == nil {
+		t.Fatal("expected pending drain after startDrain")
+	}
+	if reservation.active != nil {
+		t.Fatal("reservation should not be active while drain is pending")
+	}
+
+	// Verify ticket was set to in_progress and drain was published,
+	// but no reservation grant yet.
+	if len(store.writes) != 2 {
+		t.Fatalf("expected 2 writes (ticket + drain), got %d", len(store.writes))
+	}
+	if store.writes[0].EventType != schema.EventTypeTicket {
+		t.Errorf("write[0] = %s, want m.bureau.ticket", store.writes[0].EventType)
+	}
+	if store.writes[1].EventType != schema.EventTypeMachineDrain {
+		t.Errorf("write[1] = %s, want m.bureau.machine_drain", store.writes[1].EventType)
+	}
+
+	// Simulate the service acknowledging the drain with InFlight == 0.
+	// The state_key is the service's full Matrix localpart (what
+	// the service uses when publishing drain_status).
+	drainStatusEvent := messaging.Event{
+		Type:     schema.EventTypeDrainStatus,
+		StateKey: stringPtr(serviceEntity.Localpart()),
+		Content: mustContentMap(schema.DrainStatusContent{
+			Acknowledged: true,
+			InFlight:     0,
+			DrainedAt:    "2026-03-01T12:00:05Z",
+		}),
+	}
+	fc.processDrainStatusEvent(opsRoomID, drainStatusEvent)
+
+	// Run checkDrainCompletion — should now complete the grant.
+	fc.checkDrainCompletion(context.Background())
+
+	if reservation.pending != nil {
+		t.Error("pending drain should be cleared after acknowledgment")
+	}
+	if reservation.active == nil {
+		t.Fatal("reservation should be active after drain completion")
+	}
+	if reservation.active.relayTicketID != "tkt-1" {
+		t.Errorf("active ticket = %q, want tkt-1", reservation.active.relayTicketID)
+	}
+
+	// Verify reservation grant was published (third write).
+	grantWritten := false
+	for _, write := range store.writes {
+		if write.EventType == schema.EventTypeReservation {
+			grantWritten = true
+		}
+	}
+	if !grantWritten {
+		t.Error("reservation grant should have been published after drain completion")
+	}
+}
+
+func TestDrainWaitTimeoutGrantsAnyway(t *testing.T) {
+	fakeClock := clock.Fake(time.Date(2026, 3, 1, 12, 0, 0, 0, time.UTC))
+	fc, store := newReservationTestController(t)
+	fc.clock = fakeClock
+	fc.drainGracePeriod = 10 * time.Second
+
+	machineLocalpart := testMachineLocalpart("gpu-box")
+	opsRoomID := testOpsRoomID("gpu-box")
+	holder := testEntity(t, "agent/builder")
+
+	fc.opsRooms[machineLocalpart] = opsRoomID
+	fc.opsRoomMachines[opsRoomID] = machineLocalpart
+
+	// Fleet-managed service that will NOT acknowledge.
+	serviceEntity := testEntity(t, "service/stt/whisper")
+	fc.services["service/stt/whisper"] = &fleetServiceState{
+		instances: map[string]*schema.PrincipalAssignment{
+			machineLocalpart: {Principal: serviceEntity},
+		},
+	}
+
+	store.seedState(opsRoomID.String(), "tkt-1", &ticket.TicketContent{
+		Version:  5,
+		Status:   ticket.StatusOpen,
+		Priority: 1,
+		Type:     ticket.TypeResourceRequest,
+		Reservation: &ticket.ReservationContent{
+			Claims: []ticket.ResourceClaim{
+				{
+					Resource: schema.ResourceRef{Type: schema.ResourceMachine, Target: "gpu-box"},
+					Mode:     schema.ModeExclusive,
+					Status:   schema.ClaimPending,
+				},
+			},
+			MaxDuration: "2h",
+		},
+	})
+
+	reservation := &machineReservation{
+		queue: []queuedReservation{
+			{
+				relayTicketID: "tkt-1",
+				opsRoomID:     opsRoomID,
+				holder:        holder,
+				mode:          schema.ModeExclusive,
+				priority:      1,
+				maxDuration:   2 * time.Hour,
+				createdAt:     time.Date(2026, 3, 1, 10, 0, 0, 0, time.UTC),
+			},
+		},
+	}
+	fc.reservations[machineLocalpart] = reservation
+
+	fc.startDrain(context.Background(), machineLocalpart, reservation)
+
+	// Before timeout: drain is pending.
+	if reservation.pending == nil {
+		t.Fatal("expected pending drain")
+	}
+
+	// Advance clock past grace period but check before that — still pending.
+	fakeClock.Advance(5 * time.Second)
+	fc.checkDrainCompletion(context.Background())
+	if reservation.pending == nil {
+		t.Fatal("drain should still be pending before grace period expires")
+	}
+
+	// Advance past the grace period.
+	fakeClock.Advance(6 * time.Second) // total 11s > 10s grace
+	fc.checkDrainCompletion(context.Background())
+
+	if reservation.pending != nil {
+		t.Error("pending drain should be cleared after timeout")
+	}
+	if reservation.active == nil {
+		t.Fatal("reservation should be granted after timeout despite no acknowledgment")
+	}
+}
+
+func TestDrainWaitNoServicesGrantsImmediately(t *testing.T) {
+	fc, store := newReservationTestController(t)
+	fc.drainGracePeriod = 30 * time.Second
+
+	machineLocalpart := testMachineLocalpart("gpu-box")
+	opsRoomID := testOpsRoomID("gpu-box")
+	holder := testEntity(t, "agent/builder")
+
+	fc.opsRooms[machineLocalpart] = opsRoomID
+	fc.opsRoomMachines[opsRoomID] = machineLocalpart
+
+	// No fleet-managed services on this machine.
+
+	store.seedState(opsRoomID.String(), "tkt-1", &ticket.TicketContent{
+		Version:  5,
+		Status:   ticket.StatusOpen,
+		Priority: 1,
+		Type:     ticket.TypeResourceRequest,
+		Reservation: &ticket.ReservationContent{
+			Claims: []ticket.ResourceClaim{
+				{
+					Resource: schema.ResourceRef{Type: schema.ResourceMachine, Target: "gpu-box"},
+					Mode:     schema.ModeExclusive,
+					Status:   schema.ClaimPending,
+				},
+			},
+			MaxDuration: "2h",
+		},
+	})
+
+	reservation := &machineReservation{
+		queue: []queuedReservation{
+			{
+				relayTicketID: "tkt-1",
+				opsRoomID:     opsRoomID,
+				holder:        holder,
+				mode:          schema.ModeExclusive,
+				priority:      1,
+				maxDuration:   2 * time.Hour,
+				createdAt:     time.Date(2026, 3, 1, 10, 0, 0, 0, time.UTC),
+			},
+		},
+	}
+	fc.reservations[machineLocalpart] = reservation
+
+	fc.startDrain(context.Background(), machineLocalpart, reservation)
+
+	// With no services to wait for, the drain publishes but
+	// checkDrainCompletion should complete immediately since the
+	// empty services map is trivially "all drained".
+	if reservation.pending == nil {
+		// It's also acceptable for startDrain to enter pending state
+		// with an empty service map, which checkDrainCompletion will
+		// complete on the next cycle.
+		if reservation.active == nil {
+			t.Fatal("expected either pending or active after startDrain with no services")
+		}
+		return
+	}
+
+	// Pending with empty services — checkDrainCompletion should grant.
+	fc.checkDrainCompletion(context.Background())
+
+	if reservation.pending != nil {
+		t.Error("pending should be cleared — no services to wait for")
+	}
+	if reservation.active == nil {
+		t.Fatal("reservation should be granted when no services need draining")
+	}
+
+	// Verify drain was published even though grant was immediate.
+	drainWritten := false
+	for _, write := range store.writes {
+		if write.EventType == schema.EventTypeMachineDrain {
+			drainWritten = true
+		}
+	}
+	if !drainWritten {
+		t.Error("exclusive mode should publish drain even when no services to wait for")
+	}
+
+	// Verify grant was published.
+	grantWritten := false
+	for _, write := range store.writes {
+		if write.EventType == schema.EventTypeReservation {
+			grantWritten = true
+		}
+	}
+	if !grantWritten {
+		t.Error("reservation grant should have been published")
+	}
+}
+
+func TestDrainPreemptionDuringPending(t *testing.T) {
+	fc, store := newReservationTestController(t)
+	fc.drainGracePeriod = 30 * time.Second
+
+	machineLocalpart := testMachineLocalpart("gpu-box")
+	opsRoomID := testOpsRoomID("gpu-box")
+	holderP3 := testEntity(t, "agent/low-priority")
+	holderP1 := testEntity(t, "agent/high-priority")
+
+	fc.opsRooms[machineLocalpart] = opsRoomID
+	fc.opsRoomMachines[opsRoomID] = machineLocalpart
+
+	// Fleet-managed service on the machine.
+	serviceEntity := testEntity(t, "service/stt/whisper")
+	fc.services["service/stt/whisper"] = &fleetServiceState{
+		instances: map[string]*schema.PrincipalAssignment{
+			machineLocalpart: {Principal: serviceEntity},
+		},
+	}
+
+	// Seed both tickets.
+	store.seedState(opsRoomID.String(), "tkt-p3", &ticket.TicketContent{
+		Version:  5,
+		Status:   ticket.StatusOpen,
+		Priority: 3,
+		Type:     ticket.TypeResourceRequest,
+		Reservation: &ticket.ReservationContent{
+			Claims: []ticket.ResourceClaim{
+				{
+					Resource: schema.ResourceRef{Type: schema.ResourceMachine, Target: "gpu-box"},
+					Mode:     schema.ModeExclusive,
+					Status:   schema.ClaimPending,
+				},
+			},
+			MaxDuration: "1h",
+		},
+	})
+	store.seedState(opsRoomID.String(), "tkt-p1", &ticket.TicketContent{
+		Version:  5,
+		Status:   ticket.StatusOpen,
+		Priority: 1,
+		Type:     ticket.TypeResourceRequest,
+		Reservation: &ticket.ReservationContent{
+			Claims: []ticket.ResourceClaim{
+				{
+					Resource: schema.ResourceRef{Type: schema.ResourceMachine, Target: "gpu-box"},
+					Mode:     schema.ModeExclusive,
+					Status:   schema.ClaimPending,
+				},
+			},
+			MaxDuration: "2h",
+		},
+	})
+
+	// Start with P3 draining.
+	reservation := &machineReservation{
+		queue: []queuedReservation{
+			{
+				relayTicketID: "tkt-p3",
+				opsRoomID:     opsRoomID,
+				holder:        holderP3,
+				mode:          schema.ModeExclusive,
+				priority:      3,
+				maxDuration:   time.Hour,
+				createdAt:     time.Date(2026, 3, 1, 10, 0, 0, 0, time.UTC),
+			},
+		},
+	}
+	fc.reservations[machineLocalpart] = reservation
+
+	fc.startDrain(context.Background(), machineLocalpart, reservation)
+
+	if reservation.pending == nil {
+		t.Fatal("expected P3 drain to be pending")
+	}
+	if reservation.pending.queued.relayTicketID != "tkt-p3" {
+		t.Errorf("pending ticket = %q, want tkt-p3", reservation.pending.queued.relayTicketID)
+	}
+
+	// Now P1 arrives in the queue.
+	reservation.queue = append(reservation.queue, queuedReservation{
+		relayTicketID: "tkt-p1",
+		opsRoomID:     opsRoomID,
+		holder:        holderP1,
+		mode:          schema.ModeExclusive,
+		priority:      1,
+		maxDuration:   2 * time.Hour,
+		createdAt:     time.Date(2026, 3, 1, 10, 5, 0, 0, time.UTC),
+	})
+
+	// advanceReservationQueues should preempt the P3 drain and start P1.
+	fc.advanceReservationQueues(context.Background())
+
+	// P3's ticket should be closed.
+	closedP3 := false
+	for _, write := range store.writes {
+		if write.EventType == schema.EventTypeTicket && write.StateKey == "tkt-p3" {
+			var content ticket.TicketContent
+			raw, _ := json.Marshal(write.Content)
+			json.Unmarshal(raw, &content)
+			if content.Status == ticket.StatusClosed {
+				closedP3 = true
+			}
+		}
+	}
+	if !closedP3 {
+		t.Error("P3 relay ticket should be closed after preemption")
+	}
+
+	// P1 should now be the pending drain.
+	if reservation.pending == nil {
+		t.Fatal("expected P1 drain to be pending after preemption")
+	}
+	if reservation.pending.queued.relayTicketID != "tkt-p1" {
+		t.Errorf("pending ticket = %q, want tkt-p1", reservation.pending.queued.relayTicketID)
+	}
+}
+
+func TestDrainServicesListPopulated(t *testing.T) {
+	fc, store := newReservationTestController(t)
+	fc.drainGracePeriod = 30 * time.Second
+
+	machineLocalpart := testMachineLocalpart("gpu-box")
+	opsRoomID := testOpsRoomID("gpu-box")
+	holder := testEntity(t, "agent/builder")
+
+	fc.opsRooms[machineLocalpart] = opsRoomID
+	fc.opsRoomMachines[opsRoomID] = machineLocalpart
+
+	// Two fleet-managed services on this machine.
+	whisperEntity := testEntity(t, "service/stt/whisper")
+	buildbarnEntity := testEntity(t, "service/buildbarn/worker")
+	fc.services["service/stt/whisper"] = &fleetServiceState{
+		instances: map[string]*schema.PrincipalAssignment{
+			machineLocalpart: {Principal: whisperEntity},
+		},
+	}
+	fc.services["service/buildbarn/worker"] = &fleetServiceState{
+		instances: map[string]*schema.PrincipalAssignment{
+			machineLocalpart: {Principal: buildbarnEntity},
+		},
+	}
+
+	store.seedState(opsRoomID.String(), "tkt-1", &ticket.TicketContent{
+		Version:  5,
+		Status:   ticket.StatusOpen,
+		Priority: 1,
+		Type:     ticket.TypeResourceRequest,
+		Reservation: &ticket.ReservationContent{
+			Claims: []ticket.ResourceClaim{
+				{
+					Resource: schema.ResourceRef{Type: schema.ResourceMachine, Target: "gpu-box"},
+					Mode:     schema.ModeExclusive,
+					Status:   schema.ClaimPending,
+				},
+			},
+			MaxDuration: "2h",
+		},
+	})
+
+	reservation := &machineReservation{
+		queue: []queuedReservation{
+			{
+				relayTicketID: "tkt-1",
+				opsRoomID:     opsRoomID,
+				holder:        holder,
+				mode:          schema.ModeExclusive,
+				priority:      1,
+				maxDuration:   2 * time.Hour,
+				createdAt:     time.Date(2026, 3, 1, 10, 0, 0, 0, time.UTC),
+			},
+		},
+	}
+	fc.reservations[machineLocalpart] = reservation
+
+	fc.startDrain(context.Background(), machineLocalpart, reservation)
+
+	// Find the drain write and verify Services is populated.
+	for _, write := range store.writes {
+		if write.EventType != schema.EventTypeMachineDrain {
+			continue
+		}
+		raw, err := json.Marshal(write.Content)
+		if err != nil {
+			t.Fatalf("marshal drain content: %v", err)
+		}
+		var drain schema.MachineDrainContent
+		if err := json.Unmarshal(raw, &drain); err != nil {
+			t.Fatalf("unmarshal drain content: %v", err)
+		}
+		if len(drain.Services) != 2 {
+			t.Errorf("drain services count = %d, want 2", len(drain.Services))
+		}
+		// Verify both services are listed (order may vary).
+		serviceSet := make(map[string]bool)
+		for _, service := range drain.Services {
+			serviceSet[service] = true
+		}
+		if !serviceSet[whisperEntity.Localpart()] {
+			t.Errorf("drain services should include %s", whisperEntity.Localpart())
+		}
+		if !serviceSet[buildbarnEntity.Localpart()] {
+			t.Errorf("drain services should include %s", buildbarnEntity.Localpart())
+		}
+		return
+	}
+	t.Error("no machine drain write found")
 }
 
 // --- Release tests ---

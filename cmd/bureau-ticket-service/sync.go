@@ -6,6 +6,7 @@ package main
 import (
 	"context"
 	"encoding/json"
+	"time"
 
 	"github.com/bureau-foundation/bureau/lib/ref"
 	"github.com/bureau-foundation/bureau/lib/schema"
@@ -40,6 +41,7 @@ func buildSyncFilter() string {
 		pipeline.EventTypePipelineResult,
 		schema.EventTypeStewardship,
 		schema.EventTypeReservation,
+		schema.EventTypeMachineDrain,
 		schema.MatrixEventTypeTombstone,
 		schema.MatrixEventTypeRoomMember,
 		schema.MatrixEventTypeCanonicalAlias,
@@ -583,6 +585,16 @@ func (ts *TicketService) processRoomSync(ctx context.Context, roomID ref.RoomID,
 		}
 	}
 
+	// Phase 1.9: Publish drain status when a machine drain event
+	// arrives in an ops room. The ticket service reports the count
+	// of active relay tickets it manages in the room as in-flight
+	// work. When drain is cleared, the service clears its status.
+	for _, event := range stateEvents {
+		if event.Type == schema.EventTypeMachineDrain && event.StateKey != nil {
+			ts.publishDrainStatus(ctx, roomID, state, event)
+		}
+	}
+
 	// Phase 2: Evaluate gates against ALL state events in the batch.
 	// Pipeline result events, ticket events, and any other state
 	// events may satisfy pending gates. Gate evaluation is idempotent
@@ -892,6 +904,99 @@ func (ts *TicketService) roomStats() []ticket.RoomSummary {
 		})
 	}
 	return summaries
+}
+
+// publishDrainStatus responds to a machine drain event in an ops room
+// by publishing the ticket service's drain status. The status reports
+// the count of active (non-closed) relay tickets the service manages
+// in this room as in-flight work.
+//
+// When the drain is cleared (empty content or zero ReservationHolder),
+// the service publishes a cleared drain_status (empty JSON object).
+//
+// The state key is the service's localpart (e.g.,
+// "fleet/prod/service/ticket/main"), matching the convention the FC
+// uses to track which services have acknowledged drain.
+//
+// Caller must hold ts.mu (write lock).
+func (ts *TicketService) publishDrainStatus(ctx context.Context, roomID ref.RoomID, state *roomState, event messaging.Event) {
+	stateKey := ts.service.Localpart()
+
+	// Check if the drain was cleared. Empty content or a zero-value
+	// ReservationHolder means the drain has been lifted.
+	isDrainActive := false
+	if len(event.Content) > 0 {
+		contentBytes, err := json.Marshal(event.Content)
+		if err == nil {
+			var drain schema.MachineDrainContent
+			if err := json.Unmarshal(contentBytes, &drain); err == nil {
+				isDrainActive = !drain.ReservationHolder.IsZero()
+			}
+		}
+	}
+
+	if !isDrainActive {
+		ts.logger.Info("drain cleared, publishing cleared drain_status",
+			"room_id", roomID,
+		)
+		if _, err := ts.writer.SendStateEvent(ctx, roomID,
+			schema.EventTypeDrainStatus, stateKey, json.RawMessage("{}")); err != nil {
+			ts.logger.Error("failed to clear drain_status in ops room",
+				"room_id", roomID,
+				"error", err,
+			)
+		}
+		return
+	}
+
+	// Count active relay tickets in this ops room.
+	inFlight := ts.countActiveRelayTickets(roomID, state)
+
+	status := schema.DrainStatusContent{
+		Acknowledged: true,
+		InFlight:     inFlight,
+	}
+	if inFlight == 0 {
+		status.DrainedAt = ts.clock.Now().UTC().Format(time.RFC3339)
+	}
+
+	ts.logger.Info("drain active, publishing drain_status",
+		"room_id", roomID,
+		"in_flight", inFlight,
+	)
+
+	if _, err := ts.writer.SendStateEvent(ctx, roomID,
+		schema.EventTypeDrainStatus, stateKey, status); err != nil {
+		ts.logger.Error("failed to publish drain_status to ops room",
+			"room_id", roomID,
+			"in_flight", inFlight,
+			"error", err,
+		)
+	}
+}
+
+// countActiveRelayTickets returns the number of non-closed relay
+// tickets managed by this ticket service in the given ops room.
+// Iterates relay entries to find tickets in this room, then checks
+// the room index for current status.
+//
+// Caller must hold ts.mu.
+func (ts *TicketService) countActiveRelayTickets(opsRoomID ref.RoomID, state *roomState) int {
+	count := 0
+	for _, entry := range ts.relayEntries {
+		relayRef, inRoom := entry.relayTickets[opsRoomID]
+		if !inRoom {
+			continue
+		}
+		content, exists := state.index.Get(relayRef.ticketID)
+		if !exists {
+			continue
+		}
+		if content.Status != ticket.StatusClosed {
+			count++
+		}
+	}
+	return count
 }
 
 // processPresence updates the in-memory presence cache from m.presence

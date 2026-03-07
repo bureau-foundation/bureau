@@ -1193,6 +1193,11 @@ type serviceDeployOptions struct {
 	// mints when resolving RequiredServices for other principals.
 	Authorization *schema.AuthorizationPolicy
 
+	// Labels are free-form key-value metadata attached to the
+	// PrincipalAssignment in MachineConfig. The fleet controller uses
+	// "fleet_managed" to track which services it placed.
+	Labels map[string]string
+
 	// HealthCheck is the health check config for this service's
 	// template. When non-nil, the daemon starts a health monitor that
 	// probes the service at the configured interval and type.
@@ -1394,6 +1399,7 @@ func deployService(
 		ExtraEnvironmentVariables: options.ExtraEnvironmentVariables,
 		MatrixPolicy:              options.MatrixPolicy,
 		Authorization:             options.Authorization,
+		Labels:                    options.Labels,
 	})
 	if err != nil {
 		t.Fatalf("create service %q: %v", options.Localpart, err)
@@ -1465,6 +1471,7 @@ func deployService(
 		Template:                  namespace.TemplateRoomAliasLocalpart() + ":" + templateName,
 		MatrixPolicy:              options.MatrixPolicy,
 		ExtraEnvironmentVariables: options.ExtraEnvironmentVariables,
+		Labels:                    options.Labels,
 	})
 
 	return serviceDeployResult{

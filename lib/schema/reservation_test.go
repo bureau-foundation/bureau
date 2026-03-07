@@ -5,6 +5,7 @@ package schema
 
 import (
 	"encoding/json"
+	"strings"
 	"testing"
 
 	"github.com/bureau-foundation/bureau/lib/ref"
@@ -603,6 +604,124 @@ func TestMachineDrainContentRoundTrip(t *testing.T) {
 	}
 }
 
+func TestDrainStatusContentValidate(t *testing.T) {
+	tests := []struct {
+		name    string
+		status  DrainStatusContent
+		wantErr bool
+	}{
+		{
+			name: "acknowledged with operations in flight",
+			status: DrainStatusContent{
+				Acknowledged: true,
+				InFlight:     3,
+			},
+			wantErr: false,
+		},
+		{
+			name: "acknowledged and fully drained",
+			status: DrainStatusContent{
+				Acknowledged: true,
+				InFlight:     0,
+				DrainedAt:    "2026-03-04T03:00:00Z",
+			},
+			wantErr: false,
+		},
+		{
+			name: "not yet acknowledged",
+			status: DrainStatusContent{
+				Acknowledged: false,
+				InFlight:     0,
+			},
+			wantErr: false,
+		},
+		{
+			name: "acknowledged drained missing drained_at",
+			status: DrainStatusContent{
+				Acknowledged: true,
+				InFlight:     0,
+			},
+			wantErr: true,
+		},
+		{
+			name: "acknowledged drained invalid drained_at",
+			status: DrainStatusContent{
+				Acknowledged: true,
+				InFlight:     0,
+				DrainedAt:    "not-a-date",
+			},
+			wantErr: true,
+		},
+		{
+			name: "negative in_flight",
+			status: DrainStatusContent{
+				Acknowledged: true,
+				InFlight:     -1,
+			},
+			wantErr: true,
+		},
+		{
+			name: "drained_at set but in_flight nonzero",
+			status: DrainStatusContent{
+				Acknowledged: true,
+				InFlight:     2,
+				DrainedAt:    "2026-03-04T03:00:00Z",
+			},
+			wantErr: true,
+		},
+	}
+	for _, testCase := range tests {
+		t.Run(testCase.name, func(t *testing.T) {
+			err := testCase.status.Validate()
+			if (err != nil) != testCase.wantErr {
+				t.Errorf("Validate() error = %v, wantErr = %v", err, testCase.wantErr)
+			}
+		})
+	}
+}
+
+func TestDrainStatusContentRoundTrip(t *testing.T) {
+	original := DrainStatusContent{
+		Acknowledged: true,
+		InFlight:     0,
+		DrainedAt:    "2026-03-04T03:15:00Z",
+	}
+
+	data, err := json.Marshal(original)
+	if err != nil {
+		t.Fatalf("Marshal: %v", err)
+	}
+
+	var decoded DrainStatusContent
+	if err := json.Unmarshal(data, &decoded); err != nil {
+		t.Fatalf("Unmarshal: %v", err)
+	}
+
+	if decoded.Acknowledged != original.Acknowledged {
+		t.Errorf("Acknowledged = %v, want %v", decoded.Acknowledged, original.Acknowledged)
+	}
+	if decoded.InFlight != original.InFlight {
+		t.Errorf("InFlight = %v, want %v", decoded.InFlight, original.InFlight)
+	}
+	if decoded.DrainedAt != original.DrainedAt {
+		t.Errorf("DrainedAt = %v, want %v", decoded.DrainedAt, original.DrainedAt)
+	}
+
+	// Verify omitempty: drained_at absent when empty.
+	inProgress := DrainStatusContent{
+		Acknowledged: true,
+		InFlight:     5,
+	}
+	data, err = json.Marshal(inProgress)
+	if err != nil {
+		t.Fatalf("Marshal in-progress: %v", err)
+	}
+	raw := string(data)
+	if strings.Contains(raw, "drained_at") {
+		t.Errorf("in-progress status should omit drained_at, got: %s", raw)
+	}
+}
+
 func TestOpsRoomPowerLevels(t *testing.T) {
 	adminUserID := mustUserID(t, "@bureau-admin:bureau.local")
 	levels := OpsRoomPowerLevels(adminUserID)
@@ -623,11 +742,12 @@ func TestOpsRoomPowerLevels(t *testing.T) {
 		t.Fatal("power levels missing 'events' map")
 	}
 
-	// Ticket service events require PL 25.
+	// Ticket service and drain status events require PL 25.
 	for _, eventType := range []ref.EventType{
 		EventTypeTicket,
 		EventTypeTicketConfig,
 		EventTypeRelayLink,
+		EventTypeDrainStatus,
 	} {
 		if events[eventType] != 25 {
 			t.Errorf("%s power level = %v, want 25", eventType, events[eventType])

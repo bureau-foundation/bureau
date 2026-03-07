@@ -31,7 +31,10 @@ func main() {
 
 func run() error {
 	var showVersion bool
+	var drainGracePeriod time.Duration
 	flag.BoolVar(&showVersion, "version", false, "print version information and exit")
+	flag.DurationVar(&drainGracePeriod, "drain-grace-period", 30*time.Second,
+		"maximum time to wait for services to acknowledge a machine drain before granting the reservation")
 	flag.Parse()
 
 	if showVersion {
@@ -87,29 +90,30 @@ func run() error {
 	)
 
 	fleetController := &FleetController{
-		session:         boot.Session,
-		configStore:     boot.Session,
-		clock:           boot.Clock,
-		principalName:   boot.PrincipalName,
-		machineName:     boot.MachineName,
-		serverName:      boot.ServerName,
-		fleet:           boot.Fleet,
-		serviceEntity:   serviceEntity,
-		serviceRoomID:   boot.ServiceRoomID,
-		startedAt:       boot.Clock.Now(),
-		machines:        make(map[string]*machineState),
-		services:        make(map[string]*fleetServiceState),
-		definitions:     make(map[string]*fleet.MachineDefinitionContent),
-		config:          make(map[string]*fleet.FleetConfigContent),
-		leases:          make(map[string]*fleet.HALeaseContent),
-		configRooms:     make(map[string]ref.RoomID),
-		opsRooms:        make(map[string]ref.RoomID),
-		opsRoomMachines: make(map[ref.RoomID]string),
-		relayLinks:      make(map[opsTicketKey]schema.RelayLink),
-		reservations:    make(map[string]*machineReservation),
-		fleetRoomID:     fleetRoomID,
-		machineRoomID:   machineRoomID,
-		logger:          boot.Logger,
+		session:          boot.Session,
+		configStore:      boot.Session,
+		clock:            boot.Clock,
+		principalName:    boot.PrincipalName,
+		machineName:      boot.MachineName,
+		serverName:       boot.ServerName,
+		fleet:            boot.Fleet,
+		serviceEntity:    serviceEntity,
+		serviceRoomID:    boot.ServiceRoomID,
+		startedAt:        boot.Clock.Now(),
+		drainGracePeriod: drainGracePeriod,
+		machines:         make(map[string]*machineState),
+		services:         make(map[string]*fleetServiceState),
+		definitions:      make(map[string]*fleet.MachineDefinitionContent),
+		config:           make(map[string]*fleet.FleetConfigContent),
+		leases:           make(map[string]*fleet.HALeaseContent),
+		configRooms:      make(map[string]ref.RoomID),
+		opsRooms:         make(map[string]ref.RoomID),
+		opsRoomMachines:  make(map[ref.RoomID]string),
+		relayLinks:       make(map[opsTicketKey]schema.RelayLink),
+		reservations:     make(map[string]*machineReservation),
+		fleetRoomID:      fleetRoomID,
+		machineRoomID:    machineRoomID,
+		logger:           boot.Logger,
 	}
 
 	// Perform initial /sync to build the fleet model.
@@ -198,6 +202,11 @@ type FleetController struct {
 	// reservations tracks per-machine reservation state: the active
 	// reservation (if any) and the queue of pending requests.
 	reservations map[string]*machineReservation
+
+	// drainGracePeriod is the maximum time the fleet controller waits
+	// for services to acknowledge a drain before granting the
+	// reservation anyway. Zero means no waiting (immediate grant).
+	drainGracePeriod time.Duration
 
 	// fleetRoomID is the fleet config room, resolved from the fleet prefix.
 	fleetRoomID ref.RoomID

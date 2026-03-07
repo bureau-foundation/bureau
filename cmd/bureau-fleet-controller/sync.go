@@ -44,6 +44,7 @@ func buildSyncFilter() string {
 		schema.EventTypeRelayLink,
 		schema.EventTypeReservation,
 		schema.EventTypeMachineDrain,
+		schema.EventTypeDrainStatus,
 		schema.EventTypeRelayPolicy,
 	}
 
@@ -293,6 +294,8 @@ func (fc *FleetController) processStateEvent(roomID ref.RoomID, event messaging.
 		fc.processMachineConfigEvent(roomID, event)
 	case schema.EventTypeRelayLink:
 		fc.processRelayLinkEvent(roomID, event)
+	case schema.EventTypeDrainStatus:
+		fc.processDrainStatusEvent(roomID, event)
 	}
 }
 
@@ -691,6 +694,16 @@ func (fc *FleetController) handleSync(ctx context.Context, response *messaging.S
 		fc.processRoomState(acceptedRoomStates[index].roomID, acceptedRoomStates[index].events, nil)
 	}
 
+	// Cross-reference machine assignments with service definitions.
+	// Events from different rooms arrive in arbitrary order within a
+	// sync response (fleet room with service definitions vs config
+	// rooms with assignments). The incremental instance tracking in
+	// processMachineConfigEvent may miss services whose
+	// FleetServiceContent arrived in the same batch or a later batch
+	// than the MachineConfig. This is the same issue initialSync
+	// solves at line 186 — it applies equally to incremental syncs.
+	fc.rebuildServiceInstances()
+
 	// Second pass: process ticket events that need context for
 	// network calls (reservation grants, relay ticket status updates).
 	// Done after the first pass so relay links are indexed before
@@ -731,8 +744,11 @@ func (fc *FleetController) handleSync(ctx context.Context, response *messaging.S
 	fc.checkMachineHealth(ctx)
 
 	// Advance reservation queues (grant next pending, check
-	// preemption) and enforce duration limits on active reservations.
+	// preemption), check drain completion (grant when all services
+	// acknowledge or timeout), and enforce duration limits on active
+	// reservations.
 	fc.advanceReservationQueues(ctx)
+	fc.checkDrainCompletion(ctx)
 	fc.checkReservationExpiry(ctx)
 }
 

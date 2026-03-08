@@ -55,4 +55,33 @@ type DaemonStatus struct {
 	// the machine's nix.conf matches the fleet's declared substituter URL
 	// and signing keys.
 	FleetCache *FleetCacheContent `json:"fleet_cache,omitempty"`
+
+	// Provenance is the fleet's provenance verification configuration,
+	// constructed from m.bureau.provenance_roots and
+	// m.bureau.provenance_policy state events in the fleet room. Nil
+	// when no provenance policy is configured. The doctor uses this to
+	// report whether binary attestation is active and at what
+	// enforcement level.
+	Provenance *ProvenanceVerifierStatus `json:"provenance,omitempty"`
+}
+
+// ProvenanceVerifierStatus summarizes the provenance verifier's
+// configuration for the daemon status file. This is the operator-facing
+// view — it reports what the verifier is configured to check, not the
+// raw PEM material or parsed certificates.
+type ProvenanceVerifierStatus struct {
+	// RootSets lists the names of configured root sets (e.g.,
+	// "sigstore_public", "fleet_private"). Each root set provides a
+	// Fulcio CA certificate and Rekor public key.
+	RootSets []string `json:"root_sets"`
+
+	// TrustedIdentities lists the names of trusted identities from the
+	// provenance policy (e.g., "github_actions"). Each identity binds
+	// a root set to an OIDC issuer and subject pattern.
+	TrustedIdentities []string `json:"trusted_identities"`
+
+	// Enforcement maps category names to their enforcement level. The
+	// daemon currently checks "nix_store_paths"; additional categories
+	// may be added.
+	Enforcement map[string]EnforcementLevel `json:"enforcement"`
 }

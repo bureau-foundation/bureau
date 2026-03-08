@@ -214,6 +214,126 @@ func TestFleetProvenanceRootsAndPolicy(t *testing.T) {
 	}
 }
 
+// TestDaemonSyncsProvenance verifies the daemon→status file data flow
+// for provenance configuration: when provenance roots and policy state
+// events are published to the fleet room, the daemon picks them up via
+// /sync, constructs a provenance verifier, and writes the verifier
+// status to daemon-status.json.
+//
+// This follows the same pattern as TestDaemonSyncsFleetCache — publish
+// a state event, wait for the daemon status file to reflect the change.
+func TestDaemonSyncsProvenance(t *testing.T) {
+	t.Parallel()
+
+	ns := setupTestNamespace(t)
+	admin := ns.Admin
+	fleet := createTestFleet(t, admin, ns)
+
+	machine := newTestMachine(t, fleet, "provenance")
+	startMachine(t, admin, machine, machineOptions{
+		LauncherBinary: resolvedBinary(t, "LAUNCHER_BINARY"),
+		DaemonBinary:   resolvedBinary(t, "DAEMON_BINARY"),
+		Fleet:          fleet,
+	})
+
+	statusPath := filepath.Join(machine.RunDir, schema.DaemonStatusFilename)
+
+	// Step 1: Verify daemon-status.json exists with no provenance config.
+	statusData, err := os.ReadFile(statusPath)
+	if err != nil {
+		t.Fatalf("read daemon status: %v", err)
+	}
+	var initialStatus schema.DaemonStatus
+	if err := json.Unmarshal(statusData, &initialStatus); err != nil {
+		t.Fatalf("unmarshal initial status: %v", err)
+	}
+	if initialStatus.Provenance != nil {
+		t.Fatalf("expected nil Provenance before publishing, got %+v", initialStatus.Provenance)
+	}
+
+	ctx := t.Context()
+
+	// Step 2: Publish provenance roots using the Sigstore fixture.
+	// Import the trusted root via CLI (same path as
+	// TestFleetProvenanceRootsAndPolicy) so we exercise the production
+	// code path for constructing ProvenanceRootsContent from a Sigstore
+	// trusted_root.json.
+	credentialFile := writeTestCredentialFile(t,
+		testHomeserverURL, admin.UserID().String(), admin.AccessToken())
+	trustedRootFile := resolvedDataFile(t, "TRUSTED_ROOT_FIXTURE")
+
+	runBureauOrFail(t, "fleet", "provenance", "roots", "set",
+		fleet.Prefix,
+		"--name", "sigstore_public",
+		"--sigstore-trusted-root", trustedRootFile,
+		"--credential-file", credentialFile, "--json")
+
+	// Step 3: Publish provenance policy with a trusted identity.
+	policy := schema.ProvenancePolicyContent{
+		TrustedIdentities: []schema.TrustedIdentity{
+			{
+				Name:           "ci",
+				Roots:          "sigstore_public",
+				Issuer:         "https://token.actions.githubusercontent.com",
+				SubjectPattern: "https://github.com/bureau-foundation/bureau/*",
+			},
+		},
+		Enforcement: map[string]schema.EnforcementLevel{
+			"nix_store_paths": schema.EnforcementWarn,
+		},
+	}
+	_, err = admin.SendStateEvent(ctx, fleet.FleetRoomID,
+		schema.EventTypeProvenancePolicy, "", policy)
+	if err != nil {
+		t.Fatalf("publish provenance policy: %v", err)
+	}
+
+	// Step 4: Wait for daemon to sync provenance config to daemon-status.json.
+	// The daemon's incremental /sync picks up the fleet room state changes,
+	// calls syncProvenance(), constructs a verifier, and rewrites
+	// daemon-status.json.
+	waitForFileContent(t, statusPath, func(data []byte) bool {
+		var status schema.DaemonStatus
+		if err := json.Unmarshal(data, &status); err != nil {
+			return false
+		}
+		return status.Provenance != nil && len(status.Provenance.RootSets) > 0
+	})
+
+	// Step 5: Full verification of the synced provenance status.
+	finalData, err := os.ReadFile(statusPath)
+	if err != nil {
+		t.Fatalf("read final daemon status: %v", err)
+	}
+	var finalStatus schema.DaemonStatus
+	if err := json.Unmarshal(finalData, &finalStatus); err != nil {
+		t.Fatalf("unmarshal final status: %v", err)
+	}
+	if finalStatus.Provenance == nil {
+		t.Fatal("Provenance still nil after sync")
+	}
+	if len(finalStatus.Provenance.RootSets) != 1 {
+		t.Errorf("root sets = %v, want 1 entry", finalStatus.Provenance.RootSets)
+	}
+	if len(finalStatus.Provenance.TrustedIdentities) != 1 {
+		t.Errorf("trusted identities = %v, want 1 entry", finalStatus.Provenance.TrustedIdentities)
+	}
+	if finalStatus.Provenance.TrustedIdentities[0] != "ci" {
+		t.Errorf("identity name = %q, want %q", finalStatus.Provenance.TrustedIdentities[0], "ci")
+	}
+	enforcement, exists := finalStatus.Provenance.Enforcement["nix_store_paths"]
+	if !exists {
+		t.Error("enforcement for nix_store_paths not found")
+	} else if enforcement != schema.EnforcementWarn {
+		t.Errorf("enforcement = %q, want %q", enforcement, schema.EnforcementWarn)
+	}
+
+	t.Logf("daemon synced provenance: root_sets=%v identities=%v enforcement=%v",
+		finalStatus.Provenance.RootSets,
+		finalStatus.Provenance.TrustedIdentities,
+		finalStatus.Provenance.Enforcement)
+}
+
 // resolvedDataFile resolves a Bazel runfile path from an environment
 // variable. Same pattern as resolvedBinary but for data files.
 func resolvedDataFile(t *testing.T, envVar string) string {

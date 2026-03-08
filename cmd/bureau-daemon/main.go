@@ -29,6 +29,7 @@ import (
 	"github.com/bureau-foundation/bureau/lib/hwinfo/nvidia"
 	"github.com/bureau-foundation/bureau/lib/principal"
 	"github.com/bureau-foundation/bureau/lib/process"
+	"github.com/bureau-foundation/bureau/lib/provenance"
 	"github.com/bureau-foundation/bureau/lib/ref"
 	"github.com/bureau-foundation/bureau/lib/schema"
 	"github.com/bureau-foundation/bureau/lib/sealed"
@@ -619,10 +620,21 @@ type Daemon struct {
 	serviceRoomID    ref.RoomID
 	fleetRoomID      ref.RoomID                // fleet room for HA leases, service definitions, and alerts
 	fleetCacheConfig *schema.FleetCacheContent // fleet cache config from m.bureau.fleet_cache; nil if not published
-	templateRoomID   ref.RoomID                // included in /sync; filtered for m.bureau.template events only
-	pipelineRoomID   ref.RoomID                // excluded from /sync via not_rooms; matched as defense-in-depth
-	opsRoomID        ref.RoomID                // machine ops room for drain coordination; zero if not resolved
-	syncFilter       string                    // inline Matrix /sync filter JSON (room- and type-scoped)
+
+	// provenanceVerifier verifies Sigstore provenance bundles against
+	// the fleet's trust roots and policy. Constructed from
+	// m.bureau.provenance_roots and m.bureau.provenance_policy state
+	// events in the fleet room. Nil when no provenance policy is
+	// configured (all store paths treated as unverified — enforcement
+	// level determines behavior). Rebuilt when either state event
+	// changes via syncProvenance. Accessed only from the sync loop
+	// goroutine (no mutex needed).
+	provenanceVerifier *provenance.Verifier
+	provenanceStatus   *schema.ProvenanceVerifierStatus // summary for daemon-status.json; nil when no verifier
+	templateRoomID     ref.RoomID                       // included in /sync; filtered for m.bureau.template events only
+	pipelineRoomID     ref.RoomID                       // excluded from /sync via not_rooms; matched as defense-in-depth
+	opsRoomID          ref.RoomID                       // machine ops room for drain coordination; zero if not resolved
+	syncFilter         string                           // inline Matrix /sync filter JSON (room- and type-scoped)
 
 	// workspaceAliases maps room IDs to their canonical aliases for
 	// rooms discovered via /sync invites (workspace rooms). Populated
@@ -928,6 +940,12 @@ type Daemon struct {
 	// configured substituters. Defaults to prefetchNixStore. Tests
 	// override this to avoid requiring a real Nix installation.
 	prefetchFunc func(ctx context.Context, storePath string) error
+
+	// narDigestFunc computes the SHA-256 NAR digest for a store path.
+	// Defaults to nix.NARDigest (streams nix-store --dump through
+	// SHA-256). Tests override this to avoid requiring a real Nix
+	// installation while still testing provenance verification flow.
+	narDigestFunc func(ctx context.Context, storePath string) ([]byte, error)
 
 	// validateCommandFunc checks that a command binary is resolvable
 	// before sending a create-sandbox request to the launcher. Defaults
@@ -1642,13 +1660,113 @@ func int64Abs(x int64) int64 {
 func (d *Daemon) syncFleetCache(ctx context.Context) {
 	cacheConfig, err := messaging.GetState[schema.FleetCacheContent](ctx, d.session, d.fleetRoomID, schema.EventTypeFleetCache, "")
 	if err != nil {
-		if !messaging.IsMatrixError(err, messaging.ErrCodeNotFound) {
-			d.logger.Error("reading fleet cache config", "error", err)
+		if messaging.IsMatrixError(err, messaging.ErrCodeNotFound) {
+			// No fleet cache configured — clear any previous config.
+			d.fleetCacheConfig = nil
+			return
 		}
-		d.fleetCacheConfig = nil
+		// Transient error (network partition, homeserver restart).
+		// Retain the previous cache config so that provenance bundle
+		// fetches continue working. Clearing the cache URL on a
+		// transient error would cause verifyStorePathProvenance to
+		// skip bundle fetches entirely, bypassing verification under
+		// warn/log enforcement.
+		d.logger.Error("reading fleet cache config — retaining previous",
+			"error", err, "has_previous_config", d.fleetCacheConfig != nil)
 		return
 	}
 	d.fleetCacheConfig = &cacheConfig
+}
+
+// syncProvenance reads provenance trust roots and policy from the fleet
+// room and constructs a Verifier. Called during initial sync (before the
+// first reconcile) and when fleet room state changes are detected.
+//
+// The verifier is only cleared when BOTH state events are absent (404
+// from the homeserver) — the legitimate "no provenance configured"
+// state. All other error paths (transient Matrix errors, malformed
+// state events, NewVerifier failures) retain the previous verifier.
+// This prevents an attacker from disabling verification by inducing
+// transient errors or publishing malformed state events.
+func (d *Daemon) syncProvenance(ctx context.Context) {
+	roots, rootsError := messaging.GetState[schema.ProvenanceRootsContent](
+		ctx, d.session, d.fleetRoomID, schema.EventTypeProvenanceRoots, "")
+	rootsNotFound := rootsError != nil && messaging.IsMatrixError(rootsError, messaging.ErrCodeNotFound)
+
+	policy, policyError := messaging.GetState[schema.ProvenancePolicyContent](
+		ctx, d.session, d.fleetRoomID, schema.EventTypeProvenancePolicy, "")
+	policyNotFound := policyError != nil && messaging.IsMatrixError(policyError, messaging.ErrCodeNotFound)
+
+	// No provenance configured: both roots and policy are absent from
+	// the fleet room. This is the only path that clears the verifier —
+	// all other error paths retain the previous verifier to prevent an
+	// attacker from disabling verification via transient errors or
+	// malformed state events.
+	if rootsNotFound && policyNotFound {
+		d.provenanceVerifier = nil
+		d.provenanceStatus = nil
+		return
+	}
+
+	// Transient errors reading roots or policy (network partition,
+	// homeserver restart, etc.). Retain the previous verifier so
+	// verification cannot be disabled by transient faults.
+	if rootsError != nil && !rootsNotFound {
+		d.logger.Error("reading provenance roots from fleet room — retaining previous verifier",
+			"error", rootsError, "has_previous_verifier", d.provenanceVerifier != nil)
+		return
+	}
+	if policyError != nil && !policyNotFound {
+		d.logger.Error("reading provenance policy from fleet room — retaining previous verifier",
+			"error", policyError, "has_previous_verifier", d.provenanceVerifier != nil)
+		return
+	}
+
+	// Partial configuration: one of roots or policy exists but not
+	// the other. This can happen during initial setup (admin publishes
+	// roots before policy) or if an attacker deletes one event.
+	// Retain the previous verifier rather than silently disabling
+	// verification.
+	if rootsNotFound {
+		d.logger.Warn("provenance policy exists but roots are missing — retaining previous verifier")
+		return
+	}
+	if policyNotFound {
+		d.logger.Warn("provenance roots exist but policy is missing — retaining previous verifier")
+		return
+	}
+
+	verifier, err := provenance.NewVerifier(roots, policy)
+	if err != nil {
+		// Configuration is invalid (empty roots, dangling root set
+		// reference, unknown enforcement level). Retain the previous
+		// verifier rather than silently disabling verification.
+		d.logger.Error("creating provenance verifier from fleet state — retaining previous verifier",
+			"error", err, "has_previous_verifier", d.provenanceVerifier != nil)
+		return
+	}
+
+	d.provenanceVerifier = verifier
+
+	// Build the operator-facing status summary for daemon-status.json.
+	rootSetNames := make([]string, 0, len(roots.Roots))
+	for name := range roots.Roots {
+		rootSetNames = append(rootSetNames, name)
+	}
+	identityNames := make([]string, 0, len(policy.TrustedIdentities))
+	for _, identity := range policy.TrustedIdentities {
+		identityNames = append(identityNames, identity.Name)
+	}
+	d.provenanceStatus = &schema.ProvenanceVerifierStatus{
+		RootSets:          rootSetNames,
+		TrustedIdentities: identityNames,
+		Enforcement:       policy.Enforcement,
+	}
+
+	d.logger.Info("provenance verifier configured",
+		"root_sets", len(roots.Roots),
+		"trusted_identities", len(policy.TrustedIdentities),
+	)
 }
 
 // writeDaemonStatus writes the daemon status file to the run directory.
@@ -1669,6 +1787,7 @@ func (d *Daemon) writeDaemonStatus() {
 		HostEnvironmentPath: d.hostEnvironmentPath,
 		StartedAt:           d.clock.Now().UTC().Format(time.RFC3339),
 		FleetCache:          d.fleetCacheConfig,
+		Provenance:          d.provenanceStatus,
 	}
 
 	data, err := json.MarshalIndent(status, "", "  ")

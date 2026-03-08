@@ -125,6 +125,16 @@ func NewVerifier(roots schema.ProvenanceRootsContent, policy schema.ProvenancePo
 		rs.identities = append(rs.identities, identity)
 	}
 
+	// Validate enforcement levels. Unknown values (typos, empty
+	// strings, attacker-crafted strings) would silently default to
+	// EnforcementLog at lookup time, effectively disabling blocking
+	// verification. Reject them at construction time instead.
+	for category, level := range policy.Enforcement {
+		if !level.IsKnown() {
+			return nil, fmt.Errorf("enforcement category %q has unknown level %q (valid: require, warn, log)", category, level)
+		}
+	}
+
 	return &Verifier{
 		roots:  rootSets,
 		policy: policy,

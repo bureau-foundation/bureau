@@ -70,6 +70,13 @@ const (
 	// a BureauVersion state event — either reporting a prefetch failure
 	// or summarizing what binary updates were applied.
 	MsgTypeBureauVersionUpdate = "m.bureau.bureau_version_update"
+
+	// MsgTypeProvenanceWarning is posted when provenance verification
+	// produces a non-blocking result under "warn" enforcement. The
+	// daemon logs the warning and continues with the version update,
+	// but posts this notification so operators can observe verification
+	// gaps without requiring log access.
+	MsgTypeProvenanceWarning = "m.bureau.provenance_warning"
 )
 
 // CredRotationStatus is the lifecycle state of a credential rotation.
@@ -625,5 +632,39 @@ func NewBureauVersionReconciledMessage(proxyChanged, launcherChanged, logRelayCh
 		ProxyChanged:    proxyChanged,
 		LauncherChanged: launcherChanged,
 		LogRelayChanged: logRelayChanged,
+	}
+}
+
+// ProvenanceWarningMessage is the content of an m.room.message event
+// with msgtype MsgTypeProvenanceWarning. Posted when provenance
+// verification produces a non-blocking warning under "warn"
+// enforcement. The version update continues, but operators are notified
+// of the verification gap.
+type ProvenanceWarningMessage struct {
+	MsgType     string           `json:"msgtype"`
+	Body        string           `json:"body"`
+	Label       string           `json:"label"`       // Component label: daemon, launcher, proxy, etc.
+	StorePath   string           `json:"store_path"`  // Nix store directory that failed verification.
+	Enforcement EnforcementLevel `json:"enforcement"` // "warn" or "log".
+	Reason      string           `json:"reason"`      // no_bundle, fetch_error, digest_error, rejected, no_cache_url.
+	Error       string           `json:"error,omitempty"`
+}
+
+// NewProvenanceWarningMessage constructs a ProvenanceWarningMessage with
+// a human-readable body describing the verification gap.
+func NewProvenanceWarningMessage(label, storePath string, enforcement EnforcementLevel, reason, errorMessage string) ProvenanceWarningMessage {
+	body := fmt.Sprintf("Provenance warning (%s): %s %s — %s",
+		enforcement, label, storePath, reason)
+	if errorMessage != "" {
+		body += ": " + errorMessage
+	}
+	return ProvenanceWarningMessage{
+		MsgType:     MsgTypeProvenanceWarning,
+		Body:        body,
+		Label:       label,
+		StorePath:   storePath,
+		Enforcement: enforcement,
+		Reason:      reason,
+		Error:       errorMessage,
 	}
 }

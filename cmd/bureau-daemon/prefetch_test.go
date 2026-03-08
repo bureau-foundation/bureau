@@ -5,9 +5,17 @@ package main
 
 import (
 	"context"
+	"crypto/ecdsa"
+	"crypto/elliptic"
+	"crypto/rand"
+	"crypto/sha256"
+	"crypto/x509"
+	"crypto/x509/pkix"
 	"encoding/json"
+	"encoding/pem"
 	"fmt"
 	"log/slog"
+	"math/big"
 	"net"
 	"net/http"
 	"net/http/httptest"
@@ -22,6 +30,7 @@ import (
 	"github.com/bureau-foundation/bureau/lib/ipc"
 	"github.com/bureau-foundation/bureau/lib/nix"
 	"github.com/bureau-foundation/bureau/lib/principal"
+	"github.com/bureau-foundation/bureau/lib/provenance"
 	"github.com/bureau-foundation/bureau/lib/ref"
 	"github.com/bureau-foundation/bureau/lib/schema"
 	"github.com/bureau-foundation/bureau/lib/testutil"
@@ -519,4 +528,935 @@ func startMockLauncher(t *testing.T, socketPath string, handler func(launcherIPC
 	}()
 
 	return listener
+}
+
+// Fixed timestamps for test certificate generation. Using constants
+// avoids wall-clock dependency (check-real-clock hook) while providing
+// a validity window wide enough for any test execution.
+var ( //nolint:realclock // These are fixed timestamps, not wall-clock usage.
+	testCertNotBefore = time.Date(2025, 1, 1, 0, 0, 0, 0, time.UTC)
+	testCertNotAfter  = time.Date(2099, 1, 1, 0, 0, 0, 0, time.UTC)
+)
+
+// generateTestPEM creates synthetic CA and Rekor PEM material for test
+// verifiers. The material is cryptographically valid but won't match
+// any real Sigstore bundle — Verify() always returns StatusRejected.
+func generateTestPEM(t *testing.T) (caPEM, rekorPEM []byte) {
+	t.Helper()
+
+	caKey, err := ecdsa.GenerateKey(elliptic.P256(), rand.Reader)
+	if err != nil {
+		t.Fatalf("generating CA key: %v", err)
+	}
+	caTemplate := &x509.Certificate{
+		SerialNumber:          big.NewInt(1),
+		Subject:               pkix.Name{CommonName: "Test CA"},
+		NotBefore:             testCertNotBefore,
+		NotAfter:              testCertNotAfter,
+		KeyUsage:              x509.KeyUsageCertSign | x509.KeyUsageCRLSign,
+		BasicConstraintsValid: true,
+		IsCA:                  true,
+	}
+	caDER, err := x509.CreateCertificate(rand.Reader, caTemplate, caTemplate, &caKey.PublicKey, caKey)
+	if err != nil {
+		t.Fatalf("creating CA cert: %v", err)
+	}
+	caPEM = pem.EncodeToMemory(&pem.Block{Type: "CERTIFICATE", Bytes: caDER})
+
+	rekorKey, err := ecdsa.GenerateKey(elliptic.P256(), rand.Reader)
+	if err != nil {
+		t.Fatalf("generating rekor key: %v", err)
+	}
+	rekorPubDER, err := x509.MarshalPKIXPublicKey(&rekorKey.PublicKey)
+	if err != nil {
+		t.Fatalf("marshaling rekor public key: %v", err)
+	}
+	rekorPEM = pem.EncodeToMemory(&pem.Block{Type: "PUBLIC KEY", Bytes: rekorPubDER})
+
+	return caPEM, rekorPEM
+}
+
+// newTestVerifier creates a provenance.Verifier with the given
+// enforcement level for "nix_store_paths". Uses synthetic PEM material
+// (self-signed CA + ECDSA key) that won't match any real bundle. This
+// means Verify() will always return StatusRejected for any bundle
+// passed to it — which is what most daemon tests need (testing the
+// enforcement gate, not cryptographic verification).
+func newTestVerifier(t *testing.T, enforcement schema.EnforcementLevel) *provenance.Verifier {
+	t.Helper()
+
+	caPEM, rekorPEM := generateTestPEM(t)
+
+	roots := schema.ProvenanceRootsContent{
+		Roots: map[string]schema.ProvenanceTrustRoot{
+			"test": {
+				FulcioRootPEM:     string(caPEM),
+				RekorPublicKeyPEM: string(rekorPEM),
+			},
+		},
+	}
+
+	policy := schema.ProvenancePolicyContent{
+		TrustedIdentities: []schema.TrustedIdentity{
+			{
+				Name:           "test-ci",
+				Roots:          "test",
+				Issuer:         "https://test.example.com",
+				SubjectPattern: "*",
+			},
+		},
+		Enforcement: map[string]schema.EnforcementLevel{
+			"nix_store_paths": enforcement,
+		},
+	}
+
+	verifier, err := provenance.NewVerifier(roots, policy)
+	if err != nil {
+		t.Fatalf("creating test verifier: %v", err)
+	}
+	return verifier
+}
+
+func TestVerifyStorePathProvenance_NilVerifier(t *testing.T) {
+	t.Parallel()
+
+	daemon, _ := newTestDaemon(t)
+	// No provenanceVerifier set — should skip verification entirely.
+	err := daemon.verifyStorePathProvenance(context.Background(), "daemon", "/nix/store/abc-test")
+	if err != nil {
+		t.Fatalf("expected nil error with nil verifier, got %v", err)
+	}
+}
+
+func TestVerifyStorePathProvenance_NoCacheURL(t *testing.T) {
+	t.Parallel()
+
+	t.Run("require", func(t *testing.T) {
+		t.Parallel()
+		daemon, _ := newTestDaemon(t)
+		daemon.provenanceVerifier = newTestVerifier(t, schema.EnforcementRequire)
+		// No fleetCacheConfig → no cache URL.
+
+		err := daemon.verifyStorePathProvenance(context.Background(), "daemon", "/nix/store/abc-test")
+		if err == nil {
+			t.Fatal("expected error with enforcement=require and no cache URL")
+		}
+		if !strings.Contains(err.Error(), "no binary cache URL") {
+			t.Errorf("error = %v, want containing 'no binary cache URL'", err)
+		}
+	})
+
+	t.Run("warn", func(t *testing.T) {
+		t.Parallel()
+		daemon, _ := newTestDaemon(t)
+		daemon.provenanceVerifier = newTestVerifier(t, schema.EnforcementWarn)
+
+		err := daemon.verifyStorePathProvenance(context.Background(), "daemon", "/nix/store/abc-test")
+		if err != nil {
+			t.Fatalf("expected nil error with enforcement=warn and no cache URL, got %v", err)
+		}
+	})
+
+	t.Run("log", func(t *testing.T) {
+		t.Parallel()
+		daemon, _ := newTestDaemon(t)
+		daemon.provenanceVerifier = newTestVerifier(t, schema.EnforcementLog)
+
+		err := daemon.verifyStorePathProvenance(context.Background(), "daemon", "/nix/store/abc-test")
+		if err != nil {
+			t.Fatalf("expected nil error with enforcement=log and no cache URL, got %v", err)
+		}
+	})
+}
+
+func TestVerifyStorePathProvenance_BundleNotFound(t *testing.T) {
+	t.Parallel()
+
+	// HTTP server that returns 404 for all requests.
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		http.NotFound(w, r)
+	}))
+	t.Cleanup(server.Close)
+
+	t.Run("require", func(t *testing.T) {
+		t.Parallel()
+		daemon, _ := newTestDaemon(t)
+		daemon.provenanceVerifier = newTestVerifier(t, schema.EnforcementRequire)
+		daemon.fleetCacheConfig = &schema.FleetCacheContent{URL: server.URL}
+
+		err := daemon.verifyStorePathProvenance(
+			context.Background(), "daemon",
+			"/nix/store/abcdefghijklmnopqrstuvwxyz012345-bureau-daemon")
+		if err == nil {
+			t.Fatal("expected error with enforcement=require and missing bundle")
+		}
+		if !strings.Contains(err.Error(), "no provenance bundle found") {
+			t.Errorf("error = %v, want containing 'no provenance bundle found'", err)
+		}
+	})
+
+	t.Run("warn", func(t *testing.T) {
+		t.Parallel()
+		daemon, _ := newTestDaemon(t)
+		daemon.provenanceVerifier = newTestVerifier(t, schema.EnforcementWarn)
+		daemon.fleetCacheConfig = &schema.FleetCacheContent{URL: server.URL}
+
+		err := daemon.verifyStorePathProvenance(
+			context.Background(), "daemon",
+			"/nix/store/abcdefghijklmnopqrstuvwxyz012345-bureau-daemon")
+		if err != nil {
+			t.Fatalf("expected nil error with enforcement=warn and missing bundle, got %v", err)
+		}
+	})
+}
+
+func TestVerifyStorePathProvenance_VerificationRejected(t *testing.T) {
+	t.Parallel()
+
+	// HTTP server that returns a syntactically valid but
+	// cryptographically bogus Sigstore bundle. The verifier will
+	// reject it because the certificate chain and signatures don't
+	// match the test trust roots.
+	fakeBundleJSON := `{
+		"mediaType": "application/vnd.dev.sigstore.bundle.v0.3+json",
+		"verificationMaterial": {
+			"x509CertificateChain": {"certificates": [{"rawBytes": ""}]},
+			"tlogEntries": []
+		},
+		"dsseEnvelope": {
+			"payload": "",
+			"payloadType": "application/vnd.in-toto+json",
+			"signatures": [{"sig": "", "keyid": ""}]
+		}
+	}`
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+		w.Write([]byte(fakeBundleJSON))
+	}))
+	t.Cleanup(server.Close)
+
+	// Mock NAR digest — returns a fixed 32-byte hash.
+	fakeDigest := sha256.Sum256([]byte("test-nar-content"))
+
+	t.Run("require", func(t *testing.T) {
+		t.Parallel()
+		daemon, _ := newTestDaemon(t)
+		daemon.provenanceVerifier = newTestVerifier(t, schema.EnforcementRequire)
+		daemon.fleetCacheConfig = &schema.FleetCacheContent{URL: server.URL}
+		daemon.narDigestFunc = func(ctx context.Context, storePath string) ([]byte, error) {
+			return fakeDigest[:], nil
+		}
+
+		err := daemon.verifyStorePathProvenance(
+			context.Background(), "daemon",
+			"/nix/store/abcdefghijklmnopqrstuvwxyz012345-bureau-daemon")
+		if err == nil {
+			t.Fatal("expected error with enforcement=require and rejected bundle")
+		}
+		if !strings.Contains(err.Error(), "rejected") {
+			t.Errorf("error = %v, want containing 'rejected'", err)
+		}
+	})
+
+	t.Run("warn", func(t *testing.T) {
+		t.Parallel()
+		daemon, _ := newTestDaemon(t)
+		daemon.provenanceVerifier = newTestVerifier(t, schema.EnforcementWarn)
+		daemon.fleetCacheConfig = &schema.FleetCacheContent{URL: server.URL}
+		daemon.narDigestFunc = func(ctx context.Context, storePath string) ([]byte, error) {
+			return fakeDigest[:], nil
+		}
+
+		err := daemon.verifyStorePathProvenance(
+			context.Background(), "daemon",
+			"/nix/store/abcdefghijklmnopqrstuvwxyz012345-bureau-daemon")
+		if err != nil {
+			t.Fatalf("expected nil error with enforcement=warn and rejected bundle, got %v", err)
+		}
+	})
+}
+
+func TestVerifyStorePathProvenance_NARDigestFailure(t *testing.T) {
+	t.Parallel()
+
+	// HTTP server that returns a bundle (content doesn't matter since
+	// we'll fail before verification).
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+		w.Write([]byte(`{"mediaType": "application/vnd.dev.sigstore.bundle.v0.3+json"}`))
+	}))
+	t.Cleanup(server.Close)
+
+	t.Run("require", func(t *testing.T) {
+		t.Parallel()
+		daemon, _ := newTestDaemon(t)
+		daemon.provenanceVerifier = newTestVerifier(t, schema.EnforcementRequire)
+		daemon.fleetCacheConfig = &schema.FleetCacheContent{URL: server.URL}
+		daemon.narDigestFunc = func(ctx context.Context, storePath string) ([]byte, error) {
+			return nil, fmt.Errorf("nix-store not found")
+		}
+
+		err := daemon.verifyStorePathProvenance(
+			context.Background(), "daemon",
+			"/nix/store/abcdefghijklmnopqrstuvwxyz012345-bureau-daemon")
+		if err == nil {
+			t.Fatal("expected error with enforcement=require and NAR digest failure")
+		}
+		if !strings.Contains(err.Error(), "NAR digest") {
+			t.Errorf("error = %v, want containing 'NAR digest'", err)
+		}
+	})
+
+	t.Run("warn", func(t *testing.T) {
+		t.Parallel()
+		daemon, _ := newTestDaemon(t)
+		daemon.provenanceVerifier = newTestVerifier(t, schema.EnforcementWarn)
+		daemon.fleetCacheConfig = &schema.FleetCacheContent{URL: server.URL}
+		daemon.narDigestFunc = func(ctx context.Context, storePath string) ([]byte, error) {
+			return nil, fmt.Errorf("nix-store not found")
+		}
+
+		err := daemon.verifyStorePathProvenance(
+			context.Background(), "daemon",
+			"/nix/store/abcdefghijklmnopqrstuvwxyz012345-bureau-daemon")
+		if err != nil {
+			t.Fatalf("expected nil error with enforcement=warn and NAR digest failure, got %v", err)
+		}
+	})
+}
+
+func TestPrefetchBureauVersion_SkipsVerificationForExistingPaths(t *testing.T) {
+	t.Parallel()
+
+	// All store paths exist on disk — provenance verification should
+	// not be called because the os.Stat fast path skips both prefetch
+	// and verification.
+	daemonDir := t.TempDir()
+
+	narDigestCalled := false
+	daemon, _ := newTestDaemon(t)
+	daemon.runDir = principal.DefaultRunDir
+	daemon.provenanceVerifier = newTestVerifier(t, schema.EnforcementRequire)
+	daemon.fleetCacheConfig = &schema.FleetCacheContent{URL: "http://cache.example.com"}
+	daemon.narDigestFunc = func(ctx context.Context, storePath string) ([]byte, error) {
+		narDigestCalled = true
+		return nil, fmt.Errorf("should not be called")
+	}
+	daemon.prefetchFunc = func(ctx context.Context, storePath string) error {
+		t.Fatal("prefetchFunc should not be called for existing paths")
+		return nil
+	}
+
+	version := &schema.BureauVersion{
+		DaemonStorePath: daemonDir,
+	}
+
+	err := daemon.prefetchBureauVersion(context.Background(), version)
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if narDigestCalled {
+		t.Error("narDigestFunc should not be called for existing paths")
+	}
+}
+
+func TestPrefetchBureauVersion_VerificationBlocksUpdate(t *testing.T) {
+	t.Parallel()
+
+	// Bundle server returns 404 — no bundle available.
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		http.NotFound(w, r)
+	}))
+	t.Cleanup(server.Close)
+
+	daemon, _ := newTestDaemon(t)
+	daemon.runDir = principal.DefaultRunDir
+	daemon.provenanceVerifier = newTestVerifier(t, schema.EnforcementRequire)
+	daemon.fleetCacheConfig = &schema.FleetCacheContent{URL: server.URL}
+	daemon.prefetchFunc = func(ctx context.Context, storePath string) error {
+		return nil // prefetch succeeds
+	}
+
+	version := &schema.BureauVersion{
+		DaemonStorePath: "/nix/store/abcdefghijklmnopqrstuvwxyz012345-bureau-daemon/bin/bureau-daemon",
+	}
+
+	err := daemon.prefetchBureauVersion(context.Background(), version)
+	if err == nil {
+		t.Fatal("expected error when enforcement=require and no bundle exists")
+	}
+	if !strings.Contains(err.Error(), "provenance") {
+		t.Errorf("error = %v, want containing 'provenance'", err)
+	}
+}
+
+// --- Adversarial tests ---
+//
+// The tests below verify that provenance verification cannot be
+// bypassed through error injection, malformed state events, or
+// enforcement level manipulation. Each test represents a specific
+// attack scenario identified during security review.
+
+// newSyncProvenanceDaemon creates a daemon with a mock Matrix server
+// and session, suitable for testing syncProvenance. The fleetRoomID
+// is wired to the mock state so GetState calls resolve correctly.
+func newSyncProvenanceDaemon(t *testing.T, state *mockMatrixState) *Daemon {
+	t.Helper()
+
+	server := httptest.NewServer(state.handler())
+	t.Cleanup(server.Close)
+
+	client, err := messaging.NewClient(messaging.ClientConfig{
+		HomeserverURL: server.URL,
+	})
+	if err != nil {
+		t.Fatalf("creating client: %v", err)
+	}
+
+	daemon, _ := newTestDaemon(t)
+	session, err := client.SessionFromToken(daemon.machine.UserID(), "test-token")
+	if err != nil {
+		t.Fatalf("creating session: %v", err)
+	}
+	t.Cleanup(func() { session.Close() })
+
+	daemon.session = session
+	daemon.fleetRoomID = mustRoomID("!fleet:test.local")
+	daemon.logger = slog.New(slog.NewJSONHandler(os.Stderr, nil))
+	return daemon
+}
+
+// validProvenanceRoots returns a ProvenanceRootsContent with synthetic
+// but parseable PEM material, suitable for NewVerifier construction.
+func validProvenanceRoots(t *testing.T) schema.ProvenanceRootsContent {
+	t.Helper()
+
+	caPEM, rekorPEM := generateTestPEM(t)
+	return schema.ProvenanceRootsContent{
+		Roots: map[string]schema.ProvenanceTrustRoot{
+			"test": {
+				FulcioRootPEM:     string(caPEM),
+				RekorPublicKeyPEM: string(rekorPEM),
+			},
+		},
+	}
+}
+
+// validProvenancePolicy returns a ProvenancePolicyContent that
+// references the "test" root set from validProvenanceRoots.
+func validProvenancePolicy() schema.ProvenancePolicyContent {
+	return schema.ProvenancePolicyContent{
+		TrustedIdentities: []schema.TrustedIdentity{
+			{
+				Name:           "ci",
+				Roots:          "test",
+				Issuer:         "https://test.example.com",
+				SubjectPattern: "*",
+			},
+		},
+		Enforcement: map[string]schema.EnforcementLevel{
+			"nix_store_paths": schema.EnforcementRequire,
+		},
+	}
+}
+
+// publishProvenanceState sets both roots and policy state events in
+// the mock state for the fleet room.
+func publishProvenanceState(t *testing.T, state *mockMatrixState, roots schema.ProvenanceRootsContent, policy schema.ProvenancePolicyContent) {
+	t.Helper()
+	state.setStateEvent("!fleet:test.local", schema.EventTypeProvenanceRoots, "", roots)
+	state.setStateEvent("!fleet:test.local", schema.EventTypeProvenancePolicy, "", policy)
+}
+
+// TestSyncProvenance_RetainsVerifierOnTransientError verifies that a
+// transient Matrix API error does not disable the provenance verifier.
+// Attack scenario: an attacker induces a network partition or
+// homeserver restart, causing GetState to fail, which previously
+// would nil the verifier and disable all verification until the next
+// successful sync.
+func TestSyncProvenance_RetainsVerifierOnTransientError(t *testing.T) {
+	t.Parallel()
+
+	state := newMockMatrixState()
+	roots := validProvenanceRoots(t)
+	policy := validProvenancePolicy()
+	publishProvenanceState(t, state, roots, policy)
+
+	daemon := newSyncProvenanceDaemon(t, state)
+
+	// Initial sync: verifier should be configured.
+	daemon.syncProvenance(context.Background())
+	if daemon.provenanceVerifier == nil {
+		t.Fatal("expected verifier after initial sync with valid roots and policy")
+	}
+	if daemon.provenanceStatus == nil {
+		t.Fatal("expected status after initial sync")
+	}
+	initialVerifier := daemon.provenanceVerifier
+
+	// Simulate a transient error by pointing the daemon at a server
+	// that returns 500 for all requests.
+	errorServer := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+		w.WriteHeader(http.StatusInternalServerError)
+		json.NewEncoder(w).Encode(map[string]string{
+			"errcode": "M_UNKNOWN",
+			"error":   "internal server error",
+		})
+	}))
+	t.Cleanup(errorServer.Close)
+
+	errorClient, err := messaging.NewClient(messaging.ClientConfig{
+		HomeserverURL: errorServer.URL,
+	})
+	if err != nil {
+		t.Fatalf("creating error client: %v", err)
+	}
+	errorSession, err := errorClient.SessionFromToken(daemon.machine.UserID(), "test-token")
+	if err != nil {
+		t.Fatalf("creating error session: %v", err)
+	}
+	t.Cleanup(func() { errorSession.Close() })
+	daemon.session = errorSession
+
+	// Sync with errors: verifier must be retained.
+	daemon.syncProvenance(context.Background())
+	if daemon.provenanceVerifier == nil {
+		t.Fatal("verifier was cleared on transient error — verification bypass")
+	}
+	if daemon.provenanceVerifier != initialVerifier {
+		t.Error("verifier was replaced on transient error — should retain previous")
+	}
+	if daemon.provenanceStatus == nil {
+		t.Fatal("status was cleared on transient error")
+	}
+}
+
+// TestSyncProvenance_RetainsVerifierOnMalformedRoots verifies that
+// publishing empty roots (which causes NewVerifier to fail) does not
+// disable the previously configured verifier.
+// Attack scenario: an attacker with fleet room write access publishes
+// empty ProvenanceRootsContent to disable verification.
+func TestSyncProvenance_RetainsVerifierOnMalformedRoots(t *testing.T) {
+	t.Parallel()
+
+	state := newMockMatrixState()
+	roots := validProvenanceRoots(t)
+	policy := validProvenancePolicy()
+	publishProvenanceState(t, state, roots, policy)
+
+	daemon := newSyncProvenanceDaemon(t, state)
+
+	// Initial sync: verifier configured.
+	daemon.syncProvenance(context.Background())
+	if daemon.provenanceVerifier == nil {
+		t.Fatal("expected verifier after initial sync")
+	}
+	initialVerifier := daemon.provenanceVerifier
+
+	// Attacker publishes empty roots. NewVerifier will reject
+	// this ("no root sets defined").
+	state.setStateEvent("!fleet:test.local", schema.EventTypeProvenanceRoots, "",
+		schema.ProvenanceRootsContent{Roots: map[string]schema.ProvenanceTrustRoot{}})
+
+	daemon.syncProvenance(context.Background())
+	if daemon.provenanceVerifier == nil {
+		t.Fatal("verifier was cleared when roots became empty — verification bypass")
+	}
+	if daemon.provenanceVerifier != initialVerifier {
+		t.Error("verifier was replaced — should retain previous on malformed config")
+	}
+}
+
+// TestSyncProvenance_RetainsVerifierOnPolicyDeleted verifies that
+// deleting the policy state event (while roots still exist) does not
+// disable the previously configured verifier.
+// Attack scenario: an attacker deletes the policy event to bypass
+// verification while leaving roots in place to avoid suspicion.
+func TestSyncProvenance_RetainsVerifierOnPolicyDeleted(t *testing.T) {
+	t.Parallel()
+
+	state := newMockMatrixState()
+	roots := validProvenanceRoots(t)
+	policy := validProvenancePolicy()
+	publishProvenanceState(t, state, roots, policy)
+
+	daemon := newSyncProvenanceDaemon(t, state)
+
+	// Initial sync: verifier configured.
+	daemon.syncProvenance(context.Background())
+	if daemon.provenanceVerifier == nil {
+		t.Fatal("expected verifier after initial sync")
+	}
+	initialVerifier := daemon.provenanceVerifier
+
+	// Attacker deletes the policy. mockMatrixState returns 404
+	// for the policy event but roots still exist.
+	state.mu.Lock()
+	policyKey := "!fleet:test.local\x00" + string(schema.EventTypeProvenancePolicy) + "\x00"
+	delete(state.stateEvents, policyKey)
+	state.mu.Unlock()
+
+	daemon.syncProvenance(context.Background())
+	if daemon.provenanceVerifier == nil {
+		t.Fatal("verifier was cleared when policy was deleted but roots exist — verification bypass")
+	}
+	if daemon.provenanceVerifier != initialVerifier {
+		t.Error("verifier was replaced — should retain previous when only policy is deleted")
+	}
+}
+
+// TestSyncProvenance_RetainsVerifierOnDanglingRootRef verifies that
+// publishing a policy with a TrustedIdentity referencing a
+// non-existent root set does not disable the previously configured
+// verifier.
+// Attack scenario: an attacker publishes a malformed policy to trigger
+// NewVerifier failure, which previously would nil the verifier.
+func TestSyncProvenance_RetainsVerifierOnDanglingRootRef(t *testing.T) {
+	t.Parallel()
+
+	state := newMockMatrixState()
+	roots := validProvenanceRoots(t)
+	policy := validProvenancePolicy()
+	publishProvenanceState(t, state, roots, policy)
+
+	daemon := newSyncProvenanceDaemon(t, state)
+
+	// Initial sync: verifier configured.
+	daemon.syncProvenance(context.Background())
+	if daemon.provenanceVerifier == nil {
+		t.Fatal("expected verifier after initial sync")
+	}
+	initialVerifier := daemon.provenanceVerifier
+
+	// Attacker publishes policy referencing non-existent root set.
+	maliciousPolicy := schema.ProvenancePolicyContent{
+		TrustedIdentities: []schema.TrustedIdentity{
+			{
+				Name:           "fake",
+				Roots:          "nonexistent_root_set",
+				Issuer:         "https://evil.com",
+				SubjectPattern: "*",
+			},
+		},
+		Enforcement: map[string]schema.EnforcementLevel{
+			"nix_store_paths": schema.EnforcementRequire,
+		},
+	}
+	state.setStateEvent("!fleet:test.local", schema.EventTypeProvenancePolicy, "", maliciousPolicy)
+
+	daemon.syncProvenance(context.Background())
+	if daemon.provenanceVerifier == nil {
+		t.Fatal("verifier was cleared on dangling root ref — verification bypass")
+	}
+	if daemon.provenanceVerifier != initialVerifier {
+		t.Error("verifier was replaced — should retain previous on invalid policy")
+	}
+}
+
+// TestSyncProvenance_ClearsVerifierWhenBothAbsent verifies that
+// syncProvenance correctly clears the verifier when both roots and
+// policy are absent (404). This is the legitimate "no provenance
+// configured" state — the only path that should nil the verifier.
+func TestSyncProvenance_ClearsVerifierWhenBothAbsent(t *testing.T) {
+	t.Parallel()
+
+	state := newMockMatrixState()
+	roots := validProvenanceRoots(t)
+	policy := validProvenancePolicy()
+	publishProvenanceState(t, state, roots, policy)
+
+	daemon := newSyncProvenanceDaemon(t, state)
+
+	// Initial sync: verifier configured.
+	daemon.syncProvenance(context.Background())
+	if daemon.provenanceVerifier == nil {
+		t.Fatal("expected verifier after initial sync")
+	}
+
+	// Admin removes both roots and policy (legitimate deconfiguration).
+	state.mu.Lock()
+	rootsKey := "!fleet:test.local\x00" + string(schema.EventTypeProvenanceRoots) + "\x00"
+	policyKey := "!fleet:test.local\x00" + string(schema.EventTypeProvenancePolicy) + "\x00"
+	delete(state.stateEvents, rootsKey)
+	delete(state.stateEvents, policyKey)
+	state.mu.Unlock()
+
+	daemon.syncProvenance(context.Background())
+	if daemon.provenanceVerifier != nil {
+		t.Error("verifier should be nil when both roots and policy are absent")
+	}
+	if daemon.provenanceStatus != nil {
+		t.Error("status should be nil when both roots and policy are absent")
+	}
+}
+
+// TestSyncProvenance_NilVerifierNeverConfigured verifies that
+// syncProvenance does not create a verifier when no roots or policy
+// have ever been published. This is the initial fleet state.
+func TestSyncProvenance_NilVerifierNeverConfigured(t *testing.T) {
+	t.Parallel()
+
+	state := newMockMatrixState()
+	// No provenance state events published.
+	daemon := newSyncProvenanceDaemon(t, state)
+
+	daemon.syncProvenance(context.Background())
+	if daemon.provenanceVerifier != nil {
+		t.Error("verifier should be nil when no provenance is configured")
+	}
+	if daemon.provenanceStatus != nil {
+		t.Error("status should be nil when no provenance is configured")
+	}
+}
+
+// TestNewVerifier_RejectsUnknownEnforcementLevel verifies that
+// NewVerifier rejects policies with unrecognized enforcement level
+// strings. This prevents typos ("requre") or attacker-crafted
+// strings ("disabled") from silently downgrading enforcement.
+func TestNewVerifier_RejectsUnknownEnforcementLevel(t *testing.T) {
+	t.Parallel()
+
+	roots := validProvenanceRoots(t)
+
+	testCases := []struct {
+		name  string
+		level schema.EnforcementLevel
+	}{
+		{"empty_string", ""},
+		{"typo_requre", "requre"},
+		{"attacker_disabled", "disabled"},
+		{"uppercase_REQUIRE", "REQUIRE"},
+		{"random_garbage", "xyzzy"},
+	}
+
+	for _, testCase := range testCases {
+		t.Run(testCase.name, func(t *testing.T) {
+			t.Parallel()
+
+			policy := schema.ProvenancePolicyContent{
+				TrustedIdentities: []schema.TrustedIdentity{
+					{
+						Name:           "ci",
+						Roots:          "test",
+						Issuer:         "https://test.example.com",
+						SubjectPattern: "*",
+					},
+				},
+				Enforcement: map[string]schema.EnforcementLevel{
+					"nix_store_paths": testCase.level,
+				},
+			}
+
+			verifier, err := provenance.NewVerifier(roots, policy)
+			if err == nil {
+				t.Fatalf("expected error for unknown enforcement level %q, got verifier", testCase.level)
+			}
+			if verifier != nil {
+				t.Error("verifier should be nil on error")
+			}
+			if !strings.Contains(err.Error(), "unknown level") {
+				t.Errorf("error = %v, want containing 'unknown level'", err)
+			}
+		})
+	}
+}
+
+// TestSyncProvenance_UnknownEnforcementRetainsPrevious verifies that
+// publishing a policy with a typo in the enforcement level does not
+// disable the previously configured verifier.
+// Attack scenario: an attacker publishes enforcement="requre"
+// (typo), which previously would silently default to log (non-blocking).
+// Now NewVerifier rejects it, and the daemon retains the previous
+// verifier with the correct enforcement.
+func TestSyncProvenance_UnknownEnforcementRetainsPrevious(t *testing.T) {
+	t.Parallel()
+
+	state := newMockMatrixState()
+	roots := validProvenanceRoots(t)
+	policy := validProvenancePolicy()
+	publishProvenanceState(t, state, roots, policy)
+
+	daemon := newSyncProvenanceDaemon(t, state)
+
+	// Initial sync: verifier configured with enforcement=require.
+	daemon.syncProvenance(context.Background())
+	if daemon.provenanceVerifier == nil {
+		t.Fatal("expected verifier after initial sync")
+	}
+	initialVerifier := daemon.provenanceVerifier
+
+	// Attacker publishes policy with typo enforcement level.
+	maliciousPolicy := schema.ProvenancePolicyContent{
+		TrustedIdentities: []schema.TrustedIdentity{
+			{
+				Name:           "ci",
+				Roots:          "test",
+				Issuer:         "https://test.example.com",
+				SubjectPattern: "*",
+			},
+		},
+		Enforcement: map[string]schema.EnforcementLevel{
+			"nix_store_paths": "requre",
+		},
+	}
+	state.setStateEvent("!fleet:test.local", schema.EventTypeProvenancePolicy, "", maliciousPolicy)
+
+	daemon.syncProvenance(context.Background())
+	if daemon.provenanceVerifier == nil {
+		t.Fatal("verifier was cleared on unknown enforcement level — verification bypass")
+	}
+	if daemon.provenanceVerifier != initialVerifier {
+		t.Error("verifier was replaced — should retain previous on invalid enforcement")
+	}
+	// Verify the original enforcement level is still active.
+	enforcement := daemon.provenanceVerifier.Enforcement("nix_store_paths")
+	if enforcement != schema.EnforcementRequire {
+		t.Errorf("enforcement = %q, want %q — enforcement was downgraded", enforcement, schema.EnforcementRequire)
+	}
+}
+
+// TestSyncFleetCache_RetainsCacheConfigOnTransientError verifies that
+// a transient Matrix API error does not clear the fleet cache config.
+// Attack scenario: an attacker induces a transient Matrix error, which
+// previously would nil fleetCacheConfig. When fleetCacheConfig is nil,
+// verifyStorePathProvenance skips bundle fetches entirely — bypassing
+// provenance verification under warn/log enforcement.
+func TestSyncFleetCache_RetainsCacheConfigOnTransientError(t *testing.T) {
+	t.Parallel()
+
+	state := newMockMatrixState()
+	cacheConfig := schema.FleetCacheContent{
+		URL:  "https://cache.infra.bureau.foundation",
+		Name: "main",
+	}
+	state.setStateEvent("!fleet:test.local", schema.EventTypeFleetCache, "", cacheConfig)
+
+	daemon := newSyncProvenanceDaemon(t, state)
+
+	// Initial sync: cache config should be set.
+	daemon.syncFleetCache(context.Background())
+	if daemon.fleetCacheConfig == nil {
+		t.Fatal("expected fleet cache config after initial sync")
+	}
+	if daemon.fleetCacheConfig.URL != "https://cache.infra.bureau.foundation" {
+		t.Errorf("cache URL = %q, want %q", daemon.fleetCacheConfig.URL, "https://cache.infra.bureau.foundation")
+	}
+
+	// Simulate a transient error by pointing the daemon at a server
+	// that returns 500.
+	errorServer := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+		w.WriteHeader(http.StatusInternalServerError)
+		json.NewEncoder(w).Encode(map[string]string{
+			"errcode": "M_UNKNOWN",
+			"error":   "internal server error",
+		})
+	}))
+	t.Cleanup(errorServer.Close)
+
+	errorClient, err := messaging.NewClient(messaging.ClientConfig{
+		HomeserverURL: errorServer.URL,
+	})
+	if err != nil {
+		t.Fatalf("creating error client: %v", err)
+	}
+	errorSession, err := errorClient.SessionFromToken(daemon.machine.UserID(), "test-token")
+	if err != nil {
+		t.Fatalf("creating error session: %v", err)
+	}
+	t.Cleanup(func() { errorSession.Close() })
+	daemon.session = errorSession
+
+	// Sync with transient error: cache config must be retained.
+	daemon.syncFleetCache(context.Background())
+	if daemon.fleetCacheConfig == nil {
+		t.Fatal("fleet cache config was cleared on transient error — provenance verification bypass")
+	}
+	if daemon.fleetCacheConfig.URL != "https://cache.infra.bureau.foundation" {
+		t.Errorf("cache URL changed to %q on transient error — should retain previous", daemon.fleetCacheConfig.URL)
+	}
+}
+
+// TestSyncFleetCache_ClearsOnAbsent verifies that syncFleetCache
+// correctly clears the cache config when the fleet cache event is
+// absent (404). This is the legitimate "no cache configured" state.
+func TestSyncFleetCache_ClearsOnAbsent(t *testing.T) {
+	t.Parallel()
+
+	state := newMockMatrixState()
+	cacheConfig := schema.FleetCacheContent{URL: "https://cache.example.com"}
+	state.setStateEvent("!fleet:test.local", schema.EventTypeFleetCache, "", cacheConfig)
+
+	daemon := newSyncProvenanceDaemon(t, state)
+
+	// Initial sync: cache config set.
+	daemon.syncFleetCache(context.Background())
+	if daemon.fleetCacheConfig == nil {
+		t.Fatal("expected fleet cache config after initial sync")
+	}
+
+	// Remove the fleet cache event (admin deconfigures cache).
+	state.mu.Lock()
+	cacheKey := "!fleet:test.local\x00" + string(schema.EventTypeFleetCache) + "\x00"
+	delete(state.stateEvents, cacheKey)
+	state.mu.Unlock()
+
+	// Sync again: cache config should be cleared.
+	daemon.syncFleetCache(context.Background())
+	if daemon.fleetCacheConfig != nil {
+		t.Error("fleet cache config should be nil when event is absent")
+	}
+}
+
+// TestVerifyStorePathProvenance_EmptyEnforcementMap verifies that
+// when the enforcement map has no entry for "nix_store_paths", the
+// daemon defaults to log enforcement (non-blocking). This is
+// documented behavior but worth testing at the daemon level to
+// ensure we know the fail-open surface.
+func TestVerifyStorePathProvenance_EmptyEnforcementMap(t *testing.T) {
+	t.Parallel()
+
+	// Create a verifier with an empty enforcement map.
+	roots := validProvenanceRoots(t)
+	policy := schema.ProvenancePolicyContent{
+		TrustedIdentities: []schema.TrustedIdentity{
+			{
+				Name:           "ci",
+				Roots:          "test",
+				Issuer:         "https://test.example.com",
+				SubjectPattern: "*",
+			},
+		},
+		Enforcement: map[string]schema.EnforcementLevel{},
+	}
+	verifier, err := provenance.NewVerifier(roots, policy)
+	if err != nil {
+		t.Fatalf("creating verifier with empty enforcement: %v", err)
+	}
+
+	// Bundle server returns 404 — no bundle.
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		http.NotFound(w, r)
+	}))
+	t.Cleanup(server.Close)
+
+	daemon, _ := newTestDaemon(t)
+	daemon.provenanceVerifier = verifier
+	daemon.fleetCacheConfig = &schema.FleetCacheContent{URL: server.URL}
+
+	// With empty enforcement map, nix_store_paths defaults to log,
+	// so verification failure should NOT block.
+	err = daemon.verifyStorePathProvenance(
+		context.Background(), "daemon",
+		"/nix/store/abcdefghijklmnopqrstuvwxyz012345-bureau-daemon")
+	if err != nil {
+		t.Fatalf("expected no error with empty enforcement map (defaults to log), got %v", err)
+	}
+
+	// Verify the enforcement level the verifier reports.
+	enforcement := verifier.Enforcement("nix_store_paths")
+	if enforcement != schema.EnforcementLog {
+		t.Errorf("enforcement for missing category = %q, want %q", enforcement, schema.EnforcementLog)
+	}
 }

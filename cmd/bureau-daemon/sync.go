@@ -11,7 +11,9 @@ package main
 //   - Config room: m.bureau.machine_config, m.bureau.credentials → reconcile
 //   - Machines room: m.bureau.machine_status → peer address updates
 //   - Services room: m.bureau.service → service directory updates
-//   - Fleet room: m.bureau.fleet_service, m.bureau.ha_lease → HA evaluation
+//   - Fleet room: m.bureau.fleet_service, m.bureau.ha_lease → HA evaluation;
+//     m.bureau.provenance_roots, m.bureau.provenance_policy → provenance
+//     verifier rebuild
 //   - Template room: m.bureau.template → reconcile (so template updates
 //     are detected without requiring a MachineConfig touch)
 //   - Ops room: m.bureau.machine_drain → drain status reporting
@@ -91,6 +93,8 @@ func buildSyncFilter(excludeRooms []ref.RoomID) string {
 		schema.EventTypeTemporalGrant,
 		schema.EventTypeFleetService,
 		schema.EventTypeHALease,
+		schema.EventTypeProvenanceRoots,
+		schema.EventTypeProvenancePolicy,
 		schema.EventTypeMachineDrain,
 		schema.MatrixEventTypeRoomMember,
 		schema.MatrixEventTypePowerLevels,
@@ -198,6 +202,11 @@ func (d *Daemon) initialSync(ctx context.Context) (string, error) {
 		}
 	}
 	d.reconcileMu.Unlock()
+
+	// Read provenance trust roots and policy from the fleet room before
+	// reconcile. reconcileBureauVersion needs the verifier to gate binary
+	// updates, so this must happen before the first reconcile call.
+	d.syncProvenance(ctx)
 
 	// Run all handlers unconditionally to establish baseline state.
 	// These use their own GetStateEvent/GetRoomState calls, which is
@@ -575,6 +584,11 @@ func (d *Daemon) processSyncResponse(ctx context.Context, response *messaging.Sy
 		// the doctor's nix.conf verification. Fleet cache changes are
 		// admin-only (PL 100) and rare — no performance concern.
 		d.syncFleetCache(ctx)
+		// Rebuild provenance verifier from fleet room state. Provenance
+		// root and policy changes are admin-only (PL 100) and rare.
+		// The rebuilt verifier takes effect on the next reconcile cycle
+		// that calls reconcileBureauVersion.
+		d.syncProvenance(ctx)
 		d.writeDaemonStatus()
 	}
 

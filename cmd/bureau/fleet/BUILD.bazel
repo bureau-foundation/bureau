@@ -26,6 +26,7 @@ go_library(
         "//cmd/bureau/cli",
         "//cmd/bureau/cli/doctor",
         "//lib/credential",
+        "//lib/nix",
         "//lib/principal",
         "//lib/provenance",
         "//lib/ref",

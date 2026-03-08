@@ -15,6 +15,7 @@ import (
 	"time"
 
 	"github.com/bureau-foundation/bureau/cmd/bureau/cli"
+	"github.com/bureau-foundation/bureau/lib/nix"
 	"github.com/bureau-foundation/bureau/lib/provenance"
 	"github.com/bureau-foundation/bureau/lib/ref"
 	"github.com/bureau-foundation/bureau/lib/schema"
@@ -24,7 +25,7 @@ import (
 type verifyParams struct {
 	cli.SessionConfig
 	cli.JSONOutput
-	Digest          string `json:"digest"           flag:"digest"           desc:"hex-encoded digest of the artifact (SHA-256 of the NAR for Nix store paths)" required:"true"`
+	Digest          string `json:"digest"           flag:"digest"           desc:"hex-encoded SHA-256 of the NAR (auto-computed from local store path when omitted)"`
 	DigestAlgorithm string `json:"digest_algorithm" flag:"digest-algorithm" desc:"digest algorithm (default: sha256)" default:"sha256"`
 	CacheURL        string `json:"cache_url"        flag:"cache-url"        desc:"override the fleet's binary cache URL for bundle fetching"`
 }
@@ -56,9 +57,13 @@ trust root and policy configuration.
 
 The store path argument can be either a full path
 (/nix/store/xyz-bureau-daemon) or just the basename
-(xyz-bureau-daemon). The --digest flag is required and should contain
-the hex-encoded SHA-256 of the store path's NAR serialization
-(nix-store --dump <path> | sha256sum).
+(xyz-bureau-daemon).
+
+When --digest is omitted and the store path exists locally, the
+NAR digest is computed automatically by streaming nix-store --dump
+through SHA-256. The NAR is never buffered in memory, so this works
+for arbitrarily large store paths. Pass --digest explicitly when
+verifying a store path that is not present on the local machine.
 
 Exit code is non-zero when verification is rejected (StatusRejected).
 Unverified status (no bundle found) exits zero — the enforcement
@@ -66,7 +71,11 @@ level determines whether that is acceptable.`,
 		Usage: "bureau fleet provenance verify <namespace/fleet/name> <store-path> [flags]",
 		Examples: []cli.Example{
 			{
-				Description: "Verify a store path",
+				Description: "Verify a local store path (digest computed automatically)",
+				Command:     "bureau fleet provenance verify bureau/fleet/prod /nix/store/xyz-bureau-daemon --credential-file ./creds",
+			},
+			{
+				Description: "Verify with an explicit digest (store path not available locally)",
 				Command:     "bureau fleet provenance verify bureau/fleet/prod xyz-bureau-daemon --digest abc123... --credential-file ./creds",
 			},
 			{
@@ -80,7 +89,7 @@ level determines whether that is acceptable.`,
 		RequiredGrants: []string{"command/fleet/provenance/verify"},
 		Run: func(ctx context.Context, args []string, logger *slog.Logger) error {
 			if len(args) < 2 {
-				return cli.Validation("fleet localpart and store path are required\n\nusage: bureau fleet provenance verify <fleet> <store-path> --digest <hex>")
+				return cli.Validation("fleet localpart and store path are required\n\nusage: bureau fleet provenance verify <fleet> <store-path> [--digest <hex>]")
 			}
 			if len(args) > 2 {
 				return cli.Validation("expected two arguments (fleet localpart, store path), got %d", len(args))
@@ -91,24 +100,41 @@ level determines whether that is acceptable.`,
 }
 
 func runVerify(ctx context.Context, logger *slog.Logger, fleetLocalpart string, storePathArg string, params *verifyParams) error {
-	if params.Digest == "" {
-		return cli.Validation("--digest is required (hex-encoded SHA-256 of the NAR)").
-			WithHint("Compute it with: nix-store --dump /nix/store/<basename> | sha256sum")
-	}
-
-	// Decode the digest.
-	artifactDigest, err := hex.DecodeString(params.Digest)
-	if err != nil {
-		return cli.Validation("invalid --digest: %v (expected hex-encoded hash)", err)
-	}
-
-	// Normalize store path: strip /nix/store/ prefix if present.
+	// Normalize store path: strip /nix/store/ prefix to get basename,
+	// but keep the full path for potential NAR digest auto-computation.
 	basename := storePathArg
+	fullStorePath := storePathArg
 	if strings.HasPrefix(basename, "/nix/store/") {
 		basename = basename[len("/nix/store/"):]
+	} else {
+		fullStorePath = "/nix/store/" + basename
 	}
 	if basename == "" {
 		return cli.Validation("store path basename is empty")
+	}
+
+	// Resolve the artifact digest: use --digest if provided, otherwise
+	// auto-compute from the local store path's NAR serialization.
+	var artifactDigest []byte
+	if params.Digest != "" {
+		var err error
+		artifactDigest, err = hex.DecodeString(params.Digest)
+		if err != nil {
+			return cli.Validation("invalid --digest: %v (expected hex-encoded hash)", err)
+		}
+	} else {
+		if params.DigestAlgorithm != "sha256" {
+			return cli.Validation("auto-computed NAR digests use SHA-256; --digest-algorithm %q conflicts", params.DigestAlgorithm).
+				WithHint(fmt.Sprintf("Pass --digest with a %s digest, or omit --digest-algorithm to use the default (sha256).", params.DigestAlgorithm))
+		}
+		logger.Info("computing NAR digest", "store_path", fullStorePath)
+		var err error
+		artifactDigest, err = nix.NARDigest(ctx, fullStorePath)
+		if err != nil {
+			return cli.Validation("cannot auto-compute digest for %s: %v", fullStorePath, err).
+				WithHint("Pass --digest explicitly if the store path is not available locally.")
+		}
+		logger.Info("computed NAR digest", "digest", hex.EncodeToString(artifactDigest))
 	}
 
 	// Connect and resolve fleet room.

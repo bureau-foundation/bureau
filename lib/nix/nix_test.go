@@ -6,6 +6,8 @@ package nix
 import (
 	"bytes"
 	"context"
+	"crypto/sha256"
+	"path/filepath"
 	"strings"
 	"testing"
 )
@@ -117,6 +119,75 @@ func TestStoreDirectory(t *testing.T) {
 				t.Errorf("StoreDirectory(%q) = %q, want %q", testCase.path, got, testCase.want)
 			}
 		})
+	}
+}
+
+func TestNARDigest(t *testing.T) {
+	t.Parallel()
+
+	// Find an arbitrary store path to test with. Skip if nix-store
+	// is not available or the store is empty.
+	_, err := FindBinary("nix-store")
+	if err != nil {
+		t.Skipf("nix-store not available: %v", err)
+	}
+
+	// Use nix-store --dump on the nix binary's own store directory to
+	// compute a reference digest via shell pipeline, then compare with
+	// our streaming implementation. Resolve symlinks first — the nix
+	// binary path may be a profile symlink (e.g., /nix/var/nix/profiles/
+	// default/bin/nix) that chains into /nix/store/.
+	nixBinary, err := FindBinary("nix")
+	if err != nil {
+		t.Skipf("nix binary not available: %v", err)
+	}
+	resolvedPath, err := filepath.EvalSymlinks(nixBinary)
+	if err != nil {
+		t.Skipf("cannot resolve symlinks for %q: %v", nixBinary, err)
+	}
+	storeDirectory, err := StoreDirectory(resolvedPath)
+	if err != nil {
+		t.Skipf("cannot extract store directory from %q: %v", resolvedPath, err)
+	}
+
+	ctx := context.Background()
+
+	// Compute digest with our streaming function.
+	digest, err := NARDigest(ctx, storeDirectory)
+	if err != nil {
+		t.Fatalf("NARDigest(%q): %v", storeDirectory, err)
+	}
+	if len(digest) != 32 {
+		t.Fatalf("digest length = %d, want 32 (SHA-256)", len(digest))
+	}
+
+	// Cross-check: compute the same digest via shell pipeline.
+	// The reference implementation is: nix-store --dump <path> | sha256sum
+	referenceOutput, err := RunStore(ctx, "--dump", storeDirectory)
+	if err != nil {
+		t.Fatalf("nix-store --dump (reference): %v", err)
+	}
+
+	// Hash the buffered reference output.
+	referenceHash := sha256.Sum256([]byte(referenceOutput))
+	referenceDigest := referenceHash[:]
+
+	if !bytes.Equal(digest, referenceDigest) {
+		t.Errorf("streaming digest = %x, reference digest = %x", digest, referenceDigest)
+	}
+}
+
+func TestNARDigest_NonexistentPath(t *testing.T) {
+	t.Parallel()
+
+	_, err := FindBinary("nix-store")
+	if err != nil {
+		t.Skipf("nix-store not available: %v", err)
+	}
+
+	_, err = NARDigest(context.Background(), "/nix/store/definitely-does-not-exist-zzz")
+	if err == nil {
+		t.Fatal("expected error for nonexistent store path")
 	}
 }
 

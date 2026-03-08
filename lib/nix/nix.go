@@ -17,6 +17,7 @@ package nix
 import (
 	"bytes"
 	"context"
+	"crypto/sha256"
 	"fmt"
 	"os"
 	"os/exec"
@@ -84,6 +85,34 @@ func run(ctx context.Context, binaryName string, args []string) (string, error) 
 		return "", formatError(binaryName, args, &stderr, err)
 	}
 	return stdout.String(), nil
+}
+
+// NARDigest computes the SHA-256 digest of a store path's NAR
+// serialization by streaming `nix-store --dump <storePath>` through a
+// hash function. The NAR is never buffered in memory — stdout from the
+// subprocess flows directly into the hasher — so this works for
+// arbitrarily large store paths.
+//
+// The store path must be a full path (e.g., /nix/store/xyz-bureau-daemon).
+// Returns the raw 32-byte SHA-256 digest.
+func NARDigest(ctx context.Context, storePath string) ([]byte, error) {
+	binaryPath, err := FindBinary("nix-store")
+	if err != nil {
+		return nil, err
+	}
+
+	hasher := sha256.New()
+	var stderr bytes.Buffer
+
+	command := exec.CommandContext(ctx, binaryPath, "--dump", storePath)
+	command.Stdout = hasher
+	command.Stderr = &stderr
+
+	if err := command.Run(); err != nil {
+		return nil, formatError("nix-store", []string{"--dump", storePath}, &stderr, err)
+	}
+
+	return hasher.Sum(nil), nil
 }
 
 // nixStorePrefix is the standard Nix store root directory.

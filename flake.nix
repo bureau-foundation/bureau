@@ -191,10 +191,10 @@
         # runs hit the Nix binary cache (magic-nix-cache in CI, or a
         # self-hosted Attic instance once deployed).
         go = pkgs.go_1_25.overrideAttrs (_: rec {
-          version = "1.25.6";
+          version = "1.25.8";
           src = pkgs.fetchurl {
             url = "https://go.dev/dl/go${version}.src.tar.gz";
-            hash = "sha256-WMv3ceRNdt5vVtGeM7d9dFoeSJNAkih15GWFuXXCsFk=";
+            hash = "sha256-6YjUokRqx/4/baoImljpk2pSo4E1Wt7ByJgyMKjWxZ4=";
           };
         });
 

@@ -1,6 +1,6 @@
 module github.com/bureau-foundation/bureau
 
-go 1.25.6
+go 1.25.8
 
 require (
 	filippo.io/age v1.3.1

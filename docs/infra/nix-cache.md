@@ -8,12 +8,19 @@ from source on every CI run or local `nix develop`.
 
 | Tier | URL | Scope | TTL |
 |------|-----|-------|-----|
+| GitHub Actions cache | GitHub-managed | CI only (build deps + outputs) | 7 days inactive |
 | Bureau R2 cache | `https://cache.infra.bureau.foundation` | CI + local dev | Permanent (Cloudflare R2) |
 | Upstream Nix cache | `https://cache.nixos.org` | Everything in nixpkgs | Permanent |
 
-The R2 cache holds anything that isn't in cache.nixos.org: version-pinned
-compilers, custom derivations, dev shell closures, release binary closures,
-and eventually environment closures for sandbox runtimes.
+The GitHub Actions cache (`magic-nix-cache-action`) automatically caches every
+store path built during a CI run, including build-time dependencies like the Go
+compiler and gomod2nix per-module derivations that aren't in any runtime closure.
+This is the primary cache for CI build speed.
+
+The R2 cache holds release artifacts for distribution: signed binary closures,
+environment packages, dev shell closures. These serve local `nix develop` and
+fleet machine deployments. R2 is permanent storage; the GitHub Actions cache
+evicts entries after 7 days of inactivity.
 
 ## How it works
 
@@ -115,9 +122,12 @@ curl -s "https://cache.infra.bureau.foundation/<hash>.narinfo" | grep '^Sig:'
 
 To fix a misnamed key, edit the GitHub secret: change the `<name>:` prefix
 from whatever it currently is to `cache.infra.bureau.foundation-2:` (keeping
-the base64 key material unchanged). The next CI run will sign with the
-correct name. Old paths in R2 with the wrong name remain untrusted until
-re-pushed (they get re-signed on the next CI run that rebuilds them).
+the base64 key material unchanged). The next CI run will sign new paths with
+the correct name. `nix copy` skips paths that already exist in the
+destination without comparing narinfo signatures, so stale narinfos persist
+until the store path itself changes (e.g., a Go version bump produces a new
+hash). The CI signature verification step catches this: it checks every
+pushed narinfo for a trusted `Sig:` prefix and fails if any are untrusted.
 
 ### Key rotation
 

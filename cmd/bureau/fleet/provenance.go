@@ -508,6 +508,22 @@ The policy is provided as a JSON file with two sections:
   "log" (accept silently). Categories: nix_store_paths, artifacts,
   models, forge_artifacts, templates.
 
+Subject patterns match against the Fulcio certificate's Subject
+Alternative Name (SAN). For GitHub Actions with Sigstore public,
+the SAN is a URI:
+
+  https://github.com/<owner>/<repo>/<workflow-path>@<ref>
+
+Example SAN from a CI run:
+  https://github.com/bureau-foundation/bureau/.github/workflows/ci.yaml@refs/heads/main
+
+Matching pattern:
+  https://github.com/bureau-foundation/bureau/*
+
+Workflow patterns match against the Build Config URI extension
+(the workflow file that produced the artifact), which has the same
+URI format as the SAN.
+
 This command performs a full replace of the policy. The policy is a
 coherent unit — identities reference root sets and enforcement levels
 apply fleet-wide. Partial merges risk inconsistency.
@@ -519,6 +535,22 @@ root set. Set trust roots first with "roots set".`,
 			{
 				Description: "Set provenance policy from a JSON file",
 				Command:     "bureau fleet provenance policy set bureau/fleet/prod --policy-file policy.json --credential-file ./creds",
+			},
+			{
+				Description: "Example policy.json for GitHub Actions CI",
+				Command: `cat > policy.json <<'EOF'
+{
+  "trusted_identities": [{
+    "name": "bureau-ci",
+    "roots": "sigstore_public",
+    "issuer": "https://token.actions.githubusercontent.com",
+    "subject_pattern": "https://github.com/bureau-foundation/bureau/*"
+  }],
+  "enforcement": {
+    "nix_store_paths": "warn"
+  }
+}
+EOF`,
 			},
 		},
 		Params:         func() any { return &params },

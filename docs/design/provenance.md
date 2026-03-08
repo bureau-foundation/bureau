@@ -185,30 +185,33 @@ Each identity is a named entry with match criteria:
       "name": "bureau-ci",
       "roots": "sigstore_public",
       "issuer": "https://token.actions.githubusercontent.com",
-      "subject_pattern": "repo:bureau-foundation/*:ref:refs/heads/main",
-      "workflow_pattern": ".github/workflows/ci.yaml"
+      "subject_pattern": "https://github.com/bureau-foundation/bureau/*",
+      "workflow_pattern": "https://github.com/bureau-foundation/bureau/.github/workflows/ci.yaml@*"
     },
     {
       "name": "bureau-services",
       "roots": "sigstore_public",
       "issuer": "https://token.actions.githubusercontent.com",
-      "subject_pattern": "repo:bureau-foundation/bureau-*:ref:refs/heads/main"
+      "subject_pattern": "https://github.com/bureau-foundation/bureau-*/*"
     },
     {
       "name": "partner-models",
       "roots": "sigstore_public",
       "issuer": "https://token.actions.githubusercontent.com",
-      "subject_pattern": "repo:trusted-model-org/*:ref:refs/tags/v*"
+      "subject_pattern": "https://github.com/trusted-model-org/*/blob/*"
     }
   ]
 }
 ```
 
 The `subject_pattern` and `workflow_pattern` fields use glob matching
-against the OIDC token's subject and workflow claims. The subject
-claim in GitHub Actions OIDC tokens has the format
-`repo:<owner>/<repo>:ref:<ref>` — the pattern matches against this
-full string.
+against the OIDC claims embedded in the Fulcio certificate as X.509
+extensions. For GitHub Actions, the Subject Alternative Name (SAN)
+in the Fulcio certificate is a URI with the format
+`https://github.com/<owner>/<repo>/<workflow-path>@<ref>` — the
+`subject_pattern` matches against this full URI. The
+`workflow_pattern` matches against the Build Config URI extension
+(OID 1.3.6.1.4.1.57264.1.18), which has the same URI format.
 
 **Enforcement rules** control how strictly each artifact category
 requires provenance verification:
@@ -657,9 +660,11 @@ Each entry specifies:
   chain to.
 - The expected OIDC issuer URL (e.g.,
   `https://token.actions.githubusercontent.com` for GitHub Actions).
-- A glob pattern matched against the OIDC subject claim. For GitHub
-  Actions, the subject has the form `repo:<owner>/<repo>:ref:<ref>`.
-- An optional glob pattern matched against the workflow path claim.
+- A glob pattern matched against the Fulcio certificate's Subject
+  Alternative Name. For GitHub Actions, this is a URI of the form
+  `https://github.com/<owner>/<repo>/<workflow-path>@<ref>`.
+- An optional glob pattern matched against the Build Config URI
+  extension (the workflow that produced the artifact).
 
 **Enforcement rules** are a map from artifact category to enforcement
 level. Three levels:

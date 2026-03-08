@@ -712,17 +712,72 @@ artifact:
 
 ### Go Library
 
-Provenance verification is implemented in `lib/provenance/`, using
-sigstore-go for bundle parsing, certificate chain verification, and
-Rekor proof validation.
+Provenance verification is implemented in `lib/provenance/` using only
+the Go standard library — no third-party cryptography or Sigstore SDK
+dependencies. The package parses Sigstore bundle v0.3 JSON, performs
+all cryptographic verification offline, and matches OIDC claims against
+fleet policy. The zero-dependency approach eliminates the 62 transitive
+dependencies that sigstore-go would introduce and gives Bureau full
+control over the verification logic in a security-critical path.
 
-The package provides a verifier configured with trust roots and
-provenance policy. The daemon constructs the verifier at startup and
-updates it when trust roots or policy change via /sync. The core
-verification function takes a bundle and an artifact content hash,
-returns a typed result (verified/unverified/rejected with identity
-details). A bundle fetcher retrieves bundles from binary caches by
-store path basename.
+The verification pipeline has six phases, each of which must succeed
+before the next begins:
+
+- **Certificate chain verification.** The Fulcio leaf certificate must
+  chain to one of the root set's trust anchors via `x509.Certificate.Verify`.
+  Intermediate certificates (non-self-signed CAs from the trusted root
+  file) are placed in the intermediates pool, not the roots pool, so
+  that path length constraints and name constraints are enforced by the
+  Go X.509 verifier. Self-signed classification uses a three-layer
+  check: fast negative on Distinguished Name mismatch, fast negative on
+  Authority Key Identifier / Subject Key Identifier mismatch, then
+  `cert.CheckSignatureFrom(cert)` as the authoritative cryptographic
+  test.
+
+- **Signature verification.** The artifact signature is verified against
+  the Fulcio leaf certificate's public key. For DSSE (in-toto) bundles,
+  the signature covers the DSSE envelope (PAE-encoded); for
+  messageSignature bundles, it covers the raw artifact digest. Both
+  ECDSA and Ed25519 leaf keys are supported.
+
+- **Signed Entry Timestamp (SET).** The Rekor transparency log's SET
+  authenticates the `integratedTime`, `logIndex`, `logID`, and entry
+  body. The SET is an ECDSA-SHA256 signature over canonical JSON with
+  fields in alphabetical order. Without SET verification, an attacker
+  who compromises a bundle in transit could substitute the
+  `integratedTime` to make an expired certificate appear valid.
+
+- **Merkle inclusion proof.** The tlog entry's inclusion proof is
+  verified against the signed checkpoint's root hash using RFC 6962
+  interior node hashing (`SHA256(0x01 || left || right)`). The
+  checkpoint is a C2SP signed note: the note body carries the tree
+  origin, size, and root hash; the signature line carries a key ID
+  and Ed25519 signature. The checkpoint origin line is cross-checked
+  against the signature's signer name to prevent checkpoint
+  substitution across logs.
+
+- **Transparency log binding.** The tlog entry body is verified to
+  contain the same leaf certificate and artifact signature as the
+  bundle, preventing an attacker from substituting a valid tlog entry
+  from a different signing operation.
+
+- **Certificate validity window.** The Fulcio leaf certificate's
+  NotBefore/NotAfter window is checked against the authenticated
+  `integratedTime` from the SET. This is checked last because the
+  time must be authenticated by the SET before it can be trusted.
+
+The package provides three entry points:
+
+- `NewVerifier(roots, policy)` constructs a verifier from fleet trust
+  roots and provenance policy. Trust roots are parsed from PEM (for
+  Matrix state events) or from Sigstore trusted root JSON (for test
+  fixtures and the public good instance).
+- `Verifier.Verify(bundle, algorithm, digest)` runs the full
+  verification pipeline and returns a typed result: verified (with
+  matched identity name, OIDC issuer, subject, and authenticated
+  timestamp), unverified, or rejected (with error).
+- `FetchBundle(client, cacheURL, basename)` retrieves bundles from
+  binary caches by Nix store path basename.
 
 ### CLI
 

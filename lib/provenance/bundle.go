@@ -785,9 +785,10 @@ func verifySignedEntryTimestamp(entry *parsedTlogEntry, rekorKey crypto.PublicKe
 // ---- Rekor entry body types -------------------------------------------
 //
 // The canonicalizedBody in a tlog entry is a base64-encoded JSON
-// Rekor log entry. Two kinds are relevant:
+// Rekor log entry. Three kinds are relevant:
 //   - hashedrekord: for messageSignature bundles
-//   - intoto: for DSSE bundles
+//   - intoto: for DSSE bundles (older cosign versions)
+//   - dsse: for DSSE bundles (cosign v2.x with --new-bundle-format)
 
 type rekorEntryBody struct {
 	APIVersion string          `json:"apiVersion"`
@@ -827,6 +828,27 @@ type rekorIntotoSig struct {
 	Sig       string `json:"sig"`       // base64 signature
 }
 
+// dsse spec — used by cosign v2.x with --new-bundle-format.
+// Unlike intoto entries (which embed the full DSSE envelope), dsse
+// entries store only hashes of the envelope and payload, plus the
+// signature and verifier (certificate). This is more compact and
+// avoids the double-base64 encoding that intoto entries suffer from.
+type rekorDSSESpec struct {
+	EnvelopeHash rekorDSSEHash  `json:"envelopeHash"`
+	PayloadHash  rekorDSSEHash  `json:"payloadHash"`
+	Signatures   []rekorDSSESig `json:"signatures"`
+}
+
+type rekorDSSEHash struct {
+	Algorithm string `json:"algorithm"` // e.g., "sha256"
+	Value     string `json:"value"`     // hex digest
+}
+
+type rekorDSSESig struct {
+	Signature string `json:"signature"` // base64 raw signature
+	Verifier  string `json:"verifier"`  // base64 PEM certificate
+}
+
 // verifyTlogBinding verifies that the Rekor entry body contains the
 // same certificate and signature as the bundle being verified.
 func verifyTlogBinding(canonicalizedBody []byte, bundle *parsedBundle) error {
@@ -840,6 +862,8 @@ func verifyTlogBinding(canonicalizedBody []byte, bundle *parsedBundle) error {
 		return verifyHashedRekordBinding(entry.Spec, bundle)
 	case "intoto":
 		return verifyIntotoBinding(entry.Spec, bundle)
+	case "dsse":
+		return verifyDSSEBinding(entry.Spec, bundle)
 	default:
 		return fmt.Errorf("unsupported rekor entry kind %q", entry.Kind)
 	}
@@ -894,6 +918,52 @@ func verifyIntotoBinding(specBytes json.RawMessage, bundle *parsedBundle) error 
 
 	// Verify the certificate matches.
 	return verifyEntryCertBinding(sig.PublicKey, bundle.leafCert)
+}
+
+func verifyDSSEBinding(specBytes json.RawMessage, bundle *parsedBundle) error {
+	var spec rekorDSSESpec
+	if err := json.Unmarshal(specBytes, &spec); err != nil {
+		return fmt.Errorf("unmarshal dsse spec: %w", err)
+	}
+
+	if len(spec.Signatures) == 0 {
+		return errors.New("dsse entry has no signatures")
+	}
+
+	entrySig := spec.Signatures[0]
+
+	// Verify the signature matches. Unlike the intoto kind (which
+	// double-base64-encodes signatures), the dsse kind stores the
+	// signature as a plain base64 string — the same encoding level
+	// as the bundle's dsseEnvelope.signatures[].sig field.
+	sigBytes, err := base64.StdEncoding.DecodeString(entrySig.Signature)
+	if err != nil {
+		return fmt.Errorf("decode dsse entry signature: %w", err)
+	}
+	if !constantTimeEqual(sigBytes, bundle.signature) {
+		return errors.New("entry signature does not match bundle signature")
+	}
+
+	// Verify the payload hash matches. The dsse entry records the
+	// hash of the DSSE payload (the in-toto statement) which we
+	// have in decoded form. This is redundant with the signature
+	// check (a valid ECDSA signature over different content would
+	// require the private key) but provides defense-in-depth
+	// against payload substitution.
+	if spec.PayloadHash.Algorithm != "" && spec.PayloadHash.Value != "" {
+		hasher, err := newHasher(spec.PayloadHash.Algorithm)
+		if err != nil {
+			return fmt.Errorf("payload hash algorithm: %w", err)
+		}
+		hasher.Write(bundle.dssePayload)
+		computedHex := hex.EncodeToString(hasher.Sum(nil))
+		if !strings.EqualFold(computedHex, spec.PayloadHash.Value) {
+			return errors.New("dsse entry payloadHash does not match bundle DSSE payload")
+		}
+	}
+
+	// Verify the certificate matches.
+	return verifyEntryCertBinding(entrySig.Verifier, bundle.leafCert)
 }
 
 // verifyEntryCertBinding verifies that the PEM-encoded certificate

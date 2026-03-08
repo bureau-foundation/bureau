@@ -2630,8 +2630,86 @@ func TestParseTrustRootRejectsNonSelfSignedCertificate(t *testing.T) {
 	if err == nil {
 		t.Fatal("expected error for non-self-signed CA in root PEM")
 	}
-	if !strings.Contains(err.Error(), "not self-signed") {
-		t.Fatalf("expected self-signed validation error, got: %v", err)
+	if !strings.Contains(err.Error(), "no self-signed root CA found") {
+		t.Fatalf("expected missing root CA error, got: %v", err)
+	}
+}
+
+func TestParseTrustRootAcceptsIntermediatePlusRoot(t *testing.T) {
+	// When FulcioRootPEM contains both an intermediate CA and its
+	// root CA, parseTrustRoot should separate them: the root goes
+	// into fulcioRoots and the intermediate into fulcioIntermediates.
+	// This matches the certificate chain layout from Sigstore's
+	// public good instance (intermediate + root in a single PEM).
+	t.Parallel()
+
+	rootKey, err := ecdsa.GenerateKey(elliptic.P256(), rand.Reader)
+	if err != nil {
+		t.Fatalf("generate root key: %v", err)
+	}
+	rootTemplate := &x509.Certificate{
+		SerialNumber:          big.NewInt(1),
+		Subject:               pkix.Name{CommonName: "test-root"},
+		NotBefore:             time.Date(2025, 1, 1, 0, 0, 0, 0, time.UTC),
+		NotAfter:              time.Date(2035, 1, 1, 0, 0, 0, 0, time.UTC),
+		KeyUsage:              x509.KeyUsageCertSign | x509.KeyUsageCRLSign,
+		IsCA:                  true,
+		BasicConstraintsValid: true,
+	}
+	rootCertDER, err := x509.CreateCertificate(rand.Reader, rootTemplate, rootTemplate, &rootKey.PublicKey, rootKey)
+	if err != nil {
+		t.Fatalf("create root cert: %v", err)
+	}
+	rootCert, err := x509.ParseCertificate(rootCertDER)
+	if err != nil {
+		t.Fatalf("parse root cert: %v", err)
+	}
+
+	intermediateKey, err := ecdsa.GenerateKey(elliptic.P256(), rand.Reader)
+	if err != nil {
+		t.Fatalf("generate intermediate key: %v", err)
+	}
+	intermediateTemplate := &x509.Certificate{
+		SerialNumber:          big.NewInt(2),
+		Subject:               pkix.Name{CommonName: "test-intermediate"},
+		NotBefore:             time.Date(2025, 1, 1, 0, 0, 0, 0, time.UTC),
+		NotAfter:              time.Date(2035, 1, 1, 0, 0, 0, 0, time.UTC),
+		KeyUsage:              x509.KeyUsageCertSign | x509.KeyUsageCRLSign,
+		IsCA:                  true,
+		BasicConstraintsValid: true,
+	}
+	intermediateDER, err := x509.CreateCertificate(rand.Reader, intermediateTemplate, rootCert, &intermediateKey.PublicKey, rootKey)
+	if err != nil {
+		t.Fatalf("create intermediate cert: %v", err)
+	}
+
+	// Concatenate intermediate + root PEM (same order as Sigstore's
+	// trusted_root.json provides them).
+	chainPEM := string(pem.EncodeToMemory(&pem.Block{Type: "CERTIFICATE", Bytes: intermediateDER})) +
+		string(pem.EncodeToMemory(&pem.Block{Type: "CERTIFICATE", Bytes: rootCertDER}))
+
+	rekorKey, err := ecdsa.GenerateKey(elliptic.P256(), rand.Reader)
+	if err != nil {
+		t.Fatalf("generate Rekor key: %v", err)
+	}
+	rekorKeyDER, err := x509.MarshalPKIXPublicKey(&rekorKey.PublicKey)
+	if err != nil {
+		t.Fatalf("marshal Rekor key: %v", err)
+	}
+	rekorPEM := pem.EncodeToMemory(&pem.Block{Type: "PUBLIC KEY", Bytes: rekorKeyDER})
+
+	root, err := parseTrustRoot(schema.ProvenanceTrustRoot{
+		FulcioRootPEM:     chainPEM,
+		RekorPublicKeyPEM: string(rekorPEM),
+	})
+	if err != nil {
+		t.Fatalf("parseTrustRoot with intermediate + root: %v", err)
+	}
+	if len(root.fulcioRoots) != 1 {
+		t.Errorf("expected 1 root CA, got %d", len(root.fulcioRoots))
+	}
+	if len(root.fulcioIntermediates) != 1 {
+		t.Errorf("expected 1 intermediate CA, got %d", len(root.fulcioIntermediates))
 	}
 }
 

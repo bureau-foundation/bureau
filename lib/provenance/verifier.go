@@ -332,37 +332,40 @@ func globToRegexp(pattern string) (*regexp.Regexp, error) {
 // from different validity periods or key rotations). All blocks are
 // parsed and added to the root pool.
 func parseTrustRoot(trustRoot schema.ProvenanceTrustRoot) (*parsedRoot, error) {
-	// Parse all Fulcio root certificates from the PEM bundle.
+	// Parse Fulcio CA certificates from the PEM bundle. The PEM may
+	// contain the complete chain (intermediate + root) as provided by
+	// Sigstore's trusted_root.json. Separate self-signed root CAs
+	// (trust anchors) from intermediates. Non-CA certificates are
+	// rejected — only CA certificates belong in the trust root.
 	var fulcioRoots []*x509.Certificate
+	var fulcioIntermediates []*x509.Certificate
 	remaining := []byte(trustRoot.FulcioRootPEM)
+	certIndex := 0
 	for {
 		var block *pem.Block
 		block, remaining = pem.Decode(remaining)
 		if block == nil {
 			break
 		}
+		certIndex++
 		if block.Type != "CERTIFICATE" {
 			return nil, fmt.Errorf("unexpected PEM block type %q in Fulcio root PEM (expected CERTIFICATE)", block.Type)
 		}
 		cert, err := x509.ParseCertificate(block.Bytes)
 		if err != nil {
-			return nil, fmt.Errorf("parse Fulcio root certificate #%d: %w", len(fulcioRoots)+1, err)
+			return nil, fmt.Errorf("parse Fulcio certificate #%d: %w", certIndex, err)
 		}
-		// Enforce that root PEM contains only CA certificates that
-		// are self-signed trust anchors. Accepting non-CA or
-		// non-self-signed certificates as roots would promote
-		// intermediates to trust anchors, bypassing path length
-		// and name constraints.
 		if !cert.IsCA {
-			return nil, fmt.Errorf("Fulcio root certificate #%d (%q) is not a CA", len(fulcioRoots)+1, cert.Subject)
+			return nil, fmt.Errorf("Fulcio certificate #%d (%q) is not a CA", certIndex, cert.Subject)
 		}
-		if !isSelfSigned(cert) {
-			return nil, fmt.Errorf("Fulcio root certificate #%d (%q) is not self-signed", len(fulcioRoots)+1, cert.Subject)
+		if isSelfSigned(cert) {
+			fulcioRoots = append(fulcioRoots, cert)
+		} else {
+			fulcioIntermediates = append(fulcioIntermediates, cert)
 		}
-		fulcioRoots = append(fulcioRoots, cert)
 	}
 	if len(fulcioRoots) == 0 {
-		return nil, errors.New("failed to decode Fulcio root PEM: no CERTIFICATE blocks found")
+		return nil, errors.New("failed to decode Fulcio root PEM: no self-signed root CA found")
 	}
 
 	// Parse Rekor transparency log public key.
@@ -379,9 +382,10 @@ func parseTrustRoot(trustRoot schema.ProvenanceTrustRoot) (*parsedRoot, error) {
 	logIDHash := sha256.Sum256(rekorBlock.Bytes)
 
 	return &parsedRoot{
-		fulcioRoots: fulcioRoots,
-		rekorKey:    rekorPubKey,
-		rekorKeyID:  logIDHash[:],
+		fulcioRoots:         fulcioRoots,
+		fulcioIntermediates: fulcioIntermediates,
+		rekorKey:            rekorPubKey,
+		rekorKeyID:          logIDHash[:],
 	}, nil
 }
 

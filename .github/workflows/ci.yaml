@@ -11,6 +11,7 @@ on:
 
 permissions:
   contents: read
+  id-token: write  # Sigstore keyless signing for provenance attestations
 
 concurrency:
   group: ${{ github.workflow }}-${{ github.ref }}
@@ -88,12 +89,62 @@ jobs:
 
           CACHE="s3://bureau-cache?endpoint=${{ secrets.R2_ENDPOINT }}&region=auto"
 
+          # Build all binary packages. bureau-host-env and bureau-sandbox-env
+          # pull in all host and sandbox binaries as dependencies. The four
+          # remaining binaries (agents and test agent) are built individually.
+          nix build --no-link \
+            .#bureau-host-env \
+            .#bureau-sandbox-env \
+            .#bureau-agent .#bureau-agent-claude .#bureau-agent-mock .#bureau-test-agent
+
+          # Sign and push host environment (includes all host binaries).
+          nix store sign --key-file /tmp/nix-signing-key -r .#bureau-host-env
+          nix copy --to "$CACHE" .#bureau-host-env
+
+          # Sign and push sandbox environment (includes all sandbox binaries).
+          nix store sign --key-file /tmp/nix-signing-key -r .#bureau-sandbox-env
+          nix copy --to "$CACHE" .#bureau-sandbox-env
+
+          # Sign and push agent and test binaries not in the environments.
+          for extra in bureau-agent bureau-agent-claude bureau-agent-mock bureau-test-agent; do
+            nix store sign --key-file /tmp/nix-signing-key -r ".#$extra"
+            nix copy --to "$CACHE" ".#$extra"
+          done
+
+          # Sign and push dev shell closure.
           nix build --no-link .#devShells.x86_64-linux.default
           nix store sign --key-file /tmp/nix-signing-key -r .#devShells.x86_64-linux.default
           nix copy --to "$CACHE" .#devShells.x86_64-linux.default
 
-          nix store sign --key-file /tmp/nix-signing-key -r .#default
-          nix copy --to "$CACHE" .#default
+      - name: Generate provenance attestations
+        if: github.ref == 'refs/heads/main' && github.event_name == 'push'
+        continue-on-error: true
+        uses: ./.github/actions/attest-nix-paths
+        with:
+          flake-outputs: >-
+            bureau
+            bureau-agent
+            bureau-agent-claude
+            bureau-agent-mock
+            bureau-agent-service
+            bureau-artifact-service
+            bureau-bridge
+            bureau-credentials
+            bureau-daemon
+            bureau-launcher
+            bureau-log-relay
+            bureau-observe-relay
+            bureau-pipeline-executor
+            bureau-proxy
+            bureau-proxy-call
+            bureau-sandbox
+            bureau-test-agent
+            bureau-ticket-service
+            bureau-viewer
+          cache-endpoint: ${{ secrets.R2_ENDPOINT }}
+          cache-bucket: bureau-cache
+          aws-access-key-id: ${{ secrets.R2_ACCESS_KEY_ID }}
+          aws-secret-access-key: ${{ secrets.R2_SECRET_ACCESS_KEY }}
 
       - name: Prune Bazel cache
         if: always()

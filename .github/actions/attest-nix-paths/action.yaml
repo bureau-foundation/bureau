@@ -1,0 +1,44 @@
+# Copyright 2026 The Bureau Authors
+# SPDX-License-Identifier: Apache-2.0
+
+name: 'Attest Nix Store Paths'
+description: >-
+  Generate Sigstore provenance attestations for Nix store paths and upload
+  the bundles to an S3-compatible binary cache. Uses keyless signing via
+  the CI environment's ambient OIDC token (GitHub Actions, or any CI with
+  Sigstore-compatible OIDC). Each flake output gets a Sigstore bundle at
+  attestation/<store-path-basename>.bundle.json in the cache, alongside
+  the corresponding .narinfo and NAR files.
+
+inputs:
+  flake-outputs:
+    description: 'Space-separated list of flake output attributes to attest (e.g., "bureau bureau-daemon")'
+    required: true
+  cache-endpoint:
+    description: 'S3-compatible endpoint URL for bundle upload (e.g., https://account.r2.cloudflarestorage.com)'
+    required: false
+  cache-bucket:
+    description: 'S3 bucket name for bundle upload'
+    required: false
+  aws-access-key-id:
+    description: 'AWS access key ID for S3-compatible cache upload'
+    required: false
+  aws-secret-access-key:
+    description: 'AWS secret access key for S3-compatible cache upload'
+    required: false
+
+runs:
+  using: 'composite'
+  steps:
+    - name: Install cosign
+      uses: sigstore/cosign-installer@v3
+
+    - name: Generate provenance attestations
+      shell: bash
+      env:
+        FLAKE_OUTPUTS: ${{ inputs.flake-outputs }}
+        CACHE_ENDPOINT: ${{ inputs.cache-endpoint }}
+        CACHE_BUCKET: ${{ inputs.cache-bucket }}
+        AWS_ACCESS_KEY_ID: ${{ inputs.aws-access-key-id }}
+        AWS_SECRET_ACCESS_KEY: ${{ inputs.aws-secret-access-key }}
+      run: bash "${{ github.action_path }}/attest.sh"

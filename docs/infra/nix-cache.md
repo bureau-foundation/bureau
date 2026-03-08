@@ -74,6 +74,53 @@ signature against the public key when downloading.
 - **Previous public key**: `cache.infra.bureau.foundation-1:3hpghLePqloLp0qMpkgPy/i0gKiL/Sxl2dY8EHZgOeY=`
 - **Secret key**: stored in GitHub org-level secret `NIX_CACHE_SIGNING_KEY`
 
+### Key naming
+
+A Nix signing key file is a single line: `<name>:<base64-ed25519-key>`. The
+name is not cryptographic material — it's an arbitrary string chosen when the
+key is generated. But it is operationally critical because **Nix matches
+signatures to trusted keys by name, not by cryptographic identity**.
+
+When `nix store sign --key-file` signs a store path, the resulting narinfo
+contains `Sig: <name>:<base64-signature>`. When a client wants to substitute
+a path, it scans the narinfo's `Sig` lines for one whose `<name>` prefix
+matches an entry in its `trusted-public-keys`. If no name matches, the path
+is treated as unsigned and the substituter refuses it — even if the
+cryptographic key material is identical under a different name.
+
+This means `bureau:abc...` and `cache.infra.bureau.foundation-2:abc...`
+are the same Ed25519 key producing valid signatures, but Nix treats them as
+completely different identities. A secret key named `bureau` will produce
+signatures that no client trusts unless `bureau:<public-key>` is in their
+`trusted-public-keys` — regardless of whether the same key material appears
+under a different name.
+
+**The name in `NIX_CACHE_SIGNING_KEY` must match the name in `flake.nix`'s
+`extra-trusted-public-keys`.** If the secret is `bureau:<secret-base64>` but
+`flake.nix` trusts `cache.infra.bureau.foundation-2:<public-base64>`, every
+path signed by CI will be present in R2 but invisible to the substituter.
+Paths that carry pass-through signatures from upstream caches
+(`cache.nixos.org-1`, `cache.flakehub.com`) will still substitute because
+those key names are trusted by default.
+
+To verify the key name matches, extract a narinfo from R2 and check the
+`Sig:` line's prefix:
+
+```bash
+# Pick any store path hash known to be in R2
+curl -s "https://cache.infra.bureau.foundation/<hash>.narinfo" | grep '^Sig:'
+# Should show: Sig: cache.infra.bureau.foundation-2:<base64>
+# If it shows: Sig: bureau:<base64>  — the key name is wrong
+```
+
+To fix a misnamed key, edit the GitHub secret: change the `<name>:` prefix
+from whatever it currently is to `cache.infra.bureau.foundation-2:` (keeping
+the base64 key material unchanged). The next CI run will sign with the
+correct name. Old paths in R2 with the wrong name remain untrusted until
+re-pushed (they get re-signed on the next CI run that rebuilds them).
+
+### Key rotation
+
 The numeric suffix is a rotation counter. When rotating: generate a new key
 with an incremented suffix, add the new public key to `flake.nix` and CI
 config alongside the old one (so both are trusted during transition), update

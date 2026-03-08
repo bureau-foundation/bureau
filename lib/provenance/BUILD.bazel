@@ -24,3 +24,9 @@ go_test(
     embed = [":provenance"],
     deps = ["//lib/schema"],
 )
+
+# Expose test fixtures for integration tests.
+exports_files(
+    ["testdata/trusted-root-scaffolding.json"],
+    visibility = ["//integration:__pkg__"],
+)

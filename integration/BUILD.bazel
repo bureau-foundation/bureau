@@ -45,6 +45,7 @@ go_test(
         "payload_test.go",
         "pipeline_test.go",
         "powerlevel_test.go",
+        "provenance_test.go",
         "proxy_crash_test.go",
         "quickstart_test.go",
         "reservation_test.go",
@@ -99,6 +100,7 @@ go_test(
         "//cmd/bureau-test-agent-claude",
         "//cmd/bureau-test-service",
         "//cmd/bureau-ticket-service",
+        "//lib/provenance:testdata/trusted-root-scaffolding.json",
         "@integration_test_env//:store_path",
     ],
     env = {
@@ -127,6 +129,7 @@ go_test(
         "TEST_AGENT_BINARY": "$(rlocationpath //cmd/bureau-test-agent:bureau-test-agent)",
         "TEST_SERVICE_BINARY": "$(rlocationpath //cmd/bureau-test-service:bureau-test-service)",
         "TICKET_SERVICE_BINARY": "$(rlocationpath //cmd/bureau-ticket-service:bureau-ticket-service)",
+        "TRUSTED_ROOT_FIXTURE": "$(rlocationpath //lib/provenance:testdata/trusted-root-scaffolding.json)",
     },
     local = True,
     tags = ["manual"],

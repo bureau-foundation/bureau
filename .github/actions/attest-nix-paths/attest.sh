@@ -52,37 +52,19 @@ mkdir -p attestation
 # Parse the space-separated output list into an array.
 read -ra outputs_array <<< "$FLAKE_OUTPUTS"
 
-# Resolve all store paths in a single flake evaluation. This avoids
-# 19 separate evaluations that each access the SQLite eval-cache,
-# causing contention ("database is busy" errors). All outputs should
-# already be built by previous CI steps.
-echo "Resolving store paths for ${#outputs_array[@]} outputs..."
-path_info_refs=()
-for output in "${outputs_array[@]}"; do
-    path_info_refs+=(".#$output")
-done
-
-if ! path_info_output=$(nix path-info "${path_info_refs[@]}"); then
-    echo "Error: failed to resolve store paths" >&2
-    echo "  Ensure all flake outputs are built before running attestation." >&2
-    exit 1
-fi
-mapfile -t store_paths <<< "$path_info_output"
-
-if [ ${#store_paths[@]} -ne ${#outputs_array[@]} ]; then
-    echo "Error: resolved ${#store_paths[@]} paths, expected ${#outputs_array[@]}" >&2
-    exit 1
-fi
-
-echo "  Resolved ${#store_paths[@]} store paths"
-echo ""
-
 attested=0
 failed=0
 
-for i in "${!outputs_array[@]}"; do
-    output="${outputs_array[$i]}"
-    store_path="${store_paths[$i]}"
+for output in "${outputs_array[@]}"; do
+    # Resolve each output individually to maintain the output-to-path
+    # mapping. nix path-info with multiple arguments does not guarantee
+    # output order matches argument order (it sorts by store hash),
+    # which would scramble the flake_output field in the predicate.
+    if ! store_path=$(nix path-info ".#$output"); then
+        echo "Error: failed to resolve store path for $output" >&2
+        failed=$((failed + 1))
+        continue
+    fi
     store_basename=$(basename "$store_path")
     bundle_path="attestation/$store_basename.bundle.json"
 
@@ -160,6 +142,7 @@ for i in "${!outputs_array[@]}"; do
     echo "  Signing with cosign..."
     if ! cosign attest-blob \
         --bundle "$bundle_path" \
+        --new-bundle-format \
         --predicate "$predicate_file" \
         --type "https://slsa.dev/provenance/v1" \
         --yes \

@@ -92,20 +92,19 @@ jobs:
           CACHE="s3://bureau-cache?endpoint=${{ secrets.R2_ENDPOINT }}&region=auto"
 
           # Build everything and resolve store paths in one evaluation.
-          nix build --no-link \
-            .#bureau-host-env .#bureau-sandbox-env \
-            .#bureau-agent .#bureau-agent-claude .#bureau-agent-mock .#bureau-test-agent \
-            .#devShells.x86_64-linux.default
-
-          mapfile -t paths < <(nix path-info \
+          # --print-out-paths returns the store paths directly, avoiding
+          # a separate nix path-info call (which would be a second flake
+          # evaluation contending on the SQLite eval-cache).
+          mapfile -t paths < <(nix build --no-link --print-out-paths \
             .#bureau-host-env .#bureau-sandbox-env \
             .#bureau-agent .#bureau-agent-claude .#bureau-agent-mock .#bureau-test-agent \
             .#devShells.x86_64-linux.default)
 
+          # Write resolved paths for the verify step to consume without
+          # re-evaluating the flake.
+          printf '%s\n' "${paths[@]}" > /tmp/nix-push-paths
+
           # Sign and push all closures using resolved store paths.
-          # Operating on store paths avoids re-evaluating the flake
-          # for each sign/copy call (which causes SQLite eval-cache
-          # contention).
           for path in "${paths[@]}"; do
             nix store sign --key-file /tmp/nix-signing-key -r "$path"
             nix copy --to "$CACHE" "$path"
@@ -119,12 +118,15 @@ jobs:
           # where paths are present in the cache but invisible to
           # substituters because the Sig: prefix doesn't match any
           # entry in trusted-public-keys.
-          # Resolve all closures in a single evaluation to avoid
-          # SQLite eval-cache contention from parallel nix commands.
-          all_paths=$(nix path-info -r \
-            .#bureau-host-env .#bureau-sandbox-env \
-            .#bureau-agent .#bureau-agent-claude .#bureau-agent-mock .#bureau-test-agent \
-            .#devShells.x86_64-linux.default | sort -u)
+          # Expand the recursive closure from raw store paths written
+          # by the push step. Using store paths (not flake refs) avoids
+          # a flake evaluation and its SQLite eval-cache contention.
+          if [ ! -f /tmp/nix-push-paths ]; then
+            echo "No paths file from push step — skipping verification"
+            exit 0
+          fi
+          mapfile -t top_paths < /tmp/nix-push-paths
+          all_paths=$(nix path-info -r "${top_paths[@]}" | sort -u)
           total=$(echo "$all_paths" | wc -l)
           echo "Checking $total store paths in R2..."
 

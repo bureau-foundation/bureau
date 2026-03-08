@@ -49,21 +49,44 @@ build_type="bureau.foundation/provenance/nix-derivation/v1"
 
 mkdir -p attestation
 
+# Parse the space-separated output list into an array.
+read -ra outputs_array <<< "$FLAKE_OUTPUTS"
+
+# Resolve all store paths in a single flake evaluation. This avoids
+# 19 separate evaluations that each access the SQLite eval-cache,
+# causing contention ("database is busy" errors). All outputs should
+# already be built by previous CI steps.
+echo "Resolving store paths for ${#outputs_array[@]} outputs..."
+path_info_refs=()
+for output in "${outputs_array[@]}"; do
+    path_info_refs+=(".#$output")
+done
+
+if ! path_info_output=$(nix path-info "${path_info_refs[@]}"); then
+    echo "Error: failed to resolve store paths" >&2
+    echo "  Ensure all flake outputs are built before running attestation." >&2
+    exit 1
+fi
+mapfile -t store_paths <<< "$path_info_output"
+
+if [ ${#store_paths[@]} -ne ${#outputs_array[@]} ]; then
+    echo "Error: resolved ${#store_paths[@]} paths, expected ${#outputs_array[@]}" >&2
+    exit 1
+fi
+
+echo "  Resolved ${#store_paths[@]} store paths"
+echo ""
+
 attested=0
 failed=0
 
-for output in $FLAKE_OUTPUTS; do
-    echo "--- Attesting: $output ---"
-
-    # Resolve the Nix store path for this flake output.
-    if ! store_path=$(nix path-info ".#$output" 2>/dev/null); then
-        echo "  Warning: could not resolve store path for .#$output, skipping" >&2
-        failed=$((failed + 1))
-        continue
-    fi
+for i in "${!outputs_array[@]}"; do
+    output="${outputs_array[$i]}"
+    store_path="${store_paths[$i]}"
     store_basename=$(basename "$store_path")
     bundle_path="attestation/$store_basename.bundle.json"
 
+    echo "--- Attesting: $output ---"
     echo "  Store path: $store_path"
 
     # Serialize the store path as a NAR to a temp file. cosign needs a
@@ -72,6 +95,7 @@ for output in $FLAKE_OUTPUTS; do
     # we hash the NAR exactly once (cosign re-hashes it internally
     # when constructing the in-toto statement subject, but that second
     # pass over a ~40MB file takes <10ms and isn't worth eliminating).
+    #
     # Name the temp file after the store basename so cosign uses it
     # as the in-toto subject name (cosign derives subject.name from
     # the blob filename).
@@ -130,9 +154,10 @@ for output in $FLAKE_OUTPUTS; do
     # Fulcio. The resulting bundle contains the DSSE envelope (with
     # the in-toto statement), the Fulcio certificate chain, and the
     # Rekor transparency log entry with inclusion proof.
-    echo "  Signing with cosign..."
+    #
     # Redirect stdout to suppress the DSSE envelope JSON that cosign
     # prints alongside writing the bundle file. Errors go to stderr.
+    echo "  Signing with cosign..."
     if ! cosign attest-blob \
         --bundle "$bundle_path" \
         --predicate "$predicate_file" \

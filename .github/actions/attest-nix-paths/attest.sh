@@ -72,13 +72,17 @@ for output in $FLAKE_OUTPUTS; do
     # we hash the NAR exactly once (cosign re-hashes it internally
     # when constructing the in-toto statement subject, but that second
     # pass over a ~40MB file takes <10ms and isn't worth eliminating).
-    nar_file=$(mktemp)
+    # Name the temp file after the store basename so cosign uses it
+    # as the in-toto subject name (cosign derives subject.name from
+    # the blob filename).
+    nar_dir=$(mktemp -d)
+    nar_file="$nar_dir/$store_basename.nar"
     predicate_file=$(mktemp)
 
     echo "  Serializing NAR..."
     if ! digest=$(nix-store --dump "$store_path" | tee "$nar_file" | sha256sum | cut -d' ' -f1); then
         echo "  Error: NAR serialization failed for $store_path" >&2
-        rm -f "$nar_file" "$predicate_file"
+        rm -rf "$nar_dir" "$predicate_file"
         failed=$((failed + 1))
         continue
     fi
@@ -127,19 +131,21 @@ for output in $FLAKE_OUTPUTS; do
     # the in-toto statement), the Fulcio certificate chain, and the
     # Rekor transparency log entry with inclusion proof.
     echo "  Signing with cosign..."
+    # Redirect stdout to suppress the DSSE envelope JSON that cosign
+    # prints alongside writing the bundle file. Errors go to stderr.
     if ! cosign attest-blob \
         --bundle "$bundle_path" \
         --predicate "$predicate_file" \
         --type "https://slsa.dev/provenance/v1" \
         --yes \
-        "$nar_file"; then
+        "$nar_file" > /dev/null; then
         echo "  Error: cosign signing failed for $output" >&2
-        rm -f "$nar_file" "$predicate_file"
+        rm -rf "$nar_dir" "$predicate_file"
         failed=$((failed + 1))
         continue
     fi
 
-    rm -f "$nar_file" "$predicate_file"
+    rm -rf "$nar_dir" "$predicate_file"
 
     echo "  Bundle written: $bundle_path"
     attested=$((attested + 1))

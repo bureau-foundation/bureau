@@ -2008,3 +2008,180 @@ func TestCheckpointOriginCrossCheck(t *testing.T) {
 		}
 	})
 }
+
+// ---- ParseTrustedRootPEMs tests ----------------------------------------
+
+func TestParseTrustedRootPEMs(t *testing.T) {
+	t.Run("scaffolding fixture", func(t *testing.T) {
+		data := readTestFixture(t, "trusted-root-scaffolding.json")
+		fulcioPEM, rekorPEM, err := ParseTrustedRootPEMs(data)
+		if err != nil {
+			t.Fatalf("ParseTrustedRootPEMs: %v", err)
+		}
+
+		// Verify the Fulcio PEM contains at least one certificate.
+		block, _ := pem.Decode([]byte(fulcioPEM))
+		if block == nil {
+			t.Fatal("Fulcio PEM has no PEM block")
+		}
+		if block.Type != "CERTIFICATE" {
+			t.Fatalf("expected CERTIFICATE block, got %q", block.Type)
+		}
+		cert, err := x509.ParseCertificate(block.Bytes)
+		if err != nil {
+			t.Fatalf("parse Fulcio certificate from PEM: %v", err)
+		}
+		if !cert.IsCA {
+			t.Fatal("Fulcio certificate is not a CA")
+		}
+
+		// Verify the Rekor PEM contains a public key.
+		rekorBlock, _ := pem.Decode([]byte(rekorPEM))
+		if rekorBlock == nil {
+			t.Fatal("Rekor PEM has no PEM block")
+		}
+		if rekorBlock.Type != "PUBLIC KEY" {
+			t.Fatalf("expected PUBLIC KEY block, got %q", rekorBlock.Type)
+		}
+
+		// Round-trip: construct a ProvenanceTrustRoot and verify it
+		// works with NewVerifier.
+		trustRoot := schema.ProvenanceTrustRoot{
+			FulcioRootPEM:     fulcioPEM,
+			RekorPublicKeyPEM: rekorPEM,
+		}
+		roots := schema.ProvenanceRootsContent{
+			Roots: map[string]schema.ProvenanceTrustRoot{
+				"test": trustRoot,
+			},
+		}
+		_, err = NewVerifier(roots, schema.ProvenancePolicyContent{})
+		if err != nil {
+			t.Fatalf("NewVerifier with round-tripped PEMs failed: %v", err)
+		}
+	})
+
+	t.Run("public-good fixture", func(t *testing.T) {
+		data := readTestFixture(t, "trusted-root-public-good.json")
+		fulcioPEM, rekorPEM, err := ParseTrustedRootPEMs(data)
+		if err != nil {
+			t.Fatalf("ParseTrustedRootPEMs: %v", err)
+		}
+
+		// The public-good fixture has multiple CAs. Count root PEM blocks.
+		remaining := []byte(fulcioPEM)
+		rootCount := 0
+		for {
+			var block *pem.Block
+			block, remaining = pem.Decode(remaining)
+			if block == nil {
+				break
+			}
+			rootCount++
+		}
+		if rootCount == 0 {
+			t.Fatal("expected at least one Fulcio root PEM block")
+		}
+		t.Logf("public-good fixture: %d Fulcio root(s)", rootCount)
+
+		// Round-trip through NewVerifier.
+		trustRoot := schema.ProvenanceTrustRoot{
+			FulcioRootPEM:     fulcioPEM,
+			RekorPublicKeyPEM: rekorPEM,
+		}
+		roots := schema.ProvenanceRootsContent{
+			Roots: map[string]schema.ProvenanceTrustRoot{
+				"sigstore_public": trustRoot,
+			},
+		}
+		_, err = NewVerifier(roots, schema.ProvenancePolicyContent{})
+		if err != nil {
+			t.Fatalf("NewVerifier with round-tripped PEMs failed: %v", err)
+		}
+	})
+
+	t.Run("excludes intermediates", func(t *testing.T) {
+		data := readTestFixture(t, "trusted-root-public-good.json")
+
+		// The public-good fixture has both roots and intermediates.
+		// Parse with the internal function to count all certs,
+		// then parse with ParseTrustedRootPEMs and verify fewer
+		// certs come out (intermediates excluded).
+		root, err := parseTrustedRootFile(data)
+		if err != nil {
+			t.Fatalf("parseTrustedRootFile: %v", err)
+		}
+		totalRoots := len(root.fulcioRoots)
+		totalIntermediates := len(root.fulcioIntermediates)
+		if totalIntermediates == 0 {
+			t.Skip("public-good fixture has no intermediates to test exclusion")
+		}
+
+		fulcioPEM, _, err := ParseTrustedRootPEMs(data)
+		if err != nil {
+			t.Fatalf("ParseTrustedRootPEMs: %v", err)
+		}
+
+		// Count PEM blocks — should match roots only, not roots + intermediates.
+		remaining := []byte(fulcioPEM)
+		pemCount := 0
+		for {
+			var block *pem.Block
+			block, remaining = pem.Decode(remaining)
+			if block == nil {
+				break
+			}
+			pemCount++
+		}
+		if pemCount != totalRoots {
+			t.Fatalf("expected %d root PEM blocks (excluding %d intermediates), got %d",
+				totalRoots, totalIntermediates, pemCount)
+		}
+	})
+
+	t.Run("rejects invalid JSON", func(t *testing.T) {
+		_, _, err := ParseTrustedRootPEMs([]byte("not json"))
+		if err == nil {
+			t.Fatal("expected error for invalid JSON")
+		}
+	})
+
+	t.Run("rejects empty certificate authorities", func(t *testing.T) {
+		data := []byte(`{"mediaType":"test","certificateAuthorities":[],"tlogs":[{"publicKey":{"rawBytes":"MFkwEwYHKoZIzj0CAQYIKoZIzj0DAQcDQgAETest"},"logId":{"keyId":"dGVzdA=="}}]}`)
+		_, _, err := ParseTrustedRootPEMs(data)
+		if err == nil {
+			t.Fatal("expected error for empty certificate authorities")
+		}
+		if !strings.Contains(err.Error(), "no self-signed Fulcio root CA") {
+			t.Fatalf("expected self-signed root error, got: %v", err)
+		}
+	})
+
+	t.Run("rejects empty tlogs", func(t *testing.T) {
+		// To reach the tlog check, we need valid Fulcio CA data.
+		// Use the scaffolding fixture's CA but strip the tlogs.
+		fixtureData := readTestFixture(t, "trusted-root-scaffolding.json")
+		var raw struct {
+			MediaType              string          `json:"mediaType"`
+			CertificateAuthorities json.RawMessage `json:"certificateAuthorities"`
+		}
+		if err := json.Unmarshal(fixtureData, &raw); err != nil {
+			t.Fatalf("unmarshal fixture: %v", err)
+		}
+		noTlogs, err := json.Marshal(map[string]any{
+			"mediaType":              raw.MediaType,
+			"certificateAuthorities": json.RawMessage(raw.CertificateAuthorities),
+			"tlogs":                  []any{},
+		})
+		if err != nil {
+			t.Fatalf("marshal: %v", err)
+		}
+		_, _, err = ParseTrustedRootPEMs(noTlogs)
+		if err == nil {
+			t.Fatal("expected error for empty tlogs")
+		}
+		if !strings.Contains(err.Error(), "no transparency logs") {
+			t.Fatalf("expected transparency log error, got: %v", err)
+		}
+	})
+}

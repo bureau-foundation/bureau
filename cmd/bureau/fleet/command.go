@@ -33,6 +33,7 @@ use direct Matrix access via --credential-file.`,
 			enableCommand(),
 			configCommand(),
 			cacheCommand(),
+			provenanceCommand(),
 
 			// Diagnostics.
 			doctorCommand(),

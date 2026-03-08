@@ -160,24 +160,9 @@ func runCache(ctx context.Context, logger *slog.Logger, fleetLocalpart string, p
 	}
 	defer session.Close()
 
-	server, err := ref.ServerFromUserID(session.UserID().String())
+	fleet, fleetRoomID, err := resolveFleetRoom(ctx, session, fleetLocalpart)
 	if err != nil {
-		return cli.Internal("cannot determine server name from session: %w", err)
-	}
-
-	fleet, err := ref.ParseFleet(fleetLocalpart, server)
-	if err != nil {
-		return cli.Validation("%v", err)
-	}
-
-	// Resolve fleet room.
-	fleetRoomID, err := session.ResolveAlias(ctx, fleet.RoomAlias())
-	if err != nil {
-		if messaging.IsMatrixError(err, messaging.ErrCodeNotFound) {
-			return cli.NotFound("fleet room %s not found", fleet.RoomAlias()).
-				WithHint("Has the fleet been created? Run 'bureau fleet create' first.")
-		}
-		return cli.Transient("resolving fleet room %s: %w", fleet.RoomAlias(), err)
+		return err
 	}
 
 	// Read existing cache config. An empty state key means singleton

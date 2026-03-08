@@ -113,16 +113,9 @@ func runConfig(ctx context.Context, logger *slog.Logger, fleetLocalpart string, 
 	}
 	defer session.Close()
 
-	// Derive server name from the connected session's identity.
-	server, err := ref.ServerFromUserID(session.UserID().String())
+	fleet, fleetRoomID, err := resolveFleetRoom(ctx, session, fleetLocalpart)
 	if err != nil {
-		return cli.Internal("cannot determine server name from session: %w", err)
-	}
-
-	// Parse and validate the fleet localpart.
-	fleet, err := ref.ParseFleet(fleetLocalpart, server)
-	if err != nil {
-		return cli.Validation("%v", err)
+		return err
 	}
 
 	// The fleet controller service is always named "fleet" within its fleet.
@@ -132,16 +125,6 @@ func runConfig(ctx context.Context, logger *slog.Logger, fleetLocalpart string, 
 		return cli.Internal("constructing fleet controller service ref: %w", err)
 	}
 	stateKey := service.Localpart()
-
-	// Resolve fleet room from the fleet's room alias.
-	fleetRoomID, err := session.ResolveAlias(ctx, fleet.RoomAlias())
-	if err != nil {
-		if messaging.IsMatrixError(err, messaging.ErrCodeNotFound) {
-			return cli.NotFound("fleet room %s not found", fleet.RoomAlias()).
-				WithHint("Has the fleet been created? Run 'bureau fleet create' first.")
-		}
-		return cli.Transient("resolving fleet room %s: %w", fleet.RoomAlias(), err)
-	}
 
 	// Read existing config.
 	config, err := messaging.GetState[fleetschema.FleetConfigContent](ctx, session, fleetRoomID, schema.EventTypeFleetConfig, stateKey)

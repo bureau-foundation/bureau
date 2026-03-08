@@ -9,6 +9,7 @@ go_library(
         "bundle.go",
         "doc.go",
         "fetch.go",
+        "trusted_root.go",
         "verifier.go",
     ],
     importpath = "github.com/bureau-foundation/bureau/lib/provenance",

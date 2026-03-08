@@ -1,6 +1,11 @@
 // Copyright 2026 The Bureau Authors
 // SPDX-License-Identifier: Apache-2.0
 
+// separate types for compile-time safety. The struct shape and parse/format
+// patterns are identical by design — the shared logic (parseRef, formatRef,
+// refRoomAlias) is already extracted into template_ref.go.
+//
+//nolint:dupl // CredentialRef, PipelineRef, and TemplateRef are deliberately
 package schema
 
 import "github.com/bureau-foundation/bureau/lib/ref"

@@ -9,6 +9,7 @@ import (
 	"crypto/elliptic"
 	"crypto/sha256"
 	"crypto/sha512"
+	"crypto/subtle"
 	"crypto/x509"
 	"crypto/x509/pkix"
 	"encoding/asn1"
@@ -242,6 +243,17 @@ func parseBundle(data []byte) (*parsedBundle, error) {
 	var raw rawBundle
 	if err := json.Unmarshal(data, &raw); err != nil {
 		return nil, fmt.Errorf("unmarshal bundle JSON: %w", err)
+	}
+
+	// Reject bundles that contain both signature types. A well-formed
+	// bundle has exactly one of messageSignature or dsseEnvelope. If
+	// both are present, the bundle is malformed or adversarially
+	// constructed — accepting the first one silently would allow type
+	// confusion attacks where the bundle verifies via messageSignature
+	// but a downstream consumer interprets the dsseEnvelope. This
+	// check runs before any cryptographic parsing to fail fast.
+	if raw.MessageSignature != nil && raw.DSSEEnvelope != nil {
+		return nil, errors.New("bundle contains both messageSignature and dsseEnvelope; exactly one is required")
 	}
 
 	// Extract the leaf certificate.
@@ -514,7 +526,7 @@ func isSelfSigned(cert *x509.Certificate) bool {
 	// Fast negative: if both AKI and SKI are present but differ,
 	// the cert was issued by a different key.
 	if len(cert.AuthorityKeyId) > 0 && len(cert.SubjectKeyId) > 0 {
-		if !bytesEqual(cert.AuthorityKeyId, cert.SubjectKeyId) {
+		if !constantTimeEqual(cert.AuthorityKeyId, cert.SubjectKeyId) {
 			return false
 		}
 	}
@@ -648,7 +660,7 @@ func verifyTlogEntry(entry *parsedTlogEntry, rekorKey crypto.PublicKey, rekorKey
 	// consistency — a mismatched LogID would indicate the entry
 	// claims to be from a different log than the one whose key we
 	// are verifying against.
-	if !bytesEqual(entry.logKeyID, rekorKeyID) {
+	if !constantTimeEqual(entry.logKeyID, rekorKeyID) {
 		return errors.New("tlog entry LogID does not match trusted Rekor key ID")
 	}
 
@@ -844,7 +856,7 @@ func verifyHashedRekordBinding(specBytes json.RawMessage, bundle *parsedBundle) 
 	if err != nil {
 		return fmt.Errorf("decode entry signature: %w", err)
 	}
-	if !bytesEqual(entrySig, bundle.signature) {
+	if !constantTimeEqual(entrySig, bundle.signature) {
 		return errors.New("entry signature does not match bundle signature")
 	}
 
@@ -897,7 +909,7 @@ func verifyEntryCertBinding(pemB64 string, leafCert *x509.Certificate) error {
 		return errors.New("entry certificate is not valid PEM")
 	}
 
-	if !bytesEqual(block.Bytes, leafCert.Raw) {
+	if !constantTimeEqual(block.Bytes, leafCert.Raw) {
 		return errors.New("entry certificate does not match bundle leaf certificate")
 	}
 
@@ -962,7 +974,7 @@ func verifyInclusionProof(leafIndex, treeSize int64, expectedRoot, leafHash []by
 		currentHash = rfc6962NodeHash(proof[i], currentHash)
 	}
 
-	if !bytesEqual(currentHash, expectedRoot) {
+	if !constantTimeEqual(currentHash, expectedRoot) {
 		return errors.New("computed root hash does not match expected root")
 	}
 
@@ -975,16 +987,12 @@ func innerProofSize(index, size int64) int {
 	return bits.Len64(uint64(index) ^ uint64(size-1))
 }
 
-func bytesEqual(a, b []byte) bool {
-	if len(a) != len(b) {
-		return false
-	}
-	for i := range a {
-		if a[i] != b[i] {
-			return false
-		}
-	}
-	return true
+// constantTimeEqual compares two byte slices in constant time to
+// prevent timing side-channel attacks. All comparisons of
+// cryptographic material (signatures, hashes, Merkle proofs, key IDs)
+// must use this function, never short-circuit byte comparison.
+func constantTimeEqual(a, b []byte) bool {
+	return subtle.ConstantTimeCompare(a, b) == 1
 }
 
 // ---- Checkpoint (signed note) verification ----------------------------
@@ -999,11 +1007,11 @@ func verifyCheckpoint(envelope string, expectedRoot []byte, expectedSize int64, 
 	}
 
 	// Verify the key ID matches the Rekor key.
-	if !bytesEqual(keyID, rekorKeyID[:4]) {
+	if !constantTimeEqual(keyID, rekorKeyID[:4]) {
 		// Key ID is the first 4 bytes of SHA-256(DER public key).
 		// Compute from our known key.
 		computedKeyID := computeCheckpointKeyID(rekorKey)
-		if !bytesEqual(keyID, computedKeyID) {
+		if !constantTimeEqual(keyID, computedKeyID) {
 			return fmt.Errorf("checkpoint key ID %x does not match Rekor key ID %x", keyID, computedKeyID)
 		}
 	}
@@ -1032,7 +1040,7 @@ func verifyCheckpoint(envelope string, expectedRoot []byte, expectedSize int64, 
 	if cpSize != expectedSize {
 		return fmt.Errorf("checkpoint tree size %d does not match proof tree size %d", cpSize, expectedSize)
 	}
-	if !bytesEqual(cpRoot, expectedRoot) {
+	if !constantTimeEqual(cpRoot, expectedRoot) {
 		return errors.New("checkpoint root hash does not match proof root hash")
 	}
 
@@ -1224,23 +1232,11 @@ func filterHandledCriticalExtensions(unhandled []asn1.ObjectIdentifier) []asn1.O
 				break
 			}
 		}
-		// Also handle any OID under the Fulcio base prefix that we
-		// might not explicitly list yet — Fulcio may add new
-		// extensions. This is safe because all Fulcio extensions
-		// are informational OIDC claim mirrors, not verification
-		// constraints.
-		if !handled && len(oid) == len(fulcioOIDBase)+1 {
-			prefix := true
-			for i, v := range fulcioOIDBase {
-				if oid[i] != v {
-					prefix = false
-					break
-				}
-			}
-			if prefix {
-				handled = true
-			}
-		}
+		// No blanket prefix match: if Fulcio introduces a new
+		// critical extension with verification-relevant semantics,
+		// we must fail closed (reject the certificate) until we
+		// explicitly add support for it. Silently accepting unknown
+		// OIDs under the Fulcio prefix would bypass constraints.
 		if !handled {
 			remaining = append(remaining, oid)
 		}
@@ -1269,13 +1265,20 @@ func extractFulcioClaims(cert *x509.Certificate) fulcioClaims {
 	// Subject Alternative Name: URIs, emails, or otherName entries.
 	// Go's x509 package parses URIs and emails but not otherName SANs
 	// (Fulcio OID 1.3.6.1.4.1.57264.1.7), so we fall back to raw
-	// SAN extension parsing for username-based identities.
+	// SAN extension parsing for username-based identities. All paths
+	// are sanitized for control characters to prevent log injection
+	// via Result.Subject and to ensure identity matching can't be
+	// confused by non-printable characters.
+	var san string
 	if len(cert.URIs) > 0 {
-		claims.SubjectAlternativeName = cert.URIs[0].String()
+		san = cert.URIs[0].String()
 	} else if len(cert.EmailAddresses) > 0 {
-		claims.SubjectAlternativeName = cert.EmailAddresses[0]
+		san = cert.EmailAddresses[0]
 	} else {
-		claims.SubjectAlternativeName = extractOtherNameSAN(cert)
+		san = extractOtherNameSAN(cert)
+	}
+	if !containsControlCharacters(san) {
+		claims.SubjectAlternativeName = san
 	}
 
 	// Extract Fulcio-specific extensions.
@@ -1303,11 +1306,18 @@ func extractFulcioClaims(cert *x509.Certificate) fulcioClaims {
 		}
 	}
 
-	// V1 issuer fallback: raw string, not DER-encoded.
+	// V1 issuer fallback: raw bytes interpreted as string (not
+	// DER-encoded UTF8String like V2). Reject if it contains
+	// control characters — V1 issuers are URLs and must be
+	// printable. A control character here indicates either a
+	// DER-encoded value misidentified as V1 or an injection.
 	if claims.Issuer == "" {
 		for _, ext := range cert.Extensions {
 			if ext.Id.Equal(oidIssuerV1) {
-				claims.Issuer = string(ext.Value)
+				raw := string(ext.Value)
+				if !containsControlCharacters(raw) {
+					claims.Issuer = raw
+				}
 				break
 			}
 		}
@@ -1391,13 +1401,49 @@ func extractOtherNameSAN(cert *x509.Certificate) string {
 
 // extractExtensionString extracts a UTF8String from a DER-encoded
 // X.509 extension value (used for Fulcio v2+ extensions, OIDs 1.8+).
+// Returns empty string if the value contains control characters —
+// OIDC claims are printable text and control characters indicate
+// either corruption or an injection attempt.
 func extractExtensionString(ext pkix.Extension) string {
 	var value string
 	rest, err := asn1.Unmarshal(ext.Value, &value)
 	if err != nil || len(rest) > 0 {
 		return ""
 	}
+	if containsControlCharacters(value) {
+		return ""
+	}
 	return value
+}
+
+// containsControlCharacters returns true if the string contains any
+// control character or Unicode line separator. OIDC claims extracted
+// from X.509 extensions must be printable text — control characters
+// indicate corruption, DER/PEM encoding confusion, or an injection
+// attempt (e.g., \r in a subject to confuse glob matching, or null
+// bytes to truncate string comparisons in other languages).
+//
+// Rejected ranges:
+//   - ASCII C0 controls (0x00-0x1F): NULL, TAB, LF, CR, ESC, etc.
+//   - ASCII DEL (0x7F)
+//   - NEL (U+0085): "Next Line" — behaves as newline in terminals
+//   - LS (U+2028): Unicode "Line Separator"
+//   - PS (U+2029): Unicode "Paragraph Separator"
+//
+// The Unicode line separators are particularly relevant because they
+// act as line breaks in many terminals, log processors, and JSON
+// parsers, enabling the same injection attacks as \n but bypassing
+// ASCII-only filters.
+func containsControlCharacters(value string) bool {
+	for _, character := range value {
+		if character <= 0x1F || character == 0x7F {
+			return true
+		}
+		if character == 0x85 || character == 0x2028 || character == 0x2029 {
+			return true
+		}
+	}
+	return false
 }
 
 // ---- PEM parsing helpers ----------------------------------------------

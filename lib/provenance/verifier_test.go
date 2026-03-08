@@ -995,14 +995,20 @@ func TestFilterHandledCriticalExtensions(t *testing.T) {
 }
 
 func TestFilterHandledCriticalExtensionsUnknownFulcioOID(t *testing.T) {
-	// A future Fulcio extension OID (under the base prefix) should
-	// still be filtered out, even if we haven't explicitly listed it.
+	// A future Fulcio extension OID (under the base prefix) must NOT
+	// be filtered — it must be left as unhandled so that Go's
+	// x509.Verify rejects the certificate. If Fulcio introduces a
+	// new critical extension with verification-relevant semantics, we
+	// must fail closed until we explicitly add support for it.
 	futureOID := append(append(asn1.ObjectIdentifier{}, fulcioOIDBase...), 99)
 	input := []asn1.ObjectIdentifier{futureOID}
 
 	remaining := filterHandledCriticalExtensions(input)
-	if len(remaining) != 0 {
-		t.Errorf("expected future Fulcio OID to be filtered, got %v", remaining)
+	if len(remaining) != 1 {
+		t.Fatalf("expected 1 remaining OID (unknown Fulcio OID should survive filtering), got %d", len(remaining))
+	}
+	if !remaining[0].Equal(futureOID) {
+		t.Errorf("expected future Fulcio OID %v to survive filtering, got %v", futureOID, remaining[0])
 	}
 }
 
@@ -1909,8 +1915,12 @@ func TestGlobNewlineInjection(t *testing.T) {
 		{"repo:org/*", "repo:org/repo\nrepo:evil/repo", false},
 		// Trailing newline on exact match also fails.
 		{"repo:org/specific", "repo:org/specific\n", false},
-		// Null byte: .* does match null bytes.
-		{"repo:org/*", "repo:org/re\x00po", true},
+		// Null byte: glob wildcards reject control characters,
+		// so a null byte in the value prevents matching.
+		{"repo:org/*", "repo:org/re\x00po", false},
+		// Carriage return: same treatment — \r is a control
+		// character and must not match wildcards.
+		{"repo:org/*", "repo:org/repo\revil", false},
 		// Clean values still work.
 		{"repo:org/*", "repo:org/repo", true},
 	}
@@ -2184,4 +2194,569 @@ func TestParseTrustedRootPEMs(t *testing.T) {
 			t.Fatalf("expected transparency log error, got: %v", err)
 		}
 	})
+}
+
+// ---- Security hardening tests -----------------------------------------
+//
+// These tests verify defenses against specific attack vectors identified
+// during cross-validated security review (Codex + Gemini, March 2026).
+// Each test is attack-shaped: it constructs the exact input an attacker
+// would craft and verifies the verifier rejects it.
+
+func TestBundleTypeConfusionRejected(t *testing.T) {
+	// Attack: craft a bundle containing BOTH messageSignature and
+	// dsseEnvelope. A verifier that checks messageSignature first
+	// could verify the bundle while a downstream consumer
+	// interprets the dsseEnvelope (or vice versa), enabling type
+	// confusion attacks. The fix: reject any bundle with both.
+	t.Parallel()
+
+	bundle := rawBundle{
+		MediaType: "application/vnd.dev.sigstore.bundle.v0.3+json",
+		VerificationMaterial: rawVerificationMaterial{
+			Certificate: &rawCertificate{
+				RawBytes: base64.StdEncoding.EncodeToString([]byte("fake-cert")),
+			},
+			TlogEntries: []rawTlogEntry{
+				{
+					LogIndex:          "0",
+					LogID:             rawLogID{KeyID: base64.StdEncoding.EncodeToString([]byte("fake-key"))},
+					IntegratedTime:    "1000000000",
+					CanonicalizedBody: base64.StdEncoding.EncodeToString([]byte("{}")),
+				},
+			},
+		},
+		MessageSignature: &rawMessageSignature{
+			MessageDigest: rawMessageDigest{
+				Algorithm: "SHA2_256",
+				Digest:    base64.StdEncoding.EncodeToString(make([]byte, 32)),
+			},
+			Signature: base64.StdEncoding.EncodeToString([]byte("fake-sig")),
+		},
+		DSSEEnvelope: &rawDSSEEnvelope{
+			Payload:     base64.StdEncoding.EncodeToString([]byte("{}")),
+			PayloadType: "application/vnd.in-toto+json",
+			Signatures:  []rawDSSESignature{{Sig: base64.StdEncoding.EncodeToString([]byte("fake-sig"))}},
+		},
+	}
+
+	bundleJSON, err := json.Marshal(bundle)
+	if err != nil {
+		t.Fatalf("marshal: %v", err)
+	}
+
+	_, err = parseBundle(bundleJSON)
+	if err == nil {
+		t.Fatal("expected error for bundle with both messageSignature and dsseEnvelope")
+	}
+	if !strings.Contains(err.Error(), "both messageSignature and dsseEnvelope") {
+		t.Fatalf("expected type confusion error, got: %v", err)
+	}
+}
+
+func TestParseTrustRootMultipleCertificates(t *testing.T) {
+	// Verify that parseTrustRoot correctly handles concatenated PEM
+	// blocks (multiple Fulcio root CAs). Previously, only the first
+	// PEM block was decoded and all subsequent blocks were silently
+	// dropped — a data loss bug that would cause verification to
+	// fail for certificates chaining to the second or later root.
+	t.Parallel()
+
+	// Generate two independent CA certificates.
+	makeCA := func(commonName string) ([]byte, *ecdsa.PrivateKey) {
+		key, err := ecdsa.GenerateKey(elliptic.P256(), rand.Reader)
+		if err != nil {
+			t.Fatalf("generate key for %s: %v", commonName, err)
+		}
+		template := &x509.Certificate{
+			SerialNumber:          big.NewInt(1),
+			Subject:               pkix.Name{CommonName: commonName},
+			NotBefore:             time.Date(2025, 1, 1, 0, 0, 0, 0, time.UTC),
+			NotAfter:              time.Date(2035, 1, 1, 0, 0, 0, 0, time.UTC),
+			KeyUsage:              x509.KeyUsageCertSign | x509.KeyUsageCRLSign,
+			IsCA:                  true,
+			BasicConstraintsValid: true,
+		}
+		certDER, err := x509.CreateCertificate(rand.Reader, template, template, &key.PublicKey, key)
+		if err != nil {
+			t.Fatalf("create cert %s: %v", commonName, err)
+		}
+		return certDER, key
+	}
+
+	ca1DER, _ := makeCA("test-fulcio-root-1")
+	ca2DER, _ := makeCA("test-fulcio-root-2")
+
+	// Concatenate both as PEM blocks.
+	ca1PEM := pem.EncodeToMemory(&pem.Block{Type: "CERTIFICATE", Bytes: ca1DER})
+	ca2PEM := pem.EncodeToMemory(&pem.Block{Type: "CERTIFICATE", Bytes: ca2DER})
+	concatenatedPEM := string(ca1PEM) + string(ca2PEM)
+
+	// Generate a Rekor key for the trust root.
+	rekorKey, err := ecdsa.GenerateKey(elliptic.P256(), rand.Reader)
+	if err != nil {
+		t.Fatalf("generate Rekor key: %v", err)
+	}
+	rekorKeyDER, err := x509.MarshalPKIXPublicKey(&rekorKey.PublicKey)
+	if err != nil {
+		t.Fatalf("marshal Rekor key: %v", err)
+	}
+	rekorPEM := pem.EncodeToMemory(&pem.Block{Type: "PUBLIC KEY", Bytes: rekorKeyDER})
+
+	root, err := parseTrustRoot(schema.ProvenanceTrustRoot{
+		FulcioRootPEM:     concatenatedPEM,
+		RekorPublicKeyPEM: string(rekorPEM),
+	})
+	if err != nil {
+		t.Fatalf("parseTrustRoot: %v", err)
+	}
+
+	if len(root.fulcioRoots) != 2 {
+		t.Fatalf("expected 2 Fulcio roots, got %d", len(root.fulcioRoots))
+	}
+	if root.fulcioRoots[0].Subject.CommonName != "test-fulcio-root-1" {
+		t.Errorf("first root CN = %q, want %q", root.fulcioRoots[0].Subject.CommonName, "test-fulcio-root-1")
+	}
+	if root.fulcioRoots[1].Subject.CommonName != "test-fulcio-root-2" {
+		t.Errorf("second root CN = %q, want %q", root.fulcioRoots[1].Subject.CommonName, "test-fulcio-root-2")
+	}
+}
+
+func TestParseTrustRootRejectsNonCertificatePEM(t *testing.T) {
+	// A Fulcio root PEM containing a non-CERTIFICATE block (e.g., a
+	// private key accidentally included) must be rejected, not
+	// silently skipped.
+	t.Parallel()
+
+	privateKey, err := ecdsa.GenerateKey(elliptic.P256(), rand.Reader)
+	if err != nil {
+		t.Fatalf("generate key: %v", err)
+	}
+	keyDER, err := x509.MarshalECPrivateKey(privateKey)
+	if err != nil {
+		t.Fatalf("marshal key: %v", err)
+	}
+	keyPEM := pem.EncodeToMemory(&pem.Block{Type: "EC PRIVATE KEY", Bytes: keyDER})
+
+	rekorKey, err := ecdsa.GenerateKey(elliptic.P256(), rand.Reader)
+	if err != nil {
+		t.Fatalf("generate Rekor key: %v", err)
+	}
+	rekorKeyDER, err := x509.MarshalPKIXPublicKey(&rekorKey.PublicKey)
+	if err != nil {
+		t.Fatalf("marshal Rekor key: %v", err)
+	}
+	rekorPEM := pem.EncodeToMemory(&pem.Block{Type: "PUBLIC KEY", Bytes: rekorKeyDER})
+
+	_, err = parseTrustRoot(schema.ProvenanceTrustRoot{
+		FulcioRootPEM:     string(keyPEM),
+		RekorPublicKeyPEM: string(rekorPEM),
+	})
+	if err == nil {
+		t.Fatal("expected error for non-CERTIFICATE PEM block in Fulcio root")
+	}
+	if !strings.Contains(err.Error(), "unexpected PEM block type") {
+		t.Fatalf("expected PEM block type error, got: %v", err)
+	}
+}
+
+func TestControlCharacterRejectionInOIDCClaims(t *testing.T) {
+	// Attack: embed control characters in OIDC claims via X.509
+	// extensions to confuse identity matching or log analysis.
+	// Defense: extractExtensionString and V1 issuer fallback must
+	// reject values containing control characters.
+	t.Parallel()
+
+	t.Run("V2 extension with control characters", func(t *testing.T) {
+		// DER-encode a UTF8String containing a carriage return.
+		maliciousValue := "https://evil.com\rhttps://trusted.com"
+		maliciousDER, err := asn1.Marshal(maliciousValue)
+		if err != nil {
+			t.Fatalf("marshal: %v", err)
+		}
+
+		ext := pkix.Extension{
+			Id:    oidIssuerV2,
+			Value: maliciousDER,
+		}
+
+		result := extractExtensionString(ext)
+		if result != "" {
+			t.Errorf("extractExtensionString returned %q for value with control character, want empty", result)
+		}
+	})
+
+	t.Run("V2 extension with null byte", func(t *testing.T) {
+		maliciousValue := "https://trusted.com\x00https://evil.com"
+		maliciousDER, err := asn1.Marshal(maliciousValue)
+		if err != nil {
+			t.Fatalf("marshal: %v", err)
+		}
+
+		ext := pkix.Extension{
+			Id:    oidIssuerV2,
+			Value: maliciousDER,
+		}
+
+		result := extractExtensionString(ext)
+		if result != "" {
+			t.Errorf("extractExtensionString returned %q for value with null byte, want empty", result)
+		}
+	})
+
+	t.Run("V1 issuer with control characters", func(t *testing.T) {
+		// V1 issuer is raw bytes, not DER-encoded. Simulate a
+		// certificate with a V1 issuer containing \r.
+		caKey, err := ecdsa.GenerateKey(elliptic.P256(), rand.Reader)
+		if err != nil {
+			t.Fatalf("generate key: %v", err)
+		}
+
+		caTemplate := &x509.Certificate{
+			SerialNumber:          big.NewInt(1),
+			Subject:               pkix.Name{CommonName: "test-ca"},
+			NotBefore:             time.Date(2025, 1, 1, 0, 0, 0, 0, time.UTC),
+			NotAfter:              time.Date(2035, 1, 1, 0, 0, 0, 0, time.UTC),
+			KeyUsage:              x509.KeyUsageCertSign,
+			IsCA:                  true,
+			BasicConstraintsValid: true,
+		}
+
+		// Create a leaf cert with only V1 issuer (raw bytes with \r).
+		maliciousIssuer := "https://evil.com\rhttps://trusted.com"
+		leafTemplate := &x509.Certificate{
+			SerialNumber: big.NewInt(2),
+			Subject:      pkix.Name{},
+			NotBefore:    time.Date(2026, 1, 1, 0, 0, 0, 0, time.UTC),
+			NotAfter:     time.Date(2026, 1, 1, 0, 10, 0, 0, time.UTC),
+			KeyUsage:     x509.KeyUsageDigitalSignature,
+			ExtraExtensions: []pkix.Extension{
+				{
+					Id:       oidIssuerV1,
+					Value:    []byte(maliciousIssuer),
+					Critical: true,
+				},
+			},
+		}
+
+		certDER, err := x509.CreateCertificate(rand.Reader, leafTemplate, caTemplate, &caKey.PublicKey, caKey)
+		if err != nil {
+			t.Fatalf("create cert: %v", err)
+		}
+		cert, err := x509.ParseCertificate(certDER)
+		if err != nil {
+			t.Fatalf("parse cert: %v", err)
+		}
+
+		claims := extractFulcioClaims(cert)
+		if claims.Issuer != "" {
+			t.Errorf("expected empty issuer for V1 value with control characters, got %q", claims.Issuer)
+		}
+	})
+}
+
+func TestGlobRejectsControlCharacters(t *testing.T) {
+	// Verify that glob wildcards do not match control characters.
+	// This prevents attacks where control characters in OIDC claims
+	// could match patterns in unexpected ways.
+	t.Parallel()
+
+	controlChars := []struct {
+		name      string
+		character byte
+	}{
+		{"null", 0x00},
+		{"tab", 0x09},
+		{"newline", 0x0A},
+		{"carriage_return", 0x0D},
+		{"escape", 0x1B},
+		{"delete", 0x7F},
+	}
+
+	for _, controlChar := range controlChars {
+		t.Run(controlChar.name+"_in_star", func(t *testing.T) {
+			value := fmt.Sprintf("prefix%csuffix", controlChar.character)
+			if matchGlob("prefix*suffix", value) {
+				t.Errorf("'*' matched control character 0x%02x", controlChar.character)
+			}
+		})
+
+		t.Run(controlChar.name+"_in_question", func(t *testing.T) {
+			value := fmt.Sprintf("prefix%csuffix", controlChar.character)
+			if matchGlob("prefix?suffix", value) {
+				t.Errorf("'?' matched control character 0x%02x", controlChar.character)
+			}
+		})
+	}
+}
+
+func TestFulcioOIDWhitelistFailsClosed(t *testing.T) {
+	// Verify that unknown Fulcio OIDs under the base prefix are NOT
+	// filtered from the unhandled critical extensions list. This
+	// ensures the verifier fails closed when Fulcio introduces new
+	// critical extensions — Go's x509.Verify will reject the
+	// certificate because the extension is unhandled.
+	t.Parallel()
+
+	// Test several hypothetical future OIDs.
+	for _, suffix := range []int{22, 30, 50, 100, 255} {
+		futureOID := append(append(asn1.ObjectIdentifier{}, fulcioOIDBase...), suffix)
+		remaining := filterHandledCriticalExtensions([]asn1.ObjectIdentifier{futureOID})
+		if len(remaining) != 1 {
+			t.Errorf("OID %v (suffix %d): expected to survive filtering (fail closed), but was removed", futureOID, suffix)
+		}
+	}
+
+	// Verify that our actually-handled OIDs ARE still filtered.
+	for _, handled := range handledCriticalOIDs {
+		remaining := filterHandledCriticalExtensions([]asn1.ObjectIdentifier{handled})
+		if len(remaining) != 0 {
+			t.Errorf("handled OID %v was not filtered", handled)
+		}
+	}
+}
+
+func TestParseTrustRootRejectsNonCACertificate(t *testing.T) {
+	// Root PEM must contain only CA certificates. A leaf cert or
+	// intermediate without IsCA=true in the root PEM must be
+	// rejected to prevent promoting non-CAs to trust anchors.
+	t.Parallel()
+
+	caKey, err := ecdsa.GenerateKey(elliptic.P256(), rand.Reader)
+	if err != nil {
+		t.Fatalf("generate CA key: %v", err)
+	}
+
+	// Create a non-CA certificate (leaf cert).
+	leafTemplate := &x509.Certificate{
+		SerialNumber: big.NewInt(1),
+		Subject:      pkix.Name{CommonName: "test-leaf"},
+		NotBefore:    time.Date(2025, 1, 1, 0, 0, 0, 0, time.UTC),
+		NotAfter:     time.Date(2035, 1, 1, 0, 0, 0, 0, time.UTC),
+		KeyUsage:     x509.KeyUsageDigitalSignature,
+		// No IsCA, no BasicConstraintsValid → not a CA.
+	}
+	leafDER, err := x509.CreateCertificate(rand.Reader, leafTemplate, leafTemplate, &caKey.PublicKey, caKey)
+	if err != nil {
+		t.Fatalf("create leaf cert: %v", err)
+	}
+	leafPEM := pem.EncodeToMemory(&pem.Block{Type: "CERTIFICATE", Bytes: leafDER})
+
+	rekorKey, err := ecdsa.GenerateKey(elliptic.P256(), rand.Reader)
+	if err != nil {
+		t.Fatalf("generate Rekor key: %v", err)
+	}
+	rekorKeyDER, err := x509.MarshalPKIXPublicKey(&rekorKey.PublicKey)
+	if err != nil {
+		t.Fatalf("marshal Rekor key: %v", err)
+	}
+	rekorPEM := pem.EncodeToMemory(&pem.Block{Type: "PUBLIC KEY", Bytes: rekorKeyDER})
+
+	_, err = parseTrustRoot(schema.ProvenanceTrustRoot{
+		FulcioRootPEM:     string(leafPEM),
+		RekorPublicKeyPEM: string(rekorPEM),
+	})
+	if err == nil {
+		t.Fatal("expected error for non-CA certificate in root PEM")
+	}
+	if !strings.Contains(err.Error(), "not a CA") {
+		t.Fatalf("expected CA validation error, got: %v", err)
+	}
+}
+
+func TestParseTrustRootRejectsNonSelfSignedCertificate(t *testing.T) {
+	// Root PEM must contain only self-signed certificates.
+	// An intermediate CA signed by another CA must be rejected
+	// to prevent intermediate-as-root promotion.
+	t.Parallel()
+
+	// Create a real root CA.
+	rootKey, err := ecdsa.GenerateKey(elliptic.P256(), rand.Reader)
+	if err != nil {
+		t.Fatalf("generate root key: %v", err)
+	}
+	rootTemplate := &x509.Certificate{
+		SerialNumber:          big.NewInt(1),
+		Subject:               pkix.Name{CommonName: "test-root"},
+		NotBefore:             time.Date(2025, 1, 1, 0, 0, 0, 0, time.UTC),
+		NotAfter:              time.Date(2035, 1, 1, 0, 0, 0, 0, time.UTC),
+		KeyUsage:              x509.KeyUsageCertSign | x509.KeyUsageCRLSign,
+		IsCA:                  true,
+		BasicConstraintsValid: true,
+	}
+	rootCertDER, err := x509.CreateCertificate(rand.Reader, rootTemplate, rootTemplate, &rootKey.PublicKey, rootKey)
+	if err != nil {
+		t.Fatalf("create root cert: %v", err)
+	}
+	rootCert, err := x509.ParseCertificate(rootCertDER)
+	if err != nil {
+		t.Fatalf("parse root cert: %v", err)
+	}
+
+	// Create an intermediate CA signed by the root.
+	intermediateKey, err := ecdsa.GenerateKey(elliptic.P256(), rand.Reader)
+	if err != nil {
+		t.Fatalf("generate intermediate key: %v", err)
+	}
+	intermediateTemplate := &x509.Certificate{
+		SerialNumber:          big.NewInt(2),
+		Subject:               pkix.Name{CommonName: "test-intermediate"},
+		NotBefore:             time.Date(2025, 1, 1, 0, 0, 0, 0, time.UTC),
+		NotAfter:              time.Date(2035, 1, 1, 0, 0, 0, 0, time.UTC),
+		KeyUsage:              x509.KeyUsageCertSign | x509.KeyUsageCRLSign,
+		IsCA:                  true,
+		BasicConstraintsValid: true,
+	}
+	intermediateDER, err := x509.CreateCertificate(rand.Reader, intermediateTemplate, rootCert, &intermediateKey.PublicKey, rootKey)
+	if err != nil {
+		t.Fatalf("create intermediate cert: %v", err)
+	}
+	intermediatePEM := pem.EncodeToMemory(&pem.Block{Type: "CERTIFICATE", Bytes: intermediateDER})
+
+	rekorKey, err := ecdsa.GenerateKey(elliptic.P256(), rand.Reader)
+	if err != nil {
+		t.Fatalf("generate Rekor key: %v", err)
+	}
+	rekorKeyDER, err := x509.MarshalPKIXPublicKey(&rekorKey.PublicKey)
+	if err != nil {
+		t.Fatalf("marshal Rekor key: %v", err)
+	}
+	rekorPEM := pem.EncodeToMemory(&pem.Block{Type: "PUBLIC KEY", Bytes: rekorKeyDER})
+
+	_, err = parseTrustRoot(schema.ProvenanceTrustRoot{
+		FulcioRootPEM:     string(intermediatePEM),
+		RekorPublicKeyPEM: string(rekorPEM),
+	})
+	if err == nil {
+		t.Fatal("expected error for non-self-signed CA in root PEM")
+	}
+	if !strings.Contains(err.Error(), "not self-signed") {
+		t.Fatalf("expected self-signed validation error, got: %v", err)
+	}
+}
+
+func TestSANControlCharacterSanitization(t *testing.T) {
+	// Subject Alternative Name values are sanitized for control
+	// characters to prevent log injection via Result.Subject.
+	t.Parallel()
+
+	caKey, err := ecdsa.GenerateKey(elliptic.P256(), rand.Reader)
+	if err != nil {
+		t.Fatalf("generate key: %v", err)
+	}
+	caTemplate := &x509.Certificate{
+		SerialNumber:          big.NewInt(1),
+		Subject:               pkix.Name{CommonName: "test-ca"},
+		NotBefore:             time.Date(2025, 1, 1, 0, 0, 0, 0, time.UTC),
+		NotAfter:              time.Date(2035, 1, 1, 0, 0, 0, 0, time.UTC),
+		KeyUsage:              x509.KeyUsageCertSign,
+		IsCA:                  true,
+		BasicConstraintsValid: true,
+	}
+
+	t.Run("URI SAN with newline", func(t *testing.T) {
+		// URI SANs go through url.URL.String() which typically
+		// percent-encodes control chars, but we test the
+		// containsControlCharacters defense-in-depth layer.
+		maliciousURI, _ := url.Parse("https://github.com/org/repo")
+		leafTemplate := &x509.Certificate{
+			SerialNumber: big.NewInt(2),
+			Subject:      pkix.Name{},
+			NotBefore:    time.Date(2026, 1, 1, 0, 0, 0, 0, time.UTC),
+			NotAfter:     time.Date(2026, 1, 1, 0, 10, 0, 0, time.UTC),
+			KeyUsage:     x509.KeyUsageDigitalSignature,
+			URIs:         []*url.URL{maliciousURI},
+		}
+		certDER, err := x509.CreateCertificate(rand.Reader, leafTemplate, caTemplate, &caKey.PublicKey, caKey)
+		if err != nil {
+			t.Fatalf("create cert: %v", err)
+		}
+		cert, err := x509.ParseCertificate(certDER)
+		if err != nil {
+			t.Fatalf("parse cert: %v", err)
+		}
+
+		claims := extractFulcioClaims(cert)
+		// Clean URI should work.
+		if claims.SubjectAlternativeName == "" {
+			t.Error("expected non-empty SAN for clean URI")
+		}
+		if containsControlCharacters(claims.SubjectAlternativeName) {
+			t.Errorf("SAN %q contains control characters", claims.SubjectAlternativeName)
+		}
+	})
+
+	t.Run("otherName SAN with control characters", func(t *testing.T) {
+		// Build a cert with an otherName SAN containing \n.
+		maliciousOtherName := "user\nevil-injection"
+		sanValue := buildSANWithOtherName(oidFulcioOtherName, maliciousOtherName)
+
+		leafTemplate := &x509.Certificate{
+			SerialNumber: big.NewInt(3),
+			Subject:      pkix.Name{},
+			NotBefore:    time.Date(2026, 1, 1, 0, 0, 0, 0, time.UTC),
+			NotAfter:     time.Date(2026, 1, 1, 0, 10, 0, 0, time.UTC),
+			KeyUsage:     x509.KeyUsageDigitalSignature,
+			ExtraExtensions: []pkix.Extension{
+				{
+					Id:       oidSubjectAltName,
+					Critical: true,
+					Value:    sanValue,
+				},
+			},
+		}
+
+		certDER, err := x509.CreateCertificate(rand.Reader, leafTemplate, caTemplate, &caKey.PublicKey, caKey)
+		if err != nil {
+			t.Fatalf("create cert: %v", err)
+		}
+		cert, err := x509.ParseCertificate(certDER)
+		if err != nil {
+			t.Fatalf("parse cert: %v", err)
+		}
+
+		claims := extractFulcioClaims(cert)
+		if claims.SubjectAlternativeName != "" {
+			t.Errorf("expected empty SAN for otherName with control chars, got %q", claims.SubjectAlternativeName)
+		}
+	})
+}
+
+func TestUnicodeLineSeparatorRejection(t *testing.T) {
+	// Unicode line separators (NEL, LS, PS) must be rejected by
+	// both containsControlCharacters and glob matching, because
+	// they act as line breaks in terminals and log processors.
+	t.Parallel()
+
+	unicodeBreaks := []struct {
+		name      string
+		character rune
+	}{
+		{"NEL", 0x85},
+		{"LineSeparator", 0x2028},
+		{"ParagraphSeparator", 0x2029},
+	}
+
+	for _, separator := range unicodeBreaks {
+		t.Run(separator.name+"_in_containsControlCharacters", func(t *testing.T) {
+			value := fmt.Sprintf("before%cafter", separator.character)
+			if !containsControlCharacters(value) {
+				t.Errorf("containsControlCharacters missed %s (U+%04X)", separator.name, separator.character)
+			}
+		})
+
+		t.Run(separator.name+"_in_glob_star", func(t *testing.T) {
+			value := fmt.Sprintf("prefix%csuffix", separator.character)
+			if matchGlob("prefix*suffix", value) {
+				t.Errorf("glob '*' matched %s (U+%04X)", separator.name, separator.character)
+			}
+		})
+
+		t.Run(separator.name+"_in_glob_question", func(t *testing.T) {
+			value := fmt.Sprintf("prefix%csuffix", separator.character)
+			if matchGlob("prefix?suffix", value) {
+				t.Errorf("glob '?' matched %s (U+%04X)", separator.name, separator.character)
+			}
+		})
+	}
 }

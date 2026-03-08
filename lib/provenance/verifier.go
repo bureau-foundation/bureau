@@ -192,7 +192,7 @@ func (v *Verifier) Verify(bundleBytes []byte, digestAlgorithm string, artifactDi
 					bundle.digestAlgorithm, digestAlgorithm),
 			}
 		}
-		if !bytesEqual(bundle.digestValue, artifactDigest) {
+		if !constantTimeEqual(bundle.digestValue, artifactDigest) {
 			return Result{
 				Status: StatusRejected,
 				Error:  errors.New("bundle artifact digest does not match expected digest"),
@@ -294,17 +294,25 @@ func matchGlob(pattern, value string) bool {
 	return re.MatchString(value)
 }
 
-// globToRegexp converts a glob pattern to a regexp. '*' becomes '.*',
-// '?' becomes '.', all other regex metacharacters are escaped.
+// globToRegexp converts a glob pattern to a regexp. '*' becomes a
+// match for any sequence of printable characters, '?' becomes a match
+// for any single printable character, and all other regex
+// metacharacters are escaped.
+//
+// The character class excludes all control characters and Unicode line
+// separators: ASCII C0 (0x00-0x1F), DEL (0x7F), NEL (U+0085), LS
+// (U+2028), and PS (U+2029). This prevents injection attacks where
+// control characters or Unicode line breaks in a subject could match
+// wildcards, confusing log analysis or terminal output.
 func globToRegexp(pattern string) (*regexp.Regexp, error) {
 	var builder strings.Builder
 	builder.WriteString("^")
 	for _, character := range pattern {
 		switch character {
 		case '*':
-			builder.WriteString(".*")
+			builder.WriteString("[^\\x00-\\x1f\\x7f\\x{0085}\\x{2028}\\x{2029}]*")
 		case '?':
-			builder.WriteByte('.')
+			builder.WriteString("[^\\x00-\\x1f\\x7f\\x{0085}\\x{2028}\\x{2029}]")
 		case '.', '(', ')', '+', '|', '^', '$', '[', ']', '{', '}', '\\':
 			builder.WriteByte('\\')
 			builder.WriteRune(character)
@@ -318,15 +326,43 @@ func globToRegexp(pattern string) (*regexp.Regexp, error) {
 
 // parseTrustRoot converts a schema.ProvenanceTrustRoot (PEM strings)
 // into a parsedRoot for offline verification.
+//
+// The Fulcio root PEM may contain multiple concatenated CERTIFICATE
+// blocks (e.g., when a trust root includes multiple CA certificates
+// from different validity periods or key rotations). All blocks are
+// parsed and added to the root pool.
 func parseTrustRoot(trustRoot schema.ProvenanceTrustRoot) (*parsedRoot, error) {
-	// Parse Fulcio root certificate.
-	fulcioBlock, _ := pem.Decode([]byte(trustRoot.FulcioRootPEM))
-	if fulcioBlock == nil {
-		return nil, errors.New("failed to decode Fulcio root PEM: no PEM block found")
+	// Parse all Fulcio root certificates from the PEM bundle.
+	var fulcioRoots []*x509.Certificate
+	remaining := []byte(trustRoot.FulcioRootPEM)
+	for {
+		var block *pem.Block
+		block, remaining = pem.Decode(remaining)
+		if block == nil {
+			break
+		}
+		if block.Type != "CERTIFICATE" {
+			return nil, fmt.Errorf("unexpected PEM block type %q in Fulcio root PEM (expected CERTIFICATE)", block.Type)
+		}
+		cert, err := x509.ParseCertificate(block.Bytes)
+		if err != nil {
+			return nil, fmt.Errorf("parse Fulcio root certificate #%d: %w", len(fulcioRoots)+1, err)
+		}
+		// Enforce that root PEM contains only CA certificates that
+		// are self-signed trust anchors. Accepting non-CA or
+		// non-self-signed certificates as roots would promote
+		// intermediates to trust anchors, bypassing path length
+		// and name constraints.
+		if !cert.IsCA {
+			return nil, fmt.Errorf("Fulcio root certificate #%d (%q) is not a CA", len(fulcioRoots)+1, cert.Subject)
+		}
+		if !isSelfSigned(cert) {
+			return nil, fmt.Errorf("Fulcio root certificate #%d (%q) is not self-signed", len(fulcioRoots)+1, cert.Subject)
+		}
+		fulcioRoots = append(fulcioRoots, cert)
 	}
-	fulcioCert, err := x509.ParseCertificate(fulcioBlock.Bytes)
-	if err != nil {
-		return nil, fmt.Errorf("parse Fulcio root certificate: %w", err)
+	if len(fulcioRoots) == 0 {
+		return nil, errors.New("failed to decode Fulcio root PEM: no CERTIFICATE blocks found")
 	}
 
 	// Parse Rekor transparency log public key.
@@ -343,7 +379,7 @@ func parseTrustRoot(trustRoot schema.ProvenanceTrustRoot) (*parsedRoot, error) {
 	logIDHash := sha256.Sum256(rekorBlock.Bytes)
 
 	return &parsedRoot{
-		fulcioRoots: []*x509.Certificate{fulcioCert},
+		fulcioRoots: fulcioRoots,
 		rekorKey:    rekorPubKey,
 		rekorKeyID:  logIDHash[:],
 	}, nil

@@ -335,6 +335,12 @@ type EnvironmentBuildContent struct {
 	// (e.g., "@bureau/fleet/prod/machine/workstation:bureau.local").
 	Machine ref.UserID `json:"machine"`
 
+	// ResolvedRevision is the git commit hash the flake reference
+	// resolved to at build time. Enables staleness detection: the
+	// update command compares this against the current HEAD of the
+	// source flake to determine whether a rebuild is needed.
+	ResolvedRevision string `json:"resolved_revision,omitempty"`
+
 	// Timestamp is the RFC 3339 build completion time.
 	Timestamp string `json:"timestamp"`
 }

@@ -28,6 +28,7 @@ Requires nix to be installed and on PATH.`,
 			listCommand(),
 			buildCommand(),
 			composeCommand(),
+			updateCommand(),
 			statusCommand(),
 		},
 		Examples: []cli.Example{
@@ -46,6 +47,10 @@ Requires nix to be installed and on PATH.`,
 			{
 				Description: "Compose and distribute a profile via pipeline",
 				Command:     "bureau environment compose workstation --machine bureau/fleet/prod/machine/builder",
+			},
+			{
+				Description: "Check for updates and recompose a stale profile",
+				Command:     "bureau environment update workstation --machine bureau/fleet/prod/machine/builder",
 			},
 			{
 				Description: "Show what's currently deployed",

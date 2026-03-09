@@ -2,11 +2,13 @@
   // Build a Nix environment profile, push the closure to the fleet
   // binary cache, and publish provenance as a Matrix state event.
   //
-  // Triggered by "bureau environment compose". Runs inside a sandbox
-  // with the nix-builder template, which provides Nix daemon access
-  // and cache push credentials (ATTIC_TOKEN).
+  // Triggered by "bureau environment compose" and "bureau environment
+  // update". Runs inside a sandbox with the nix-builder template,
+  // which provides Nix daemon access and cache push credentials
+  // (ATTIC_TOKEN).
   //
   // Execution order:
+  //   - Resolve the flake's git revision for provenance tracking
   //   - Build the profile from the environment flake
   //   - Push the closure to the fleet binary cache via attic
   //   - Publish m.bureau.environment_build with provenance metadata
@@ -47,6 +49,14 @@
 
   "steps": [
     {
+      "name": "resolve-metadata",
+      "run": "nix flake metadata ${{FLAKE_REF}} --json | jq -r '.revision // empty' > /tmp/outputs/resolved_revision",
+      "timeout": "2m",
+      "outputs": {
+        "resolved_revision": "/tmp/outputs/resolved_revision"
+      }
+    },
+    {
       "name": "build-profile",
       "run": "nix build ${{FLAKE_REF}}#packages.${{SYSTEM}}.${{PROFILE}} --no-link --print-out-paths > /tmp/outputs/store_path",
       "timeout": "30m",
@@ -71,6 +81,7 @@
           "system": "${{SYSTEM}}",
           "store_path": "${{OUTPUT_build_profile_store_path}}",
           "machine": "${{MACHINE}}",
+          "resolved_revision": "${{OUTPUT_resolve_metadata_resolved_revision}}",
           "timestamp": "${{BUREAU_TIMESTAMP}}"
         }
       }
@@ -97,6 +108,7 @@
           "system": "${{SYSTEM}}",
           "store_path": "",
           "machine": "${{MACHINE}}",
+          "resolved_revision": "",
           "timestamp": "${{BUREAU_TIMESTAMP}}"
         }
       }

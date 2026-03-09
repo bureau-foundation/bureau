@@ -11,10 +11,7 @@ import (
 
 	"github.com/bureau-foundation/bureau/cmd/bureau/cli"
 	"github.com/bureau-foundation/bureau/lib/clock"
-	"github.com/bureau-foundation/bureau/lib/command"
 	"github.com/bureau-foundation/bureau/lib/ref"
-	"github.com/bureau-foundation/bureau/lib/schema"
-	"github.com/bureau-foundation/bureau/messaging"
 )
 
 // composeParams holds the parameters for the environment compose command.
@@ -35,13 +32,14 @@ type composeParams struct {
 	clock clock.Clock
 }
 
-// composeResult is the JSON output for environment compose.
+// composeResult is the JSON output for environment compose and update.
 type composeResult struct {
-	Profile     string       `json:"profile"      desc:"Nix profile name"`
-	Machine     string       `json:"machine"      desc:"builder machine localpart"`
-	PipelineRef string       `json:"pipeline_ref" desc:"pipeline reference"`
-	TicketID    ref.TicketID `json:"ticket_id"    desc:"pipeline ticket ID"`
-	TicketRoom  ref.RoomID   `json:"ticket_room"  desc:"room where the ticket was created"`
+	Profile     string       `json:"profile"                desc:"Nix profile name"`
+	Machine     string       `json:"machine"                desc:"builder machine localpart"`
+	PipelineRef string       `json:"pipeline_ref"           desc:"pipeline reference"`
+	TicketID    ref.TicketID `json:"ticket_id"              desc:"pipeline ticket ID"`
+	TicketRoom  ref.RoomID   `json:"ticket_room"            desc:"room where the ticket was created"`
+	Conclusion  string       `json:"conclusion,omitempty"   desc:"pipeline conclusion (when --wait is used)"`
 }
 
 func composeCommand() *cli.Command {
@@ -112,201 +110,48 @@ immediately after the daemon accepts the pipeline.`,
 				return cli.Validation("--machine is required for compose (specifies which machine runs the build)")
 			}
 
-			// Connect to Matrix.
 			session, err := cli.ConnectOperator()
 			if err != nil {
 				return err
 			}
 			defer session.Close()
 
-			// Resolve the fleet room to read cache config.
-			fleetRoomAlias := scope.Fleet.RoomAlias()
-			fleetRoomID, err := session.ResolveAlias(ctx, fleetRoomAlias)
-			if err != nil {
-				if messaging.IsMatrixError(err, messaging.ErrCodeNotFound) {
-					return cli.NotFound("fleet room %s not found", fleetRoomAlias).
-						WithHint("Has the fleet been created? Run 'bureau fleet create' first.")
-				}
-				return cli.Transient("resolving fleet room %s: %w", fleetRoomAlias, err)
-			}
-
-			// Read fleet cache config for defaults.
-			cacheConfig, err := messaging.GetState[schema.FleetCacheContent](
-				ctx, session, fleetRoomID, schema.EventTypeFleetCache, "",
-			)
-			if err != nil && !messaging.IsMatrixError(err, messaging.ErrCodeNotFound) {
-				return cli.Transient("reading fleet cache config: %w", err)
-			}
-
-			if cacheConfig.Name == "" {
-				return cli.Validation("fleet cache has no Attic cache name configured").
-					WithHint("Run: bureau fleet cache " + scope.Fleet.Localpart() + " --name <cache-name> --url <url> --public-key <key>")
-			}
-
-			// Apply defaults from fleet cache config.
-			system := params.System
-			if system == "" {
-				system = cacheConfig.DefaultSystem
-			}
-			if system == "" {
-				return cli.Validation("--system is required (no default configured in fleet cache)").
-					WithHint("Set a default: bureau fleet cache " + scope.Fleet.Localpart() + " --default-system x86_64-linux")
-			}
-
-			template := params.Template
-			if template == "" {
-				template = cacheConfig.ComposeTemplate
-			}
-			if template == "" {
-				return cli.Validation("--template is required (no default configured in fleet cache)").
-					WithHint("Set a default: bureau fleet cache " + scope.Fleet.Localpart() + " --compose-template bureau/template:nix-builder")
-			}
-
-			// Discover and validate any templates and pipelines declared
-			// by the flake. Both are validated before either is published,
-			// so a validation failure in pipelines cannot leave templates
-			// in a partially-published state.
-			namespace := scope.Fleet.Namespace()
-
-			templates, err := ValidateFlakeTemplates(ctx, params.FlakeRef, system, namespace, logger)
+			config, err := resolveFleetConfig(ctx, session, scope, params.System, params.Template)
 			if err != nil {
 				return err
 			}
 
-			pipelines, err := ValidateFlakePipelines(ctx, params.FlakeRef, namespace, logger)
-			if err != nil {
-				return err
-			}
-
-			// All definitions validated — now publish.
-			serverName := namespace.Server()
-
-			templateCount, err := publishTemplates(ctx, session, serverName, templates, logger)
-			if err != nil {
-				return err
-			}
-
-			pipelineCount, err := publishPipelines(ctx, session, serverName, pipelines, logger)
-			if err != nil {
-				return err
-			}
-
-			if templateCount > 0 || pipelineCount > 0 {
-				logger.Info("published flake definitions",
-					"templates", templateCount,
-					"pipelines", pipelineCount,
-				)
-			}
-
-			// Derive the pipeline reference from the fleet's namespace.
-			pipelineRef := namespace.PipelineRoomAliasLocalpart() + ":environment-compose"
-
-			// Validate the pipeline ref is parseable.
-			if _, parseErr := schema.ParsePipelineRef(pipelineRef); parseErr != nil {
-				return cli.Internal("derived pipeline reference %q is invalid: %w", pipelineRef, parseErr)
-			}
-
-			// Resolve the machine's config room. The daemon monitors
-			// this room for m.bureau.command messages.
-			configRoomAlias := scope.Machine.RoomAlias()
-			configRoomID, err := session.ResolveAlias(ctx, configRoomAlias)
-			if err != nil {
-				return cli.NotFound("resolving machine config room %s: %w (is the machine registered?)", configRoomAlias, err)
-			}
-
-			// Build pipeline parameters. These become ticket variables
-			// that the pipeline executor substitutes into step templates.
-			// MACHINE is injected by the daemon, not the CLI.
-			parameters := map[string]any{
-				"pipeline":      pipelineRef,
-				"room":          fleetRoomID.String(),
-				"template":      template,
-				"FLAKE_REF":     params.FlakeRef,
-				"PROFILE":       params.Profile,
-				"SYSTEM":        system,
-				"CACHE_NAME":    cacheConfig.Name,
-				"FLEET_ROOM_ID": fleetRoomID.String(),
-			}
-
-			logger.Info("submitting environment compose pipeline",
-				"profile", params.Profile,
-				"machine", scope.Machine.Localpart(),
-				"pipeline", pipelineRef,
-				"flake", params.FlakeRef,
-				"system", system,
-			)
-
-			// Send the command and wait for the accepted result.
-			result, err := command.Execute(ctx, command.SendParams{
-				Session:    session,
-				RoomID:     configRoomID,
-				Command:    "pipeline.execute",
-				Parameters: parameters,
+			output, err := submitComposePipeline(ctx, submitComposeParams{
+				Session:     session,
+				Scope:       scope,
+				FleetConfig: config,
+				Profile:     params.Profile,
+				FlakeRef:    params.FlakeRef,
+				Logger:      logger,
 			})
 			if err != nil {
 				return err
-			}
-			if err := result.Err(); err != nil {
-				return err
-			}
-
-			output := composeResult{
-				Profile:     params.Profile,
-				Machine:     scope.Machine.Localpart(),
-				PipelineRef: pipelineRef,
-				TicketID:    result.TicketID,
-				TicketRoom:  result.TicketRoom,
 			}
 
 			if done, emitErr := params.EmitJSON(output); done {
 				return emitErr
 			}
 
-			logger.Info("pipeline accepted",
-				"profile", params.Profile,
-				"machine", scope.Machine.Localpart(),
-				"ticket_id", result.TicketID,
-			)
-
-			if !params.Wait || result.TicketID.IsZero() {
-				result.WriteAcceptedHint(os.Stderr)
+			if !params.Wait {
+				writeAcceptedHint(os.Stderr, output)
 				return nil
 			}
 
-			// Environment builds can be slow (Nix evaluation + build +
-			// cache push).
-			watchCtx := ctx
-			if params.Timeout > 0 {
-				clk := params.clock
-				if clk == nil {
-					clk = clock.Real()
-				}
-				var watchCancel context.CancelFunc
-				watchCtx, watchCancel = context.WithCancel(ctx)
-				defer watchCancel()
-				timer := clk.AfterFunc(params.Timeout, watchCancel)
-				defer timer.Stop()
-			}
-
-			final, watchErr := command.WatchTicket(watchCtx, command.WatchTicketParams{
-				Session:    session,
-				RoomID:     result.TicketRoom,
-				TicketID:   result.TicketID,
-				OnProgress: command.StepProgressWriter(os.Stderr),
+			conclusion, err := watchComposePipeline(ctx, watchComposeParams{
+				Session: session,
+				Result:  output,
+				Timeout: params.Timeout,
+				Clock:   params.clock,
+				Logger:  logger,
 			})
-			if watchErr != nil {
-				return watchErr
+			if err != nil {
+				return err
 			}
-
-			conclusion := ""
-			if final.Pipeline != nil {
-				conclusion = string(final.Pipeline.Conclusion)
-			}
-
-			logger.Info("compose pipeline completed",
-				"profile", params.Profile,
-				"conclusion", conclusion,
-			)
 
 			if conclusion != "success" {
 				return &cli.ExitError{Code: 1}

@@ -17,6 +17,10 @@
 //   - build: build a profile with "nix build" and optionally create
 //     an --out-link symlink for deployment (e.g., into
 //     deploy/buildbarn/runner-env).
+//   - compose: trigger a sandboxed pipeline to build, cache-push,
+//     and publish provenance for a profile on a remote machine.
+//   - update: check if a profile's source flake has a newer revision
+//     than the last compose and optionally trigger a recompose.
 //   - status: show which profiles are currently deployed by checking
 //     existing out-link symlinks and their Nix store targets.
 //

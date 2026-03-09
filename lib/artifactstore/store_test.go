@@ -6,7 +6,9 @@ package artifactstore
 import (
 	"bytes"
 	"crypto/rand"
+	"errors"
 	"fmt"
+	"io"
 	"os"
 	"path/filepath"
 	"testing"
@@ -554,6 +556,189 @@ func TestStoreAtSmallArtifactBoundary(t *testing.T) {
 	if !bytes.Equal(readBackPlus, contentPlus) {
 		t.Error("roundtrip failed just above small artifact boundary")
 	}
+}
+
+// --- Streaming store tests ---
+
+func TestStoreStreamingMatchesInMemory(t *testing.T) {
+	// The essential correctness property: Write(io.Reader) and
+	// WriteContent([]byte) must produce identical file hashes for the
+	// same input. This exercises the StreamingChunker path end-to-end.
+	sizes := []int{
+		100,                        // small, well below threshold
+		SmallArtifactThreshold,     // exactly at threshold
+		SmallArtifactThreshold + 1, // just above threshold
+		512 * 1024,                 // multi-chunk
+		2 * 1024 * 1024,            // many chunks
+	}
+
+	for _, size := range sizes {
+		t.Run(fmt.Sprintf("size=%s", formatByteSize(size)), func(t *testing.T) {
+			content := make([]byte, size)
+			for i := range content {
+				content[i] = byte(i % 251)
+			}
+
+			store := newTestStore(t)
+
+			// WriteContent path (uses bytes.NewReader internally).
+			resultInMemory, err := store.WriteContent(content, "")
+			if err != nil {
+				t.Fatalf("WriteContent: %v", err)
+			}
+
+			// Write path with an io.Reader that is NOT a bytes.Reader,
+			// to ensure we don't accidentally take a fast path.
+			store2 := newTestStore(t)
+			reader := &oneByteAtATimeReader{data: content}
+			resultStreaming, err := store2.Write(reader, "", nil)
+			if err != nil {
+				t.Fatalf("Write(reader): %v", err)
+			}
+
+			if resultInMemory.FileHash != resultStreaming.FileHash {
+				t.Errorf("file hash mismatch:\n  in-memory:  %s\n  streaming:  %s",
+					FormatHash(resultInMemory.FileHash), FormatHash(resultStreaming.FileHash))
+			}
+			if resultInMemory.Size != resultStreaming.Size {
+				t.Errorf("size: in-memory=%d, streaming=%d", resultInMemory.Size, resultStreaming.Size)
+			}
+			if resultInMemory.ChunkCount != resultStreaming.ChunkCount {
+				t.Errorf("chunk count: in-memory=%d, streaming=%d",
+					resultInMemory.ChunkCount, resultStreaming.ChunkCount)
+			}
+
+			// Verify the streaming result is readable.
+			readBack, err := store2.ReadContent(resultStreaming.FileHash)
+			if err != nil {
+				t.Fatalf("ReadContent: %v", err)
+			}
+			if !bytes.Equal(readBack, content) {
+				t.Error("read-back does not match original content")
+			}
+		})
+	}
+}
+
+func TestStoreStreamingLargeArtifactRoundtrip(t *testing.T) {
+	store := newTestStore(t)
+
+	// 4MB: exercises multiple container flushes with streaming.
+	content := make([]byte, 4*1024*1024)
+	for i := range content {
+		content[i] = byte(i * 37)
+	}
+
+	result, err := store.Write(bytes.NewReader(content), "", nil)
+	if err != nil {
+		t.Fatalf("Write: %v", err)
+	}
+
+	if result.Size != int64(len(content)) {
+		t.Errorf("Size = %d, want %d", result.Size, len(content))
+	}
+
+	readBack, err := store.ReadContent(result.FileHash)
+	if err != nil {
+		t.Fatalf("ReadContent: %v", err)
+	}
+	if !bytes.Equal(readBack, content) {
+		t.Error("read-back does not match original for 4MB streaming write")
+	}
+}
+
+func TestStoreStreamingReadError(t *testing.T) {
+	store := newTestStore(t)
+
+	// A reader that fails partway through. The error must propagate,
+	// not produce a silently truncated artifact.
+	errDiskFault := errors.New("simulated disk fault")
+	reader := &failAfterReader{
+		data:      make([]byte, 2*1024*1024),
+		failAfter: SmallArtifactThreshold + 50*1024,
+		err:       errDiskFault,
+	}
+	// Fill with deterministic data.
+	for i := range reader.data {
+		reader.data[i] = byte(i)
+	}
+
+	_, err := store.Write(reader, "", nil)
+	if err == nil {
+		t.Fatal("Write should fail when reader returns an error")
+	}
+	if !errors.Is(err, errDiskFault) {
+		t.Errorf("error = %v, want wrapped %v", err, errDiskFault)
+	}
+}
+
+func TestStoreStreamingReadErrorDuringProbe(t *testing.T) {
+	store := newTestStore(t)
+
+	// Reader fails during the initial probe read (before we even
+	// decide small vs large).
+	errEarly := errors.New("early read failure")
+	reader := &failAfterReader{
+		data:      make([]byte, 1024),
+		failAfter: 100,
+		err:       errEarly,
+	}
+
+	_, err := store.Write(reader, "", nil)
+	if err == nil {
+		t.Fatal("Write should fail when probe read returns an error")
+	}
+}
+
+// oneByteAtATimeReader returns exactly one byte per Read call, which
+// exercises the StreamingChunker's buffer-filling loop thoroughly.
+type oneByteAtATimeReader struct {
+	data     []byte
+	position int
+}
+
+func (r *oneByteAtATimeReader) Read(p []byte) (int, error) {
+	if r.position >= len(r.data) {
+		return 0, io.EOF
+	}
+	p[0] = r.data[r.position]
+	r.position++
+	if r.position >= len(r.data) {
+		return 1, io.EOF
+	}
+	return 1, nil
+}
+
+// failAfterReader reads data normally until failAfter bytes, then
+// returns err.
+type failAfterReader struct {
+	data      []byte
+	position  int
+	failAfter int
+	err       error
+}
+
+func (r *failAfterReader) Read(p []byte) (int, error) {
+	if r.position >= r.failAfter {
+		return 0, r.err
+	}
+	remaining := r.failAfter - r.position
+	toRead := len(p)
+	if toRead > remaining {
+		toRead = remaining
+	}
+	if toRead > len(r.data)-r.position {
+		toRead = len(r.data) - r.position
+	}
+	if toRead == 0 {
+		return 0, io.EOF
+	}
+	copy(p[:toRead], r.data[r.position:r.position+toRead])
+	r.position += toRead
+	if r.position >= r.failAfter {
+		return toRead, r.err
+	}
+	return toRead, nil
 }
 
 // Benchmarks for the store. Run with:

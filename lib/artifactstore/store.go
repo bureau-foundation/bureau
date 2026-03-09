@@ -89,23 +89,33 @@ type StoreResult struct {
 // into containers, and writes everything to disk. Returns metadata
 // about the stored artifact.
 //
+// Write streams the input: memory usage is bounded at roughly
+// MaxContainerSize (~64 MiB) regardless of input size. Only the
+// first SmallArtifactThreshold bytes are buffered to detect whether
+// the small-artifact fast path applies.
+//
 // The contentType parameter is used for compression auto-selection.
 // Pass an empty string to always probe the first chunk.
 //
 // If compressionOverride is non-nil, it overrides the auto-selected
 // compression algorithm for all chunks.
 func (s *Store) Write(r io.Reader, contentType string, compressionOverride *CompressionTag) (*StoreResult, error) {
-	// Read all content into memory. The streaming version (chunking
-	// as bytes arrive) will come when we need to handle multi-GB
-	// artifacts; for now, the in-memory path is simpler and correct.
-	content, err := io.ReadAll(r)
-	if err != nil {
+	// Read up to SmallArtifactThreshold+1 bytes. If the entire
+	// content fits, we take the small-artifact fast path (single
+	// chunk, no CDC). The +1 lets us distinguish "exactly at
+	// threshold" from "above threshold" without a second read.
+	probeBuffer := make([]byte, SmallArtifactThreshold+1)
+	probeRead, err := io.ReadFull(r, probeBuffer)
+	if err != nil && err != io.ErrUnexpectedEOF && err != io.EOF {
 		return nil, fmt.Errorf("reading content: %w", err)
 	}
 
-	if len(content) == 0 {
+	if probeRead == 0 {
 		return nil, fmt.Errorf("cannot store empty content")
 	}
+
+	content := probeBuffer[:probeRead]
+	isSmall := err == io.ErrUnexpectedEOF || err == io.EOF
 
 	// Determine compression algorithm.
 	var compression CompressionTag
@@ -113,7 +123,8 @@ func (s *Store) Write(r io.Reader, contentType string, compressionOverride *Comp
 		compression = *compressionOverride
 	} else {
 		// Probe up to the first TargetChunkSize bytes for auto-selection.
-		probeSize := len(content)
+		// We always have at least probeRead bytes available.
+		probeSize := probeRead
 		if probeSize > TargetChunkSize {
 			probeSize = TargetChunkSize
 		}
@@ -121,11 +132,15 @@ func (s *Store) Write(r io.Reader, contentType string, compressionOverride *Comp
 	}
 
 	// Small artifact fast path: no CDC, single chunk.
-	if len(content) <= SmallArtifactThreshold {
+	if isSmall && probeRead <= SmallArtifactThreshold {
 		return s.writeSmall(content, compression)
 	}
 
-	return s.writeLarge(content, compression)
+	// Large artifact: stream through CDC. Prepend the bytes we
+	// already read to the remaining reader.
+	combined := io.MultiReader(bytes.NewReader(content), r)
+	chunker := NewStreamingChunker(combined)
+	return s.writeLargeFromChunks(chunker, compression)
 }
 
 // writeSmall stores a small artifact as a single chunk in a single
@@ -177,16 +192,17 @@ func (s *Store) writeSmall(content []byte, compression CompressionTag) (*StoreRe
 	}, nil
 }
 
-// writeLarge stores a large artifact using CDC chunking, potentially
-// spanning multiple containers.
-func (s *Store) writeLarge(content []byte, compression CompressionTag) (*StoreResult, error) {
-	chunker := NewChunker(content)
-
+// writeLargeFromChunks stores a large artifact by iterating chunks
+// from a chunkIterator (either in-memory [Chunker] or streaming
+// [StreamingChunker]). Chunks are compressed, packed into containers,
+// and flushed to disk as containers fill up.
+func (s *Store) writeLargeFromChunks(chunks chunkIterator, compression CompressionTag) (*StoreResult, error) {
 	var (
 		allChunkHashes  []Hash
 		segments        []Segment
 		builder         = NewContainerBuilder()
 		containerStart  = 0 // chunk index where current container started
+		totalSize       int64
 		totalCompressed int64
 	)
 
@@ -213,11 +229,12 @@ func (s *Store) writeLarge(content []byte, compression CompressionTag) (*StoreRe
 	}
 
 	for {
-		chunk := chunker.Next()
+		chunk := chunks.Next()
 		if chunk == nil {
 			break
 		}
 
+		totalSize += int64(len(chunk.Data))
 		allChunkHashes = append(allChunkHashes, chunk.Hash)
 
 		compressed, actualTag, err := compressWithFallback(chunk.Data, compression)
@@ -235,6 +252,11 @@ func (s *Store) writeLarge(content []byte, compression CompressionTag) (*StoreRe
 		}
 	}
 
+	// Check for I/O errors from streaming chunkers.
+	if err := chunks.Err(); err != nil {
+		return nil, fmt.Errorf("reading content: %w", err)
+	}
+
 	// Flush the final container.
 	if err := flushCurrentContainer(); err != nil {
 		return nil, err
@@ -248,7 +270,7 @@ func (s *Store) writeLarge(content []byte, compression CompressionTag) (*StoreRe
 	record := &ReconstructionRecord{
 		Version:    ReconstructionRecordVersion,
 		FileHash:   fileHash,
-		Size:       int64(len(content)),
+		Size:       totalSize,
 		ChunkCount: len(allChunkHashes),
 		Segments:   segments,
 	}
@@ -260,7 +282,7 @@ func (s *Store) writeLarge(content []byte, compression CompressionTag) (*StoreRe
 	return &StoreResult{
 		FileHash:       fileHash,
 		Ref:            FormatRef(fileHash),
-		Size:           int64(len(content)),
+		Size:           totalSize,
 		ChunkCount:     len(allChunkHashes),
 		ContainerCount: len(segments),
 		CompressedSize: totalCompressed,

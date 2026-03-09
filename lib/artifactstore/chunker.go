@@ -3,6 +3,8 @@
 
 package artifactstore
 
+import "io"
+
 // Chunking parameters. These are protocol constants — changing them
 // invalidates all existing chunk boundaries and therefore all existing
 // container packings and reconstruction metadata.
@@ -61,14 +63,24 @@ type Chunk struct {
 	Hash Hash
 }
 
+// chunkIterator is the common interface between [Chunker] (in-memory)
+// and [StreamingChunker] (io.Reader-based). Both produce identical
+// chunks for the same input — the only difference is where the input
+// bytes come from.
+//
+// Call Next repeatedly until it returns nil. After the loop, call Err
+// to check for I/O errors (always nil for Chunker).
+type chunkIterator interface {
+	Next() *Chunk
+	Err() error
+}
+
 // Chunker splits input data into content-defined chunks using
 // GearHash. Create one with [NewChunker] and call [Chunker.Next]
 // repeatedly to iterate over chunks.
 //
-// The chunker operates on an in-memory byte slice. For streaming
-// large files, the caller reads the file in segments and feeds them
-// to the chunker (a streaming wrapper will be added when the store
-// layer needs it).
+// Chunker operates on an in-memory byte slice. For streaming input,
+// use [StreamingChunker] instead.
 type Chunker struct {
 	data     []byte
 	position int
@@ -99,6 +111,98 @@ func (c *Chunker) Next() *Chunk {
 	c.position += chunkEnd
 	return chunk
 }
+
+// Err always returns nil for the in-memory chunker.
+func (c *Chunker) Err() error { return nil }
+
+// StreamingChunker splits input from an [io.Reader] into
+// content-defined chunks using the same GearHash algorithm as
+// [Chunker]. It buffers at most MaxChunkSize+1 bytes internally,
+// making it suitable for arbitrarily large inputs.
+//
+// The buffer is one byte larger than MaxChunkSize because
+// [gearFindBoundary] returns len(data) when len(data) <= MaxChunkSize
+// (taking all remaining bytes as the final chunk). When there IS more
+// data in the reader, we need gearFindBoundary to see len > MaxChunkSize
+// so it enters the scanning path and finds a content-defined boundary.
+// Since gearFindBoundary only reads data[0..MaxChunkSize-1], the +1
+// sentinel byte is enough to produce identical boundaries to the
+// in-memory [Chunker].
+//
+// Follows the [bufio.Scanner] error pattern: Next returns nil on
+// both EOF and error; call Err after the loop to distinguish.
+type StreamingChunker struct {
+	reader io.Reader
+	buffer []byte // working buffer, capacity = MaxChunkSize+1
+	valid  int    // number of valid bytes in buffer
+	eof    bool   // reader returned io.EOF
+	err    error  // first non-EOF read error
+	total  int64  // total bytes yielded as chunks
+}
+
+// NewStreamingChunker creates a chunker that reads from r. The
+// chunker allocates a single MaxChunkSize+1 buffer and reuses it
+// across chunks.
+func NewStreamingChunker(r io.Reader) *StreamingChunker {
+	return &StreamingChunker{
+		reader: r,
+		buffer: make([]byte, MaxChunkSize+1),
+	}
+}
+
+// Next returns the next chunk, or nil when the input is exhausted or
+// an error occurs. The returned chunk's Data is a freshly allocated
+// slice (not shared with the internal buffer).
+func (sc *StreamingChunker) Next() *Chunk {
+	if sc.err != nil {
+		return nil
+	}
+
+	// Fill the buffer to capacity (MaxChunkSize+1) so
+	// gearFindBoundary has enough data to distinguish "last chunk"
+	// from "mid-stream". When valid == MaxChunkSize+1, the function
+	// sees len > MaxChunkSize and enters the scanning path. When
+	// valid <= MaxChunkSize (only possible at EOF), it correctly
+	// takes all remaining bytes.
+	for sc.valid < len(sc.buffer) && !sc.eof {
+		read, readErr := sc.reader.Read(sc.buffer[sc.valid:])
+		sc.valid += read
+		if readErr == io.EOF {
+			sc.eof = true
+		} else if readErr != nil {
+			sc.err = readErr
+			return nil
+		}
+	}
+
+	if sc.valid == 0 {
+		return nil
+	}
+
+	boundary := gearFindBoundary(sc.buffer[:sc.valid])
+
+	// Copy chunk data out — the buffer is reused for the next chunk.
+	chunkData := make([]byte, boundary)
+	copy(chunkData, sc.buffer[:boundary])
+
+	// Shift remaining bytes to the front of the buffer.
+	sc.valid = copy(sc.buffer, sc.buffer[boundary:sc.valid])
+	sc.total += int64(boundary)
+
+	return &Chunk{
+		Data: chunkData,
+		Hash: HashChunk(chunkData),
+	}
+}
+
+// Err returns the first non-EOF error encountered during reading.
+// Returns nil if the input was fully consumed without error.
+func (sc *StreamingChunker) Err() error { return sc.err }
+
+// TotalSize returns the total number of bytes yielded as chunks so
+// far. After all chunks have been consumed (Next returns nil and Err
+// returns nil), this equals the total size of the input.
+func (sc *StreamingChunker) TotalSize() int64 { return sc.total }
 
 // ChunkAll is a convenience function that chunks the entire input
 // and returns all chunks. For large inputs, prefer using [NewChunker]

@@ -4,8 +4,11 @@
 package artifactstore
 
 import (
+	"bytes"
 	"crypto/rand"
+	"errors"
 	"fmt"
+	"io"
 	"testing"
 )
 
@@ -313,6 +316,282 @@ func BenchmarkChunker(b *testing.B) {
 				chunkCount = 0
 				chunker := NewChunker(input)
 				for chunker.Next() != nil {
+					chunkCount++
+				}
+			}
+			b.ReportMetric(float64(chunkCount), "chunks/op")
+		})
+	}
+}
+
+// --- StreamingChunker tests ---
+
+func TestStreamingChunkerMatchesInMemory(t *testing.T) {
+	// The critical correctness property: StreamingChunker must produce
+	// identical chunks (same boundaries, same hashes) as the in-memory
+	// Chunker for any input.
+	sizes := []int{
+		1,                          // single byte
+		MinChunkSize - 1,           // below minimum
+		MinChunkSize,               // exactly minimum
+		TargetChunkSize,            // target size
+		MaxChunkSize,               // maximum size
+		MaxChunkSize + 1,           // just above maximum
+		512 * 1024,                 // multi-chunk
+		2 * 1024 * 1024,            // ~30 chunks
+		SmallArtifactThreshold,     // at threshold
+		SmallArtifactThreshold + 1, // above threshold
+	}
+
+	for _, size := range sizes {
+		t.Run(fmt.Sprintf("size=%s", formatByteSize(size)), func(t *testing.T) {
+			// Deterministic pseudo-random data so boundaries are
+			// reproducible across runs.
+			input := make([]byte, size)
+			lcg := uint64(0xCAFEBABE)
+			for i := range input {
+				lcg = lcg*6364136223846793005 + 1442695040888963407
+				input[i] = byte(lcg >> 56)
+			}
+
+			// In-memory path.
+			memChunks := ChunkAll(input)
+
+			// Streaming path.
+			streaming := NewStreamingChunker(bytes.NewReader(input))
+			var streamChunks []Chunk
+			for {
+				chunk := streaming.Next()
+				if chunk == nil {
+					break
+				}
+				streamChunks = append(streamChunks, *chunk)
+			}
+			if err := streaming.Err(); err != nil {
+				t.Fatalf("StreamingChunker error: %v", err)
+			}
+
+			if len(streamChunks) != len(memChunks) {
+				t.Fatalf("chunk count: streaming=%d, memory=%d", len(streamChunks), len(memChunks))
+			}
+
+			for i := range memChunks {
+				if len(streamChunks[i].Data) != len(memChunks[i].Data) {
+					t.Errorf("chunk %d: streaming size=%d, memory size=%d",
+						i, len(streamChunks[i].Data), len(memChunks[i].Data))
+				}
+				if streamChunks[i].Hash != memChunks[i].Hash {
+					t.Errorf("chunk %d: hash mismatch", i)
+				}
+				if !bytes.Equal(streamChunks[i].Data, memChunks[i].Data) {
+					t.Errorf("chunk %d: data mismatch", i)
+				}
+			}
+
+			if streaming.TotalSize() != int64(size) {
+				t.Errorf("TotalSize = %d, want %d", streaming.TotalSize(), size)
+			}
+		})
+	}
+}
+
+func TestStreamingChunkerEmpty(t *testing.T) {
+	streaming := NewStreamingChunker(bytes.NewReader(nil))
+	if chunk := streaming.Next(); chunk != nil {
+		t.Errorf("expected nil for empty reader, got chunk of %d bytes", len(chunk.Data))
+	}
+	if err := streaming.Err(); err != nil {
+		t.Errorf("unexpected error: %v", err)
+	}
+	if streaming.TotalSize() != 0 {
+		t.Errorf("TotalSize = %d, want 0", streaming.TotalSize())
+	}
+}
+
+func TestStreamingChunkerReassembly(t *testing.T) {
+	input := make([]byte, 512*1024)
+	for i := range input {
+		input[i] = byte(i * 37)
+	}
+
+	streaming := NewStreamingChunker(bytes.NewReader(input))
+	var reassembled []byte
+	for {
+		chunk := streaming.Next()
+		if chunk == nil {
+			break
+		}
+		reassembled = append(reassembled, chunk.Data...)
+	}
+	if err := streaming.Err(); err != nil {
+		t.Fatalf("StreamingChunker error: %v", err)
+	}
+
+	if !bytes.Equal(reassembled, input) {
+		t.Fatalf("reassembled %d bytes does not match input %d bytes",
+			len(reassembled), len(input))
+	}
+}
+
+func TestStreamingChunkerReadError(t *testing.T) {
+	// Verify that I/O errors from the underlying reader propagate
+	// through Err() and stop chunk production.
+	errBroken := errors.New("disk on fire")
+	reader := &failingReader{
+		data:      make([]byte, MaxChunkSize*2),
+		failAfter: MaxChunkSize + 100,
+		err:       errBroken,
+	}
+
+	streaming := NewStreamingChunker(reader)
+	var chunkCount int
+	for streaming.Next() != nil {
+		chunkCount++
+	}
+
+	if streaming.Err() == nil {
+		t.Fatal("expected error from failing reader")
+	}
+	if !errors.Is(streaming.Err(), errBroken) {
+		t.Errorf("Err() = %v, want %v", streaming.Err(), errBroken)
+	}
+	// Should have produced at least one chunk from the bytes before
+	// the failure.
+	if chunkCount == 0 {
+		t.Error("expected at least one chunk before the read error")
+	}
+}
+
+func TestStreamingChunkerSmallReads(t *testing.T) {
+	// Verify correct behavior when the reader returns small amounts
+	// per Read call, as many real readers do.
+	input := make([]byte, 200*1024)
+	for i := range input {
+		input[i] = byte(i ^ 0x55)
+	}
+
+	// Wrap in a reader that returns at most 1000 bytes per Read.
+	smallReader := &smallChunkReader{reader: bytes.NewReader(input), maxRead: 1000}
+	streaming := NewStreamingChunker(smallReader)
+
+	var streamChunks []Chunk
+	for {
+		chunk := streaming.Next()
+		if chunk == nil {
+			break
+		}
+		streamChunks = append(streamChunks, *chunk)
+	}
+	if err := streaming.Err(); err != nil {
+		t.Fatalf("StreamingChunker error: %v", err)
+	}
+
+	// Must match in-memory chunker output.
+	memChunks := ChunkAll(input)
+	if len(streamChunks) != len(memChunks) {
+		t.Fatalf("chunk count: streaming=%d, memory=%d", len(streamChunks), len(memChunks))
+	}
+	for i := range memChunks {
+		if streamChunks[i].Hash != memChunks[i].Hash {
+			t.Errorf("chunk %d: hash mismatch with small reads", i)
+		}
+	}
+}
+
+func TestStreamingChunkerChunkSizeBounds(t *testing.T) {
+	// Same as TestChunkerChunkSizeBounds but for the streaming path.
+	input := make([]byte, 4*1024*1024)
+	rand.Read(input)
+
+	streaming := NewStreamingChunker(bytes.NewReader(input))
+	var chunks []Chunk
+	for {
+		chunk := streaming.Next()
+		if chunk == nil {
+			break
+		}
+		chunks = append(chunks, *chunk)
+	}
+	if err := streaming.Err(); err != nil {
+		t.Fatalf("StreamingChunker error: %v", err)
+	}
+
+	for i, chunk := range chunks {
+		size := len(chunk.Data)
+		if i < len(chunks)-1 && size < MinChunkSize {
+			t.Errorf("chunk %d: size %d below MinChunkSize %d (not last)", i, size, MinChunkSize)
+		}
+		if size > MaxChunkSize {
+			t.Errorf("chunk %d: size %d exceeds MaxChunkSize %d", i, size, MaxChunkSize)
+		}
+	}
+}
+
+// failingReader returns err after failAfter bytes have been read.
+type failingReader struct {
+	data      []byte
+	position  int
+	failAfter int
+	err       error
+}
+
+func (r *failingReader) Read(p []byte) (int, error) {
+	if r.position >= r.failAfter {
+		return 0, r.err
+	}
+	remaining := r.failAfter - r.position
+	toRead := len(p)
+	if toRead > remaining {
+		toRead = remaining
+	}
+	if toRead > len(r.data)-r.position {
+		toRead = len(r.data) - r.position
+	}
+	if toRead == 0 {
+		return 0, io.EOF
+	}
+	copy(p[:toRead], r.data[r.position:r.position+toRead])
+	r.position += toRead
+	if r.position >= r.failAfter {
+		return toRead, r.err
+	}
+	return toRead, nil
+}
+
+// smallChunkReader wraps a reader and limits each Read to maxRead bytes.
+type smallChunkReader struct {
+	reader  io.Reader
+	maxRead int
+}
+
+func (r *smallChunkReader) Read(p []byte) (int, error) {
+	if len(p) > r.maxRead {
+		p = p[:r.maxRead]
+	}
+	return r.reader.Read(p)
+}
+
+func BenchmarkStreamingChunker(b *testing.B) {
+	sizes := []int{
+		256 * 1024,       // 256KB
+		1024 * 1024,      // 1MB
+		4 * 1024 * 1024,  // 4MB
+		64 * 1024 * 1024, // 64MB
+	}
+
+	for _, size := range sizes {
+		input := make([]byte, size)
+		rand.Read(input)
+
+		b.Run(fmt.Sprintf("size=%s", formatByteSize(size)), func(b *testing.B) {
+			b.SetBytes(int64(size))
+			b.ReportAllocs()
+
+			var chunkCount int64
+			for b.Loop() {
+				chunkCount = 0
+				streaming := NewStreamingChunker(bytes.NewReader(input))
+				for streaming.Next() != nil {
 					chunkCount++
 				}
 			}

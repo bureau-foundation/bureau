@@ -8,6 +8,7 @@ go_library(
     srcs = [
         "actions.go",
         "app.go",
+        "attestations.go",
         "auth.go",
         "client.go",
         "doc.go",
@@ -19,6 +20,7 @@ go_library(
         "pagination.go",
         "pulls.go",
         "ratelimit.go",
+        "releases.go",
         "reviews.go",
         "status.go",
         "types.go",
@@ -35,10 +37,12 @@ go_test(
     name = "github_test",
     srcs = [
         "api_test.go",
+        "attestations_test.go",
         "auth_test.go",
         "client_test.go",
         "errors_test.go",
         "pagination_test.go",
+        "releases_test.go",
     ],
     embed = [":github"],
     deps = ["//lib/clock"],

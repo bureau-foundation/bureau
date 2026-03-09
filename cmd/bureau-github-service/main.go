@@ -103,6 +103,7 @@ func run() error {
 		session:       boot.Session,
 		service:       boot.Service,
 		serviceRoomID: boot.ServiceRoomID,
+		fleetRoomID:   boot.FleetRoomID,
 		manager:       forgesub.NewManager(boot.Clock, boot.Logger),
 		ticketSyncer:  ticketSyncer,
 		mentionDispatcher: &MentionDispatcher{
@@ -112,6 +113,19 @@ func run() error {
 		githubClient: githubClient,
 		clock:        boot.Clock,
 		logger:       boot.Logger,
+	}
+
+	// Establish the initial provenance verifier from fleet room state
+	// before starting the sync loop. This ensures download requests
+	// are verified from the first request, not just after the first
+	// /sync response delivers a provenance event.
+	//
+	// If the homeserver is unreachable (transient errors), the service
+	// refuses to start — it cannot determine whether enforcement is
+	// "require", so starting with a nil verifier would silently
+	// bypass provenance checks.
+	if err := githubService.syncProvenance(ctx); err != nil {
+		return fmt.Errorf("initial provenance sync: %w", err)
 	}
 
 	// Create the webhook handler. Events are dispatched to the

@@ -719,7 +719,7 @@ func TestParseRepoSlug(t *testing.T) {
 		{"", "", "", true},
 		{"/empty-owner", "", "", true},
 		{"empty-repo/", "", "", true},
-		{"org/repo/extra", "org", "repo/extra", false}, // splitN preserves extra slashes
+		{"org/repo/extra", "", "", true}, // repo cannot contain "/" — path traversal prevention
 	}
 
 	for _, tt := range tests {

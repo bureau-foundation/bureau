@@ -27,6 +27,11 @@ const (
 	ActionReportStatus    = "report-status"
 )
 
+// Artifact download operations.
+const (
+	ActionDownloadReleaseAsset = "download-release-asset"
+)
+
 // Repository query operations.
 const (
 	ActionListRepos = "list-repos"

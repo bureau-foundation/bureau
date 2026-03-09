@@ -3,7 +3,10 @@
 
 package github
 
-import "time"
+import (
+	"encoding/json"
+	"time"
+)
 
 // User is a GitHub user reference. Appears in issue authors, PR authors,
 // reviewers, assignees, etc.
@@ -173,6 +176,43 @@ type WorkflowRun struct {
 	HTMLURL    string    `json:"html_url"`
 	CreatedAt  time.Time `json:"created_at"`
 	UpdatedAt  time.Time `json:"updated_at"`
+}
+
+// Release is a GitHub release.
+type Release struct {
+	ID         int64          `json:"id"`
+	TagName    string         `json:"tag_name"`
+	Name       string         `json:"name"`
+	Body       string         `json:"body"`
+	Draft      bool           `json:"draft"`
+	Prerelease bool           `json:"prerelease"`
+	HTMLURL    string         `json:"html_url"`
+	Assets     []ReleaseAsset `json:"assets"`
+	CreatedAt  time.Time      `json:"created_at"`
+}
+
+// ReleaseAsset is a downloadable file attached to a release.
+type ReleaseAsset struct {
+	ID                 int64     `json:"id"`
+	Name               string    `json:"name"`
+	ContentType        string    `json:"content_type"`
+	Size               int64     `json:"size"`
+	BrowserDownloadURL string    `json:"browser_download_url"`
+	CreatedAt          time.Time `json:"created_at"`
+}
+
+// AttestationResponse is the response from GitHub's attestation API.
+// Contains zero or more Sigstore bundles for a given artifact digest.
+type AttestationResponse struct {
+	Attestations []AttestationEntry `json:"attestations"`
+}
+
+// AttestationEntry is a single attestation bundle from GitHub's API.
+// The Bundle field contains the raw Sigstore bundle JSON, which can
+// be passed directly to provenance.Verifier.Verify.
+type AttestationEntry struct {
+	Bundle       json.RawMessage `json:"bundle"`
+	RepositoryID int64           `json:"repository_id"`
 }
 
 // Webhook is a GitHub webhook configuration.

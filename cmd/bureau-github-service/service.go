@@ -8,10 +8,12 @@ import (
 	"encoding/json"
 	"log/slog"
 	"strings"
+	"sync/atomic"
 
 	"github.com/bureau-foundation/bureau/lib/clock"
 	"github.com/bureau-foundation/bureau/lib/forgesub"
 	"github.com/bureau-foundation/bureau/lib/github"
+	"github.com/bureau-foundation/bureau/lib/provenance"
 	"github.com/bureau-foundation/bureau/lib/ref"
 	"github.com/bureau-foundation/bureau/lib/schema"
 	"github.com/bureau-foundation/bureau/lib/schema/forge"
@@ -32,6 +34,8 @@ func buildSyncFilter() string {
 		forge.EventTypeForgeAutoSubscribe,
 		forge.EventTypeForgeWorkIdentity,
 		schema.MatrixEventTypeRoomMember,
+		schema.EventTypeProvenanceRoots,
+		schema.EventTypeProvenancePolicy,
 	}
 
 	// Timeline includes the same state event types (state events can
@@ -81,12 +85,23 @@ type GitHubService struct {
 	session           messaging.Session
 	service           ref.Service
 	serviceRoomID     ref.RoomID
+	fleetRoomID       ref.RoomID
 	manager           *forgesub.Manager
 	ticketSyncer      *TicketSyncer // nil if ticket service not configured
 	mentionDispatcher *MentionDispatcher
 	githubClient      *github.Client // nil if outbound API not configured
 	clock             clock.Clock
 	logger            *slog.Logger
+
+	// provenanceVerifier verifies Sigstore provenance bundles against
+	// the fleet's trust roots and policy. Constructed from
+	// m.bureau.provenance_roots and m.bureau.provenance_policy state
+	// events in the fleet room. Nil when no provenance policy is
+	// configured (enforcement level determines behavior). Rebuilt
+	// when either state event changes via syncProvenance. Stored
+	// atomically: written by the sync loop goroutine, read by
+	// socket handler goroutines (download requests).
+	provenanceVerifier atomic.Pointer[provenance.Verifier]
 }
 
 // handleEvent processes a translated forge event from the webhook
@@ -172,15 +187,17 @@ func (gs *GitHubService) handleSync(ctx context.Context, response *messaging.Syn
 
 	// Process joined room state and timeline events.
 	for roomID, room := range response.Rooms.Join {
-		gs.processRoomEvents(roomID, room.State.Events)
-		gs.processRoomEvents(roomID, room.Timeline.Events)
+		gs.processRoomEvents(ctx, roomID, room.State.Events)
+		gs.processRoomEvents(ctx, roomID, room.Timeline.Events)
 	}
 }
 
 // processRoomEvents handles state events from a single room. Parses
 // repository bindings and forge config into the subscription manager,
 // and logs identity and auto-subscribe events for future handling.
-func (gs *GitHubService) processRoomEvents(roomID ref.RoomID, events []messaging.Event) {
+// Provenance events trigger a re-read of fleet room state via
+// syncProvenance (same pattern as the daemon).
+func (gs *GitHubService) processRoomEvents(ctx context.Context, roomID ref.RoomID, events []messaging.Event) {
 	for _, event := range events {
 		switch event.Type {
 		case forge.EventTypeRepository:
@@ -198,6 +215,11 @@ func (gs *GitHubService) processRoomEvents(roomID ref.RoomID, events []messaging
 			)
 		case forge.EventTypeForgeAttribution:
 			gs.processForgeAttribution(event)
+		case schema.EventTypeProvenanceRoots, schema.EventTypeProvenancePolicy:
+			// Transient errors retain the previous verifier and are
+			// logged by syncProvenance. At runtime, the sync loop
+			// will retry on the next /sync response.
+			_ = gs.syncProvenance(ctx)
 		}
 	}
 }
@@ -625,6 +647,10 @@ func (gs *GitHubService) registerActions(server *service.SocketServer) {
 	server.HandleAuth(
 		forge.ProviderAction(forge.ProviderGitHub, forge.ActionReportStatus),
 		gs.handleReportStatus,
+	)
+	server.HandleAuth(
+		forge.ProviderAction(forge.ProviderGitHub, forge.ActionDownloadReleaseAsset),
+		gs.handleDownloadReleaseAsset,
 	)
 }
 

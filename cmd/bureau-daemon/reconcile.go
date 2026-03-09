@@ -740,13 +740,16 @@ func (d *Daemon) reconcile(ctx context.Context) error {
 		d.ensurePrincipalRoomAccess(ctx, assignment.Principal, d.configRoomID)
 
 		// Services need system room membership (token signing key
-		// lookup) and fleet service room membership (service
-		// registration). principal.Create invites using the admin
-		// session in the standard path; the daemon handles alternative
-		// paths where no admin session is available.
+		// lookup), fleet service room membership (service
+		// registration), and fleet room membership (provenance
+		// config, cache config, and other fleet-wide state).
+		// principal.Create invites using the admin session in the
+		// standard path; the daemon handles alternative paths
+		// where no admin session is available.
 		if assignment.Principal.EntityType() == "service" {
 			d.ensurePrincipalRoomAccess(ctx, assignment.Principal, d.systemRoomID)
 			d.ensurePrincipalRoomAccess(ctx, assignment.Principal, d.serviceRoomID)
+			d.ensurePrincipalRoomAccess(ctx, assignment.Principal, d.fleetRoomID)
 		}
 
 		// Invite the principal to any workspace room it references so it

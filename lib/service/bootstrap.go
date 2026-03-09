@@ -47,6 +47,12 @@ type BootstrapResult struct {
 	// during bootstrap.
 	ServiceRoomID ref.RoomID
 
+	// FleetRoomID is the fleet's configuration room, resolved during
+	// bootstrap. Contains fleet-wide state: provenance roots and
+	// policy, binary cache config, HA leases, machine status.
+	// Services have read-only access (default power level 0).
+	FleetRoomID ref.RoomID
+
 	// AuthConfig is the configured token verification for the
 	// service's socket server. Uses the daemon's Ed25519 public
 	// key fetched from the system room.
@@ -281,6 +287,12 @@ func BootstrapViaProxy(ctx context.Context, config ProxyBootstrapConfig) (*Boots
 		return nil, nil, fmt.Errorf("resolving fleet service room %q: %w", serviceRoomAlias, err)
 	}
 
+	fleetRoomAlias := fleet.RoomAlias()
+	fleetRoomID, err := session.ResolveAlias(ctx, fleetRoomAlias)
+	if err != nil {
+		return nil, nil, fmt.Errorf("resolving fleet room %q: %w", fleetRoomAlias, err)
+	}
+
 	namespace := fleet.Namespace()
 	systemRoomAlias := namespace.SystemRoomAlias()
 	systemRoomID, err := session.ResolveAlias(ctx, systemRoomAlias)
@@ -289,6 +301,7 @@ func BootstrapViaProxy(ctx context.Context, config ProxyBootstrapConfig) (*Boots
 	}
 	logger.Info("global rooms ready",
 		"service_room", serviceRoomID,
+		"fleet_room", fleetRoomID,
 		"system_room", systemRoomID,
 	)
 
@@ -390,6 +403,7 @@ func BootstrapViaProxy(ctx context.Context, config ProxyBootstrapConfig) (*Boots
 		Namespace:     namespace,
 		SystemRoomID:  systemRoomID,
 		ServiceRoomID: serviceRoomID,
+		FleetRoomID:   fleetRoomID,
 		AuthConfig:    authConfig,
 		Clock:         clk,
 		TestClock:     testClock,

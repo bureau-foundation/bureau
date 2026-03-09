@@ -105,7 +105,28 @@ func parseRepoSlug(slug string) (string, string, error) {
 	if len(parts) != 2 || parts[0] == "" || parts[1] == "" {
 		return "", "", fmt.Errorf("invalid repo format %q: expected \"owner/repo\"", slug)
 	}
-	return parts[0], parts[1], nil
+	owner, repo := parts[0], parts[1]
+	if !isValidRepoComponent(owner) || !isValidRepoComponent(repo) {
+		return "", "", fmt.Errorf("invalid repo slug %q: owner and repo must contain only alphanumeric characters, hyphens, underscores, and periods", slug)
+	}
+	return owner, repo, nil
+}
+
+// isValidRepoComponent checks that a GitHub owner or repo name contains
+// only characters that are safe for URL path construction. GitHub
+// allows [a-zA-Z0-9._-] in owner and repo names. Rejecting other
+// characters prevents path traversal and API injection via crafted
+// repo slugs from untrusted agents.
+func isValidRepoComponent(name string) bool {
+	for _, char := range name {
+		if !((char >= 'a' && char <= 'z') ||
+			(char >= 'A' && char <= 'Z') ||
+			(char >= '0' && char <= '9') ||
+			char == '-' || char == '_' || char == '.') {
+			return false
+		}
+	}
+	return true
 }
 
 // requireGitHubClient returns the GitHub API client or a clear error

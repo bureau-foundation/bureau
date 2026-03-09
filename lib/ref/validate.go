@@ -94,6 +94,10 @@ func ValidatePathSegment(segment, label string) error {
 // which also excludes shell metacharacters — making validated paths safe
 // for filesystem operations and pipeline variable substitution.
 func ValidatePath(path, label string) error {
+	if path == "" {
+		return fmt.Errorf("%s is empty", label)
+	}
+
 	for i := 0; i < len(path); i++ {
 		if !allowedChars[path[i]] {
 			return fmt.Errorf("%s: invalid character %q at position %d (allowed: a-z, 0-9, ., _, =, -, /)", label, path[i], i)

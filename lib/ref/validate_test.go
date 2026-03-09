@@ -80,6 +80,9 @@ func TestValidatePath(t *testing.T) {
 		{name: "single-char", path: "a"},
 		{name: "all-allowed", path: "az09._=-/test"},
 
+		// Empty path.
+		{name: "empty", path: "", wantErr: "is empty"},
+
 		// Character validation.
 		{name: "uppercase", path: "Alice", wantErr: "invalid character"},
 		{name: "space", path: "alice bob", wantErr: "invalid character"},

@@ -1892,16 +1892,35 @@ func (d *Daemon) ensurePrincipalRoomAccess(ctx context.Context, principalEntity 
 // parts. Specs use the format "role" or "role:endpoint". A bare role (no colon)
 // returns an empty endpoint, which callers treat as the default CBOR endpoint.
 //
+// Both role and endpoint are validated against ref.ValidatePath to prevent path
+// traversal attacks. RequiredServices come from template state events — a
+// compromised template room could publish specs like "../../etc/shadow" to
+// escape the token directory or sandbox mount point. The ref.ValidatePath
+// charset (a-z, 0-9, ., _, =, -, /) also rejects shell metacharacters,
+// making validated roles safe for filesystem and IPC use.
+//
 // Examples:
 //
-//	"ticket"      → ("ticket", "")
-//	"model:http"  → ("model", "http")
-//	"stt/whisper" → ("stt/whisper", "")
-func parseServiceSpec(spec string) (role, endpoint string) {
+//	"ticket"      → ("ticket", "", nil)
+//	"model:http"  → ("model", "http", nil)
+//	"stt/whisper" → ("stt/whisper", "", nil)
+func parseServiceSpec(spec string) (role, endpoint string, err error) {
 	if index := strings.IndexByte(spec, ':'); index >= 0 {
-		return spec[:index], spec[index+1:]
+		role, endpoint = spec[:index], spec[index+1:]
+	} else {
+		role = spec
 	}
-	return spec, ""
+
+	if err := ref.ValidatePath(role, "service role"); err != nil {
+		return "", "", fmt.Errorf("invalid service spec %q: %w", spec, err)
+	}
+	if endpoint != "" {
+		if err := ref.ValidatePath(endpoint, "service endpoint"); err != nil {
+			return "", "", fmt.Errorf("invalid service spec %q: %w", spec, err)
+		}
+	}
+
+	return role, endpoint, nil
 }
 
 // resolveServiceMounts resolves a list of required service specs to host-side
@@ -1928,7 +1947,10 @@ func (d *Daemon) resolveServiceMounts(ctx context.Context, requiredServices []st
 
 	var mounts []launcherServiceMount
 	for _, spec := range requiredServices {
-		role, endpoint := parseServiceSpec(spec)
+		role, endpoint, err := parseServiceSpec(spec)
+		if err != nil {
+			return nil, err
+		}
 
 		principal, err := d.resolveServiceBinding(ctx, role, rooms)
 		if err != nil {
@@ -2127,6 +2149,17 @@ func (d *Daemon) resolveEndpointSocket(principal ref.Entity, endpoint string) (s
 		return "", fmt.Errorf("service %s does not declare endpoint %q (available: %v)", principal, endpoint, available)
 	}
 
+	// Validate the socket filename is a bare filename with no path
+	// separators. Endpoint values come from m.bureau.service state
+	// events — a compromised service room could publish filenames like
+	// "../../../etc/passwd" to escape the service socket directory.
+	if err := ref.ValidatePathSegment(socketFilename, "endpoint socket filename"); err != nil {
+		return "", fmt.Errorf("service %s endpoint %q: %w", principal, endpoint, err)
+	}
+	if strings.Contains(socketFilename, "/") {
+		return "", fmt.Errorf("service %s endpoint %q: socket filename %q must not contain path separators", principal, endpoint, socketFilename)
+	}
+
 	// Follow the CBOR socket symlink to find the service's listen directory,
 	// then replace the filename with the endpoint's socket file.
 	resolved, err := filepath.EvalSymlinks(cborSocketPath)
@@ -2194,7 +2227,10 @@ func (d *Daemon) mintServiceTokens(principal ref.Entity, requiredServices []stri
 	seen := make(map[string]bool, len(requiredServices))
 	var roles []string
 	for _, spec := range requiredServices {
-		role, _ := parseServiceSpec(spec)
+		role, _, err := parseServiceSpec(spec)
+		if err != nil {
+			return "", nil, err
+		}
 		if !seen[role] {
 			seen[role] = true
 			roles = append(roles, role)

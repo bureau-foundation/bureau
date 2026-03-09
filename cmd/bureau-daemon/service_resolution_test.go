@@ -760,30 +760,69 @@ func newServiceResolutionTestDaemon(t *testing.T, daemon *Daemon, matrixState *m
 }
 
 // TestParseServiceSpec verifies that service specs are correctly split
-// into role and endpoint parts.
+// into role and endpoint parts, and that path traversal is rejected.
 func TestParseServiceSpec(t *testing.T) {
 	t.Parallel()
 
-	tests := []struct {
-		spec         string
-		wantRole     string
-		wantEndpoint string
-	}{
-		{spec: "ticket", wantRole: "ticket", wantEndpoint: ""},
-		{spec: "model:http", wantRole: "model", wantEndpoint: "http"},
-		{spec: "stt/whisper", wantRole: "stt/whisper", wantEndpoint: ""},
-		{spec: "stt/whisper:grpc", wantRole: "stt/whisper", wantEndpoint: "grpc"},
-	}
+	t.Run("valid specs", func(t *testing.T) {
+		t.Parallel()
+		tests := []struct {
+			spec         string
+			wantRole     string
+			wantEndpoint string
+		}{
+			{spec: "ticket", wantRole: "ticket", wantEndpoint: ""},
+			{spec: "model:http", wantRole: "model", wantEndpoint: "http"},
+			{spec: "stt/whisper", wantRole: "stt/whisper", wantEndpoint: ""},
+			{spec: "stt/whisper:grpc", wantRole: "stt/whisper", wantEndpoint: "grpc"},
+		}
 
-	for _, test := range tests {
-		role, endpoint := parseServiceSpec(test.spec)
-		if role != test.wantRole {
-			t.Errorf("parseServiceSpec(%q) role = %q, want %q", test.spec, role, test.wantRole)
+		for _, test := range tests {
+			role, endpoint, err := parseServiceSpec(test.spec)
+			if err != nil {
+				t.Errorf("parseServiceSpec(%q) unexpected error: %v", test.spec, err)
+				continue
+			}
+			if role != test.wantRole {
+				t.Errorf("parseServiceSpec(%q) role = %q, want %q", test.spec, role, test.wantRole)
+			}
+			if endpoint != test.wantEndpoint {
+				t.Errorf("parseServiceSpec(%q) endpoint = %q, want %q", test.spec, endpoint, test.wantEndpoint)
+			}
 		}
-		if endpoint != test.wantEndpoint {
-			t.Errorf("parseServiceSpec(%q) endpoint = %q, want %q", test.spec, endpoint, test.wantEndpoint)
+	})
+
+	t.Run("path traversal in role", func(t *testing.T) {
+		t.Parallel()
+		malicious := []string{
+			"../../etc/shadow",
+			"../secret",
+			"ticket/../../etc/passwd",
+			"/absolute/path",
+			"",
 		}
-	}
+		for _, spec := range malicious {
+			_, _, err := parseServiceSpec(spec)
+			if err == nil {
+				t.Errorf("parseServiceSpec(%q) = nil error, want rejection", spec)
+			}
+		}
+	})
+
+	t.Run("path traversal in endpoint", func(t *testing.T) {
+		t.Parallel()
+		malicious := []string{
+			"ticket:../../etc/shadow",
+			"model:../secret",
+			"model:/absolute",
+		}
+		for _, spec := range malicious {
+			_, _, err := parseServiceSpec(spec)
+			if err == nil {
+				t.Errorf("parseServiceSpec(%q) = nil error, want rejection", spec)
+			}
+		}
+	})
 }
 
 // TestResolveEndpointSocket verifies that the daemon correctly resolves
@@ -898,6 +937,44 @@ func TestResolveEndpointSocket(t *testing.T) {
 		}
 		if !strings.Contains(err.Error(), "does not declare endpoint") {
 			t.Errorf("error = %v, want 'does not declare endpoint'", err)
+		}
+	})
+
+	t.Run("path traversal in endpoint socket filename", func(t *testing.T) {
+		t.Parallel()
+		daemon, _ := newTestDaemon(t)
+		daemon.machine, daemon.fleet = testMachineSetup(t, "workstation", "bureau.local")
+		daemon.fleetRunDir = daemon.fleet.RunDir(daemon.runDir)
+
+		serviceRef, err := ref.NewService(daemon.fleet, "evil")
+		if err != nil {
+			t.Fatalf("construct service ref: %v", err)
+		}
+		principal := serviceRef.Entity()
+
+		// A compromised service publishes endpoint filenames with path
+		// traversal to escape the socket directory.
+		maliciousFilenames := map[string]string{
+			"traversal":     "../../../etc/passwd",
+			"parent_escape": "../secret.sock",
+			"slash":         "subdir/evil.sock",
+			"dot_segment":   "..sock",
+		}
+
+		for name, filename := range maliciousFilenames {
+			daemon.services[principal.UserID().StateKey()] = &schema.Service{
+				Principal: principal,
+				Machine:   daemon.machine,
+				Endpoints: map[string]string{
+					"cbor": "service.sock",
+					name:   filename,
+				},
+			}
+
+			_, err := daemon.resolveEndpointSocket(principal, name)
+			if err == nil {
+				t.Errorf("endpoint %q with filename %q: expected rejection, got nil", name, filename)
+			}
 		}
 	})
 

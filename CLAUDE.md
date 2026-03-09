@@ -345,6 +345,28 @@ Bureau runs untrusted code. Every design decision must account for this.
   Use file paths, sealed inputs, or environment variables. Mask tokens in
   debug output.
 
+- **Never fail open on security state.** When a security-relevant configuration
+  (trust roots, policy, verifier, access control state) cannot be read due to a
+  transient error, retain the last-known-good configuration. Only clear security
+  state when the source explicitly indicates absence (e.g., 404 on both roots
+  and policy). An attacker who can cause momentary unavailability of the
+  configuration source should not be able to disable security checks. This
+  applies to provenance verification, credential provisioning, authorization
+  grants, and any future security state synced from Matrix or other sources.
+
+- **Adversarial testing is required for security-adjacent code.** Any code that
+  touches authentication, authorization, credential handling, provenance
+  verification, trust boundaries, enforcement levels, or sandbox isolation must
+  include adversarial tests that model specific attack scenarios — not just
+  happy-path validation. Test what happens when an attacker publishes malformed
+  state events, causes transient errors to disable verifiers, downgrades
+  enforcement levels via typos or crafted values, exploits TOCTOU gaps between
+  existence checks and security operations, or manipulates cache/network
+  responses. A cross-validated red-team review (multiple AI models
+  independently reviewing, then cross-validating findings) is strongly
+  encouraged before merging security-adjacent changes. The cost of a review is
+  minutes; the cost of a bypass is a compromised fleet.
+
 ## Conventions
 
 - Go is the primary language for infrastructure code

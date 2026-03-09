@@ -7,6 +7,7 @@ import (
 	"fmt"
 	"io"
 	"net/http"
+	"net/url"
 	"regexp"
 	"strings"
 )
@@ -32,7 +33,12 @@ func FetchBundle(client *http.Client, cacheURL, storePathBasename string) ([]byt
 	if !validStorePathBasename.MatchString(storePathBasename) {
 		return nil, fmt.Errorf("invalid store path basename %q: must match Nix store path format", storePathBasename)
 	}
-	url := strings.TrimRight(cacheURL, "/") + "/attestation/" + storePathBasename + ".bundle.json"
+	// PathEscape the basename because Nix store names can contain ? and =
+	// (allowed by validStorePathBasename). Without escaping, these characters
+	// are URL-significant: ? starts a query string, truncating the path and
+	// causing a 404. Under require enforcement that blocks valid updates;
+	// under warn enforcement it silently skips verification.
+	url := strings.TrimRight(cacheURL, "/") + "/attestation/" + url.PathEscape(storePathBasename) + ".bundle.json"
 
 	response, err := client.Get(url)
 	if err != nil {

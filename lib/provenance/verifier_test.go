@@ -18,6 +18,7 @@ import (
 	"fmt"
 	"math/big"
 	"net/http"
+	"net/http/httptest"
 	"net/url"
 	"os"
 	"path/filepath"
@@ -1163,6 +1164,43 @@ func TestFetchBundleRejectsPathTraversal(t *testing.T) {
 	t.Run("valid basename with special chars", func(t *testing.T) {
 		if validStorePathBasename.MatchString("abcdefghijklmnopqrstuvwxyz012345-bureau_env.1.2.3") != true {
 			t.Error("expected basename with dots and underscores to pass regex")
+		}
+	})
+
+	// Nix store basenames can contain ? and = (e.g., python3.11?doc=true).
+	// These are URL-significant characters that must be escaped in the
+	// request path. Without escaping, ? starts a query string, truncating
+	// the path and causing a 404.
+	t.Run("url escapes question mark and equals", func(t *testing.T) {
+		basename := "abcdefghijklmnopqrstuvwxyz012345-python3.11?doc=true"
+		if !validStorePathBasename.MatchString(basename) {
+			t.Fatal("test basename should pass regex validation")
+		}
+
+		// Use a test server to capture the actual request path.
+		server := httptest.NewServer(http.HandlerFunc(func(writer http.ResponseWriter, request *http.Request) {
+			// The request path should contain the escaped basename,
+			// not a query string. If unescaped, request.URL.Path
+			// would be "/attestation/abcdefghijklmnopqrstuvwxyz012345-python3.11"
+			// with RawQuery "doc=true".
+			if request.URL.RawQuery != "" {
+				t.Errorf("basename leaked into query string: path=%q query=%q", request.URL.Path, request.URL.RawQuery)
+			}
+			expectedPath := "/attestation/abcdefghijklmnopqrstuvwxyz012345-python3.11%3Fdoc%3Dtrue.bundle.json"
+			if request.URL.RawPath != "" && request.URL.RawPath != expectedPath {
+				t.Errorf("unexpected raw path: got %q, want %q", request.URL.RawPath, expectedPath)
+			}
+			writer.WriteHeader(http.StatusOK)
+			writer.Write([]byte(`{"bundle": "test"}`))
+		}))
+		defer server.Close()
+
+		result, err := FetchBundle(server.Client(), server.URL, basename)
+		if err != nil {
+			t.Fatalf("FetchBundle with ?= basename: %v", err)
+		}
+		if string(result) != `{"bundle": "test"}` {
+			t.Errorf("unexpected body: %q", result)
 		}
 	})
 }

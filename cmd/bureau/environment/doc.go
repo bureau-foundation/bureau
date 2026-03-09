@@ -15,8 +15,7 @@
 //   - list: query a Nix flake for available profile names using
 //     "nix flake show --json".
 //   - build: build a profile with "nix build" and optionally create
-//     an --out-link symlink for deployment (e.g., into
-//     deploy/buildbarn/runner-env).
+//     an --out-link symlink for deployment.
 //   - compose: trigger a sandboxed pipeline to build, cache-push,
 //     and publish provenance for a profile on a remote machine.
 //   - update: check if a profile's source flake has a newer revision

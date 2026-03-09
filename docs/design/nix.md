@@ -98,7 +98,7 @@ VM with 1 CPU sends its build actions to the execution cluster. The
 cluster compiles at full speed, results flow back through the cache. The
 agent never runs a compiler.
 
-The Buildbarn deployment (`deploy/buildbarn/`) has four components:
+The Buildbarn deployment (in the environment repository) has four components:
 content-addressable storage (CAS and action cache), a scheduler (action
 queue and dispatch), workers (execution environment setup), and runners
 (actual command execution). Runners have `/nix/store` bind-mounted
@@ -283,9 +283,9 @@ The `bureau environment` command manages sandbox environments:
   `/var/bureau/environment/<profile>`. Supports `--override-input` for
   development (e.g., `--override-input bureau=path:/home/user/src/bureau`
   to test local flake changes).
-- **`bureau environment status`** — scans `/var/bureau/environment/` and
-  `deploy/buildbarn/runner-env` for symlinks into `/nix/store`, showing
-  which environments are installed and their store paths.
+- **`bureau environment status`** — scans `/var/bureau/environment/`
+  for symlinks into `/nix/store`, showing which environments are
+  installed and their store paths.
 
 ### Template Integration
 

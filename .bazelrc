@@ -36,10 +36,10 @@ build:ci --curses=no
 build:ci --disk_cache=~/.cache/bazel-disk-cache
 test:ci --test_output=errors
 
-# Remote execution via Buildbarn (deploy/buildbarn/).
+# Remote execution via Buildbarn.
 # Activate with: bazel build --config=remote //...
 # The execution platform must match the worker's platform properties exactly
-# (see deploy/buildbarn/bb-worker.jsonnet).
+# (see the Buildbarn config in the environment repository).
 build:remote --remote_executor=grpc://localhost:8980
 build:remote --jobs=64
 build:remote --extra_execution_platforms=//:remote_linux_amd64

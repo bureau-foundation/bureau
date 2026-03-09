@@ -21,83 +21,52 @@ machine-lifecycle.md, nix.md, credentials.md, fleet.md.
 - **A machine with network access** — the operator workstation needs to
   reach the homeserver. Target machines need to reach the homeserver.
 
-## 1. Start the Homeserver
+## 1. Bootstrap Infrastructure
 
-Bureau uses Continuwuity (a Matrix homeserver) as its persistence layer.
-The `deploy/matrix/` directory contains a Docker Compose stack with
-Continuwuity, coturn (for WebRTC NAT traversal), and attic (Nix binary
-cache).
+Bureau requires a Continuwuity homeserver (Matrix), an attic binary cache
+(Nix), and optionally a coturn TURN server (WebRTC NAT traversal). These
+run as Docker containers managed by the
+[environment](https://github.com/bureau-foundation/environment) repository.
 
-```bash
-cd deploy/matrix
-
-# Generate secrets (registration token, TURN shared secret, attic JWT).
-REGISTRATION_TOKEN=$(openssl rand -hex 32)
-TURN_SECRET=$(openssl rand -hex 32)
-ATTIC_TOKEN_SECRET=$(openssl rand 64 | base64 -w0)
-
-cat > .env <<EOF
-BUREAU_MATRIX_SERVER_NAME=bureau.local
-BUREAU_MATRIX_REGISTRATION_TOKEN=${REGISTRATION_TOKEN}
-BUREAU_TURN_SECRET=${TURN_SECRET}
-BUREAU_TURN_HOST=localhost
-BUREAU_ATTIC_TOKEN_SECRET=${ATTIC_TOKEN_SECRET}
-EOF
-
-# Save the registration token to a file (CLI reads secrets from files,
-# never from arguments or environment).
-echo "${REGISTRATION_TOKEN}" > .env-token
-
-# Start everything.
-docker compose up -d
-```
-
-Wait for the homeserver to become healthy:
+Fork the environment repository and run the bootstrap script:
 
 ```bash
-curl -sf http://localhost:6167/_matrix/client/versions
+# Clone your fork of the environment repo.
+git clone https://github.com/$YOUR_ORG/environment.git
+cd environment
+
+# Run the bootstrap (idempotent — safe to re-run).
+nix run .#bootstrap
 ```
 
-For the full infrastructure playbook including coturn and attic
-configuration, see `deploy/matrix/PLAYBOOK.md`.
+The bootstrap script:
+- Generates secrets (registration token, TURN secret, attic JWT)
+- Starts Docker containers (Continuwuity, attic, coturn)
+- Waits for health checks
+- Runs `bureau matrix setup` to create the admin account and Bureau rooms
+- Configures the binary cache
+- Writes a credential file for subsequent commands
 
-## 2. Bootstrap the Homeserver
-
-The `bureau matrix setup` command creates the admin account, the Bureau
-namespace space, and the global rooms (system, template, pipeline,
-agents, machines, services).
+After bootstrap, verify with:
 
 ```bash
-bureau matrix setup \
-    --homeserver http://localhost:6167 \
-    --server-name bureau.local \
-    --registration-token-file deploy/matrix/.env-token \
-    --credential-file deploy/matrix/bureau-creds
+bureau matrix doctor --credential-file ./bureau-creds
 ```
 
-This writes a credential file (`bureau-creds`) containing the admin
-token and room IDs. All subsequent commands use `--credential-file` to
-authenticate.
+See the environment repository README for full details, customization,
+and updating.
 
-Verify with:
-
-```bash
-bureau matrix doctor \
-    --credential-file deploy/matrix/bureau-creds \
-    --server-name bureau.local
-```
-
-## 3. Create a Fleet
+## 2. Create a Fleet
 
 A fleet is a group of machines managed together. Fleet rooms hold
 machine registrations, service bindings, and configuration.
 
 ```bash
 bureau fleet create bureau/fleet/prod \
-    --credential-file deploy/matrix/bureau-creds
+    --credential-file ./bureau-creds
 ```
 
-## 4. Provision a Machine
+## 3. Provision a Machine
 
 Provisioning creates the machine's Matrix account, per-machine config
 room, and a bootstrap config file that contains a one-time password.
@@ -107,7 +76,7 @@ file):
 
 ```bash
 bureau machine provision bureau/fleet/prod/machine/worker-01 \
-    --credential-file deploy/matrix/bureau-creds \
+    --credential-file ./bureau-creds \
     --output bootstrap.json
 ```
 
@@ -115,7 +84,7 @@ Transfer `bootstrap.json` to the target machine. The one-time password
 in the file is rotated on first boot, so it becomes useless after the
 machine starts.
 
-## 5. Deploy to the Target Machine
+## 4. Deploy to the Target Machine
 
 On the target machine, run the unified deploy command. This handles
 system user/group creation, directory setup, binary installation,
@@ -147,7 +116,7 @@ What `bureau machine deploy local` does:
 
 After deploy, the machine is live and managed entirely through Matrix.
 
-## 6. Verify
+## 5. Verify
 
 On the target machine:
 
@@ -161,18 +130,18 @@ sockets, and Matrix connectivity. All checks should pass.
 From the operator workstation:
 
 ```bash
-bureau machine list --credential-file deploy/matrix/bureau-creds
+bureau machine list --credential-file ./bureau-creds
 ```
 
 The new machine should appear in the list.
 
-## 7. Add an Operator
+## 6. Add an Operator
 
 Create a Matrix account for each human operator:
 
 ```bash
 bureau matrix user create alice \
-    --credential-file deploy/matrix/bureau-creds \
+    --credential-file ./bureau-creds \
     --operator
 ```
 
@@ -205,14 +174,11 @@ No restart, no downtime.
 
 ```bash
 # Local machine.
-bureau machine upgrade --local \
-    --host-env "$HOST_ENV" \
-    --credential-file deploy/matrix/bureau-creds
+bureau machine upgrade --local --host-env "$HOST_ENV"
 
 # Remote machine.
 bureau machine upgrade bureau/fleet/prod/machine/worker-01 \
-    --host-env "$HOST_ENV" \
-    --credential-file deploy/matrix/bureau-creds
+    --host-env "$HOST_ENV"
 ```
 
 For developer iteration, `script/dev-deploy` wraps the build and
@@ -236,8 +202,7 @@ sudo bureau machine doctor --fix --dry-run
 Drain principals and remove the machine from the fleet:
 
 ```bash
-bureau machine decommission bureau/fleet/prod/machine/worker-01 \
-    --credential-file deploy/matrix/bureau-creds
+bureau machine decommission bureau/fleet/prod/machine/worker-01
 ```
 
 Then on the machine itself, remove Bureau:
@@ -299,8 +264,7 @@ never visible to the agent process.
 bureau agent create bureau/template:bureau-agent-claude \
     --machine bureau/fleet/prod/machine/sharkbox \
     --name agent/my-agent \
-    --extra-credential ANTHROPIC_API_KEY=sk-ant-... \
-    --credential-file deploy/matrix/bureau-creds
+    --extra-credential ANTHROPIC_API_KEY=sk-ant-...
 ```
 
 ### Deploy Supporting Services
@@ -310,29 +274,11 @@ The agent needs the artifact and agent services running on the machine:
 ```bash
 bureau service create bureau/template:artifact-service \
     --machine bureau/fleet/prod/machine/sharkbox \
-    --name service/artifact \
-    --credential-file deploy/matrix/bureau-creds
+    --name service/artifact
 
 bureau service create bureau/template:agent-service \
     --machine bureau/fleet/prod/machine/sharkbox \
-    --name service/agent \
-    --credential-file deploy/matrix/bureau-creds
-```
-
-Publish service bindings so the daemon can resolve `RequiredServices`:
-
-```bash
-bureau matrix state set --credential-file deploy/matrix/bureau-creds \
-    --key artifact \
-    '#bureau/fleet/prod/machine/sharkbox:bureau.local' \
-    m.bureau.service_binding \
-    '{"principal":"@bureau/fleet/prod/service/artifact:bureau.local"}'
-
-bureau matrix state set --credential-file deploy/matrix/bureau-creds \
-    --key agent \
-    '#bureau/fleet/prod/machine/sharkbox:bureau.local' \
-    m.bureau.service_binding \
-    '{"principal":"@bureau/fleet/prod/service/agent:bureau.local"}'
+    --name service/agent
 ```
 
 ### Create Agent or Workspace
@@ -342,8 +288,7 @@ bureau matrix state set --credential-file deploy/matrix/bureau-creds \
 ```bash
 bureau agent create bureau/template:bureau-agent-claude \
     --machine bureau/fleet/prod/machine/sharkbox \
-    --name agent/code-review \
-    --credential-file deploy/matrix/bureau-creds
+    --name agent/code-review
 ```
 
 **Workspace with agent** (includes git worktree setup):
@@ -352,8 +297,7 @@ bureau agent create bureau/template:bureau-agent-claude \
 bureau workspace create project/feature \
     --machine bureau/fleet/prod/machine/sharkbox \
     --template bureau/template:bureau-agent-claude \
-    --param repository=https://github.com/org/repo.git \
-    --credential-file deploy/matrix/bureau-creds
+    --param repository=https://github.com/org/repo.git
 ```
 
 ### Observe
@@ -365,15 +309,13 @@ bureau dashboard
 
 ## Adding More Machines
 
-Repeat steps 4-6 for each additional machine. The fleet controller
+Repeat steps 3-5 for each additional machine. The fleet controller
 (when enabled) coordinates service placement across machines
 automatically.
 
 ```bash
 # Enable the fleet controller on a machine.
-bureau fleet enable bureau/fleet/prod \
-    --host local \
-    --credential-file deploy/matrix/bureau-creds
+bureau fleet enable bureau/fleet/prod --host local
 ```
 
 See fleet.md for multi-machine service placement, HA, and scaling.
@@ -382,8 +324,8 @@ See fleet.md for multi-machine service placement, HA, and scaling.
 
 ## Related Documents
 
-- `deploy/matrix/PLAYBOOK.md` — detailed infrastructure playbook
-  including TURN, binary cache, and validation steps
+- [environment](https://github.com/bureau-foundation/environment) —
+  infrastructure bootstrap, profiles, and operator fleet configuration
 - machine-lifecycle.md — privilege model, socket permissions, directory
   layout, agent autonomy
 - nix.md — build pipeline, binary cache, version management protocol

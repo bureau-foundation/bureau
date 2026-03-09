@@ -17,7 +17,8 @@ exports_files([
 ])
 
 # Remote execution platform. The platform properties must match exactly what
-# bb-worker registers with the scheduler (see deploy/buildbarn/bb-worker.jsonnet).
+# bb-worker registers with the scheduler (see Buildbarn config in the
+# environment repository).
 # The scheduler routes actions to workers whose platform property set is an
 # exact match — a mismatch means actions queue forever with no worker to run them.
 platform(

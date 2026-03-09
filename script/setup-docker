@@ -24,10 +24,18 @@
 
 set -euo pipefail
 
-SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
-REPO_ROOT="$(cd "$SCRIPT_DIR/.." && pwd)"
-SOURCE_CONFIG="$REPO_ROOT/deploy/docker/daemon.json"
 TARGET_CONFIG="/etc/docker/daemon.json"
+
+# Bureau's Docker daemon configuration: expand the default address pool
+# to avoid collisions with host networks and allow more containers.
+BUREAU_DOCKER_CONFIG='{
+  "default-address-pools": [
+    {
+      "base": "172.16.0.0/12",
+      "size": 28
+    }
+  ]
+}'
 
 CHECK_ONLY=false
 FORCE=false
@@ -56,12 +64,6 @@ while [[ $# -gt 0 ]]; do
             ;;
     esac
 done
-
-# Verify the source config exists.
-if [ ! -f "$SOURCE_CONFIG" ]; then
-    echo "Error: source config not found at $SOURCE_CONFIG" >&2
-    exit 1
-fi
 
 # Check mode: verify daemon.json contains the address pool config.
 check_config() {
@@ -105,7 +107,7 @@ if [ -f "$TARGET_CONFIG" ] && [ "$FORCE" = false ]; then
     echo ""
     echo "Bureau needs to add default-address-pools. Options:"
     echo "  1. Run with --force to overwrite (backs up existing file)"
-    echo "  2. Manually merge deploy/docker/daemon.json into $TARGET_CONFIG"
+    echo "  2. Manually add default-address-pools to $TARGET_CONFIG"
     exit 1
 fi
 
@@ -119,7 +121,7 @@ fi
 # Install the config.
 echo "Installing $TARGET_CONFIG..."
 sudo mkdir -p /etc/docker
-sudo cp "$SOURCE_CONFIG" "$TARGET_CONFIG"
+echo "$BUREAU_DOCKER_CONFIG" | sudo tee "$TARGET_CONFIG" > /dev/null
 
 # Restart Docker daemon to pick up the new config.
 echo "Restarting Docker daemon..."

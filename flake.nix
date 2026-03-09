@@ -332,8 +332,7 @@
 
             # Minimal environment for Bureau's own CI and Buildbarn runners.
             # Contains only Bureau's sandbox runtime deps (bubblewrap, tmux).
-            # For Buildbarn runners, prefer:
-            #   bureau environment build workstation --out-link deploy/buildbarn/runner-env
+            # For richer environments, use the environment repository:
             runner-env = pkgs.buildEnv {
               name = "bureau-runner-env";
               paths = self.lib.bureauRuntime pkgs;

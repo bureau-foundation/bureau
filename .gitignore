@@ -11,7 +11,6 @@
 /result-*
 
 # Nix runner environment (symlink to /nix/store, machine-local)
-deploy/buildbarn/runner-env
 
 # Build artifacts (safety net for accidental go build at repo root)
 /bureau
@@ -48,12 +47,8 @@ secrets/
 *.pem
 *.crt
 
-# Deploy secrets (written by bureau matrix setup / attic bootstrap)
-deploy/matrix/bureau-creds
-deploy/matrix/.env-attic-token
+# Deploy secrets (written by bureau matrix setup)
 deploy/test/bureau-creds
-# Forgejo app.ini contains generated secrets after first boot
-deploy/forgejo/app.ini
 
 # Beads (local workstream tracking)
 .beads/

@@ -97,7 +97,16 @@ if [ -z "$CREDENTIAL_FILE" ]; then
     if [ "$USE_DEV" = true ]; then
         CREDENTIAL_FILE="$DEV_DATA_DIR/bureau-creds"
     else
-        CREDENTIAL_FILE="$REPO_ROOT/deploy/matrix/bureau-creds"
+        # Production: operator should have a credential file from their
+        # environment bootstrap. Check common locations.
+        for candidate in \
+            "$HOME/.config/bureau/bureau-creds" \
+            "/etc/bureau/bureau-creds"; do
+            if [ -f "$candidate" ]; then
+                CREDENTIAL_FILE="$candidate"
+                break
+            fi
+        done
     fi
 fi
 

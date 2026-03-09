@@ -105,7 +105,6 @@ fi
 if ! "$SCRIPT_DIR/setup-docker" --check &>/dev/null; then
     echo "Warning: Docker not configured for Bureau (address pool too small)." >&2
     echo "  Run: script/setup-docker" >&2
-    echo "  See: deploy/docker/daemon.json" >&2
     echo "" >&2
 fi
 

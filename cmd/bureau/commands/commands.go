@@ -122,8 +122,8 @@ observation, and structured messaging via Matrix.`,
 				Command:     "bureau template list bureau/template",
 			},
 			{
-				Description: "Build and deploy an environment profile",
-				Command:     "bureau environment build workstation --out-link deploy/buildbarn/runner-env",
+				Description: "Build an environment profile",
+				Command:     "bureau environment build workstation",
 			},
 			{
 				Description: "Create a workspace for a project",

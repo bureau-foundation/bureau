@@ -63,8 +63,8 @@ with symlinks into /nix/store for all packages in the profile.`,
 				Command:     "bureau environment build workstation",
 			},
 			{
-				Description: "Build for the Buildbarn runner",
-				Command:     "bureau environment build workstation --out-link deploy/buildbarn/runner-env",
+				Description: "Build with a custom output link",
+				Command:     "bureau environment build workstation --out-link /var/bureau/buildbarn/runner-env",
 			},
 			{
 				Description: "Build from a local checkout",

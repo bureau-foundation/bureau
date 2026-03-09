@@ -76,7 +76,7 @@ cmd/           Binary entry points:
   bureau-telemetry-relay/  Per-machine telemetry collection and forwarding
   bureau-test-agent/     Minimal test agent for integration tests
 integration/   End-to-end integration tests (real homeserver, full daemon+launcher stack)
-deploy/        Deployment configurations (matrix/, buildbarn/, systemd/, test/)
+deploy/        Local deployment configs (dev/, test/, systemd/, tmux/)
 docs/          Documentation (design/ for architecture, infra/ for operations)
 script/        Dev environment setup (Nix installer, version pins)
 ```

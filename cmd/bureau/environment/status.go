@@ -50,16 +50,9 @@ environments.`,
 			// Check the standard environment directory.
 			entries = append(entries, scanDirectory(defaultOutDir)...)
 
-			// Check the Buildbarn runner-env symlink (may be elsewhere
-			// in the source tree or an absolute path).
-			buildbarnPaths := []string{
-				"deploy/buildbarn/runner-env",
-				"/var/bureau/buildbarn/runner-env",
-			}
-			for _, path := range buildbarnPaths {
-				if entry, ok := resolveSymlink(path, "buildbarn"); ok {
-					entries = append(entries, entry)
-				}
+			// Check the Buildbarn runner-env symlink.
+			if entry, ok := resolveSymlink("/var/bureau/buildbarn/runner-env", "buildbarn"); ok {
+				entries = append(entries, entry)
 			}
 
 			if done, err := params.EmitJSON(entries); done {

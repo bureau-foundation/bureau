@@ -256,4 +256,4 @@ Use `--prod` to target the production installation explicitly.
 - deployment.md — deploying Bureau to real machines
 - nix-cache.md — setting up the Nix binary cache
 - `docs/design/README.md` — reading guide for all design documents
-- `deploy/matrix/PLAYBOOK.md` — detailed homeserver setup playbook
+- [environment](https://github.com/bureau-foundation/environment) — infrastructure bootstrap and operator fleet configuration

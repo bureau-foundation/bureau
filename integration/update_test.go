@@ -300,47 +300,64 @@ func TestUpdateLifecycle(t *testing.T) {
 	t.Log("update lifecycle test complete")
 }
 
-// createFakeNixStore creates v2 binaries inside the container at fake Nix
-// store paths. v1 uses the original binaries at /bureau-bin/ (already
-// present from the bind mount) — no copies needed. v2 daemon and launcher
-// are full copies with a trailing marker appended to change the SHA256
-// hash without affecting ELF execution. v2 proxy is a small placeholder
-// (it is never exec'd, only hashed and path-updated via IPC).
+// fakeStoreHashV1 and fakeStoreHashV2 are 32-character lowercase
+// alphanumeric strings matching the canonical Nix store path basename
+// format. Used to construct valid /nix/store/ paths in the test
+// container so that the daemon's ValidateStorePath check passes.
+const (
+	fakeStoreHashV1 = "00000000000000000000000000000001"
+	fakeStoreHashV2 = "00000000000000000000000000000002"
+)
+
+// createFakeNixStore creates v1 and v2 binaries inside the container at
+// valid Nix store paths. Both versions use canonical /nix/store/<hash>-name
+// paths so they pass the daemon's store path validation.
 //
-// Using /bureau-bin/ for v1 avoids ~180MB of unnecessary file copies
-// through Docker's overlay2 filesystem (3 binaries × ~60MB each). This
-// keeps the test well within the 10-second budget even under concurrent
-// test invocations.
+// v1 and v2 binaries are full copies of the bind-mounted /bureau-bin/
+// originals. Symlinks cannot be used because Linux resolves /proc/self/exe
+// through symlinks: after exec'ing a symlink, os.Executable() returns the
+// target path instead of the Nix store path, breaking the daemon's watchdog
+// path comparison (checkDaemonWatchdog compares os.Executable() against
+// watchdog.State.NewBinary by string equality).
+//
+// v2 daemon and launcher have a trailing marker appended to change the
+// SHA256 hash without affecting ELF execution. v2 proxy is a small
+// placeholder (it is never exec'd, only hashed and path-updated via IPC).
 func createFakeNixStore(t *testing.T, containerID string) (v1 *schema.BureauVersion, v2 *schema.BureauVersion) {
 	t.Helper()
 
-	// Only create v2 binaries. Daemon and launcher need full copies
-	// (they get exec'd). Proxy only needs to be stat-able, hashable,
-	// and pass the launcher's executability check — a small placeholder
-	// with different content from the v1 proxy is sufficient.
+	// Shell printf uses %%s (escaped for Go's fmt.Sprintf) to avoid
+	// collision with Go format specifiers.
 	script := fmt.Sprintf(`
 set -e
-for component in bureau-daemon bureau-launcher; do
-	mkdir -p /nix/store/test-v2-${component}/bin
-	cp /bureau-bin/${component} /nix/store/test-v2-${component}/bin/${component}
-	printf '%s' >> /nix/store/test-v2-${component}/bin/${component}
+# v1: full copies of bind-mounted binaries
+for component in bureau-daemon bureau-launcher bureau-proxy; do
+	mkdir -p /nix/store/%[1]s-${component}/bin
+	cp /bureau-bin/${component} /nix/store/%[1]s-${component}/bin/${component}
 done
-mkdir -p /nix/store/test-v2-bureau-proxy/bin
-printf '%s' > /nix/store/test-v2-bureau-proxy/bin/bureau-proxy
-chmod +x /nix/store/test-v2-bureau-proxy/bin/bureau-proxy
-`, v2Marker, v2Marker)
+# v2: full copies with marker appended (daemon and launcher get exec'd)
+for component in bureau-daemon bureau-launcher; do
+	mkdir -p /nix/store/%[2]s-${component}/bin
+	cp /bureau-bin/${component} /nix/store/%[2]s-${component}/bin/${component}
+	printf '%%s' %[3]s >> /nix/store/%[2]s-${component}/bin/${component}
+done
+# v2 proxy: small placeholder (only hashed, never exec'd)
+mkdir -p /nix/store/%[2]s-bureau-proxy/bin
+printf '%%s' %[3]s > /nix/store/%[2]s-bureau-proxy/bin/bureau-proxy
+chmod +x /nix/store/%[2]s-bureau-proxy/bin/bureau-proxy
+`, fakeStoreHashV1, fakeStoreHashV2, v2Marker)
 	dockerExecOrFail(t, containerID, "sh", "-c", script)
-	t.Log("fake Nix store created with v2 binaries")
+	t.Log("fake Nix store created with v1 and v2 binaries")
 
 	v1 = &schema.BureauVersion{
-		DaemonStorePath:   "/bureau-bin/bureau-daemon",
-		LauncherStorePath: "/bureau-bin/bureau-launcher",
-		ProxyStorePath:    "/bureau-bin/bureau-proxy",
+		DaemonStorePath:   fmt.Sprintf("/nix/store/%s-bureau-daemon/bin/bureau-daemon", fakeStoreHashV1),
+		LauncherStorePath: fmt.Sprintf("/nix/store/%s-bureau-launcher/bin/bureau-launcher", fakeStoreHashV1),
+		ProxyStorePath:    fmt.Sprintf("/nix/store/%s-bureau-proxy/bin/bureau-proxy", fakeStoreHashV1),
 	}
 	v2 = &schema.BureauVersion{
-		DaemonStorePath:   "/nix/store/test-v2-bureau-daemon/bin/bureau-daemon",
-		LauncherStorePath: "/nix/store/test-v2-bureau-launcher/bin/bureau-launcher",
-		ProxyStorePath:    "/nix/store/test-v2-bureau-proxy/bin/bureau-proxy",
+		DaemonStorePath:   fmt.Sprintf("/nix/store/%s-bureau-daemon/bin/bureau-daemon", fakeStoreHashV2),
+		LauncherStorePath: fmt.Sprintf("/nix/store/%s-bureau-launcher/bin/bureau-launcher", fakeStoreHashV2),
+		ProxyStorePath:    fmt.Sprintf("/nix/store/%s-bureau-proxy/bin/bureau-proxy", fakeStoreHashV2),
 	}
 	return v1, v2
 }

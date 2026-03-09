@@ -106,8 +106,19 @@ func run() error {
 	}()
 
 	// Start the incremental sync loop in a goroutine.
+	//
+	// The timeout is set to 5 seconds instead of the default 30s.
+	// Continuwuity's /sync long-poll notification mechanism does not
+	// reliably wake up connections using inline filters without
+	// room-level scoping: when an event matches the filter's event
+	// types and the user is a member of the room, the long-poll may
+	// still sleep until the timeout expires. A 5-second timeout
+	// bounds the worst-case relay cascade latency while adding
+	// minimal homeserver load (5 extra empty responses per 30s
+	// window vs the default of 1).
 	go service.RunSyncLoop(ctx, boot.Session, service.SyncConfig{
-		Filter: syncFilter,
+		Filter:  syncFilter,
+		Timeout: 5000,
 	}, sinceToken, ticketService.handleSync, boot.Clock, boot.Logger)
 
 	// Start the timer loop. Timer gates fire at precise target

@@ -606,6 +606,9 @@ func TestReconcileBureauVersion_ProxyChanged(t *testing.T) {
 	daemon.configRoomID = mustRoomID(configRoomID)
 	daemon.launcherSocket = launcherSocket
 	daemon.daemonBinaryHash = daemonHash
+	daemon.validateStorePathFunc = func(path string) error {
+		return nil // Test uses temp paths, not real Nix store paths.
+	}
 	daemon.adminSocketPathFunc = func(principal ref.Entity) string {
 		return filepath.Join(socketDir, principal.AccountLocalpart()+".admin.sock")
 	}

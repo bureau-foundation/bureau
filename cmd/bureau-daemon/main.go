@@ -631,6 +631,7 @@ type Daemon struct {
 	// goroutine (no mutex needed).
 	provenanceVerifier *provenance.Verifier
 	provenanceStatus   *schema.ProvenanceVerifierStatus // summary for daemon-status.json; nil when no verifier
+	verifiedStorePaths map[string]bool                  // store paths verified in this session; cleared on provenance config change
 	templateRoomID     ref.RoomID                       // included in /sync; filtered for m.bureau.template events only
 	pipelineRoomID     ref.RoomID                       // excluded from /sync via not_rooms; matched as defense-in-depth
 	opsRoomID          ref.RoomID                       // machine ops room for drain coordination; zero if not resolved
@@ -936,6 +937,12 @@ type Daemon struct {
 	// Tests override this to use temp directories.
 	serviceSocketPathFunc func(principal ref.Entity) string
 
+	// validateStorePathFunc validates that a path is a legitimate Nix
+	// store path (not a path traversal attack). Defaults to
+	// nix.ValidateStorePath. Tests override this when using temp
+	// directory paths for binary comparison tests.
+	validateStorePathFunc func(path string) error
+
 	// prefetchFunc fetches a Nix store path and its closure from
 	// configured substituters. Defaults to prefetchNixStore. Tests
 	// override this to avoid requiring a real Nix installation.
@@ -946,6 +953,12 @@ type Daemon struct {
 	// SHA-256). Tests override this to avoid requiring a real Nix
 	// installation while still testing provenance verification flow.
 	narDigestFunc func(ctx context.Context, storePath string) ([]byte, error)
+
+	// verifyBundleFunc verifies a provenance bundle against trust
+	// roots and policy. Defaults to verifier.Verify. Tests override
+	// this to inject specific verification results (e.g., unknown
+	// status values) without constructing valid Sigstore bundles.
+	verifyBundleFunc func(bundleBytes []byte, digestAlgorithm string, artifactDigest []byte) provenance.Result
 
 	// validateCommandFunc checks that a command binary is resolvable
 	// before sending a create-sandbox request to the launcher. Defaults
@@ -1705,6 +1718,7 @@ func (d *Daemon) syncProvenance(ctx context.Context) {
 	if rootsNotFound && policyNotFound {
 		d.provenanceVerifier = nil
 		d.provenanceStatus = nil
+		d.verifiedStorePaths = nil
 		return
 	}
 
@@ -1747,6 +1761,10 @@ func (d *Daemon) syncProvenance(ctx context.Context) {
 	}
 
 	d.provenanceVerifier = verifier
+
+	// Policy changed — invalidate previously verified store paths so
+	// they are re-verified against the new roots/policy.
+	d.verifiedStorePaths = nil
 
 	// Build the operator-facing status summary for daemon-status.json.
 	rootSetNames := make([]string, 0, len(roots.Roots))

@@ -241,6 +241,113 @@ func TestCheckDaemonWatchdog_ReportsToMatrix(t *testing.T) {
 	}
 }
 
+func TestCheckDaemonWatchdog_SymlinkResolution(t *testing.T) {
+	t.Parallel()
+
+	// Simulates the Linux /proc/self/exe behavior: when exec'ing a
+	// symlink, os.Executable() returns the target path (resolved by
+	// the kernel), not the symlink path stored in the watchdog.
+	//
+	// Without symlink resolution in checkDaemonWatchdog, this scenario
+	// would fall through to the "neither match" default case, silently
+	// clearing the watchdog without reporting success.
+
+	watchdogDir := t.TempDir()
+	watchdogPath := filepath.Join(watchdogDir, "daemon-watchdog.cbor")
+	logger := slog.New(slog.NewJSONHandler(os.Stderr, nil))
+
+	// Create a real file (the binary target) and a symlink to it.
+	binaryDir := t.TempDir()
+	targetPath := filepath.Join(binaryDir, "bureau-daemon-real")
+	if err := os.WriteFile(targetPath, []byte("binary-content"), 0755); err != nil {
+		t.Fatalf("writing target binary: %v", err)
+	}
+	symlinkDir := filepath.Join(binaryDir, "nix-store-link")
+	if err := os.MkdirAll(symlinkDir, 0755); err != nil {
+		t.Fatalf("creating symlink dir: %v", err)
+	}
+	symlinkPath := filepath.Join(symlinkDir, "bureau-daemon")
+	if err := os.Symlink(targetPath, symlinkPath); err != nil {
+		t.Fatalf("creating symlink: %v", err)
+	}
+
+	err := watchdog.Write(watchdogPath, watchdog.State{
+		Component:      "daemon",
+		PreviousBinary: "/nix/store/old-daemon/bin/bureau-daemon",
+		NewBinary:      symlinkPath, // watchdog stores the symlink path
+		Timestamp:      time.Date(2099, 1, 1, 0, 0, 0, 0, time.UTC),
+	})
+	if err != nil {
+		t.Fatalf("writing watchdog: %v", err)
+	}
+
+	// os.Executable() returns the resolved target, not the symlink.
+	failedPath := checkDaemonWatchdog(
+		watchdogPath,
+		targetPath, // what os.Executable() returns after exec through symlink
+		nil, ref.RoomID{}, logger,
+	)
+	if failedPath != "" {
+		t.Errorf("failedPath = %q, want empty (symlink should resolve to successful exec)", failedPath)
+	}
+
+	// Watchdog should be cleared.
+	if _, err := os.Stat(watchdogPath); !os.IsNotExist(err) {
+		t.Error("watchdog file should be removed after successful exec detection via symlink")
+	}
+}
+
+func TestCheckDaemonWatchdog_SymlinkResolution_FailedExec(t *testing.T) {
+	t.Parallel()
+
+	// Same symlink setup, but daemonBinaryPath matches PreviousBinary
+	// (the old binary was restarted after the new one failed).
+
+	watchdogDir := t.TempDir()
+	watchdogPath := filepath.Join(watchdogDir, "daemon-watchdog.cbor")
+	logger := slog.New(slog.NewJSONHandler(os.Stderr, nil))
+
+	binaryDir := t.TempDir()
+	oldTargetPath := filepath.Join(binaryDir, "bureau-daemon-old")
+	if err := os.WriteFile(oldTargetPath, []byte("old-binary"), 0755); err != nil {
+		t.Fatalf("writing old binary: %v", err)
+	}
+	oldSymlinkDir := filepath.Join(binaryDir, "old-store-link")
+	if err := os.MkdirAll(oldSymlinkDir, 0755); err != nil {
+		t.Fatalf("creating symlink dir: %v", err)
+	}
+	oldSymlinkPath := filepath.Join(oldSymlinkDir, "bureau-daemon")
+	if err := os.Symlink(oldTargetPath, oldSymlinkPath); err != nil {
+		t.Fatalf("creating symlink: %v", err)
+	}
+
+	err := watchdog.Write(watchdogPath, watchdog.State{
+		Component:      "daemon",
+		PreviousBinary: oldSymlinkPath, // symlink to the old binary
+		NewBinary:      "/nix/store/new-daemon/bin/bureau-daemon",
+		Timestamp:      time.Date(2099, 1, 1, 0, 0, 0, 0, time.UTC),
+	})
+	if err != nil {
+		t.Fatalf("writing watchdog: %v", err)
+	}
+
+	// os.Executable() returns the resolved old target — new binary failed,
+	// systemd restarted the old one.
+	failedPath := checkDaemonWatchdog(
+		watchdogPath,
+		oldTargetPath, // resolved symlink target of PreviousBinary
+		nil, ref.RoomID{}, logger,
+	)
+	if failedPath != "/nix/store/new-daemon/bin/bureau-daemon" {
+		t.Errorf("failedPath = %q, want %q", failedPath, "/nix/store/new-daemon/bin/bureau-daemon")
+	}
+
+	// Watchdog should be cleared.
+	if _, err := os.Stat(watchdogPath); !os.IsNotExist(err) {
+		t.Error("watchdog file should be removed after failed exec detection via symlink")
+	}
+}
+
 // --- execDaemon tests ---
 
 func TestExecDaemon_WritesWatchdogAndCallsExec(t *testing.T) {
@@ -536,6 +643,9 @@ func TestReconcileBureauVersion_DaemonChanged_TriggersExec(t *testing.T) {
 		return filepath.Join(socketDir, principal.AccountLocalpart()+".admin.sock")
 	}
 	daemon.logger = slog.New(slog.NewJSONHandler(os.Stderr, nil))
+	daemon.validateStorePathFunc = func(path string) error {
+		return nil // Test uses temp paths, not real Nix store paths.
+	}
 	daemon.prefetchFunc = func(ctx context.Context, storePath string) error {
 		return nil // Skip real Nix operations.
 	}

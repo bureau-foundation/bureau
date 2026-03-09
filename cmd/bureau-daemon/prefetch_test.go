@@ -37,6 +37,29 @@ import (
 	"github.com/bureau-foundation/bureau/messaging"
 )
 
+// validTestHash is a 32-character lowercase alphanumeric string matching
+// the Nix store path hash format for use in test store paths.
+const validTestHash = "abcdefghijklmnopqrstuvwxyz012345"
+
+// findExistingStoreDirectory returns a real Nix store directory path that
+// exists on the current machine. Skips the test if Nix is not available.
+func findExistingStoreDirectory(t *testing.T) string {
+	t.Helper()
+	nixBinary, err := nix.FindBinary("nix")
+	if err != nil {
+		t.Skipf("nix not available: %v", err)
+	}
+	resolved, err := filepath.EvalSymlinks(nixBinary)
+	if err != nil {
+		t.Skipf("cannot resolve nix binary symlinks: %v", err)
+	}
+	storeDirectory, err := nix.StoreDirectory(resolved)
+	if err != nil {
+		t.Skipf("cannot extract store directory from %q: %v", resolved, err)
+	}
+	return storeDirectory
+}
+
 func TestPrefetchEnvironment_ExistingPath(t *testing.T) {
 	t.Parallel()
 
@@ -45,6 +68,9 @@ func TestPrefetchEnvironment_ExistingPath(t *testing.T) {
 	daemon, _ := newTestDaemon(t)
 	daemon.runDir = principal.DefaultRunDir
 	daemon.logger = slog.New(slog.NewJSONHandler(os.Stderr, nil))
+	daemon.validateStorePathFunc = func(path string) error {
+		return nil // Test uses temp paths, not real Nix store paths.
+	}
 	daemon.prefetchFunc = func(ctx context.Context, storePath string) error {
 		called = true
 		return fmt.Errorf("should not be called")
@@ -66,6 +92,9 @@ func TestPrefetchEnvironment_MissingPathSuccess(t *testing.T) {
 	daemon, _ := newTestDaemon(t)
 	daemon.runDir = principal.DefaultRunDir
 	daemon.logger = slog.New(slog.NewJSONHandler(os.Stderr, nil))
+	daemon.validateStorePathFunc = func(path string) error {
+		return nil // Test uses fake paths, not real Nix store paths.
+	}
 	daemon.prefetchFunc = func(ctx context.Context, storePath string) error {
 		capturedPath = storePath
 		return nil
@@ -87,6 +116,9 @@ func TestPrefetchEnvironment_MissingPathFailure(t *testing.T) {
 	daemon, _ := newTestDaemon(t)
 	daemon.runDir = principal.DefaultRunDir
 	daemon.logger = slog.New(slog.NewJSONHandler(os.Stderr, nil))
+	daemon.validateStorePathFunc = func(path string) error {
+		return nil // Test uses fake paths, not real Nix store paths.
+	}
 	daemon.prefetchFunc = func(ctx context.Context, storePath string) error {
 		return fmt.Errorf("substituter unreachable")
 	}
@@ -109,6 +141,9 @@ func TestPrefetchEnvironment_ContextCancellation(t *testing.T) {
 	daemon, _ := newTestDaemon(t)
 	daemon.runDir = principal.DefaultRunDir
 	daemon.logger = slog.New(slog.NewJSONHandler(os.Stderr, nil))
+	daemon.validateStorePathFunc = func(path string) error {
+		return nil // Test uses fake paths, not real Nix store paths.
+	}
 	daemon.prefetchFunc = func(ctx context.Context, storePath string) error {
 		return ctx.Err()
 	}
@@ -119,14 +154,43 @@ func TestPrefetchEnvironment_ContextCancellation(t *testing.T) {
 	}
 }
 
+func TestPrefetchEnvironment_RejectsPathTraversal(t *testing.T) {
+	t.Parallel()
+
+	// Simulates a compromised template publishing an EnvironmentPath
+	// with path traversal. prefetchEnvironment must reject before any
+	// filesystem access (os.Stat or nix-store --realise).
+	daemon, _ := newTestDaemon(t)
+	daemon.runDir = principal.DefaultRunDir
+	daemon.logger = slog.New(slog.NewJSONHandler(os.Stderr, nil))
+	daemon.prefetchFunc = func(ctx context.Context, storePath string) error {
+		t.Fatal("prefetchFunc should not be called for invalid paths")
+		return nil
+	}
+
+	traversalPaths := []string{
+		"/nix/store/../../etc/shadow",
+		"/nix/store/../etc/passwd",
+		"/usr/local/bin/bash",
+		"/nix/store/",
+		"",
+	}
+
+	for _, path := range traversalPaths {
+		err := daemon.prefetchEnvironment(context.Background(), path)
+		if err == nil {
+			t.Errorf("expected error for path %q, got nil", path)
+		}
+	}
+}
+
 func TestPrefetchBureauVersion_AllPaths(t *testing.T) {
 	t.Parallel()
 
-	// All three store paths exist on disk, so no actual prefetch should
-	// be needed (os.Stat fast path).
-	daemonDir := t.TempDir()
-	launcherDir := t.TempDir()
-	proxyDir := t.TempDir()
+	// All store paths point to the same real Nix store directory that
+	// exists on disk, so no actual prefetch should be needed (os.Stat
+	// fast path).
+	existingPath := findExistingStoreDirectory(t)
 
 	called := false
 	daemon, _ := newTestDaemon(t)
@@ -138,9 +202,9 @@ func TestPrefetchBureauVersion_AllPaths(t *testing.T) {
 	}
 
 	version := &schema.BureauVersion{
-		DaemonStorePath:   daemonDir,
-		LauncherStorePath: launcherDir,
-		ProxyStorePath:    proxyDir,
+		DaemonStorePath:   existingPath,
+		LauncherStorePath: existingPath,
+		ProxyStorePath:    existingPath,
 	}
 
 	err := daemon.prefetchBureauVersion(context.Background(), version)
@@ -156,7 +220,7 @@ func TestPrefetchBureauVersion_PartialPaths(t *testing.T) {
 	t.Parallel()
 
 	// Only DaemonStorePath is set; others are empty and should be skipped.
-	existingDir := t.TempDir()
+	existingPath := findExistingStoreDirectory(t)
 
 	var prefetchedPaths []string
 	daemon, _ := newTestDaemon(t)
@@ -168,7 +232,7 @@ func TestPrefetchBureauVersion_PartialPaths(t *testing.T) {
 	}
 
 	version := &schema.BureauVersion{
-		DaemonStorePath: existingDir,
+		DaemonStorePath: existingPath,
 		// LauncherStorePath and ProxyStorePath intentionally empty.
 	}
 
@@ -192,7 +256,7 @@ func TestPrefetchBureauVersion_PrefetchFailure(t *testing.T) {
 	}
 
 	version := &schema.BureauVersion{
-		DaemonStorePath: "/nix/store/nonexistent-daemon-binary",
+		DaemonStorePath: "/nix/store/" + validTestHash + "-nonexistent-daemon-binary",
 	}
 
 	err := daemon.prefetchBureauVersion(context.Background(), version)
@@ -217,9 +281,9 @@ func TestPrefetchBureauVersion_MissingPathTriggersFetch(t *testing.T) {
 	}
 
 	version := &schema.BureauVersion{
-		DaemonStorePath:   "/nix/store/nonexistent-daemon",
-		LauncherStorePath: "/nix/store/nonexistent-launcher",
-		ProxyStorePath:    "/nix/store/nonexistent-proxy",
+		DaemonStorePath:   "/nix/store/" + validTestHash + "-nonexistent-daemon",
+		LauncherStorePath: "/nix/store/" + validTestHash + "-nonexistent-launcher",
+		ProxyStorePath:    "/nix/store/" + validTestHash + "-nonexistent-proxy",
 	}
 
 	err := daemon.prefetchBureauVersion(context.Background(), version)
@@ -228,6 +292,55 @@ func TestPrefetchBureauVersion_MissingPathTriggersFetch(t *testing.T) {
 	}
 	if len(fetchedPaths) != 3 {
 		t.Errorf("expected 3 prefetch calls, got %d: %v", len(fetchedPaths), fetchedPaths)
+	}
+}
+
+func TestPrefetchBureauVersion_PathTraversalRejected(t *testing.T) {
+	t.Parallel()
+
+	daemon, _ := newTestDaemon(t)
+	daemon.runDir = principal.DefaultRunDir
+	daemon.logger = slog.New(slog.NewJSONHandler(os.Stderr, nil))
+	daemon.prefetchFunc = func(ctx context.Context, storePath string) error {
+		t.Fatal("prefetchFunc should not be called for invalid paths")
+		return nil
+	}
+
+	tests := []struct {
+		name string
+		path string
+	}{
+		{
+			name: "dotdot traversal to bin",
+			path: "/nix/store/../../bin/bash",
+		},
+		{
+			name: "dotdot traversal to etc",
+			path: "/nix/store/../etc/passwd",
+		},
+		{
+			name: "short hash basename",
+			path: "/nix/store/abc-bureau-daemon/bin/bureau-daemon",
+		},
+		{
+			name: "non-nix path",
+			path: "/usr/local/bin/evil-binary",
+		},
+	}
+
+	for _, testCase := range tests {
+		t.Run(testCase.name, func(t *testing.T) {
+			version := &schema.BureauVersion{
+				DaemonStorePath: testCase.path,
+			}
+			err := daemon.prefetchBureauVersion(context.Background(), version)
+			if err == nil {
+				t.Fatalf("expected error for path %q", testCase.path)
+			}
+			if !strings.Contains(err.Error(), "invalid") {
+				t.Errorf("error = %v, want error containing 'invalid'", err)
+			}
+		})
 	}
 }
 
@@ -477,7 +590,7 @@ func newPrefetchTestMatrixState(t *testing.T, fleet ref.Fleet, configRoomID, tem
 
 	state.setStateEvent(templateRoomID, schema.EventTypeTemplate, "test-template", schema.TemplateContent{
 		Command:     []string{"/bin/echo", "hello"},
-		Environment: "/nix/store/abc123-test-env",
+		Environment: "/nix/store/abcdefghijklmnopqrstuvwxyz012345-test-env",
 	})
 
 	state.setStateEvent(configRoomID, schema.EventTypeMachineConfig, machineName, schema.MachineConfig{
@@ -825,13 +938,85 @@ func TestVerifyStorePathProvenance_NARDigestFailure(t *testing.T) {
 	})
 }
 
-func TestPrefetchBureauVersion_SkipsVerificationForExistingPaths(t *testing.T) {
+func TestPrefetchBureauVersion_ExistingPathSkipsVerificationUnderWarn(t *testing.T) {
 	t.Parallel()
 
-	// All store paths exist on disk — provenance verification should
-	// not be called because the os.Stat fast path skips both prefetch
-	// and verification.
-	daemonDir := t.TempDir()
+	// Under warn enforcement, existing paths skip verification
+	// entirely (fast path).
+	existingPath := findExistingStoreDirectory(t)
+
+	narDigestCalled := false
+	daemon, _ := newTestDaemon(t)
+	daemon.runDir = principal.DefaultRunDir
+	daemon.provenanceVerifier = newTestVerifier(t, schema.EnforcementWarn)
+	daemon.fleetCacheConfig = &schema.FleetCacheContent{URL: "http://cache.example.com"}
+	daemon.narDigestFunc = func(ctx context.Context, storePath string) ([]byte, error) {
+		narDigestCalled = true
+		return nil, fmt.Errorf("should not be called")
+	}
+	daemon.prefetchFunc = func(ctx context.Context, storePath string) error {
+		t.Fatal("prefetchFunc should not be called for existing paths")
+		return nil
+	}
+
+	version := &schema.BureauVersion{
+		DaemonStorePath: existingPath,
+	}
+
+	err := daemon.prefetchBureauVersion(context.Background(), version)
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if narDigestCalled {
+		t.Error("narDigestFunc should not be called for existing paths under warn")
+	}
+}
+
+func TestPrefetchBureauVersion_ExistingPathVerifiedUnderRequire(t *testing.T) {
+	t.Parallel()
+
+	// Under require enforcement, existing paths that haven't been
+	// verified in this session MUST be verified. The fast path is
+	// only for paths already in verifiedStorePaths.
+	existingPath := findExistingStoreDirectory(t)
+
+	bundleServer := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		http.NotFound(w, r)
+	}))
+	t.Cleanup(bundleServer.Close)
+
+	daemon, _ := newTestDaemon(t)
+	daemon.runDir = principal.DefaultRunDir
+	daemon.provenanceVerifier = newTestVerifier(t, schema.EnforcementRequire)
+	daemon.fleetCacheConfig = &schema.FleetCacheContent{URL: bundleServer.URL}
+	daemon.prefetchFunc = func(ctx context.Context, storePath string) error {
+		t.Fatal("prefetchFunc should not be called for existing paths")
+		return nil
+	}
+
+	version := &schema.BureauVersion{
+		DaemonStorePath: existingPath,
+	}
+
+	// First call: path exists but not yet verified — should trigger
+	// verification, which fails because no bundle exists. The bundle
+	// fetch returns 404, which under require enforcement returns an
+	// error before reaching narDigest computation.
+	err := daemon.prefetchBureauVersion(context.Background(), version)
+	if err == nil {
+		t.Fatal("expected error for unverified existing path under require")
+	}
+	if !strings.Contains(err.Error(), "provenance") {
+		t.Errorf("error = %v, want containing 'provenance'", err)
+	}
+}
+
+func TestPrefetchBureauVersion_VerifiedPathSkipsFastPath(t *testing.T) {
+	t.Parallel()
+
+	// Once a path is in verifiedStorePaths, it should skip
+	// verification even under require enforcement.
+	existingPath := findExistingStoreDirectory(t)
 
 	narDigestCalled := false
 	daemon, _ := newTestDaemon(t)
@@ -846,9 +1031,11 @@ func TestPrefetchBureauVersion_SkipsVerificationForExistingPaths(t *testing.T) {
 		t.Fatal("prefetchFunc should not be called for existing paths")
 		return nil
 	}
+	// Pre-populate the verified map.
+	daemon.verifiedStorePaths = map[string]bool{existingPath: true}
 
 	version := &schema.BureauVersion{
-		DaemonStorePath: daemonDir,
+		DaemonStorePath: existingPath,
 	}
 
 	err := daemon.prefetchBureauVersion(context.Background(), version)
@@ -856,7 +1043,7 @@ func TestPrefetchBureauVersion_SkipsVerificationForExistingPaths(t *testing.T) {
 		t.Fatalf("unexpected error: %v", err)
 	}
 	if narDigestCalled {
-		t.Error("narDigestFunc should not be called for existing paths")
+		t.Error("narDigestFunc should not be called for already-verified path")
 	}
 }
 
@@ -887,6 +1074,128 @@ func TestPrefetchBureauVersion_VerificationBlocksUpdate(t *testing.T) {
 	}
 	if !strings.Contains(err.Error(), "provenance") {
 		t.Errorf("error = %v, want containing 'provenance'", err)
+	}
+}
+
+func TestVerifyStorePathProvenance_RedirectRejected(t *testing.T) {
+	t.Parallel()
+
+	// Server returns 302 redirect to an "attacker" server. The client
+	// should NOT follow the redirect — it should treat the 302
+	// response as a non-200 error.
+	attacker := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		t.Error("redirect was followed to attacker server")
+		w.WriteHeader(http.StatusOK)
+		w.Write([]byte(`{"fake":"bundle"}`))
+	}))
+	t.Cleanup(attacker.Close)
+
+	cache := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		http.Redirect(w, r, attacker.URL+r.URL.Path, http.StatusFound)
+	}))
+	t.Cleanup(cache.Close)
+
+	daemon, _ := newTestDaemon(t)
+	daemon.provenanceVerifier = newTestVerifier(t, schema.EnforcementRequire)
+	daemon.fleetCacheConfig = &schema.FleetCacheContent{URL: cache.URL}
+	daemon.narDigestFunc = func(ctx context.Context, storePath string) ([]byte, error) {
+		return []byte("fake-digest-for-test-only-32-by"), nil
+	}
+
+	err := daemon.verifyStorePathProvenance(
+		context.Background(), "daemon",
+		"/nix/store/"+validTestHash+"-bureau-daemon")
+	if err == nil {
+		t.Fatal("expected error when cache returns redirect under require enforcement")
+	}
+	// The redirect is not followed, so provenance.FetchBundle sees the
+	// 302 status and returns an HTTP error (not ErrNoBundleFound).
+	if !strings.Contains(err.Error(), "provenance") {
+		t.Errorf("error = %v, want containing 'provenance'", err)
+	}
+}
+
+func TestVerifyStorePathProvenance_UnexpectedStatusRequireBlocks(t *testing.T) {
+	t.Parallel()
+
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+		w.Write([]byte(`{"fake":"bundle"}`))
+	}))
+	t.Cleanup(server.Close)
+
+	daemon, _ := newTestDaemon(t)
+	daemon.provenanceVerifier = newTestVerifier(t, schema.EnforcementRequire)
+	daemon.fleetCacheConfig = &schema.FleetCacheContent{URL: server.URL}
+	daemon.narDigestFunc = func(ctx context.Context, storePath string) ([]byte, error) {
+		return []byte("fake-digest-for-test-only-32-by"), nil
+	}
+	daemon.verifyBundleFunc = func(bundleBytes []byte, digestAlgorithm string, artifactDigest []byte) provenance.Result {
+		return provenance.Result{Status: provenance.Status(99)}
+	}
+
+	err := daemon.verifyStorePathProvenance(
+		context.Background(), "daemon",
+		"/nix/store/"+validTestHash+"-bureau-daemon")
+	if err == nil {
+		t.Fatal("expected error for unexpected status under require enforcement")
+	}
+	if !strings.Contains(err.Error(), "unexpected verification status") {
+		t.Errorf("error = %v, want containing 'unexpected verification status'", err)
+	}
+}
+
+func TestVerifyStorePathProvenance_UnexpectedStatusWarnAllows(t *testing.T) {
+	t.Parallel()
+
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+		w.Write([]byte(`{"fake":"bundle"}`))
+	}))
+	t.Cleanup(server.Close)
+
+	daemon, _ := newTestDaemon(t)
+	daemon.provenanceVerifier = newTestVerifier(t, schema.EnforcementWarn)
+	daemon.fleetCacheConfig = &schema.FleetCacheContent{URL: server.URL}
+	daemon.narDigestFunc = func(ctx context.Context, storePath string) ([]byte, error) {
+		return []byte("fake-digest-for-test-only-32-by"), nil
+	}
+	daemon.verifyBundleFunc = func(bundleBytes []byte, digestAlgorithm string, artifactDigest []byte) provenance.Result {
+		return provenance.Result{Status: provenance.Status(99)}
+	}
+
+	err := daemon.verifyStorePathProvenance(
+		context.Background(), "daemon",
+		"/nix/store/"+validTestHash+"-bureau-daemon")
+	if err != nil {
+		t.Fatalf("expected no error for unexpected status under warn enforcement, got %v", err)
+	}
+}
+
+func TestVerifyStorePathProvenance_UnexpectedStatusLogAllows(t *testing.T) {
+	t.Parallel()
+
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+		w.Write([]byte(`{"fake":"bundle"}`))
+	}))
+	t.Cleanup(server.Close)
+
+	daemon, _ := newTestDaemon(t)
+	daemon.provenanceVerifier = newTestVerifier(t, schema.EnforcementLog)
+	daemon.fleetCacheConfig = &schema.FleetCacheContent{URL: server.URL}
+	daemon.narDigestFunc = func(ctx context.Context, storePath string) ([]byte, error) {
+		return []byte("fake-digest-for-test-only-32-by"), nil
+	}
+	daemon.verifyBundleFunc = func(bundleBytes []byte, digestAlgorithm string, artifactDigest []byte) provenance.Result {
+		return provenance.Result{Status: provenance.Status(99)}
+	}
+
+	err := daemon.verifyStorePathProvenance(
+		context.Background(), "daemon",
+		"/nix/store/"+validTestHash+"-bureau-daemon")
+	if err != nil {
+		t.Fatalf("expected no error for unexpected status under log enforcement, got %v", err)
 	}
 }
 

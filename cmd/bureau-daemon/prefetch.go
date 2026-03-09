@@ -28,6 +28,20 @@ import (
 // prefetchNixStore) which invokes nix-store --realise to fetch from
 // configured substituters.
 func (d *Daemon) prefetchEnvironment(ctx context.Context, storePath string) error {
+	// Validate the store path before any filesystem access. This
+	// function is called both from prefetchBureauVersion (which does
+	// its own validation) and from reconcileRunningPrincipal for
+	// template environment paths. Template content comes from Matrix
+	// state events — a compromised template room could publish paths
+	// like "/nix/store/../../bin/bash" to escape the store.
+	validateStorePath := d.validateStorePathFunc
+	if validateStorePath == nil {
+		validateStorePath = nix.ValidateStorePath
+	}
+	if err := validateStorePath(storePath); err != nil {
+		return fmt.Errorf("invalid store path: %w", err)
+	}
+
 	// Fast path: the store path already exists locally. Nix store paths
 	// are written atomically (rename into /nix/store/) so there is no
 	// race with concurrent fetches — we see either the full path or
@@ -56,13 +70,19 @@ func (d *Daemon) prefetchEnvironment(ctx context.Context, storePath string) erro
 // (e.g., daemon, proxy) from being prefetched. The caller can then compare
 // whatever store paths are available.
 //
+// All paths are validated against nix.ValidateStorePath before any filesystem
+// access, catching path traversal attacks from compromised BureauVersion
+// state events.
+//
 // After each newly fetched store path, provenance verification is performed
 // against the fleet's trust roots and policy. When enforcement is "require"
 // and verification fails, the prefetch returns an error — blocking the
-// entire version update. Paths that already exist locally (os.Stat fast
-// path) are not re-verified: the daemon trusts store paths that were
-// present before this reconcile cycle, and Nix's own Ed25519 cache
-// signatures have already validated them.
+// entire version update.
+//
+// Existing paths (os.Stat fast path) skip both prefetch and verification
+// UNLESS enforcement is "require" and the path hasn't been verified in the
+// current session (tracked via verifiedStorePaths map). This ensures policy
+// changes apply retroactively to paths already on disk.
 //
 // Returns the first error encountered, if any. On error, some store paths
 // may have been fetched while others were not — the caller should check
@@ -84,34 +104,70 @@ func (d *Daemon) prefetchBureauVersion(ctx context.Context, version *schema.Bure
 			continue
 		}
 
-		// BureauVersion contains full file paths (e.g.,
-		// /nix/store/abc-bureau-daemon/bin/bureau-daemon). Check if
-		// the file already exists locally (fast path — skips
-		// nix-store invocation on the common case where the binary
-		// was built on this machine).
+		// Validate the store path before any filesystem access.
+		// BureauVersion paths come from Matrix state events — a
+		// compromised fleet room could publish paths like
+		// "/nix/store/../../bin/bash" that resolve outside
+		// /nix/store/ via POSIX path resolution.
+		validateStorePath := d.validateStorePathFunc
+		if validateStorePath == nil {
+			validateStorePath = nix.ValidateStorePath
+		}
+		if err := validateStorePath(entry.path); err != nil {
+			return fmt.Errorf("invalid %s path in BureauVersion: %w", entry.label, err)
+		}
+
+		alreadyExists := false
 		if _, statErr := os.Stat(entry.path); statErr == nil {
+			alreadyExists = true
+		}
+
+		// Fast path: when the path exists and no require-enforcement
+		// verification is needed, skip without extracting the store
+		// directory. This covers the common case where binaries are
+		// already present and either no provenance policy is
+		// configured or enforcement is below "require".
+		if alreadyExists && (d.provenanceVerifier == nil ||
+			d.provenanceVerifier.Enforcement("nix_store_paths") != schema.EnforcementRequire) {
 			continue
 		}
 
-		// File doesn't exist locally. Extract the Nix store directory
-		// (e.g., /nix/store/abc-bureau-daemon) and prefetch it.
+		// Extract the store directory for prefetch or verification.
 		// nix-store --realise expects store directory paths, not file
 		// paths within them.
 		storeDirectory, err := nix.StoreDirectory(entry.path)
 		if err != nil {
 			return fmt.Errorf("invalid %s store path %s: %w", entry.label, entry.path, err)
 		}
-		if err := d.prefetchEnvironment(ctx, storeDirectory); err != nil {
-			return fmt.Errorf("prefetching %s store path %s: %w", entry.label, storeDirectory, err)
+
+		if alreadyExists {
+			// Path exists but require enforcement is active. Skip
+			// if already verified in this session.
+			if d.verifiedStorePaths[storeDirectory] {
+				continue
+			}
+		} else {
+			// File doesn't exist. Prefetch from binary cache.
+			if err := d.prefetchEnvironment(ctx, storeDirectory); err != nil {
+				return fmt.Errorf("prefetching %s store path %s: %w", entry.label, storeDirectory, err)
+			}
 		}
 
-		// Verify provenance of the newly fetched store path. This
-		// is an additional gate beyond Nix's Ed25519 cache
-		// signatures: the bundle attests that the NAR was built by
-		// a trusted CI identity (Fulcio cert + Rekor tlog entry).
+		// Verify provenance of the store path. For newly fetched
+		// paths, this is an additional gate beyond Nix's Ed25519
+		// cache signatures. For existing paths under require
+		// enforcement, this ensures policy changes apply
+		// retroactively.
 		if err := d.verifyStorePathProvenance(ctx, entry.label, storeDirectory); err != nil {
 			return err
 		}
+
+		// Record successful verification so the fast path can
+		// skip re-verification on subsequent reconcile cycles.
+		if d.verifiedStorePaths == nil {
+			d.verifiedStorePaths = make(map[string]bool)
+		}
+		d.verifiedStorePaths[storeDirectory] = true
 	}
 	return nil
 }
@@ -166,7 +222,17 @@ func (d *Daemon) verifyStorePathProvenance(ctx context.Context, label, storeDire
 	// Fetch the provenance bundle from the cache's attestation directory.
 	// Use a bounded timeout to prevent a malicious or slow cache server
 	// from stalling the reconcile loop indefinitely.
-	bundleBytes, err := provenance.FetchBundle(&http.Client{Timeout: 30 * time.Second}, cacheURL, basename)
+	bundleClient := &http.Client{
+		Timeout: 30 * time.Second,
+		// Reject redirects. Binary caches serve static files — there
+		// is no legitimate reason for a redirect in attestation bundle
+		// fetches. Following redirects would let a compromised cache
+		// send requests to an attacker-controlled server.
+		CheckRedirect: func(*http.Request, []*http.Request) error {
+			return http.ErrUseLastResponse
+		},
+	}
+	bundleBytes, err := provenance.FetchBundle(bundleClient, cacheURL, basename)
 	if err != nil {
 		if errors.Is(err, provenance.ErrNoBundleFound) {
 			d.logger.Warn("no provenance bundle for store path",
@@ -217,7 +283,11 @@ func (d *Daemon) verifyStorePathProvenance(ctx context.Context, label, storeDire
 	}
 
 	// Verify the bundle against trust roots and policy.
-	result := verifier.Verify(bundleBytes, "sha256", narDigest)
+	verifyBundle := d.verifyBundleFunc
+	if verifyBundle == nil {
+		verifyBundle = verifier.Verify
+	}
+	result := verifyBundle(bundleBytes, "sha256", narDigest)
 
 	switch result.Status {
 	case provenance.StatusVerified:
@@ -246,11 +316,16 @@ func (d *Daemon) verifyStorePathProvenance(ctx context.Context, label, storeDire
 		return nil
 
 	default:
-		d.logger.Warn("unexpected provenance verification status",
+		d.logger.Error("unexpected provenance verification status",
 			"label", label,
 			"store_path", storeDirectory,
 			"status", result.Status,
 		)
+		if enforcement == schema.EnforcementRequire {
+			return fmt.Errorf("provenance: %s: unexpected verification status %d", label, result.Status)
+		}
+		d.postProvenanceWarning(ctx, label, storeDirectory, enforcement,
+			"unexpected_status", fmt.Sprintf("unexpected verification status: %d", result.Status))
 		return nil
 	}
 }

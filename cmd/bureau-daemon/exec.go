@@ -32,6 +32,14 @@ func (d *Daemon) daemonWatchdogPath() string {
 // checkDaemonWatchdog reads the daemon watchdog file on startup and
 // determines whether a previous exec() transition succeeded or failed.
 //
+// Path comparison uses filepath.EvalSymlinks on all three paths
+// (current, new, previous) to handle the case where the exec target
+// is a symlink. On Linux, /proc/self/exe (read by os.Executable)
+// resolves through symlinks to the final target, so the current
+// binary path is already resolved — but the watchdog's NewBinary and
+// PreviousBinary are literal paths from BureauVersion store paths,
+// which could be symlinks in non-standard deployments.
+//
 // When the watchdog exists and is recent (within watchdogMaxAge):
 //   - If daemonBinaryPath == state.NewBinary: the exec succeeded. The
 //     new binary is running. Reports success to Matrix, clears watchdog.
@@ -63,8 +71,17 @@ func checkDaemonWatchdog(
 	// A recent watchdog exists — this process started after an exec()
 	// transition attempt (or a crash during one).
 
-	switch daemonBinaryPath {
-	case state.NewBinary:
+	// Resolve all paths through symlinks so that a symlinked exec
+	// target (where /proc/self/exe returns the target, not the link)
+	// still matches the watchdog entry. Resolution errors are
+	// non-fatal — fall back to the original literal path, which is
+	// correct for the common case of regular files.
+	resolvedCurrent := resolveSymlinks(daemonBinaryPath)
+	resolvedNew := resolveSymlinks(state.NewBinary)
+	resolvedPrevious := resolveSymlinks(state.PreviousBinary)
+
+	switch resolvedCurrent {
+	case resolvedNew:
 		// We are the new binary. The exec() succeeded.
 		logger.Info("daemon exec() succeeded",
 			"previous", state.PreviousBinary,
@@ -75,7 +92,7 @@ func checkDaemonWatchdog(
 				schema.NewDaemonSelfUpdateMessage(state.PreviousBinary, state.NewBinary, schema.SelfUpdateSucceeded, ""))
 		}
 
-	case state.PreviousBinary:
+	case resolvedPrevious:
 		// We are the old binary. The new binary crashed or failed to
 		// start, and this process was restarted (by systemd, manual
 		// intervention, etc.).
@@ -96,8 +113,11 @@ func checkDaemonWatchdog(
 		// from a stale transition that no longer applies.
 		logger.Info("clearing stale daemon watchdog (current binary matches neither previous nor new)",
 			"current", daemonBinaryPath,
+			"resolved_current", resolvedCurrent,
 			"watchdog_previous", state.PreviousBinary,
+			"resolved_previous", resolvedPrevious,
 			"watchdog_new", state.NewBinary,
+			"resolved_new", resolvedNew,
 		)
 	}
 
@@ -106,6 +126,20 @@ func checkDaemonWatchdog(
 	}
 
 	return failedPath
+}
+
+// resolveSymlinks returns the path with all symlinks evaluated. If
+// resolution fails (broken symlink, permission error, path doesn't
+// exist), returns the original path unchanged. This makes the
+// watchdog comparison correct for regular files (no-op) and robust
+// for symlinked binaries (resolves to the same target that
+// /proc/self/exe would report).
+func resolveSymlinks(path string) string {
+	resolved, err := filepath.EvalSymlinks(path)
+	if err != nil {
+		return path
+	}
+	return resolved
 }
 
 // execDaemon performs the daemon self-update: writes the watchdog state

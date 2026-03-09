@@ -401,6 +401,11 @@ func cleanupConfigDir(configDir string) {
 // checkLauncherWatchdog reads the launcher watchdog file on startup and
 // determines whether a previous exec() transition succeeded or failed.
 //
+// Path comparison uses filepath.EvalSymlinks on all three paths
+// (current, new, previous) so that exec through a symlink still
+// matches the watchdog entry. See checkDaemonWatchdog in
+// cmd/bureau-daemon/exec.go for the full rationale.
+//
 // Unlike the daemon's checkDaemonWatchdog, the launcher does not report
 // to Matrix (it has no configRoomID). The daemon reports on the
 // launcher's behalf when it detects the binary hash change.
@@ -424,15 +429,23 @@ func checkLauncherWatchdog(
 	// A recent watchdog exists — this process started after an exec()
 	// transition attempt (or a crash during one).
 
-	switch launcherBinaryPath {
-	case state.NewBinary:
+	// Resolve all paths through symlinks. See checkDaemonWatchdog for
+	// the full explanation — on Linux /proc/self/exe resolves through
+	// symlinks, so exec through a symlink produces a path mismatch
+	// unless we resolve here too.
+	resolvedCurrent := resolveSymlinks(launcherBinaryPath)
+	resolvedNew := resolveSymlinks(state.NewBinary)
+	resolvedPrevious := resolveSymlinks(state.PreviousBinary)
+
+	switch resolvedCurrent {
+	case resolvedNew:
 		// We are the new binary. The exec() succeeded.
 		logger.Info("launcher exec() succeeded",
 			"previous", state.PreviousBinary,
 			"new", state.NewBinary,
 		)
 
-	case state.PreviousBinary:
+	case resolvedPrevious:
 		// We are the old binary. The new binary crashed or failed to
 		// start, and this process was restarted (by systemd, manual
 		// intervention, etc.).
@@ -448,8 +461,11 @@ func checkLauncherWatchdog(
 		// from a stale transition that no longer applies.
 		logger.Info("clearing stale launcher watchdog (current binary matches neither previous nor new)",
 			"current", launcherBinaryPath,
+			"resolved_current", resolvedCurrent,
 			"watchdog_previous", state.PreviousBinary,
+			"resolved_previous", resolvedPrevious,
 			"watchdog_new", state.NewBinary,
+			"resolved_new", resolvedNew,
 		)
 	}
 
@@ -458,4 +474,18 @@ func checkLauncherWatchdog(
 	}
 
 	return failedPath
+}
+
+// resolveSymlinks returns the path with all symlinks evaluated. If
+// resolution fails (broken symlink, permission error, path doesn't
+// exist), returns the original path unchanged. This makes the
+// watchdog comparison correct for regular files (no-op) and robust
+// for symlinked binaries (resolves to the same target that
+// /proc/self/exe would report).
+func resolveSymlinks(path string) string {
+	resolved, err := filepath.EvalSymlinks(path)
+	if err != nil {
+		return path
+	}
+	return resolved
 }

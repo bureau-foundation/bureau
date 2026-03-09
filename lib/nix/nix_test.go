@@ -56,6 +56,108 @@ func TestFindBinary_NonexistentBinary(t *testing.T) {
 	}
 }
 
+// validHash is a 32-character lowercase alphanumeric string matching the
+// Nix store path hash format. Used across tests to construct valid paths.
+const validHash = "abcdefghijklmnopqrstuvwxyz012345"
+
+func TestValidateStorePath(t *testing.T) {
+	t.Parallel()
+
+	tests := []struct {
+		name    string
+		path    string
+		wantErr bool
+	}{
+		{
+			name: "valid store directory",
+			path: "/nix/store/" + validHash + "-bureau-daemon",
+		},
+		{
+			name: "valid file within store entry",
+			path: "/nix/store/" + validHash + "-bureau-daemon/bin/bureau-daemon",
+		},
+		{
+			name: "valid deeply nested file",
+			path: "/nix/store/" + validHash + "-env/share/doc/readme.txt",
+		},
+		{
+			name: "valid name with special chars",
+			path: "/nix/store/" + validHash + "-foo+bar_baz.qux?yes=no",
+		},
+		{
+			name:    "path traversal via dotdot",
+			path:    "/nix/store/../../bin/bash",
+			wantErr: true,
+		},
+		{
+			name:    "path traversal single dotdot",
+			path:    "/nix/store/../etc/passwd",
+			wantErr: true,
+		},
+		{
+			name:    "not under nix store",
+			path:    "/usr/local/bin/bureau-daemon",
+			wantErr: true,
+		},
+		{
+			name:    "bare nix store root",
+			path:    "/nix/store/",
+			wantErr: true,
+		},
+		{
+			name:    "nix store without trailing slash",
+			path:    "/nix/store",
+			wantErr: true,
+		},
+		{
+			name:    "empty path",
+			path:    "",
+			wantErr: true,
+		},
+		{
+			name:    "invalid basename too short hash",
+			path:    "/nix/store/abc-bureau-daemon",
+			wantErr: true,
+		},
+		{
+			name:    "invalid basename no hyphen",
+			path:    "/nix/store/" + validHash + "nohyphen",
+			wantErr: true,
+		},
+		{
+			name:    "invalid basename uppercase in hash",
+			path:    "/nix/store/ABCDEFGHIJKLMNOPQRSTUVWXYZ012345-daemon",
+			wantErr: true,
+		},
+		{
+			name:    "dotdot as basename",
+			path:    "/nix/store/..",
+			wantErr: true,
+		},
+		{
+			name:    "dot as basename",
+			path:    "/nix/store/.",
+			wantErr: true,
+		},
+	}
+
+	for _, testCase := range tests {
+		t.Run(testCase.name, func(t *testing.T) {
+			t.Parallel()
+			err := ValidateStorePath(testCase.path)
+			if testCase.wantErr {
+				if err == nil {
+					t.Fatalf("expected error for path %q", testCase.path)
+				}
+				return
+			}
+			if err != nil {
+				t.Fatalf("unexpected error for path %q: %v", testCase.path, err)
+			}
+		})
+	}
+}
+
 func TestStoreDirectory(t *testing.T) {
 	t.Parallel()
 
@@ -67,18 +169,18 @@ func TestStoreDirectory(t *testing.T) {
 	}{
 		{
 			name: "file path within store entry",
-			path: "/nix/store/abc-bureau-daemon/bin/bureau-daemon",
-			want: "/nix/store/abc-bureau-daemon",
+			path: "/nix/store/" + validHash + "-bureau-daemon/bin/bureau-daemon",
+			want: "/nix/store/" + validHash + "-bureau-daemon",
 		},
 		{
 			name: "bare store directory",
-			path: "/nix/store/abc-bureau-daemon",
-			want: "/nix/store/abc-bureau-daemon",
+			path: "/nix/store/" + validHash + "-bureau-daemon",
+			want: "/nix/store/" + validHash + "-bureau-daemon",
 		},
 		{
 			name: "deeply nested file",
-			path: "/nix/store/xyz-env/share/doc/readme.txt",
-			want: "/nix/store/xyz-env",
+			path: "/nix/store/" + validHash + "-env/share/doc/readme.txt",
+			want: "/nix/store/" + validHash + "-env",
 		},
 		{
 			name:    "not under nix store",

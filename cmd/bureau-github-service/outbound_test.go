@@ -51,8 +51,9 @@ type recordedRequest struct {
 // Route keys are "METHOD /path" (e.g., "POST /repos/acme/widgets/issues").
 // Each route is a mockRoute with a status code and response body.
 type mockRoute struct {
-	Status int
-	Body   any // JSON-encoded into response
+	Status  int
+	Body    any    // JSON-encoded into response
+	RawBody []byte // Written directly without JSON encoding (for binary responses)
 }
 
 type mockGitHub struct {
@@ -90,7 +91,9 @@ func newMockGitHub(t *testing.T) *mockGitHub {
 		}
 
 		writer.WriteHeader(route.Status)
-		if route.Body != nil {
+		if route.RawBody != nil {
+			writer.Write(route.RawBody)
+		} else if route.Body != nil {
 			json.NewEncoder(writer).Encode(route.Body)
 		}
 	}))
@@ -702,6 +705,56 @@ func outboundMustParseMachine(raw string) ref.Machine {
 		panic(fmt.Sprintf("ParseMachineUserID(%q): %v", raw, err))
 	}
 	return machine
+}
+
+func TestIsValidRepoComponent(t *testing.T) {
+	t.Parallel()
+
+	tests := []struct {
+		name  string
+		input string
+		want  bool
+	}{
+		{name: "valid lowercase", input: "acme", want: true},
+		{name: "valid with hyphens", input: "my-repo", want: true},
+		{name: "valid with underscore", input: "my_repo", want: true},
+		{name: "valid with period", input: "my.repo", want: true},
+		{name: "valid with digits", input: "repo123", want: true},
+		{name: "valid mixed", input: "My-Repo_2.0", want: true},
+
+		// Adversarial inputs.
+		{name: "slash", input: "owner/repo", want: false},
+		{name: "path traversal dots", input: "..", want: false},
+		{name: "question mark", input: "repo?q=1", want: false},
+		{name: "hash", input: "repo#evil", want: false},
+		{name: "percent encoding", input: "repo%2F", want: false},
+		{name: "backslash", input: "repo\\evil", want: false},
+		{name: "space", input: "repo name", want: false},
+		{name: "null byte", input: "repo\x00evil", want: false},
+		{name: "newline", input: "repo\nevil", want: false},
+		{name: "tab", input: "repo\tevil", want: false},
+
+		// Unicode homoglyphs that visually resemble safe characters.
+		// U+2044 FRACTION SLASH — looks like / but is not ASCII.
+		{name: "unicode fraction slash", input: "owner\u2044repo", want: false},
+		// U+FF0F FULLWIDTH SOLIDUS — looks like / in CJK contexts.
+		{name: "unicode fullwidth slash", input: "owner\uFF0Frepo", want: false},
+		// U+2024 ONE DOT LEADER — looks like . but is not ASCII.
+		{name: "unicode dot leader", input: "repo\u2024evil", want: false},
+		// U+2025 TWO DOT LEADER — visual .. equivalent.
+		{name: "unicode two dot leader", input: "\u2025evil", want: false},
+		// U+00AD SOFT HYPHEN — invisible character.
+		{name: "soft hyphen", input: "repo\u00ADevil", want: false},
+	}
+
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			got := isValidRepoComponent(test.input)
+			if got != test.want {
+				t.Errorf("isValidRepoComponent(%q) = %v, want %v", test.input, got, test.want)
+			}
+		})
+	}
 }
 
 func TestParseRepoSlug(t *testing.T) {

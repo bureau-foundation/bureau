@@ -93,6 +93,12 @@ func TestParseTemplateRefErrors(t *testing.T) {
 		{"empty room", ":base"},
 		{"empty room localpart with server", "@server:base"},
 		{"empty server after at", "bureau/template@:base"},
+
+		// Path traversal in template name (via ValidatePathSegment).
+		{"dotdot name", "bureau/template:.."},
+		{"dot name", "bureau/template:."},
+		{"hidden name", "bureau/template:.secret"},
+		{"dotgit name", "bureau/template:.git"},
 	}
 
 	for _, test := range tests {

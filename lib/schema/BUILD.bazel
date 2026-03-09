@@ -39,6 +39,7 @@ go_test(
     name = "schema_test",
     srcs = [
         "authorization_test.go",
+        "credential_ref_test.go",
         "events_artifact_test.go",
         "events_command_test.go",
         "events_fleet_test.go",

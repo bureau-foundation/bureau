@@ -6,6 +6,8 @@ package principal
 import (
 	"fmt"
 	"strings"
+
+	"github.com/bureau-foundation/bureau/lib/ref"
 )
 
 const (
@@ -58,36 +60,10 @@ const (
 	ProxyAdminSocketSuffix = ".admin.sock"
 )
 
-// allowedChars is the set of characters permitted in Matrix localparts
-// (per the Matrix spec: a-z, 0-9, and the symbols . _ = - /).
-// We check this via a lookup table for O(1) per-character validation.
-var allowedChars [256]bool
-
-func init() {
-	for c := 'a'; c <= 'z'; c++ {
-		allowedChars[c] = true
-	}
-	for c := '0'; c <= '9'; c++ {
-		allowedChars[c] = true
-	}
-	// Matrix localpart spec allows: a-z, 0-9, ., _, =, -, /
-	allowedChars['.'] = true
-	allowedChars['_'] = true
-	allowedChars['='] = true
-	allowedChars['-'] = true
-	allowedChars['/'] = true
-}
-
 // ValidateLocalpart checks that a Bureau principal localpart is safe to
 // use as both a Matrix user ID component and a filesystem path.
-//
-// Rules enforced:
-//   - Non-empty
-//   - Only lowercase a-z, 0-9, ., _, =, -, / (Matrix localpart charset)
-//   - No ".." segments (path traversal)
-//   - No segments starting with "." (hidden files/directories)
-//   - No empty segments (double slashes "//" or leading/trailing "/")
-//   - Maximum 84 characters (derived from unix socket path limit)
+// Delegates path safety rules to ref.ValidatePath, adding a length
+// constraint derived from the unix socket path limit.
 func ValidateLocalpart(localpart string) error {
 	if localpart == "" {
 		return fmt.Errorf("localpart is empty")
@@ -97,7 +73,7 @@ func ValidateLocalpart(localpart string) error {
 		return fmt.Errorf("localpart is %d characters, maximum is %d", len(localpart), MaxLocalpartLength)
 	}
 
-	return validatePath(localpart, "localpart")
+	return ref.ValidatePath(localpart, "localpart")
 }
 
 // ValidateRelativePath checks that a path is safe for use in filesystem
@@ -115,48 +91,7 @@ func ValidateRelativePath(path, label string) error {
 		return fmt.Errorf("%s is empty", label)
 	}
 
-	return validatePath(path, label)
-}
-
-// validatePath enforces the Bureau path safety rules shared by localparts,
-// workspace names, and worktree paths:
-//
-//   - Characters restricted to a-z, 0-9, ., _, =, -, / (the Matrix
-//     localpart charset — no shell metacharacters, no uppercase)
-//   - No leading or trailing /
-//   - No empty segments (double slashes)
-//   - No ".." segments (path traversal)
-//   - No segments starting with "." (hidden files/directories)
-func validatePath(path, label string) error {
-	// Check every character against the allowed set.
-	for i := 0; i < len(path); i++ {
-		if !allowedChars[path[i]] {
-			return fmt.Errorf("%s: invalid character %q at position %d (allowed: a-z, 0-9, ., _, =, -, /)", label, path[i], i)
-		}
-	}
-
-	// Structural checks on the slash-separated segments.
-	if path[0] == '/' {
-		return fmt.Errorf("%s must not start with /", label)
-	}
-	if path[len(path)-1] == '/' {
-		return fmt.Errorf("%s must not end with /", label)
-	}
-
-	segments := strings.Split(path, "/")
-	for _, segment := range segments {
-		if segment == "" {
-			return fmt.Errorf("%s contains empty segment (double slash)", label)
-		}
-		if segment == ".." {
-			return fmt.Errorf("%s contains '..' segment (path traversal)", label)
-		}
-		if segment[0] == '.' {
-			return fmt.Errorf("%s segment %q starts with '.' (hidden file/directory)", label, segment)
-		}
-	}
-
-	return nil
+	return ref.ValidatePath(path, label)
 }
 
 // RoomAliasLocalpart extracts the local alias name from a full Matrix room alias.

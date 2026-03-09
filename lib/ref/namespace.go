@@ -30,7 +30,7 @@ func NewNamespace(server ServerName, namespace string) (Namespace, error) {
 	if err := validateSegment(namespace, "namespace name"); err != nil {
 		return Namespace{}, fmt.Errorf("invalid namespace: %w", err)
 	}
-	if err := validatePath(namespace, "namespace name"); err != nil {
+	if err := ValidatePath(namespace, "namespace name"); err != nil {
 		return Namespace{}, fmt.Errorf("invalid namespace: %w", err)
 	}
 	return Namespace{server: server, namespace: namespace}, nil

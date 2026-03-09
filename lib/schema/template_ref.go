@@ -105,8 +105,8 @@ func parseRef(reference, entityKind string) (room, name, server string, err erro
 	if roomReference == "" {
 		return "", "", "", fmt.Errorf("%s reference %q has empty room", entityKind, reference)
 	}
-	if name == "" {
-		return "", "", "", fmt.Errorf("%s reference %q has empty %s name", entityKind, reference, entityKind)
+	if err := ref.ValidatePathSegment(name, entityKind+" name"); err != nil {
+		return "", "", "", fmt.Errorf("%s reference %q: %w", entityKind, reference, err)
 	}
 
 	// Split room reference into localpart and optional @server.

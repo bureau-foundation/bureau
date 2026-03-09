@@ -52,8 +52,8 @@ func TestValidateLocalpart(t *testing.T) {
 		{name: "only_slash", localpart: "/", wantErr: "must not start with /"},
 
 		// Structural: empty segments (double slash).
-		{name: "double_slash", localpart: "alice//bob", wantErr: "empty segment"},
-		{name: "triple_slash", localpart: "a///b", wantErr: "empty segment"},
+		{name: "double_slash", localpart: "alice//bob", wantErr: "is empty"},
+		{name: "triple_slash", localpart: "a///b", wantErr: "is empty"},
 
 		// Path traversal.
 		{name: "dotdot_segment", localpart: "alice/../bob", wantErr: "path traversal"},
@@ -64,7 +64,7 @@ func TestValidateLocalpart(t *testing.T) {
 		// Hidden files (segments starting with dot).
 		{name: "hidden_first_segment", localpart: ".hidden", wantErr: "starts with '.'"},
 		{name: "hidden_later_segment", localpart: "alice/.hidden/bob", wantErr: "starts with '.'"},
-		{name: "dot_only_segment", localpart: "alice/./bob", wantErr: "starts with '.'"},
+		{name: "dot_only_segment", localpart: "alice/./bob", wantErr: "path traversal"},
 		{name: "dotfile_segment", localpart: "alice/.config", wantErr: "starts with '.'"},
 
 		// Dots allowed when not leading a segment.
@@ -114,7 +114,7 @@ func TestValidateRelativePath(t *testing.T) {
 		// Structural.
 		{name: "leading_slash", path: "/foo", label: "worktree path", wantErr: "must not start with /"},
 		{name: "trailing_slash", path: "foo/", label: "worktree path", wantErr: "must not end with /"},
-		{name: "double_slash", path: "foo//bar", label: "worktree path", wantErr: "empty segment"},
+		{name: "double_slash", path: "foo//bar", label: "worktree path", wantErr: "is empty"},
 		{name: "path_traversal", path: "foo/../bar", label: "worktree path", wantErr: "path traversal"},
 		{name: "hidden_segment", path: "foo/.hidden", label: "worktree path", wantErr: "starts with '.'"},
 

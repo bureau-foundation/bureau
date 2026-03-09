@@ -93,6 +93,11 @@ func TestParsePipelineRefErrors(t *testing.T) {
 		{"empty room", ":dev-workspace-init"},
 		{"empty room localpart with server", "@server:deploy"},
 		{"empty server after at", "bureau/pipeline@:init"},
+
+		// Path traversal in pipeline name (via ValidatePathSegment).
+		{"dotdot name", "bureau/pipeline:.."},
+		{"dot name", "bureau/pipeline:."},
+		{"hidden name", "bureau/pipeline:.secret"},
 	}
 
 	for _, test := range tests {

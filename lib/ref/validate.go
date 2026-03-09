@@ -55,10 +55,45 @@ func init() {
 	allowedChars['/'] = true
 }
 
-// validatePath enforces Bureau path safety rules: characters restricted
-// to a-z, 0-9, ., _, =, -, /; no leading or trailing /; no empty
-// segments; no ".." segments; no segments starting with ".".
-func validatePath(path, label string) error {
+// ValidatePathSegment checks that a single path segment is safe for
+// use in URL paths, file paths, and Matrix localparts. Rejects:
+//   - empty string
+//   - "." and ".." (path traversal vectors)
+//   - segments starting with "." (hidden files/directories)
+//
+// This function only checks semantic safety — it does NOT validate
+// character sets, which vary by context (Matrix localparts allow
+// [a-z0-9._=-/], GitHub repo names allow [a-zA-Z0-9._-], etc.).
+// Callers should apply their own character validation after this check.
+//
+// Every path component validator in the codebase should call this
+// function to ensure consistent rejection of path traversal patterns.
+func ValidatePathSegment(segment, label string) error {
+	if segment == "" {
+		return fmt.Errorf("%s is empty", label)
+	}
+	if segment == "." || segment == ".." {
+		return fmt.Errorf("%s %q is a path traversal segment", label, segment)
+	}
+	if segment[0] == '.' {
+		return fmt.Errorf("%s %q starts with '.' (hidden)", label, segment)
+	}
+	return nil
+}
+
+// ValidatePath enforces Bureau path safety rules on a slash-delimited
+// path (localparts, workspace names, worktree paths). Rules:
+//   - Characters restricted to a-z, 0-9, ., _, =, -, / (Matrix localpart charset)
+//   - No leading or trailing /
+//   - No empty segments (double slashes)
+//   - No ".." or "." segments (path traversal)
+//   - No segments starting with "." (hidden files/directories)
+//
+// The label parameter names the path in error messages (e.g., "localpart",
+// "worktree path"). Character validation uses the Matrix localpart charset,
+// which also excludes shell metacharacters — making validated paths safe
+// for filesystem operations and pipeline variable substitution.
+func ValidatePath(path, label string) error {
 	for i := 0; i < len(path); i++ {
 		if !allowedChars[path[i]] {
 			return fmt.Errorf("%s: invalid character %q at position %d (allowed: a-z, 0-9, ., _, =, -, /)", label, path[i], i)
@@ -74,14 +109,8 @@ func validatePath(path, label string) error {
 
 	segments := strings.Split(path, "/")
 	for _, segment := range segments {
-		if segment == "" {
-			return fmt.Errorf("%s contains empty segment (double slash)", label)
-		}
-		if segment == ".." {
-			return fmt.Errorf("%s contains '..' segment (path traversal)", label)
-		}
-		if segment[0] == '.' {
-			return fmt.Errorf("%s segment %q starts with '.' (hidden file/directory)", label, segment)
+		if err := ValidatePathSegment(segment, label+" segment"); err != nil {
+			return err
 		}
 	}
 
@@ -96,14 +125,14 @@ func validateLocalpart(localpart string) error {
 	if len(localpart) > maxLocalpartLength {
 		return fmt.Errorf("localpart %q is %d characters, maximum is %d", localpart, len(localpart), maxLocalpartLength)
 	}
-	return validatePath(localpart, "localpart")
+	return ValidatePath(localpart, "localpart")
 }
 
 // validateSegment checks that a value is a valid single path segment:
-// non-empty and contains no slashes.
+// non-empty, no slashes, no path traversal patterns.
 func validateSegment(value, label string) error {
-	if value == "" {
-		return fmt.Errorf("%s is empty", label)
+	if err := ValidatePathSegment(value, label); err != nil {
+		return err
 	}
 	if strings.Contains(value, "/") {
 		return fmt.Errorf("%s %q must not contain '/'", label, value)

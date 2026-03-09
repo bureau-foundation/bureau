@@ -34,6 +34,7 @@ go_test(
         "ref_test.go",
         "room_test.go",
         "ticket_id_test.go",
+        "validate_test.go",
     ],
     embed = [":ref"],
 )

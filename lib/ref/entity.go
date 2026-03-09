@@ -35,7 +35,7 @@ func newEntity(fleet Fleet, entityType, name string) (entity, error) {
 	if name == "" {
 		return entity{}, fmt.Errorf("invalid %s ref: name is empty", entityType)
 	}
-	if err := validatePath(name, entityType+" name"); err != nil {
+	if err := ValidatePath(name, entityType+" name"); err != nil {
 		return entity{}, fmt.Errorf("invalid %s ref: %w", entityType, err)
 	}
 

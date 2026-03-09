@@ -14,6 +14,7 @@ import (
 	"github.com/bureau-foundation/bureau/lib/clock"
 	"github.com/bureau-foundation/bureau/lib/codec"
 	"github.com/bureau-foundation/bureau/lib/github"
+	"github.com/bureau-foundation/bureau/lib/ref"
 	"github.com/bureau-foundation/bureau/lib/schema/forge"
 	"github.com/bureau-foundation/bureau/lib/servicetoken"
 )
@@ -114,10 +115,15 @@ func parseRepoSlug(slug string) (string, string, error) {
 
 // isValidRepoComponent checks that a GitHub owner or repo name contains
 // only characters that are safe for URL path construction. GitHub
-// allows [a-zA-Z0-9._-] in owner and repo names. Rejecting other
-// characters prevents path traversal and API injection via crafted
-// repo slugs from untrusted agents.
+// allows [a-zA-Z0-9._-] in owner and repo names. Semantic safety
+// (empty, ".", "..", leading dot) is delegated to ref.ValidatePathSegment
+// so the codebase has one canonical path traversal check. Character
+// validation is GitHub-specific: the allowlist prevents API injection
+// via crafted repo slugs from untrusted agents.
 func isValidRepoComponent(name string) bool {
+	if ref.ValidatePathSegment(name, "repo component") != nil {
+		return false
+	}
 	for _, char := range name {
 		if !((char >= 'a' && char <= 'z') ||
 			(char >= 'A' && char <= 'Z') ||

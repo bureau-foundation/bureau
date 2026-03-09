@@ -17,6 +17,8 @@ import (
 	"math/big"
 	"net/http"
 	"net/http/httptest"
+	"strings"
+	"sync"
 	"testing"
 	"time"
 
@@ -787,6 +789,152 @@ func TestVerifyArtifactProvenance_RejectedBundleWarnAllowed(t *testing.T) {
 	if result.Enforcement != "warn" {
 		t.Errorf("enforcement = %q, want %q", result.Enforcement, "warn")
 	}
+}
+
+func TestSyncProvenance_RootsSucceedPolicyTransientError(t *testing.T) {
+	t.Parallel()
+
+	// Roots return 200 with valid content, but policy returns 500.
+	// The enforcement level is unknown — the service must fail-closed.
+	// This tests the partial transient error path that the "both 500"
+	// test (TransientErrorAtStartupBlocksBoot) doesn't cover.
+	roots := provenanceValidRoots(t)
+	rootsJSON, err := json.Marshal(roots)
+	if err != nil {
+		t.Fatalf("marshaling roots: %v", err)
+	}
+
+	server := httptest.NewServer(http.HandlerFunc(func(writer http.ResponseWriter, request *http.Request) {
+		writer.Header().Set("Content-Type", "application/json")
+		path := request.URL.Path
+		if strings.Contains(path, string(schema.EventTypeProvenanceRoots)) {
+			writer.WriteHeader(http.StatusOK)
+			writer.Write(rootsJSON)
+		} else if strings.Contains(path, string(schema.EventTypeProvenancePolicy)) {
+			writer.WriteHeader(http.StatusInternalServerError)
+			json.NewEncoder(writer).Encode(map[string]string{
+				"errcode": "M_UNKNOWN",
+				"error":   "internal server error",
+			})
+		} else {
+			writer.WriteHeader(http.StatusNotFound)
+			json.NewEncoder(writer).Encode(map[string]string{
+				"errcode": "M_NOT_FOUND",
+				"error":   "not found",
+			})
+		}
+	}))
+	t.Cleanup(server.Close)
+
+	gs := newProvenanceTestService(t, server)
+	syncError := gs.syncProvenance(context.Background())
+	if syncError == nil {
+		t.Fatal("syncProvenance must return error when roots succeed but policy returns transient error — enforcement level unknown")
+	}
+	if gs.provenanceVerifier.Load() != nil {
+		t.Fatal("verifier should remain nil (no previous state to retain)")
+	}
+}
+
+func TestSyncProvenance_PolicySucceedRootsTransientError(t *testing.T) {
+	t.Parallel()
+
+	// Policy returns 200 with valid content, but roots return 500.
+	// Without roots, the verifier cannot be constructed. The service
+	// must fail-closed.
+	policy := provenanceValidPolicy()
+	policyJSON, err := json.Marshal(policy)
+	if err != nil {
+		t.Fatalf("marshaling policy: %v", err)
+	}
+
+	server := httptest.NewServer(http.HandlerFunc(func(writer http.ResponseWriter, request *http.Request) {
+		writer.Header().Set("Content-Type", "application/json")
+		path := request.URL.Path
+		if strings.Contains(path, string(schema.EventTypeProvenanceRoots)) {
+			writer.WriteHeader(http.StatusInternalServerError)
+			json.NewEncoder(writer).Encode(map[string]string{
+				"errcode": "M_UNKNOWN",
+				"error":   "internal server error",
+			})
+		} else if strings.Contains(path, string(schema.EventTypeProvenancePolicy)) {
+			writer.WriteHeader(http.StatusOK)
+			writer.Write(policyJSON)
+		} else {
+			writer.WriteHeader(http.StatusNotFound)
+			json.NewEncoder(writer).Encode(map[string]string{
+				"errcode": "M_NOT_FOUND",
+				"error":   "not found",
+			})
+		}
+	}))
+	t.Cleanup(server.Close)
+
+	gs := newProvenanceTestService(t, server)
+	syncError := gs.syncProvenance(context.Background())
+	if syncError == nil {
+		t.Fatal("syncProvenance must return error when policy succeeds but roots return transient error — verifier cannot be constructed")
+	}
+	if gs.provenanceVerifier.Load() != nil {
+		t.Fatal("verifier should remain nil (no previous state to retain)")
+	}
+}
+
+func TestVerifyArtifactProvenance_ConcurrentAccess(t *testing.T) {
+	t.Parallel()
+
+	// Exercise concurrent syncProvenance (writer) and
+	// verifyArtifactProvenance (reader) access to the
+	// provenanceVerifier field. Run with -race to validate
+	// the atomic.Pointer fix — a regular pointer field would
+	// trigger a data race here.
+	state := newProvenanceMockState()
+	roots := provenanceValidRoots(t)
+	policy := provenanceValidPolicy()
+	state.setStateEvent(schema.EventTypeProvenanceRoots, "", roots)
+	state.setStateEvent(schema.EventTypeProvenancePolicy, "", policy)
+
+	stateServer := httptest.NewServer(state.handler())
+	t.Cleanup(stateServer.Close)
+
+	gs := newProvenanceTestService(t, stateServer)
+
+	// Set up GitHub mock for attestation lookups.
+	mock := newMockGitHub(t)
+	digest := computeSHA256([]byte("concurrent-test"))
+	subjectDigest := github.FormatSubjectDigest("sha256", digest)
+	mock.routes["GET /repos/owner/repo/attestations/"+subjectDigest] = mockRoute{
+		Status: http.StatusOK,
+		Body:   github.AttestationResponse{Attestations: []github.AttestationEntry{}},
+	}
+	githubClient := newTestGitHubClient(t, mock)
+
+	ctx, cancel := context.WithTimeout(context.Background(), 100*time.Millisecond)
+	defer cancel()
+
+	var wg sync.WaitGroup
+
+	// Writer goroutine: repeatedly syncs provenance config.
+	wg.Add(1)
+	go func() {
+		defer wg.Done()
+		for ctx.Err() == nil {
+			_ = gs.syncProvenance(ctx)
+		}
+	}()
+
+	// Reader goroutines: repeatedly verify provenance.
+	for range 4 {
+		wg.Add(1)
+		go func() {
+			defer wg.Done()
+			for ctx.Err() == nil {
+				gs.verifyArtifactProvenance(ctx, githubClient, "owner", "repo", digest, "concurrent-test")
+			}
+		}()
+	}
+
+	wg.Wait()
 }
 
 // newTestGitHubClient creates a GitHub client backed by the mock server.

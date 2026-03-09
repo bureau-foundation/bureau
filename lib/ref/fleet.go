@@ -30,7 +30,7 @@ func NewFleet(ns Namespace, fleet string) (Fleet, error) {
 	if err := validateSegment(fleet, "fleet name"); err != nil {
 		return Fleet{}, fmt.Errorf("invalid fleet: %w", err)
 	}
-	if err := validatePath(fleet, "fleet name"); err != nil {
+	if err := ValidatePath(fleet, "fleet name"); err != nil {
 		return Fleet{}, fmt.Errorf("invalid fleet: %w", err)
 	}
 	localpart := ns.namespace + "/" + fleetLiteral + "/" + fleet

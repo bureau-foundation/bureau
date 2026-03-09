@@ -263,6 +263,7 @@ func FetchWithSender(ctx context.Context, session messaging.Session, templateRef
 // Merge rules:
 //   - Scalars (Description, Command, Environment): child replaces parent if non-zero
 //   - Maps (EnvironmentVariables, Roles, DefaultPayload, ProxyServices): merged, child values win on conflict
+//   - PrependVariables: per-key merge — child entries first, then parent entries, deduplicated per key
 //   - Slices (Filesystem, CreateDirs, RequiredCredentials, RequiredServices,
 //     Secrets): child appended after parent, deduplicated where applicable
 //     (Filesystem by Dest, strings by value, Secrets by Key)
@@ -296,6 +297,7 @@ func Merge(parent, child *schema.TemplateContent) schema.TemplateContent {
 
 	// Maps: merge with child winning on conflict.
 	result.EnvironmentVariables = mergeStringMaps(parent.EnvironmentVariables, child.EnvironmentVariables)
+	result.PrependVariables = mergePrependVariables(parent.PrependVariables, child.PrependVariables)
 	result.Roles = mergeStringSliceMaps(parent.Roles, child.Roles)
 	result.DefaultPayload = MergeAnyMaps(parent.DefaultPayload, child.DefaultPayload)
 
@@ -514,5 +516,61 @@ func mergeStringSlices(parent, child []string) []string {
 			seen[s] = true
 		}
 	}
+	return result
+}
+
+// mergePrependVariables merges two PrependVariables maps. For each key
+// present in either map, child entries come first, then parent entries
+// not already in the child's list. This preserves the inheritance
+// invariant: a child's prepended paths appear before a parent's.
+//
+// Example: parent has PATH=["/parent/bin"], child has PATH=["/child/bin"].
+// Result: PATH=["/child/bin", "/parent/bin"]. The child's directories
+// are searched first, matching the general "child wins" principle.
+func mergePrependVariables(parent, child map[string][]string) map[string][]string {
+	if len(parent) == 0 && len(child) == 0 {
+		return nil
+	}
+	if len(parent) == 0 {
+		return child
+	}
+	if len(child) == 0 {
+		return parent
+	}
+
+	// Collect all keys from both maps.
+	result := make(map[string][]string, len(parent)+len(child))
+
+	// Start with parent entries for keys only in parent.
+	for key, values := range parent {
+		if _, inChild := child[key]; !inChild {
+			result[key] = values
+		}
+	}
+
+	// For keys in child (possibly also in parent), child first then parent.
+	for key, childValues := range child {
+		parentValues, inParent := parent[key]
+		if !inParent {
+			result[key] = childValues
+			continue
+		}
+
+		// Child entries first, then parent entries not in child.
+		seen := make(map[string]bool, len(childValues))
+		merged := make([]string, len(childValues))
+		copy(merged, childValues)
+		for _, value := range childValues {
+			seen[value] = true
+		}
+		for _, value := range parentValues {
+			if !seen[value] {
+				merged = append(merged, value)
+				seen[value] = true
+			}
+		}
+		result[key] = merged
+	}
+
 	return result
 }

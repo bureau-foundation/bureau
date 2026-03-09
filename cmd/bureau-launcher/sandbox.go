@@ -129,6 +129,28 @@ func specToProfile(spec *schema.SandboxSpec, proxySocketPath string) *sandbox.Pr
 		}
 	}
 
+	// Apply PrependVariables: for each key, join the values with ":" and
+	// prepend to the corresponding environment variable. This runs after
+	// EnvironmentPath PATH handling, so for PATH the final order is:
+	// PrependVariables["PATH"] : EnvironmentPath/bin : base_PATH.
+	if len(spec.PrependVariables) > 0 {
+		if profile.Environment == nil {
+			profile.Environment = make(map[string]string)
+		}
+		for key, values := range spec.PrependVariables {
+			if len(values) == 0 {
+				continue
+			}
+			prepended := strings.Join(values, ":")
+			existing := profile.Environment[key]
+			if existing != "" {
+				profile.Environment[key] = prepended + ":" + existing
+			} else {
+				profile.Environment[key] = prepended
+			}
+		}
+	}
+
 	// Add the proxy socket bind mount. The proxy runs outside the sandbox
 	// and listens on a host socket; the bind mount makes it accessible at
 	// /run/bureau/proxy.sock inside the sandbox.

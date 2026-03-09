@@ -22,6 +22,7 @@ package schema
 //   - Resources → sandbox.ResourceConfig
 //   - Security → sandbox.SecurityConfig
 //   - EnvironmentVariables → sandbox.Profile.Environment
+//   - PrependVariables → prepended to corresponding Environment entries (joined with ":")
 //   - Command → argv for bwrap's -- separator
 //   - EnvironmentPath → bind-mount to /usr/local, prepend /usr/local/bin to PATH
 //   - Payload → JSON written to /run/bureau/payload.json inside sandbox
@@ -77,6 +78,15 @@ type SandboxSpec struct {
 	// concrete values are known. Workspace variables (PROJECT,
 	// WORKTREE_PATH) are extracted from SandboxSpec.Payload.
 	EnvironmentVariables map[string]string `json:"environment_variables,omitempty"`
+
+	// PrependVariables declares values to prepend to colon-delimited
+	// environment variables (PATH, LD_LIBRARY_PATH, etc.). Each key is
+	// a variable name; each value is an ordered list of path segments.
+	// The launcher joins each key's values with ":" and prepends them
+	// to the corresponding environment variable. For PATH, the final
+	// order is: PrependVariables["PATH"] : EnvironmentPath/bin : base.
+	// Propagated from TemplateContent after template resolution and merge.
+	PrependVariables map[string][]string `json:"prepend_variables,omitempty"`
 
 	// EnvironmentPath is the Nix store path providing the sandbox's
 	// toolchain (e.g., "/nix/store/abc123-bureau-agent-env"). When set,

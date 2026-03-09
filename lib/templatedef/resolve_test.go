@@ -647,6 +647,116 @@ func TestMergeIsolationInheritFromParent(t *testing.T) {
 	}
 }
 
+func TestMergePrependVariablesChildFirst(t *testing.T) {
+	t.Parallel()
+
+	parent := &schema.TemplateContent{
+		Command: []string{"/bin/parent"},
+		PrependVariables: map[string][]string{
+			"PATH": {"/parent/bin"},
+		},
+	}
+	child := &schema.TemplateContent{
+		PrependVariables: map[string][]string{
+			"PATH": {"/child/bin"},
+		},
+	}
+
+	result := Merge(parent, child)
+
+	paths := result.PrependVariables["PATH"]
+	if len(paths) != 2 || paths[0] != "/child/bin" || paths[1] != "/parent/bin" {
+		t.Errorf("PrependVariables[PATH] = %v, want [/child/bin /parent/bin]", paths)
+	}
+}
+
+func TestMergePrependVariablesDeduplication(t *testing.T) {
+	t.Parallel()
+
+	parent := &schema.TemplateContent{
+		Command: []string{"/bin/parent"},
+		PrependVariables: map[string][]string{
+			"PATH": {"/shared/bin", "/parent/bin"},
+		},
+	}
+	child := &schema.TemplateContent{
+		PrependVariables: map[string][]string{
+			"PATH": {"/child/bin", "/shared/bin"},
+		},
+	}
+
+	result := Merge(parent, child)
+
+	// Child has [/child/bin, /shared/bin], parent has [/shared/bin, /parent/bin].
+	// Result: child first [/child/bin, /shared/bin], then parent entries not
+	// in child [/parent/bin]. /shared/bin is deduplicated.
+	paths := result.PrependVariables["PATH"]
+	expected := []string{"/child/bin", "/shared/bin", "/parent/bin"}
+	if len(paths) != len(expected) {
+		t.Fatalf("PrependVariables[PATH] = %v, want %v", paths, expected)
+	}
+	for index, value := range expected {
+		if paths[index] != value {
+			t.Errorf("PrependVariables[PATH][%d] = %q, want %q", index, paths[index], value)
+		}
+	}
+}
+
+func TestMergePrependVariablesDisjointKeys(t *testing.T) {
+	t.Parallel()
+
+	parent := &schema.TemplateContent{
+		Command: []string{"/bin/parent"},
+		PrependVariables: map[string][]string{
+			"LD_LIBRARY_PATH": {"/parent/lib"},
+		},
+	}
+	child := &schema.TemplateContent{
+		PrependVariables: map[string][]string{
+			"PATH": {"/child/bin"},
+		},
+	}
+
+	result := Merge(parent, child)
+
+	if len(result.PrependVariables) != 2 {
+		t.Fatalf("PrependVariables has %d keys, want 2", len(result.PrependVariables))
+	}
+	if paths := result.PrependVariables["PATH"]; len(paths) != 1 || paths[0] != "/child/bin" {
+		t.Errorf("PrependVariables[PATH] = %v, want [/child/bin]", paths)
+	}
+	if libs := result.PrependVariables["LD_LIBRARY_PATH"]; len(libs) != 1 || libs[0] != "/parent/lib" {
+		t.Errorf("PrependVariables[LD_LIBRARY_PATH] = %v, want [/parent/lib]", libs)
+	}
+}
+
+func TestMergePrependVariablesNilInputs(t *testing.T) {
+	t.Parallel()
+
+	// Both nil: result is nil.
+	parent := &schema.TemplateContent{Command: []string{"/bin/parent"}}
+	child := &schema.TemplateContent{}
+	result := Merge(parent, child)
+	if result.PrependVariables != nil {
+		t.Errorf("both nil: got %v, want nil", result.PrependVariables)
+	}
+
+	// Only parent set.
+	parent.PrependVariables = map[string][]string{"PATH": {"/parent/bin"}}
+	result = Merge(parent, child)
+	if paths := result.PrependVariables["PATH"]; len(paths) != 1 || paths[0] != "/parent/bin" {
+		t.Errorf("only parent: PrependVariables[PATH] = %v, want [/parent/bin]", paths)
+	}
+
+	// Only child set.
+	parent.PrependVariables = nil
+	child.PrependVariables = map[string][]string{"PATH": {"/child/bin"}}
+	result = Merge(parent, child)
+	if paths := result.PrependVariables["PATH"]; len(paths) != 1 || paths[0] != "/child/bin" {
+		t.Errorf("only child: PrependVariables[PATH] = %v, want [/child/bin]", paths)
+	}
+}
+
 func TestMergePointerOverride(t *testing.T) {
 	t.Parallel()
 

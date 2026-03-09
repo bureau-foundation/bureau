@@ -42,6 +42,10 @@ func TestSandboxSpecRoundTrip(t *testing.T) {
 			"BUREAU_SANDBOX": "1",
 			"MODEL_NAME":     "claude-opus-4-6",
 		},
+		PrependVariables: map[string][]string{
+			"PATH":            {"/opt/cuda/bin"},
+			"LD_LIBRARY_PATH": {"/opt/cuda/lib64", "/opt/rocm/lib"},
+		},
 		EnvironmentPath: "/nix/store/abc123-bureau-agent-env",
 		Payload: map[string]any{
 			"project":    "iree/amdgpu",
@@ -91,6 +95,26 @@ func TestSandboxSpecRoundTrip(t *testing.T) {
 	}
 	if len(filesystem) != 4 {
 		t.Fatalf("filesystem count = %d, want 4", len(filesystem))
+	}
+
+	// Verify prepend_variables.
+	prependVariables, ok := raw["prepend_variables"].(map[string]any)
+	if !ok {
+		t.Fatal("prepend_variables field missing or wrong type")
+	}
+	prependPath, ok := prependVariables["PATH"].([]any)
+	if !ok {
+		t.Fatal("prepend_variables.PATH missing or wrong type")
+	}
+	if len(prependPath) != 1 || prependPath[0] != "/opt/cuda/bin" {
+		t.Errorf("prepend_variables.PATH = %v, want [/opt/cuda/bin]", prependPath)
+	}
+	prependLDPath, ok := prependVariables["LD_LIBRARY_PATH"].([]any)
+	if !ok {
+		t.Fatal("prepend_variables.LD_LIBRARY_PATH missing or wrong type")
+	}
+	if len(prependLDPath) != 2 {
+		t.Fatalf("prepend_variables.LD_LIBRARY_PATH count = %d, want 2", len(prependLDPath))
 	}
 
 	// Verify environment_variables.
@@ -155,6 +179,17 @@ func TestSandboxSpecRoundTrip(t *testing.T) {
 		t.Errorf("EnvironmentVariables[BUREAU_SANDBOX]: got %q, want %q",
 			decoded.EnvironmentVariables["BUREAU_SANDBOX"], "1")
 	}
+	if len(decoded.PrependVariables) != 2 {
+		t.Fatalf("PrependVariables count = %d, want 2", len(decoded.PrependVariables))
+	}
+	decodedPrependPath := decoded.PrependVariables["PATH"]
+	if len(decodedPrependPath) != 1 || decodedPrependPath[0] != "/opt/cuda/bin" {
+		t.Errorf("PrependVariables[PATH] = %v, want [/opt/cuda/bin]", decodedPrependPath)
+	}
+	decodedPrependLDPath := decoded.PrependVariables["LD_LIBRARY_PATH"]
+	if len(decodedPrependLDPath) != 2 || decodedPrependLDPath[0] != "/opt/cuda/lib64" || decodedPrependLDPath[1] != "/opt/rocm/lib" {
+		t.Errorf("PrependVariables[LD_LIBRARY_PATH] = %v, want [/opt/cuda/lib64 /opt/rocm/lib]", decodedPrependLDPath)
+	}
 	if len(decoded.Roles) != 2 {
 		t.Fatalf("Roles count = %d, want 2", len(decoded.Roles))
 	}
@@ -198,7 +233,7 @@ func TestSandboxSpecOmitsEmptyFields(t *testing.T) {
 
 	omittedFields := []string{
 		"isolation", "filesystem", "namespaces", "resources", "security",
-		"environment_variables", "environment_path",
+		"environment_variables", "prepend_variables", "environment_path",
 		"payload", "roles", "create_dirs", "proxy_services",
 	}
 	for _, field := range omittedFields {

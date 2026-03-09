@@ -383,6 +383,9 @@ A template specifies:
 - **Command**: the entrypoint command and arguments
 - **Environment**: Nix store path providing the execution environment
 - **EnvironmentVariables**: key-value pairs with `${VAR}` expansion
+- **PrependVariables**: values to prepend to colon-delimited environment
+  variables (PATH, LD_LIBRARY_PATH, etc.) — composes during inheritance
+  instead of clobbering
 - **Filesystem**: mount points (source, dest, mode, type, optional)
 - **Namespaces**: which Linux namespaces to create
 - **Resources**: cgroup limits (memory, CPU, tasks)
@@ -406,6 +409,9 @@ chain and merges fields:
   parent entries.
 - **Maps** (EnvironmentVariables, Roles, DefaultPayload) merge — child
   values override parent values on key conflict.
+- **PrependVariables** per-key merge — child entries first, then parent
+  entries, deduplicated per key. This allows composable PATH construction
+  across the inheritance chain.
 - **Scalars** (Command, Environment) replace — non-zero child value
   replaces parent.
 

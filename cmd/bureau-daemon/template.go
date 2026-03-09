@@ -106,6 +106,16 @@ func resolveInstanceConfig(template *schema.TemplateContent, assignment *schema.
 		}
 	}
 
+	// Copy prepend variables (deep copy: each slice is independent).
+	if len(template.PrependVariables) > 0 {
+		spec.PrependVariables = make(map[string][]string, len(template.PrependVariables))
+		for key, values := range template.PrependVariables {
+			copied := make([]string, len(values))
+			copy(copied, values)
+			spec.PrependVariables[key] = copied
+		}
+	}
+
 	// Apply instance overrides.
 	if len(assignment.CommandOverride) > 0 {
 		spec.Command = assignment.CommandOverride

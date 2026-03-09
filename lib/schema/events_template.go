@@ -368,8 +368,8 @@ type MatrixPolicy struct {
 // keys, slices are concatenated, and the child template is applied last
 // (overrides everything). Slices (Filesystem, CreateDirs) are appended;
 // maps (EnvironmentVariables, Roles, DefaultPayload) are merged with child
-// values winning; scalars (Command, Environment) are replaced if non-zero
-// in the child.
+// values winning; PrependVariables are per-key merged with child entries first;
+// scalars (Command, Environment) are replaced if non-zero in the child.
 type TemplateContent struct {
 	// Description is a human-readable summary of what this template
 	// provides (e.g., "GPU-accelerated LLM agent with IREE runtime").
@@ -419,6 +419,28 @@ type TemplateContent struct {
 	// ${TERM}, ${MACHINE_NAME}, and ${SERVER_NAME}. Workspace variables
 	// (PROJECT, WORKTREE_PATH) are populated from the principal's payload.
 	EnvironmentVariables map[string]string `json:"environment_variables,omitempty"`
+
+	// PrependVariables declares values to prepend to colon-delimited
+	// environment variables (PATH, LD_LIBRARY_PATH, etc.). Each key is
+	// an environment variable name; each value is an ordered list of
+	// path segments to prepend before the variable's existing value.
+	//
+	// This solves the composition problem for PATH and similar variables
+	// during template inheritance: a child template can add directories
+	// to the front of PATH without knowing or clobbering the parent's
+	// value. Without this, EnvironmentVariables["PATH"] = "/my/bin" in
+	// the child would completely replace the parent's PATH.
+	//
+	// During template inheritance, prepend lists for the same key are
+	// concatenated with child entries first, then parent entries
+	// (deduplicated). This preserves the "child takes priority" invariant:
+	// a child's prepended paths appear before a parent's.
+	//
+	// At sandbox creation time, prepended values are joined with ":"
+	// and placed before the variable's existing value from
+	// EnvironmentVariables. For PATH specifically, the order is:
+	// PrependVariables["PATH"] : EnvironmentPath/bin : base_PATH.
+	PrependVariables map[string][]string `json:"prepend_variables,omitempty"`
 
 	// Filesystem is the list of mount points for the sandbox. During
 	// inheritance, child mounts are appended after parent mounts.

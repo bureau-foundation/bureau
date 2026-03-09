@@ -149,6 +149,67 @@ func TestValidateTemplateContent(t *testing.T) {
 			wantSubstrings: []string{`roles["agent"]`},
 		},
 		{
+			name: "valid prepend variables",
+			content: &schema.TemplateContent{
+				Description: "Has prepend vars",
+				Command:     []string{"/bin/bash"},
+				PrependVariables: map[string][]string{
+					"PATH":            {"/opt/cuda/bin"},
+					"LD_LIBRARY_PATH": {"/opt/cuda/lib64", "/opt/rocm/lib"},
+				},
+			},
+			expectedIssues: 0,
+		},
+		{
+			name: "prepend variables empty value list",
+			content: &schema.TemplateContent{
+				Description: "Bad prepend",
+				Command:     []string{"/bin/bash"},
+				PrependVariables: map[string][]string{
+					"PATH": {},
+				},
+			},
+			expectedIssues: 1,
+			wantSubstrings: []string{"value list is empty"},
+		},
+		{
+			name: "prepend variables empty string entry",
+			content: &schema.TemplateContent{
+				Description: "Bad prepend entry",
+				Command:     []string{"/bin/bash"},
+				PrependVariables: map[string][]string{
+					"PATH": {"/good/bin", ""},
+				},
+			},
+			expectedIssues: 1,
+			wantSubstrings: []string{"empty string"},
+		},
+		{
+			name: "prepend variables colon in value",
+			content: &schema.TemplateContent{
+				Description: "Colon injection",
+				Command:     []string{"/bin/bash"},
+				PrependVariables: map[string][]string{
+					"PATH": {"/good/bin", "/evil:/injection"},
+				},
+			},
+			expectedIssues: 1,
+			wantSubstrings: []string{"contains colon"},
+		},
+		{
+			name: "prepend variables multiple issues",
+			content: &schema.TemplateContent{
+				Description: "Multiple prepend issues",
+				Command:     []string{"/bin/bash"},
+				PrependVariables: map[string][]string{
+					"PATH":            {"", "/a:/b"},
+					"LD_LIBRARY_PATH": {},
+				},
+			},
+			expectedIssues: 3, // empty string, colon, empty list
+			wantSubstrings: []string{"empty string", "contains colon", "value list is empty"},
+		},
+		{
 			name: "valid passthrough template",
 			content: &schema.TemplateContent{
 				Description: "Passthrough agent",

@@ -9,6 +9,7 @@ import (
 	"fmt"
 	"log/slog"
 	"os"
+	"strings"
 
 	"github.com/tidwall/jsonc"
 
@@ -184,6 +185,24 @@ func validateTemplateContent(content *schema.TemplateContent) []string {
 		}
 		if content.Resources.PidsLimit < 0 {
 			issues = append(issues, "resources.pids_limit must be non-negative")
+		}
+	}
+
+	// Validate prepend variables.
+	for key, values := range content.PrependVariables {
+		if key == "" {
+			issues = append(issues, "prepend_variables: empty key")
+		}
+		if len(values) == 0 {
+			issues = append(issues, fmt.Sprintf("prepend_variables[%q]: value list is empty", key))
+		}
+		for index, value := range values {
+			if value == "" {
+				issues = append(issues, fmt.Sprintf("prepend_variables[%q][%d]: empty string (likely a mistake — empty segments in colon-delimited variables have surprising behavior)", key, index))
+			}
+			if strings.Contains(value, ":") {
+				issues = append(issues, fmt.Sprintf("prepend_variables[%q][%d]: contains colon — each entry should be a single path segment, not a colon-delimited list (use separate entries instead)", key, index))
+			}
 		}
 	}
 

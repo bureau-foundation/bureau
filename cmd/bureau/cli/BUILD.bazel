@@ -9,6 +9,7 @@ go_library(
         "annotations.go",
         "command.go",
         "connect.go",
+        "content_source.go",
         "doc.go",
         "exit.go",
         "fleet_scope.go",
@@ -45,6 +46,7 @@ go_library(
         "//messaging",
         "//observe",
         "@com_github_spf13_pflag//:pflag",
+        "@com_github_tidwall_jsonc//:jsonc",
         "@org_golang_x_term//:term",
     ],
 )

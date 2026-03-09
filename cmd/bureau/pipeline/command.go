@@ -37,6 +37,8 @@ All commands that access Matrix require an operator session. Run
 			showCommand(),
 			validateCommand(),
 			pushCommand(),
+			publishCommand(),
+			updateCommand(),
 			runCommand(),
 			waitCommand(),
 			statusCommand(),
@@ -59,6 +61,14 @@ All commands that access Matrix require an operator session. Run
 			{
 				Description: "Push a local pipeline to Matrix",
 				Command:     "bureau pipeline push bureau/pipeline:my-pipeline my-pipeline.jsonc",
+			},
+			{
+				Description: "Publish a pipeline from a Nix flake with origin tracking",
+				Command:     "bureau pipeline publish --flake github:org/repo/v1.0 bureau/pipeline:my-pipeline",
+			},
+			{
+				Description: "Check for pipeline updates from their original source",
+				Command:     "bureau pipeline update bureau/pipeline",
 			},
 			{
 				Description: "Run a pipeline on a machine",

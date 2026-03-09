@@ -295,11 +295,11 @@ func TestTemplateContentOmitsEmptyFields(t *testing.T) {
 	}
 }
 
-func TestTemplateOriginFlakeRoundTrip(t *testing.T) {
+func TestContentOriginFlakeRoundTrip(t *testing.T) {
 	original := TemplateContent{
 		Command:     []string{"/nix/store/abc-bureau-discord/bin/bureau-discord"},
 		Description: "Discord connector service",
-		Origin: &TemplateOrigin{
+		Origin: &ref.ContentOrigin{
 			FlakeRef:    "github:bureau-foundation/bureau-discord/v1.2.0",
 			ResolvedRev: "a1b2c3d4e5f6a1b2c3d4e5f6a1b2c3d4e5f6a1b2",
 			ContentHash: "sha256:9f86d081884c7d659a2feaa0c55ad015a3bf4f1b2b0b822cd15d6c15b0f00a08",
@@ -346,10 +346,10 @@ func TestTemplateOriginFlakeRoundTrip(t *testing.T) {
 	}
 }
 
-func TestTemplateOriginURLRoundTrip(t *testing.T) {
+func TestContentOriginURLRoundTrip(t *testing.T) {
 	original := TemplateContent{
 		Command: []string{"/usr/local/bin/my-service"},
-		Origin: &TemplateOrigin{
+		Origin: &ref.ContentOrigin{
 			URL:         "https://raw.githubusercontent.com/bureau-foundation/bureau-discord/main/template.jsonc",
 			ContentHash: "sha256:e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
 		},

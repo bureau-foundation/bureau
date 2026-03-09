@@ -100,6 +100,12 @@ type PipelineContent struct {
 	// When nil, the executor logs only to stdout (visible via
 	// bureau observe).
 	Log *PipelineLog `json:"log,omitempty"`
+
+	// Origin records where this pipeline was published from, enabling
+	// 'bureau pipeline update' to find and fetch newer versions.
+	// Set by 'bureau pipeline publish --flake' or '--url'; nil for
+	// pipelines pushed from local files or defined inline.
+	Origin *ref.ContentOrigin `json:"origin,omitempty"`
 }
 
 // PipelineVariable declares an expected variable for a pipeline.

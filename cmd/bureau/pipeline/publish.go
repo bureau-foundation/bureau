@@ -1,7 +1,7 @@
 // Copyright 2026 The Bureau Authors
 // SPDX-License-Identifier: Apache-2.0
 
-package template
+package pipeline
 
 import (
 	"context"
@@ -12,97 +12,97 @@ import (
 	"time"
 
 	"github.com/bureau-foundation/bureau/cmd/bureau/cli"
+	"github.com/bureau-foundation/bureau/lib/pipelinedef"
 	"github.com/bureau-foundation/bureau/lib/ref"
 	"github.com/bureau-foundation/bureau/lib/schema"
-	libtmpl "github.com/bureau-foundation/bureau/lib/templatedef"
+	schemapipeline "github.com/bureau-foundation/bureau/lib/schema/pipeline"
 )
 
-// templatePublishParams holds the parameters for the template publish command.
-type templatePublishParams struct {
+// pipelinePublishParams holds the parameters for the pipeline publish command.
+type pipelinePublishParams struct {
 	cli.SessionConfig
 	cli.JSONOutput
 	ServerName string `json:"server_name" flag:"server-name" desc:"Matrix server name for resolving room aliases (auto-detected from machine.conf)"`
-	FlakeRef   string `json:"flake_ref"   flag:"flake"       desc:"Nix flake reference (e.g., github:bureau-foundation/bureau-discord/v1.2.0)"`
-	URL        string `json:"url"         flag:"url"         desc:"URL to fetch template JSONC from (HTTPS required)"`
-	File       string `json:"file"        flag:"file"        desc:"local template JSONC file path"`
-	System     string `json:"system"      flag:"system"      desc:"Nix system for flake evaluation (default: current system)"`
+	FlakeRef   string `json:"flake_ref"   flag:"flake"       desc:"Nix flake reference (e.g., github:bureau-foundation/bureau-hf/v1.0.0)"`
+	URL        string `json:"url"         flag:"url"         desc:"URL to fetch pipeline JSONC from (HTTPS required)"`
+	File       string `json:"file"        flag:"file"        desc:"local pipeline JSONC file path"`
 	DryRun     bool   `json:"dry_run"     flag:"dry-run"     desc:"validate only, do not publish to Matrix"`
 }
 
-// templatePublishResult is the JSON output for template publish.
-type templatePublishResult struct {
-	Ref          string             `json:"ref"                desc:"template reference (state key)"`
+// pipelinePublishResult is the JSON output for pipeline publish.
+type pipelinePublishResult struct {
+	Ref          string             `json:"ref"                desc:"pipeline reference (state key)"`
 	Source       string             `json:"source"             desc:"source type: flake, url, or file"`
 	SourceRef    string             `json:"source_ref"         desc:"source reference (flake ref, URL, or file path)"`
 	RoomAlias    ref.RoomAlias      `json:"room_alias"         desc:"target room alias"`
 	RoomID       ref.RoomID         `json:"room_id,omitempty"  desc:"target room Matrix ID"`
-	TemplateName string             `json:"template_name"      desc:"template name"`
+	PipelineName string             `json:"pipeline_name"      desc:"pipeline name"`
 	EventID      ref.EventID        `json:"event_id,omitempty" desc:"created state event ID"`
 	Origin       *ref.ContentOrigin `json:"origin,omitempty"   desc:"recorded origin for update tracking"`
 	DryRun       bool               `json:"dry_run"            desc:"true if publish was simulated"`
 }
 
-// publishCommand returns the "publish" subcommand for publishing templates
+// publishCommand returns the "publish" subcommand for publishing pipelines
 // from flake references, URLs, or local files.
 func publishCommand() *cli.Command {
-	var params templatePublishParams
+	var params pipelinePublishParams
 
 	return &cli.Command{
 		Name:    "publish",
-		Summary: "Publish a template to Matrix from a flake, URL, or file",
-		Description: `Publish a template to Matrix from one of three sources:
+		Summary: "Publish a pipeline to Matrix from a flake, URL, or file",
+		Description: `Publish a pipeline to Matrix from one of three sources:
 
-  --flake <ref>   Evaluate a Nix flake, read its bureauTemplate output,
+  --flake <ref>   Evaluate a Nix flake, read its bureauPipeline output,
                   and publish with origin tracking. The flake reference
-                  is recorded so 'bureau template update' can check for
+                  is recorded so 'bureau pipeline update' can check for
                   newer versions.
 
-  --url <url>     Fetch template JSONC from a URL, validate, and publish
+  --url <url>     Fetch pipeline JSONC from a URL, validate, and publish
                   with origin tracking.
 
-  --file <path>   Read template JSONC from a local file, validate, and
-                  publish. Equivalent to 'bureau template push'.
+  --file <path>   Read pipeline JSONC from a local file, validate, and
+                  publish. Equivalent to 'bureau pipeline push'.
 
-Exactly one of --flake, --url, or --file must be specified. The template
+Exactly one of --flake, --url, or --file must be specified. The pipeline
 reference (positional argument) specifies which room and state key to
 publish to.
 
-For flake sources, the bureauTemplate.<system> output must be an
-attribute set using the same field names as the TemplateContent JSON
-wire format (snake_case). Store paths from Nix string interpolation
-are resolved during evaluation.`,
-		Usage: "bureau template publish [flags] <template-ref>",
+For flake sources, the bureauPipeline output must be an attribute set
+using the same field names as the PipelineContent JSON wire format
+(snake_case). Pipelines are system-agnostic — no per-system attribute
+is needed (tools come from the template/environment, not the pipeline).`,
+		Usage: "bureau pipeline publish [flags] <pipeline-ref>",
 		Examples: []cli.Example{
 			{
 				Description: "Publish from a Nix flake",
-				Command:     "bureau template publish --flake github:bureau-foundation/bureau-discord/v1.2.0 bureau/template:discord",
+				Command:     "bureau pipeline publish --flake github:bureau-foundation/bureau-hf/v1.0.0 bureau/pipeline:model-ingest",
 			},
 			{
 				Description: "Publish from a URL",
-				Command:     "bureau template publish --url https://raw.githubusercontent.com/.../template.jsonc bureau/template:discord",
+				Command:     "bureau pipeline publish --url https://raw.githubusercontent.com/.../pipeline.jsonc bureau/pipeline:model-ingest",
 			},
 			{
 				Description: "Publish from a local file",
-				Command:     "bureau template publish --file ./template.jsonc bureau/template:discord",
+				Command:     "bureau pipeline publish --file ./pipeline.jsonc bureau/pipeline:model-ingest",
 			},
 			{
 				Description: "Dry-run: validate without publishing",
-				Command:     "bureau template publish --flake github:bureau-foundation/bureau-discord --dry-run bureau/template:discord",
+				Command:     "bureau pipeline publish --flake github:bureau-foundation/bureau-hf --dry-run bureau/pipeline:model-ingest",
 			},
 		},
 		Params:         func() any { return &params },
-		Output:         func() any { return &templatePublishResult{} },
-		RequiredGrants: []string{"command/template/publish"},
+		Output:         func() any { return &pipelinePublishResult{} },
+		RequiredGrants: []string{"command/pipeline/publish"},
 		Annotations:    cli.Create(),
 		Run: func(ctx context.Context, args []string, logger *slog.Logger) error {
 			if len(args) != 1 {
-				return cli.Validation("usage: bureau template publish [flags] <template-ref>")
+				return cli.Validation("usage: bureau pipeline publish [flags] <pipeline-ref>")
 			}
 
-			templateRef, err := schema.ParseTemplateRef(args[0])
+			pipelineRef, err := schema.ParsePipelineRef(args[0])
 			if err != nil {
-				return cli.Validation("invalid template reference: %w", err).
-					WithHint("Template references have the form namespace/template:name (e.g., bureau/template:discord).")
+				return cli.Validation("invalid pipeline reference: %w", err).
+					WithHint("Pipeline references have the form namespace/pipeline:name (e.g., bureau/pipeline:model-ingest).")
 			}
 
 			// Validate exactly one source is specified.
@@ -125,11 +125,9 @@ are resolved during evaluation.`,
 
 			switch {
 			case params.FlakeRef != "":
-				system, err := cli.ResolveSystem(params.System)
-				if err != nil {
-					return err
-				}
-				source, err = cli.LoadFromFlake(ctx, params.FlakeRef, "bureauTemplate."+system, logger)
+				// Pipelines are system-agnostic — the flake attr is
+				// "bureauPipeline" (no per-system qualifier).
+				source, err = cli.LoadFromFlake(ctx, params.FlakeRef, "bureauPipeline", logger)
 				if err != nil {
 					return err
 				}
@@ -145,11 +143,11 @@ are resolved during evaluation.`,
 				}
 			}
 
-			// Unmarshal into the typed TemplateContent.
-			var content schema.TemplateContent
+			// Unmarshal into the typed PipelineContent.
+			var content schemapipeline.PipelineContent
 			if err := json.Unmarshal(source.Data, &content); err != nil {
-				return cli.Internal("parsing %s output as TemplateContent: %w", source.Source, err).
-					WithHint("The content must use snake_case field names matching the TemplateContent JSON wire format.")
+				return cli.Internal("parsing %s output as PipelineContent: %w", source.Source, err).
+					WithHint("The content must use snake_case field names matching the PipelineContent JSON wire format.")
 			}
 
 			// Compute content hash and set origin.
@@ -164,8 +162,8 @@ are resolved during evaluation.`,
 			}
 			content.Origin = source.Origin
 
-			// Validate the template content.
-			issues := validateTemplateContent(&content)
+			// Validate the pipeline content.
+			issues := pipelinedef.Validate(&content)
 			if len(issues) > 0 {
 				for _, issue := range issues {
 					logger.Warn("validation issue", "issue", issue)
@@ -189,35 +187,23 @@ are resolved during evaluation.`,
 				return cli.Validation("invalid --server-name: %w", err)
 			}
 
-			// Dry-run: resolve room and verify inheritance without publishing.
+			// Dry-run: resolve room and verify it exists without publishing.
 			if params.DryRun {
-				roomAlias := templateRef.RoomAlias(serverName)
+				roomAlias := pipelineRef.RoomAlias(serverName)
 				roomID, err := session.ResolveAlias(ctx, roomAlias)
 				if err != nil {
 					return cli.NotFound("resolving target room %q: %w", roomAlias, err).
-						WithHint("The template room must exist before publishing. " +
+						WithHint("The pipeline room must exist before publishing. " +
 							"Run 'bureau matrix setup' to create standard rooms, or check the namespace.")
 				}
 
-				for index, parentRefString := range content.Inherits {
-					parentRef, err := schema.ParseTemplateRef(parentRefString)
-					if err != nil {
-						return cli.Validation("inherits[%d] reference %q is invalid: %w", index, parentRefString, err)
-					}
-					if _, err := libtmpl.Fetch(ctx, session, parentRef, serverName); err != nil {
-						return cli.NotFound("parent template %q not found in Matrix: %w", parentRefString, err).
-							WithHint("Publish the parent template first.")
-					}
-					logger.Info("parent template found", "parent", parentRefString)
-				}
-
-				if done, err := params.EmitJSON(templatePublishResult{
-					Ref:          templateRef.String(),
+				if done, err := params.EmitJSON(pipelinePublishResult{
+					Ref:          pipelineRef.String(),
 					Source:       source.Source,
 					SourceRef:    source.Ref,
 					RoomAlias:    roomAlias,
 					RoomID:       roomID,
-					TemplateName: templateRef.Template,
+					PipelineName: pipelineRef.Pipeline,
 					Origin:       source.Origin,
 					DryRun:       true,
 				}); done {
@@ -226,26 +212,26 @@ are resolved during evaluation.`,
 				fmt.Fprintf(os.Stdout, "%s: valid (dry-run, not published)\n", source.Ref)
 				fmt.Fprintf(os.Stdout, "  source: %s\n", source.Source)
 				fmt.Fprintf(os.Stdout, "  target room: %s (%s)\n", roomAlias, roomID)
-				fmt.Fprintf(os.Stdout, "  template name: %s\n", templateRef.Template)
+				fmt.Fprintf(os.Stdout, "  pipeline name: %s\n", pipelineRef.Pipeline)
 				if source.Origin != nil {
 					fmt.Fprintf(os.Stdout, "  origin: %s\n", cli.OriginSummary(source.Origin))
 				}
 				return nil
 			}
 
-			// Publish the template.
-			result, err := libtmpl.Push(ctx, session, templateRef, content, serverName)
+			// Publish the pipeline.
+			result, err := pipelinedef.Push(ctx, session, pipelineRef, content, serverName)
 			if err != nil {
-				return cli.Internal("publishing template: %w", err)
+				return cli.Internal("publishing pipeline: %w", err)
 			}
 
-			if done, err := params.EmitJSON(templatePublishResult{
-				Ref:          templateRef.String(),
+			if done, err := params.EmitJSON(pipelinePublishResult{
+				Ref:          pipelineRef.String(),
 				Source:       source.Source,
 				SourceRef:    source.Ref,
 				RoomAlias:    result.RoomAlias,
 				RoomID:       result.RoomID,
-				TemplateName: templateRef.Template,
+				PipelineName: pipelineRef.Pipeline,
 				EventID:      result.EventID,
 				Origin:       source.Origin,
 				DryRun:       false,
@@ -253,7 +239,7 @@ are resolved during evaluation.`,
 				return err
 			}
 
-			fmt.Fprintf(os.Stdout, "published %s to %s (event: %s)\n", templateRef.String(), result.RoomAlias, result.EventID)
+			fmt.Fprintf(os.Stdout, "published %s to %s (event: %s)\n", pipelineRef.String(), result.RoomAlias, result.EventID)
 			if source.Origin != nil {
 				fmt.Fprintf(os.Stdout, "  origin: %s\n", cli.OriginSummary(source.Origin))
 			}

@@ -1,7 +1,7 @@
 // Copyright 2026 The Bureau Authors
 // SPDX-License-Identifier: Apache-2.0
 
-package template
+package pipeline
 
 import (
 	"bufio"
@@ -14,85 +14,89 @@ import (
 	"time"
 
 	"github.com/bureau-foundation/bureau/cmd/bureau/cli"
+	"github.com/bureau-foundation/bureau/lib/pipelinedef"
 	"github.com/bureau-foundation/bureau/lib/ref"
 	"github.com/bureau-foundation/bureau/lib/schema"
-	libtmpl "github.com/bureau-foundation/bureau/lib/templatedef"
+	schemapipeline "github.com/bureau-foundation/bureau/lib/schema/pipeline"
 	"github.com/bureau-foundation/bureau/messaging"
 )
 
-// templateUpdateParams holds the parameters for the template update command.
-type templateUpdateParams struct {
+// pipelineUpdateParams holds the parameters for the pipeline update command.
+type pipelineUpdateParams struct {
 	cli.SessionConfig
 	cli.JSONOutput
 	ServerName string `json:"server_name" flag:"server-name" desc:"Matrix server name for resolving room aliases (auto-detected from machine.conf)"`
-	System     string `json:"system"      flag:"system"      desc:"Nix system for flake evaluation (default: current system)"`
 	DryRun     bool   `json:"dry_run"     flag:"dry-run"     desc:"show what would change without publishing"`
 	Yes        bool   `json:"yes"         flag:"yes"         desc:"skip confirmation prompts, publish all updates"`
 }
 
-// templateUpdateResult is the JSON output for one template's update status.
-type templateUpdateResult struct {
-	Name        string   `json:"name"                    desc:"template name (state key)"`
-	Status      string   `json:"status"                  desc:"updated, current, skipped, or error"`
-	Source      string   `json:"source,omitempty"         desc:"source type: flake or url"`
-	OldRevision string   `json:"old_revision,omitempty"   desc:"previous git revision (flake only, short hash)"`
-	NewRevision string   `json:"new_revision,omitempty"   desc:"new git revision (flake only, short hash)"`
-	OldHash     string   `json:"old_hash,omitempty"       desc:"previous content hash"`
-	NewHash     string   `json:"new_hash,omitempty"       desc:"new content hash"`
-	Change      string   `json:"change,omitempty"         desc:"structural, payload-only, metadata, or no change"`
-	Fields      []string `json:"fields,omitempty"         desc:"changed field names"`
-	EventID     string   `json:"event_id,omitempty"       desc:"Matrix event ID of published update"`
-	Error       string   `json:"error,omitempty"          desc:"error message if check failed"`
-	DryRun      bool     `json:"dry_run"                  desc:"true if no publish was performed"`
+// pipelineUpdateResult is the JSON output for one pipeline's update status.
+type pipelineUpdateResult struct {
+	Name        string `json:"name"                    desc:"pipeline name (state key)"`
+	Status      string `json:"status"                  desc:"updated, current, skipped, or error"`
+	Source      string `json:"source,omitempty"         desc:"source type: flake or url"`
+	OldRevision string `json:"old_revision,omitempty"   desc:"previous git revision (flake only, short hash)"`
+	NewRevision string `json:"new_revision,omitempty"   desc:"new git revision (flake only, short hash)"`
+	OldHash     string `json:"old_hash,omitempty"       desc:"previous content hash"`
+	NewHash     string `json:"new_hash,omitempty"       desc:"new content hash"`
+	EventID     string `json:"event_id,omitempty"       desc:"Matrix event ID of published update"`
+	Error       string `json:"error,omitempty"          desc:"error message if check failed"`
+	DryRun      bool   `json:"dry_run"                  desc:"true if no publish was performed"`
+}
+
+// pipelineUpdateTarget holds a pipeline to check for updates.
+type pipelineUpdateTarget struct {
+	name       string
+	ref        schema.PipelineRef
+	content    *schemapipeline.PipelineContent
+	serverName ref.ServerName
+	newContent *schemapipeline.PipelineContent // populated if update available
 }
 
 // updateCommand returns the "update" subcommand for checking and applying
-// template updates from their original source (flake or URL).
+// pipeline updates from their original source (flake or URL).
 func updateCommand() *cli.Command {
-	var params templateUpdateParams
+	var params pipelineUpdateParams
 
 	return &cli.Command{
 		Name:    "update",
-		Summary: "Check for and apply template updates from their source",
-		Description: `Check templates for updates from their original source and optionally
-publish the new versions. Templates published with --flake or --url have
+		Summary: "Check for and apply pipeline updates from their source",
+		Description: `Check pipelines for updates from their original source and optionally
+publish the new versions. Pipelines published with --flake or --url have
 origin metadata that records where they came from — this command
 re-evaluates that source and compares the content hash.
 
-If the argument is a template reference (contains ':'), only that
-template is checked. If the argument is a room alias localpart (no ':'),
-all templates in the room with origin metadata are checked.
+If the argument is a pipeline reference (contains ':'), only that
+pipeline is checked. If the argument is a room alias localpart (no ':'),
+all pipelines in the room with origin metadata are checked.
 
-Templates published from local files have no origin and are skipped.
-
-After publishing an update, the daemon detects the template change via
-/sync and restarts affected sandboxes automatically.`,
-		Usage: "bureau template update [flags] <room-alias-localpart | template-ref>",
+Pipelines published from local files have no origin and are skipped.`,
+		Usage: "bureau pipeline update [flags] <room-alias-localpart | pipeline-ref>",
 		Examples: []cli.Example{
 			{
-				Description: "Check a single template for updates",
-				Command:     "bureau template update bureau/template:bureau-agent-claude",
+				Description: "Check a single pipeline for updates",
+				Command:     "bureau pipeline update bureau/pipeline:model-ingest",
 			},
 			{
-				Description: "Check all templates in a room",
-				Command:     "bureau template update bureau/template",
+				Description: "Check all pipelines in a room",
+				Command:     "bureau pipeline update bureau/pipeline",
 			},
 			{
 				Description: "Dry-run: show what would change without publishing",
-				Command:     "bureau template update --dry-run bureau/template",
+				Command:     "bureau pipeline update --dry-run bureau/pipeline",
 			},
 			{
 				Description: "Non-interactive: publish all updates without prompting",
-				Command:     "bureau template update --yes bureau/template",
+				Command:     "bureau pipeline update --yes bureau/pipeline",
 			},
 		},
 		Params:         func() any { return &params },
-		Output:         func() any { return &[]templateUpdateResult{} },
-		RequiredGrants: []string{"command/template/update"},
+		Output:         func() any { return &[]pipelineUpdateResult{} },
+		RequiredGrants: []string{"command/pipeline/update"},
 		Annotations:    cli.Create(),
 		Run: func(ctx context.Context, args []string, logger *slog.Logger) error {
 			if len(args) != 1 {
-				return cli.Validation("usage: bureau template update [flags] <room-alias-localpart | template-ref>")
+				return cli.Validation("usage: bureau pipeline update [flags] <room-alias-localpart | pipeline-ref>")
 			}
 
 			ctx, cancel := context.WithTimeout(ctx, 2*time.Minute)
@@ -117,30 +121,30 @@ After publishing an update, the daemon detects the template change via
 			}
 
 			argument := args[0]
-			singleTemplate := strings.Contains(argument, ":")
+			singlePipeline := strings.Contains(argument, ":")
 
-			var targets []updateTarget
+			var targets []pipelineUpdateTarget
 
-			if singleTemplate {
-				templateRef, err := schema.ParseTemplateRef(argument)
+			if singlePipeline {
+				pipelineRef, err := schema.ParsePipelineRef(argument)
 				if err != nil {
-					return cli.Validation("invalid template reference: %w", err).
-						WithHint("Template references have the form namespace/template:name (e.g., bureau/template:bureau-agent-claude).")
+					return cli.Validation("invalid pipeline reference: %w", err).
+						WithHint("Pipeline references have the form namespace/pipeline:name (e.g., bureau/pipeline:model-ingest).")
 				}
 
-				content, err := libtmpl.Fetch(ctx, session, templateRef, serverName)
+				content, err := fetchPipeline(ctx, session, pipelineRef, serverName)
 				if err != nil {
 					return err
 				}
 
-				targets = []updateTarget{{
-					name:       templateRef.Template,
-					ref:        templateRef,
+				targets = []pipelineUpdateTarget{{
+					name:       pipelineRef.Pipeline,
+					ref:        pipelineRef,
 					content:    content,
 					serverName: serverName,
 				}}
 			} else {
-				roomTargets, err := discoverTemplatesInRoom(ctx, session, argument, serverName)
+				roomTargets, err := discoverPipelinesInRoom(ctx, session, argument, serverName)
 				if err != nil {
 					return err
 				}
@@ -148,14 +152,14 @@ After publishing an update, the daemon detects the template change via
 			}
 
 			if len(targets) == 0 {
-				logger.Info("no templates found", "target", argument)
+				logger.Info("no pipelines found", "target", argument)
 				return nil
 			}
 
-			results := make([]templateUpdateResult, 0, len(targets))
+			results := make([]pipelineUpdateResult, 0, len(targets))
 
 			for index := range targets {
-				result := checkTemplateUpdate(ctx, &targets[index], params.System, logger)
+				result := checkPipelineUpdate(ctx, &targets[index], logger)
 				results = append(results, result)
 			}
 
@@ -168,14 +172,14 @@ After publishing an update, the daemon detects the template change via
 					target := &targets[index]
 
 					if !params.Yes {
-						if !confirmUpdate(&results[index]) {
+						if !confirmPipelineUpdate(&results[index]) {
 							results[index].Status = "skipped"
 							results[index].DryRun = true
 							continue
 						}
 					}
 
-					eventID, err := libtmpl.Push(ctx, session, target.ref, *target.newContent, serverName)
+					eventID, err := pipelinedef.Push(ctx, session, target.ref, *target.newContent, serverName)
 					if err != nil {
 						results[index].Status = "error"
 						results[index].Error = fmt.Sprintf("publishing: %v", err)
@@ -194,24 +198,35 @@ After publishing an update, the daemon detects the template change via
 				return err
 			}
 
-			printUpdateResults(results)
+			printPipelineUpdateResults(results)
 			return nil
 		},
 	}
 }
 
-// updateTarget holds a template to check for updates.
-type updateTarget struct {
-	name       string
-	ref        schema.TemplateRef
-	content    *schema.TemplateContent
-	serverName ref.ServerName
-	newContent *schema.TemplateContent // populated if update available
+// fetchPipeline reads a single pipeline from Matrix by resolving the room
+// alias and reading the state event.
+func fetchPipeline(ctx context.Context, session messaging.Session, pipelineRef schema.PipelineRef, serverName ref.ServerName) (*schemapipeline.PipelineContent, error) {
+	roomAlias := pipelineRef.RoomAlias(serverName)
+
+	roomID, err := session.ResolveAlias(ctx, roomAlias)
+	if err != nil {
+		return nil, cli.NotFound("resolving room alias %q: %w", roomAlias, err).
+			WithHint("Check the pipeline reference and server name.")
+	}
+
+	content, err := messaging.GetState[schemapipeline.PipelineContent](ctx, session, roomID, schema.EventTypePipeline, pipelineRef.Pipeline)
+	if err != nil {
+		return nil, cli.NotFound("reading pipeline %q from room %q: %w", pipelineRef.Pipeline, roomAlias, err).
+			WithHint("Check that the pipeline exists. Run 'bureau pipeline list' to see available pipelines.")
+	}
+
+	return &content, nil
 }
 
-// discoverTemplatesInRoom reads all templates from a room and returns
-// those that have origin metadata (eligible for update checking).
-func discoverTemplatesInRoom(ctx context.Context, session messaging.Session, roomLocalpart string, serverName ref.ServerName) ([]updateTarget, error) {
+// discoverPipelinesInRoom reads all pipelines from a room and returns
+// those eligible for update checking.
+func discoverPipelinesInRoom(ctx context.Context, session messaging.Session, roomLocalpart string, serverName ref.ServerName) ([]pipelineUpdateTarget, error) {
 	roomAlias := ref.MustParseRoomAlias(schema.FullRoomAlias(roomLocalpart, serverName))
 
 	roomID, err := session.ResolveAlias(ctx, roomAlias)
@@ -226,35 +241,34 @@ func discoverTemplatesInRoom(ctx context.Context, session messaging.Session, roo
 		return nil, cli.Internal("reading room state: %w", err)
 	}
 
-	var targets []updateTarget
+	var targets []pipelineUpdateTarget
 
 	for _, event := range events {
-		if event.Type != schema.EventTypeTemplate {
+		if event.Type != schema.EventTypePipeline {
 			continue
 		}
 		if event.StateKey == nil || *event.StateKey == "" {
 			continue
 		}
 
-		// Unmarshal the Content map into TemplateContent.
 		contentJSON, err := json.Marshal(event.Content)
 		if err != nil {
 			continue
 		}
-		var content schema.TemplateContent
+		var content schemapipeline.PipelineContent
 		if err := json.Unmarshal(contentJSON, &content); err != nil {
 			continue
 		}
 
-		templateRefString := roomLocalpart + ":" + *event.StateKey
-		templateRef, err := schema.ParseTemplateRef(templateRefString)
+		pipelineRefString := roomLocalpart + ":" + *event.StateKey
+		pipelineRef, err := schema.ParsePipelineRef(pipelineRefString)
 		if err != nil {
 			continue
 		}
 
-		targets = append(targets, updateTarget{
+		targets = append(targets, pipelineUpdateTarget{
 			name:       *event.StateKey,
-			ref:        templateRef,
+			ref:        pipelineRef,
 			content:    &content,
 			serverName: serverName,
 		})
@@ -263,9 +277,9 @@ func discoverTemplatesInRoom(ctx context.Context, session messaging.Session, roo
 	return targets, nil
 }
 
-// checkTemplateUpdate checks a single template for updates from its origin.
-func checkTemplateUpdate(ctx context.Context, target *updateTarget, system string, logger *slog.Logger) templateUpdateResult {
-	result := templateUpdateResult{
+// checkPipelineUpdate checks a single pipeline for updates from its origin.
+func checkPipelineUpdate(ctx context.Context, target *pipelineUpdateTarget, logger *slog.Logger) pipelineUpdateResult {
+	result := pipelineUpdateResult{
 		Name: target.name,
 	}
 
@@ -276,7 +290,7 @@ func checkTemplateUpdate(ctx context.Context, target *updateTarget, system strin
 
 	origin := target.content.Origin
 
-	var newContent schema.TemplateContent
+	var newContent schemapipeline.PipelineContent
 	var newOrigin *ref.ContentOrigin
 
 	switch {
@@ -285,18 +299,13 @@ func checkTemplateUpdate(ctx context.Context, target *updateTarget, system strin
 		result.OldRevision = cli.ShortRevision(origin.ResolvedRev)
 		result.OldHash = origin.ContentHash
 		logger.Info("checking flake for updates",
-			"template", target.name,
+			"pipeline", target.name,
 			"flake_ref", origin.FlakeRef,
 			"current_rev", result.OldRevision,
 		)
 
-		resolvedSystem, err := cli.ResolveSystem(system)
-		if err != nil {
-			result.Status = "error"
-			result.Error = err.Error()
-			return result
-		}
-		source, err := cli.LoadFromFlake(ctx, origin.FlakeRef, "bureauTemplate."+resolvedSystem, logger)
+		// Pipelines are system-agnostic — use "bureauPipeline" directly.
+		source, err := cli.LoadFromFlake(ctx, origin.FlakeRef, "bureauPipeline", logger)
 		if err != nil {
 			result.Status = "error"
 			result.Error = err.Error()
@@ -322,7 +331,7 @@ func checkTemplateUpdate(ctx context.Context, target *updateTarget, system strin
 		result.Source = "url"
 		result.OldHash = origin.ContentHash
 		logger.Info("checking URL for updates",
-			"template", target.name,
+			"pipeline", target.name,
 			"url", origin.URL,
 		)
 
@@ -363,36 +372,26 @@ func checkTemplateUpdate(ctx context.Context, target *updateTarget, system strin
 		return result
 	}
 
-	// Content has changed — classify the change.
+	// Content has changed. All pipeline changes are structural — the
+	// automation definition changed, unlike templates where some
+	// changes (metadata-only) don't require sandbox restarts.
 	result.Status = "updated"
-	result.Change, result.Fields = classifyTemplateChange(target.content, &newContent)
 
-	// Set origin on the new content for publishing.
 	newContent.Origin = newOrigin
 	target.newContent = &newContent
 
 	return result
 }
 
-// confirmUpdate prompts the user for confirmation to publish an update.
-// Returns true if the user confirms.
-func confirmUpdate(result *templateUpdateResult) bool {
+// confirmPipelineUpdate prompts the user for confirmation to publish a
+// pipeline update. Returns true if the user confirms.
+func confirmPipelineUpdate(result *pipelineUpdateResult) bool {
 	fmt.Fprintf(os.Stderr, "\n%s: update available\n", result.Name)
 	fmt.Fprintf(os.Stderr, "  source: %s\n", result.Source)
 	if result.OldRevision != "" && result.NewRevision != "" {
 		fmt.Fprintf(os.Stderr, "  revision: %s → %s\n", result.OldRevision, result.NewRevision)
 	}
 	fmt.Fprintf(os.Stderr, "  content hash: %s → %s\n", result.OldHash, result.NewHash)
-	if len(result.Fields) > 0 {
-		fmt.Fprintf(os.Stderr, "  changed fields: %s\n", strings.Join(result.Fields, ", "))
-	}
-	if result.Change != "" {
-		classification := result.Change
-		if result.Change == "structural" {
-			classification += " (restart required)"
-		}
-		fmt.Fprintf(os.Stderr, "  classification: %s\n", classification)
-	}
 	fmt.Fprintf(os.Stderr, "  Publish update? [y/N] ")
 
 	scanner := bufio.NewScanner(os.Stdin)
@@ -403,8 +402,8 @@ func confirmUpdate(result *templateUpdateResult) bool {
 	return answer == "y" || answer == "yes"
 }
 
-// printUpdateResults formats and prints the update results for CLI output.
-func printUpdateResults(results []templateUpdateResult) {
+// printPipelineUpdateResults formats and prints the update results for CLI output.
+func printPipelineUpdateResults(results []pipelineUpdateResult) {
 	var updated, current, skipped, errored int
 
 	for index := range results {
@@ -421,13 +420,6 @@ func printUpdateResults(results []templateUpdateResult) {
 			}
 			if result.Source == "flake" && result.OldRevision != "" {
 				fmt.Fprintf(os.Stdout, "  revision: %s → %s\n", result.OldRevision, result.NewRevision)
-			}
-			if len(result.Fields) > 0 {
-				classification := result.Change
-				if result.Change == "structural" {
-					classification += " (restart required)"
-				}
-				fmt.Fprintf(os.Stdout, "  changed: %s (%s)\n", strings.Join(result.Fields, ", "), classification)
 			}
 			updated++
 		case "current":

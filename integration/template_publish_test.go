@@ -12,6 +12,7 @@ import (
 	"strings"
 	"testing"
 
+	"github.com/bureau-foundation/bureau/lib/ref"
 	"github.com/bureau-foundation/bureau/lib/schema"
 )
 
@@ -49,12 +50,12 @@ func TestTemplatePublishFile(t *testing.T) {
 		"--json")
 
 	var publishResult struct {
-		Ref       string                 `json:"ref"`
-		Source    string                 `json:"source"`
-		SourceRef string                 `json:"source_ref"`
-		EventID   string                 `json:"event_id"`
-		Origin    *schema.TemplateOrigin `json:"origin"`
-		DryRun    bool                   `json:"dry_run"`
+		Ref       string             `json:"ref"`
+		Source    string             `json:"source"`
+		SourceRef string             `json:"source_ref"`
+		EventID   string             `json:"event_id"`
+		Origin    *ref.ContentOrigin `json:"origin"`
+		DryRun    bool               `json:"dry_run"`
 	}
 	if err := json.Unmarshal([]byte(publishOutput), &publishResult); err != nil {
 		t.Fatalf("parse publish result: %v\noutput:\n%s", err, publishOutput)
@@ -205,12 +206,12 @@ func TestTemplatePublishFlake(t *testing.T) {
 		"--json")
 
 	var publishResult struct {
-		Ref       string                 `json:"ref"`
-		Source    string                 `json:"source"`
-		SourceRef string                 `json:"source_ref"`
-		EventID   string                 `json:"event_id"`
-		Origin    *schema.TemplateOrigin `json:"origin"`
-		DryRun    bool                   `json:"dry_run"`
+		Ref       string             `json:"ref"`
+		Source    string             `json:"source"`
+		SourceRef string             `json:"source_ref"`
+		EventID   string             `json:"event_id"`
+		Origin    *ref.ContentOrigin `json:"origin"`
+		DryRun    bool               `json:"dry_run"`
 	}
 	if err := json.Unmarshal([]byte(publishOutput), &publishResult); err != nil {
 		t.Fatalf("parse publish result: %v\noutput:\n%s", err, publishOutput)

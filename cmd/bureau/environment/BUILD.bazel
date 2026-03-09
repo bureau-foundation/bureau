@@ -9,6 +9,7 @@ go_library(
         "build.go",
         "command.go",
         "compose.go",
+        "definitions.go",
         "doc.go",
         "list.go",
         "nix.go",
@@ -22,15 +23,25 @@ go_library(
         "//lib/clock",
         "//lib/command",
         "//lib/nix",
+        "//lib/pipelinedef",
         "//lib/ref",
         "//lib/schema",
+        "//lib/schema/pipeline",
+        "//lib/templatedef",
         "//messaging",
     ],
 )
 
 go_test(
     name = "environment_test",
-    srcs = ["nix_test.go"],
+    srcs = [
+        "definitions_test.go",
+        "nix_test.go",
+    ],
     embed = [":environment"],
-    deps = ["//lib/nix"],
+    deps = [
+        "//lib/nix",
+        "//lib/ref",
+        "//lib/schema",
+    ],
 )

@@ -14,7 +14,7 @@ import (
 	"github.com/bureau-foundation/bureau/cmd/bureau/cli"
 	"github.com/bureau-foundation/bureau/lib/ref"
 	"github.com/bureau-foundation/bureau/lib/schema"
-	libtmpl "github.com/bureau-foundation/bureau/lib/templatedef"
+	"github.com/bureau-foundation/bureau/lib/templatedef"
 )
 
 // templatePublishParams holds the parameters for the template publish command.
@@ -165,7 +165,7 @@ are resolved during evaluation.`,
 			content.Origin = source.Origin
 
 			// Validate the template content.
-			issues := validateTemplateContent(&content)
+			issues := templatedef.Validate(&content)
 			if len(issues) > 0 {
 				for _, issue := range issues {
 					logger.Warn("validation issue", "issue", issue)
@@ -204,7 +204,7 @@ are resolved during evaluation.`,
 					if err != nil {
 						return cli.Validation("inherits[%d] reference %q is invalid: %w", index, parentRefString, err)
 					}
-					if _, err := libtmpl.Fetch(ctx, session, parentRef, serverName); err != nil {
+					if _, err := templatedef.Fetch(ctx, session, parentRef, serverName); err != nil {
 						return cli.NotFound("parent template %q not found in Matrix: %w", parentRefString, err).
 							WithHint("Publish the parent template first.")
 					}
@@ -234,7 +234,7 @@ are resolved during evaluation.`,
 			}
 
 			// Publish the template.
-			result, err := libtmpl.Push(ctx, session, templateRef, content, serverName)
+			result, err := templatedef.Push(ctx, session, templateRef, content, serverName)
 			if err != nil {
 				return cli.Internal("publishing template: %w", err)
 			}

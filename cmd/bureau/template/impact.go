@@ -18,7 +18,7 @@ import (
 	"github.com/bureau-foundation/bureau/cmd/bureau/cli"
 	"github.com/bureau-foundation/bureau/lib/ref"
 	"github.com/bureau-foundation/bureau/lib/schema"
-	libtmpl "github.com/bureau-foundation/bureau/lib/templatedef"
+	"github.com/bureau-foundation/bureau/lib/templatedef"
 	"github.com/bureau-foundation/bureau/messaging"
 )
 
@@ -362,7 +362,7 @@ func (a *impactAnalyzer) fetchCached(ref schema.TemplateRef) (*schema.TemplateCo
 		return cached, nil
 	}
 
-	template, err := libtmpl.Fetch(a.ctx, a.session, ref, a.serverName)
+	template, err := templatedef.Fetch(a.ctx, a.session, ref, a.serverName)
 	if err != nil {
 		return nil, err
 	}
@@ -452,10 +452,10 @@ func (a *impactAnalyzer) resolveWithOverrideRecurse(templateRef, overrideRef str
 	// Merge resolved parents left-to-right, then child on top.
 	merged := *resolvedParents[0]
 	for i := 1; i < len(resolvedParents); i++ {
-		merged = libtmpl.Merge(&merged, resolvedParents[i])
+		merged = templatedef.Merge(&merged, resolvedParents[i])
 	}
 
-	result := libtmpl.Merge(&merged, template)
+	result := templatedef.Merge(&merged, template)
 	cache[templateRef] = &result
 	return &result, nil
 }

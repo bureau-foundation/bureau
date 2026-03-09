@@ -233,6 +233,14 @@ func TestMain(m *testing.M) {
 
 // --- Infrastructure Helpers ---
 
+// testLogger returns a structured JSON logger scoped to the current test name,
+// writing to stderr. Integration tests use stderr for log output so that
+// --test_arg=-test.v surfaces logs alongside test output.
+func testLogger(t *testing.T) *slog.Logger {
+	t.Helper()
+	return slog.New(slog.NewJSONHandler(os.Stderr, nil)).With("test", t.Name())
+}
+
 // findWorkspaceRoot returns the real filesystem path to the Bureau source tree.
 // In Bazel, this resolves through the runfiles symlink tree. Outside Bazel,
 // it walks up from the current directory looking for MODULE.bazel.

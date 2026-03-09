@@ -1,0 +1,288 @@
+// Copyright 2026 The Bureau Authors
+// SPDX-License-Identifier: Apache-2.0
+
+package templatedef
+
+import (
+	"strings"
+	"testing"
+
+	"github.com/bureau-foundation/bureau/lib/schema"
+)
+
+func TestValidate(t *testing.T) {
+	t.Parallel()
+
+	tests := []struct {
+		name           string
+		content        *schema.TemplateContent
+		expectedIssues int
+		wantSubstrings []string
+	}{
+		{
+			name: "valid root template",
+			content: &schema.TemplateContent{
+				Description: "A valid base template",
+				Command:     []string{"/bin/bash"},
+			},
+			expectedIssues: 0,
+		},
+		{
+			name: "valid child template",
+			content: &schema.TemplateContent{
+				Description: "A valid child template",
+				Inherits:    []string{"bureau/template:base"},
+			},
+			expectedIssues: 0,
+		},
+		{
+			name: "empty description",
+			content: &schema.TemplateContent{
+				Command: []string{"/bin/bash"},
+			},
+			expectedIssues: 1,
+			wantSubstrings: []string{"description is empty"},
+		},
+		{
+			name: "no command and no inherits",
+			content: &schema.TemplateContent{
+				Description: "A template with no command and no parent",
+			},
+			expectedIssues: 1,
+			wantSubstrings: []string{"no command defined"},
+		},
+		{
+			name: "invalid inherits reference",
+			content: &schema.TemplateContent{
+				Description: "Has bad inherits",
+				Inherits:    []string{"no-colon-here"},
+			},
+			expectedIssues: 1,
+			wantSubstrings: []string{"inherits[0] reference"},
+		},
+		{
+			name: "filesystem mount missing dest",
+			content: &schema.TemplateContent{
+				Description: "Has mount issues",
+				Command:     []string{"/bin/bash"},
+				Filesystem: []schema.TemplateMount{
+					{Source: "/usr"},
+				},
+			},
+			expectedIssues: 1,
+			wantSubstrings: []string{"dest is required"},
+		},
+		{
+			name: "filesystem unknown type",
+			content: &schema.TemplateContent{
+				Description: "Has unknown mount type",
+				Command:     []string{"/bin/bash"},
+				Filesystem: []schema.TemplateMount{
+					{Source: "/dev/sda", Dest: "/mnt", Type: "ext4"},
+				},
+			},
+			expectedIssues: 1,
+			wantSubstrings: []string{"unknown type"},
+		},
+		{
+			name: "filesystem unknown mode",
+			content: &schema.TemplateContent{
+				Description: "Has unknown mount mode",
+				Command:     []string{"/bin/bash"},
+				Filesystem: []schema.TemplateMount{
+					{Source: "/usr", Dest: "/usr", Mode: "wx"},
+				},
+			},
+			expectedIssues: 1,
+			wantSubstrings: []string{"unknown mode"},
+		},
+		{
+			name: "tmpfs with source path",
+			content: &schema.TemplateContent{
+				Description: "tmpfs should not have source",
+				Command:     []string{"/bin/bash"},
+				Filesystem: []schema.TemplateMount{
+					{Source: "/something", Dest: "/tmp", Type: "tmpfs"},
+				},
+			},
+			expectedIssues: 1,
+			wantSubstrings: []string{"tmpfs mounts should not have a source path"},
+		},
+		{
+			name: "bind mount missing source",
+			content: &schema.TemplateContent{
+				Description: "bind mount needs source",
+				Command:     []string{"/bin/bash"},
+				Filesystem: []schema.TemplateMount{
+					{Dest: "/usr"},
+				},
+			},
+			expectedIssues: 1,
+			wantSubstrings: []string{"bind mounts require a source path"},
+		},
+		{
+			name: "negative resource limits",
+			content: &schema.TemplateContent{
+				Description: "Has negative resources",
+				Command:     []string{"/bin/bash"},
+				Resources: &schema.TemplateResources{
+					CPUShares:     -1,
+					MemoryLimitMB: -512,
+					PidsLimit:     -10,
+				},
+			},
+			expectedIssues: 3,
+			wantSubstrings: []string{"cpu_shares", "memory_limit_mb", "pids_limit"},
+		},
+		{
+			name: "empty role command",
+			content: &schema.TemplateContent{
+				Description: "Has empty role",
+				Command:     []string{"/bin/bash"},
+				Roles: map[string][]string{
+					"agent": {},
+				},
+			},
+			expectedIssues: 1,
+			wantSubstrings: []string{`roles["agent"]`},
+		},
+		{
+			name: "valid prepend variables",
+			content: &schema.TemplateContent{
+				Description: "Has prepend vars",
+				Command:     []string{"/bin/bash"},
+				PrependVariables: map[string][]string{
+					"PATH":            {"/opt/cuda/bin"},
+					"LD_LIBRARY_PATH": {"/opt/cuda/lib64", "/opt/rocm/lib"},
+				},
+			},
+			expectedIssues: 0,
+		},
+		{
+			name: "prepend variables empty value list",
+			content: &schema.TemplateContent{
+				Description: "Bad prepend",
+				Command:     []string{"/bin/bash"},
+				PrependVariables: map[string][]string{
+					"PATH": {},
+				},
+			},
+			expectedIssues: 1,
+			wantSubstrings: []string{"value list is empty"},
+		},
+		{
+			name: "prepend variables empty string entry",
+			content: &schema.TemplateContent{
+				Description: "Bad prepend entry",
+				Command:     []string{"/bin/bash"},
+				PrependVariables: map[string][]string{
+					"PATH": {"/good/bin", ""},
+				},
+			},
+			expectedIssues: 1,
+			wantSubstrings: []string{"empty string"},
+		},
+		{
+			name: "prepend variables colon in value",
+			content: &schema.TemplateContent{
+				Description: "Colon injection",
+				Command:     []string{"/bin/bash"},
+				PrependVariables: map[string][]string{
+					"PATH": {"/good/bin", "/evil:/injection"},
+				},
+			},
+			expectedIssues: 1,
+			wantSubstrings: []string{"contains colon"},
+		},
+		{
+			name: "prepend variables multiple issues",
+			content: &schema.TemplateContent{
+				Description: "Multiple prepend issues",
+				Command:     []string{"/bin/bash"},
+				PrependVariables: map[string][]string{
+					"PATH":            {"", "/a:/b"},
+					"LD_LIBRARY_PATH": {},
+				},
+			},
+			expectedIssues: 3, // empty string, colon, empty list
+			wantSubstrings: []string{"empty string", "contains colon", "value list is empty"},
+		},
+		{
+			name: "valid passthrough template",
+			content: &schema.TemplateContent{
+				Description: "Passthrough agent",
+				Isolation:   schema.IsolationModeNone,
+				Command:     []string{"/bin/bash"},
+			},
+			expectedIssues: 0,
+		},
+		{
+			name: "unknown isolation mode",
+			content: &schema.TemplateContent{
+				Description: "Bad isolation",
+				Isolation:   "fortified",
+				Command:     []string{"/bin/bash"},
+			},
+			expectedIssues: 1,
+			wantSubstrings: []string{"unknown isolation mode"},
+		},
+		{
+			name: "passthrough contradicts namespaces",
+			content: &schema.TemplateContent{
+				Description: "Contradiction",
+				Isolation:   schema.IsolationModeNone,
+				Command:     []string{"/bin/bash"},
+				Namespaces:  &schema.TemplateNamespaces{PID: true},
+			},
+			expectedIssues: 1,
+			wantSubstrings: []string{"contradicts namespace"},
+		},
+		{
+			name: "passthrough with all-false namespaces is valid",
+			content: &schema.TemplateContent{
+				Description: "Passthrough with explicit zero namespaces",
+				Isolation:   schema.IsolationModeNone,
+				Command:     []string{"/bin/bash"},
+				Namespaces:  &schema.TemplateNamespaces{},
+			},
+			expectedIssues: 0,
+		},
+		{
+			name: "multiple issues",
+			content: &schema.TemplateContent{
+				Filesystem: []schema.TemplateMount{
+					{Dest: "/usr"},
+					{Source: "/bad", Dest: "/bad", Type: "zfs"},
+				},
+				Roles: map[string][]string{
+					"empty": {},
+				},
+			},
+			expectedIssues: 5, // description, no command, bind without source, unknown type, empty role
+		},
+	}
+
+	for _, testCase := range tests {
+		t.Run(testCase.name, func(t *testing.T) {
+			t.Parallel()
+
+			issues := Validate(testCase.content)
+			if len(issues) != testCase.expectedIssues {
+				t.Fatalf("got %d issues, want %d:\n%s", len(issues), testCase.expectedIssues, strings.Join(issues, "\n"))
+			}
+
+			for _, substring := range testCase.wantSubstrings {
+				found := false
+				for _, issue := range issues {
+					if strings.Contains(issue, substring) {
+						found = true
+						break
+					}
+				}
+				if !found {
+					t.Errorf("expected issue containing %q, got:\n%s", substring, strings.Join(issues, "\n"))
+				}
+			}
+		})
+	}
+}

@@ -36,6 +36,7 @@ go_library(
         "doc.go",
         "push.go",
         "resolve.go",
+        "validate.go",
     ],
     importpath = "github.com/bureau-foundation/bureau/lib/templatedef",
     visibility = ["//visibility:public"],
@@ -48,7 +49,10 @@ go_library(
 
 go_test(
     name = "templatedef_test",
-    srcs = ["resolve_test.go"],
+    srcs = [
+        "resolve_test.go",
+        "validate_test.go",
+    ],
     embed = [":templatedef"],
     deps = [
         "//lib/ref",

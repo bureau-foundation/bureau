@@ -15,7 +15,7 @@ import (
 	"github.com/bureau-foundation/bureau/cmd/bureau/cli"
 	"github.com/bureau-foundation/bureau/lib/ref"
 	"github.com/bureau-foundation/bureau/lib/schema"
-	libtmpl "github.com/bureau-foundation/bureau/lib/templatedef"
+	"github.com/bureau-foundation/bureau/lib/templatedef"
 )
 
 // templateCreateParams holds the parameters for the template create command.
@@ -162,7 +162,7 @@ Mount specs use a compact format:
 			}
 
 			// Validate the constructed template.
-			issues := validateTemplateContent(&content)
+			issues := templatedef.Validate(&content)
 			if len(issues) > 0 {
 				for _, issue := range issues {
 					logger.Warn("validation issue", "issue", issue)
@@ -201,7 +201,7 @@ Mount specs use a compact format:
 					if parseError != nil {
 						return cli.Validation("--inherits[%d] reference %q is invalid: %w", index, parentRefString, parseError)
 					}
-					if _, fetchError := libtmpl.Fetch(ctx, session, parentRef, serverName); fetchError != nil {
+					if _, fetchError := templatedef.Fetch(ctx, session, parentRef, serverName); fetchError != nil {
 						return cli.NotFound("parent template %q not found in Matrix: %w", parentRefString, fetchError).
 							WithHint("Publish the parent template first with 'bureau template publish'.")
 					}
@@ -225,7 +225,7 @@ Mount specs use a compact format:
 			}
 
 			// Publish the template.
-			result, err := libtmpl.Push(ctx, session, templateRef, content, serverName)
+			result, err := templatedef.Push(ctx, session, templateRef, content, serverName)
 			if err != nil {
 				return cli.Internal("publishing template: %w", err)
 			}

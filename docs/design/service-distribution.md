@@ -129,6 +129,60 @@ routes traffic through proxy service discovery. The service does not need
 to import any Bureau code — it interacts entirely through documented
 filesystem and HTTP contracts.
 
+### Environment flakes (batch definitions)
+
+Service flakes produce a single template and optionally a single pipeline.
+Environment flakes — repositories that define an operator's complete
+environment (packages, templates, pipelines) — produce multiple definitions
+from a single flake. Two additional well-known outputs support this:
+
+- `bureauTemplates.<system>` (plural) — an attrset mapping template names
+  to `TemplateContent` objects. Each key becomes the state event key when
+  published to the template room.
+- `bureauPipelines` (plural, no per-system qualifier) — an attrset mapping
+  pipeline names to `PipelineContent` objects. Pipelines are system-agnostic
+  because tools come from the template/environment, not the pipeline itself.
+
+```nix
+{
+  bureauTemplates.x86_64-linux = {
+    hf-model-ingest = {
+      description = "HuggingFace model ingest agent";
+      command = ["${self.packages.x86_64-linux.model-ingest}/bin/model-ingest"];
+      required_services = ["model"];
+    };
+    cloudflare-tunnel = {
+      description = "Cloudflare tunnel connector";
+      command = ["${self.packages.x86_64-linux.cf-tunnel}/bin/cf-tunnel"];
+    };
+  };
+
+  bureauPipelines = {
+    environment-compose = {
+      steps = [
+        { name = "build"; run = "nix build ..."; }
+        { name = "push"; run = "attic push ..."; }
+      ];
+    };
+  };
+}
+```
+
+`bureau environment compose` automatically discovers and publishes these
+outputs when evaluating an environment flake. This makes environment
+composition atomic — one command updates packages, templates, and
+pipelines together, preventing template/binary version skew.
+
+Missing outputs are not errors. An environment flake that declares only
+`bureauTemplates` (no `bureauPipelines`) or neither simply skips the
+publishing step silently.
+
+The singular conventions (`bureauTemplate`, `bureauPipeline`) for service
+flakes and the plural conventions (`bureauTemplates`, `bureauPipelines`)
+for environment flakes coexist. A single flake could export both (though
+this would be unusual — service flakes produce one definition, environment
+flakes produce many).
+
 ---
 
 ## Template Publishing and Updates

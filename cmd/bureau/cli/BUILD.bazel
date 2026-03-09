@@ -37,6 +37,7 @@ go_library(
     importpath = "github.com/bureau-foundation/bureau/cmd/bureau/cli",
     visibility = ["//visibility:public"],
     deps = [
+        "//lib/nix",
         "//lib/principal",
         "//lib/proxyclient",
         "//lib/ref",

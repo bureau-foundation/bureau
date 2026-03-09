@@ -12,6 +12,7 @@ import (
 	"log/slog"
 	"os"
 	"os/exec"
+	"sort"
 	"strings"
 	"syscall"
 	"time"
@@ -477,11 +478,18 @@ func runShellCommand(ctx context.Context, command string, env map[string]string,
 		}
 	}
 
-	// Set step-level environment variables.
+	// Set step-level environment variables. Sort keys for deterministic
+	// ordering — non-deterministic env var order can cause irreproducible
+	// behavior in processes that are sensitive to environment layout.
 	if len(env) > 0 {
 		cmd.Env = os.Environ()
-		for name, value := range env {
-			cmd.Env = append(cmd.Env, name+"="+value)
+		envKeys := make([]string, 0, len(env))
+		for name := range env {
+			envKeys = append(envKeys, name)
+		}
+		sort.Strings(envKeys)
+		for _, name := range envKeys {
+			cmd.Env = append(cmd.Env, name+"="+env[name])
 		}
 	}
 

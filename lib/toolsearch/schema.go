@@ -3,7 +3,10 @@
 
 package toolsearch
 
-import "encoding/json"
+import (
+	"encoding/json"
+	"sort"
+)
 
 // ExtractArguments extracts parameter names and descriptions from a
 // JSON Schema object (the inputSchema of a tool definition). Returns
@@ -27,9 +30,20 @@ func ExtractArguments(inputSchema json.RawMessage) (names, descriptions []string
 		return nil, nil
 	}
 
-	for name, property := range schema.Properties {
+	// Sort property names for deterministic output. The caller pairs
+	// names[i] with descriptions[i], so both slices must be in the
+	// same stable order.
+	sortedNames := make([]string, 0, len(schema.Properties))
+	for name := range schema.Properties {
+		sortedNames = append(sortedNames, name)
+	}
+	sort.Strings(sortedNames)
+
+	names = make([]string, 0, len(sortedNames))
+	descriptions = make([]string, 0, len(sortedNames))
+	for _, name := range sortedNames {
 		names = append(names, name)
-		descriptions = append(descriptions, property.Description)
+		descriptions = append(descriptions, schema.Properties[name].Description)
 	}
 
 	return names, descriptions

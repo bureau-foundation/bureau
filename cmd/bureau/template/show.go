@@ -10,7 +10,7 @@ import (
 	"github.com/bureau-foundation/bureau/cmd/bureau/cli"
 	"github.com/bureau-foundation/bureau/lib/ref"
 	"github.com/bureau-foundation/bureau/lib/schema"
-	libtmpl "github.com/bureau-foundation/bureau/lib/templatedef"
+	"github.com/bureau-foundation/bureau/lib/templatedef"
 )
 
 // templateShowParams holds the parameters for the template show command.
@@ -83,14 +83,14 @@ template overrides versus what it inherits.`,
 					return cli.Validation("invalid template reference: %w", err).
 						WithHint("Template references have the form namespace/template:name (e.g., bureau/template:base-networked).")
 				}
-				content, err := libtmpl.Fetch(ctx, session, templateRef, serverName)
+				content, err := templatedef.Fetch(ctx, session, templateRef, serverName)
 				if err != nil {
 					return err
 				}
 				return printTemplateJSON(content)
 			}
 
-			resolved, err := libtmpl.Resolve(ctx, session, templateRefString, serverName)
+			resolved, err := templatedef.Resolve(ctx, session, templateRefString, serverName)
 			if err != nil {
 				return err
 			}

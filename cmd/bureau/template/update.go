@@ -16,7 +16,7 @@ import (
 	"github.com/bureau-foundation/bureau/cmd/bureau/cli"
 	"github.com/bureau-foundation/bureau/lib/ref"
 	"github.com/bureau-foundation/bureau/lib/schema"
-	libtmpl "github.com/bureau-foundation/bureau/lib/templatedef"
+	"github.com/bureau-foundation/bureau/lib/templatedef"
 	"github.com/bureau-foundation/bureau/messaging"
 )
 
@@ -128,7 +128,7 @@ After publishing an update, the daemon detects the template change via
 						WithHint("Template references have the form namespace/template:name (e.g., bureau/template:bureau-agent-claude).")
 				}
 
-				content, err := libtmpl.Fetch(ctx, session, templateRef, serverName)
+				content, err := templatedef.Fetch(ctx, session, templateRef, serverName)
 				if err != nil {
 					return err
 				}
@@ -175,7 +175,7 @@ After publishing an update, the daemon detects the template change via
 						}
 					}
 
-					eventID, err := libtmpl.Push(ctx, session, target.ref, *target.newContent, serverName)
+					eventID, err := templatedef.Push(ctx, session, target.ref, *target.newContent, serverName)
 					if err != nil {
 						results[index].Status = "error"
 						results[index].Error = fmt.Sprintf("publishing: %v", err)

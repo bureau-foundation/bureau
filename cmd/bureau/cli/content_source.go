@@ -4,6 +4,7 @@
 package cli
 
 import (
+	"bytes"
 	"context"
 	"crypto/sha256"
 	"encoding/json"
@@ -18,6 +19,7 @@ import (
 
 	"github.com/tidwall/jsonc"
 
+	"github.com/bureau-foundation/bureau/lib/nix"
 	"github.com/bureau-foundation/bureau/lib/ref"
 )
 
@@ -55,9 +57,9 @@ type SourceContent struct {
 // The returned SourceContent.Origin has FlakeRef and ResolvedRev set, but
 // ContentHash is empty — the caller must compute it after unmarshaling.
 func LoadFromFlake(ctx context.Context, flakeRef, flakeAttr string, logger *slog.Logger) (*SourceContent, error) {
-	nixPath, err := exec.LookPath("nix")
+	nixPath, err := nix.FindBinary("nix")
 	if err != nil {
-		return nil, Validation("nix not found on PATH: %w", err).
+		return nil, Validation("nix not found: %w", err).
 			WithHint("The Nix package manager is required for --flake. Install it with 'script/setup-nix'.")
 	}
 
@@ -101,6 +103,96 @@ func LoadFromFlake(ctx context.Context, flakeRef, flakeAttr string, logger *slog
 		Source: "flake",
 		Ref:    flakeRef,
 	}, nil
+}
+
+// LoadBatchFromFlake evaluates a Nix flake attribute that produces a JSON
+// object (attrset) and returns one SourceContent per entry. This is used
+// for environment flakes that declare multiple definitions under a single
+// attribute (e.g., bureauTemplates.<system> with multiple template entries).
+//
+// Returns nil, nil when the flake does not provide the requested attribute —
+// this is not an error, since environment flakes are not required to declare
+// templates or pipelines. Returns an error for genuine nix failures (syntax
+// errors, evaluation errors, network problems).
+//
+// Each entry in the returned map shares the same Origin.FlakeRef and
+// Origin.ResolvedRev. ContentHash is empty — the caller must compute it
+// after unmarshaling each entry through its typed struct.
+func LoadBatchFromFlake(ctx context.Context, flakeRef, flakeAttr string, logger *slog.Logger) (map[string]*SourceContent, error) {
+	nixPath, err := nix.FindBinary("nix")
+	if err != nil {
+		return nil, Validation("nix not found: %w", err).
+			WithHint("The Nix package manager is required. Install it with 'script/setup-nix'.")
+	}
+
+	// Evaluate the flake attribute.
+	fullAttribute := flakeRef + "#" + flakeAttr
+	logger.Info("evaluating batch flake attribute", "attr", fullAttribute)
+
+	evalCommand := exec.CommandContext(ctx, nixPath, "eval", "--json", fullAttribute)
+	var stderrBuffer bytes.Buffer
+	evalCommand.Stderr = &stderrBuffer
+	evalOutput, err := evalCommand.Output()
+	if err != nil {
+		// Missing attribute is not an error — environment flakes may
+		// not declare templates or pipelines. Match the specific
+		// attribute name to avoid swallowing nested evaluation errors.
+		stderrText := stderrBuffer.String()
+		if strings.Contains(stderrText, "does not provide attribute") &&
+			strings.Contains(stderrText, "'"+flakeAttr+"'") {
+			logger.Debug("flake attribute not found, skipping", "attr", fullAttribute)
+			return nil, nil
+		}
+		// Write captured stderr so the user sees the nix error details.
+		_, _ = os.Stderr.WriteString(stderrText)
+		return nil, Internal("nix eval %s: %w", fullAttribute, err).
+			WithHint(fmt.Sprintf("Ensure the flake exports a %s attribute.", flakeAttr))
+	}
+
+	// Parse the top-level JSON object. Each key is a definition name,
+	// each value is the content JSON for that definition.
+	var batch map[string]json.RawMessage
+	if err := json.Unmarshal(evalOutput, &batch); err != nil {
+		return nil, Internal("parsing batch flake output: expected JSON object: %w", err)
+	}
+	if len(batch) == 0 {
+		return nil, nil
+	}
+
+	// Get flake metadata once for the resolved revision, shared across
+	// all entries.
+	logger.Info("reading flake metadata", "flake_ref", flakeRef)
+
+	metadataCommand := exec.CommandContext(ctx, nixPath, "flake", "metadata", "--json", flakeRef)
+	metadataCommand.Stderr = os.Stderr
+	metadataOutput, err := metadataCommand.Output()
+	if err != nil {
+		return nil, Internal("nix flake metadata %s: %w", flakeRef, err).
+			WithHint("Ensure the flake reference is valid and accessible.")
+	}
+
+	var metadata struct {
+		Revision string `json:"revision"`
+	}
+	if err := json.Unmarshal(metadataOutput, &metadata); err != nil {
+		return nil, Internal("parsing flake metadata: %w", err)
+	}
+
+	result := make(map[string]*SourceContent, len(batch))
+	for name, data := range batch {
+		result[name] = &SourceContent{
+			Data: data,
+			Origin: &ref.ContentOrigin{
+				FlakeRef:    flakeRef,
+				ResolvedRev: metadata.Revision,
+				// ContentHash left empty — caller computes after unmarshal.
+			},
+			Source: "flake",
+			Ref:    flakeRef,
+		}
+	}
+
+	return result, nil
 }
 
 // LoadFromURL fetches JSONC content from an HTTPS URL with a 1MB size limit.

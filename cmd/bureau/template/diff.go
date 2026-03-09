@@ -14,7 +14,7 @@ import (
 	"github.com/bureau-foundation/bureau/cmd/bureau/cli"
 	"github.com/bureau-foundation/bureau/lib/ref"
 	"github.com/bureau-foundation/bureau/lib/schema"
-	libtmpl "github.com/bureau-foundation/bureau/lib/templatedef"
+	"github.com/bureau-foundation/bureau/lib/templatedef"
 )
 
 // templateDiffParams holds the parameters for the template diff command.
@@ -110,7 +110,7 @@ content, not the resolved inheritance chain — use "bureau template show
 				return cli.Validation("invalid --server-name: %w", err)
 			}
 
-			remoteContent, err := libtmpl.Fetch(ctx, session, templateRef, serverName)
+			remoteContent, err := templatedef.Fetch(ctx, session, templateRef, serverName)
 			if err != nil {
 				return err
 			}

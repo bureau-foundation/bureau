@@ -9,7 +9,7 @@ import (
 
 	"github.com/bureau-foundation/bureau/lib/ref"
 	"github.com/bureau-foundation/bureau/lib/schema"
-	libtmpl "github.com/bureau-foundation/bureau/lib/templatedef"
+	"github.com/bureau-foundation/bureau/lib/templatedef"
 	"github.com/bureau-foundation/bureau/messaging"
 )
 
@@ -17,7 +17,7 @@ import (
 // chain to produce a fully-merged TemplateContent. Delegates to
 // lib/templatedef.Resolve.
 func resolveTemplate(ctx context.Context, session *messaging.DirectSession, templateRef string, serverName ref.ServerName) (*schema.TemplateContent, error) {
-	return libtmpl.Resolve(ctx, session, templateRef, serverName)
+	return templatedef.Resolve(ctx, session, templateRef, serverName)
 }
 
 // resolveTemplateWithAuthor fetches a template from Matrix and walks its
@@ -25,8 +25,8 @@ func resolveTemplate(ctx context.Context, session *messaging.DirectSession, temp
 // event that introduced the CredentialRef (if any). This is the template
 // resolution path used when credential-bound templates need authorization
 // checks against the template author.
-func resolveTemplateWithAuthor(ctx context.Context, session *messaging.DirectSession, templateRef string, serverName ref.ServerName) (libtmpl.ResolveResult, error) {
-	return libtmpl.ResolveWithAuthor(ctx, session, templateRef, serverName)
+func resolveTemplateWithAuthor(ctx context.Context, session *messaging.DirectSession, templateRef string, serverName ref.ServerName) (templatedef.ResolveResult, error) {
+	return templatedef.ResolveWithAuthor(ctx, session, templateRef, serverName)
 }
 
 // resolveExtraInherits resolves additional template references and merges
@@ -43,7 +43,7 @@ func resolveExtraInherits(ctx context.Context, session *messaging.DirectSession,
 		if err != nil {
 			return nil, fmt.Errorf("resolving extra inherit %q: %w", extraRef, err)
 		}
-		merged := libtmpl.Merge(result, extra)
+		merged := templatedef.Merge(result, extra)
 		result = &merged
 	}
 	return result, nil
@@ -56,24 +56,24 @@ func resolveExtraInherits(ctx context.Context, session *messaging.DirectSession,
 func resolveExtraInheritsWithAuthor(
 	ctx context.Context,
 	session *messaging.DirectSession,
-	base libtmpl.ResolveResult,
+	base templatedef.ResolveResult,
 	extraInherits []string,
 	serverName ref.ServerName,
-) (libtmpl.ResolveResult, error) {
+) (templatedef.ResolveResult, error) {
 	result := base
 	for _, extraRef := range extraInherits {
 		extra, err := resolveTemplateWithAuthor(ctx, session, extraRef, serverName)
 		if err != nil {
-			return libtmpl.ResolveResult{}, fmt.Errorf("resolving extra inherit %q: %w", extraRef, err)
+			return templatedef.ResolveResult{}, fmt.Errorf("resolving extra inherit %q: %w", extraRef, err)
 		}
-		merged := libtmpl.Merge(result.Template, extra.Template)
+		merged := templatedef.Merge(result.Template, extra.Template)
 		// If the extra inherit has a CredentialRef, its author wins
 		// (scalar override: the extra is applied after the base).
 		author := result.CredentialRefAuthor
 		if extra.Template.CredentialRef != "" {
 			author = extra.CredentialRefAuthor
 		}
-		result = libtmpl.ResolveResult{Template: &merged, CredentialRefAuthor: author}
+		result = templatedef.ResolveResult{Template: &merged, CredentialRefAuthor: author}
 	}
 	return result, nil
 }
@@ -145,7 +145,7 @@ func resolveInstanceConfig(template *schema.TemplateContent, assignment *schema.
 	}
 
 	// Merge payload: template DefaultPayload as base, assignment Payload wins.
-	spec.Payload = libtmpl.MergeAnyMaps(template.DefaultPayload, assignment.Payload)
+	spec.Payload = templatedef.MergeAnyMaps(template.DefaultPayload, assignment.Payload)
 
 	return spec
 }

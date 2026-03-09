@@ -19,6 +19,7 @@ go_test(
     timeout = "short",  # 60s hard limit — all integration tests must complete in under 40s
     srcs = [
         "agent_service_test.go",
+        "batch_flake_publish_test.go",
         "bootstrap_test.go",
         "claude_agent_test.go",
         "cli_smoke_test.go",
@@ -136,6 +137,7 @@ go_test(
     deps = [
         "//cmd/bureau/cli",
         "//cmd/bureau/cli/doctor",
+        "//cmd/bureau/environment",
         "//cmd/bureau/fleet",
         "//cmd/bureau/machine",
         "//cmd/bureau/mcp",

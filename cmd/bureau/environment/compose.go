@@ -162,8 +162,43 @@ immediately after the daemon accepts the pipeline.`,
 					WithHint("Set a default: bureau fleet cache " + scope.Fleet.Localpart() + " --compose-template bureau/template:nix-builder")
 			}
 
-			// Derive the pipeline reference from the fleet's namespace.
+			// Discover and validate any templates and pipelines declared
+			// by the flake. Both are validated before either is published,
+			// so a validation failure in pipelines cannot leave templates
+			// in a partially-published state.
 			namespace := scope.Fleet.Namespace()
+
+			templates, err := ValidateFlakeTemplates(ctx, params.FlakeRef, system, namespace, logger)
+			if err != nil {
+				return err
+			}
+
+			pipelines, err := ValidateFlakePipelines(ctx, params.FlakeRef, namespace, logger)
+			if err != nil {
+				return err
+			}
+
+			// All definitions validated — now publish.
+			serverName := namespace.Server()
+
+			templateCount, err := publishTemplates(ctx, session, serverName, templates, logger)
+			if err != nil {
+				return err
+			}
+
+			pipelineCount, err := publishPipelines(ctx, session, serverName, pipelines, logger)
+			if err != nil {
+				return err
+			}
+
+			if templateCount > 0 || pipelineCount > 0 {
+				logger.Info("published flake definitions",
+					"templates", templateCount,
+					"pipelines", pipelineCount,
+				)
+			}
+
+			// Derive the pipeline reference from the fleet's namespace.
 			pipelineRef := namespace.PipelineRoomAliasLocalpart() + ":environment-compose"
 
 			// Validate the pipeline ref is parseable.
